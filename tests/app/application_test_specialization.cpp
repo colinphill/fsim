@@ -286,6 +286,115 @@ assert(parameter_changed.simulation.native_cache.misses == 2);
 assert(parameter_changed.simulation.native_cache.stores == 2);
 #endif
 
+const auto defparam_source = directory / "defparam-specialization.sv";
+{
+    std::ofstream output(defparam_source);
+    output << R"(
+module defparam_leaf #(
+  parameter logic [256:0] VALUE = 257'd0
+) (
+  output logic [1:0] observed
+);
+initial observed = {VALUE[256], VALUE[0]};
+endmodule
+
+module defparam_top;
+logic [1:0] low;
+logic [1:0] high;
+defparam low_leaf.VALUE = 257'h1;
+defparam high_leaf.VALUE = (257'h1 << 256) | 257'h1;
+defparam_leaf low_leaf(low);
+defparam_leaf high_leaf(high);
+endmodule
+)";
+    assert(output.good());
+}
+auto defparam_config = config;
+defparam_config.project.name = "defparam-specialization-test";
+defparam_config.project.top = "sv:work.defparam_top";
+defparam_config.build.optimization = fsim::project::Optimization::o2;
+defparam_config.build.cache_path = directory / "defparam-specialization-cache";
+defparam_config.source_sets.clear();
+fsim::project::SourceSet defparam_sources;
+defparam_sources.language = fsim::project::Language::system_verilog;
+defparam_sources.standard = "2017";
+defparam_sources.library = "work";
+defparam_sources.compilation_unit = "file";
+defparam_sources.files = { defparam_source };
+defparam_config.source_sets.push_back(std::move(defparam_sources));
+struct DefparamRun {
+    std::vector<std::pair<std::string, std::string>> keys;
+    bool analysis_cache_hit { };
+    CapturedSimulation simulation;
+};
+const auto defparam_key_for_instance =
+    [](const DefparamRun& run,
+        const std::string_view instance) -> const std::string& {
+    const auto found = std::ranges::find_if(run.keys, [&](const auto& entry) {
+        return entry.first == instance;
+    });
+    assert(found != run.keys.end());
+    return found->second;
+};
+const auto run_defparam_specializations =
+    [&](const fsim::app::SimulationEngine engine) {
+        fsim::diagnostic::Engine run_diagnostics;
+        auto project = fsim::app::build_project(defparam_config, run_diagnostics);
+        if (!project) {
+            fsim::diagnostic::print_text(std::cerr, run_diagnostics);
+        }
+        assert(project && !run_diagnostics.has_error());
+        assert(project->design.specializations().size() == 3);
+        assert(project->specialization_cache_keys.size() == 3);
+        DefparamRun result;
+        result.analysis_cache_hit = project->cache_hit;
+        for (std::size_t index = 0;
+            index < project->design.specializations().size(); ++index) {
+            const auto& specialization = project->design.specializations()[index];
+            result.keys.emplace_back(
+                specialization.instance, project->specialization_cache_keys[index]);
+            if (specialization.instance == "defparam_top.low_leaf"
+                || specialization.instance == "defparam_top.high_leaf") {
+                assert(specialization.parameter_values.size() == 1);
+                assert(specialization.parameter_values.front().first == "VALUE");
+                assert(specialization.parameter_identity_values.size() == 1);
+                assert(specialization.parameter_identity_values.front().first
+                    == "VALUE");
+                assert(specialization.parameter_identity_values.front().second.starts_with(
+                    "svconst-v2:w=257:"));
+            }
+        }
+        assert(defparam_key_for_instance(result, "defparam_top.low_leaf")
+            != defparam_key_for_instance(result, "defparam_top.high_leaf"));
+        result.simulation = capture_simulation(std::move(*project), engine);
+        return result;
+    };
+const auto defparam_reference = run_defparam_specializations(
+    fsim::app::SimulationEngine::interpreter);
+const auto defparam_cold = run_defparam_specializations(
+    fsim::app::SimulationEngine::compiled);
+const auto defparam_warm = run_defparam_specializations(
+    fsim::app::SimulationEngine::compiled);
+assert(!defparam_reference.analysis_cache_hit);
+assert(defparam_cold.analysis_cache_hit);
+assert(defparam_warm.analysis_cache_hit);
+assert(defparam_reference.keys == defparam_cold.keys);
+assert(defparam_cold.keys == defparam_warm.keys);
+compare_captures(defparam_reference.simulation, defparam_cold.simulation);
+compare_captures(defparam_reference.simulation, defparam_warm.simulation);
+assert(std::ranges::find(defparam_cold.simulation.final_values, "01")
+    != defparam_cold.simulation.final_values.end());
+assert(std::ranges::find(defparam_cold.simulation.final_values, "11")
+    != defparam_cold.simulation.final_values.end());
+#if defined(FSIM_HAS_LLVM)
+assert(defparam_cold.simulation.native_cache.misses != 0);
+assert(defparam_cold.simulation.native_cache.stores
+    == defparam_cold.simulation.native_cache.misses);
+assert(defparam_warm.simulation.native_cache.hits
+    == defparam_cold.simulation.native_cache.misses);
+assert(defparam_warm.simulation.native_cache.misses == 0);
+#endif
+
 auto generic_config = config;
 generic_config.project.name = "vhdl-generic-specialization-test";
 generic_config.project.top =

@@ -653,6 +653,172 @@ endmodule
           && clog2->parameters[1].default_value.operands.size() == 1,
       "Verilog-2005 $clog2 parameter-call HIR");
 
+  const auto verilog_declarations = parse_text(
+      "verilog-declarations.v",
+      R"(
+(* module_attr, tool_note = "verilog-2005" *)
+module declaration_matrix #(
+  (* param_attr = (1 + 2) * 3 *)
+  parameter [256:0] WIDE = 257'h1,
+  (* count_attr *) parameter integer COUNT = 4
+) (
+  (* port_attr = 2 *) input wire signed [7:0] data,
+  output reg [7:0] result,
+  inout tri shared
+);
+  (* net_attr = WIDE[0] *) wire [7:0] driven = data;
+  (* reg_attr *) reg signed [257'h7:257'h0] scratch;
+  integer index;
+  time stamp;
+  real gain;
+  realtime interval;
+  (* memory_attr *) reg [7:0] memory [257'h0:257'h3];
+  (* event_attr *) event changed;
+  (* genvar_attr *) genvar g;
+  localparam [256:0] COPY = WIDE;
+  (* function_attr *) function automatic integer identity;
+    input value;
+    begin
+      identity = value;
+    end
+  endfunction
+  (* task_attr *) task automatic capture;
+    input value;
+    begin
+      index = value;
+    end
+  endtask
+endmodule
+)",
+      Language::Verilog2005);
+  if (!verilog_declarations.ok()) {
+      for (const auto& diagnostic : verilog_declarations.diagnostics) {
+          std::cerr << diagnostic.code << ": "
+                    << diagnostic.message << '\n';
+      }
+  }
+  require(
+      verilog_declarations.ok(),
+      "Verilog-2005 declarations, memories, and attributes must parse");
+  const auto* declaration_matrix = verilog_declarations.design.find(
+      UnitKind::VerilogModule, "declaration_matrix");
+  require(
+      declaration_matrix != nullptr
+          && declaration_matrix->ports.size() == 3
+          && declaration_matrix->ports[0].direction
+              == PortDirection::Input
+          && declaration_matrix->ports[0].type.is_signed
+          && declaration_matrix->ports[0].type.width() == 8
+          && declaration_matrix->ports[1].direction
+              == PortDirection::Output
+          && declaration_matrix->ports[2].direction
+              == PortDirection::Inout,
+      "Verilog-2005 ANSI ports retain direction, signedness, and range");
+  require(
+      declaration_matrix != nullptr
+          && declaration_matrix->parameters.size() == 3
+          && declaration_matrix->parameters[0].name == "WIDE"
+          && declaration_matrix->parameters[0].type.width() == 257
+          && declaration_matrix->parameters[0].default_value.text
+              == "257'h1"
+          && declaration_matrix->parameters[1].name == "COUNT"
+          && declaration_matrix->parameters[2].name == "COPY"
+          && declaration_matrix->parameters[2].default_value.text
+              == "WIDE",
+      "Verilog-2005 parameters retain wide types, defaults, and locality");
+  const auto memory = std::ranges::find_if(
+      declaration_matrix->variables,
+      [](const auto& variable) {
+          return variable.name == "memory";
+      });
+  require(
+      memory != declaration_matrix->variables.end()
+          && memory->type.width() == 8
+          && memory->type.systemverilog_container
+          && memory->type.systemverilog_container->kind
+              == SystemVerilogContainerKind::StaticArray
+          && memory->type.systemverilog_container->static_range
+          && memory->type.systemverilog_container->static_range->left == 0
+          && memory->type.systemverilog_container->static_range->right == 3
+          && memory->type.systemverilog_container
+                  ->static_range_expressions.size()
+              == 1
+          && memory->type.systemverilog_container
+                  ->static_range_expressions[0]
+                  .left.text
+              == "257'h0"
+          && memory->type.systemverilog_container
+                  ->static_range_expressions[0]
+                  .right.text
+              == "257'h3",
+      "one-dimensional Verilog memory retains element and wide bound HIR");
+  const auto scratch = std::ranges::find_if(
+      declaration_matrix->signals,
+      [](const auto& signal) {
+          return signal.name == "scratch";
+      });
+  require(
+      scratch != declaration_matrix->signals.end()
+          && scratch->type.is_signed && scratch->type.width() == 8
+          && declaration_matrix->signals.size() == 7,
+      "Verilog net, reg, integer, time, real, realtime, and event objects "
+      "remain distinct after ignored attributes");
+  require(
+      declaration_matrix->functions.size() == 1
+          && declaration_matrix->functions[0].automatic
+          && declaration_matrix->functions[0].lifetime_explicit
+          && declaration_matrix->functions[0].language
+              == Language::Verilog2005
+          && declaration_matrix->tasks.size() == 1
+          && declaration_matrix->tasks[0].automatic
+          && declaration_matrix->tasks[0].lifetime_explicit,
+      "Verilog-2005 callable lifetime remains explicit and source-owned");
+
+  const auto malformed_attribute_name = parse_text(
+      "verilog-attribute-name.v",
+      "(* = 1 *) module bad_name; endmodule",
+      Language::Verilog2005);
+  const auto malformed_attribute_value = parse_text(
+      "verilog-attribute-value.v",
+      "(* keep = *) module bad_value; endmodule",
+      Language::Verilog2005);
+  const auto malformed_attribute_close = parse_text(
+      "verilog-attribute-close.v",
+      "(* keep = 1",
+      Language::Verilog2005);
+  const auto has_diagnostic = [](
+                                  const ParseResult& parsed_result, const std::string_view code) {
+      return std::ranges::any_of(
+          parsed_result.diagnostics,
+          [&](const auto& diagnostic) {
+              return diagnostic.code == code;
+          });
+  };
+  require(
+      !malformed_attribute_name.ok()
+          && has_diagnostic(
+              malformed_attribute_name, "FSIM-SV-PARSE-336")
+          && !malformed_attribute_value.ok()
+          && has_diagnostic(
+              malformed_attribute_value, "FSIM-SV-PARSE-338")
+          && !malformed_attribute_close.ok()
+          && has_diagnostic(
+              malformed_attribute_close, "FSIM-SV-PARSE-337"),
+      "malformed Verilog attributes have stable bounded diagnostics");
+
+  const auto invalid_verilog_memories = parse_text(
+      "verilog-invalid-memories.v",
+      "module bad; reg [7:0] matrix [0:3][0:1]; "
+      "wire [7:0] wire_memory [0:3]; endmodule",
+      Language::Verilog2005);
+  require(
+      !invalid_verilog_memories.ok()
+          && has_diagnostic(
+              invalid_verilog_memories, "FSIM-VERILOG-SEM-012")
+          && has_diagnostic(
+              invalid_verilog_memories, "FSIM-SV-SEM-079"),
+      "multidimensional and net Verilog memories diagnose precisely");
+
   const auto invalid = parse_text(
       "invalid-parameters.sv",
       R"(

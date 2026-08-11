@@ -13,11 +13,11 @@
 
 namespace fsim::app {
 
-inline constexpr std::uint32_t kRuntimeStateSchema = 19;
+inline constexpr std::uint32_t kRuntimeStateSchema = 24;
 inline constexpr std::uint32_t kSemanticStateSchema = 2;
 inline constexpr std::uint32_t kDesignIrStateSchema = 2;
 inline constexpr std::uint32_t kClassStateSchema = 9;
-inline constexpr std::uint32_t kSystemVerilogConstraintHirStateSchema = 3;
+inline constexpr std::uint32_t kSystemVerilogConstraintHirStateSchema = 4;
 inline constexpr std::uint32_t kSystemVerilogCoverageStateSchema = 1;
 inline constexpr std::uint32_t kSystemVerilogUvmStateSchema = 2;
 inline constexpr std::uint32_t kVhdlHirStateSchema = 1;
@@ -61,11 +61,13 @@ deserialize_class_state(
 [[nodiscard]] std::optional<std::string>
 serialize_systemverilog_constraint_hir_state(
     const semantic::sv::Hir& hir,
+    const semantic::Model& semantics,
     diagnostic::Engine& diagnostics);
 [[nodiscard]] std::optional<semantic::sv::Hir>
 deserialize_systemverilog_constraint_hir_state(
     std::string_view bytes,
     std::string source_name,
+    const semantic::Model& semantics,
     diagnostic::Engine& diagnostics);
 
 [[nodiscard]] std::optional<std::string>
@@ -108,4 +110,4 @@ deserialize_systemverilog_uvm_state(
     const std::filesystem::path& directory,
     diagnostic::Engine& diagnostics);
 
-}  // namespace fsim::app
+} // namespace fsim::app

@@ -3,14 +3,14 @@
 
 This is the Batch 130 Task 7 reconciliation of diagnostics, authored source
 size, repository licensing, reviewed third-party material, conformance, and
-provenance, updated through v2 Batch 163 Change 1. The inventories are release
+provenance, updated through v2 Batch 164 Change 1. The inventories are release
 inputs, not substitutes for final sanitizer and full executable regressions.
 
 | Review ID | Frozen release inventory | Required ownership |
 |---|---|---|
-| `B130-T7-DIAGNOSTICS` | 2,138 production diagnostic codes | Every emitted `FSIM-*` diagnostic is unique in and exactly matched by `docs/diagnostics.md`; stale catalog entries and undocumented emissions fail the gate |
-| `B130-T7-SOURCES` | 835 authored C/C++ source and test files | Every file is at most 2,500 lines with a 2,000-line refactor target and an empty hard-limit exception list |
-| `B130-T7-LICENSES` | 955 authored repository files | Every owned build, workflow, documentation, example, header, source, and test artifact, including `.clang-format`, carries an Apache-2.0 SPDX identifier; the root license is Apache-2.0 |
+| `B130-T7-DIAGNOSTICS` | 2,152 production diagnostic codes | Every emitted `FSIM-*` diagnostic is unique in and exactly matched by `docs/diagnostics.md`; stale catalog entries and undocumented emissions fail the gate |
+| `B130-T7-SOURCES` | 842 authored C/C++ source and test files | Every file is at most 2,500 lines with a 2,000-line refactor target and an empty hard-limit exception list |
+| `B130-T7-LICENSES` | 972 authored repository files | Every owned build, workflow, documentation, example, header, source, and test artifact, including `.clang-format`, carries an Apache-2.0 SPDX identifier; the root license is Apache-2.0 |
 | `B130-T7-THIRD-PARTY` | One reviewed root with 31 files and 26 VHDL sources | IEEE P1076 packages retain the pinned commit, Apache-2.0 license/authorship/provenance files, exact loading inventory, and byte-for-byte SHA-256 checks |
 | `B130-T7-CONFORMANCE` | 105 expectations in 28 fixtures owned by 27 CTests | IDs, source identities, expected outcomes, fixture/test ownership, all required evidence modes, and the exact sorted digest remain frozen |
 | `B130-T7-PROVENANCE` | 10 reviewed source IDs and 6 explicit exclusions | Every external semantic reference is pinned and license-reviewed; no unrecorded third-party root or imported test text is permitted |
@@ -281,9 +281,22 @@ third-party bytes, and external provenance identities remain unchanged.
 v2 Batch 163 through Change 19 adds the VHDL/PSL frontend, semantic, runtime,
 debugger, artifact, application, clause/closure inventory, documentation, and
 WebKit formatting owners. Twenty production diagnostics and nine bounded C/C++
-sources advance the reviewed totals to 2,138 diagnostics and 835 sources; three
+sources advance the reviewed totals to 2,142 diagnostics and 835 sources; three
 new focused test sources advance authored test/control ownership to 316. The
 complete authored inventory is 955 files, including the repository
 `.clang-format`, three public VHDL/PSL documents, and their machine contracts.
 The 105 conformance expectations, reviewed IEEE third-party bytes, and external
 provenance identities remain unchanged.
+
+v2 Batch 164 Change 1 adds the clause-indexed Verilog-2005 gap inventory, the
+separate literal-width and host-word-assumption inventory, and their shared
+registered machine contract as three SPDX-owned release files. The complete
+authored inventory advances to 958 files. Diagnostics, bounded C/C++ sources,
+authored test/control owners, conformance expectations, reviewed IEEE third-
+party bytes, and external provenance identities remain unchanged.
+
+v2 Batch 164 through Change 19 advances the synchronized live inventory to
+2,152 diagnostics, 842 bounded C/C++ sources, 972 SPDX-owned files, and 320
+authored test/control files. Historical batch baselines above remain recorded
+at the point they were established; the table and machine gate carry the
+current release totals.

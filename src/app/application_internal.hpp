@@ -85,6 +85,59 @@ private:
 [[nodiscard]] std::unique_ptr<runtime::VhdlVhpiObjectRegistry>
 make_vhdl_debug_registry(const BuiltProject& project);
 
+struct SystemVerilogVpiDriverBinding {
+    fsim_vpi_handle_v1 handle { };
+    runtime::simir::ProcessId process { };
+    std::optional<runtime::SystemVerilogVpiDriveStrength> strength;
+};
+
+struct SystemVerilogVpiPublishedDesign {
+    std::unique_ptr<runtime::SystemVerilogVpiObjectRegistry> registry;
+    std::map<runtime::simir::SignalId, std::vector<fsim_vpi_handle_v1>>
+        signals;
+    std::map<fsim_vpi_handle_v1, runtime::simir::SignalId> handles;
+    std::map<runtime::simir::SignalId,
+        std::vector<SystemVerilogVpiDriverBinding>>
+        drivers;
+    std::map<runtime::simir::SignalId, std::vector<fsim_vpi_handle_v1>> events;
+    std::map<runtime::simir::SignalId, runtime::SystemVerilogScalarKind>
+        scalar_kinds;
+    std::map<runtime::simir::SignalId,
+        runtime::SystemVerilogVpiValueCategory>
+        categories;
+    std::map<runtime::simir::ContainerObjectId,
+        std::vector<std::pair<fsim_vpi_handle_v1, std::size_t>>>
+        container_words;
+    std::map<fsim_vpi_handle_v1,
+        std::pair<runtime::simir::ContainerObjectId, std::size_t>>
+        word_handles;
+    std::map<runtime::simir::ContainerObjectId,
+        runtime::SystemVerilogScalarKind>
+        container_scalar_kinds;
+    std::map<runtime::simir::ContainerObjectId,
+        runtime::SystemVerilogVpiValueCategory>
+        container_categories;
+};
+
+[[nodiscard]] SystemVerilogVpiPublishedDesign
+make_systemverilog_vpi_design(
+    const BuiltProject& project,
+    const runtime::simir::Interpreter& interpreter);
+
+[[nodiscard]] runtime::SystemVerilogVpiTimeProfile
+systemverilog_vpi_time_profile(std::string_view resolution);
+
+[[nodiscard]] runtime::SystemVerilogVpiStoredValue
+systemverilog_vpi_signal_value(
+    runtime::PackedLogic4 value,
+    runtime::SystemVerilogScalarKind scalar_kind,
+    runtime::SystemVerilogVpiValueCategory category);
+
+[[nodiscard]] runtime::PackedLogic4 systemverilog_vpi_packed_value(
+    const runtime::SystemVerilogVpiStoredValue& value,
+    runtime::SystemVerilogScalarKind scalar_kind,
+    runtime::SystemVerilogVpiValueCategory category);
+
 [[nodiscard]] std::string_view report_severity_name(
     const runtime::simir::AssertionSeverity severity) noexcept;
 
@@ -232,6 +285,9 @@ public:
     fork_clone(
         runtime::simir::InstructionIndex start_instruction) override;
 
+    void redirect(
+        runtime::simir::InstructionIndex instruction) override;
+
     [[nodiscard]] runtime::simir::ProcessResumeResult resume(
         runtime::simir::ProcessExecutionContext& context,
         const runtime::simir::InstructionIndex start_instruction) override;
@@ -239,6 +295,9 @@ public:
     [[nodiscard]] PackedLogic4 read_register(
         const runtime::simir::RegisterId id,
         const std::size_t width) const override;
+
+    [[nodiscard]] PackedLogic4 snapshot_register(
+        runtime::simir::RegisterId id) const override;
 
     void write_register(
         const runtime::simir::RegisterId id,
@@ -597,6 +656,12 @@ private:
         const std::uint32_t count,
         const std::uint64_t rejection,
         const std::uint32_t mode) noexcept;
+
+    static std::uint32_t execute_signal_operation(
+        void* context,
+        std::uint32_t process,
+        std::uint32_t instruction,
+        fsim_jit_frame_v1* frame) noexcept;
 
     [[nodiscard]] static runtime::simir::ProjectedDelayMode
     projected_delay_mode(const std::uint32_t mode);

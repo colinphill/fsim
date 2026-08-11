@@ -161,6 +161,36 @@ add_test(
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckVhdlPslGapInventory.cmake"
 )
 add_test(
+  NAME fsim.verilog-gap-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckVerilogGapInventory.cmake"
+)
+add_test(
+  NAME fsim.verilog-closure-audit
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckVerilogClosureAudit.cmake"
+)
+add_test(
+  NAME fsim.verilog-documentation
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckVerilogDocumentation.cmake"
+)
+add_test(
+  NAME fsim.verilog-closure-matrix
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    "-DFSIM_BINARY_DIR=${CMAKE_BINARY_DIR}"
+    "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/verilog-closure-evidence"
+    -P "${PROJECT_SOURCE_DIR}/cmake/RunVerilogClosureMatrix.cmake"
+)
+add_test(
   NAME fsim.vhdl-psl-closure-audit
   COMMAND
     "${CMAKE_COMMAND}"
@@ -393,6 +423,25 @@ set_tests_properties(
   PROPERTIES LABELS "fast;vhdl;psl;conformance;inventory;positive;negative;resources;cmake"
 )
 set_tests_properties(
+  fsim.verilog-gap-inventory
+  PROPERTIES LABELS "fast;verilog;conformance;inventory;positive;negative;width;resources;cmake"
+)
+set_tests_properties(
+  fsim.verilog-closure-audit
+  PROPERTIES LABELS "fast;verilog;closure;release;inventory;width;artifact;cache;debug;trace;mixed;portability;resources;cmake"
+)
+set_tests_properties(
+  fsim.verilog-documentation
+  PROPERTIES LABELS "fast;verilog;documentation;installed;release;width;cmake"
+)
+set_tests_properties(
+  fsim.verilog-closure-matrix
+  PROPERTIES
+    LABELS "slow;verilog;closure;release;positive;negative;llvm;artifact;cache;debug;trace;mixed;portability;resources"
+    RUN_SERIAL TRUE
+    TIMEOUT 7200
+)
+set_tests_properties(
   fsim.vhdl-psl-closure-audit
   PROPERTIES LABELS "fast;vhdl;psl;closure;release;artifact;cache;debug;trace;portability;resources;cmake"
 )
@@ -549,6 +598,7 @@ add_executable(
   elaboration/elaborator_sv_string_test.cpp
   elaboration/elaborator_sv_type_parameter_test.cpp
   elaboration/elaborator_generate_test.cpp
+  elaboration/elaborator_defparam_test.cpp
   elaboration/elaborator_mixed_test.cpp
   elaboration/elaborator_library_search_test.cpp
   elaboration/elaborator_udp_test.cpp
@@ -897,6 +947,23 @@ endif()
 
 if(TARGET fsim_application)
   add_executable(
+    fsim_vpi_application_tests
+    app/vpi_application_test.cpp
+  )
+  fsim_configure_test(fsim_vpi_application_tests)
+  target_link_libraries(
+    fsim_vpi_application_tests PRIVATE fsim_application)
+  add_test(
+    NAME fsim.application.vpi
+    COMMAND fsim_vpi_application_tests
+  )
+  set_tests_properties(
+    fsim.application.vpi
+    PROPERTIES
+      LABELS "fast;application;verilog;vpi;hierarchy;value;callback;control;llvm"
+  )
+
+  add_executable(
     fsim_uvm_phase_tlm_application_tests
     app/uvm_phase_tlm_application_test.cpp
     app/uvm_conformance_inventory.cpp
@@ -1008,6 +1075,10 @@ if(TARGET fsim_application)
 
     fsim_add_application_case(
       0 core app/application_test.cpp fsim.application)
+    fsim_add_application_case(
+      0 specialization app/application_specialization_case.cpp
+      fsim.application.specialization
+      fast specialization hierarchy cache llvm)
     fsim_add_application_case(
       0 artifact_phases app/application_artifact_case.cpp
       fsim.application.artifact_phases
@@ -1294,6 +1365,11 @@ if(TARGET fsim_application)
     )
     set_tests_properties(
       fsim.application.vhdl_psl
+      PROPERTIES TIMEOUT 1200
+    )
+    set_tests_properties(
+      fsim.application.artifact_phases
+      fsim.application.typed_boundaries
       PROPERTIES TIMEOUT 1200
     )
     if(
@@ -2127,6 +2203,7 @@ set_tests_properties(
     PROPERTIES
       LABELS
         "fast;semantic;hir;designir;vhdl;systemverilog;mixed-language;systemc;cache;debugger;vcd;portability"
+      TIMEOUT 1200
   )
 
   add_executable(
@@ -2428,6 +2505,7 @@ set_tests_properties(
   )
   target_link_libraries(fsim_application_tests PRIVATE fsim_application)
   add_test(NAME fsim.application COMMAND fsim_application_tests)
+  set_tests_properties(fsim.application PROPERTIES TIMEOUT 1200)
   if(
     WIN32
     AND (

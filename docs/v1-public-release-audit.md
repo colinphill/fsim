@@ -39,6 +39,12 @@ SystemVerilog/UVM source-set, registration, configuration, phase, objection,
 report, direct-engine, portable-artifact, plusarg, and bounded-automation
 contracts; it requires no producer wrapper or patched compatibility source.
 
+V2 Batch 164 adds installed checks for `verilog-2005.md`,
+`verilog-2005-tutorial.md`, and `verilog-2005-closure-audit.md`. The public
+surface states the no-arbitrary-literal-width rule, distinguishes physical
+host/resource ceilings from language legality, and exposes the exact retained
+clause/width/closure digests without requiring source-tree paths at runtime.
+
 ## Closure evidence
 
 The eight-worker Debug build is warning-clean. The public/static and staged

@@ -85,6 +85,14 @@ void substitute_generate_body_parameter_sites(
     substitute_systemverilog_scalars(constant.default_value, environment);
   }
   substitute_instance_actuals(body.instances, environment);
+  for (auto& declaration : body.verilog_defparams) {
+      for (auto& segment : declaration.path) {
+          for (auto& index : segment.indices) {
+              substitute_systemverilog_scalars(index, environment);
+          }
+      }
+      substitute_systemverilog_scalars(declaration.value, environment);
+  }
   substitute_generate_parameter_sites(body.generate_regions, environment);
 }
 
@@ -197,6 +205,14 @@ void substitute_systemverilog_scalar_parameter_sites(
     substitute_callable_parameter_sites(task, environment);
   }
   substitute_instance_actuals(unit.instances, environment);
+  for (auto& declaration : unit.verilog_defparams) {
+      for (auto& segment : declaration.path) {
+          for (auto& index : segment.indices) {
+              substitute_systemverilog_scalars(index, environment);
+          }
+      }
+      substitute_systemverilog_scalars(declaration.value, environment);
+  }
   for (auto& instance : unit.instances) {
     for (auto& connection : instance.connections) {
       substitute_systemverilog_scalars(connection.value, environment);

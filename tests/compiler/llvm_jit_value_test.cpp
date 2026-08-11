@@ -80,6 +80,254 @@ void test_systemverilog_scalar_transport_at_level(
   (void)jit.lookup(binary_symbol);
 }
 
+void test_wide_register_frame_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol)
+{
+    auto value = PackedLogic4(257, fsim::runtime::Logic4::zero);
+    value.set(0, fsim::runtime::Logic4::one);
+    value.set(64, fsim::runtime::Logic4::x);
+    value.set(128, fsim::runtime::Logic4::z);
+    value.set(256, fsim::runtime::Logic4::one);
+
+    Process process;
+    process.id = 91;
+    process.name = "wide_register_frame";
+    process.register_count = 2;
+    process.operations = {
+        LoadConstant { 0, value },
+        CopyRegister { 1, 0 },
+        Pause { },
+        Stop { },
+    };
+
+    LlvmJit jit { LlvmJitOptions { optimization, { } } };
+    assert(jit.supports_process(process, { }));
+    jit.add_process(symbol, process, { });
+    const auto handle = jit.lookup(symbol);
+    const auto layout = jit.frame_layout(handle);
+    assert(layout.register_count == 2);
+    assert(layout.register_word_count == 10);
+    assert((layout.register_widths
+        == std::vector<std::uint32_t> { 257, 257 }));
+    assert((layout.register_word_offsets
+        == std::vector<std::uint32_t> { 0, 5 }));
+
+    std::vector<std::uint64_t> aval(layout.register_word_count);
+    std::vector<std::uint64_t> bval(layout.register_word_count);
+    std::vector<std::uint8_t> initialized(layout.register_count);
+    fsim_jit_frame_v1 frame { };
+    jit.initialize_frame(handle, frame, aval, bval, initialized);
+    TestRuntime runtime;
+    auto descriptor = abi(runtime);
+    auto result = new_resume_result();
+    assert(jit.resume(handle, descriptor, frame, result)
+        == JitResumeStatus::paused);
+    assert(result.instruction == 2);
+    assert((initialized == std::vector<std::uint8_t> { 1, 1 }));
+    for (std::size_t destination = 0; destination < 2; ++destination) {
+        const auto offset = layout.register_word_offsets[destination];
+        assert(std::ranges::equal(value.aval_words(),
+            std::span { aval }.subspan(offset, value.aval_words().size())));
+        assert(std::ranges::equal(value.bval_words(),
+            std::span { bval }.subspan(offset, value.bval_words().size())));
+    }
+}
+
+void test_wide_value_operations_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol)
+{
+    auto wide = PackedLogic4(257, Logic4::zero);
+    wide.set(0, Logic4::one);
+    wide.set(2, Logic4::one);
+    wide.set(256, Logic4::one);
+    auto one = PackedLogic4(257, Logic4::zero);
+    one.set(0, Logic4::one);
+    auto three = one;
+    three.set(1, Logic4::one);
+    auto wide_part = PackedLogic4(129, Logic4::zero);
+    wide_part.set(0, Logic4::one);
+    wide_part.set(64, Logic4::x);
+    wide_part.set(128, Logic4::z);
+
+    Process process;
+    process.id = 92;
+    process.name = "wide_value_operations";
+    process.register_count = 49;
+    process.operations = {
+        LoadConstant { 0, wide },
+        LoadConstant { 1, one },
+        LoadConstant { 2, three },
+        Binary { BinaryOperator::bit_and, 3, 0, 2 },
+        Binary { BinaryOperator::bit_or, 4, 0, 2 },
+        Binary { BinaryOperator::bit_xor, 5, 0, 2 },
+        Binary { BinaryOperator::add_unsigned, 6, 0, 2 },
+        Binary { BinaryOperator::subtract_unsigned, 7, 0, 2 },
+        Binary { BinaryOperator::multiply_unsigned, 8, 0, 2 },
+        Binary { BinaryOperator::power_unsigned, 9, 0, 1 },
+        Binary { BinaryOperator::divide_unsigned, 10, 0, 1 },
+        Binary { BinaryOperator::modulo_unsigned, 11, 0, 1 },
+        Binary { BinaryOperator::add_signed, 12, 0, 2 },
+        Binary { BinaryOperator::subtract_signed, 13, 0, 2 },
+        Binary { BinaryOperator::multiply_signed, 14, 0, 2 },
+        Binary { BinaryOperator::power_signed, 15, 0, 1 },
+        Binary { BinaryOperator::divide_signed, 16, 0, 1 },
+        Binary { BinaryOperator::remainder_signed, 17, 0, 1 },
+        Binary { BinaryOperator::modulo_signed, 18, 0, 1 },
+        Binary { BinaryOperator::equal, 19, 0, 0 },
+        Binary { BinaryOperator::not_equal, 20, 0, 2 },
+        Binary { BinaryOperator::less_unsigned, 21, 2, 0 },
+        Binary { BinaryOperator::less_signed, 22, 0, 2 },
+        Binary { BinaryOperator::case_equal, 23, 0, 0 },
+        UnaryNot { 24, 0 },
+        LogicalNot { 25, 0 },
+        LogicalBinary { LogicalBinaryOperator::logical_and, 26, 0, 2 },
+        Reduction { ReductionOperator::bit_xor, 27, 0 },
+        CountOnes { 28, 0 },
+        Concatenate { 29, { 0, 2 }, 514 },
+        Extract { 30, 29, 0, 257 },
+        Insert { 31, 0, 19, 128 },
+        ConditionalSelect { 32, 19, 0, 2 },
+        Shift { ShiftOperator::logical_left, 33, 0, 1, false },
+        Shift { ShiftOperator::logical_right, 34, 0, 1, false },
+        Shift { ShiftOperator::arithmetic_left, 35, 0, 1, false },
+        Shift { ShiftOperator::arithmetic_right, 36, 0, 1, false },
+        Shift { ShiftOperator::rotate_left, 37, 0, 1, false },
+        Shift { ShiftOperator::rotate_right, 38, 0, 1, false },
+        LoadConstant { 39, PackedLogic4::from_aval_bval(32, 128, 0) },
+        LoadConstant { 40, PackedLogic4::from_aval_bval(32, 256, 0) },
+        DynamicExtract { 41, 0, DynamicIndex { 40, 256, 0, 0 } },
+        DynamicInsert { 42, 0, 19, DynamicIndex { 39, 256, 0, 0 } },
+        DynamicPartSelect { 43, 0, 40, 256, 0, 1, true, true, false, 0 },
+        DynamicPartInsert {
+            44, 0, 19, DynamicPartIndex { 39, 256, 0, 0, 1, true, true } },
+        LoadConstant { 45, wide_part },
+        LoadConstant { 46, PackedLogic4::from_aval_bval(32, 64, 0) },
+        DynamicPartInsert {
+            47, 0, 45,
+            DynamicPartIndex { 46, 256, 0, 0, 129, true, true } },
+        DynamicPartSelect {
+            48, 47, 46, 256, 0, 129, true, true, false, 0 },
+        Pause { },
+        Stop { },
+    };
+
+    LlvmJit jit { LlvmJitOptions { optimization, { } } };
+    assert(jit.supports_process(process, { }));
+    jit.add_process(symbol, process, { });
+    const auto handle = jit.lookup(symbol);
+    const auto layout = jit.frame_layout(handle);
+    std::vector<std::uint64_t> aval(layout.register_word_count);
+    std::vector<std::uint64_t> bval(layout.register_word_count);
+    std::vector<std::uint8_t> initialized(layout.register_count);
+    fsim_jit_frame_v1 frame { };
+    jit.initialize_frame(handle, frame, aval, bval, initialized);
+    TestRuntime runtime;
+    auto descriptor = abi(runtime);
+    auto result = new_resume_result();
+    assert(jit.resume(handle, descriptor, frame, result)
+        == JitResumeStatus::paused);
+
+    const auto read = [&](const RegisterId id) {
+        const auto width = layout.register_widths[id];
+        const auto offset = layout.register_word_offsets[id];
+        const auto words = (static_cast<std::size_t>(width) + 63U) / 64U;
+        return PackedLogic4::from_word_planes(
+            width,
+            std::span { aval }.subspan(offset, words),
+            std::span { bval }.subspan(offset, words));
+    };
+    const auto scalar = [&](const RegisterId id) {
+        const auto value = read(id).known_unsigned_value();
+        assert(value);
+        return *value;
+    };
+    const auto expect_wide = [&](const RegisterId id,
+                                 const PackedLogic4& expected) {
+        assert(read(id).to_msb_string() == expected.to_msb_string());
+    };
+
+    assert(scalar(3) == 1);
+    auto expected_or = wide;
+    expected_or.set(1, Logic4::one);
+    expect_wide(4, expected_or);
+    auto expected_xor = expected_or;
+    expected_xor.set(0, Logic4::zero);
+    expect_wide(5, expected_xor);
+    auto expected_add = PackedLogic4(257, Logic4::zero);
+    expected_add.set(3, Logic4::one);
+    expected_add.set(256, Logic4::one);
+    expect_wide(6, expected_add);
+    auto expected_subtract = PackedLogic4(257, Logic4::zero);
+    expected_subtract.set(1, Logic4::one);
+    expected_subtract.set(256, Logic4::one);
+    expect_wide(7, expected_subtract);
+    auto expected_multiply = PackedLogic4(257, Logic4::zero);
+    for (const auto bit : { 0U, 1U, 2U, 3U, 256U }) {
+        expected_multiply.set(bit, Logic4::one);
+    }
+    expect_wide(8, expected_multiply);
+    for (const auto id : { 9U, 10U, 15U, 16U }) {
+        expect_wide(id, wide);
+    }
+    for (const auto id : { 11U, 17U, 18U }) {
+        assert(scalar(id) == 0);
+    }
+    expect_wide(12, expected_add);
+    expect_wide(13, expected_subtract);
+    expect_wide(14, expected_multiply);
+    for (const auto id : { 19U, 20U, 21U, 22U, 23U, 26U, 27U }) {
+        assert(scalar(id) == 1);
+    }
+    const auto inverted = read(24);
+    assert(inverted.get(0) == Logic4::zero);
+    assert(inverted.get(1) == Logic4::one);
+    assert(inverted.get(2) == Logic4::zero);
+    assert(inverted.get(255) == Logic4::one);
+    assert(inverted.get(256) == Logic4::zero);
+    assert(scalar(25) == 0);
+    assert(scalar(28) == 3);
+    const auto concatenated = read(29);
+    assert(concatenated.get(0) == Logic4::one);
+    assert(concatenated.get(1) == Logic4::one);
+    assert(concatenated.get(256) == Logic4::zero);
+    assert(concatenated.get(257) == Logic4::one);
+    assert(concatenated.get(259) == Logic4::one);
+    assert(concatenated.get(513) == Logic4::one);
+    expect_wide(30, three);
+    auto expected_insert = wide;
+    expected_insert.set(128, Logic4::one);
+    expect_wide(31, expected_insert);
+    expect_wide(32, wide);
+    auto expected_left = PackedLogic4(257, Logic4::zero);
+    expected_left.set(1, Logic4::one);
+    expected_left.set(3, Logic4::one);
+    expect_wide(33, expected_left);
+    auto expected_right = PackedLogic4(257, Logic4::zero);
+    expected_right.set(1, Logic4::one);
+    expected_right.set(255, Logic4::one);
+    expect_wide(34, expected_right);
+    auto expected_arithmetic_left = expected_left;
+    expected_arithmetic_left.set(0, Logic4::one);
+    expect_wide(35, expected_arithmetic_left);
+    auto expected_arithmetic_right = expected_right;
+    expected_arithmetic_right.set(256, Logic4::one);
+    expect_wide(36, expected_arithmetic_right);
+    expect_wide(37, expected_arithmetic_left);
+    expect_wide(38, expected_arithmetic_right);
+    assert(scalar(41) == 1);
+    expect_wide(42, expected_insert);
+    assert(scalar(43) == 1);
+    expect_wide(44, expected_insert);
+    auto expected_wide_part_insert = wide;
+    for (std::size_t bit = 0; bit < wide_part.width(); ++bit) {
+        expected_wide_part_insert.set(64 + bit, wide_part.get(bit));
+    }
+    expect_wide(47, expected_wide_part_insert);
+    expect_wide(48, wide_part);
+}
+
 void test_scalar_truth_tables_and_64_bits() {
   LlvmJit jit;
   Process scalar;

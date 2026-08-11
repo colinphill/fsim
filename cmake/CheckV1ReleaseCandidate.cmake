@@ -9,7 +9,16 @@ endif()
 set(FSIM_MATRIX "${FSIM_SOURCE_DIR}/docs/feature-matrix.md")
 set(FSIM_CORPUS "${FSIM_SOURCE_DIR}/docs/v1-release-candidate-corpus.txt")
 set(FSIM_TEST_CMAKE "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
-foreach(FSIM_INPUT IN ITEMS "${FSIM_MATRIX}" "${FSIM_CORPUS}" "${FSIM_TEST_CMAKE}")
+set(FSIM_VERILOG_GAP
+  "${FSIM_SOURCE_DIR}/tests/feature_matrix/verilog_gap_inventory.tsv")
+set(FSIM_VERILOG_WIDTH
+  "${FSIM_SOURCE_DIR}/tests/feature_matrix/verilog_literal_width_inventory.tsv")
+set(FSIM_VERILOG_CLOSURE
+  "${FSIM_SOURCE_DIR}/tests/feature_matrix/verilog_release_closure.tsv")
+foreach(FSIM_INPUT IN ITEMS
+    "${FSIM_MATRIX}" "${FSIM_CORPUS}" "${FSIM_TEST_CMAKE}"
+    "${FSIM_VERILOG_GAP}" "${FSIM_VERILOG_WIDTH}"
+    "${FSIM_VERILOG_CLOSURE}")
   if(NOT EXISTS "${FSIM_INPUT}")
     message(FATAL_ERROR "release-candidate input not found: ${FSIM_INPUT}")
   endif()
@@ -41,6 +50,9 @@ endforeach()
 file(READ "${FSIM_MATRIX}" FSIM_MATRIX_CONTENTS)
 file(READ "${FSIM_CORPUS}" FSIM_CORPUS_CONTENTS)
 file(READ "${FSIM_TEST_CMAKE}" FSIM_TEST_CMAKE_CONTENTS)
+file(SHA256 "${FSIM_VERILOG_GAP}" FSIM_VERILOG_GAP_DIGEST)
+file(SHA256 "${FSIM_VERILOG_WIDTH}" FSIM_VERILOG_WIDTH_DIGEST)
+file(SHA256 "${FSIM_VERILOG_CLOSURE}" FSIM_VERILOG_CLOSURE_DIGEST)
 string(REPLACE "\r\n" "\n" FSIM_MATRIX_CONTENTS "${FSIM_MATRIX_CONTENTS}")
 string(SHA256 FSIM_MATRIX_DIGEST "${FSIM_MATRIX_CONTENTS}")
 
@@ -141,7 +153,7 @@ while(FSIM_EXPECTED_VALUES)
 endwhile()
 
 set(FSIM_EXPECTED_MATRIX_DIGEST
-  "e38217f0ced26556c13e4ef6d4f32aa4d46172192ec54e926e739d165abbbab7")
+  "7f879238bfcdbc544e688c710038c97063a8464f9817c758b87c1a2f89e0472d")
 set(FSIM_EXPECTED_EVIDENCE_DIGEST
   "2d9a2bf8fdc360b6b484087848eeb00def2a61cff5fecfacf9400fadcec2010b")
 if(NOT FSIM_MATRIX_DIGEST STREQUAL FSIM_EXPECTED_MATRIX_DIGEST
@@ -157,6 +169,9 @@ foreach(FSIM_TOKEN IN ITEMS
     "evidence-slots: 5116"
     "evidence-paths: 604"
     "evidence-sha256: ${FSIM_EVIDENCE_DIGEST}"
+    "verilog-gap-sha256: ${FSIM_VERILOG_GAP_DIGEST}"
+    "verilog-width-sha256: ${FSIM_VERILOG_WIDTH_DIGEST}"
+    "verilog-closure-sha256: ${FSIM_VERILOG_CLOSURE_DIGEST}"
     "test-evidence-paths: 265"
     "production-evidence-paths: 312"
     "release-evidence-paths: 27"

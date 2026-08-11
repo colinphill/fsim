@@ -60,12 +60,16 @@ namespace fsim::runtime::simir {
           return std::optional{value.signal};
         } else if constexpr (std::is_same_v<OperationType, WriteInertialDynamicSlice>) {
           return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<
+                                 OperationType,
+                                 WriteInertialDynamicPartSlice>) {
+            return std::optional { value.signal };
         } else if constexpr (std::is_same_v<OperationType, WriteProjectedDynamicSlice>) {
-          return std::optional{value.signal};
+            return std::optional { value.signal };
         } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveformDynamicSlice>) {
-          return std::optional{value.signal};
+            return std::optional { value.signal };
         } else {
-          return {};
+            return { };
         }
       },
       operation);

@@ -2,6 +2,7 @@
 #include "fsim/runtime/packed_value.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <limits>
 #include <stdexcept>
 
@@ -147,6 +148,23 @@ PackedLogic4 PackedLogic4::from_aval_bval(
   return result;
 }
 
+PackedLogic4 PackedLogic4::from_word_planes(
+    const std::size_t width,
+    const std::span<const std::uint64_t> aval,
+    const std::span<const std::uint64_t> bval)
+{
+    const auto words = word_count(width);
+    if (width == 0 || aval.size() != words || bval.size() != words) {
+        throw std::invalid_argument(
+            "four-state plane dimensions do not match the packed width");
+    }
+    PackedLogic4 result(width, Logic4::zero);
+    std::ranges::copy(aval, result.mutable_aval_words().begin());
+    std::ranges::copy(bval, result.mutable_bval_words().begin());
+    result.mask_unused_bits();
+    return result;
+}
+
 PackedLogic4 PackedLogic4::from_logic9_word(
     const Logic9Word& value) {
   if (value.width == 0 || value.width > bits_per_word) {
@@ -205,6 +223,56 @@ PackedLogic4::mutable_bval_words() noexcept {
     return {&inline_bval_, 1};
   }
   return bval_;
+}
+
+std::optional<std::uint64_t>
+PackedLogic4::known_unsigned_value() const noexcept
+{
+    if (width_ == 0 || logic9_) {
+        return std::nullopt;
+    }
+    const auto aval = aval_words();
+    const auto bval = bval_words();
+    if (std::ranges::any_of(bval, [](const auto word) { return word != 0; })
+        || std::ranges::any_of(
+            aval.subspan(1), [](const auto word) { return word != 0; })) {
+        return std::nullopt;
+    }
+    return aval.front();
+}
+
+std::optional<std::int64_t>
+PackedLogic4::known_signed_value() const noexcept
+{
+    if (width_ == 0 || logic9_) {
+        return std::nullopt;
+    }
+    const auto aval = aval_words();
+    const auto bval = bval_words();
+    if (std::ranges::any_of(bval, [](const auto word) { return word != 0; })) {
+        return std::nullopt;
+    }
+
+    auto low = aval.front();
+    if (width_ < bits_per_word) {
+        const auto sign = UINT64_C(1) << (width_ - 1U);
+        if ((low & sign) != 0) {
+            low |= ~final_word_mask(width_);
+        }
+        return std::bit_cast<std::int64_t>(low);
+    }
+
+    const auto negative = (low & (UINT64_C(1) << 63U)) != 0;
+    for (std::size_t index = 1; index < aval.size(); ++index) {
+        const auto mask = index + 1U == aval.size()
+            ? final_word_mask(width_)
+            : std::numeric_limits<std::uint64_t>::max();
+        const auto extension = negative ? mask : UINT64_C(0);
+        if ((aval[index] & mask) != extension) {
+            return std::nullopt;
+        }
+    }
+    return std::bit_cast<std::int64_t>(low);
 }
 
 Logic4Word PackedLogic4::low_word() const {

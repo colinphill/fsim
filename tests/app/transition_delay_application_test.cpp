@@ -49,6 +49,8 @@ struct Capture {
   std::string vcd;
   std::string debugger;
   std::string resolution;
+  bool wide_dynamic_part_inertial { };
+  bool wide_dynamic_part_update { };
   std::size_t compiled_processes{};
   fsim::app::NativeCacheStatistics native_cache;
 };
@@ -99,13 +101,29 @@ Capture run_once(
     if (process.name.find("gate_array[") != std::string::npos) {
       capture.gate_array_processes.push_back(process.name);
     }
+    capture.wide_dynamic_part_inertial = capture.wide_dynamic_part_inertial
+        || std::ranges::any_of(
+            process.operations,
+            [](const fsim::runtime::simir::Operation& operation) {
+                return fsim::runtime::simir::operation_holds<
+                    fsim::runtime::simir::
+                        WriteInertialDynamicPartSlice>(operation);
+            });
+    capture.wide_dynamic_part_update = capture.wide_dynamic_part_update
+        || std::ranges::any_of(
+            process.operations,
+            [](const fsim::runtime::simir::Operation& operation) {
+                return fsim::runtime::simir::operation_holds<
+                    fsim::runtime::simir::
+                        WriteUpdateDynamicPartSlice>(operation);
+            });
   }
   fsim::app::Simulation simulation{
       std::move(*project), config.run.max_deltas, engine};
   capture.compiled_processes = simulation.compiled_process_count();
   capture.native_cache = simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 13> names{
+  constexpr std::array<std::string_view, 15> names {
       "transition_delays.mode_output",
       "transition_delays.vector_output",
       "transition_delays.slice_output",
@@ -118,7 +136,10 @@ Capture run_once(
       "transition_delays.tri_output",
       "transition_delays.notif_output",
       "transition_delays.same_value_output",
-      "transition_delays.zero_output"};
+      "transition_delays.zero_output",
+      "transition_delays.wide_output",
+      "transition_delays.wide_update_output"
+  };
   std::array<fsim::runtime::simir::SignalId, names.size()> signals{};
   std::ostringstream vcd_output;
   fsim::runtime::VcdWriter vcd(vcd_output, capture.resolution, 128);
@@ -127,13 +148,14 @@ Capture run_once(
     const auto signal = simulation.find_signal(names[index]);
     assert(signal);
     signals[index] = *signal;
-    const auto width =
-        names[index].find("vector") != std::string_view::npos
-                || names[index].find("gate_array")
-                    != std::string_view::npos
-                || names[index].find("slice") != std::string_view::npos
-            ? 4U
-            : 1U;
+    const auto width = names[index].find("wide") != std::string_view::npos
+        ? 257U
+        : names[index].find("vector") != std::string_view::npos
+            || names[index].find("gate_array")
+                != std::string_view::npos
+            || names[index].find("slice") != std::string_view::npos
+        ? 4U
+        : 1U;
     vcd_signals[index] =
         vcd.declare_signal(std::string{names[index]}, width);
   }
@@ -218,6 +240,8 @@ void verify_mode(
   assert(reference.result.status == fsim::runtime::RunStatus::stopped);
   assert(reference.result.time == 100);
   assert(reference.resolution == "1ps");
+  assert(reference.wide_dynamic_part_inertial);
+  assert(reference.wide_dynamic_part_update);
   const std::vector<std::pair<
       std::string,
       fsim::runtime::SimulationTick>> expected_mode{
@@ -313,6 +337,27 @@ void verify_mode(
           fsim::runtime::SimulationTick>>{
           {"X", 0}, {"0", 0}, {"1", 20}, {"0", 40}, {"Z", 60},
           {"X", 80}}));
+  const auto wide_zero = std::string(64, 'Z') + std::string(129, '0')
+      + std::string(64, 'Z');
+  const auto wide_pattern = std::string(64, 'Z') + "1" + std::string(127, '0') + "X"
+      + std::string(64, 'Z');
+  const auto wide_unknown = std::string(64, 'Z') + std::string(129, 'X')
+      + std::string(64, 'Z');
+  assert((
+      changes_for(reference, "transition_delays.wide_output")
+      == std::vector<std::pair<
+          std::string,
+          fsim::runtime::SimulationTick>> {
+          { wide_zero, 5 }, { wide_pattern, 43 }, { std::string(257, 'Z'), 67 },
+          { wide_unknown, 83 } }));
+  assert((
+      changes_for(reference, "transition_delays.wide_update_output")
+      == std::vector<std::pair<
+          std::string,
+          fsim::runtime::SimulationTick>> {
+          { wide_zero, 0 }, { wide_pattern, 20 }, { wide_zero, 22 },
+          { wide_pattern, 40 }, { std::string(257, 'Z'), 60 },
+          { wide_unknown, 80 } }));
   assert(
       reference.vcd.find(
           "#" + std::to_string(mode_times.back()))
@@ -342,15 +387,21 @@ void verify_mode(
     assert(
         reference.gate_array_processes
         == actual->gate_array_processes);
+    assert(
+        reference.wide_dynamic_part_inertial
+        == actual->wide_dynamic_part_inertial);
+    assert(
+        reference.wide_dynamic_part_update
+        == actual->wide_dynamic_part_update);
     assert(reference.vcd == actual->vcd);
     assert(reference.debugger == actual->debugger);
   }
 #if defined(FSIM_HAS_LLVM)
-  assert(cold.compiled_processes == 17);
+  assert(cold.compiled_processes == 19);
   assert(cold.native_cache.hits == 0);
   assert(cold.native_cache.misses == 1);
   assert(cold.native_cache.stores == 1);
-  assert(warm.compiled_processes == 17);
+  assert(warm.compiled_processes == 19);
   assert(warm.native_cache.hits == 1);
   assert(warm.native_cache.misses == 0);
 #else
@@ -1306,6 +1357,8 @@ module transition_delays;
   logic gate_enable;
   logic same_left;
   logic same_right;
+  logic [128:0] wide_drive;
+  logic [31:0] wide_base;
   wire mode_output;
   wire [3:0] vector_output;
   wire [3:0] slice_output;
@@ -1319,6 +1372,8 @@ module transition_delays;
   wire notif_output;
   wire same_value_output;
   wire zero_output;
+  wire [256:0] wide_output;
+  wire [256:0] wide_update_output;
 
   assign #(
       1ps:2ps:3ps,
@@ -1340,6 +1395,9 @@ module transition_delays;
       notif_output, mode_drive, gate_enable);
   assign #5ps same_value_output = same_left & same_right;
   assign #0 zero_output = mode_drive;
+  assign #(3ps, 5ps, 7ps)
+      wide_output[wide_base +: 129] = wide_drive;
+  assign wide_update_output[wide_base +: 129] = wide_drive;
 
   initial begin
     mode_drive = 1'b0;
@@ -1351,6 +1409,8 @@ module transition_delays;
     gate_enable = 1'b0;
     same_left = 1'b0;
     same_right = 1'b0;
+    wide_drive = '0;
+    wide_base = 32'd64;
     #1ps same_left = 1'b1;
     #19ps;
     mode_drive = 1'b1;
@@ -1360,13 +1420,20 @@ module transition_delays;
     gate_array_a = 4'b1010;
     gate_enable = 1'b1;
     same_right = 1'b1;
+    wide_drive = {1'b1, {127{1'b0}}, 1'bx};
     #2ps pulse_drive = 1'b0;
+    wide_drive = '0;
     #18ps;
     mode_drive = 1'b0;
     vector_drive = 4'b0000;
     gate_array_b = 4'b0101;
-    #20ps mode_drive = 1'bz;
-    #20ps mode_drive = 1'bx;
+    wide_drive = {1'b1, {127{1'b0}}, 1'bx};
+    #20ps;
+    mode_drive = 1'bz;
+    wide_drive = 'z;
+    #20ps;
+    mode_drive = 1'bx;
+    wide_drive = 'x;
     #20ps $finish;
   end
 endmodule

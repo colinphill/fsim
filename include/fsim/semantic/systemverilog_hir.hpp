@@ -132,6 +132,7 @@ enum class StatementKind : std::uint8_t {
     fork,
     wait_fork,
     disable_fork,
+    disable,
     display,
     file_close,
     file_flush,
@@ -143,6 +144,8 @@ enum class StatementKind : std::uint8_t {
     finish,
     block,
     null_statement,
+    procedural_assign,
+    deassign,
 };
 
 enum class ProcessKind : std::uint8_t {
@@ -154,9 +157,16 @@ enum class ProcessKind : std::uint8_t {
     final,
 };
 
-enum class ForkJoinKind : std::uint8_t { all, any, none };
-enum class AssignmentControl : std::uint8_t { none, delay, event };
-enum class UpdateKind : std::uint8_t { none, compound, prefix, postfix };
+enum class ForkJoinKind : std::uint8_t { all,
+    any,
+    none };
+enum class AssignmentControl : std::uint8_t { none,
+    delay,
+    event };
+enum class UpdateKind : std::uint8_t { none,
+    compound,
+    prefix,
+    postfix };
 enum class CaseMatchKind : std::uint8_t {
     exact,
     wildcard_z,
@@ -189,7 +199,9 @@ enum class OutputFormat : std::uint8_t {
     hierarchy,
     time,
 };
-enum class EdgeKind : std::uint8_t { any, positive, negative };
+enum class EdgeKind : std::uint8_t { any,
+    positive,
+    negative };
 
 struct Name {
     std::string spelling;
@@ -214,7 +226,7 @@ struct CallAssociation {
 struct Expression {
     ExpressionId id;
     ScopeId scope;
-    ExpressionKind kind{ExpressionKind::invalid};
+    ExpressionKind kind { ExpressionKind::invalid };
     std::string text;
     SourceSpanId source;
     OriginId origin;
@@ -226,13 +238,13 @@ struct Expression {
     std::string nominal_type;
     std::string class_identity;
     std::string class_member_identity;
-    bool class_checked{};
+    bool class_checked { };
     std::optional<std::string> decoded_string;
 };
 
 struct DelayValue {
-    std::uint64_t magnitude{};
-    std::uint64_t divisor{1};
+    std::uint64_t magnitude { };
+    std::uint64_t divisor { 1 };
     std::string unit;
     std::optional<ExpressionId> expression;
     SourceSpanId source;
@@ -247,7 +259,7 @@ struct Delay {
 };
 
 struct Sensitivity {
-    EdgeKind edge{EdgeKind::any};
+    EdgeKind edge { EdgeKind::any };
     std::string signal;
     std::optional<ExpressionId> expression;
     SourceSpanId source;
@@ -261,88 +273,88 @@ struct TaskAssociation {
 
 struct OutputValue {
     ExpressionId value;
-    OutputFormat format{OutputFormat::decimal};
+    OutputFormat format { OutputFormat::decimal };
     std::string prefix;
-    bool suppress_leading_zero{};
-    std::uint32_t minimum_width{};
-    bool left_justify{};
-    bool zero_pad{};
+    bool suppress_leading_zero { };
+    std::uint32_t minimum_width { };
+    bool left_justify { };
+    bool zero_pad { };
 };
 
 struct CaseAlternative {
     std::vector<ExpressionId> choices;
     std::vector<StatementId> statements;
-    bool is_default{};
+    bool is_default { };
     SourceSpanId source;
 };
 
 struct Statement {
     StatementId id;
     ScopeId scope;
-    StatementKind kind{StatementKind::null_statement};
+    StatementKind kind { StatementKind::null_statement };
     std::string label;
     SourceSpanId source;
     OriginId origin;
-    AssignmentKind assignment_kind{AssignmentKind::blocking};
+    AssignmentKind assignment_kind { AssignmentKind::blocking };
     std::optional<ExpressionId> target;
     std::optional<ExpressionId> value;
     std::optional<ExpressionId> condition;
     Name task;
     std::vector<TaskAssociation> task_arguments;
     std::string loop_variable;
-    bool loop_variable_declared{};
+    bool loop_variable_declared { };
     std::optional<ExpressionId> loop_initial;
     std::optional<ExpressionId> loop_limit;
     std::optional<ExpressionId> loop_update_target;
     std::vector<StatementId> loop_updates;
-    bool loop_descending{};
-    bool loop_limit_exclusive{};
-    bool loop_repeat{};
-    bool loop_runtime{};
-    bool loop_post_test{};
-    ForkJoinKind fork_join{ForkJoinKind::all};
-    AssignmentControl assignment_control{AssignmentControl::none};
-    bool assignment_control_repeated{};
-    UpdateKind update_kind{UpdateKind::none};
+    bool loop_descending { };
+    bool loop_limit_exclusive { };
+    bool loop_repeat { };
+    bool loop_runtime { };
+    bool loop_post_test { };
+    ForkJoinKind fork_join { ForkJoinKind::all };
+    AssignmentControl assignment_control { AssignmentControl::none };
+    bool assignment_control_repeated { };
+    UpdateKind update_kind { UpdateKind::none };
     std::string update_operator;
     std::optional<Delay> delay;
     std::vector<Sensitivity> sensitivities;
     std::string assertion_message;
-    AssertionSeverity assertion_severity{AssertionSeverity::error};
-    bool assertion_has_pass_action{};
-    bool assertion_has_failure_action{};
+    AssertionSeverity assertion_severity { AssertionSeverity::error };
+    bool assertion_has_pass_action { };
+    bool assertion_has_failure_action { };
     std::string output_text;
-    bool output_newline{true};
-    bool output_postponed{};
+    bool output_newline { true };
+    bool output_postponed { };
     std::optional<OutputFormat> output_format;
     std::string output_prefix;
     std::string output_suffix;
-    bool output_suppress_leading_zero{};
-    std::uint32_t output_minimum_width{};
-    bool output_left_justify{};
-    bool output_zero_pad{};
-    bool output_monitor{};
-    bool monitor_enabled{};
+    bool output_suppress_leading_zero { };
+    std::uint32_t output_minimum_width { };
+    bool output_left_justify { };
+    bool output_zero_pad { };
+    bool output_monitor { };
+    bool monitor_enabled { };
     std::optional<ExpressionId> file_handle;
-    bool memory_hex{};
-    bool memory_write{};
+    bool memory_hex { };
+    bool memory_write { };
     std::vector<OutputValue> output_values;
     std::string output_trailing_text;
     std::vector<StatementId> statements;
     std::vector<StatementId> else_statements;
-    CaseMatchKind case_match{CaseMatchKind::exact};
-    CaseQualifier case_qualifier{CaseQualifier::none};
+    CaseMatchKind case_match { CaseMatchKind::exact };
+    CaseQualifier case_qualifier { CaseQualifier::none };
     std::vector<CaseAlternative> case_alternatives;
     std::vector<DeclarationId> declarations;
     std::optional<ScopeId> nested_scope;
-    bool class_handle_transfer{};
+    bool class_handle_transfer { };
     std::string class_handle_type;
 };
 
 struct Process {
     ProcessId id;
     ScopeId scope;
-    ProcessKind kind{ProcessKind::always};
+    ProcessKind kind { ProcessKind::always };
     std::string name;
     SourceSpanId source;
     OriginId origin;
@@ -356,7 +368,7 @@ struct PackedRange {
     std::optional<std::int64_t> right;
     std::optional<ExpressionId> left_expression;
     std::optional<ExpressionId> right_expression;
-    bool descending{};
+    bool descending { };
     SourceSpanId source;
 };
 
@@ -365,13 +377,13 @@ struct TypeReference {
     std::optional<TypeForm> value_form;
     std::string class_identity;
     std::optional<PackedRange> packed_range;
-    bool signed_value{};
+    bool signed_value { };
     std::optional<TypeForm> container_form;
     std::optional<ExpressionId> queue_maximum;
     std::optional<semantic::TypeReference> associative_index;
     std::vector<PackedRange> unpacked_dimensions;
     std::optional<std::uint64_t> executable_width;
-    bool four_state{};
+    bool four_state { };
 };
 
 enum class ClassVisibility : std::uint8_t {
@@ -426,7 +438,7 @@ enum class ConstraintReferenceKind : std::uint8_t {
 };
 
 struct ConstraintBinding {
-    ConstraintReferenceKind kind{ConstraintReferenceKind::property};
+    ConstraintReferenceKind kind { ConstraintReferenceKind::property };
     std::string specialization_identity;
     std::string canonical_identity;
     TypeReference type;
@@ -434,7 +446,7 @@ struct ConstraintBinding {
 };
 
 struct ConstraintExpression {
-    ConstraintExpressionKind kind{ConstraintExpressionKind::invalid};
+    ConstraintExpressionKind kind { ConstraintExpressionKind::invalid };
     std::string text;
     std::string resolved_identity;
     SourceSpanId source;
@@ -447,23 +459,23 @@ struct ClassProperty {
     std::string canonical_identity;
     std::string owner_identity;
     TypeReference type;
-    ClassVisibility visibility{ClassVisibility::public_access};
-    ClassRandomKind random_kind{ClassRandomKind::none};
-    bool static_storage{};
-    bool constant{};
+    ClassVisibility visibility { ClassVisibility::public_access };
+    ClassRandomKind random_kind { ClassRandomKind::none };
+    bool static_storage { };
+    bool constant { };
     SourceSpanId source;
 };
 
 struct ClassConstraint {
     std::string name;
     std::string canonical_identity;
-  std::string owner_identity;
-  ClassVisibility visibility{ClassVisibility::public_access};
+    std::string owner_identity;
+    ClassVisibility visibility { ClassVisibility::public_access };
     std::vector<ConstraintExpression> expressions;
-    bool static_constraint{};
-    bool pure{};
-    bool external{};
-    bool defined{true};
+    bool static_constraint { };
+    bool pure { };
+    bool external { };
+    bool defined { true };
     SourceSpanId source;
 };
 
@@ -471,9 +483,9 @@ struct ComposedClassConstraint {
     std::string name;
     std::string selected_identity;
     std::string overridden_identity;
-    bool overrides{};
-    bool override_legal{true};
-    bool mode_enabled{true};
+    bool overrides { };
+    bool override_legal { true };
+    bool mode_enabled { true };
 };
 
 /// One flattened class declaration. Declared members retain their exact
@@ -488,21 +500,21 @@ struct ClassDeclaration {
     std::vector<ClassProperty> properties;
     std::vector<ClassConstraint> constraints;
     std::vector<ComposedClassConstraint> composed_constraints;
-    bool virtual_class{};
-    bool interface_class{};
+    bool virtual_class { };
+    bool interface_class { };
     SourceSpanId source;
 };
 
 struct PackedMember {
     std::string name;
     TypeReference type;
-    std::uint64_t lsb_offset{};
+    std::uint64_t lsb_offset { };
     SourceSpanId source;
     std::optional<ExpressionId> initializer;
 };
 
 struct ContainerType {
-    TypeForm form{TypeForm::dynamic_array};
+    TypeForm form { TypeForm::dynamic_array };
     std::optional<ExpressionId> queue_maximum;
     std::optional<TypeReference> associative_index;
     std::vector<PackedRange> static_dimensions;
@@ -520,7 +532,7 @@ struct EnumerationLiteral {
 struct TypeDefinition {
     TypeId id;
     DeclarationId declaration;
-    TypeForm form{TypeForm::unresolved};
+    TypeForm form { TypeForm::unresolved };
     std::string name;
     TypeReference base;
     std::vector<PackedMember> members;
@@ -531,16 +543,16 @@ struct TypeDefinition {
 };
 
 struct CallableProfile {
-    bool function{};
+    bool function { };
     TypeReference return_type;
     std::vector<DeclarationId> formals;
-    Lifetime lifetime{Lifetime::implicit};
+    Lifetime lifetime { Lifetime::implicit };
 };
 
 struct Declaration {
     DeclarationId id;
     ScopeId scope;
-    DeclarationForm form{DeclarationForm::variable};
+    DeclarationForm form { DeclarationForm::variable };
     std::string name;
     SourceSpanId source;
     OriginId origin;
@@ -550,10 +562,10 @@ struct Declaration {
     std::optional<TypeReference> default_type;
     std::optional<ExpressionId> initializer;
     std::optional<Delay> delay;
-    Direction direction{Direction::unknown};
+    Direction direction { Direction::unknown };
     std::string interface_type;
     std::string modport;
-    Lifetime lifetime{Lifetime::implicit};
+    Lifetime lifetime { Lifetime::implicit };
     std::optional<ScopeId> nested_scope;
     std::optional<CallableProfile> callable;
     std::vector<DeclarationId> children;
@@ -563,21 +575,21 @@ struct Declaration {
 struct Import {
     Name package;
     std::optional<Name> member;
-    bool wildcard{};
+    bool wildcard { };
     SourceSpanId source;
 };
 
 struct Export {
     Name package;
     std::optional<Name> member;
-    bool wildcard{};
+    bool wildcard { };
     SourceSpanId source;
 };
 
 struct ModportMember {
-    ModportMemberKind kind{ModportMemberKind::signal};
+    ModportMemberKind kind { ModportMemberKind::signal };
     Name name;
-    Direction direction{Direction::unknown};
+    Direction direction { Direction::unknown };
     SourceSpanId source;
 };
 
@@ -592,7 +604,7 @@ struct Modport {
 struct GenerateChoice {
     ExpressionId left;
     std::optional<ExpressionId> right;
-    bool descending{};
+    bool descending { };
     SourceSpanId source;
 };
 
@@ -600,14 +612,14 @@ struct GenerateAlternative {
     ScopeId scope;
     std::string label;
     std::vector<GenerateChoice> choices;
-    bool is_default{};
+    bool is_default { };
     SourceSpanId source;
 };
 
 struct GenerateRegion {
     DeclarationId declaration;
     ScopeId scope;
-    GenerateKind kind{GenerateKind::conditional};
+    GenerateKind kind { GenerateKind::conditional };
     std::string label;
     std::string alternative_label;
     std::string iterator;
@@ -628,7 +640,7 @@ struct CompilationContext {
     std::string time_unit;
     std::string time_precision;
     std::string default_nettype;
-    bool cell{};
+    bool cell { };
 };
 
 enum class ConcurrentAssertionKind : std::uint8_t {
@@ -645,26 +657,26 @@ enum class AssertionRegion : std::uint8_t {
 };
 
 struct AssertionObserverPolicy {
-    bool callback_on_failure{true};
-    bool debugger_visible{true};
-    bool trace_visible{true};
-    bool coverage_enabled{true};
+    bool callback_on_failure { true };
+    bool debugger_visible { true };
+    bool trace_visible { true };
+    bool coverage_enabled { true };
 };
 
 struct ConcurrentAssertion {
-    ConcurrentAssertionKind kind{ConcurrentAssertionKind::assertion};
+    ConcurrentAssertionKind kind { ConcurrentAssertionKind::assertion };
     std::string name;
-    bool explicit_label{};
+    bool explicit_label { };
     std::vector<std::string> property_tokens;
-    bool has_pass_action{};
+    bool has_pass_action { };
     std::vector<std::string> pass_action_tokens;
-    bool has_failure_action{};
+    bool has_failure_action { };
     std::vector<std::string> failure_action_tokens;
-    AssertionRegion sampling_region{AssertionRegion::preponed};
-    AssertionRegion evaluation_region{AssertionRegion::observed};
-    AssertionRegion action_region{AssertionRegion::reactive};
+    AssertionRegion sampling_region { AssertionRegion::preponed };
+    AssertionRegion evaluation_region { AssertionRegion::observed };
+    AssertionRegion action_region { AssertionRegion::reactive };
     AssertionObserverPolicy observers;
-    std::uint32_t coverage_slot{};
+    std::uint32_t coverage_slot { };
     SourceSpanId source;
     std::optional<SourceSpanId> label_source;
     std::optional<SourceSpanId> pass_action_source;
@@ -675,7 +687,7 @@ struct ConcurrentAssertion {
 struct Unit {
     UnitId id;
     ScopeId scope;
-    UnitKind kind{UnitKind::module};
+    UnitKind kind { UnitKind::module };
     std::string library;
     std::string name;
     SourceSpanId source;

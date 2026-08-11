@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -79,6 +80,10 @@ public:
   [[nodiscard]] static PackedLogic4
   from_aval_bval(std::size_t width, std::uint64_t aval,
                  std::uint64_t bval);
+  [[nodiscard]] static PackedLogic4 from_word_planes(
+      std::size_t width,
+      std::span<const std::uint64_t> aval,
+      std::span<const std::uint64_t> bval);
   [[nodiscard]] static PackedLogic4
   from_logic9_word(const Logic9Word& value);
 
@@ -96,6 +101,10 @@ public:
   aval_words() const noexcept;
   [[nodiscard]] std::span<const std::uint64_t>
   bval_words() const noexcept;
+  [[nodiscard]] std::optional<std::uint64_t>
+  known_unsigned_value() const noexcept;
+  [[nodiscard]] std::optional<std::int64_t>
+  known_signed_value() const noexcept;
   [[nodiscard]] Logic4Word low_word() const;
   [[nodiscard]] Logic9Word logic9_low_word() const;
   [[nodiscard]] PackedLogic4 promoted_to_logic9() const;

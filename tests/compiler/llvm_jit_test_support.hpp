@@ -1154,6 +1154,12 @@ void test_scalar_truth_tables_and_64_bits();
 void test_systemverilog_scalar_transport_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
+void test_wide_register_frame_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_wide_value_operations_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
 void test_wildcard_case_matching_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);

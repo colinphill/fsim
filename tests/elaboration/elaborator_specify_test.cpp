@@ -3,7 +3,8 @@
 
 namespace fsim::tests::elaboration {
 
-void test_verilog_specify_specialization() {
+void test_verilog_specify_specialization()
+{
     const auto parsed = fsim::frontend::parse_text(
         "specify-specialization.v",
         R"(
@@ -65,24 +66,26 @@ endmodule
     const auto& paths = elaborated.design->verilog_specify_paths();
     assert(paths.size() == 1);
     assert(paths.front().id == 0);
+    assert(paths.front().identity
+        == "sdf:iopath:specify_top.dut:0");
     assert(paths.front().instance == "specify_top.dut");
     assert(paths.front().sources.size() == 1);
     assert(paths.front().destinations.size() == 1);
     assert(paths.front().sources.front().width == 1);
     assert(paths.front().destinations.front().width == 1);
     assert(paths.front().drivers.size() == 1);
-    assert(paths.front().delays == std::vector<std::uint64_t>{6});
+    assert(paths.front().delays == std::vector<std::uint64_t> { 6 });
     const auto interpreter = elaborated.design->create_interpreter();
     assert(interpreter);
-    const auto& timing_checks =
-        elaborated.design->verilog_timing_checks();
+    const auto& timing_checks = elaborated.design->verilog_timing_checks();
     assert(timing_checks.size() == 1);
+    assert(timing_checks.front().identity
+        == "sdf:timingcheck:specify_top.dut:0");
     assert(timing_checks.front().limits
-           == std::vector<std::int64_t>{6});
+        == std::vector<std::int64_t> { 6 });
     assert(timing_checks.front().notifier.has_value());
     auto state = elaborated.design->state();
-    const auto restored =
-        fsim::elaboration::ElaboratedDesign::from_state(state);
+    const auto restored = fsim::elaboration::ElaboratedDesign::from_state(state);
     assert(restored);
     assert(restored->verilog_specify_paths().size() == 1);
     state.verilog_specify_paths.front().sources.front().width = 0;
@@ -93,11 +96,11 @@ endmodule
         "selected-specify.v",
         R"(
 module selected_specify(
-  input [3:0] source,
-  output [3:0] result
+  input [136:0] source,
+  output [136:0] result
 );
   specify
-    (source[2:1] => result[2:1]) = (2, 3);
+    (source[136:65] => result[136:65]) = (2, 3);
   endspecify
   assign result = source;
 endmodule
@@ -107,13 +110,14 @@ endmodule
     const auto selected_result = fsim::elaboration::elaborate(
         selected.design, "selected_specify");
     assert(selected_result.ok());
-    const auto& selected_path =
-        selected_result.design->verilog_specify_paths().front();
-    assert(selected_path.sources.front().offset == 1);
-    assert(selected_path.sources.front().width == 2);
-    assert(selected_path.destinations.front().offset == 1);
-    assert(selected_path.destinations.front().width == 2);
-    assert((selected_path.delays == std::vector<std::uint64_t>{2, 3}));
+    const auto& selected_path = selected_result.design->verilog_specify_paths().front();
+    assert(selected_path.sources.front().offset == 65);
+    assert(selected_path.identity
+        == "sdf:iopath:selected_specify:0");
+    assert(selected_path.sources.front().width == 72);
+    assert(selected_path.destinations.front().offset == 65);
+    assert(selected_path.destinations.front().width == 72);
+    assert((selected_path.delays == std::vector<std::uint64_t> { 2, 3 }));
 
     const auto conditional = fsim::frontend::parse_text(
         "conditional-specify.v",
@@ -139,15 +143,14 @@ endmodule
     const auto conditional_result = fsim::elaboration::elaborate(
         conditional.design, "conditional_specify");
     assert(conditional_result.ok());
-    const auto& conditional_paths =
-        conditional_result.design->verilog_specify_paths();
+    const auto& conditional_paths = conditional_result.design->verilog_specify_paths();
     assert(conditional_paths.size() == 2);
     assert(!conditional_paths[0].condition_program.empty());
     assert(!conditional_paths[0].data_source_program.empty());
     assert(conditional_paths[0].selection_group
-           == conditional_paths[1].selection_group);
+        == conditional_paths[1].selection_group);
     assert(conditional_paths[0].pulse_style
-           == fsim::frontend::VerilogPulseStyle::Ondetect);
+        == fsim::frontend::VerilogPulseStyle::Ondetect);
     assert(conditional_paths[0].show_cancelled);
     assert(conditional_paths[0].pulse_reject_limit == 1);
     assert(conditional_paths[0].pulse_error_limit == 4);
@@ -184,11 +187,14 @@ endmodule
         }
     }
     assert(compound_result.ok());
-    const auto& compound_checks =
-        compound_result.design->verilog_timing_checks();
+    const auto& compound_checks = compound_result.design->verilog_timing_checks();
     assert(compound_checks.size() == 2);
+    assert(compound_checks[0].identity
+        == "sdf:timingcheck:compound_specify:0");
+    assert(compound_checks[1].identity
+        == "sdf:timingcheck:compound_specify:1");
     assert((compound_checks[0].limits
-            == std::vector<std::int64_t>{-2, 5}));
+        == std::vector<std::int64_t> { -2, 5 }));
     assert(!compound_checks[0].timestamp_condition.empty());
     assert(!compound_checks[0].timecheck_condition.empty());
     assert(compound_checks[0].delayed_reference.has_value());
@@ -277,6 +283,10 @@ endmodule
     assert(!fsim::elaboration::ElaboratedDesign::from_state(
         std::move(corrupt_state)));
     corrupt_state = compound_result.design->state();
+    corrupt_state.verilog_timing_checks.front().identity.clear();
+    assert(!fsim::elaboration::ElaboratedDesign::from_state(
+        std::move(corrupt_state)));
+    corrupt_state = compound_result.design->state();
     auto& corrupt_condition = corrupt_state.verilog_timing_checks.front()
                                   .timestamp_condition;
     corrupt_condition.root = static_cast<std::uint32_t>(
@@ -285,4 +295,4 @@ endmodule
         std::move(corrupt_state)));
 }
 
-}  // namespace fsim::tests::elaboration
+} // namespace fsim::tests::elaboration

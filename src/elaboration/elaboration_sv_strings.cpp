@@ -355,6 +355,16 @@ void substitute_body(
                 connection.value, environment, integer_environment);
         }
     }
+    for (auto& declaration : body.verilog_defparams) {
+        for (auto& segment : declaration.path) {
+            for (auto& index : segment.indices) {
+                substitute_expression(
+                    index, environment, integer_environment);
+            }
+        }
+        substitute_expression(
+            declaration.value, environment, integer_environment);
+    }
     substitute_regions(
         body.generate_regions,
         environment,
@@ -564,6 +574,16 @@ void substitute_systemverilog_strings(
             substitute_expression(
                 connection.value, environment, integer_environment);
         }
+    }
+    for (auto& declaration : unit.verilog_defparams) {
+        for (auto& segment : declaration.path) {
+            for (auto& index : segment.indices) {
+                substitute_expression(
+                    index, environment, integer_environment);
+            }
+        }
+        substitute_expression(
+            declaration.value, environment, integer_environment);
     }
     substitute_regions(
         unit.generate_regions,

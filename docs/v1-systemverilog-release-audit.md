@@ -55,3 +55,11 @@ The Batch 159-162 UVM rows advance the strict audit to all 848 rows and name
 governed source, simulation-owned runtime, exact engine/artifact/cache,
 sequence/register, object-policy/synchronization/test-runner, compatibility,
 platform, conformance-inventory, and closure-audit owners.
+
+Batch 164 closes the separate Verilog-2005 clause and literal-width ledgers:
+34 supported clause rows and 12 preserved width paths have zero active gaps.
+The retained 23-witness closure matrix covers 17 direct, interpreter, LLVM,
+cache, debug/VCD, artifact, relocation/replay, checkpoint, multiple-root, and
+mixed-language stages. Verilog literal width is no longer a deferred language
+feature; only explicit host representation and governed resource boundaries
+remain.

@@ -345,6 +345,28 @@ endmodule
     assert(has_diagnostic(rejected_force, "FSIM-ELAB-SVFORCE-002"));
     assert(has_diagnostic(rejected_force, "FSIM-ELAB-SVFORCE-003"));
 
+    const auto invalid_procedural_assign = fsim::frontend::parse_text(
+        "invalid_procedural_assign.sv",
+        R"(
+module invalid_procedural_assign;
+  logic source;
+  initial begin
+    automatic logic local_value;
+    assign local_value = source;
+    deassign local_value;
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_procedural_assign.ok());
+    const auto rejected_procedural_assign = fsim::elaboration::elaborate(
+        invalid_procedural_assign.design,
+        "invalid_procedural_assign");
+    assert(!rejected_procedural_assign.ok());
+    assert(has_diagnostic(
+        rejected_procedural_assign,
+        "FSIM-ELAB-SVPROCASSIGN-001"));
+
     const auto dynamic_force = fsim::frontend::parse_text(
         "dynamic_force.sv",
         R"(

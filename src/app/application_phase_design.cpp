@@ -417,7 +417,7 @@ bool publish_design_artifact(
     auto classes = serialize_class_state(
         project.systemverilog_class_specializations, diagnostics);
     auto constraint_hir = serialize_systemverilog_constraint_hir_state(
-        project.systemverilog_hir, diagnostics);
+        project.systemverilog_hir, project.semantics, diagnostics);
     auto vhdl_hir = serialize_vhdl_hir_state(
         project.vhdl_hir, project.semantics, diagnostics);
     auto coverage = serialize_systemverilog_coverage_state(
@@ -661,15 +661,18 @@ std::optional<BuiltProject> load_design_artifact(
     auto classes = deserialize_class_state(
         *class_bytes, support::path_to_utf8(class_index->artifact),
         diagnostics);
-    auto constraint_hir = deserialize_systemverilog_constraint_hir_state(
-        *constraint_hir_bytes,
-        support::path_to_utf8(constraint_hir_index->artifact), diagnostics);
+    auto constraint_hir = semantics
+        ? deserialize_systemverilog_constraint_hir_state(
+              *constraint_hir_bytes,
+              support::path_to_utf8(constraint_hir_index->artifact),
+              *semantics, diagnostics)
+        : std::optional<semantic::sv::Hir> { };
     auto vhdl_hir = semantics
         ? deserialize_vhdl_hir_state(
               *vhdl_hir_bytes,
               support::path_to_utf8(vhdl_hir_index->artifact), *semantics,
               diagnostics)
-        : std::optional<semantic::vhdl::Hir>{};
+        : std::optional<semantic::vhdl::Hir> { };
     auto coverage = deserialize_systemverilog_coverage_state(
         *coverage_bytes, support::path_to_utf8(coverage_index->artifact),
         diagnostics);

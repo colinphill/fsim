@@ -1072,13 +1072,16 @@ bool Lowerer::lower_assignment_selections(
         selection_expression.operands[2]);
     const auto range = expression_range(
         selection_source, selection_source_width);
-    if (!width || *width <= 0 || *width > 64 || !range) {
-      report(
-          "FSIM-ELAB-SVEXPR-004",
-          "a runtime-base procedural part-select requires a fixed width "
-          "from 1 through 64 and an inferable packed target range",
-          selection_expression.span);
-      return false;
+    if (!width || *width <= 0
+        || static_cast<std::uint64_t>(*width)
+            > std::numeric_limits<std::uint32_t>::max()
+        || !range) {
+        report(
+            "FSIM-ELAB-SVEXPR-004",
+            "a runtime-base procedural part-select requires a fixed width "
+            "representable by SimIR and an inferable packed target range",
+            selection_expression.span);
+        return false;
     }
     auto dynamic_base = lower_expression(
         selection_expression.operands[1], 32);

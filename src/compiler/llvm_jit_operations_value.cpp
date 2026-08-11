@@ -36,28 +36,27 @@ void ValueOperationLowerer::lower(
     const DynamicExtract& operation) {
               const auto source = load_register(
                   builder, registers, operation.source);
-              auto* shift = dynamic_offset(operation.selection);
+              auto* shift = builder.CreateZExtOrTrunc(
+                  dynamic_offset(operation.selection),
+                  packed_integer_type(context, source.width));
+              const auto extract = [&](llvm::Value* value) {
+                  return builder.CreateZExtOrTrunc(
+                      builder.CreateAnd(
+                          builder.CreateLShr(value, shift),
+                          packed_constant(context, source.width, 1)),
+                      i64);
+              };
               store_register(
                   builder,
                   registers,
                   operation.destination,
-                  EncodedValue{
-                      builder.CreateAnd(
-                          builder.CreateLShr(source.aval, shift),
-                          constant_i64(context, 1)),
-                      builder.CreateAnd(
-                          builder.CreateLShr(source.bval, shift),
-                          constant_i64(context, 1)),
+                  EncodedValue {
+                      extract(source.aval),
+                      extract(source.bval),
                       1,
-                      builder.CreateAnd(
-                          builder.CreateLShr(
-                              source.logic9_plane2, shift),
-                          constant_i64(context, 1)),
-                      builder.CreateAnd(
-                          builder.CreateLShr(
-                              source.logic9_plane3, shift),
-                          constant_i64(context, 1)),
-                      source.kind});
+                      extract(source.logic9_plane2),
+                      extract(source.logic9_plane3),
+                      source.kind });
               branch_to_next();
             
 }
@@ -84,10 +83,10 @@ void ValueOperationLowerer::lower(
   auto* upper = llvm::ConstantInt::getSigned(
       i64, std::max(operation.left, operation.right));
 
-  llvm::Value* aval = constant_i64(context, 0);
-  llvm::Value* bval = constant_i64(context, 0);
-  llvm::Value* plane2 = constant_i64(context, 0);
-  llvm::Value* plane3 = constant_i64(context, 0);
+  llvm::Value* aval = packed_constant(context, operation.width, 0);
+  llvm::Value* bval = packed_constant(context, operation.width, 0);
+  llvm::Value* plane2 = packed_constant(context, operation.width, 0);
+  llvm::Value* plane3 = packed_constant(context, operation.width, 0);
   const auto edge_distance =
       static_cast<std::int64_t>(operation.width - 1U);
   const auto right_delta = operation.increasing
@@ -120,21 +119,25 @@ void ValueOperationLowerer::lower(
         valid, offset, constant_i64(context, 0));
     const auto select_bit = [&](llvm::Value* plane,
                                 const bool unknown_one) {
-      auto* extracted = builder.CreateAnd(
-          builder.CreateLShr(plane, safe_offset),
-          constant_i64(context, 1));
-      return builder.CreateSelect(
-          valid,
-          extracted,
-          constant_i64(
-              context,
-              !operation.two_state && unknown_one ? 1U : 0U));
+        auto* packed_offset = builder.CreateZExtOrTrunc(
+            safe_offset, packed_integer_type(context, source.width));
+        auto* extracted = builder.CreateAnd(
+            builder.CreateLShr(plane, packed_offset),
+            packed_constant(context, source.width, 1));
+        return builder.CreateZExtOrTrunc(builder.CreateSelect(
+                                             valid,
+                                             extracted,
+                                             packed_constant(
+                                                 context,
+                                                 source.width,
+                                                 !operation.two_state && unknown_one ? 1U : 0U)),
+            packed_integer_type(context, operation.width));
     };
     const auto append = [&](llvm::Value* result, llvm::Value* value) {
-      return builder.CreateOr(
-          result,
-          builder.CreateShl(
-              value, constant_i64(context, bit)));
+        return builder.CreateOr(
+            result,
+            builder.CreateShl(
+                value, packed_constant(context, operation.width, bit)));
     };
     aval = append(aval, select_bit(source.aval, true));
     bval = append(
@@ -175,42 +178,53 @@ void ValueOperationLowerer::lower(
                   load_register(
                       builder, registers, operation.source),
                   destination_kind);
-              auto* source_mask =
-                  constant_i64(context, width_mask(source.width));
-              auto* shifted_mask =
-                  builder.CreateShl(
-                      source_mask,
-                      constant_i64(context, operation.offset));
-              auto* keep_mask =
-                  builder.CreateAnd(
-                      builder.CreateNot(shifted_mask),
-                      constant_i64(
-                          context, width_mask(target.width)));
-              auto* shift =
-                  constant_i64(context, operation.offset);
+              auto* target_mask = packed_mask(context, target.width);
+              const auto widen = [&](llvm::Value* value) {
+                  return builder.CreateZExtOrTrunc(
+                      value, packed_integer_type(context, target.width));
+              };
+              auto* shifted_mask = builder.CreateShl(
+                  packed_low_mask(
+                      context, target.width, source.width),
+                  packed_constant(
+                      context, target.width, operation.offset));
+              auto* keep_mask = builder.CreateAnd(
+                  builder.CreateNot(shifted_mask),
+                  target_mask);
+              auto* shift = packed_constant(context, target.width, operation.offset);
               auto* aval = builder.CreateOr(
                   builder.CreateAnd(target.aval, keep_mask),
                   builder.CreateShl(
-                      builder.CreateAnd(source.aval, source_mask),
+                      builder.CreateAnd(
+                          widen(source.aval),
+                          packed_low_mask(
+                              context, target.width, source.width)),
                       shift));
               auto* bval = builder.CreateOr(
                   builder.CreateAnd(target.bval, keep_mask),
                   builder.CreateShl(
-                      builder.CreateAnd(source.bval, source_mask),
+                      builder.CreateAnd(
+                          widen(source.bval),
+                          packed_low_mask(
+                              context, target.width, source.width)),
                       shift));
               auto* plane2 = builder.CreateOr(
                   builder.CreateAnd(
                       target.logic9_plane2, keep_mask),
                   builder.CreateShl(
                       builder.CreateAnd(
-                          source.logic9_plane2, source_mask),
+                          widen(source.logic9_plane2),
+                          packed_low_mask(
+                              context, target.width, source.width)),
                       shift));
               auto* plane3 = builder.CreateOr(
                   builder.CreateAnd(
                       target.logic9_plane3, keep_mask),
                   builder.CreateShl(
                       builder.CreateAnd(
-                          source.logic9_plane3, source_mask),
+                          widen(source.logic9_plane3),
+                          packed_low_mask(
+                              context, target.width, source.width)),
                       shift));
               store_register(
                   builder, registers, operation.destination,
@@ -239,24 +253,29 @@ void ValueOperationLowerer::lower(
                   load_register(
                       builder, registers, operation.source),
                   destination_kind);
-              auto* shift = dynamic_offset(operation.selection);
+              auto* shift = builder.CreateZExtOrTrunc(
+                  dynamic_offset(operation.selection),
+                  packed_integer_type(context, target.width));
               auto* shifted_mask = builder.CreateShl(
-                  constant_i64(context, 1), shift);
+                  packed_constant(context, target.width, 1), shift);
               auto* keep_mask = builder.CreateAnd(
                   builder.CreateNot(shifted_mask),
-                  constant_i64(
-                      context, width_mask(target.width)));
+                  packed_mask(context, target.width));
               const auto insert_plane =
                   [&](llvm::Value* target_plane,
                       llvm::Value* source_plane) {
-                    return builder.CreateOr(
-                        builder.CreateAnd(
-                            target_plane, keep_mask),
-                        builder.CreateShl(
-                            builder.CreateAnd(
-                                source_plane,
-                                constant_i64(context, 1)),
-                            shift));
+                      return builder.CreateOr(
+                          builder.CreateAnd(
+                              target_plane, keep_mask),
+                          builder.CreateShl(
+                              builder.CreateAnd(
+                                  builder.CreateZExtOrTrunc(
+                                      source_plane,
+                                      packed_integer_type(
+                                          context, target.width)),
+                                  packed_constant(
+                                      context, target.width, 1)),
+                              shift));
                   };
               store_register(
                   builder,
@@ -322,8 +341,7 @@ void ValueOperationLowerer::lower(
   auto* bval = target.bval;
   auto* plane2 = target.logic9_plane2;
   auto* plane3 = target.logic9_plane3;
-  const auto target_mask =
-      constant_i64(context, width_mask(target.width));
+  const auto target_mask = packed_mask(context, target.width);
   for (std::uint32_t bit = 0;
        bit < operation.selection.width;
        ++bit) {
@@ -352,24 +370,34 @@ void ValueOperationLowerer::lower(
     auto* selected_mask = builder.CreateSelect(
         valid,
         builder.CreateShl(
-            constant_i64(context, 1), safe_offset),
-        constant_i64(context, 0));
+            packed_constant(context, target.width, 1),
+            builder.CreateZExtOrTrunc(
+                safe_offset,
+                packed_integer_type(context, target.width))),
+        packed_constant(context, target.width, 0));
     auto* keep_mask = builder.CreateAnd(
         builder.CreateNot(selected_mask), target_mask);
     const auto insert_plane =
         [&](llvm::Value* target_plane,
             llvm::Value* source_plane) {
-          auto* source_bit = builder.CreateAnd(
-              builder.CreateLShr(
-                  source_plane,
-                  constant_i64(context, bit)),
-              constant_i64(context, 1));
-          auto* shifted = builder.CreateShl(
-              source_bit, safe_offset);
-          return builder.CreateOr(
-              builder.CreateAnd(target_plane, keep_mask),
-              builder.CreateSelect(
-                  valid, shifted, constant_i64(context, 0)));
+            auto* source_bit = builder.CreateAnd(
+                builder.CreateLShr(
+                    source_plane,
+                    packed_constant(context, source.width, bit)),
+                packed_constant(context, source.width, 1));
+            auto* shifted = builder.CreateShl(
+                builder.CreateZExtOrTrunc(
+                    source_bit,
+                    packed_integer_type(context, target.width)),
+                builder.CreateZExtOrTrunc(
+                    safe_offset,
+                    packed_integer_type(context, target.width)));
+            return builder.CreateOr(
+                builder.CreateAnd(target_plane, keep_mask),
+                builder.CreateSelect(
+                    valid,
+                    shifted,
+                    packed_constant(context, target.width, 0)));
         };
     aval = insert_plane(aval, source.aval);
     bval = insert_plane(bval, source.bval);
@@ -392,58 +420,63 @@ void ValueOperationLowerer::lower(
 
 void ValueOperationLowerer::lower(
     const Concatenate& operation) {
-              llvm::Value* aval = constant_i64(context, 0);
-              llvm::Value* bval = constant_i64(context, 0);
-              llvm::Value* plane2 = constant_i64(context, 0);
-              llvm::Value* plane3 = constant_i64(context, 0);
-              const auto destination_kind =
-                  registers[operation.destination].kind;
-              std::uint32_t offset = 0;
-              for (auto operand = operation.operands.rbegin();
-                   operand != operation.operands.rend(); ++operand) {
-                const auto source = coerce_value_kind(
-                    builder,
-                    load_register(builder, registers, *operand),
-                    destination_kind);
-                auto* source_mask =
-                    constant_i64(context, width_mask(source.width));
-                auto* source_aval =
-                    builder.CreateAnd(source.aval, source_mask);
-                auto* source_bval =
-                    builder.CreateAnd(source.bval, source_mask);
-                auto* source_plane2 = builder.CreateAnd(
-                    source.logic9_plane2, source_mask);
-                auto* source_plane3 = builder.CreateAnd(
-                    source.logic9_plane3, source_mask);
-                if (offset != 0) {
-                  auto* shift = constant_i64(context, offset);
-                  source_aval =
-                      builder.CreateShl(source_aval, shift);
-                  source_bval =
-                      builder.CreateShl(source_bval, shift);
-                  source_plane2 =
-                      builder.CreateShl(source_plane2, shift);
-                  source_plane3 =
-                      builder.CreateShl(source_plane3, shift);
-                }
-                aval = builder.CreateOr(aval, source_aval);
-                bval = builder.CreateOr(bval, source_bval);
-                plane2 = builder.CreateOr(plane2, source_plane2);
-                plane3 = builder.CreateOr(plane3, source_plane3);
-                offset += source.width;
-              }
-              auto* mask =
-                  constant_i64(context, width_mask(operation.width));
-              store_register(
-                  builder, registers, operation.destination,
-                  EncodedValue{
-                      builder.CreateAnd(aval, mask),
-                      builder.CreateAnd(bval, mask),
-                      operation.width,
-                      builder.CreateAnd(plane2, mask),
-                      builder.CreateAnd(plane3, mask),
-                      destination_kind});
-              branch_to_next();
+    llvm::Value* aval = packed_constant(
+        context, operation.width, 0);
+    llvm::Value* bval = packed_constant(
+        context, operation.width, 0);
+    llvm::Value* plane2 = packed_constant(
+        context, operation.width, 0);
+    llvm::Value* plane3 = packed_constant(
+        context, operation.width, 0);
+    const auto destination_kind = registers[operation.destination].kind;
+    std::uint32_t offset = 0;
+    for (auto operand = operation.operands.rbegin();
+        operand != operation.operands.rend(); ++operand) {
+        const auto source = coerce_value_kind(
+            builder,
+            load_register(builder, registers, *operand),
+            destination_kind);
+        auto* source_mask = packed_mask(context, source.width);
+        auto* source_aval = builder.CreateAnd(source.aval, source_mask);
+        auto* source_bval = builder.CreateAnd(source.bval, source_mask);
+        auto* source_plane2 = builder.CreateAnd(
+            source.logic9_plane2, source_mask);
+        auto* source_plane3 = builder.CreateAnd(
+            source.logic9_plane3, source_mask);
+        const auto widen = [&](llvm::Value* value) {
+            return builder.CreateZExtOrTrunc(
+                value,
+                packed_integer_type(context, operation.width));
+        };
+        source_aval = widen(source_aval);
+        source_bval = widen(source_bval);
+        source_plane2 = widen(source_plane2);
+        source_plane3 = widen(source_plane3);
+        if (offset != 0) {
+            auto* shift = packed_constant(
+                context, operation.width, offset);
+            source_aval = builder.CreateShl(source_aval, shift);
+            source_bval = builder.CreateShl(source_bval, shift);
+            source_plane2 = builder.CreateShl(source_plane2, shift);
+            source_plane3 = builder.CreateShl(source_plane3, shift);
+        }
+        aval = builder.CreateOr(aval, source_aval);
+        bval = builder.CreateOr(bval, source_bval);
+        plane2 = builder.CreateOr(plane2, source_plane2);
+        plane3 = builder.CreateOr(plane3, source_plane3);
+        offset += source.width;
+    }
+    auto* mask = packed_mask(context, operation.width);
+    store_register(
+        builder, registers, operation.destination,
+        EncodedValue {
+            builder.CreateAnd(aval, mask),
+            builder.CreateAnd(bval, mask),
+            operation.width,
+            builder.CreateAnd(plane2, mask),
+            builder.CreateAnd(plane3, mask),
+            destination_kind });
+    branch_to_next();
             
 }
 
@@ -826,8 +859,7 @@ void ValueOperationLowerer::lower(
                   load_register(
                       builder, registers, operation.when_false),
                   destination_kind);
-              auto *mask =
-                  constant_i64(context, width_mask(when_true.width));
+              auto* mask = packed_mask(context, when_true.width);
               auto *different = builder.CreateAnd(
                   builder.CreateOr(
                       builder.CreateOr(
@@ -848,10 +880,10 @@ void ValueOperationLowerer::lower(
               auto *merged_aval = builder.CreateOr(
                   builder.CreateAnd(when_true.aval, same),
                   different);
-              auto *merged_bval = builder.CreateOr(
+              auto* merged_bval = builder.CreateOr(
                   builder.CreateAnd(when_true.bval, same),
                   destination_kind == ValueKind::logic9
-                      ? constant_i64(context, 0)
+                      ? packed_constant(context, when_true.width, 0)
                       : different);
               auto* merged_plane2 = builder.CreateAnd(
                   when_true.logic9_plane2, same);

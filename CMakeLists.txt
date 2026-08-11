@@ -922,6 +922,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_vhdl_hir.cpp
   src/app/application_vhdl_psl.cpp
   src/app/application_vhdl_debug.cpp
+      src/app/application_vpi.cpp
       src/app/application_vhdl_executable_hir.cpp
       src/app/application_services.cpp
       src/app/application_class_inspection.cpp

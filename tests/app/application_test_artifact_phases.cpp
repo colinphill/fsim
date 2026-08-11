@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
+#include "governed_process_limits.hpp"
 
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
@@ -19,24 +20,42 @@
 
 namespace fsim::test {
 
-void ApplicationTestFixture::test_artifact_phase_semantics() {
-  static_assert(app::kRuntimeStateSchema == 19);
-  static_assert(app::kSemanticStateSchema == 2);
-  static_assert(app::kDesignIrStateSchema == 2);
-  static_assert(app::kClassStateSchema == 9);
-  static_assert(app::kSystemVerilogConstraintHirStateSchema == 3);
-  static_assert(app::kSystemVerilogCoverageStateSchema == 1);
-  static_assert(app::kSystemVerilogUvmStateSchema == 2);
-  static_assert(app::kVhdlHirStateSchema == 1);
-  const auto sv_source = directory / "artifact_phase.sv";
-  const auto vhdl_source = directory / "artifact_phase.vhd";
-  const auto sv_object = directory / "artifact-sv.fsimobj";
-  const auto vhdl_object = directory / "artifact-vhdl.fsimobj";
-  const auto design = directory / "artifact-mixed.fsimdesign";
-  const auto trace = directory / "artifact-mixed.vcd";
-  {
-    std::ofstream output(sv_source);
-    output << R"(
+void ApplicationTestFixture::test_artifact_phase_semantics()
+{
+    install_governed_process_address_space_ceiling();
+    static_assert(app::kRuntimeStateSchema == 24);
+    static_assert(app::kSemanticStateSchema == 2);
+    static_assert(app::kDesignIrStateSchema == 2);
+    static_assert(app::kClassStateSchema == 9);
+    static_assert(app::kSystemVerilogConstraintHirStateSchema == 4);
+    static_assert(app::kSystemVerilogCoverageStateSchema == 1);
+    static_assert(app::kSystemVerilogUvmStateSchema == 2);
+    static_assert(app::kVhdlHirStateSchema == 1);
+    const auto copy_artifact_tree = [](
+                                        const std::filesystem::path& source_root,
+                                        const std::filesystem::path& destination) {
+        std::filesystem::create_directories(destination);
+        for (const auto& entry :
+            std::filesystem::recursive_directory_iterator(source_root)) {
+            const auto target = destination
+                / entry.path().lexically_relative(source_root);
+            if (entry.is_directory()) {
+                std::filesystem::create_directories(target);
+            } else if (entry.is_regular_file()) {
+                std::filesystem::create_directories(target.parent_path());
+                std::filesystem::copy_file(entry.path(), target);
+            }
+        }
+    };
+    const auto sv_source = directory / "artifact_phase.sv";
+    const auto vhdl_source = directory / "artifact_phase.vhd";
+    const auto sv_object = directory / "artifact-sv.fsimobj";
+    const auto vhdl_object = directory / "artifact-vhdl.fsimobj";
+    const auto design = directory / "artifact-mixed.fsimdesign";
+    const auto trace = directory / "artifact-mixed.vcd";
+    {
+        std::ofstream output(sv_source);
+        output << R"(
 package artifact_class_pkg;
   class process_box;
     process current;
@@ -93,8 +112,8 @@ module phase_watch;
 endmodule
 
 module scalar_artifact;
-  localparam logic [136:0] WIDE_SEED =
-      {1'b1, 62'b0, 1'b1, 69'b0, 4'b1000};
+  localparam logic signed [136:0] WIDE_SEED =
+      {1'b1, 62'b0, 1'bx, 69'b0, 4'b10z0};
   typedef enum logic [136:0] {
     WIDE_ZERO = 137'b0,
     WIDE_ENUM = {1'b1, 62'b0, 1'b1, 69'b0, 4'b1000}
@@ -112,11 +131,12 @@ module scalar_artifact;
   realtime rt;
   time ticks;
   chandle handle;
-  logic [136:0] wide_value;
+  logic signed [136:0] wide_value;
+  logic signed [136:0] wide_shift;
   wide_enum_t wide_enum;
   initialized_wide_t initialized_wide;
   tagged_wide_t tagged_wide;
-  logic [4:0] checks;
+  logic [5:0] checks;
   class ArtifactCoverageOwner;
     covergroup artifact_coverage with function sample(
       input logic [7:0] sample_value
@@ -137,11 +157,13 @@ module scalar_artifact;
     rt = 3.75;
     ticks = 64'd9007199254740993;
     handle = null;
+    wide_shift = WIDE_SEED >>> 136;
     checks[0] = r == 1.25;
     checks[1] = s == -2.5;
     checks[2] = rt == 3.75;
     checks[3] = ticks == 64'd9007199254740993;
     checks[4] = handle == null;
+    checks[5] = wide_shift == {137{1'b1}};
   end
 endmodule
 
@@ -169,10 +191,10 @@ program interface_artifact;
   virtual artifact_if #(.WIDTH(4)).view selected = link;
 endprogram
 )";
-  }
-  {
-    std::ofstream output(vhdl_source);
-    output << R"(
+    }
+    {
+        std::ofstream output(vhdl_source);
+        output << R"(
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -245,759 +267,932 @@ architecture rtl of phase_watch is
 begin
 end architecture;
 )";
-  }
-
-  const auto sv_source_text = support::path_to_utf8(sv_source);
-  const auto vhdl_source_text = support::path_to_utf8(vhdl_source);
-  const auto sv_object_text = support::path_to_utf8(sv_object);
-  const auto vhdl_object_text = support::path_to_utf8(vhdl_object);
-  const auto design_text = support::path_to_utf8(design);
-  const auto trace_text = support::path_to_utf8(trace);
-  auto services = app::make_cli_services();
-  std::ostringstream output;
-  std::ostringstream error;
-
-  const std::vector<const char*> vhdl_compile{
-      "fsim", "compile", "--lang", "vhdl", "--standard", "2008",
-      "--library", "work", "--output", vhdl_object_text.c_str(),
-      vhdl_source_text.c_str()};
-  const auto vhdl_result = cli::run(
-      static_cast<int>(vhdl_compile.size()), vhdl_compile.data(), services,
-      output, error);
-  if (vhdl_result != 0) {
-    std::cerr << error.str();
-  }
-  assert(vhdl_result == 0);
-  assert(error.str().empty());
-  diagnostic::Engine vhdl_inspection_diagnostics;
-  const auto vhdl_inspection = app::inspect_artifact(
-      vhdl_object, vhdl_inspection_diagnostics);
-  assert(vhdl_inspection && !vhdl_inspection_diagnostics.has_error());
-  assert(vhdl_inspection->phase == app::ArtifactPhaseKind::compilation);
-  assert(vhdl_inspection->language == "vhdl");
-  assert(vhdl_inspection->library == "work");
-  assert(vhdl_inspection->units.size() >= 5);
-  output.str({});
-  error.str({});
-  const std::vector<const char*> sv_compile{
-      "fsim", "compile", "--lang", "systemverilog", "--standard", "2017",
-      "--library", "work", "--output", sv_object_text.c_str(),
-      sv_source_text.c_str()};
-  const auto sv_result = cli::run(
-      static_cast<int>(sv_compile.size()), sv_compile.data(), services,
-      output, error);
-  if (sv_result != 0) {
-    std::cerr << error.str();
-  }
-  assert(sv_result == 0);
-  assert(error.str().empty());
-
-  output.str({});
-  error.str({});
-  const std::vector<const char*> elaborate{
-      "fsim", "elaborate", "--object", vhdl_object_text.c_str(),
-      "--object", sv_object_text.c_str(), "--top",
-      "main=sv:work.phase_tb", "--top", "observer=sv:work.phase_watch",
-      "--top", "scalar=sv:work.scalar_artifact",
-      "--top", "virtual=sv:work.interface_artifact",
-      "--output", design_text.c_str(), "--seed", "23"};
-  const auto elaborate_result = cli::run(
-      static_cast<int>(elaborate.size()), elaborate.data(), services,
-      output, error);
-  if (elaborate_result != 0) {
-    std::cerr << error.str();
-  }
-  assert(elaborate_result == 0);
-  assert(error.str().empty());
-  diagnostic::Engine design_inspection_diagnostics;
-  const auto design_inspection = app::inspect_artifact(
-      design, design_inspection_diagnostics);
-  assert(design_inspection && !design_inspection_diagnostics.has_error());
-  assert(design_inspection->phase == app::ArtifactPhaseKind::elaboration);
-  assert(design_inspection->compatible);
-  assert(design_inspection->runtime_abi == runtime_abi_version);
-  assert(design_inspection->roots
-      == std::vector<std::string>(
-          {"main", "observer", "scalar", "virtual"}));
-  assert(design_inspection->process_count != 0);
-  auto active_design = design;
-
-  diagnostic::Engine coverage_load_diagnostics;
-  auto coverage_checkpoint = app::load_design_artifact(
-      active_design, coverage_load_diagnostics);
-  assert(coverage_checkpoint && !coverage_load_diagnostics.has_error());
-  assert(!coverage_checkpoint->vhdl_hir.units().empty());
-  assert(std::ranges::any_of(
-      coverage_checkpoint->vhdl_hir.units(), [](const auto& unit) {
-        return std::ranges::any_of(
-            unit.psl_directives, [](const auto& directive) {
-              return directive.label == "artifact_clock";
-            });
-      }));
-  diagnostic::Engine vhdl_hir_codec_diagnostics;
-  const auto vhdl_hir_bytes = app::serialize_vhdl_hir_state(
-      coverage_checkpoint->vhdl_hir, coverage_checkpoint->semantics,
-      vhdl_hir_codec_diagnostics);
-  assert(vhdl_hir_bytes && !vhdl_hir_codec_diagnostics.has_error());
-  auto restored_vhdl_hir = app::deserialize_vhdl_hir_state(
-      *vhdl_hir_bytes, "vhdl-hir.bin", coverage_checkpoint->semantics,
-      vhdl_hir_codec_diagnostics);
-  assert(restored_vhdl_hir && !vhdl_hir_codec_diagnostics.has_error());
-  assert(restored_vhdl_hir->units().size()
-      == coverage_checkpoint->vhdl_hir.units().size());
-  assert(restored_vhdl_hir->declarations().size()
-      == coverage_checkpoint->vhdl_hir.declarations().size());
-  assert(restored_vhdl_hir->processes().size()
-      == coverage_checkpoint->vhdl_hir.processes().size());
-  const auto repeated_vhdl_hir = app::serialize_vhdl_hir_state(
-      *restored_vhdl_hir, coverage_checkpoint->semantics,
-      vhdl_hir_codec_diagnostics);
-  assert(repeated_vhdl_hir == vhdl_hir_bytes);
-  auto future_vhdl_hir = *vhdl_hir_bytes;
-  future_vhdl_hir[8] = static_cast<char>(app::kVhdlHirStateSchema + 1U);
-  diagnostic::Engine future_vhdl_hir_diagnostics;
-  assert(!app::deserialize_vhdl_hir_state(
-      future_vhdl_hir, "future-vhdl-hir.bin",
-      coverage_checkpoint->semantics, future_vhdl_hir_diagnostics));
-  diagnostic::Engine truncated_vhdl_hir_diagnostics;
-  assert(!app::deserialize_vhdl_hir_state(
-      vhdl_hir_bytes->substr(0, vhdl_hir_bytes->size() - 1U),
-      "truncated-vhdl-hir.bin", coverage_checkpoint->semantics,
-      truncated_vhdl_hir_diagnostics));
-  auto invalid_vhdl_hir = *restored_vhdl_hir;
-  invalid_vhdl_hir.mutable_units().front().id =
-      semantic::UnitId::from_index(
-          static_cast<std::uint32_t>(
-              coverage_checkpoint->semantics.units().size()));
-  diagnostic::Engine invalid_vhdl_hir_diagnostics;
-  assert(!app::serialize_vhdl_hir_state(
-      invalid_vhdl_hir, coverage_checkpoint->semantics,
-      invalid_vhdl_hir_diagnostics));
-  assert(coverage_checkpoint->systemverilog_uvm_checkpoint);
-  const auto& uvm_checkpoint =
-      *coverage_checkpoint->systemverilog_uvm_checkpoint;
-  assert(
-      uvm_checkpoint.schema
-          == runtime::systemverilog_uvm_checkpoint_schema
-      && uvm_checkpoint.foreign_abi == FSIM_UVM_FOREIGN_ABI_VERSION
-      && uvm_checkpoint.provenance.roots
-          == std::vector<std::string>(
-              {"main", "observer", "scalar", "virtual"})
-      && uvm_checkpoint.records.size()
-          == runtime::kSystemVerilogUvmStandardPhaseCount
-      && uvm_checkpoint.external_state.phase_processes == 0
-      && uvm_checkpoint.external_state.callbacks == 0);
-  diagnostic::Engine uvm_codec_diagnostics;
-  const auto uvm_bytes = app::serialize_systemverilog_uvm_state(
-      uvm_checkpoint, uvm_codec_diagnostics);
-  assert(uvm_bytes && !uvm_codec_diagnostics.has_error());
-  const auto restored_uvm = app::deserialize_systemverilog_uvm_state(
-      *uvm_bytes, "sv-uvm.bin", uvm_codec_diagnostics);
-  assert(restored_uvm == uvm_checkpoint);
-  const auto repeated_uvm_bytes = app::serialize_systemverilog_uvm_state(
-      *restored_uvm, uvm_codec_diagnostics);
-  assert(repeated_uvm_bytes == uvm_bytes);
-  auto future_uvm = *uvm_bytes;
-  future_uvm[8] = static_cast<char>(app::kSystemVerilogUvmStateSchema + 1U);
-  diagnostic::Engine future_uvm_diagnostics;
-  assert(!app::deserialize_systemverilog_uvm_state(
-      future_uvm, "future-sv-uvm.bin", future_uvm_diagnostics));
-  const auto truncated_uvm = uvm_bytes->substr(0, uvm_bytes->size() - 1U);
-  diagnostic::Engine truncated_uvm_diagnostics;
-  assert(!app::deserialize_systemverilog_uvm_state(
-      truncated_uvm, "truncated-sv-uvm.bin", truncated_uvm_diagnostics));
-  auto nonportable_uvm = uvm_checkpoint;
-  nonportable_uvm.records.front().kind = FSIM_UVM_FOREIGN_PHASE_PROCESS;
-  diagnostic::Engine nonportable_uvm_diagnostics;
-  assert(!app::serialize_systemverilog_uvm_state(
-      nonportable_uvm, nonportable_uvm_diagnostics));
-  assert(std::ranges::any_of(
-      nonportable_uvm_diagnostics.diagnostics(), [](const auto& diagnostic) {
-        return diagnostic.code == "FSIM-UVM-STATE-001";
-      }));
-  const auto corrupt_uvm_design =
-      directory / "artifact-corrupt-uvm.fsimdesign";
-  std::filesystem::create_directories(corrupt_uvm_design);
-  for (const auto& entry :
-       std::filesystem::recursive_directory_iterator(active_design)) {
-    const auto destination = corrupt_uvm_design
-        / entry.path().lexically_relative(active_design);
-    if (entry.is_directory()) {
-      std::filesystem::create_directories(destination);
-    } else if (entry.is_regular_file()) {
-      std::filesystem::copy_file(entry.path(), destination);
-      std::filesystem::permissions(
-          destination, std::filesystem::perms::owner_write,
-          std::filesystem::perm_options::add);
     }
-  }
-  {
-    std::ofstream corrupt(
-        corrupt_uvm_design / "state" / "sv-uvm.bin",
-        std::ios::binary | std::ios::app);
-    corrupt.put('\0');
-  }
-  diagnostic::Engine corrupt_uvm_diagnostics;
-  assert(!app::load_design_artifact(
-      corrupt_uvm_design, corrupt_uvm_diagnostics));
-  assert(corrupt_uvm_diagnostics.has_error());
-  std::filesystem::remove_all(corrupt_uvm_design);
-  const auto corrupt_vhdl_hir_design =
-      directory / "artifact-corrupt-vhdl-hir.fsimdesign";
-  std::filesystem::create_directories(corrupt_vhdl_hir_design);
-  for (const auto& entry :
-       std::filesystem::recursive_directory_iterator(active_design)) {
-    const auto destination = corrupt_vhdl_hir_design
-        / entry.path().lexically_relative(active_design);
-    if (entry.is_directory()) {
-      std::filesystem::create_directories(destination);
-    } else if (entry.is_regular_file()) {
-      std::filesystem::copy_file(entry.path(), destination);
-      std::filesystem::permissions(
-          destination, std::filesystem::perms::owner_write,
-          std::filesystem::perm_options::add);
+
+    const auto sv_source_text = support::path_to_utf8(sv_source);
+    const auto vhdl_source_text = support::path_to_utf8(vhdl_source);
+    const auto sv_object_text = support::path_to_utf8(sv_object);
+    const auto vhdl_object_text = support::path_to_utf8(vhdl_object);
+    const auto design_text = support::path_to_utf8(design);
+    const auto trace_text = support::path_to_utf8(trace);
+    auto services = app::make_cli_services();
+    std::ostringstream output;
+    std::ostringstream error;
+
+    const std::vector<const char*> vhdl_compile {
+        "fsim", "compile", "--lang", "vhdl", "--standard", "2008",
+        "--library", "work", "--output", vhdl_object_text.c_str(),
+        vhdl_source_text.c_str()
+    };
+    const auto vhdl_result = cli::run(
+        static_cast<int>(vhdl_compile.size()), vhdl_compile.data(), services,
+        output, error);
+    if (vhdl_result != 0) {
+        std::cerr << error.str();
     }
-  }
-  {
-    std::ofstream corrupt(
-        corrupt_vhdl_hir_design / "state" / "vhdl-hir.bin",
-        std::ios::binary | std::ios::app);
-    corrupt.put('\0');
-  }
-  diagnostic::Engine corrupt_vhdl_hir_diagnostics;
-  assert(!app::load_design_artifact(
-      corrupt_vhdl_hir_design, corrupt_vhdl_hir_diagnostics));
-  assert(corrupt_vhdl_hir_diagnostics.has_error());
-  std::filesystem::remove_all(corrupt_vhdl_hir_design);
-  assert(std::filesystem::remove(vhdl_source));
-  auto coverage_state = coverage_checkpoint->systemverilog_coverage;
-  assert(coverage_state.declarations.size() == 1);
-  assert(coverage_state.instances.size() == 1);
-  assert(coverage_state.reports.size() == 1);
-  const auto& coverage_declaration = coverage_state.declarations.front();
-  assert(coverage_declaration.name == "artifact_coverage");
-  assert(coverage_declaration.effective_instance_goal == 75);
-  assert(coverage_declaration.effective_merge_instances);
-  assert(coverage_declaration.coverage_declarations.size() == 1);
-  assert(coverage_declaration.coverage_declarations.front().bins.size() == 6);
-  auto& coverage_instance = coverage_state.instances.front();
-  assert(coverage_instance.runtime_identity.find("0x") == std::string::npos);
-  const auto& first_bin =
-      coverage_declaration.coverage_declarations.front().bins.front();
-  frontend::SystemVerilogCoverageBinHit hit;
-  hit.coverage_declaration_index = 0;
-  hit.bin_declaration_index = first_bin.declaration_index;
-  hit.identity = first_bin.name;
-  hit.hit_count = 3;
-  hit.at_least = first_bin.at_least;
-  hit.covered = true;
-  coverage_instance.bin_hits.push_back(hit);
-  coverage_instance.transition_progress.push_back({0, 4, 0, 1, 2, 3});
-  coverage_instance.previous_samples.push_back({0, 2, 0, 64});
-  coverage_instance.cross_bin_state.push_back(
-      {0, std::nullopt, "tuple", {first_bin.name}, 4, 1, 1, 100, 1,
-       true, false});
-  coverage_instance.illegal_bin_reports.push_back(
-      {"rejected", 8, first_bin.span});
-  frontend::SystemVerilogCoverageCallbackEvent callback;
-  callback.sequence = 9;
-  callback.kind = frontend::SystemVerilogCoverageCallbackKind::Hit;
-  callback.trigger =
-      frontend::SystemVerilogCoverageSampleTrigger::Procedural;
-  callback.mode = frontend::SystemVerilogCoverageExecutionMode::LlvmO2;
-  callback.runtime_identity = coverage_instance.runtime_identity;
-  callback.bin_identity = first_bin.name;
-  callback.value = 2;
-  coverage_state.callback_events.push_back(callback);
-  coverage_state.trace_events.push_back(
-      {9, 42, 7, "alias.coverage.hit", "coverage.hit",
-       frontend::SystemVerilogCoverageCallbackKind::Hit, 2, true});
-  coverage_state.aliases.push_back({"alias.coverage", "coverage"});
-  frontend::refresh_systemverilog_coverage_reports(coverage_state);
-  diagnostic::Engine coverage_codec_diagnostics;
-  const auto coverage_bytes = app::serialize_systemverilog_coverage_state(
-      coverage_state, coverage_codec_diagnostics);
-  assert(coverage_bytes && !coverage_codec_diagnostics.has_error());
-  auto restored_coverage = app::deserialize_systemverilog_coverage_state(
-      *coverage_bytes, "coverage-state.bin", coverage_codec_diagnostics);
-  assert(restored_coverage && !coverage_codec_diagnostics.has_error());
-  const auto restored_bytes = app::serialize_systemverilog_coverage_state(
-      *restored_coverage, coverage_codec_diagnostics);
-  assert(restored_bytes == coverage_bytes);
-  assert(restored_coverage->instances.front().bin_hits.front().hit_count == 3);
-  assert(restored_coverage->instances.front().transition_progress.size() == 1);
-  assert(restored_coverage->instances.front().previous_samples.size() == 1);
-  assert(restored_coverage->instances.front().cross_bin_state.size() == 1);
-  assert(restored_coverage->instances.front().illegal_bin_reports.size() == 1);
-  assert(restored_coverage->callback_events.front().runtime_identity
-      == coverage_instance.runtime_identity);
-  assert(restored_coverage->trace_events.front().time == 42);
-  assert(restored_coverage->aliases.front().canonical_root == "coverage");
-  assert(frontend::render_systemverilog_coverage_report(
-             restored_coverage->reports.front())
-      == frontend::render_systemverilog_coverage_report(
-             coverage_state.reports.front()));
+    assert(vhdl_result == 0);
+    assert(error.str().empty());
+    diagnostic::Engine vhdl_inspection_diagnostics;
+    const auto vhdl_inspection = app::inspect_artifact(
+        vhdl_object, vhdl_inspection_diagnostics);
+    assert(vhdl_inspection && !vhdl_inspection_diagnostics.has_error());
+    assert(vhdl_inspection->phase == app::ArtifactPhaseKind::compilation);
+    assert(vhdl_inspection->language == "vhdl");
+    assert(vhdl_inspection->library == "work");
+    assert(vhdl_inspection->units.size() >= 5);
+    output.str({ });
+    error.str({ });
+    const std::vector<const char*> sv_compile {
+        "fsim", "compile", "--lang", "systemverilog", "--standard", "2017",
+        "--library", "work", "--output", sv_object_text.c_str(),
+        sv_source_text.c_str()
+    };
+    const auto sv_result = cli::run(
+        static_cast<int>(sv_compile.size()), sv_compile.data(), services,
+        output, error);
+    if (sv_result != 0) {
+        std::cerr << error.str();
+    }
+    assert(sv_result == 0);
+    assert(error.str().empty());
 
-  const auto missing_design = directory / "artifact-missing.fsimdesign";
-  const auto missing_design_text = support::path_to_utf8(missing_design);
-  const std::vector<const char*> missing_elaborate{
-      "fsim", "elaborate", "--object", sv_object_text.c_str(), "--top",
-      "missing=sv:work.absent", "--output", missing_design_text.c_str()};
-  output.str({});
-  error.str({});
-  assert(cli::run(
-      static_cast<int>(missing_elaborate.size()), missing_elaborate.data(),
-      services, output, error) != 0);
-  assert(error.str().find("absent") != std::string::npos);
-  assert(!std::filesystem::exists(missing_design));
-
-  const auto ambiguous_design = directory / "artifact-ambiguous.fsimdesign";
-  const auto ambiguous_design_text = support::path_to_utf8(ambiguous_design);
-  const std::vector<const char*> ambiguous_elaborate{
-      "fsim", "elaborate", "--object", vhdl_object_text.c_str(),
-      "--object", sv_object_text.c_str(), "--top",
-      "collision=phase_watch", "--output", ambiguous_design_text.c_str()};
-  output.str({});
-  error.str({});
-  assert(cli::run(
-      static_cast<int>(ambiguous_elaborate.size()),
-      ambiguous_elaborate.data(), services, output, error) != 0);
-  assert(error.str().find("ambiguous") != std::string::npos);
-  assert(!std::filesystem::exists(ambiguous_design));
-
-  std::vector<runtime::SystemVerilogUvmCheckpointArtifact>
-      replay_checkpoints;
-  const auto run_engine = [&](const app::SimulationEngine engine) {
-    diagnostic::Engine diagnostics;
-    auto built = app::load_design_artifact(active_design, diagnostics);
-    assert(built && !diagnostics.has_error());
-    assert(built->design.roots()
+    output.str({ });
+    error.str({ });
+    const std::vector<const char*> elaborate {
+        "fsim", "elaborate", "--object", vhdl_object_text.c_str(),
+        "--object", sv_object_text.c_str(), "--top",
+        "main=sv:work.phase_tb", "--top", "observer=sv:work.phase_watch",
+        "--top", "scalar=sv:work.scalar_artifact",
+        "--top", "virtual=sv:work.interface_artifact",
+        "--output", design_text.c_str(), "--seed", "23"
+    };
+    const auto elaborate_result = cli::run(
+        static_cast<int>(elaborate.size()), elaborate.data(), services,
+        output, error);
+    if (elaborate_result != 0) {
+        std::cerr << error.str();
+    }
+    assert(elaborate_result == 0);
+    assert(error.str().empty());
+    diagnostic::Engine design_inspection_diagnostics;
+    const auto design_inspection = app::inspect_artifact(
+        design, design_inspection_diagnostics);
+    assert(design_inspection && !design_inspection_diagnostics.has_error());
+    assert(design_inspection->phase == app::ArtifactPhaseKind::elaboration);
+    assert(design_inspection->compatible);
+    assert(design_inspection->runtime_abi == runtime_abi_version);
+    assert(design_inspection->roots
         == std::vector<std::string>(
-            {"main", "observer", "scalar", "virtual"}));
-    assert(built->semantics.source_files().size() >= 2);
-    assert(built->design.verilog_specify_paths().size() == 1);
-    assert(built->design.verilog_timing_checks().size() == 1);
-    assert(built->systemverilog_coverage.declarations.size() == 1);
-    assert(built->systemverilog_coverage.instances.size() == 1);
-    assert(built->systemverilog_coverage.reports.size() == 1);
+            { "main", "observer", "scalar", "virtual" }));
+    assert(design_inspection->process_count != 0);
+    auto active_design = design;
+
+    diagnostic::Engine coverage_load_diagnostics;
+    auto coverage_checkpoint = app::load_design_artifact(
+        active_design, coverage_load_diagnostics);
+    assert(coverage_checkpoint && !coverage_load_diagnostics.has_error());
+    assert(!coverage_checkpoint->vhdl_hir.units().empty());
     assert(std::ranges::any_of(
-        built->vhdl_hir.units(), [](const auto& unit) {
-          return std::ranges::any_of(
-              unit.psl_directives, [](const auto& directive) {
-                return directive.label == "artifact_clock";
-              });
+        coverage_checkpoint->vhdl_hir.units(), [](const auto& unit) {
+            return std::ranges::any_of(
+                unit.psl_directives, [](const auto& directive) {
+                    return directive.label == "artifact_clock";
+                });
         }));
-    for (const auto& file : built->semantics.source_files()) {
-      assert(!std::filesystem::path(file.physical_name).is_absolute());
-    }
-    built->cache_path = directory / "artifact-phase-cache";
-    std::filesystem::create_directories(built->cache_path);
-    app::Simulation simulation{std::move(*built), 1000, engine};
-    const auto counter = simulation.find_signal("main.counter_q");
-    const auto watch = simulation.find_signal("observer.watched");
-    const auto stable_probe =
-        simulation.find_signal("main.counter.stable_probe");
-    const auto vital_probe =
-        simulation.find_signal("main.counter.vital_probe");
-    const auto scalar_checks = simulation.find_signal("scalar.checks");
-    const auto scalar_real = simulation.find_signal("scalar.r");
-    const auto scalar_short = simulation.find_signal("scalar.s");
-    const auto scalar_realtime = simulation.find_signal("scalar.rt");
-    const auto scalar_time = simulation.find_signal("scalar.ticks");
-    const auto scalar_handle = simulation.find_signal("scalar.handle");
-    const auto scalar_wide = simulation.find_signal("scalar.wide_value");
-    const auto virtual_selected =
-        simulation.find_signal("virtual.selected");
-    const auto forwarded_selected =
-        simulation.find_signal("virtual.leaf.selected");
-    const auto clocking_sample =
-        simulation.find_signal("virtual.leaf.bus.cb.data");
-    assert(counter && watch && stable_probe && vital_probe && scalar_checks
-        && scalar_real && scalar_short && scalar_realtime && scalar_time
-        && scalar_handle && scalar_wide && virtual_selected
-        && forwarded_selected && clocking_sample);
-    std::size_t callbacks{};
-    simulation.set_signal_change_hook(
-        [&](runtime::simir::SignalId, const runtime::PackedLogic4&,
-            runtime::SimulationTick, std::uint64_t) { ++callbacks; });
-    const auto result = simulation.run();
-    assert(result.status == runtime::RunStatus::stopped);
-    assert(result.time == 6);
-    const auto replay_checkpoint = simulation.capture_uvm_checkpoint();
+    diagnostic::Engine vhdl_hir_codec_diagnostics;
+    const auto vhdl_hir_bytes = app::serialize_vhdl_hir_state(
+        coverage_checkpoint->vhdl_hir, coverage_checkpoint->semantics,
+        vhdl_hir_codec_diagnostics);
+    assert(vhdl_hir_bytes && !vhdl_hir_codec_diagnostics.has_error());
+    auto restored_vhdl_hir = app::deserialize_vhdl_hir_state(
+        *vhdl_hir_bytes, "vhdl-hir.bin", coverage_checkpoint->semantics,
+        vhdl_hir_codec_diagnostics);
+    assert(restored_vhdl_hir && !vhdl_hir_codec_diagnostics.has_error());
+    assert(restored_vhdl_hir->units().size()
+        == coverage_checkpoint->vhdl_hir.units().size());
+    assert(restored_vhdl_hir->declarations().size()
+        == coverage_checkpoint->vhdl_hir.declarations().size());
+    assert(restored_vhdl_hir->processes().size()
+        == coverage_checkpoint->vhdl_hir.processes().size());
+    const auto repeated_vhdl_hir = app::serialize_vhdl_hir_state(
+        *restored_vhdl_hir, coverage_checkpoint->semantics,
+        vhdl_hir_codec_diagnostics);
+    assert(repeated_vhdl_hir == vhdl_hir_bytes);
+    auto future_vhdl_hir = *vhdl_hir_bytes;
+    future_vhdl_hir[8] = static_cast<char>(app::kVhdlHirStateSchema + 1U);
+    diagnostic::Engine future_vhdl_hir_diagnostics;
+    assert(!app::deserialize_vhdl_hir_state(
+        future_vhdl_hir, "future-vhdl-hir.bin",
+        coverage_checkpoint->semantics, future_vhdl_hir_diagnostics));
+    diagnostic::Engine truncated_vhdl_hir_diagnostics;
+    assert(!app::deserialize_vhdl_hir_state(
+        vhdl_hir_bytes->substr(0, vhdl_hir_bytes->size() - 1U),
+        "truncated-vhdl-hir.bin", coverage_checkpoint->semantics,
+        truncated_vhdl_hir_diagnostics));
+    auto invalid_vhdl_hir = *restored_vhdl_hir;
+    invalid_vhdl_hir.mutable_units().front().id = semantic::UnitId::from_index(
+        static_cast<std::uint32_t>(
+            coverage_checkpoint->semantics.units().size()));
+    diagnostic::Engine invalid_vhdl_hir_diagnostics;
+    assert(!app::serialize_vhdl_hir_state(
+        invalid_vhdl_hir, coverage_checkpoint->semantics,
+        invalid_vhdl_hir_diagnostics));
+    assert(coverage_checkpoint->systemverilog_uvm_checkpoint);
+    const auto& uvm_checkpoint = *coverage_checkpoint->systemverilog_uvm_checkpoint;
     assert(
-        replay_checkpoint
-        && replay_checkpoint.artifact.time == result.time
-        && replay_checkpoint.artifact.delta == simulation.delta()
-        && !replay_checkpoint.artifact.provenance.content_identity.empty()
-        && !replay_checkpoint.artifact.provenance.cache_identity.empty()
-        && !replay_checkpoint.artifact.provenance.artifact_identity.empty()
-        && replay_checkpoint.artifact.external_state.phase_processes == 0);
-    replay_checkpoints.push_back(replay_checkpoint.artifact);
-    assert(callbacks != 0);
-    assert(simulation.read_signal(*stable_probe).to_msb_string() == "1");
-    assert(simulation.read_signal(*vital_probe).to_msb_string() == "1");
-    assert(simulation.read_signal(*scalar_checks).to_msb_string() == "11111");
-    auto expected_wide = runtime::PackedLogic4{
-        137, runtime::Logic4::zero};
-    expected_wide.set(136, runtime::Logic4::one);
-    expected_wide.set(73, runtime::Logic4::one);
-    expected_wide.set(3, runtime::Logic4::one);
-    assert(simulation.read_signal(*scalar_wide) == expected_wide);
-    assert(simulation.read_scalar_signal(*scalar_real).as_real() == 1.25);
-    assert(simulation.read_scalar_signal(*scalar_short).as_shortreal() == -2.5F);
-    assert(simulation.read_scalar_signal(*scalar_realtime).as_real() == 3.75);
-    assert(simulation.read_scalar_signal(*scalar_time).as_time()
-        == UINT64_C(9007199254740993));
-    assert(simulation.read_scalar_signal(*scalar_handle).as_chandle() == 0);
-    const auto virtual_handle =
-        simulation.read_signal(*virtual_selected).low_word();
-    assert(virtual_handle.aval != 0 && virtual_handle.bval == 0);
-    assert(simulation.read_signal(*forwarded_selected).low_word()
-           == virtual_handle);
-    assert(simulation.read_signal(*clocking_sample).to_msb_string()
-           == "1010");
-    std::ostringstream debugger_output;
-    std::ostringstream debugger_error;
-    app::DebuggerControl debugger{
-        simulation, debugger_output, debugger_error};
-    debugger.execute({
-        "show", "main.counter.attribute_source'stable(1)"});
-    assert(debugger_error.str().empty());
-    assert(debugger_output.str().find("1") != std::string::npos);
-    assert(!simulation.vhdl_psl_attempts().empty());
-    return std::tuple{
-        simulation.read_signal(*counter).to_msb_string(),
-        simulation.read_signal(*watch).to_msb_string(),
-        simulation.vhdl_psl_attempts()};
-  };
-  const auto interpreted = run_engine(app::SimulationEngine::interpreter);
-  const auto compiled = run_engine(app::SimulationEngine::compiled);
-  const auto compiled_warm = run_engine(app::SimulationEngine::compiled);
-  assert(interpreted == compiled);
-  assert(compiled == compiled_warm);
-  assert(
-      replay_checkpoints.size() == 3
-      && replay_checkpoints[0] == replay_checkpoints[1]
-      && replay_checkpoints[1] == replay_checkpoints[2]);
-  assert(std::get<0>(interpreted) == "00000001");
-  assert(std::get<1>(interpreted) == "1");
+        uvm_checkpoint.schema
+            == runtime::systemverilog_uvm_checkpoint_schema
+        && uvm_checkpoint.foreign_abi == FSIM_UVM_FOREIGN_ABI_VERSION
+        && uvm_checkpoint.provenance.roots
+            == std::vector<std::string>(
+                { "main", "observer", "scalar", "virtual" })
+        && uvm_checkpoint.records.size()
+            == runtime::kSystemVerilogUvmStandardPhaseCount
+        && uvm_checkpoint.external_state.phase_processes == 0
+        && uvm_checkpoint.external_state.callbacks == 0);
+    diagnostic::Engine uvm_codec_diagnostics;
+    const auto uvm_bytes = app::serialize_systemverilog_uvm_state(
+        uvm_checkpoint, uvm_codec_diagnostics);
+    assert(uvm_bytes && !uvm_codec_diagnostics.has_error());
+    const auto restored_uvm = app::deserialize_systemverilog_uvm_state(
+        *uvm_bytes, "sv-uvm.bin", uvm_codec_diagnostics);
+    assert(restored_uvm == uvm_checkpoint);
+    const auto repeated_uvm_bytes = app::serialize_systemverilog_uvm_state(
+        *restored_uvm, uvm_codec_diagnostics);
+    assert(repeated_uvm_bytes == uvm_bytes);
+    auto future_uvm = *uvm_bytes;
+    future_uvm[8] = static_cast<char>(app::kSystemVerilogUvmStateSchema + 1U);
+    diagnostic::Engine future_uvm_diagnostics;
+    assert(!app::deserialize_systemverilog_uvm_state(
+        future_uvm, "future-sv-uvm.bin", future_uvm_diagnostics));
+    const auto truncated_uvm = uvm_bytes->substr(0, uvm_bytes->size() - 1U);
+    diagnostic::Engine truncated_uvm_diagnostics;
+    assert(!app::deserialize_systemverilog_uvm_state(
+        truncated_uvm, "truncated-sv-uvm.bin", truncated_uvm_diagnostics));
+    auto nonportable_uvm = uvm_checkpoint;
+    nonportable_uvm.records.front().kind = FSIM_UVM_FOREIGN_PHASE_PROCESS;
+    diagnostic::Engine nonportable_uvm_diagnostics;
+    assert(!app::serialize_systemverilog_uvm_state(
+        nonportable_uvm, nonportable_uvm_diagnostics));
+    assert(std::ranges::any_of(
+        nonportable_uvm_diagnostics.diagnostics(), [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-UVM-STATE-001";
+        }));
+    const auto corrupt_uvm_design = directory / "artifact-corrupt-uvm.fsimdesign";
+    std::filesystem::create_directories(corrupt_uvm_design);
+    for (const auto& entry :
+        std::filesystem::recursive_directory_iterator(active_design)) {
+        const auto destination = corrupt_uvm_design
+            / entry.path().lexically_relative(active_design);
+        if (entry.is_directory()) {
+            std::filesystem::create_directories(destination);
+        } else if (entry.is_regular_file()) {
+            std::filesystem::copy_file(entry.path(), destination);
+            std::filesystem::permissions(
+                destination, std::filesystem::perms::owner_write,
+                std::filesystem::perm_options::add);
+        }
+    }
+    {
+        std::ofstream corrupt(
+            corrupt_uvm_design / "state" / "sv-uvm.bin",
+            std::ios::binary | std::ios::app);
+        corrupt.put('\0');
+    }
+    diagnostic::Engine corrupt_uvm_diagnostics;
+    assert(!app::load_design_artifact(
+        corrupt_uvm_design, corrupt_uvm_diagnostics));
+    assert(corrupt_uvm_diagnostics.has_error());
+    std::filesystem::remove_all(corrupt_uvm_design);
+    const auto corrupt_vhdl_hir_design = directory / "artifact-corrupt-vhdl-hir.fsimdesign";
+    std::filesystem::create_directories(corrupt_vhdl_hir_design);
+    for (const auto& entry :
+        std::filesystem::recursive_directory_iterator(active_design)) {
+        const auto destination = corrupt_vhdl_hir_design
+            / entry.path().lexically_relative(active_design);
+        if (entry.is_directory()) {
+            std::filesystem::create_directories(destination);
+        } else if (entry.is_regular_file()) {
+            std::filesystem::copy_file(entry.path(), destination);
+            std::filesystem::permissions(
+                destination, std::filesystem::perms::owner_write,
+                std::filesystem::perm_options::add);
+        }
+    }
+    {
+        std::ofstream corrupt(
+            corrupt_vhdl_hir_design / "state" / "vhdl-hir.bin",
+            std::ios::binary | std::ios::app);
+        corrupt.put('\0');
+    }
+    diagnostic::Engine corrupt_vhdl_hir_diagnostics;
+    assert(!app::load_design_artifact(
+        corrupt_vhdl_hir_design, corrupt_vhdl_hir_diagnostics));
+    assert(corrupt_vhdl_hir_diagnostics.has_error());
+    std::filesystem::remove_all(corrupt_vhdl_hir_design);
+    assert(std::filesystem::remove(vhdl_source));
+    auto coverage_state = coverage_checkpoint->systemverilog_coverage;
+    assert(coverage_state.declarations.size() == 1);
+    assert(coverage_state.instances.size() == 1);
+    assert(coverage_state.reports.size() == 1);
+    const auto& coverage_declaration = coverage_state.declarations.front();
+    assert(coverage_declaration.name == "artifact_coverage");
+    assert(coverage_declaration.effective_instance_goal == 75);
+    assert(coverage_declaration.effective_merge_instances);
+    assert(coverage_declaration.coverage_declarations.size() == 1);
+    assert(coverage_declaration.coverage_declarations.front().bins.size() == 6);
+    auto& coverage_instance = coverage_state.instances.front();
+    assert(coverage_instance.runtime_identity.find("0x") == std::string::npos);
+    const auto& first_bin = coverage_declaration.coverage_declarations.front().bins.front();
+    frontend::SystemVerilogCoverageBinHit hit;
+    hit.coverage_declaration_index = 0;
+    hit.bin_declaration_index = first_bin.declaration_index;
+    hit.identity = first_bin.name;
+    hit.hit_count = 3;
+    hit.at_least = first_bin.at_least;
+    hit.covered = true;
+    coverage_instance.bin_hits.push_back(hit);
+    coverage_instance.transition_progress.push_back({ 0, 4, 0, 1, 2, 3 });
+    coverage_instance.previous_samples.push_back({ 0, 2, 0, 64 });
+    coverage_instance.cross_bin_state.push_back(
+        { 0, std::nullopt, "tuple", { first_bin.name }, 4, 1, 1, 100, 1,
+            true, false });
+    coverage_instance.illegal_bin_reports.push_back(
+        { "rejected", 8, first_bin.span });
+    frontend::SystemVerilogCoverageCallbackEvent callback;
+    callback.sequence = 9;
+    callback.kind = frontend::SystemVerilogCoverageCallbackKind::Hit;
+    callback.trigger = frontend::SystemVerilogCoverageSampleTrigger::Procedural;
+    callback.mode = frontend::SystemVerilogCoverageExecutionMode::LlvmO2;
+    callback.runtime_identity = coverage_instance.runtime_identity;
+    callback.bin_identity = first_bin.name;
+    callback.value = 2;
+    coverage_state.callback_events.push_back(callback);
+    coverage_state.trace_events.push_back(
+        { 9, 42, 7, "alias.coverage.hit", "coverage.hit",
+            frontend::SystemVerilogCoverageCallbackKind::Hit, 2, true });
+    coverage_state.aliases.push_back({ "alias.coverage", "coverage" });
+    frontend::refresh_systemverilog_coverage_reports(coverage_state);
+    diagnostic::Engine coverage_codec_diagnostics;
+    const auto coverage_bytes = app::serialize_systemverilog_coverage_state(
+        coverage_state, coverage_codec_diagnostics);
+    assert(coverage_bytes && !coverage_codec_diagnostics.has_error());
+    auto restored_coverage = app::deserialize_systemverilog_coverage_state(
+        *coverage_bytes, "coverage-state.bin", coverage_codec_diagnostics);
+    assert(restored_coverage && !coverage_codec_diagnostics.has_error());
+    const auto restored_bytes = app::serialize_systemverilog_coverage_state(
+        *restored_coverage, coverage_codec_diagnostics);
+    assert(restored_bytes == coverage_bytes);
+    assert(restored_coverage->instances.front().bin_hits.front().hit_count == 3);
+    assert(restored_coverage->instances.front().transition_progress.size() == 1);
+    assert(restored_coverage->instances.front().previous_samples.size() == 1);
+    assert(restored_coverage->instances.front().cross_bin_state.size() == 1);
+    assert(restored_coverage->instances.front().illegal_bin_reports.size() == 1);
+    assert(restored_coverage->callback_events.front().runtime_identity
+        == coverage_instance.runtime_identity);
+    assert(restored_coverage->trace_events.front().time == 42);
+    assert(restored_coverage->aliases.front().canonical_root == "coverage");
+    assert(frontend::render_systemverilog_coverage_report(
+               restored_coverage->reports.front())
+        == frontend::render_systemverilog_coverage_report(
+            coverage_state.reports.front()));
 
-  const auto relocated_design = directory / "relocated.fsimdesign";
-  std::filesystem::rename(active_design, relocated_design);
-  active_design = relocated_design;
-  const auto relocated = run_engine(app::SimulationEngine::interpreter);
-  assert(relocated == interpreted);
-  assert(replay_checkpoints.back() == replay_checkpoints.front());
+    const auto missing_design = directory / "artifact-missing.fsimdesign";
+    const auto missing_design_text = support::path_to_utf8(missing_design);
+    const std::vector<const char*> missing_elaborate {
+        "fsim", "elaborate", "--object", sv_object_text.c_str(), "--top",
+        "missing=sv:work.absent", "--output", missing_design_text.c_str()
+    };
+    output.str({ });
+    error.str({ });
+    assert(cli::run(
+               static_cast<int>(missing_elaborate.size()), missing_elaborate.data(),
+               services, output, error)
+        != 0);
+    assert(error.str().find("absent") != std::string::npos);
+    assert(!std::filesystem::exists(missing_design));
 
-  output.str({});
-  error.str({});
-  const auto active_design_text = support::path_to_utf8(active_design);
-  const std::vector<const char*> simulate{
-      "fsim", "simulate", "--design", active_design_text.c_str(), "--engine",
-      "compiled", "--trace", trace_text.c_str(), "--trace-filter",
-      "main.*", "--trace-filter", "observer.*", "--trace-filter",
-      "scalar.*", "--trace-filter", "virtual.*"};
-  assert(cli::run(
-      static_cast<int>(simulate.size()), simulate.data(), services,
-      output, error) == 0);
-  assert(error.str().empty());
-  const auto trace_bytes = [&] {
-    std::ifstream input(trace, std::ios::binary);
-    return std::string{
-        std::istreambuf_iterator<char>{input},
-        std::istreambuf_iterator<char>{}};
-  }();
-  assert(trace_bytes.find("main") != std::string::npos);
-  assert(trace_bytes.find("observer") != std::string::npos);
-  assert(trace_bytes.find("stable_probe") != std::string::npos);
-  assert(trace_bytes.find("vital_probe") != std::string::npos);
-  assert(trace_bytes.find("scalar") != std::string::npos);
-  assert(trace_bytes.find("ticks") != std::string::npos);
-  assert(trace_bytes.find("handle") != std::string::npos);
-  assert(trace_bytes.find("virtual") != std::string::npos);
-  assert(trace_bytes.find("selected") != std::string::npos);
-  assert(
-      trace_bytes.find("attribute_source'stable(1)")
-      != std::string::npos);
+    const auto ambiguous_design = directory / "artifact-ambiguous.fsimdesign";
+    const auto ambiguous_design_text = support::path_to_utf8(ambiguous_design);
+    const std::vector<const char*> ambiguous_elaborate {
+        "fsim", "elaborate", "--object", vhdl_object_text.c_str(),
+        "--object", sv_object_text.c_str(), "--top",
+        "collision=phase_watch", "--output", ambiguous_design_text.c_str()
+    };
+    output.str({ });
+    error.str({ });
+    assert(cli::run(
+               static_cast<int>(ambiguous_elaborate.size()),
+               ambiguous_elaborate.data(), services, output, error)
+        != 0);
+    assert(error.str().find("ambiguous") != std::string::npos);
+    assert(!std::filesystem::exists(ambiguous_design));
 
-  const auto systemc_phase_source = directory / "artifact_phase.cpp";
-  const auto systemc_phase_object = directory / "artifact-systemc.fsimobj";
-  {
-    std::ofstream systemc_output(systemc_phase_source);
-    systemc_output << "SC_MODULE(ArtifactPhase) {};\n";
-  }
-  const auto systemc_source_text = support::path_to_utf8(systemc_phase_source);
-  const auto systemc_object_text = support::path_to_utf8(systemc_phase_object);
-  const std::vector<const char*> systemc_compile{
-      "fsim", "compile", "--lang", "systemc", "--standard", "2023",
-      "--library", "work", "--output", systemc_object_text.c_str(),
-      systemc_source_text.c_str()};
-  output.str({});
-  error.str({});
-  assert(cli::run(
-      static_cast<int>(systemc_compile.size()), systemc_compile.data(),
-      services, output, error) != 0);
-  assert(error.str().find("Batch 138") != std::string::npos);
-  assert(!std::filesystem::exists(systemc_phase_object));
+    std::vector<runtime::SystemVerilogUvmCheckpointArtifact>
+        replay_checkpoints;
+    const auto run_engine = [&](const app::SimulationEngine engine) {
+        diagnostic::Engine diagnostics;
+        auto built = app::load_design_artifact(active_design, diagnostics);
+        assert(built && !diagnostics.has_error());
+        assert(built->design.roots()
+            == std::vector<std::string>(
+                { "main", "observer", "scalar", "virtual" }));
+        assert(built->semantics.source_files().size() >= 2);
+        assert(built->design.verilog_specify_paths().size() == 1);
+        assert(built->design.verilog_timing_checks().size() == 1);
+        assert(built->systemverilog_coverage.declarations.size() == 1);
+        assert(built->systemverilog_coverage.instances.size() == 1);
+        assert(built->systemverilog_coverage.reports.size() == 1);
+        assert(std::ranges::any_of(
+            built->vhdl_hir.units(), [](const auto& unit) {
+                return std::ranges::any_of(
+                    unit.psl_directives, [](const auto& directive) {
+                        return directive.label == "artifact_clock";
+                    });
+            }));
+        for (const auto& file : built->semantics.source_files()) {
+            assert(!std::filesystem::path(file.physical_name).is_absolute());
+        }
+        built->cache_path = directory / "artifact-phase-cache";
+        std::filesystem::create_directories(built->cache_path);
+        app::Simulation simulation { std::move(*built), 1000, engine };
+        const auto counter = simulation.find_signal("main.counter_q");
+        const auto watch = simulation.find_signal("observer.watched");
+        const auto stable_probe = simulation.find_signal("main.counter.stable_probe");
+        const auto vital_probe = simulation.find_signal("main.counter.vital_probe");
+        const auto scalar_checks = simulation.find_signal("scalar.checks");
+        const auto scalar_real = simulation.find_signal("scalar.r");
+        const auto scalar_short = simulation.find_signal("scalar.s");
+        const auto scalar_realtime = simulation.find_signal("scalar.rt");
+        const auto scalar_time = simulation.find_signal("scalar.ticks");
+        const auto scalar_handle = simulation.find_signal("scalar.handle");
+        const auto scalar_wide = simulation.find_signal("scalar.wide_value");
+        const auto virtual_selected = simulation.find_signal("virtual.selected");
+        const auto forwarded_selected = simulation.find_signal("virtual.leaf.selected");
+        const auto clocking_sample = simulation.find_signal("virtual.leaf.bus.cb.data");
+        assert(counter && watch && stable_probe && vital_probe && scalar_checks
+            && scalar_real && scalar_short && scalar_realtime && scalar_time
+            && scalar_handle && scalar_wide && virtual_selected
+            && forwarded_selected && clocking_sample);
+        std::size_t callbacks { };
+        simulation.set_signal_change_hook(
+            [&](runtime::simir::SignalId, const runtime::PackedLogic4&,
+                runtime::SimulationTick, std::uint64_t) { ++callbacks; });
+        const auto result = simulation.run();
+        assert(result.status == runtime::RunStatus::stopped);
+        assert(result.time == 6);
+        const auto replay_checkpoint = simulation.capture_uvm_checkpoint();
+        assert(
+            replay_checkpoint
+            && replay_checkpoint.artifact.time == result.time
+            && replay_checkpoint.artifact.delta == simulation.delta()
+            && !replay_checkpoint.artifact.provenance.content_identity.empty()
+            && !replay_checkpoint.artifact.provenance.cache_identity.empty()
+            && !replay_checkpoint.artifact.provenance.artifact_identity.empty()
+            && replay_checkpoint.artifact.external_state.phase_processes == 0);
+        replay_checkpoints.push_back(replay_checkpoint.artifact);
+        assert(callbacks != 0);
+        assert(simulation.read_signal(*stable_probe).to_msb_string() == "1");
+        assert(simulation.read_signal(*vital_probe).to_msb_string() == "1");
+        assert(simulation.read_signal(*scalar_checks).to_msb_string() == "111111");
+        auto expected_wide = runtime::PackedLogic4 {
+            137, runtime::Logic4::zero
+        };
+        expected_wide.set(136, runtime::Logic4::one);
+        expected_wide.set(73, runtime::Logic4::x);
+        expected_wide.set(3, runtime::Logic4::one);
+        expected_wide.set(1, runtime::Logic4::z);
+        assert(simulation.read_signal(*scalar_wide) == expected_wide);
+        assert(simulation.read_scalar_signal(*scalar_real).as_real() == 1.25);
+        assert(simulation.read_scalar_signal(*scalar_short).as_shortreal() == -2.5F);
+        assert(simulation.read_scalar_signal(*scalar_realtime).as_real() == 3.75);
+        assert(simulation.read_scalar_signal(*scalar_time).as_time()
+            == UINT64_C(9007199254740993));
+        assert(simulation.read_scalar_signal(*scalar_handle).as_chandle() == 0);
+        const auto virtual_handle = simulation.read_signal(*virtual_selected).low_word();
+        assert(virtual_handle.aval != 0 && virtual_handle.bval == 0);
+        assert(simulation.read_signal(*forwarded_selected).low_word()
+            == virtual_handle);
+        assert(simulation.read_signal(*clocking_sample).to_msb_string()
+            == "1010");
+        std::ostringstream debugger_output;
+        std::ostringstream debugger_error;
+        app::DebuggerControl debugger {
+            simulation, debugger_output, debugger_error
+        };
+        debugger.execute({ "show", "main.counter.attribute_source'stable(1)" });
+        assert(debugger_error.str().empty());
+        assert(debugger_output.str().find("1") != std::string::npos);
+        assert(!simulation.vhdl_psl_attempts().empty());
+        return std::tuple {
+            simulation.read_signal(*counter).to_msb_string(),
+            simulation.read_signal(*watch).to_msb_string(),
+            simulation.vhdl_psl_attempts()
+        };
+    };
+    const auto interpreted = run_engine(app::SimulationEngine::interpreter);
+    const auto compiled = run_engine(app::SimulationEngine::compiled);
+    const auto compiled_warm = run_engine(app::SimulationEngine::compiled);
+    assert(interpreted == compiled);
+    assert(compiled == compiled_warm);
+    assert(
+        replay_checkpoints.size() == 3
+        && replay_checkpoints[0] == replay_checkpoints[1]
+        && replay_checkpoints[1] == replay_checkpoints[2]);
+    assert(std::get<0>(interpreted) == "00000001");
+    assert(std::get<1>(interpreted) == "1");
 
-  project::Config api_compile_config;
-  api_compile_config.manifest_path = "<artifact-api>";
-  api_compile_config.base_directory = directory;
-  api_compile_config.project.name = "artifact-api-compile";
-  project::SourceSet api_sources;
-  api_sources.language = project::Language::system_verilog;
-  api_sources.standard = "2017";
-  api_sources.library = "work";
-  api_sources.compilation_unit = "source-set";
-  api_sources.file_patterns = {sv_source};
-  api_sources.files = {sv_source};
-  api_compile_config.source_sets.push_back(std::move(api_sources));
-  const auto api_object = directory / "artifact-api.fsimobj";
-  diagnostic::Engine api_compile_diagnostics;
-  assert(app::compile_artifact(
-      api_compile_config, api_object, api_compile_diagnostics));
-  assert(!api_compile_diagnostics.has_error());
+    const auto relocated_design = directory / "relocated.fsimdesign";
+    std::filesystem::rename(active_design, relocated_design);
+    active_design = relocated_design;
+    const auto relocated = run_engine(app::SimulationEngine::interpreter);
+    assert(relocated == interpreted);
+    assert(replay_checkpoints.back() == replay_checkpoints.front());
 
-  project::Config api_elaborate_config;
-  api_elaborate_config.manifest_path = "<artifact-api>";
-  api_elaborate_config.base_directory = directory;
-  api_elaborate_config.project.name = "artifact-api-elaborate";
-  api_elaborate_config.project.tops.push_back(
-      {"sv:work.phase_watch", "api"});
-  api_elaborate_config.project.time_resolution = "1ns";
-  api_elaborate_config.build.cache_path = directory / "artifact-api-cache";
-  const auto api_design = directory / "artifact-api.fsimdesign";
-  const std::array api_objects{api_object};
-  diagnostic::Engine api_elaborate_diagnostics;
-  assert(app::elaborate_artifact(
-      api_elaborate_config, api_objects, api_design,
-      api_elaborate_diagnostics));
-  assert(!api_elaborate_diagnostics.has_error());
-  diagnostic::Engine api_load_diagnostics;
-  auto api_loaded = app::load_design_artifact(
-      api_design, api_load_diagnostics);
-  assert(api_loaded && !api_load_diagnostics.has_error());
-  assert(api_loaded->design.roots() == std::vector<std::string>{"api"});
-  auto& malformed_scalar_signals =
-      const_cast<std::vector<elaboration::SignalInfo>&>(
-          api_loaded->design.signals());
-  assert(!malformed_scalar_signals.empty());
-  malformed_scalar_signals.front().systemverilog_scalar =
-      static_cast<frontend::SystemVerilogScalarKind>(255);
-  diagnostic::Engine malformed_scalar_artifact_diagnostics;
-  assert(!app::serialize_runtime_state(
-      api_loaded->design, malformed_scalar_artifact_diagnostics));
-  assert(std::ranges::any_of(
-      malformed_scalar_artifact_diagnostics.diagnostics(),
-      [](const auto& diagnostic) {
-        return diagnostic.code == "FSIM-ART-0013"
-            && diagnostic.message.find("invalid scalar enumeration")
+    output.str({ });
+    error.str({ });
+    const auto active_design_text = support::path_to_utf8(active_design);
+    const std::vector<const char*> simulate {
+        "fsim", "simulate", "--design", active_design_text.c_str(), "--engine",
+        "compiled", "--trace", trace_text.c_str(), "--trace-filter",
+        "main.*", "--trace-filter", "observer.*", "--trace-filter",
+        "scalar.*", "--trace-filter", "virtual.*"
+    };
+    assert(cli::run(
+               static_cast<int>(simulate.size()), simulate.data(), services,
+               output, error)
+        == 0);
+    assert(error.str().empty());
+    const auto trace_bytes = [&] {
+        std::ifstream input(trace, std::ios::binary);
+        return std::string {
+            std::istreambuf_iterator<char> { input },
+            std::istreambuf_iterator<char> { }
+        };
+    }();
+    assert(trace_bytes.find("main") != std::string::npos);
+    assert(trace_bytes.find("observer") != std::string::npos);
+    assert(trace_bytes.find("stable_probe") != std::string::npos);
+    assert(trace_bytes.find("vital_probe") != std::string::npos);
+    assert(trace_bytes.find("scalar") != std::string::npos);
+    assert(trace_bytes.find("ticks") != std::string::npos);
+    assert(trace_bytes.find("handle") != std::string::npos);
+    assert(trace_bytes.find("virtual") != std::string::npos);
+    assert(trace_bytes.find("selected") != std::string::npos);
+    assert(
+        trace_bytes.find("attribute_source'stable(1)")
+        != std::string::npos);
+
+    const auto systemc_phase_source = directory / "artifact_phase.cpp";
+    const auto systemc_phase_object = directory / "artifact-systemc.fsimobj";
+    {
+        std::ofstream systemc_output(systemc_phase_source);
+        systemc_output << "SC_MODULE(ArtifactPhase) {};\n";
+    }
+    const auto systemc_source_text = support::path_to_utf8(systemc_phase_source);
+    const auto systemc_object_text = support::path_to_utf8(systemc_phase_object);
+    const std::vector<const char*> systemc_compile {
+        "fsim", "compile", "--lang", "systemc", "--standard", "2023",
+        "--library", "work", "--output", systemc_object_text.c_str(),
+        systemc_source_text.c_str()
+    };
+    output.str({ });
+    error.str({ });
+    assert(cli::run(
+               static_cast<int>(systemc_compile.size()), systemc_compile.data(),
+               services, output, error)
+        != 0);
+    assert(error.str().find("Batch 138") != std::string::npos);
+    assert(!std::filesystem::exists(systemc_phase_object));
+
+    project::Config api_compile_config;
+    api_compile_config.manifest_path = "<artifact-api>";
+    api_compile_config.base_directory = directory;
+    api_compile_config.project.name = "artifact-api-compile";
+    project::SourceSet api_sources;
+    api_sources.language = project::Language::system_verilog;
+    api_sources.standard = "2017";
+    api_sources.library = "work";
+    api_sources.compilation_unit = "source-set";
+    api_sources.file_patterns = { sv_source };
+    api_sources.files = { sv_source };
+    api_compile_config.source_sets.push_back(std::move(api_sources));
+    const auto api_object = directory / "artifact-api.fsimobj";
+    diagnostic::Engine api_compile_diagnostics;
+    assert(app::compile_artifact(
+        api_compile_config, api_object, api_compile_diagnostics));
+    assert(!api_compile_diagnostics.has_error());
+
+    project::Config api_elaborate_config;
+    api_elaborate_config.manifest_path = "<artifact-api>";
+    api_elaborate_config.base_directory = directory;
+    api_elaborate_config.project.name = "artifact-api-elaborate";
+    api_elaborate_config.project.tops.push_back(
+        { "sv:work.phase_watch", "api" });
+    api_elaborate_config.project.time_resolution = "1ns";
+    api_elaborate_config.build.cache_path = directory / "artifact-api-cache";
+    const auto api_design = directory / "artifact-api.fsimdesign";
+    const std::array api_objects { api_object };
+    diagnostic::Engine api_elaborate_diagnostics;
+    assert(app::elaborate_artifact(
+        api_elaborate_config, api_objects, api_design,
+        api_elaborate_diagnostics));
+    assert(!api_elaborate_diagnostics.has_error());
+    diagnostic::Engine api_load_diagnostics;
+    auto api_loaded = app::load_design_artifact(
+        api_design, api_load_diagnostics);
+    assert(api_loaded && !api_load_diagnostics.has_error());
+    assert(api_loaded->design.roots() == std::vector<std::string> { "api" });
+    auto& malformed_scalar_signals = const_cast<std::vector<elaboration::SignalInfo>&>(
+        api_loaded->design.signals());
+    assert(!malformed_scalar_signals.empty());
+    malformed_scalar_signals.front().systemverilog_scalar = static_cast<frontend::SystemVerilogScalarKind>(255);
+    diagnostic::Engine malformed_scalar_artifact_diagnostics;
+    assert(!app::serialize_runtime_state(
+        api_loaded->design, malformed_scalar_artifact_diagnostics));
+    assert(std::ranges::any_of(
+        malformed_scalar_artifact_diagnostics.diagnostics(),
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ART-0013"
+                && diagnostic.message.find("invalid scalar enumeration")
                 != std::string::npos;
-      }));
+        }));
 
-  auto scalar_export_config = api_compile_config;
-  scalar_export_config.project.name = "scalar-artifact-library";
-  scalar_export_config.project.top = "sv:work.scalar_artifact";
-  scalar_export_config.project.time_resolution = "1ns";
-  scalar_export_config.build.cache_path = directory / "scalar-export-cache";
-  auto scalar_library = directory / "scalar-artifact.fsimlib";
-  diagnostic::Engine scalar_export_diagnostics;
-  assert(app::export_library(
-      scalar_export_config, "work", scalar_library,
-      scalar_export_diagnostics));
-  assert(!scalar_export_diagnostics.has_error());
-  struct ScalarLibraryCapture {
-    std::string checks;
-    std::string wide;
-    std::array<std::uint64_t, 5> payloads{};
-    std::vector<std::string> keys;
-    app::NativeCacheStatistics cache;
-    std::size_t compiled_processes{};
-    std::string coverage_identity;
-    std::string coverage_report;
-  };
-  ScalarLibraryCapture scalar_o2_reference;
-  const auto run_scalar_library = [&](
-      const project::Optimization optimization,
-      const app::SimulationEngine engine) {
-    project::Config mapped;
-    mapped.base_directory = directory;
-    mapped.project.name = "scalar-artifact-consumer";
-    mapped.project.top = "sv:work.scalar_artifact";
-    mapped.project.time_resolution = "1ns";
-    mapped.build.optimization = optimization;
-    mapped.build.cache_path = directory
-        / (optimization == project::Optimization::o0
-               ? "scalar-mapped-o0" : "scalar-mapped-o2");
-    mapped.library_mappings.push_back({"work", scalar_library});
-    diagnostic::Engine diagnostics;
-    auto built = app::build_project(mapped, diagnostics);
-    if (!built) diagnostic::print_text(std::cerr, diagnostics);
-    assert(built && built->mapped_libraries.size() == 1);
-    ScalarLibraryCapture capture;
-    capture.keys = built->specialization_cache_keys;
-    assert(built->systemverilog_coverage.declarations.size() == 1);
-    assert(built->systemverilog_coverage.instances.size() == 1);
-    capture.coverage_identity =
-        built->systemverilog_coverage.instances.front().runtime_identity;
-    capture.coverage_report =
-        frontend::render_systemverilog_coverage_report(
+    auto scalar_export_config = api_compile_config;
+    scalar_export_config.project.name = "scalar-artifact-library";
+    scalar_export_config.project.top = "sv:work.scalar_artifact";
+    scalar_export_config.project.time_resolution = "1ns";
+    scalar_export_config.build.cache_path = directory / "scalar-export-cache";
+    auto scalar_library = directory / "scalar-artifact.fsimlib";
+    diagnostic::Engine scalar_export_diagnostics;
+    assert(app::export_library(
+        scalar_export_config, "work", scalar_library,
+        scalar_export_diagnostics));
+    assert(!scalar_export_diagnostics.has_error());
+    struct ScalarLibraryCapture {
+        std::string checks;
+        std::string wide;
+        std::string wide_shift;
+        std::array<std::uint64_t, 5> payloads { };
+        std::vector<std::string> keys;
+        app::NativeCacheStatistics cache;
+        std::size_t compiled_processes { };
+        std::string coverage_identity;
+        std::string coverage_report;
+    };
+    ScalarLibraryCapture scalar_o2_reference;
+    const auto run_scalar_library = [&](
+                                        const project::Optimization optimization,
+                                        const app::SimulationEngine engine) {
+        project::Config mapped;
+        mapped.base_directory = directory;
+        mapped.project.name = "scalar-artifact-consumer";
+        mapped.project.top = "sv:work.scalar_artifact";
+        mapped.project.time_resolution = "1ns";
+        mapped.build.optimization = optimization;
+        mapped.build.cache_path = directory
+            / (optimization == project::Optimization::o0
+                    ? "scalar-mapped-o0"
+                    : "scalar-mapped-o2");
+        mapped.library_mappings.push_back({ "work", scalar_library });
+        diagnostic::Engine diagnostics;
+        auto built = app::build_project(mapped, diagnostics);
+        if (!built)
+            diagnostic::print_text(std::cerr, diagnostics);
+        assert(built && built->mapped_libraries.size() == 1);
+        ScalarLibraryCapture capture;
+        capture.keys = built->specialization_cache_keys;
+        assert(built->systemverilog_coverage.declarations.size() == 1);
+        assert(built->systemverilog_coverage.instances.size() == 1);
+        capture.coverage_identity = built->systemverilog_coverage.instances.front().runtime_identity;
+        capture.coverage_report = frontend::render_systemverilog_coverage_report(
             built->systemverilog_coverage.reports.front());
-    app::Simulation simulation{std::move(*built), 1000, engine};
-    capture.cache = simulation.native_cache_statistics();
-    capture.compiled_processes = simulation.compiled_process_count();
-    const auto checks = simulation.find_signal("scalar_artifact.checks");
-    const auto wide = simulation.find_signal("scalar_artifact.wide_value");
-    const std::array signals{
-        simulation.find_signal("scalar_artifact.r"),
-        simulation.find_signal("scalar_artifact.s"),
-        simulation.find_signal("scalar_artifact.rt"),
-        simulation.find_signal("scalar_artifact.ticks"),
-        simulation.find_signal("scalar_artifact.handle")};
-    assert(checks && wide && std::ranges::all_of(
-        signals, [](const auto& signal) { return signal.has_value(); }));
-    assert(simulation.run().status == runtime::RunStatus::completed);
-    capture.checks = simulation.read_signal(*checks).to_msb_string();
-    capture.wide = simulation.read_signal(*wide).to_msb_string();
-    for (std::size_t index = 0; index < signals.size(); ++index) {
-      capture.payloads[index] =
-          simulation.read_scalar_signal(*signals[index]).bits;
+        app::Simulation simulation { std::move(*built), 1000, engine };
+        capture.cache = simulation.native_cache_statistics();
+        capture.compiled_processes = simulation.compiled_process_count();
+        const auto checks = simulation.find_signal("scalar_artifact.checks");
+        const auto wide = simulation.find_signal("scalar_artifact.wide_value");
+        const auto wide_shift
+            = simulation.find_signal("scalar_artifact.wide_shift");
+        const std::array signals {
+            simulation.find_signal("scalar_artifact.r"),
+            simulation.find_signal("scalar_artifact.s"),
+            simulation.find_signal("scalar_artifact.rt"),
+            simulation.find_signal("scalar_artifact.ticks"),
+            simulation.find_signal("scalar_artifact.handle")
+        };
+        assert(checks && wide && wide_shift
+            && std::ranges::all_of(signals, [](const auto& signal) {
+                   return signal.has_value();
+               }));
+        assert(simulation.run().status == runtime::RunStatus::completed);
+        capture.checks = simulation.read_signal(*checks).to_msb_string();
+        capture.wide = simulation.read_signal(*wide).to_msb_string();
+        capture.wide_shift
+            = simulation.read_signal(*wide_shift).to_msb_string();
+        for (std::size_t index = 0; index < signals.size(); ++index) {
+            capture.payloads[index] = simulation.read_scalar_signal(*signals[index]).bits;
+        }
+        return capture;
+    };
+    for (const auto optimization :
+        { project::Optimization::o0, project::Optimization::o2 }) {
+        const auto scalar_interpreted = run_scalar_library(
+            optimization, app::SimulationEngine::interpreter);
+        const auto scalar_cold = run_scalar_library(
+            optimization, app::SimulationEngine::compiled);
+        const auto scalar_warm = run_scalar_library(
+            optimization, app::SimulationEngine::compiled);
+        assert(scalar_interpreted.checks == "111111");
+        assert(scalar_interpreted.wide
+            == "1" + std::string(62, '0') + "X"
+                + std::string(69, '0') + "10Z0");
+        assert(
+            scalar_interpreted.wide == scalar_cold.wide
+            && scalar_cold.wide == scalar_warm.wide);
+        assert(scalar_interpreted.wide_shift == std::string(137, '1'));
+        assert(scalar_interpreted.wide_shift == scalar_cold.wide_shift
+            && scalar_cold.wide_shift == scalar_warm.wide_shift);
+        assert(scalar_interpreted.payloads == scalar_cold.payloads
+            && scalar_cold.payloads == scalar_warm.payloads);
+        assert(scalar_interpreted.keys == scalar_cold.keys
+            && scalar_cold.keys == scalar_warm.keys);
+        assert(scalar_interpreted.coverage_identity
+            == scalar_cold.coverage_identity);
+        assert(scalar_cold.coverage_identity
+            == scalar_warm.coverage_identity);
+        assert(scalar_interpreted.coverage_report
+            == scalar_cold.coverage_report);
+        assert(scalar_cold.coverage_report == scalar_warm.coverage_report);
+#if defined(FSIM_HAS_LLVM)
+        assert(scalar_cold.compiled_processes == 2);
+        assert(scalar_warm.cache.hits == 1);
+#endif
+        if (optimization == project::Optimization::o2) {
+            scalar_o2_reference = scalar_warm;
+        }
     }
-    return capture;
-  };
-  for (const auto optimization :
-       {project::Optimization::o0, project::Optimization::o2}) {
-    const auto scalar_interpreted = run_scalar_library(
-        optimization, app::SimulationEngine::interpreter);
-    const auto scalar_cold = run_scalar_library(
-        optimization, app::SimulationEngine::compiled);
-    const auto scalar_warm = run_scalar_library(
-        optimization, app::SimulationEngine::compiled);
-    assert(scalar_interpreted.checks == "11111");
+    const auto scalar_relocation = directory / "relocated-scalar";
+    std::filesystem::create_directories(scalar_relocation);
+    const auto relocated_scalar_library
+        = scalar_relocation / "scalar-artifact.fsimlib";
+    copy_artifact_tree(scalar_library, relocated_scalar_library);
+    std::filesystem::rename(scalar_library,
+        directory / "scalar-artifact.fsimlib.unavailable");
+    scalar_library = relocated_scalar_library;
+    const auto relocated_scalar = run_scalar_library(
+        project::Optimization::o2, app::SimulationEngine::compiled);
     assert(
-        scalar_interpreted.wide == scalar_cold.wide
-        && scalar_cold.wide == scalar_warm.wide);
-    assert(scalar_interpreted.payloads == scalar_cold.payloads
-        && scalar_cold.payloads == scalar_warm.payloads);
-    assert(scalar_interpreted.keys == scalar_cold.keys
-        && scalar_cold.keys == scalar_warm.keys);
-    assert(scalar_interpreted.coverage_identity
-        == scalar_cold.coverage_identity);
-    assert(scalar_cold.coverage_identity
-        == scalar_warm.coverage_identity);
-    assert(scalar_interpreted.coverage_report
-        == scalar_cold.coverage_report);
-    assert(scalar_cold.coverage_report == scalar_warm.coverage_report);
+        relocated_scalar.checks == "111111"
+        && relocated_scalar.wide == scalar_o2_reference.wide
+        && relocated_scalar.wide_shift == scalar_o2_reference.wide_shift
+        && relocated_scalar.payloads == scalar_o2_reference.payloads
+        && relocated_scalar.keys == scalar_o2_reference.keys
+        && relocated_scalar.coverage_identity
+            == scalar_o2_reference.coverage_identity
+        && relocated_scalar.coverage_report
+            == scalar_o2_reference.coverage_report);
 #if defined(FSIM_HAS_LLVM)
-    assert(scalar_cold.compiled_processes == 1);
-    assert(scalar_warm.cache.hits == 1);
+    assert(relocated_scalar.cache.hits == 1);
 #endif
-    if (optimization == project::Optimization::o2) {
-      scalar_o2_reference = scalar_warm;
+
+    std::ifstream scalar_source_input(sv_source, std::ios::binary);
+    std::string edited_scalar_source {
+        std::istreambuf_iterator<char> { scalar_source_input }, { }
+    };
+    assert(scalar_source_input.good() || scalar_source_input.eof());
+    const auto scalar_assignment = edited_scalar_source.find(
+        "1'bx, 69'b0, 4'b10z0");
+    assert(scalar_assignment != std::string::npos);
+    edited_scalar_source.replace(
+        scalar_assignment, std::string { "1'bx" }.size(), "1'bz");
+    {
+        std::ofstream scalar_source_output(
+            sv_source, std::ios::binary | std::ios::trunc);
+        scalar_source_output << edited_scalar_source;
+        assert(scalar_source_output.good());
     }
-  }
-  const auto relocated_scalar_library =
-      directory / "relocated-scalar-artifact.fsimlib";
-  std::filesystem::rename(scalar_library, relocated_scalar_library);
-  scalar_library = relocated_scalar_library;
-  const auto relocated_scalar = run_scalar_library(
-      project::Optimization::o2, app::SimulationEngine::compiled);
-  assert(
-      relocated_scalar.checks == "11111"
-      && relocated_scalar.wide == scalar_o2_reference.wide
-      && relocated_scalar.payloads == scalar_o2_reference.payloads
-      && relocated_scalar.keys == scalar_o2_reference.keys
-      && relocated_scalar.coverage_identity
-          == scalar_o2_reference.coverage_identity
-      && relocated_scalar.coverage_report
-          == scalar_o2_reference.coverage_report);
+    scalar_library = directory / "edited-scalar-artifact.fsimlib";
+    diagnostic::Engine edited_scalar_export_diagnostics;
+    assert(app::export_library(
+        scalar_export_config, "work", scalar_library,
+        edited_scalar_export_diagnostics));
+    assert(!edited_scalar_export_diagnostics.has_error());
+    const auto edited_scalar = run_scalar_library(
+        project::Optimization::o2, app::SimulationEngine::compiled);
+    assert(
+        edited_scalar.checks == "111111"
+        && edited_scalar.wide
+            == "1" + std::string(62, '0') + "Z"
+                + std::string(69, '0') + "10Z0"
+        && edited_scalar.wide != scalar_o2_reference.wide
+        && edited_scalar.wide_shift == scalar_o2_reference.wide_shift
+        && edited_scalar.payloads == scalar_o2_reference.payloads
+        && edited_scalar.keys != scalar_o2_reference.keys);
 #if defined(FSIM_HAS_LLVM)
-  assert(relocated_scalar.cache.hits == 1);
+    assert(
+        edited_scalar.compiled_processes == 2
+        && edited_scalar.cache.hits + edited_scalar.cache.misses == 1);
+#endif
+    const auto edited_scalar_warm = run_scalar_library(
+        project::Optimization::o2, app::SimulationEngine::compiled);
+    assert(edited_scalar_warm.wide == edited_scalar.wide);
+    assert(edited_scalar_warm.wide_shift == edited_scalar.wide_shift);
+    assert(edited_scalar_warm.keys == edited_scalar.keys);
+#if defined(FSIM_HAS_LLVM)
+    assert(edited_scalar_warm.cache.hits == 1);
 #endif
 
-  std::ifstream scalar_source_input(sv_source, std::ios::binary);
-  std::string edited_scalar_source{
-      std::istreambuf_iterator<char>{scalar_source_input}, {}};
-  assert(scalar_source_input.good() || scalar_source_input.eof());
-  const auto scalar_assignment = edited_scalar_source.find("r = 1.25;");
-  assert(scalar_assignment != std::string::npos);
-  edited_scalar_source.replace(
-      scalar_assignment, std::string{"r = 1.25;"}.size(), "r = 1.5;");
-  {
-    std::ofstream scalar_source_output(
-        sv_source, std::ios::binary | std::ios::trunc);
-    scalar_source_output << edited_scalar_source;
-    assert(scalar_source_output.good());
-  }
-  scalar_library = directory / "edited-scalar-artifact.fsimlib";
-  diagnostic::Engine edited_scalar_export_diagnostics;
-  assert(app::export_library(
-      scalar_export_config, "work", scalar_library,
-      edited_scalar_export_diagnostics));
-  assert(!edited_scalar_export_diagnostics.has_error());
-  const auto edited_scalar = run_scalar_library(
-      project::Optimization::o2, app::SimulationEngine::compiled);
-  assert(
-      edited_scalar.checks == "11110"
-      && edited_scalar.wide == scalar_o2_reference.wide
-      && edited_scalar.payloads != scalar_o2_reference.payloads
-      && edited_scalar.keys != scalar_o2_reference.keys);
-#if defined(FSIM_HAS_LLVM)
-  assert(
-      edited_scalar.compiled_processes == 1
-      && edited_scalar.cache.hits + edited_scalar.cache.misses == 1);
-#endif
-
-  const auto verilog_source = directory / "artifact_phase.v";
-  const auto verilog_object = directory / "artifact-verilog.fsimobj";
-  const auto verilog_design = directory / "artifact-verilog.fsimdesign";
-  {
-    std::ofstream verilog_output(verilog_source);
-    verilog_output << R"(
-module legacy_phase;
-  reg value;
+    const auto verilog_source = directory / "artifact_phase.v";
+    const auto verilog_object = directory / "artifact-verilog.fsimobj";
+    const auto verilog_design = directory / "artifact-verilog.fsimdesign";
+    const auto verilog_trace = directory / "artifact-verilog.vcd";
+    const auto verilog_wide_value = "1" + std::string(63, '0') + "X"
+        + std::string(63, '0') + "Z10101010";
+    auto verilog_wide_literal = verilog_wide_value;
+    std::ranges::replace(verilog_wide_literal, 'X', 'x');
+    std::ranges::replace(verilog_wide_literal, 'Z', 'z');
+    const auto verilog_signed_value = "1" + std::string(136, '0');
+    {
+        std::ofstream verilog_output(verilog_source);
+        verilog_output << "module legacy_phase;\n"
+                       << "  localparam [136:0] WIDE_XZ = 137'b"
+                       << verilog_wide_literal << ";\n"
+                       << "  localparam signed [136:0] SIGNED_SEED = 137'sb"
+                       << verilog_signed_value << ";\n"
+                       << R"(  reg [136:0] wide_value;
+  reg signed [136:0] signed_value;
+  reg signed [136:0] signed_shift;
   initial begin
-    value = 1'b0;
-    #1 value = 1'b1;
+    wide_value = WIDE_XZ;
+    signed_value = SIGNED_SEED;
+    signed_shift = SIGNED_SEED >>> 136;
+    #1 wide_value = WIDE_XZ;
     #1 $finish;
   end
 endmodule
 )";
-  }
-  const auto verilog_source_text = support::path_to_utf8(verilog_source);
-  const auto verilog_object_text = support::path_to_utf8(verilog_object);
-  const auto verilog_design_text = support::path_to_utf8(verilog_design);
-  const std::vector<const char*> verilog_compile{
-      "fsim", "compile", "--lang", "verilog", "--standard", "2005",
-      "--library", "work", "--output", verilog_object_text.c_str(),
-      verilog_source_text.c_str()};
-  output.str({});
-  error.str({});
-  assert(cli::run(
-      static_cast<int>(verilog_compile.size()), verilog_compile.data(),
-      services, output, error) == 0);
-  assert(error.str().empty());
-  const std::vector<const char*> verilog_elaborate{
-      "fsim", "elaborate", "--object", verilog_object_text.c_str(),
-      "--top", "legacy=verilog:work.legacy_phase", "--output",
-      verilog_design_text.c_str()};
-  output.str({});
-  error.str({});
-  assert(cli::run(
-      static_cast<int>(verilog_elaborate.size()), verilog_elaborate.data(),
-      services, output, error) == 0);
-  assert(error.str().empty());
-  const std::vector<const char*> verilog_simulate{
-      "fsim", "simulate", "--design", verilog_design_text.c_str(),
-      "--engine", "interpreter"};
-  output.str({});
-  error.str({});
-  assert(cli::run(
-      static_cast<int>(verilog_simulate.size()), verilog_simulate.data(),
-      services, output, error) == 0);
-  assert(error.str().empty());
-  assert(output.str().find("simulation stopped at tick 2")
-      != std::string::npos);
+    }
+    const auto verilog_source_text = support::path_to_utf8(verilog_source);
+    const auto verilog_object_text = support::path_to_utf8(verilog_object);
+    const auto verilog_design_text = support::path_to_utf8(verilog_design);
+    const auto verilog_trace_text = support::path_to_utf8(verilog_trace);
+    const std::vector<const char*> verilog_compile {
+        "fsim", "compile", "--lang", "verilog", "--standard", "2005",
+        "--library", "work", "--output", verilog_object_text.c_str(),
+        verilog_source_text.c_str()
+    };
+    output.str({ });
+    error.str({ });
+    assert(cli::run(
+               static_cast<int>(verilog_compile.size()), verilog_compile.data(),
+               services, output, error)
+        == 0);
+    assert(error.str().empty());
+    diagnostic::Engine verilog_object_inspection_diagnostics;
+    const auto verilog_object_inspection = app::inspect_artifact(
+        verilog_object, verilog_object_inspection_diagnostics);
+    assert(verilog_object_inspection
+        && !verilog_object_inspection_diagnostics.has_error()
+        && verilog_object_inspection->phase
+            == app::ArtifactPhaseKind::compilation
+        && verilog_object_inspection->language == "verilog"
+        && verilog_object_inspection->library == "work"
+        && std::ranges::find(
+               verilog_object_inspection->units,
+               "verilog:work.legacy_phase")
+            != verilog_object_inspection->units.end());
+    const std::vector<const char*> verilog_elaborate {
+        "fsim", "elaborate", "--object", verilog_object_text.c_str(),
+        "--top", "legacy=verilog:work.legacy_phase", "--output",
+        verilog_design_text.c_str()
+    };
+    output.str({ });
+    error.str({ });
+    assert(cli::run(
+               static_cast<int>(verilog_elaborate.size()), verilog_elaborate.data(),
+               services, output, error)
+        == 0);
+    assert(error.str().empty());
+    diagnostic::Engine verilog_design_inspection_diagnostics;
+    const auto verilog_design_inspection = app::inspect_artifact(
+        verilog_design, verilog_design_inspection_diagnostics);
+    assert(verilog_design_inspection
+        && !verilog_design_inspection_diagnostics.has_error()
+        && verilog_design_inspection->phase
+            == app::ArtifactPhaseKind::elaboration
+        && verilog_design_inspection->compatible
+        && verilog_design_inspection->roots
+            == std::vector<std::string> { "legacy" });
+
+    struct VerilogArtifactCapture {
+        std::string wide;
+        std::string signed_value;
+        std::string signed_shift;
+        std::vector<std::string> keys;
+        app::NativeCacheStatistics cache;
+        std::size_t compiled_processes { };
+    };
+    const auto verilog_cache = directory / "artifact-verilog-cache";
+    auto active_verilog_design = verilog_design;
+    const auto run_verilog_artifact
+        = [&](const app::SimulationEngine engine) {
+              diagnostic::Engine diagnostics;
+              auto built = app::load_design_artifact(
+                  active_verilog_design, diagnostics);
+              assert(built && !diagnostics.has_error());
+              built->cache_path = verilog_cache;
+              VerilogArtifactCapture capture;
+              capture.keys = built->specialization_cache_keys;
+              app::Simulation simulation { std::move(*built), 1000, engine };
+              capture.cache = simulation.native_cache_statistics();
+              capture.compiled_processes = simulation.compiled_process_count();
+              const auto wide
+                  = simulation.find_signal("legacy.wide_value");
+              const auto signed_value
+                  = simulation.find_signal("legacy.signed_value");
+              const auto signed_shift
+                  = simulation.find_signal("legacy.signed_shift");
+              assert(wide && signed_value && signed_shift);
+              const auto result = simulation.run();
+              assert(result.status == runtime::RunStatus::stopped);
+              assert(result.time == 2);
+              capture.wide = simulation.read_signal(*wide).to_msb_string();
+              capture.signed_value
+                  = simulation.read_signal(*signed_value).to_msb_string();
+              capture.signed_shift
+                  = simulation.read_signal(*signed_shift).to_msb_string();
+              return capture;
+          };
+    const auto verilog_interpreted
+        = run_verilog_artifact(app::SimulationEngine::interpreter);
+    const auto verilog_cold
+        = run_verilog_artifact(app::SimulationEngine::compiled);
+    const auto verilog_warm
+        = run_verilog_artifact(app::SimulationEngine::compiled);
+    for (const auto* capture :
+        { &verilog_interpreted, &verilog_cold, &verilog_warm }) {
+        assert(capture->wide == verilog_wide_value);
+        assert(capture->signed_value == verilog_signed_value);
+        assert(capture->signed_shift == std::string(137, '1'));
+        assert(capture->keys == verilog_interpreted.keys);
+    }
+#if defined(FSIM_HAS_LLVM)
+    assert(verilog_cold.compiled_processes == 1);
+    assert(verilog_cold.cache.misses == 1);
+    assert(verilog_warm.cache.hits == 1);
+#endif
+
+    const auto verilog_relocation = directory / "relocated-verilog";
+    std::filesystem::create_directories(verilog_relocation);
+    const auto relocated_verilog_design
+        = verilog_relocation / "artifact-verilog.fsimdesign";
+    copy_artifact_tree(active_verilog_design, relocated_verilog_design);
+    std::filesystem::rename(active_verilog_design,
+        directory / "artifact-verilog.fsimdesign.unavailable");
+    active_verilog_design = relocated_verilog_design;
+    std::filesystem::rename(
+        verilog_source, directory / "artifact_phase.v.unavailable");
+    std::filesystem::rename(
+        verilog_object, directory / "artifact-verilog.fsimobj.unavailable");
+    const auto verilog_relocated
+        = run_verilog_artifact(app::SimulationEngine::compiled);
+    assert(verilog_relocated.wide == verilog_wide_value);
+    assert(verilog_relocated.signed_value == verilog_signed_value);
+    assert(verilog_relocated.signed_shift == std::string(137, '1'));
+    assert(verilog_relocated.keys == verilog_interpreted.keys);
+#if defined(FSIM_HAS_LLVM)
+    assert(verilog_relocated.cache.hits == 1);
+#endif
+
+    const auto active_verilog_design_text
+        = support::path_to_utf8(active_verilog_design);
+    const std::vector<const char*> verilog_simulate {
+        "fsim", "simulate", "--design",
+        active_verilog_design_text.c_str(), "--engine", "compiled",
+        "--trace", verilog_trace_text.c_str(), "--trace-filter", "legacy.*"
+    };
+    output.str({ });
+    error.str({ });
+    assert(cli::run(
+               static_cast<int>(verilog_simulate.size()), verilog_simulate.data(),
+               services, output, error)
+        == 0);
+    assert(error.str().empty());
+    assert(output.str().find("simulation stopped at tick 2")
+        != std::string::npos);
+    std::ifstream verilog_trace_input(verilog_trace, std::ios::binary);
+    const std::string verilog_trace_bytes {
+        std::istreambuf_iterator<char> { verilog_trace_input }, { }
+    };
+    assert(verilog_trace_bytes.find("$timescale 1ns $end")
+        != std::string::npos);
+    assert(verilog_trace_bytes.find("b" + verilog_wide_literal + " ")
+        != std::string::npos);
+    std::cout
+        << "FSIM-VERILOG-2005-ARTIFACT-PASS "
+           "stages=object/library/design/relocation/replay/checkpoint "
+           "resources=as6g gaps=0 widths=exact-xz\n";
 }
 
-}  // namespace fsim::test
+} // namespace fsim::test

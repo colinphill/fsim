@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -93,7 +94,40 @@ Capture run_once(
   capture.compiled_processes = simulation.compiled_process_count();
   capture.native_cache = simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 42> names{
+  auto& vpi = simulation.systemverilog_vpi_objects();
+  const auto vpi_root = vpi.find("procedural_assignments");
+  assert(vpi_root);
+  const auto process_iterator = vpi.iterate_children(vpi_root.value->handle);
+  assert(process_iterator);
+  std::set<std::string> process_names;
+  bool saw_procedural_driver{};
+  bool saw_disambiguated_driver{};
+  while (true) {
+    const auto child = vpi.scan(process_iterator.value);
+    if (child.error
+        == fsim::runtime::SystemVerilogVpiIteratorError::End) {
+      break;
+    }
+    assert(child);
+    const auto info = vpi.lookup(child.value);
+    assert(info);
+    if (info.value->kind
+        != fsim::runtime::SystemVerilogVpiObjectKind::Process) {
+      continue;
+    }
+    assert(process_names.insert(info.value->name).second);
+    saw_procedural_driver
+        = saw_procedural_driver
+        || info.value->name == "$procedural_assign_0";
+    saw_disambiguated_driver
+        = saw_disambiguated_driver
+        || info.value->name.starts_with("$process_");
+  }
+  assert(vpi.release_iterator(process_iterator.value)
+      == fsim::runtime::SystemVerilogVpiIteratorError::None);
+  assert(saw_procedural_driver && saw_disambiguated_driver);
+
+  constexpr std::array<std::string_view, 69> names {
       "procedural_assignments.delayed_nba",
       "procedural_assignments.delayed_blocking",
       "procedural_assignments.event_blocking",
@@ -135,13 +169,45 @@ Capture run_once(
       "procedural_assignments.dynamic_force_released",
       "procedural_assignments.edge_positive",
       "procedural_assignments.edge_negative",
-      "procedural_assignments.edge_mixed_state"};
-  constexpr std::array<std::uint32_t, names.size()> widths{
+      "procedural_assignments.edge_mixed_state",
+      "procedural_assignments.proc_target",
+      "procedural_assignments.proc_initial",
+      "procedural_assignments.proc_reactive",
+      "procedural_assignments.proc_replaced",
+      "procedural_assignments.proc_still_replaced",
+      "procedural_assignments.proc_deassigned",
+      "procedural_assignments.proc_active",
+      "procedural_assignments.proc_selected",
+      "procedural_assignments.proc_selected_initial",
+      "procedural_assignments.proc_selected_reactive",
+      "procedural_assignments.proc_selected_after",
+      "procedural_assignments.concat_blocking",
+      "procedural_assignments.concat_forced",
+      "procedural_assignments.concat_released",
+      "procedural_assignments.concat_initial",
+      "procedural_assignments.concat_reactive",
+      "procedural_assignments.concat_deassigned",
+      "procedural_assignments.concat_index_capture",
+      "procedural_assignments.wide_proc_initial_high",
+      "procedural_assignments.wide_proc_initial_low",
+      "procedural_assignments.wide_proc_reactive_high",
+      "procedural_assignments.wide_proc_reactive_low",
+      "procedural_assignments.wide_proc_deassigned_high",
+      "procedural_assignments.wide_proc_deassigned_low",
+      "procedural_assignments.wide_selected_initial",
+      "procedural_assignments.wide_selected_reactive",
+      "procedural_assignments.wide_selected_deassigned"
+  };
+  constexpr std::array<std::uint32_t, names.size()> widths {
       1, 1, 1, 1, 1, 1, 4, 4, 1, 1, 1,
       16, 16, 16, 16, 16, 32,
       8, 8, 8, 1, 32,
       4, 4, 4, 4, 4, 4, 4, 4, 8, 4, 4, 4,
-      1, 3, 4, 4, 4, 1, 1, 2};
+      1, 3, 4, 4, 4, 1, 1, 2,
+      4, 4, 4, 4, 4, 4, 4, 8, 8, 8, 8,
+      8, 8, 8, 8, 8, 8, 3,
+      64, 64, 64, 64, 64, 64, 64, 64, 64
+  };
   std::array<fsim::runtime::simir::SignalId, names.size()> signals{};
   std::array<fsim::runtime::VcdSignal, names.size()> vcd_signals{};
   std::ostringstream vcd_output;
@@ -188,6 +254,7 @@ Capture run_once(
   debugger.execute({"show", "dynamic_partial"});
   debugger.execute({"show", "force_masked"});
   debugger.execute({"show", "force_partial"});
+  debugger.execute({ "show", "proc_active" });
   assert(debugger_error.str().empty());
   capture.debugger = debugger_output.str();
   for (std::size_t index = 0; index < signals.size(); ++index) {
@@ -315,6 +382,49 @@ void verify_reference(const Capture& capture) {
   assert(final_value("procedural_assignments.edge_positive") == "1");
   assert(final_value("procedural_assignments.edge_negative") == "1");
   assert(final_value("procedural_assignments.edge_mixed_state") == "11");
+  assert(final_value("procedural_assignments.proc_target") == "1001");
+  assert(final_value("procedural_assignments.proc_initial") == "0011");
+  assert(final_value("procedural_assignments.proc_reactive") == "1010");
+  assert(final_value("procedural_assignments.proc_replaced") == "0101");
+  assert(
+      final_value("procedural_assignments.proc_still_replaced") == "0101");
+  assert(final_value("procedural_assignments.proc_deassigned") == "0101");
+  assert(final_value("procedural_assignments.proc_active") == "1011");
+  assert(final_value("procedural_assignments.proc_selected") == "00101000");
+  assert(
+      final_value("procedural_assignments.proc_selected_initial")
+      == "11010111");
+  assert(
+      final_value("procedural_assignments.proc_selected_reactive")
+      == "11101011");
+  assert(
+      final_value("procedural_assignments.proc_selected_after")
+      == "00101000");
+  assert(final_value("procedural_assignments.concat_blocking") == "10101011");
+  assert(final_value("procedural_assignments.concat_forced") == "00111100");
+  assert(final_value("procedural_assignments.concat_released") == "01010101");
+  assert(final_value("procedural_assignments.concat_initial") == "10010110");
+  assert(final_value("procedural_assignments.concat_reactive") == "01101001");
+  assert(final_value("procedural_assignments.concat_deassigned") == "01101001");
+  assert(final_value("procedural_assignments.concat_index_capture") == "101");
+  assert(final_value("procedural_assignments.wide_proc_initial_high")
+      == "0000000100100011010001010110011110001001101010111100110111101111");
+  assert(final_value("procedural_assignments.wide_proc_initial_low")
+      == "1111111011011100101110101001100001110110010101000011001000010000");
+  assert(final_value("procedural_assignments.wide_proc_reactive_high")
+      == "1000100110101011110011011110111100000001001000110100010101100111");
+  assert(final_value("procedural_assignments.wide_proc_reactive_low")
+      == "0111011001010100001100100001000011111110110111001011101010011000");
+  assert(final_value("procedural_assignments.wide_proc_deassigned_high")
+      == final_value("procedural_assignments.wide_proc_reactive_high"));
+  assert(final_value("procedural_assignments.wide_proc_deassigned_low")
+      == final_value("procedural_assignments.wide_proc_reactive_low"));
+  assert(final_value("procedural_assignments.wide_selected_initial")
+      == "0000000100100011010001010110011110001001101010111100110111101111");
+  assert(final_value("procedural_assignments.wide_selected_reactive")
+      == "1111111011011100101110101001100001110110010101000011001000010000");
+  assert(final_value("procedural_assignments.wide_selected_deassigned")
+      == final_value("procedural_assignments.wide_selected_reactive"));
   assert(
       capture.debugger.find(
           "procedural_assignments.dynamic_partial = 1001001000110100")
@@ -326,6 +436,10 @@ void verify_reference(const Capture& capture) {
   assert(
       capture.debugger.find(
           "procedural_assignments.force_partial = 0011")
+      != std::string::npos);
+  assert(
+      capture.debugger.find(
+          "procedural_assignments.proc_active = 1011 (forced)")
       != std::string::npos);
   assert(
       capture.vcd.find("$timescale 1ps $end")
@@ -355,11 +469,11 @@ void verify_mode(
     assert(reference.debugger == actual->debugger);
   }
 #if defined(FSIM_HAS_LLVM)
-  assert(cold.compiled_processes == 19);
+  assert(cold.compiled_processes == 29);
   assert(cold.native_cache.hits == 0);
   assert(cold.native_cache.misses == 1);
   assert(cold.native_cache.stores == 1);
-  assert(warm.compiled_processes == 19);
+  assert(warm.compiled_processes == 29);
   assert(warm.native_cache.hits == 1);
   assert(warm.native_cache.misses == 0);
 #else
@@ -431,6 +545,45 @@ module procedural_assignments;
   logic edge_positive;
   logic edge_negative;
   logic [1:0] edge_mixed_state;
+  logic [3:0] proc_source_a;
+  logic [3:0] proc_source_b;
+  logic [3:0] proc_target;
+  logic [3:0] proc_initial;
+  logic [3:0] proc_reactive;
+  logic [3:0] proc_replaced;
+  logic [3:0] proc_still_replaced;
+  logic [3:0] proc_deassigned;
+  logic [3:0] proc_active;
+  logic [3:0] proc_selected_source;
+  logic [7:0] proc_selected;
+  logic [7:0] proc_selected_initial;
+  logic [7:0] proc_selected_reactive;
+  logic [7:0] proc_selected_after;
+  logic [3:0] concat_left;
+  logic [3:0] concat_right;
+  logic [7:0] concat_source;
+  logic [7:0] concat_blocking;
+  logic [7:0] concat_forced;
+  logic [7:0] concat_released;
+  logic [7:0] concat_initial;
+  logic [7:0] concat_reactive;
+  logic [7:0] concat_deassigned;
+  logic [1:0] concat_index;
+  logic [3:0] concat_indexed;
+  logic [2:0] concat_index_capture;
+  logic [256:0] wide_target;
+  logic [256:0] wide_proc_source;
+  logic [128:0] wide_selected_source;
+  logic signed [31:0] wide_base;
+  logic [63:0] wide_proc_initial_high;
+  logic [63:0] wide_proc_initial_low;
+  logic [63:0] wide_proc_reactive_high;
+  logic [63:0] wide_proc_reactive_low;
+  logic [63:0] wide_proc_deassigned_high;
+  logic [63:0] wide_proc_deassigned_low;
+  logic [63:0] wide_selected_initial;
+  logic [63:0] wide_selected_reactive;
+  logic [63:0] wide_selected_deassigned;
   logic [3:0] compound_rhs;
   logic signed [31:0] event_index;
 
@@ -526,12 +679,108 @@ module procedural_assignments;
   end
 
   initial begin
+    proc_source_a = 4'h3;
+    proc_source_b = 4'h5;
+    proc_target = 4'h0;
+    assign proc_target = proc_source_a;
+    #1ps proc_initial = proc_target;
+    proc_source_a = 4'ha;
+    #1ps proc_reactive = proc_target;
+    proc_target = 4'h6;
+    assign proc_target = proc_source_b;
+    #1ps proc_replaced = proc_target;
+    proc_source_a = 4'hf;
+    #1ps proc_still_replaced = proc_target;
+    deassign proc_target;
+    proc_deassigned = proc_target;
+    proc_target = 4'h9;
+
+    proc_active = 4'h0;
+    assign proc_active = proc_source_a;
+    proc_active = 4'h6;
+    proc_source_a = 4'hb;
+  end
+
+  initial begin
+    proc_selected = 8'hc3;
+    proc_selected_source = 4'h5;
+    assign proc_selected[5:2] = proc_selected_source;
+    #1ps proc_selected_initial = proc_selected;
+    proc_selected_source = 4'ha;
+    #1ps proc_selected_reactive = proc_selected;
+    proc_selected = 8'h00;
+    deassign proc_selected[5:2];
+    proc_selected_after = proc_selected;
+
+    {concat_left, concat_right} = 8'hab;
+    concat_blocking = {concat_left, concat_right};
+    force {concat_left, concat_right} = 8'h3c;
+    {concat_left, concat_right} = 8'h55;
+    concat_forced = {concat_left, concat_right};
+    release {concat_left, concat_right};
+    concat_released = {concat_left, concat_right};
+    concat_source = 8'h96;
+    assign {concat_left, concat_right} = concat_source;
+    #1ps concat_initial = {concat_left, concat_right};
+    concat_source = 8'h69;
+    #1ps concat_reactive = {concat_left, concat_right};
+    {concat_left, concat_right} = 8'h12;
+    deassign {concat_left, concat_right};
+    concat_deassigned = {concat_left, concat_right};
+
+    concat_index = 2'b00;
+    concat_indexed = 4'b0000;
+    {concat_index, concat_indexed[concat_index]} = 3'b101;
+    concat_index_capture = {concat_index, concat_indexed[0]};
+  end
+
+  initial begin
     edge_left = 1'b0;
     edge_right = 1'b0;
     #1ps edge_right = 1'b1;
     #1ps edge_left = 1'b1;
     #1ps edge_right = 1'b0;
     #1ps edge_left = 1'b0;
+  end
+  initial begin
+    wide_target = '0;
+    wide_base = 64;
+    wide_selected_source = 129'h1_0123456789abcdef_0123456789abcdef;
+    wide_target[200:72] = wide_selected_source;
+    wide_target[wide_base] = 1'b1;
+    wide_target[wide_base +: 129] = wide_selected_source;
+    wide_target[wide_base] <= 1'b0;
+    wide_target <= #1ps wide_proc_source;
+    wide_target[200:72] <= #1ps wide_selected_source;
+    wide_target[wide_base] <= #1ps 1'b1;
+    wide_target[wide_base +: 129] <= #1ps wide_selected_source;
+    #2ps;
+
+    wide_proc_source =
+      257'h1_0123456789abcdef_0123456789abcdef_fedcba9876543210_fedcba9876543210;
+    assign wide_target = wide_proc_source;
+    #1ps;
+    wide_proc_initial_high = wide_target[255:192];
+    wide_proc_initial_low = wide_target[63:0];
+    wide_proc_source =
+      257'h0_89abcdef01234567_89abcdef01234567_76543210fedcba98_76543210fedcba98;
+    #1ps;
+    wide_proc_reactive_high = wide_target[255:192];
+    wide_proc_reactive_low = wide_target[63:0];
+    wide_target = '0;
+    deassign wide_target;
+    wide_proc_deassigned_high = wide_target[255:192];
+    wide_proc_deassigned_low = wide_target[63:0];
+
+    wide_target = '0;
+    wide_selected_source = 129'h1_0123456789abcdef_0123456789abcdef;
+    assign wide_target[200:72] = wide_selected_source;
+    #1ps wide_selected_initial = wide_target[135:72];
+    wide_selected_source = 129'h0_fedcba9876543210_fedcba9876543210;
+    #1ps wide_selected_reactive = wide_target[135:72];
+    wide_target = '0;
+    deassign wide_target[200:72];
+    wide_selected_deassigned = wide_target[135:72];
   end
   initial begin
     edge_positive = 1'b0;

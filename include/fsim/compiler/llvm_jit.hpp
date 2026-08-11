@@ -99,11 +99,14 @@ struct JitProcessFrameLayout {
   std::uint64_t layout_id_low{};
   std::uint64_t layout_id_high{};
   std::uint32_t register_count{};
+  std::uint32_t register_word_count { };
   std::uint32_t string_register_count{};
   bool uses_logic9{};
+  std::vector<std::uint32_t> register_widths;
+  std::vector<std::uint32_t> register_word_offsets;
 
-  friend bool operator==(JitProcessFrameLayout,
-                         JitProcessFrameLayout) = default;
+  friend bool operator==(const JitProcessFrameLayout&,
+      const JitProcessFrameLayout&) = default;
 };
 
 /// One externally named process function within a compiled LLVM module.
@@ -132,21 +135,22 @@ public:
 };
 
 enum class JitGeneratedRuntimeErrorReason : std::uint8_t {
-  unknown_branch_condition,
-  integer_operand_unknown,
-  integer_overflow,
-  integer_division_by_zero,
-  integer_negative_exponent,
-  integer_subtype_range,
-  dynamic_index_unknown,
-  dynamic_index_range,
-  call_stack_unknown,
-  call_stack_overflow,
-  call_stack_underflow,
-  call_stack_target,
-  string_callback_failure,
-  file_callback_failure,
-  container_callback_failure,
+    unknown_branch_condition,
+    integer_operand_unknown,
+    integer_overflow,
+    integer_division_by_zero,
+    integer_negative_exponent,
+    integer_subtype_range,
+    dynamic_index_unknown,
+    dynamic_index_range,
+    call_stack_unknown,
+    call_stack_overflow,
+    call_stack_underflow,
+    call_stack_target,
+    string_callback_failure,
+    file_callback_failure,
+    container_callback_failure,
+    signal_callback_failure,
 };
 
 /// A failure deliberately reported by generated SimIR code.

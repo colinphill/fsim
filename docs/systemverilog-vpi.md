@@ -126,6 +126,15 @@ Nonrestorable native state is never serialized. Unsupported profiles, invalid
 encodings, oversize inputs, foreign/stale handles, and resource exhaustion
 return checked failures without partial publication.
 
+Packed Verilog/SystemVerilog values are not capped at one megabit or at a host
+word. Type descriptors and stored `aval`/`bval` planes preserve the exact
+declared width, signedness, and `X`/`Z` state, and application publication keeps
+that identity across interpreter/LLVM execution, callbacks, checkpoints, and
+relocation. The public descriptor width is explicitly `uint32_t`; exceeding
+that host ABI representation is a diagnosed physical boundary, distinct from
+Verilog language legality. Configured allocation/work budgets are likewise
+transactional resource limits and never justify narrowing a value.
+
 Primary evidence lives in `tests/runtime/runtime_vpi_*_tests.cpp`,
 `tests/runtime/vpi_reference_plugin_c.c`, and
 `tests/runtime/vpi_reference_plugin_cpp.cpp`.

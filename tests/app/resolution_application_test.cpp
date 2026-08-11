@@ -52,16 +52,16 @@ struct Capture {
 };
 
 struct StrengthCapture {
-  std::array<std::string, 17> values;
-  std::vector<Change> switch_changes;
-  std::vector<Change> conditional_changes;
-  std::vector<Change> decay_changes;
-  std::vector<Change> renewed_changes;
-  std::string vcd;
-  std::string debugger;
+    std::array<std::string, 23> values;
+    std::vector<Change> switch_changes;
+    std::vector<Change> conditional_changes;
+    std::vector<Change> decay_changes;
+    std::vector<Change> renewed_changes;
+    std::string vcd;
+    std::string debugger;
 
-  friend bool operator==(
-      const StrengthCapture&, const StrengthCapture&) = default;
+    friend bool operator==(
+        const StrengthCapture&, const StrengthCapture&) = default;
 };
 
 bool writes_signal(
@@ -301,6 +301,9 @@ void verify_verilog_strengths(
 module strength_top;
   reg drive;
   reg enabled;
+  reg device_drive;
+  reg device_ncontrol;
+  reg pmos_control;
   reg tran_drive;
   reg switch_control;
   reg renew_drive;
@@ -309,6 +312,12 @@ module strength_top;
   supply1 supply_high;
   wire explicit_pull;
   wire mos_output;
+  wire pmos_output;
+  wire rpmos_output;
+  wire cmos_output;
+  wire rcmos_output;
+  reg [4:0] mos_on_seen;
+  reg [4:0] mos_off_seen;
   wire resistive_conflict;
   wire tran_left;
   wire tran_right;
@@ -329,7 +338,13 @@ module strength_top;
   assign (weak0, weak1) strength_conflict = 1'b0;
   assign (strong0, strong1) strength_conflict = drive;
   pullup pull_source(explicit_pull);
-  nmos mos_device(mos_output, drive, enabled);
+  nmos mos_device(mos_output, device_drive, device_ncontrol);
+  pmos pmos_device(pmos_output, device_drive, pmos_control);
+  rpmos rpmos_device(rpmos_output, device_drive, pmos_control);
+  cmos cmos_device(
+      cmos_output, device_drive, device_ncontrol, pmos_control);
+  rcmos rcmos_device(
+      rcmos_output, device_drive, device_ncontrol, pmos_control);
   assign (strong0, strong1) resistive_conflict = 1'b0;
   rnmos resistive_device(resistive_conflict, 1'b1, enabled);
   assign tran_left = tran_drive;
@@ -359,22 +374,35 @@ module strength_top;
   initial begin
     drive = 1'b1;
     enabled = 1'b1;
+    device_drive = 1'bz;
+    device_ncontrol = 1'b0;
+    pmos_control = 1'b1;
     tran_drive = 1'b1;
     switch_control = 1'b0;
     renew_drive = 1'b1;
     #1 begin
       drive = 1'bz;
+      device_drive = 1'b1;
+      device_ncontrol = 1'b1;
+      pmos_control = 1'b0;
       tran_drive = 1'bz;
       switch_control = 1'b1;
       renew_drive = 1'bz;
     end
     #1 begin
+      mos_on_seen = {
+        mos_output, pmos_output, rpmos_output, cmos_output, rcmos_output};
       enabled = 1'b0;
+      device_drive = 1'bz;
       switch_control = 1'b0;
       renew_drive = 1'b0;
     end
     #1 begin
+      mos_off_seen = {
+        mos_output, pmos_output, rpmos_output, cmos_output, rcmos_output};
       tran_drive = 1'b0;
+      device_ncontrol = 1'b0;
+      pmos_control = 1'b1;
       switch_control = 1'bx;
     end
     #1 $finish;
@@ -419,6 +447,28 @@ endmodule
            && topology->switch_source && topology->switch_target
            && topology->switch_control);
     const auto topology_process = topology->id;
+    const auto topology_occurrence = std::ranges::find(
+        project->design_ir.processes(),
+        topology_process,
+        &fsim::semantic::design::ProcessOccurrence::runtime_index);
+    assert(topology_occurrence != project->design_ir.processes().end()
+           && topology_occurrence->drivers.empty()
+           && topology_occurrence->transactions.empty());
+    const auto directional = std::ranges::find_if(
+        project->design.processes(), [](const auto& process) {
+          return !process.switch_bidirectional
+              && process.switch_source && process.switch_target;
+        });
+    assert(directional != project->design.processes().end());
+    const auto directional_process = directional->id;
+    const auto directional_target = *directional->switch_target;
+    const auto directional_occurrence = std::ranges::find(
+        project->design_ir.processes(),
+        directional_process,
+        &fsim::semantic::design::ProcessOccurrence::runtime_index);
+    assert(directional_occurrence != project->design_ir.processes().end()
+           && !directional_occurrence->drivers.empty()
+           && !directional_occurrence->transactions.empty());
     const auto runtime_bytes = fsim::app::serialize_runtime_state(
         project->design, diagnostics);
     assert(runtime_bytes);
@@ -443,15 +493,19 @@ endmodule
       assert(signal);
       return *signal;
     };
-    const std::array signals{
+    const std::array signals {
         read("strength_conflict"), read("implicit_pull"),
         read("supply_high"), read("explicit_pull"),
-        read("mos_output"), read("resistive_conflict"),
+        read("mos_output"), read("pmos_output"),
+        read("rpmos_output"), read("cmos_output"),
+        read("rcmos_output"), read("resistive_conflict"),
         read("tran_right"), read("retained_charge"),
         read("decayed_charge"), read("charged_conflict"),
         read("rtran_right"), read("weak_mos_output"),
         read("zero_decay"), read("renewed_charge"),
-        read("packed_charge")};
+        read("packed_charge"), read("mos_on_seen"),
+        read("mos_off_seen")
+    };
     const auto conditional_signal = read("conditional_right");
     const auto control_signal = read("switch_control");
     const auto chain_signal = read("chain_right");
@@ -463,30 +517,30 @@ endmodule
     const auto vcd_signal = vcd.declare_signal(
         "strength_top.decayed_charge", 1);
     vcd.begin(simulation.now());
-    vcd.change(vcd_signal, simulation.read_signal(signals[8]));
+    vcd.change(vcd_signal, simulation.read_signal(signals[12]));
     simulation.set_signal_change_hook(
         [&](const fsim::runtime::simir::SignalId signal,
             const fsim::runtime::PackedLogic4& value,
             const fsim::runtime::SimulationTick time,
             const std::uint64_t delta) {
-          if (signal == signals[6]) {
-            capture.switch_changes.push_back(
-                {value.to_msb_string(), time, delta});
-          }
-          if (signal == conditional_signal) {
-            capture.conditional_changes.push_back(
-                {value.to_msb_string(), time, delta});
-          }
-          if (signal == signals[8]) {
-            capture.decay_changes.push_back(
-                {value.to_msb_string(), time, delta});
-            vcd.set_time(time);
-            vcd.change(vcd_signal, value);
-          }
-          if (signal == signals[13]) {
-            capture.renewed_changes.push_back(
-                {value.to_msb_string(), time, delta});
-          }
+            if (signal == signals[10]) {
+                capture.switch_changes.push_back(
+                    { value.to_msb_string(), time, delta });
+            }
+            if (signal == conditional_signal) {
+                capture.conditional_changes.push_back(
+                    { value.to_msb_string(), time, delta });
+            }
+            if (signal == signals[12]) {
+                capture.decay_changes.push_back(
+                    { value.to_msb_string(), time, delta });
+                vcd.set_time(time);
+                vcd.change(vcd_signal, value);
+            }
+            if (signal == signals[17]) {
+                capture.renewed_changes.push_back(
+                    { value.to_msb_string(), time, delta });
+            }
         });
     std::ostringstream debugger_output;
     std::ostringstream debugger_error;
@@ -498,6 +552,9 @@ endmodule
     const auto result = simulation.run();
     assert(result.status == fsim::runtime::RunStatus::stopped);
     assert(simulation.read_signal(control_signal).to_msb_string() == "X");
+    assert(simulation.read_driver(
+               directional_process, directional_target).width()
+           == simulation.read_signal(directional_target).width());
     bool topology_has_no_driver = false;
     try {
       (void)simulation.read_driver(topology_process, conditional_signal);
@@ -521,9 +578,10 @@ endmodule
   const auto reference = execute(fsim::app::SimulationEngine::interpreter);
   const auto cold = execute(fsim::app::SimulationEngine::compiled);
   const auto warm = execute(fsim::app::SimulationEngine::compiled);
-  const auto expected_strengths = std::array<std::string, 17>{
-      "0", "0", "1", "1", "Z", "0", "0", "1", "Z", "1", "0", "0",
-      "Z", "0", "11", "X", "X"};
+  const auto expected_strengths = std::array<std::string, 23> {
+      "0", "0", "1", "1", "Z", "Z", "Z", "Z", "Z", "0", "0", "1",
+      "Z", "1", "0", "0", "Z", "0", "11", "11111", "ZZZZZ", "X", "X"
+  };
   if (reference.values != expected_strengths) {
     for (const auto& value : reference.values) std::cerr << value << ' ';
     std::cerr << '\n';
@@ -534,7 +592,7 @@ endmodule
   assert(!reference.decay_changes.empty());
   assert(std::ranges::any_of(
       reference.switch_changes, [](const Change& change) {
-        return change.value == "Z" && change.time == 1000;
+          return change.value == "Z" && change.time == 1000;
       }));
   assert(!reference.switch_changes.empty()
          && reference.switch_changes.back().value == "0"

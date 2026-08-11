@@ -37,81 +37,83 @@ struct Root {
 };
 
 struct ExternalPort {
-    std::uint64_t handle{};
+    std::uint64_t handle { };
     std::string name;
     frontend::Type type;
-    frontend::PortDirection direction{
-        frontend::PortDirection::Unknown};
-    std::uint64_t bound_object{};
+    frontend::PortDirection direction {
+        frontend::PortDirection::Unknown
+    };
+    std::uint64_t bound_object { };
 };
 
 struct ForeignPort {
     std::string name;
     frontend::Type type;
-    frontend::PortDirection direction{
-        frontend::PortDirection::Unknown};
-    std::uint64_t object{};
-    std::uint64_t handle{};
+    frontend::PortDirection direction {
+        frontend::PortDirection::Unknown
+    };
+    std::uint64_t object { };
+    std::uint64_t handle { };
 };
 
 struct ForeignChild {
-    std::uint64_t handle{};
+    std::uint64_t handle { };
     std::string name;
     std::vector<std::pair<std::string, std::int64_t>>
         construction_actuals;
     std::vector<ForeignPort> ports;
-    bool module_facade{};
+    bool module_facade { };
     std::string implementation;
 };
 
 struct ExternalSensitivity {
-    std::uint64_t object{};
+    std::uint64_t object { };
     // Store untrusted ABI metadata as an integer so validation can inspect an
     // out-of-range value without first performing an undefined C++ enum load.
-    std::uint32_t edge{FSIM_SC_ANY_EDGE};
+    std::uint32_t edge { FSIM_SC_ANY_EDGE };
 };
 
 struct ExternalProcess {
-    std::uint64_t handle{};
+    std::uint64_t handle { };
     std::string name;
-    fsim_sc_process_kind_v1 kind{FSIM_SC_METHOD};
-    fsim_sc_process_entry_v1 entry{};
-    void* user{};
+    fsim_sc_process_kind_v1 kind { FSIM_SC_METHOD };
+    fsim_sc_process_entry_v1 entry { };
+    void* user { };
     std::vector<ExternalSensitivity> sensitivity;
-    bool initialize{true};
+    bool initialize { true };
 };
 
 struct ExternalEvent {
-    std::uint64_t handle{};
+    std::uint64_t handle { };
     std::string name;
 };
 
 struct ExternalPrimitiveChannel {
-    std::uint64_t handle{};
+    std::uint64_t handle { };
     std::string name;
-    std::string kind{"sc_prim_channel"};
+    std::string kind { "sc_prim_channel" };
 };
 
 struct ExternalMetadataObject {
-    std::uint64_t handle{};
+    std::uint64_t handle { };
     std::string name;
-    fsim_sc_metadata_category_v1 category{FSIM_SC_METADATA_PORT};
+    fsim_sc_metadata_category_v1 category { FSIM_SC_METADATA_PORT };
     std::string kind;
 };
 
 struct ExternalInternalSignal {
-    std::uint64_t handle{};
+    std::uint64_t handle { };
     std::string name;
     frontend::Type type;
     runtime::PackedLogic4 initial_value;
 };
 
 struct ExternalExport {
-    std::uint64_t handle{};
+    std::uint64_t handle { };
     std::string name;
     frontend::Type type;
-    std::uint64_t bound_object{};
-    bool writable{true};
+    std::uint64_t bound_object { };
+    bool writable { true };
 };
 
 /// Immutable, ABI-neutral description produced by one constructed SystemC
@@ -120,8 +122,8 @@ struct ExternalExport {
 struct SystemCInstanceDescription {
     std::string path;
     std::string target;
-    std::uint64_t handle{};
-    std::uint64_t parent{};
+    std::uint64_t handle { };
+    std::uint64_t parent { };
     std::vector<std::pair<std::string, std::int64_t>>
         construction_values;
     std::vector<ExternalPort> ports;
@@ -142,8 +144,9 @@ struct SystemCInstanceDescription {
 
 struct SystemCConstructionParameter {
     std::string name;
-    fsim_sc_construction_type_v1 type{
-        FSIM_SC_CONSTRUCTION_INTEGER};
+    fsim_sc_construction_type_v1 type {
+        FSIM_SC_CONSTRUCTION_INTEGER
+    };
     std::optional<std::int64_t> default_value;
 };
 
@@ -166,7 +169,8 @@ public:
     // Logical-library availability is distinct from exporting at least one
     // factory. The default preserves source compatibility for providers which
     // expose only candidate records.
-    [[nodiscard]] virtual std::vector<std::string> libraries() const {
+    [[nodiscard]] virtual std::vector<std::string> libraries() const
+    {
         std::vector<std::string> result;
         for (const auto& candidate : candidates()) {
             if (std::ranges::find(result, candidate.library)
@@ -231,15 +235,16 @@ struct Diagnostic {
 };
 
 struct SignalInfo {
-    runtime::simir::SignalId id{};
+    runtime::simir::SignalId id { };
     std::string name;
-    std::size_t width{};
+    std::size_t width { };
     std::string type_name;
-    frontend::ValueDomain source_domain{frontend::ValueDomain::Unknown};
-    frontend::SystemVerilogScalarKind systemverilog_scalar{
-        frontend::SystemVerilogScalarKind::None};
+    frontend::ValueDomain source_domain { frontend::ValueDomain::Unknown };
+    frontend::SystemVerilogScalarKind systemverilog_scalar {
+        frontend::SystemVerilogScalarKind::None
+    };
     std::string systemverilog_net_type;
-    bool is_signed{};
+    bool is_signed { };
     std::optional<frontend::PackedRange> packed_range;
     std::optional<frontend::VhdlArrayInfo> vhdl_array;
     std::optional<frontend::VhdlAccessInfo> vhdl_access;
@@ -249,11 +254,12 @@ struct SignalInfo {
     std::string nominal_type;
     std::vector<std::string> enumeration_literals;
     std::optional<frontend::EnumerationRange> enumeration_range;
-    bool is_port{};
-    frontend::PortDirection direction{frontend::PortDirection::Unknown};
+    bool is_port { };
+    frontend::PortDirection direction { frontend::PortDirection::Unknown };
     frontend::SourceSpan declaration_span;
-    runtime::simir::ResolutionKind resolution{
-        runtime::simir::ResolutionKind::none};
+    runtime::simir::ResolutionKind resolution {
+        runtime::simir::ResolutionKind::none
+    };
 };
 
 /// One explicit cross-language scalar or vector boundary conversion.
@@ -276,19 +282,19 @@ enum class BoundaryConversionKind : std::uint8_t {
 };
 
 struct BoundaryConversionInfo {
-    BoundaryConversionKind kind{BoundaryConversionKind::ordinal_alias};
+    BoundaryConversionKind kind { BoundaryConversionKind::ordinal_alias };
     std::string path;
-    runtime::simir::SignalId formal_signal{};
-    runtime::simir::SignalId actual_signal{};
+    runtime::simir::SignalId formal_signal { };
+    runtime::simir::SignalId actual_signal { };
     std::optional<runtime::simir::ProcessId> process;
-    frontend::PortDirection direction{frontend::PortDirection::Unknown};
-    std::size_t formal_width{};
-    std::size_t actual_width{};
-    frontend::ValueDomain formal_domain{frontend::ValueDomain::Unknown};
-    frontend::ValueDomain actual_domain{frontend::ValueDomain::Unknown};
-    bool formal_signed{};
-    bool actual_signed{};
-    bool state_domain_changed{};
+    frontend::PortDirection direction { frontend::PortDirection::Unknown };
+    std::size_t formal_width { };
+    std::size_t actual_width { };
+    frontend::ValueDomain formal_domain { frontend::ValueDomain::Unknown };
+    frontend::ValueDomain actual_domain { frontend::ValueDomain::Unknown };
+    bool formal_signed { };
+    bool actual_signed { };
+    bool state_domain_changed { };
     std::optional<frontend::PackedRange> formal_range;
     std::optional<frontend::PackedRange> actual_range;
     std::optional<frontend::IntegerRange> formal_integer_range;
@@ -299,22 +305,24 @@ struct BoundaryConversionInfo {
 };
 
 struct StringObjectInfo {
-    runtime::simir::StringObjectId id{};
+    runtime::simir::StringObjectId id { };
     std::string name;
     frontend::SourceSpan declaration_span;
-    bool is_port{};
-    frontend::PortDirection direction{
-        frontend::PortDirection::Unknown};
+    bool is_port { };
+    frontend::PortDirection direction {
+        frontend::PortDirection::Unknown
+    };
 };
 
 struct ContainerObjectInfo {
-    runtime::simir::ContainerObjectId id{};
+    runtime::simir::ContainerObjectId id { };
     std::string name;
     runtime::simir::ContainerType type;
     frontend::SourceSpan declaration_span;
-    bool is_port{};
-    frontend::PortDirection direction{
-        frontend::PortDirection::Unknown};
+    bool is_port { };
+    frontend::PortDirection direction {
+        frontend::PortDirection::Unknown
+    };
     std::optional<runtime::simir::ContainerSliceAlias> slice_alias;
 };
 
@@ -323,9 +331,9 @@ using VhdlProtectedObjectId = std::uint32_t;
 struct VhdlProtectedMemberInfo {
     std::string name;
     frontend::Type type;
-    std::size_t offset{};
-    std::size_t width{};
-    runtime::simir::ContainerObjectId storage{};
+    std::size_t offset { };
+    std::size_t width { };
+    runtime::simir::ContainerObjectId storage { };
     frontend::SourceSpan declaration_span;
 };
 
@@ -333,7 +341,7 @@ struct VhdlProtectedMemberInfo {
 /// use independently addressable global container objects, while this record
 /// preserves their common object identity and declaration-ordered layout.
 struct VhdlProtectedObjectInfo {
-    VhdlProtectedObjectId id{};
+    VhdlProtectedObjectId id { };
     std::string name;
     std::string type_name;
     std::string nominal_type;
@@ -350,7 +358,7 @@ using SpecializationId = std::uint32_t;
 /// an explicit specialization record so process ownership and cache identity
 /// never depend on recovering hierarchy from process-name strings.
 struct SpecializationInfo {
-    SpecializationId id{};
+    SpecializationId id { };
     std::string unit;
     std::string instance;
     std::vector<runtime::simir::ProcessId> processes;
@@ -358,9 +366,9 @@ struct SpecializationInfo {
     // Additional source roots that define this specialization's interface,
     // such as a VHDL entity paired with an architecture in another file.
     std::vector<std::string> source_dependencies;
-    frontend::Language language{frontend::Language::SystemVerilog2017};
-    std::string library{"work"};
-    bool is_cell{};
+    frontend::Language language { frontend::Language::SystemVerilog2017 };
+    std::string library { "work" };
+    bool is_cell { };
     // Canonical name/value pairs after frontend generic/parameter evaluation.
     // Empty for unparameterized units.
     std::vector<std::pair<std::string, std::string>> parameter_values;
@@ -378,10 +386,10 @@ using UdpTableId = std::uint32_t;
 /// The table is stored once per canonical logical-library identity. Every UDP
 /// instance references its stable ID/digest through specialization provenance.
 struct UdpTableInfo {
-    UdpTableId id{};
+    UdpTableId id { };
     std::string identity;
     std::string digest;
-    bool sequential{};
+    bool sequential { };
     std::optional<frontend::VerilogUdpOutputSymbol> initial_output;
     std::vector<std::string> terminals;
     std::vector<frontend::VerilogUdpTableRow> rows;
@@ -389,39 +397,39 @@ struct UdpTableInfo {
 
 struct SystemCPortInfo {
     std::string name;
-    std::uint64_t native_handle{};
-    runtime::simir::SignalId signal{};
+    std::uint64_t native_handle { };
+    runtime::simir::SignalId signal { };
 };
 
 struct SystemCEventInfo {
     std::string name;
-    std::uint64_t native_handle{};
-    runtime::simir::SignalId signal{};
+    std::uint64_t native_handle { };
+    runtime::simir::SignalId signal { };
 };
 
 struct SystemCPrimitiveChannelInfo {
     std::string name;
-    std::uint64_t native_handle{};
+    std::uint64_t native_handle { };
 };
 
 struct SystemCSignalInfo {
     std::string name;
-    std::uint64_t native_handle{};
-    runtime::simir::SignalId signal{};
+    std::uint64_t native_handle { };
+    runtime::simir::SignalId signal { };
 };
 
 struct SystemCExportInfo {
     std::string name;
-    std::uint64_t native_handle{};
-    runtime::simir::SignalId signal{};
-    bool writable{true};
+    std::uint64_t native_handle { };
+    runtime::simir::SignalId signal { };
+    bool writable { true };
 };
 
 struct SystemCInstanceInfo {
-    std::uint32_t id{};
+    std::uint32_t id { };
     std::string target;
     std::string instance;
-    std::uint64_t native_handle{};
+    std::uint64_t native_handle { };
     std::vector<std::pair<std::string, std::int64_t>>
         construction_values;
     std::vector<std::pair<std::string, std::string>>
@@ -434,8 +442,8 @@ struct SystemCInstanceInfo {
 };
 
 struct SystemCProcessInfo {
-    runtime::simir::ProcessId process{};
-    std::uint64_t native_handle{};
+    runtime::simir::ProcessId process { };
+    std::uint64_t native_handle { };
 };
 
 enum class SystemCNamedObjectKind : std::uint8_t {
@@ -453,8 +461,8 @@ enum class SystemCNamedObjectKind : std::uint8_t {
 /// parent names are common DesignIR paths; value-bearing aliases retain their
 /// distinct object identity while sharing the referenced dense signal.
 struct SystemCNamedObjectInfo {
-    SystemCNamedObjectKind kind{SystemCNamedObjectKind::module};
-    std::uint64_t native_handle{};
+    SystemCNamedObjectKind kind { SystemCNamedObjectKind::module };
+    std::uint64_t native_handle { };
     std::string name;
     std::string parent;
     std::string type_name;
@@ -466,9 +474,9 @@ struct SystemCNamedObjectInfo {
 using VerilogSpecifyPathId = std::uint32_t;
 
 struct VerilogSpecifyTerminalInfo {
-    runtime::simir::SignalId signal{};
-    std::uint32_t offset{};
-    std::uint32_t width{};
+    runtime::simir::SignalId signal { };
+    std::uint32_t offset { };
+    std::uint32_t width { };
     friend bool operator==(
         const VerilogSpecifyTerminalInfo&,
         const VerilogSpecifyTerminalInfo&) = default;
@@ -478,29 +486,34 @@ struct VerilogSpecifyTerminalInfo {
 /// Conditions and destination data-source expressions retain their substituted
 /// frontend trees until Change 9 lowers them into scheduler-owned programs.
 struct VerilogSpecifyPathInfo {
-    VerilogSpecifyPathId id{};
+    VerilogSpecifyPathId id { };
+    std::string identity;
     std::string instance;
     std::vector<VerilogSpecifyTerminalInfo> sources;
     std::vector<VerilogSpecifyTerminalInfo> destinations;
     std::vector<runtime::simir::ProcessId> drivers;
     runtime::simir::ModulePathExpression condition_program;
     runtime::simir::ModulePathExpression data_source_program;
-    std::uint32_t selection_group{};
-    frontend::VerilogModulePathKind kind{
-        frontend::VerilogModulePathKind::Parallel};
-    frontend::VerilogSpecifyEdge source_edge{
-        frontend::VerilogSpecifyEdge::None};
-    frontend::VerilogPathPolarity polarity{
-        frontend::VerilogPathPolarity::None};
-    frontend::VerilogPulseStyle pulse_style{
-        frontend::VerilogPulseStyle::Onevent};
-    bool show_cancelled{};
+    std::uint32_t selection_group { };
+    frontend::VerilogModulePathKind kind {
+        frontend::VerilogModulePathKind::Parallel
+    };
+    frontend::VerilogSpecifyEdge source_edge {
+        frontend::VerilogSpecifyEdge::None
+    };
+    frontend::VerilogPathPolarity polarity {
+        frontend::VerilogPathPolarity::None
+    };
+    frontend::VerilogPulseStyle pulse_style {
+        frontend::VerilogPulseStyle::Onevent
+    };
+    bool show_cancelled { };
     std::optional<runtime::SimulationTick> pulse_reject_limit;
     std::optional<runtime::SimulationTick> pulse_error_limit;
     frontend::Expression condition;
     frontend::Expression destination_data_source;
-    bool conditional{};
-    bool ifnone{};
+    bool conditional { };
+    bool ifnone { };
     std::vector<runtime::SimulationTick> delays;
     frontend::SourceSpan source;
 };
@@ -578,7 +591,7 @@ public:
     container_paths() const;
 
     [[nodiscard]] std::unique_ptr<runtime::simir::Interpreter> create_interpreter(
-        runtime::SchedulerOptions options = {},
+        runtime::SchedulerOptions options = { },
         std::uint64_t seed = 1) const;
 
     [[nodiscard]] ElaboratedDesignState state() const;
@@ -654,7 +667,8 @@ struct ElaborationResult {
     std::optional<ElaboratedDesign> design;
     std::vector<Diagnostic> diagnostics;
 
-    [[nodiscard]] bool ok() const noexcept {
+    [[nodiscard]] bool ok() const noexcept
+    {
         return design.has_value() && diagnostics.empty();
     }
 };

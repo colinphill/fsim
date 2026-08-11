@@ -1619,13 +1619,15 @@ endmodule
 }
 
 void test_systemverilog_delay_triples() {
-  const auto parsed = parse_text(
-      "delay-triples.sv",
-      R"(timeunit 1ns / 1ps;
+    const auto parsed = parse_text(
+        "delay-triples.sv",
+        R"(timeunit 1ns / 1ps;
 module delay_triples;
   logic source;
   logic continuous_result;
   logic gate_result;
+  wire listed_result;
+  wire listed_inverted;
   event fired;
 
   assign #(
@@ -1633,6 +1635,8 @@ module delay_triples;
       4ps:5ps:6ps,
       7fs:8fs:9fs) continuous_result = source;
   buf #(1ps:2ps:3ps, 4ps:5ps:6ps) (gate_result, source);
+  assign (weak0, strong1) #(2ps, 3ps, 4ps)
+      listed_result = source, listed_inverted = ~source;
 
   initial begin
     #(0.1:0.2:0.3) source = 1'b1;
@@ -1642,90 +1646,114 @@ module delay_triples;
   end
 endmodule
 )",
-      Language::SystemVerilog2017);
-  require(parsed.ok(), "SystemVerilog delay triples must parse");
-  const auto& unit = parsed.design.units.front();
-  require(
-      unit.concurrent_statements.size() == 2,
-      "continuous and gate delay triples are retained");
-  const auto& process = unit.processes.front().statements;
-  require(
-      process.size() == 4
-          && process[0].kind == StatementKind::Delay
-          && process[0].statements.size() == 1
-          && process[1].kind == StatementKind::Assignment
-          && process[1].assignment_kind == AssignmentKind::Blocking
-          && process[2].kind == StatementKind::Assignment
-          && process[2].assignment_kind == AssignmentKind::NonBlocking
-          && process[3].kind == StatementKind::EventTrigger
-          && process[3].assignment_kind == AssignmentKind::NonBlocking,
-      "procedural, assignment, and named-event triple forms");
+        Language::SystemVerilog2017);
+    require(parsed.ok(), "SystemVerilog delay triples must parse");
+    const auto& unit = parsed.design.units.front();
+    require(
+        unit.concurrent_statements.size() == 4,
+        "continuous lists and gate delay triples are retained");
+    require(
+        unit.concurrent_statements[2].target.text == "listed_result"
+            && unit.concurrent_statements[3].target.text
+                == "listed_inverted"
+            && unit.concurrent_statements[2].delay
+            && unit.concurrent_statements[3].delay
+            && unit.concurrent_statements[2].delay->magnitude == 2
+            && unit.concurrent_statements[3].delay->magnitude == 2
+            && unit.concurrent_statements[2].delay->additional_values.size() == 2
+            && unit.concurrent_statements[3].delay->additional_values.size() == 2
+            && unit.concurrent_statements[2].delay->additional_values[0].magnitude == 3
+            && unit.concurrent_statements[3].delay->additional_values[0].magnitude == 3
+            && unit.concurrent_statements[2].delay->additional_values[1].magnitude == 4
+            && unit.concurrent_statements[3].delay->additional_values[1].magnitude == 4
+            && unit.concurrent_statements[2].verilog_drive_strength
+            && unit.concurrent_statements[3].verilog_drive_strength
+            && unit.concurrent_statements[2].verilog_drive_strength->zero
+                == VerilogStrength::Weak
+            && unit.concurrent_statements[3].verilog_drive_strength->zero
+                == VerilogStrength::Weak
+            && unit.concurrent_statements[2].verilog_drive_strength->one
+                == VerilogStrength::Strong
+            && unit.concurrent_statements[3].verilog_drive_strength->one
+                == VerilogStrength::Strong,
+        "each net assignment retains the shared delay and strength prefix");
+    const auto& process = unit.processes.front().statements;
+    require(
+        process.size() == 4
+            && process[0].kind == StatementKind::Delay
+            && process[0].statements.size() == 1
+            && process[1].kind == StatementKind::Assignment
+            && process[1].assignment_kind == AssignmentKind::Blocking
+            && process[2].kind == StatementKind::Assignment
+            && process[2].assignment_kind == AssignmentKind::NonBlocking
+            && process[3].kind == StatementKind::EventTrigger
+            && process[3].assignment_kind == AssignmentKind::NonBlocking,
+        "procedural, assignment, and named-event triple forms");
 
-  const auto verify =
-      [](const Delay& delay,
-         const std::array<std::uint64_t, 3>& magnitudes,
-         const std::array<std::uint64_t, 3>& divisors,
-         const std::string_view unit_name) {
-        require(
-            delay.minimum && delay.typical && delay.maximum,
-            "all min:typ:max HIR branches are present");
-        require(
-            delay.minimum->magnitude == magnitudes[0]
-                && delay.typical->magnitude == magnitudes[1]
-                && delay.maximum->magnitude == magnitudes[2]
-                && delay.minimum->divisor == divisors[0]
-                && delay.typical->divisor == divisors[1]
-                && delay.maximum->divisor == divisors[2]
-                && delay.minimum->unit == unit_name
-                && delay.typical->unit == unit_name
-                && delay.maximum->unit == unit_name,
-            "delay triple values retain exact magnitudes, divisors, and units");
-        require(
-            delay.magnitude == magnitudes[1]
-                && delay.divisor == divisors[1]
-                && delay.unit == unit_name,
-            "typed HIR defaults a delay triple to its typical branch");
-      };
+    const auto verify =
+        [](const Delay& delay,
+            const std::array<std::uint64_t, 3>& magnitudes,
+            const std::array<std::uint64_t, 3>& divisors,
+            const std::string_view unit_name) {
+            require(
+                delay.minimum && delay.typical && delay.maximum,
+                "all min:typ:max HIR branches are present");
+            require(
+                delay.minimum->magnitude == magnitudes[0]
+                    && delay.typical->magnitude == magnitudes[1]
+                    && delay.maximum->magnitude == magnitudes[2]
+                    && delay.minimum->divisor == divisors[0]
+                    && delay.typical->divisor == divisors[1]
+                    && delay.maximum->divisor == divisors[2]
+                    && delay.minimum->unit == unit_name
+                    && delay.typical->unit == unit_name
+                    && delay.maximum->unit == unit_name,
+                "delay triple values retain exact magnitudes, divisors, and units");
+            require(
+                delay.magnitude == magnitudes[1]
+                    && delay.divisor == divisors[1]
+                    && delay.unit == unit_name,
+                "typed HIR defaults a delay triple to its typical branch");
+        };
 
-  verify(
-      *unit.concurrent_statements[0].delay,
-      {1, 1, 3},
-      {1000, 500, 1000},
-      "ns");
-  verify(
-      *unit.concurrent_statements[1].delay,
-      {1, 2, 3},
-      {1, 1, 1},
-      "ps");
-  require(
-      unit.concurrent_statements[0].delay->additional_values.size() == 2
-          && unit.concurrent_statements[1].delay
-                 ->additional_values.size()
-              == 1,
-      "continuous and gate rise/fall/turnoff delay-list arity");
-  verify(
-      unit.concurrent_statements[0].delay->additional_values[0],
-      {4, 5, 6},
-      {1, 1, 1},
-      "ps");
-  verify(
-      unit.concurrent_statements[0].delay->additional_values[1],
-      {7, 8, 9},
-      {1, 1, 1},
-      "fs");
-  verify(
-      unit.concurrent_statements[1].delay->additional_values[0],
-      {4, 5, 6},
-      {1, 1, 1},
-      "ps");
-  verify(*process[0].delay, {1, 1, 3}, {10, 5, 10}, "ns");
-  verify(*process[1].delay, {4, 5, 6}, {1, 1, 1}, "ps");
-  verify(*process[2].delay, {7, 8, 9}, {1, 1, 1}, "ps");
-  verify(*process[3].delay, {10, 11, 12}, {1, 1, 1}, "ps");
+    verify(
+        *unit.concurrent_statements[0].delay,
+        { 1, 1, 3 },
+        { 1000, 500, 1000 },
+        "ns");
+    verify(
+        *unit.concurrent_statements[1].delay,
+        { 1, 2, 3 },
+        { 1, 1, 1 },
+        "ps");
+    require(
+        unit.concurrent_statements[0].delay->additional_values.size() == 2
+            && unit.concurrent_statements[1].delay->additional_values.size()
+                == 1,
+        "continuous and gate rise/fall/turnoff delay-list arity");
+    verify(
+        unit.concurrent_statements[0].delay->additional_values[0],
+        { 4, 5, 6 },
+        { 1, 1, 1 },
+        "ps");
+    verify(
+        unit.concurrent_statements[0].delay->additional_values[1],
+        { 7, 8, 9 },
+        { 1, 1, 1 },
+        "fs");
+    verify(
+        unit.concurrent_statements[1].delay->additional_values[0],
+        { 4, 5, 6 },
+        { 1, 1, 1 },
+        "ps");
+    verify(*process[0].delay, { 1, 1, 3 }, { 10, 5, 10 }, "ns");
+    verify(*process[1].delay, { 4, 5, 6 }, { 1, 1, 1 }, "ps");
+    verify(*process[2].delay, { 7, 8, 9 }, { 1, 1, 1 }, "ps");
+    verify(*process[3].delay, { 10, 11, 12 }, { 1, 1, 1 }, "ps");
 
-  const auto parameterized = parse_text(
-      "parameterized-delays.sv",
-      R"(timeunit 10ps / 1ps;
+    const auto parameterized = parse_text(
+        "parameterized-delays.sv",
+        R"(timeunit 10ps / 1ps;
 module parameterized_delays #(
     parameter int RISE = 2,
     localparam int FALL = RISE + 1);
@@ -1738,88 +1766,88 @@ module parameterized_delays #(
   initial #(RISE + 1) source = 1'b1;
 endmodule
 )",
-      Language::SystemVerilog2017);
-  require(
-      parameterized.ok(),
-      "locally constant parameterized delay expressions must parse");
-  const auto& parameterized_unit = parameterized.design.units.front();
-  const auto explicit_driver = std::ranges::find_if(
-      parameterized_unit.concurrent_statements,
-      [](const Statement& statement) {
-        return statement.target.text == "result";
-      });
-  require(
-      explicit_driver
-          != parameterized_unit.concurrent_statements.end(),
-      "parameterized continuous driver is retained");
-  const auto& continuous = *explicit_driver->delay;
-  require(
-      continuous.expression
-          && continuous.expression->kind == ExpressionKind::Identifier
-          && continuous.expression->text == "FALL"
-          && continuous.magnitude == 10
-          && continuous.unit == "ps"
-          && continuous.minimum && continuous.minimum->expression
-          && continuous.typical && continuous.typical->expression
-          && continuous.maximum && continuous.maximum->expression
-          && continuous.additional_values.size() == 1
-          && continuous.additional_values.front().expression,
-      "parameterized transition-delay HIR retains expressions and time scale");
-  const auto& procedural =
-      *parameterized_unit.processes.front().statements.front().delay;
-  require(
-      procedural.expression
-          && procedural.expression->kind == ExpressionKind::Binary
-          && procedural.expression->text == "+"
-          && procedural.magnitude == 10
-          && procedural.unit == "ps",
-      "parameterized procedural-delay HIR retains its expression tree");
-  const auto net_result = std::ranges::find_if(
-      parameterized_unit.signals,
-      [](const SignalDeclaration& signal) {
-        return signal.name == "net_result";
-      });
-  const auto initialized = std::ranges::find_if(
-      parameterized_unit.signals,
-      [](const SignalDeclaration& signal) {
-        return signal.name == "initialized";
-      });
-  require(
-      net_result != parameterized_unit.signals.end()
-          && net_result->net_delay
-          && net_result->net_delay->expression
-          && net_result->net_delay->additional_values.size() == 2
-          && initialized != parameterized_unit.signals.end()
-          && initialized->net_delay
-          && initialized->net_delay->magnitude == 20
-          && std::ranges::any_of(
-              parameterized_unit.concurrent_statements,
-              [](const Statement& statement) {
-                return statement.target.text == "initialized"
-                    && statement.assignment_kind
+        Language::SystemVerilog2017);
+    require(
+        parameterized.ok(),
+        "locally constant parameterized delay expressions must parse");
+    const auto& parameterized_unit = parameterized.design.units.front();
+    const auto explicit_driver = std::ranges::find_if(
+        parameterized_unit.concurrent_statements,
+        [](const Statement& statement) {
+            return statement.target.text == "result";
+        });
+    require(
+        explicit_driver
+            != parameterized_unit.concurrent_statements.end(),
+        "parameterized continuous driver is retained");
+    const auto& continuous = *explicit_driver->delay;
+    require(
+        continuous.expression
+            && continuous.expression->kind == ExpressionKind::Identifier
+            && continuous.expression->text == "FALL"
+            && continuous.magnitude == 10
+            && continuous.unit == "ps"
+            && continuous.minimum && continuous.minimum->expression
+            && continuous.typical && continuous.typical->expression
+            && continuous.maximum && continuous.maximum->expression
+            && continuous.additional_values.size() == 1
+            && continuous.additional_values.front().expression,
+        "parameterized transition-delay HIR retains expressions and time scale");
+    const auto& procedural = *parameterized_unit.processes.front().statements.front().delay;
+    require(
+        procedural.expression
+            && procedural.expression->kind == ExpressionKind::Binary
+            && procedural.expression->text == "+"
+            && procedural.magnitude == 10
+            && procedural.unit == "ps",
+        "parameterized procedural-delay HIR retains its expression tree");
+    const auto net_result = std::ranges::find_if(
+        parameterized_unit.signals,
+        [](const SignalDeclaration& signal) {
+            return signal.name == "net_result";
+        });
+    const auto initialized = std::ranges::find_if(
+        parameterized_unit.signals,
+        [](const SignalDeclaration& signal) {
+            return signal.name == "initialized";
+        });
+    require(
+        net_result != parameterized_unit.signals.end()
+            && net_result->net_delay
+            && net_result->net_delay->expression
+            && net_result->net_delay->additional_values.size() == 2
+            && initialized != parameterized_unit.signals.end()
+            && initialized->net_delay
+            && initialized->net_delay->magnitude == 20
+            && std::ranges::any_of(
+                parameterized_unit.concurrent_statements,
+                [](const Statement& statement) {
+                    return statement.target.text == "initialized"
+                        && statement.assignment_kind
                         == AssignmentKind::Continuous;
-              }),
-      "net-declaration delays and declaration assignments retain HIR");
+                }),
+        "net-declaration delays and declaration assignments retain HIR");
 
-  const auto invalid_net_delay = parse_text(
-      "invalid-net-delay.sv",
-      "module invalid_net_delay; logic #2 value; endmodule\n",
-      Language::SystemVerilog2017);
-  require(
-      !invalid_net_delay.ok()
-          && std::ranges::any_of(
-              invalid_net_delay.diagnostics,
-              [](const Diagnostic& diagnostic) {
-                return diagnostic.code == "FSIM-SV-SEM-110";
-              }),
-      "net-declaration delays reject variable data types");
+    const auto invalid_net_delay = parse_text(
+        "invalid-net-delay.sv",
+        "module invalid_net_delay; logic #2 value; endmodule\n",
+        Language::SystemVerilog2017);
+    require(
+        !invalid_net_delay.ok()
+            && std::ranges::any_of(
+                invalid_net_delay.diagnostics,
+                [](const Diagnostic& diagnostic) {
+                    return diagnostic.code == "FSIM-SV-SEM-110";
+                }),
+        "net-declaration delays reject variable data types");
 
-  const auto malformed = parse_text(
-      "bad-delay-triples.sv",
-      R"(module bad_delay_triples;
+    const auto malformed = parse_text(
+        "bad-delay-triples.sv",
+        R"(module bad_delay_triples;
   wire source;
   wire result;
   assign #(1, 2, 3, 4) result = source;
+  assign result = source, ;
   buf #(1, 2, 3) (result, source);
   initial begin
     #1:2:3;
@@ -1830,23 +1858,24 @@ endmodule
   end
 endmodule
 )",
-      Language::SystemVerilog2017);
-  const auto has_code =
-      [&](const std::string_view code) {
-        return std::ranges::any_of(
-            malformed.diagnostics,
-            [&](const Diagnostic& diagnostic) {
-              return diagnostic.code == code;
-            });
-      };
-  require(
-      !malformed.ok()
-          && has_code("FSIM-SV-SEM-052")
-          && has_code("FSIM-SV-SEM-053")
-          && has_code("FSIM-SV-PARSE-134")
-          && has_code("FSIM-SV-PARSE-135")
-          && has_code("FSIM-SV-PARSE-023"),
-      "malformed triples and illegal transition-delay lists are targeted");
+        Language::SystemVerilog2017);
+    const auto has_code =
+        [&](const std::string_view code) {
+            return std::ranges::any_of(
+                malformed.diagnostics,
+                [&](const Diagnostic& diagnostic) {
+                    return diagnostic.code == code;
+                });
+        };
+    require(
+        !malformed.ok()
+            && has_code("FSIM-SV-SEM-052")
+            && has_code("FSIM-SV-SEM-053")
+            && has_code("FSIM-SV-PARSE-134")
+            && has_code("FSIM-SV-PARSE-135")
+            && has_code("FSIM-SV-PARSE-009")
+            && has_code("FSIM-SV-PARSE-023"),
+        "malformed triples and illegal transition-delay lists are targeted");
 }
 
 void test_systemverilog_procedural_assignment_controls() {

@@ -27,6 +27,14 @@ int main() {
       JitOptimizationLevel::o0, "systemverilog_scalar_o0");
   test_systemverilog_scalar_transport_at_level(
       JitOptimizationLevel::o2, "systemverilog_scalar_o2");
+  test_wide_register_frame_at_level(
+      JitOptimizationLevel::o0, "wide_register_frame_o0");
+  test_wide_register_frame_at_level(
+      JitOptimizationLevel::o2, "wide_register_frame_o2");
+  test_wide_value_operations_at_level(
+      JitOptimizationLevel::o0, "wide_value_operations_o0");
+  test_wide_value_operations_at_level(
+      JitOptimizationLevel::o2, "wide_value_operations_o2");
   test_conditional_select_at_level(
       JitOptimizationLevel::o0, "conditional_select_o0");
   test_conditional_select_at_level(

@@ -675,6 +675,9 @@ class SystemVerilogHirBuilder final {
       output.class_identity = input.systemverilog_class_declaration;
     }
     output.signed_value = input.is_signed;
+    output.executable_width = input.width();
+    output.four_state = input.domain == frontend::ValueDomain::Logic4
+        || input.domain == frontend::ValueDomain::Integer;
     if (input.packed_range) {
       output.packed_range = packed_range(
           *input.packed_range, source(fallback));

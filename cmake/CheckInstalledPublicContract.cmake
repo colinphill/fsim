@@ -67,6 +67,9 @@ set(FSIM_EXPECTED_PATHS
   "${FSIM_STAGE}/${FSIM_DOCDIR}/vhdl-psl.md"
   "${FSIM_STAGE}/${FSIM_DOCDIR}/vhdl-psl-tutorial.md"
   "${FSIM_STAGE}/${FSIM_DOCDIR}/vhdl-psl-closure-audit.md"
+  "${FSIM_STAGE}/${FSIM_DOCDIR}/verilog-2005.md"
+  "${FSIM_STAGE}/${FSIM_DOCDIR}/verilog-2005-tutorial.md"
+  "${FSIM_STAGE}/${FSIM_DOCDIR}/verilog-2005-closure-audit.md"
   "${FSIM_STAGE}/${FSIM_DOCDIR}/v1-release-audit.md"
   "${FSIM_STAGE}/share/fsim/vhdl/ieee-1076-2019/SHA256SUMS"
 )

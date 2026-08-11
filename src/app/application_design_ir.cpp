@@ -1095,6 +1095,9 @@ class DesignIrBuilder final {
             sensitivity_id, id, *object, edge(sensitivity.edge)});
         stored.sensitivities.push_back(sensitivity_id);
       }
+      if (input.switch_bidirectional) {
+        continue;
+      }
       for (const auto& region : input.driver_regions) {
         const auto object = signal_object(region.signal);
         if (!object) {
@@ -1337,11 +1340,28 @@ bool valid_runtime_projection(
     }
   }
   for (std::size_t index = 0; index < runtime.processes().size(); ++index) {
-    if (std::ranges::count_if(
-            design.processes(), [&](const auto& process) {
-              return process.runtime_index == index
-                  && process.name == runtime.processes()[index].name;
-            }) != 1) {
+    const auto projected = std::ranges::find(
+        design.processes(), index,
+        &semantic::design::ProcessOccurrence::runtime_index);
+    if (projected == design.processes().end()
+        || projected->name != runtime.processes()[index].name
+        || std::ranges::count(
+               design.processes(), index,
+               &semantic::design::ProcessOccurrence::runtime_index)
+            != 1) {
+      return false;
+    }
+    if (runtime.processes()[index].switch_bidirectional
+        && (!projected->drivers.empty()
+            || !projected->transactions.empty()
+            || std::ranges::any_of(
+                design.drivers(), [&](const auto& driver) {
+                  return driver.process == projected->id;
+                })
+            || std::ranges::any_of(
+                design.transactions(), [&](const auto& transaction) {
+                  return transaction.process == projected->id;
+                }))) {
       return false;
     }
   }

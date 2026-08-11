@@ -368,11 +368,11 @@ namespace fsim::runtime::simir {
     const bool increasing,
     const bool source_descending,
     const bool two_state) {
-  if (base.width() != 32 || width == 0 || width > 64) {
-    throw std::invalid_argument(
-        "dynamic part-select requires a signed 32-bit base and a "
-        "fixed width from 1 through 64");
-  }
+    if (base.width() != 32 || width == 0) {
+        throw std::invalid_argument(
+            "dynamic part-select requires a signed 32-bit base and a "
+            "nonzero fixed width");
+    }
   auto result = PackedLogic4{
       width, two_state ? Logic4::zero : Logic4::x};
   if (source.is_logic9()) {
@@ -439,11 +439,10 @@ dynamic_part_write_value(
     const DynamicPartIndex& selection) {
   if (base.width() != 32
       || selection.width == 0
-      || selection.width > 64
       || source.width() != selection.width) {
-    throw std::invalid_argument(
-        "dynamic part-select write requires a signed 32-bit base and a "
-        "matching fixed width from 1 through 64");
+      throw std::invalid_argument(
+          "dynamic part-select write requires a signed 32-bit base and a "
+          "matching nonzero fixed width");
   }
   std::uint32_t raw{};
   for (std::size_t bit = 0; bit < 32; ++bit) {

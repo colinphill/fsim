@@ -61,33 +61,36 @@ collect_driver_regions(
               || std::is_same_v<
                   OperationType, WriteInertialDynamicSlice>
               || std::is_same_v<
+                  OperationType, WriteInertialDynamicPartSlice>
+              || std::is_same_v<
                   OperationType, WriteProjectedDynamicSlice>
               || std::is_same_v<
                   OperationType, WriteProjectedWaveformDynamicSlice>) {
-            whole(value.signal);
+              whole(value.signal);
           } else if constexpr (
               std::is_same_v<OperationType, VitalTimingCheck>) {
-            if (value.trigger_signal) whole(*value.trigger_signal);
+              if (value.trigger_signal)
+                  whole(*value.trigger_signal);
           } else if constexpr (std::is_same_v<OperationType, VitalDelay>) {
-            whole(value.output);
+              whole(value.output);
           } else if constexpr (
               std::is_same_v<OperationType, WriteBlockingSlice>
               || std::is_same_v<OperationType, WriteUpdateSlice>
               || std::is_same_v<OperationType, WriteAfterSlice>
               || std::is_same_v<OperationType, WriteInertialSlice>
               || std::is_same_v<OperationType, WriteProjectedSlice>) {
-            slice(value.signal, value.source, value.offset);
+              slice(value.signal, value.source, value.offset);
           } else if constexpr (std::is_same_v<
                                    OperationType,
                                    WriteProjectedWaveformSlice>) {
-            if (value.elements.empty()) {
-              whole(value.signal);
-            } else {
-              slice(
-                  value.signal,
-                  value.elements.front().source,
-                  value.offset);
-            }
+              if (value.elements.empty()) {
+                  whole(value.signal);
+              } else {
+                  slice(
+                      value.signal,
+                      value.elements.front().source,
+                      value.offset);
+              }
           }
         },
         operation);

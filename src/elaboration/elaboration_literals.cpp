@@ -3,6 +3,133 @@
 
 namespace fsim::elaboration::elaboration_detail {
 
+namespace {
+
+    std::optional<std::string> expand_based_digits(
+        const std::string_view digits,
+        const char base)
+    {
+        const auto bits_per_digit = base == 'b' ? 1U : base == 'o' ? 3U
+            : base == 'h'                                          ? 4U
+                                                                   : 0U;
+        if (bits_per_digit == 0) {
+            return std::nullopt;
+        }
+        std::string expanded;
+        expanded.reserve(digits.size() * bits_per_digit);
+        for (const char raw : digits) {
+            if (raw == '_') {
+                continue;
+            }
+            const auto digit = static_cast<char>(
+                std::tolower(static_cast<unsigned char>(raw)));
+            if (digit == 'x' || digit == 'z' || digit == '?') {
+                expanded.append(
+                    bits_per_digit,
+                    digit == '?' ? 'z' : digit);
+                continue;
+            }
+            const auto value = digit >= '0' && digit <= '9'
+                ? static_cast<unsigned>(digit - '0')
+                : digit >= 'a' && digit <= 'f'
+                ? static_cast<unsigned>(digit - 'a' + 10)
+                : 16U;
+            const auto radix = base == 'b' ? 2U : base == 'o' ? 8U
+                                                              : 16U;
+            if (value >= radix) {
+                return std::nullopt;
+            }
+            for (auto bit = bits_per_digit; bit != 0; --bit) {
+                expanded.push_back(
+                    ((value >> (bit - 1U)) & 1U) != 0U ? '1' : '0');
+            }
+        }
+        return expanded.empty() ? std::nullopt
+                                : std::optional { std::move(expanded) };
+    }
+
+    std::optional<std::string> expand_decimal_digits(
+        const std::string_view digits,
+        const std::size_t width)
+    {
+        std::string decimal;
+        decimal.reserve(digits.size());
+        for (const char raw : digits) {
+            if (raw != '_') {
+                decimal.push_back(static_cast<char>(
+                    std::tolower(static_cast<unsigned char>(raw))));
+            }
+        }
+        if (decimal.empty()) {
+            return std::nullopt;
+        }
+        if (decimal == "x" || decimal == "z" || decimal == "?") {
+            return std::string(width, decimal == "?" ? 'z' : decimal.front());
+        }
+        if (!std::ranges::all_of(decimal, [](const char digit) {
+                return digit >= '0' && digit <= '9';
+            })) {
+            return std::nullopt;
+        }
+        const auto first_nonzero = decimal.find_first_not_of('0');
+        decimal = first_nonzero == std::string::npos
+            ? "0"
+            : decimal.substr(first_nonzero);
+        std::string expanded(width, '0');
+        for (std::size_t bit = 0; bit < width && decimal != "0"; ++bit) {
+            unsigned carry = 0;
+            for (char& digit : decimal) {
+                const auto value = carry * 10U
+                    + static_cast<unsigned>(digit - '0');
+                digit = static_cast<char>('0' + value / 2U);
+                carry = value % 2U;
+            }
+            expanded[width - 1U - bit] = carry != 0U ? '1' : '0';
+            const auto next_nonzero = decimal.find_first_not_of('0');
+            decimal = next_nonzero == std::string::npos
+                ? "0"
+                : decimal.substr(next_nonzero);
+        }
+        return expanded;
+    }
+
+    std::optional<LoweredLiteral> sized_based_value(
+        const std::string_view digits,
+        const char base,
+        const std::size_t width)
+    {
+        auto expanded = base == 'd'
+            ? expand_decimal_digits(digits, width)
+            : expand_based_digits(digits, base);
+        if (!expanded) {
+            return std::nullopt;
+        }
+        const auto fill = expanded->front() == 'x'
+            ? 'x'
+            : expanded->front() == 'z' ? 'z'
+                                       : '0';
+        if (expanded->size() < width) {
+            expanded->insert(expanded->begin(), width - expanded->size(), fill);
+        } else if (expanded->size() > width) {
+            expanded->erase(0, expanded->size() - width);
+        }
+        try {
+            auto value = PackedLogic4::from_msb_string(*expanded);
+            const auto four_state = std::ranges::any_of(
+                *expanded,
+                [](const char bit) { return bit != '0' && bit != '1'; });
+            return LoweredLiteral {
+                std::move(value),
+                four_state ? frontend::ValueDomain::Logic4
+                           : frontend::ValueDomain::Bit2
+            };
+        } catch (const std::invalid_argument&) {
+            return std::nullopt;
+        }
+    }
+
+} // namespace
+
 std::optional<LoweredLiteral> literal_value(
     const Expression& expression,
     const std::size_t expected_width,
@@ -128,66 +255,8 @@ std::optional<LoweredLiteral> literal_value(
         const auto base = static_cast<char>(
             std::tolower(static_cast<unsigned char>(digits.front())));
         digits.remove_prefix(1);
-        if (base == 'b') {
-            std::string expanded;
-            for (const char c : digits) {
-                if (c != '_') {
-                    expanded.push_back(
-                        language != frontend::Language::Vhdl2008
-                                && c == '?'
-                            ? 'z'
-                            : c);
-                }
-            }
-            if (expanded.size() < width) {
-                expanded.insert(
-                    expanded.begin(), width - expanded.size(), '0');
-            } else if (expanded.size() > width) {
-                expanded.erase(0, expanded.size() - width);
-            }
-            try {
-                auto value = PackedLogic4::from_msb_string(expanded);
-                auto domain = frontend::ValueDomain::Bit2;
-                for (std::size_t bit = 0; bit < value.width(); ++bit) {
-                    if (value.get(bit) != Logic4::zero
-                        && value.get(bit) != Logic4::one) {
-                        domain = frontend::ValueDomain::Logic4;
-                        break;
-                    }
-                }
-                return LoweredLiteral{std::move(value), domain};
-            } catch (const std::invalid_argument&) {
-                return std::nullopt;
-            }
-        }
-        if (base == 'd') {
-            const auto value = unsigned_decimal(digits);
-            return value
-                ? std::optional{LoweredLiteral{
-                      unsigned_value(*value, width),
-                      frontend::ValueDomain::Bit2}}
-                : std::nullopt;
-        }
-        if (base == 'h') {
-            std::uint64_t value{};
-            std::string cleaned;
-            for (const char c : digits) {
-                if (c != '_') {
-                    cleaned.push_back(c);
-                }
-            }
-            const auto parsed = std::from_chars(
-                cleaned.data(),
-                cleaned.data() + cleaned.size(),
-                value,
-                16);
-            if (parsed.ec != std::errc{}
-                || parsed.ptr != cleaned.data() + cleaned.size()) {
-                return std::nullopt;
-            }
-            return LoweredLiteral{
-                unsigned_value(value, width),
-                frontend::ValueDomain::Bit2};
+        if (base == 'b' || base == 'o' || base == 'd' || base == 'h') {
+            return sized_based_value(digits, base, width);
         }
         return std::nullopt;
     }

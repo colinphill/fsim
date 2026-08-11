@@ -7,20 +7,22 @@ using namespace elaboration_detail;
 
 namespace {
 
-bool writable_procedure_actual(const Expression& expression) {
-    if (expression.kind == ExpressionKind::Identifier) {
-        return true;
+    bool writable_procedure_actual(const Expression& expression)
+    {
+        if (expression.kind == ExpressionKind::Identifier) {
+            return true;
+        }
+        return (expression.kind == ExpressionKind::Index
+                   && expression.operands.size() == 2)
+            || (expression.kind == ExpressionKind::Slice
+                && expression.operands.size() == 3);
     }
-    return (expression.kind == ExpressionKind::Index
-            && expression.operands.size() == 2)
-        || (expression.kind == ExpressionKind::Slice
-            && expression.operands.size() == 3);
-}
 
 } // namespace
 
 bool Lowerer::lower_vhdl_file_procedure_call(
-        const Statement& statement) {
+    const Statement& statement)
+{
     const bool open = statement.procedure_name == "file_open";
     const bool close = statement.procedure_name == "file_close";
     const bool read = statement.procedure_name == "read";
@@ -39,7 +41,7 @@ bool Lowerer::lower_vhdl_file_procedure_call(
     }();
     const auto actual = [&](const std::string_view formal,
                             const std::size_t index)
-            -> const Expression* {
+        -> const Expression* {
         const auto named = std::ranges::find_if(
             statement.procedure_arguments,
             [&](const auto& argument) {
@@ -64,7 +66,8 @@ bool Lowerer::lower_vhdl_file_procedure_call(
             && !positional.empty()) {
             const auto* first_type = positional.front()->kind
                     == ExpressionKind::Identifier
-                ? object_type(positional.front()->text) : nullptr;
+                ? object_type(positional.front()->text)
+                : nullptr;
             status_form = first_type != nullptr
                 && !first_type->vhdl_file;
         }
@@ -105,7 +108,7 @@ bool Lowerer::lower_vhdl_file_procedure_call(
             return true;
         }
         process_.operations.emplace_back(
-            FileClose{local->second, true, false});
+            FileClose { local->second, true, false });
         return true;
     }
     if (read || write) {
@@ -144,9 +147,11 @@ bool Lowerer::lower_vhdl_file_procedure_call(
             return true;
         }
         const auto target = value->kind == ExpressionKind::Identifier
-            ? locals_.find(value->text) : locals_.end();
+            ? locals_.find(value->text)
+            : locals_.end();
         const auto* target_type = value->kind == ExpressionKind::Identifier
-            ? object_type(value->text) : nullptr;
+            ? object_type(value->text)
+            : nullptr;
         if (target == locals_.end() || target_type == nullptr
             || target_type->domain != frontend::ValueDomain::Integer) {
             report(
@@ -158,21 +163,22 @@ bool Lowerer::lower_vhdl_file_procedure_call(
         }
         InputScanConversion conversion;
         conversion.format = InputScanFormat::decimal;
-        conversion.target = InputScanTarget{
+        conversion.target = InputScanTarget {
             InputScanTargetKind::packed_register,
             target->second,
             32,
-            true};
+            true
+        };
         const auto count = allocate_register(
             32, frontend::ValueDomain::Integer);
-        process_.operations.emplace_back(FileScan{
+        process_.operations.emplace_back(FileScan {
             count,
             local->second,
             0,
             false,
-            {std::move(conversion)},
-            {},
-            true});
+            { std::move(conversion) },
+            { },
+            true });
         return true;
     }
     const auto* path = actual(
@@ -192,13 +198,12 @@ bool Lowerer::lower_vhdl_file_procedure_call(
         return true;
     }
     const auto kind_name = kind == nullptr
-        ? std::string_view{"read_mode"}
-        : std::string_view{kind->text};
-    const auto mode_text =
-        kind_name == "read_mode" ? std::string_view{"r"}
-        : kind_name == "write_mode" ? std::string_view{"w"}
-        : kind_name == "append_mode" ? std::string_view{"a"}
-        : std::string_view{};
+        ? std::string_view { "read_mode" }
+        : std::string_view { kind->text };
+    const auto mode_text = kind_name == "read_mode" ? std::string_view { "r" }
+        : kind_name == "write_mode"                 ? std::string_view { "w" }
+        : kind_name == "append_mode"                ? std::string_view { "a" }
+                                                    : std::string_view { };
     if (mode_text.empty()) {
         report(
             "FSIM-ELAB-VHFILE-004",
@@ -212,15 +217,17 @@ bool Lowerer::lower_vhdl_file_procedure_call(
         const auto* target = actual("status", 0);
         const auto target_local = target != nullptr
                 && target->kind == ExpressionKind::Identifier
-            ? locals_.find(target->text) : locals_.end();
+            ? locals_.find(target->text)
+            : locals_.end();
         const auto* target_type = target != nullptr
                 && target->kind == ExpressionKind::Identifier
-            ? object_type(target->text) : nullptr;
+            ? object_type(target->text)
+            : nullptr;
         if (target == nullptr || target_local == locals_.end()
             || target_type == nullptr
             || target_type->enumeration_literals
-                != std::vector<std::string>{
-                    "open_ok", "status_error", "name_error", "mode_error"}) {
+                != std::vector<std::string> {
+                    "open_ok", "status_error", "name_error", "mode_error" }) {
             report(
                 "FSIM-ELAB-VHFILE-008",
                 "file_open status actual must be a writable "
@@ -233,15 +240,16 @@ bool Lowerer::lower_vhdl_file_procedure_call(
     const auto path_register = lower_string_expression(*path);
     const auto mode_register = allocate_string_register();
     process_.operations.emplace_back(
-        LoadStringConstant{mode_register, std::string{mode_text}});
+        LoadStringConstant { mode_register, std::string { mode_text } });
     if (path_register) {
-        process_.operations.emplace_back(FileOpen{
-            local->second, *path_register, mode_register, status, true});
+        process_.operations.emplace_back(FileOpen {
+            local->second, *path_register, mode_register, status, true });
     }
     return true;
 }
 
-void Lowerer::initialize_procedure_support() {
+void Lowerer::initialize_procedure_support()
+{
     procedure_frames_.clear();
     procedure_indices_.clear();
     pending_procedures_.clear();
@@ -253,7 +261,7 @@ void Lowerer::initialize_procedure_support() {
         function_frames_.size());
     active_procedure_.reset();
     procedure_return_jumps_.clear();
-    procedure_call_stack_ = {};
+    procedure_call_stack_ = { };
     procedure_support_initialized_ = false;
     if (procedures_.empty()) {
         return;
@@ -273,31 +281,29 @@ void Lowerer::initialize_procedure_support() {
         const bool duplicate_profile = std::ranges::any_of(
             overloads,
             [&](const std::size_t candidate_index) {
-              const auto& candidate =
-                  *procedure_frames_[candidate_index].source;
-              const bool imported_distinct_declarations =
-                  !candidate.visibility_owner.empty()
-                  && !procedure.visibility_owner.empty()
-                  && candidate.visibility_owner
-                      != procedure.visibility_owner;
-              if (candidate.arguments.size()
-                      != procedure.arguments.size()
-                  || imported_distinct_declarations) {
-                return false;
-              }
-              for (std::size_t argument = 0;
-                   argument < procedure.arguments.size();
-                   ++argument) {
-                const auto& left = candidate.arguments[argument];
-                const auto& right = procedure.arguments[argument];
-                if (left.direction != right.direction
-                    || left.object_class != right.object_class
-                    || !vhdl_callable_type_matches(
-                        left.type, right.type)) {
-                  return false;
+                const auto& candidate = *procedure_frames_[candidate_index].source;
+                const bool imported_distinct_declarations = !candidate.visibility_owner.empty()
+                    && !procedure.visibility_owner.empty()
+                    && candidate.visibility_owner
+                        != procedure.visibility_owner;
+                if (candidate.arguments.size()
+                        != procedure.arguments.size()
+                    || imported_distinct_declarations) {
+                    return false;
                 }
-              }
-              return true;
+                for (std::size_t argument = 0;
+                    argument < procedure.arguments.size();
+                    ++argument) {
+                    const auto& left = candidate.arguments[argument];
+                    const auto& right = procedure.arguments[argument];
+                    if (left.direction != right.direction
+                        || left.object_class != right.object_class
+                        || !vhdl_callable_type_matches(
+                            left.type, right.type)) {
+                        return false;
+                    }
+                }
+                return true;
             });
         if (duplicate_profile) {
             report(
@@ -310,6 +316,7 @@ void Lowerer::initialize_procedure_support() {
         const auto index = procedure_frames_.size();
         ProcedureFrame frame;
         frame.source = &procedure;
+        frame.invocation_identity = next_callable_invocation_identity_++;
         procedure_frames_.push_back(std::move(frame));
         overloads.push_back(index);
     }
@@ -338,24 +345,12 @@ void Lowerer::initialize_procedure_support() {
         }
     }
 
-    procedure_call_stack_.pointer =
-        allocate_register(32, frontend::ValueDomain::Bit2);
-    procedure_call_stack_.entries = next_register_;
-    procedure_call_stack_.capacity =
-        static_cast<std::uint32_t>(procedure_frames_.size());
-    process_.operations.emplace_back(LoadConstant{
-        procedure_call_stack_.pointer, unsigned_value(0, 32)});
-    for (std::uint32_t index = 0;
-         index < procedure_call_stack_.capacity; ++index) {
-        const auto entry =
-            allocate_register(32, frontend::ValueDomain::Bit2);
-        process_.operations.emplace_back(
-            LoadConstant{entry, unsigned_value(0, 32)});
-    }
+    procedure_call_stack_ = { };
     procedure_support_initialized_ = true;
 }
 
-void Lowerer::lower_procedure_call(const Statement& statement) {
+void Lowerer::lower_procedure_call(const Statement& statement)
+{
     if (language_ == frontend::Language::Vhdl2008
         && lower_vhdl_vital_delay_call(statement)) {
         return;
@@ -411,7 +406,7 @@ void Lowerer::lower_procedure_call(const Statement& statement) {
     std::size_t next_positional = 0;
     bool saw_named = false;
     for (const auto& association :
-         statement.procedure_arguments) {
+        statement.procedure_arguments) {
         std::optional<std::size_t> index;
         if (association.formal) {
             saw_named = true;
@@ -461,20 +456,19 @@ void Lowerer::lower_procedure_call(const Statement& statement) {
         actuals[*index] = &association.value;
     }
     for (std::size_t index = 0;
-         index < actuals.size(); ++index) {
-      if (actuals[index] == nullptr) {
-        if (procedure.arguments[index].default_value) {
-          actuals[index] =
-              &*procedure.arguments[index].default_value;
-        } else {
-          report(
-              "FSIM-ELAB-VHPROC-017",
-              "procedure '" + procedure.name
-                  + "' requires an actual for formal '"
-                  + procedure.arguments[index].name + "'",
-              statement.span);
+        index < actuals.size(); ++index) {
+        if (actuals[index] == nullptr) {
+            if (procedure.arguments[index].default_value) {
+                actuals[index] = &*procedure.arguments[index].default_value;
+            } else {
+                report(
+                    "FSIM-ELAB-VHPROC-017",
+                    "procedure '" + procedure.name
+                        + "' requires an actual for formal '"
+                        + procedure.arguments[index].name + "'",
+                    statement.span);
+            }
         }
-      }
     }
     if (std::ranges::any_of(
             actuals,
@@ -500,23 +494,26 @@ void Lowerer::lower_procedure_call(const Statement& statement) {
                 static_cast<std::size_t>(*width),
                 argument.type.domain));
         }
+        frame.invocation_packed = frame.arguments;
         frame.allocated = true;
     }
 
+    std::vector<Expression> copy_out_targets(
+        procedure.arguments.size());
+    std::vector<RegisterId> actual_values(
+        procedure.arguments.size());
     for (std::size_t index = 0;
-         index < procedure.arguments.size(); ++index) {
+        index < procedure.arguments.size(); ++index) {
         const auto& formal = procedure.arguments[index];
         const auto& actual = *actuals[index];
-        const auto width =
-            static_cast<std::size_t>(*formal.type.width());
-        const bool writable =
-            writable_procedure_actual(actual);
+        const auto width = static_cast<std::size_t>(*formal.type.width());
+        const bool writable = writable_procedure_actual(actual);
         if ((formal.object_class
-                 == frontend::InterfaceObjectClass::Variable
-             || formal.object_class
-                 == frontend::InterfaceObjectClass::File
-             || formal.direction
-                 != frontend::PortDirection::Input)
+                    == frontend::InterfaceObjectClass::Variable
+                || formal.object_class
+                    == frontend::InterfaceObjectClass::File
+                || formal.direction
+                    != frontend::PortDirection::Input)
             && !writable) {
             report(
                 "FSIM-ELAB-VHPROC-018",
@@ -526,10 +523,25 @@ void Lowerer::lower_procedure_call(const Statement& statement) {
                 actual.span);
             return;
         }
+        if (formal.direction != frontend::PortDirection::Input
+            || formal.object_class
+                == frontend::InterfaceObjectClass::File) {
+            auto target = capture_callable_copy_out_target(
+                actual,
+                "@procedure_target_" + std::to_string(procedure_index)
+                    + "_" + std::to_string(index)
+                    + "_" + std::to_string(process_.operations.size()));
+            if (!target) {
+                return;
+            }
+            copy_out_targets[index] = std::move(*target);
+        }
+        actual_values[index] = allocate_register(
+            width, formal.type.domain);
         if (formal.direction == frontend::PortDirection::Output) {
-            process_.operations.emplace_back(LoadConstant{
-                frame.arguments[index],
-                default_packed_value(formal.type, width)});
+            process_.operations.emplace_back(LoadConstant {
+                actual_values[index],
+                default_packed_value(formal.type, width) });
             continue;
         }
         auto value = lower_expression(
@@ -542,18 +554,33 @@ void Lowerer::lower_procedure_call(const Statement& statement) {
                 *value, width, is_signed_expression(actual));
         }
         process_.operations.emplace_back(
-            CopyRegister{frame.arguments[index], *value});
+            CopyRegister { actual_values[index], *value });
+    }
+
+    const auto push_site = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(CallableFramePush {
+        frame.invocation_identity,
+        frame.invocation_packed,
+        { },
+        { } });
+    if (!frame.invocation_layout_finalized) {
+        frame.invocation_push_sites.push_back(push_site);
+    }
+    for (std::size_t index = 0;
+        index < procedure.arguments.size(); ++index) {
+        process_.operations.emplace_back(CopyRegister {
+            frame.arguments[index], actual_values[index] });
     }
 
     const auto call_site = static_cast<InstructionIndex>(
         process_.operations.size());
-    process_.operations.emplace_back(Call{
+    process_.operations.emplace_back(Call {
         frame.target.value_or(0),
         static_cast<InstructionIndex>(call_site + 1U),
-        procedure_call_stack_});
+        procedure_call_stack_ });
     if (frame.target) {
-        fsim::runtime::simir::operation_get<Call>(process_.operations[call_site]).target =
-            *frame.target;
+        fsim::runtime::simir::operation_get<Call>(process_.operations[call_site]).target = *frame.target;
     } else {
         frame.call_sites.push_back(call_site);
     }
@@ -571,8 +598,27 @@ void Lowerer::lower_procedure_call(const Statement& statement) {
         process_procedure_dependencies_.insert(procedure_index);
     }
 
+    std::vector<RegisterId> preserved_values;
     for (std::size_t index = 0;
-         index < procedure.arguments.size(); ++index) {
+        index < procedure.arguments.size(); ++index) {
+        const auto& formal = procedure.arguments[index];
+        if (formal.direction == frontend::PortDirection::Input
+            && formal.object_class
+                != frontend::InterfaceObjectClass::File) {
+            continue;
+        }
+        process_.operations.emplace_back(CopyRegister {
+            actual_values[index], frame.arguments[index] });
+        preserved_values.push_back(actual_values[index]);
+    }
+    process_.operations.emplace_back(CallableFramePop {
+        frame.invocation_identity,
+        preserved_values,
+        { },
+        { } });
+
+    for (std::size_t index = 0;
+        index < procedure.arguments.size(); ++index) {
         const auto& formal = procedure.arguments[index];
         if (formal.direction == frontend::PortDirection::Input
             && formal.object_class
@@ -581,20 +627,20 @@ void Lowerer::lower_procedure_call(const Statement& statement) {
         }
         if (formal.object_class
             == frontend::InterfaceObjectClass::File) {
-            const auto actual_local = actuals[index]->kind
+            const auto actual_local = copy_out_targets[index].kind
                     == ExpressionKind::Identifier
-                ? locals_.find(actuals[index]->text) : locals_.end();
+                ? locals_.find(copy_out_targets[index].text)
+                : locals_.end();
             if (actual_local != locals_.end()) {
-                process_.operations.emplace_back(CopyRegister{
-                    actual_local->second, frame.arguments[index]});
+                process_.operations.emplace_back(CopyRegister {
+                    actual_local->second, actual_values[index] });
             }
             continue;
         }
-        const auto temporary =
-            "@procedure_copyout_" + std::to_string(procedure_index)
+        const auto temporary = "@procedure_copyout_" + std::to_string(procedure_index)
             + "_" + std::to_string(index);
         locals_.insert_or_assign(
-            temporary, frame.arguments[index]);
+            temporary, actual_values[index]);
         local_signed_.insert_or_assign(
             temporary, formal.type.is_signed);
         local_ranges_.insert_or_assign(
@@ -608,19 +654,21 @@ void Lowerer::lower_procedure_call(const Statement& statement) {
         Statement copy_out;
         copy_out.kind = StatementKind::Assignment;
         copy_out.assignment_kind = AssignmentKind::Blocking;
-        copy_out.target = *actuals[index];
-        copy_out.value = Expression{
+        copy_out.target = copy_out_targets[index];
+        copy_out.value = Expression {
             ExpressionKind::Identifier,
             temporary,
-            {},
-            statement.span};
+            { },
+            statement.span
+        };
         copy_out.span = statement.span;
         lower_assignment(copy_out);
     }
 }
 
 void Lowerer::lower_procedure_return(
-    const Statement& statement) {
+    const Statement& statement)
+{
     if (!active_procedure_) {
         report(
             "FSIM-ELAB-VHPROC-021",
@@ -638,11 +686,12 @@ void Lowerer::lower_procedure_return(
     procedure_return_jumps_.push_back(
         static_cast<InstructionIndex>(
             process_.operations.size()));
-    process_.operations.emplace_back(Jump{});
+    process_.operations.emplace_back(Jump { });
 }
 
 void Lowerer::lower_procedure_body(
-    const std::size_t procedure_index) {
+    const std::size_t procedure_index)
+{
     auto& frame = procedure_frames_[procedure_index];
     if (frame.lowered || !frame.allocated) {
         return;
@@ -650,8 +699,7 @@ void Lowerer::lower_procedure_body(
     frame.target = static_cast<InstructionIndex>(
         process_.operations.size());
     for (const auto call_site : frame.call_sites) {
-        fsim::runtime::simir::operation_get<Call>(process_.operations[call_site]).target =
-            *frame.target;
+        fsim::runtime::simir::operation_get<Call>(process_.operations[call_site]).target = *frame.target;
     }
     frame.call_sites.clear();
     frame.lowered = true;
@@ -659,16 +707,16 @@ void Lowerer::lower_procedure_body(
     auto saved_locals = std::move(locals_);
     auto saved_signed = std::move(local_signed_);
     auto saved_ranges = std::move(local_ranges_);
-    auto saved_integer_ranges =
-        std::move(local_integer_ranges_);
+    auto saved_integer_ranges = std::move(local_integer_ranges_);
     auto saved_members = std::move(local_members_);
     auto saved_types = std::move(local_types_);
     auto saved_scope = std::move(local_scope_);
     auto saved_loop_controls = std::move(loop_controls_);
-    auto saved_return_jumps =
-        std::move(procedure_return_jumps_);
-    auto saved_file_handles =
-        std::move(procedure_file_handles_);
+    auto saved_block_controls = std::move(block_controls_);
+    auto saved_named_block_controls = std::move(named_block_controls_);
+    auto saved_named_fork_controls = std::move(named_fork_controls_);
+    auto saved_return_jumps = std::move(procedure_return_jumps_);
+    auto saved_file_handles = std::move(procedure_file_handles_);
     const auto saved_active = active_procedure_;
     locals_.clear();
     local_signed_.clear();
@@ -676,8 +724,11 @@ void Lowerer::lower_procedure_body(
     local_integer_ranges_.clear();
     local_members_.clear();
     local_types_.clear();
-    local_scope_ = {frame.source->name};
+    local_scope_ = { frame.source->name };
     loop_controls_.clear();
+    block_controls_.clear();
+    named_block_controls_.clear();
+    named_fork_controls_.clear();
     procedure_return_jumps_.clear();
     procedure_file_handles_.clear();
     active_procedure_ = procedure_index;
@@ -686,17 +737,17 @@ void Lowerer::lower_procedure_body(
         [&](const std::string& name,
             const frontend::Type& type,
             const RegisterId register_id) {
-          locals_.insert_or_assign(name, register_id);
-          local_signed_.insert_or_assign(name, type.is_signed);
-          local_ranges_.insert_or_assign(name, type.packed_range);
-          local_integer_ranges_.insert_or_assign(
-              name, type.integer_range);
-          local_members_.insert_or_assign(
-              name, type.packed_members);
-          local_types_.insert_or_assign(name, &type);
+            locals_.insert_or_assign(name, register_id);
+            local_signed_.insert_or_assign(name, type.is_signed);
+            local_ranges_.insert_or_assign(name, type.packed_range);
+            local_integer_ranges_.insert_or_assign(
+                name, type.integer_range);
+            local_members_.insert_or_assign(
+                name, type.packed_members);
+            local_types_.insert_or_assign(name, &type);
         };
     for (std::size_t index = 0;
-         index < frame.source->arguments.size(); ++index) {
+        index < frame.source->arguments.size(); ++index) {
         const auto& argument = frame.source->arguments[index];
         bind(
             argument.name,
@@ -706,101 +757,78 @@ void Lowerer::lower_procedure_body(
         if (!debug_local_names_.emplace(debug_name).second) {
             debug_name += "@"
                 + std::to_string(argument.span.begin.line)
-                + ":" + std::to_string(
-                    argument.span.begin.column);
+                + ":" + std::to_string(argument.span.begin.column);
             debug_local_names_.emplace(debug_name);
         }
-        process_.debug_locals.push_back(DebugLocal{
+        process_.debug_locals.push_back(DebugLocal {
             std::move(debug_name),
             argument.type.spelling,
             frame.arguments[index],
             static_cast<std::size_t>(*argument.type.width()),
-            SourceLocation{
+            SourceLocation {
                 argument.span.source_name,
                 static_cast<std::uint32_t>(
                     argument.span.begin.line),
                 static_cast<std::uint32_t>(
-                    argument.span.begin.column)},
-            {},
-            {},
+                    argument.span.begin.column) },
+            { },
+            { },
             value_kind(argument.type.domain),
             argument.type.enumeration_literals,
-            argument.type.systemverilog_scalar});
+            argument.type.systemverilog_scalar });
         if (argument.type.integer_range) {
-            const auto [lower, upper] =
-                integer_bounds(argument.type.integer_range);
+            const auto [lower, upper] = integer_bounds(argument.type.integer_range);
             process_.debug_locals.back().integer_lower = lower;
             process_.debug_locals.back().integer_upper = upper;
         }
     }
+    const auto packed_begin = next_register_;
     initialize_variables(frame.source->variables);
     lower_statements(frame.source->statements);
+    for (auto id = packed_begin; id < next_register_; ++id) {
+        frame.invocation_packed.push_back(id);
+    }
     const auto epilogue = static_cast<InstructionIndex>(
         process_.operations.size());
     for (const auto jump : procedure_return_jumps_) {
-        process_.operations[jump] = Jump{epilogue};
+        process_.operations[jump] = Jump { epilogue };
     }
     for (const auto handle : procedure_file_handles_) {
         process_.operations.emplace_back(
-            FileClose{handle, true, true});
+            FileClose { handle, true, true });
     }
     process_.operations.emplace_back(
-        Return{procedure_call_stack_});
+        Return { procedure_call_stack_ });
+    for (const auto push_site : frame.invocation_push_sites) {
+        process_.operations[push_site] = CallableFramePush {
+            frame.invocation_identity,
+            frame.invocation_packed,
+            { },
+            { }
+        };
+    }
+    frame.invocation_push_sites.clear();
+    frame.invocation_layout_finalized = true;
 
     active_procedure_ = saved_active;
-    procedure_return_jumps_ =
-        std::move(saved_return_jumps);
-    procedure_file_handles_ =
-        std::move(saved_file_handles);
+    procedure_return_jumps_ = std::move(saved_return_jumps);
+    procedure_file_handles_ = std::move(saved_file_handles);
     loop_controls_ = std::move(saved_loop_controls);
+    block_controls_ = std::move(saved_block_controls);
+    named_block_controls_ = std::move(saved_named_block_controls);
+    named_fork_controls_ = std::move(saved_named_fork_controls);
     local_scope_ = std::move(saved_scope);
     local_types_ = std::move(saved_types);
     local_members_ = std::move(saved_members);
-    local_integer_ranges_ =
-        std::move(saved_integer_ranges);
+    local_integer_ranges_ = std::move(saved_integer_ranges);
     local_ranges_ = std::move(saved_ranges);
     local_signed_ = std::move(saved_signed);
     locals_ = std::move(saved_locals);
 }
 
-void Lowerer::diagnose_procedure_cycles() {
-    std::vector<std::uint8_t> state(
-        procedure_frames_.size(), 0);
-    const auto visit =
-        [&](const auto& self, const std::size_t index) -> bool {
-          if (state[index] == 1) {
-              report(
-                  "FSIM-ELAB-VHPROC-010",
-                  "recursive procedure call graph involving '"
-                      + procedure_frames_[index].source->name
-                      + "' is not supported",
-                  procedure_frames_[index].source->span);
-              return true;
-          }
-          if (state[index] == 2) {
-              return false;
-          }
-          state[index] = 1;
-          for (const auto dependency :
-               procedure_dependencies_[index]) {
-              if (self(self, dependency)) {
-                  state[index] = 2;
-                  return true;
-              }
-          }
-          state[index] = 2;
-          return false;
-        };
-    for (std::size_t index = 0;
-         index < procedure_frames_.size(); ++index) {
-        if (state[index] == 0) {
-            (void)visit(visit, index);
-        }
-    }
-}
-
 bool Lowerer::procedure_dependencies_suspend(
-    const std::unordered_set<std::size_t>& roots) const {
+    const std::unordered_set<std::size_t>& roots) const
+{
     std::vector<bool> visited(procedure_frames_.size(), false);
     const auto visit = [&](const auto& self,
                            const std::size_t index) -> bool {
@@ -824,14 +852,14 @@ bool Lowerer::procedure_dependencies_suspend(
         });
 }
 
-void Lowerer::lower_pending_procedures() {
+void Lowerer::lower_pending_procedures()
+{
     while (!pending_procedures_.empty()) {
         const auto procedure = pending_procedures_.front();
         pending_procedures_.pop_front();
         procedure_frames_[procedure].queued = false;
         lower_procedure_body(procedure);
     }
-    diagnose_procedure_cycles();
 }
 
 } // namespace fsim::elaboration

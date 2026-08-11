@@ -244,43 +244,70 @@ endmodule
   const auto directive_errors = preprocess_verilog_file(
       directive_error_root, Language::SystemVerilog2017);
   const auto has_preprocessor_code = [&](const std::string_view code) {
-    return std::any_of(
-        directive_errors.lexed.diagnostics.begin(),
-        directive_errors.lexed.diagnostics.end(),
-        [&](const Diagnostic &diagnostic) { return diagnostic.code == code; });
+      return std::any_of(
+          directive_errors.lexed.diagnostics.begin(),
+          directive_errors.lexed.diagnostics.end(),
+          [&](const Diagnostic& diagnostic) { return diagnostic.code == code; });
   };
-  require(!directive_errors.ok() && has_preprocessor_code("FSIM-SV-PP-030") &&
-              has_preprocessor_code("FSIM-SV-PP-020") &&
-              has_preprocessor_code("FSIM-SV-PP-011") &&
-              has_preprocessor_code("FSIM-SV-PP-002"),
-          "macro arity, unsupported pragma, and open conditional diagnostics");
+  require(!directive_errors.ok() && has_preprocessor_code("FSIM-SV-PP-030") && has_preprocessor_code("FSIM-SV-PP-020") && has_preprocessor_code("FSIM-SV-PP-011") && has_preprocessor_code("FSIM-SV-PP-002"),
+      "macro arity, malformed protect pragma, and open conditional diagnostics");
+
+  auto ignored_and_plaintext_pragmas = preprocess_verilog(
+      SourceText { "pragma-policy.sv",
+          R"(`pragma vendor_extension option = enabled
+`pragma protect begin
+module visible_plaintext;
+endmodule
+`pragma protect end
+)" },
+      Language::SystemVerilog2017);
+  auto ignored_and_plaintext_parsed = parse_verilog(
+      std::move(ignored_and_plaintext_pragmas.lexed), true);
+  require(
+      ignored_and_plaintext_parsed.ok() && ignored_and_plaintext_parsed.design.units.size() == 1 && ignored_and_plaintext_parsed.design.units.front().name == "visible_plaintext",
+      "unknown pragmas have no effect and plaintext protect markers compile");
+
+  auto encrypted_envelope = preprocess_verilog(
+      SourceText { "protected-envelope.sv",
+          R"(module visible_before;
+endmodule
+`pragma protect begin_protected
+`pragma protect data_method = "aes128-cbc"
+`pragma protect data_block
+encrypted payload tokens 12345
+`pragma protect end_protected
+module visible_after;
+endmodule
+)" },
+      Language::SystemVerilog2017);
+  const bool has_protected_code = std::ranges::any_of(
+      encrypted_envelope.lexed.diagnostics,
+      [](const Diagnostic& diagnostic) {
+          return diagnostic.code == "FSIM-SV-PP-011";
+      });
+  auto encrypted_parsed = parse_verilog(
+      std::move(encrypted_envelope.lexed), true);
+  require(
+      has_protected_code && encrypted_parsed.design.units.size() == 2 && encrypted_parsed.design.units[0].name == "visible_before" && encrypted_parsed.design.units[1].name == "visible_after",
+      "encrypted envelopes are contained and require a decryption provider");
 
   const auto cycle_a = directory / "cycle-a.svh";
   const auto cycle_b = directory / "cycle-b.svh";
   write_text(cycle_a, "`include \"cycle-b.svh\"\n");
   write_text(cycle_b, "`include \"cycle-a.svh\"\n");
-  const auto cycle =
-      preprocess_verilog_file(cycle_a, Language::SystemVerilog2017);
-  require(!cycle.ok() && std::any_of(cycle.lexed.diagnostics.begin(),
-                                     cycle.lexed.diagnostics.end(),
-                                     [](const Diagnostic &diagnostic) {
-                                       return diagnostic.code ==
-                                              "FSIM-SV-PP-005";
-                                     }),
-          "recursive include receives a targeted diagnostic");
-  const auto empty_compilation_unit =
-      preprocess_verilog_compilation_unit({}, Language::SystemVerilog2017);
-  require(!empty_compilation_unit.ok() &&
-              std::any_of(empty_compilation_unit.lexed.diagnostics.begin(),
-                          empty_compilation_unit.lexed.diagnostics.end(),
-                          [](const Diagnostic &diagnostic) {
-                            return diagnostic.code == "FSIM-SV-PP-031";
-                          }),
-          "an empty preprocessing compilation unit is rejected");
+  const auto cycle = preprocess_verilog_file(cycle_a, Language::SystemVerilog2017);
+  require(!cycle.ok() && std::any_of(cycle.lexed.diagnostics.begin(), cycle.lexed.diagnostics.end(), [](const Diagnostic& diagnostic) {
+      return diagnostic.code == "FSIM-SV-PP-005";
+  }),
+      "recursive include receives a targeted diagnostic");
+  const auto empty_compilation_unit = preprocess_verilog_compilation_unit({ }, Language::SystemVerilog2017);
+  require(!empty_compilation_unit.ok() && std::any_of(empty_compilation_unit.lexed.diagnostics.begin(), empty_compilation_unit.lexed.diagnostics.end(), [](const Diagnostic& diagnostic) {
+      return diagnostic.code == "FSIM-SV-PP-031";
+  }),
+      "an empty preprocessing compilation unit is rejected");
 
-  auto reset_macros =
-      preprocess_verilog(SourceText{"undefineall.sv",
-                                    R"(`define SAME(value=1) value
+  auto reset_macros = preprocess_verilog(SourceText { "undefineall.sv",
+                                             R"(`define SAME(value=1) value
 `define SAME(value=1) value
 `define CLEARED 1
 `undefineall
@@ -288,24 +315,19 @@ endmodule
 module macros_cleared;
 endmodule
 `endif
-)"},
-                         Language::SystemVerilog2017);
+)" },
+      Language::SystemVerilog2017);
   auto reset_parsed = parse_verilog(std::move(reset_macros.lexed), true);
-  require(reset_parsed.ok() && reset_parsed.design.units.size() == 1 &&
-              reset_parsed.design.units.front().name == "macros_cleared",
-          "identical redefinition is legal and `undefineall clears macros");
+  require(reset_parsed.ok() && reset_parsed.design.units.size() == 1 && reset_parsed.design.units.front().name == "macros_cleared",
+      "identical redefinition is legal and `undefineall clears macros");
 
   const auto conflicting_redefinition = preprocess_verilog(
-      SourceText{"macro-redefinition.sv", "`define VALUE 1\n`define VALUE 2\n"},
+      SourceText { "macro-redefinition.sv", "`define VALUE 1\n`define VALUE 2\n" },
       Language::SystemVerilog2017);
-  require(!conflicting_redefinition.ok() &&
-              std::ranges::any_of(conflicting_redefinition.lexed.diagnostics,
-                                  [](const Diagnostic &diagnostic) {
-                                    return diagnostic.code ==
-                                               "FSIM-SV-PP-044" &&
-                                           !diagnostic.expansion_stack.empty();
-                                  }),
-          "a conflicting macro redefinition retains the prior location");
+  require(!conflicting_redefinition.ok() && std::ranges::any_of(conflicting_redefinition.lexed.diagnostics, [](const Diagnostic& diagnostic) {
+      return diagnostic.code == "FSIM-SV-PP-044" && !diagnostic.expansion_stack.empty();
+  }),
+      "a conflicting macro redefinition retains the prior location");
 
   const auto cross_close = directory / "cross-close.svh";
   const auto cross_open = directory / "cross-open.svh";
@@ -313,34 +335,28 @@ endmodule
   write_text(cross_close, "`endif\n");
   write_text(cross_open, "`ifdef OPEN_IN_INCLUDE\n");
   write_text(cross_root,
-             R"(`define FLAG
+      R"(`define FLAG
 `ifdef FLAG
 `include "cross-close.svh"
 `include "cross-open.svh"
 `endif
 )");
-  const auto cross_boundary =
-      preprocess_verilog_file(cross_root, Language::SystemVerilog2017);
-  const auto has_cross_code = [&](const std::string_view code) {
-    return std::ranges::any_of(
-        cross_boundary.lexed.diagnostics,
-        [&](const Diagnostic &diagnostic) { return diagnostic.code == code; });
-  };
+  const auto cross_boundary = preprocess_verilog_file(cross_root, Language::SystemVerilog2017);
   require(
-      !cross_boundary.ok() && has_cross_code("FSIM-SV-PP-045") &&
-          has_cross_code("FSIM-SV-PP-046"),
-      "conditional branches cannot open or close across include boundaries");
+      cross_boundary.ok(),
+      "textual includes may open and close conditional branches across files");
 
   std::error_code cleanup_error;
   std::filesystem::remove_all(directory, cleanup_error);
 }
 
-void test_systemverilog_uvm_macro_surface() {
-  const auto directory = make_test_directory("uvm-macro-surface");
-  const auto include = directory / "uvm_like_macros.svh";
-  const auto root = directory / "root.sv";
-  write_text(include,
-             R"(`ifndef FSIM_UVM_LIKE_MACROS_SVH
+void test_systemverilog_uvm_macro_surface()
+{
+    const auto directory = make_test_directory("uvm-macro-surface");
+    const auto include = directory / "uvm_like_macros.svh";
+    const auto root = directory / "root.sv";
+    write_text(include,
+        R"(`ifndef FSIM_UVM_LIKE_MACROS_SVH
 `define FSIM_UVM_LIKE_MACROS_SVH
 `define UVM_FORWARD(first, second) localparam int first = second;
 `define UVM_DECLARE(SFX, FORWARDED) \
@@ -354,65 +370,50 @@ module uvm_generated``SFX; \
 endmodule
 `endif
 )");
-  write_text(root,
-             R"(`include "uvm_like_macros.svh"
+    write_text(root,
+        R"(`include "uvm_like_macros.svh"
 `include "uvm_like_macros.svh"
 `define FSIM_UVM_SUFFIX _item
 `UVM_DECLARE(`FSIM_UVM_SUFFIX, (forwarded_value, 7))
 )");
-  PreprocessorOptions options;
-  options.include_directories = {directory};
-  auto preprocessed =
-      preprocess_verilog_file(root, Language::SystemVerilog2017, options);
-  require(preprocessed.ok(),
-          "UVM-style guarded, nested, forwarded, conditional, pasted, and "
-          "stringified macros must preprocess");
-  const auto has_token = [&](const TokenKind kind,
-                             const std::string_view text) {
-    return std::ranges::any_of(
-        preprocessed.lexed.tokens, [&](const Token &token) {
-          return token.kind == kind && token.text == text;
-        });
-  };
-  require(has_token(TokenKind::Identifier, "uvm_generated_item") &&
-              has_token(TokenKind::Identifier, "forwarded_value") &&
-              has_token(TokenKind::Number, "7") &&
-              has_token(TokenKind::Number, "2"),
-          "nested suffix expansion, tuple forwarding, and replacement "
-          "conditional selection must reach generated declarations");
-  require(
-      std::ranges::any_of(preprocessed.lexed.tokens,
-                          [](const Token &token) {
-                            return token.kind == TokenKind::StringLiteral &&
-                                   token.text.find("uvm_generated_item") !=
-                                       std::string::npos &&
-                                   token.text.find("forwarded_value") !=
-                                       std::string::npos &&
-                                   token.text.find('`') == std::string::npos;
-                          }),
-      "composed special strings must substitute parameters and remove paste "
-      "markers");
-  const auto parsed = parse_verilog(std::move(preprocessed.lexed), true);
-  require(parsed.ok() && parsed.design.units.size() == 1 &&
-              parsed.design.units.front().name == "uvm_generated_item",
-          "UVM-style macro expansion must generate one parseable declaration");
+    PreprocessorOptions options;
+    options.include_directories = { directory };
+    auto preprocessed = preprocess_verilog_file(root, Language::SystemVerilog2017, options);
+    require(preprocessed.ok(),
+        "UVM-style guarded, nested, forwarded, conditional, pasted, and "
+        "stringified macros must preprocess");
+    const auto has_token = [&](const TokenKind kind,
+                               const std::string_view text) {
+        return std::ranges::any_of(
+            preprocessed.lexed.tokens, [&](const Token& token) {
+                return token.kind == kind && token.text == text;
+            });
+    };
+    require(has_token(TokenKind::Identifier, "uvm_generated_item") && has_token(TokenKind::Identifier, "forwarded_value") && has_token(TokenKind::Number, "7") && has_token(TokenKind::Number, "2"),
+        "nested suffix expansion, tuple forwarding, and replacement "
+        "conditional selection must reach generated declarations");
+    require(
+        std::ranges::any_of(preprocessed.lexed.tokens,
+            [](const Token& token) {
+                return token.kind == TokenKind::StringLiteral && token.text.find("uvm_generated_item") != std::string::npos && token.text.find("forwarded_value") != std::string::npos && token.text.find('`') == std::string::npos;
+            }),
+        "composed special strings must substitute parameters and remove paste "
+        "markers");
+    const auto parsed = parse_verilog(std::move(preprocessed.lexed), true);
+    require(parsed.ok() && parsed.design.units.size() == 1 && parsed.design.units.front().name == "uvm_generated_item",
+        "UVM-style macro expansion must generate one parseable declaration");
 
-  const auto punctuation_paste =
-      preprocess_verilog(SourceText{"uvm-punctuation-paste.sv",
-                                    "`define UVM_MEMBER(BASE) BASE``.value\n"
-                                    "`UVM_MEMBER(resource_queue)\n"},
-                         Language::SystemVerilog2017);
-  require(
-      punctuation_paste.ok() && punctuation_paste.lexed.tokens.size() == 4 &&
-          punctuation_paste.lexed.tokens[0].text == "resource_queue" &&
-          punctuation_paste.lexed.tokens[1].kind == TokenKind::Dot &&
-          punctuation_paste.lexed.tokens[2].text == "value",
-      "a paste marker may delimit a macro argument before punctuation without "
-      "forming one lexical token");
+    const auto punctuation_paste = preprocess_verilog(SourceText { "uvm-punctuation-paste.sv",
+                                                          "`define UVM_MEMBER(BASE) BASE``.value\n"
+                                                          "`UVM_MEMBER(resource_queue)\n" },
+        Language::SystemVerilog2017);
+    require(
+        punctuation_paste.ok() && punctuation_paste.lexed.tokens.size() == 4 && punctuation_paste.lexed.tokens[0].text == "resource_queue" && punctuation_paste.lexed.tokens[1].kind == TokenKind::Dot && punctuation_paste.lexed.tokens[2].text == "value",
+        "a paste marker may delimit a macro argument before punctuation without "
+        "forming one lexical token");
 
-  const auto malformed =
-      preprocess_verilog(SourceText{"uvm-macro-errors.sv",
-                                    R"(`define BAD_CONDITIONAL \
+    const auto malformed = preprocess_verilog(SourceText { "uvm-macro-errors.sv",
+                                                  R"(`define BAD_CONDITIONAL \
 `ifdef \
 module bad_conditional; endmodule
 `BAD_CONDITIONAL
@@ -422,18 +423,17 @@ module bad_open; endmodule
 `BAD_OPEN
 `define BAD_STRING(ARG) `"ARG``"
 `BAD_STRING(value)
-)"},
-                         Language::SystemVerilog2017);
-  const auto has_code = [&](const std::string_view code) {
-    return std::ranges::any_of(
-        malformed.lexed.diagnostics,
-        [&](const Diagnostic &diagnostic) { return diagnostic.code == code; });
-  };
-  require(
-      !malformed.ok() && has_code("FSIM-SV-PP-049") &&
-          has_code("FSIM-SV-PP-050") && has_code("FSIM-SV-PP-051"),
-      "malformed replacement conditionals and special strings receive exact "
-      "cataloged diagnostics");
+)" },
+        Language::SystemVerilog2017);
+    const auto has_code = [&](const std::string_view code) {
+        return std::ranges::any_of(
+            malformed.lexed.diagnostics,
+            [&](const Diagnostic& diagnostic) { return diagnostic.code == code; });
+    };
+    require(
+        !malformed.ok() && has_code("FSIM-SV-PP-049") && has_code("FSIM-SV-PP-050") && has_code("FSIM-SV-PP-051"),
+        "malformed replacement conditionals and special strings receive exact "
+        "cataloged diagnostics");
 
 #if defined(FSIM_TEST_UVM_1_2_SOURCE_DIR) &&                                   \
     defined(FSIM_TEST_UVM_2020_3_1_SOURCE_DIR)

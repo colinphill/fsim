@@ -28,6 +28,7 @@ EncodedDynamicPartWrite lower_dynamic_part_write(
       builder,
       load_register(builder, registers, selection.base),
       runtime::simir::ValueKind::logic4);
+  auto* integer = packed_integer_type(context, selection.width);
   auto* base_unknown = builder.CreateICmpNE(
       builder.CreateAnd(
           base.bval,
@@ -51,11 +52,12 @@ EncodedDynamicPartWrite lower_dynamic_part_write(
       llvm::ConstantInt::getSigned(i64, right_delta));
   llvm::Value* selected_width = constant_i64(context, 0);
   llvm::Value* first_offset = constant_i64(context, 0);
-  std::array<llvm::Value*, 4> selected_planes{
-      constant_i64(context, 0),
-      constant_i64(context, 0),
-      constant_i64(context, 0),
-      constant_i64(context, 0)};
+  std::array<llvm::Value*, 4> selected_planes {
+      llvm::ConstantInt::get(integer, 0),
+      llvm::ConstantInt::get(integer, 0),
+      llvm::ConstantInt::get(integer, 0),
+      llvm::ConstantInt::get(integer, 0)
+  };
   const std::array<llvm::Value*, 4> source_planes{
       source.aval,
       source.bval,
@@ -88,15 +90,19 @@ EncodedDynamicPartWrite lower_dynamic_part_write(
         offset,
         first_offset);
     for (std::size_t plane = 0; plane < selected_planes.size(); ++plane) {
-      auto* source_bit = builder.CreateAnd(
-          builder.CreateLShr(
-              source_planes[plane], constant_i64(context, bit)),
-          constant_i64(context, 1));
-      auto* appended = builder.CreateOr(
-          selected_planes[plane],
-          builder.CreateShl(source_bit, selected_width));
-      selected_planes[plane] = builder.CreateSelect(
-          valid, appended, selected_planes[plane]);
+        auto* source_bit = builder.CreateAnd(
+            builder.CreateLShr(
+                source_planes[plane],
+                llvm::ConstantInt::get(integer, bit)),
+            llvm::ConstantInt::get(integer, 1));
+        auto* appended = builder.CreateOr(
+            selected_planes[plane],
+            builder.CreateShl(
+                source_bit,
+                builder.CreateZExtOrTrunc(
+                    selected_width, integer)));
+        selected_planes[plane] = builder.CreateSelect(
+            valid, appended, selected_planes[plane]);
     }
     selected_width = builder.CreateAdd(
         selected_width, builder.CreateZExt(valid, i64));

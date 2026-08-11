@@ -89,6 +89,660 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     code and executable evidence, assign Changes 2-16 one-to-one owners, freeze
     supported/unsupported/deferred scope, and make duplicate, missing, unowned
     or drifted active rows fail a registered contract.
+17. A user-approved future-scope amendment is now authoritative for Batch 166:
+    support the legacy non-standard Synopsys `ieee.std_logic_signed`,
+    `ieee.std_logic_unsigned`, `ieee.std_logic_arith`, and
+    `ieee.std_logic_misc` compatibility packages. Preserve their historical
+    logical-library names but label their provenance accurately, cover their
+    overloads and executable behavior without host-word narrowing, diagnose
+    ambiguous interaction with `numeric_std`, and retain package identity
+    through libraries, artifacts, relocation, and caches.
+18. Batch 164 Change 1 is complete in the intentionally dirty worktree. The
+    authoritative 37-row IEEE 1364-2005 TSV freezes 19 reviewed supported
+    baselines, 15 active residual rows owned one-to-one by Changes 2-16, and
+    three explicit Batch 170/post-v2 deferrals. Its separate 15-row literal-
+    width ledger freezes four preserved vector paths, eight active obligations,
+    and three physical resource/host boundaries with exact source anchors.
+    The registered contract rejects duplicate IDs/anchors, missing or
+    misplaced owners/evidence, absent or repeated closures, clause/deferral/
+    disposition drift, lost source anchors, plan/registration drift, and
+    failure escapes. Inventory SHA-256 identities are
+    `eac3e15d38a6749a71f8e243c87861ab9c4b9b19cf09ef71d4b991ae34c08f39`
+    and `8c2eb522c5a3e4ed851ed7bf1edbb2e203a99adef40e9cbceb01544d22c3c4db`.
+19. The exact-LLVM Debug tree regenerates and links 19 targets warning-free
+    with eight workers in 28.97 seconds at 4,244,580 KiB peak RSS and zero
+    swaps. The contract passes directly and through CTest, and the complete
+    static contract range excluding only the long UVM execution matrix passes
+    36/36 in 20.73 seconds at 57,288 KiB peak RSS and zero swaps. The new
+    machine contract and two TSVs advance the SPDX-authored inventory from 955
+    to 958 while diagnostics remain 2,138, bounded C/C++ sources 835, and
+    authored test/control owners 316. Preserve all Change 1 and Batch 166 plan
+    edits without reset, commit, push, sanitizer, or hosted-CI inspection.
+    Next implement Batch 164 Change 2's lexical and arbitrary-width numeric-
+    literal closure only.
+20. Batch 164 Change 2 is complete in the same intentionally dirty worktree.
+    The lexer and packed semantic engine already retained complete token text
+    and word-vector values; the repaired frontend output shortcut was the one
+    remaining `uint64_t` reparse. Its portable limb integer now handles exact
+    binary/octal/decimal/hex multiply-add, sized and unsized selection,
+    truncation, signed two's-complement interpretation, decimal rendering, and
+    declared widths beyond `size_t` without allocating from the width. Focused
+    frontend evidence covers values above `uint64_t`, four-base 257-bit
+    equivalence, signed/truncating/unsized cases, 4097-bit declared width, and
+    X/Z rejection. The display application proves matching interpreter/LLVM
+    O0/O2 output, while elaboration/runtime evidence proves exact four-base
+    packed values, signed bits, 4097-bit parameter identity, and a 4097-bit
+    interpreter signal. Warning-free eight-worker focused builds complete, the
+    direct inventory contract passes, and the combined frontend, inventory,
+    release, elaboration, and display slice passes 6/6 in 9.99 seconds. The
+    clause inventory is now 20 supported/14 active/3 deferred and the width
+    ledger is six preserved/six active/three physical, with SHA-256 identities
+    `cc1d9bee24cfa18873d64da67acade396da301641711d0f740b9b6f3caa93baa`
+    and `8abbc3a8cbf1aa1834a28a52ea7e7b51ecff9c9001139b05bd8b1b632f53429a`.
+    `git diff --check` is clean. Preserve Changes 1-2 and the Batch 166
+    Synopsys-package amendment without reset, commit, push, sanitizer, or
+    hosted-CI inspection. Next implement Batch 164 Change 3 preprocessing and
+    compiler-directive closure only.
+21. Batch 164 Change 3 is complete in the same intentionally dirty worktree.
+    The existing preprocessor already retained the macro argument/default,
+    substitution, paste/quote, recursive-expansion, conditional, include-search,
+    provenance, line-control, directive-state, dependency-snapshot and cache
+    surfaces. Two nonstandard include-boundary conditional restrictions are
+    removed so included text can open, continue or close the surrounding
+    conditional stream. Unknown pragmas have no effect; plaintext protect
+    markers are transparent; encrypted `begin_protected` payload is contained
+    and diagnosed as requiring an unavailable decryption provider, with exact
+    malformed/nested/unmatched policy. Retired include-restriction diagnostic
+    identities remain reserved by explicit non-emitting production constants
+    to preserve the 2,138-entry catalog ABI and forbid reassignment.
+    Warning-free eight-worker focused builds are current, and the exact
+    frontend, elaboration, application, SystemVerilog-HIR and preprocessing
+    application slice passes 5/5 in 30.79 seconds. The rebuilt frontend plus
+    exact inventory/release contract slice passes 5/5 in 9.36 seconds,
+    including the release candidate. The clause inventory is now 21
+    supported/13 active/3 deferred while the width ledger remains six
+    preserved/six active/three physical, with SHA-256 identities
+    `d0f507d0a96baefa7857c3e6561c32b0f05c287ffe9851d674f3b27aec3b58cb`
+    and `8abbc3a8cbf1aa1834a28a52ea7e7b51ecff9c9001139b05bd8b1b632f53429a`.
+    Preserve Changes 1-3 and the Batch 166 Synopsys-package amendment without
+    reset, commit, push, sanitizer, or hosted-CI inspection. Next implement
+    Batch 164 Change 4 declarations and data-object closure only.
+22. Batch 164 Change 4 is complete. Its first slice replaces the shared
+    declaration/range evaluator's rejection of every logic literal wider than
+    64 bits. Verilog based literals now use the arbitrary-width packed constant
+    service, followed by a checked signed-64 value conversion only where an
+    integer-only range consumer requires it. A 257-bit hexadecimal spelling
+    whose value is four elaborates an exact five-bit signal. The initial full
+    elaboration host exposed and then verified preservation of the shared VHDL
+    scalar-character path; the final host passes 1/1 in 1.18 seconds after a
+    warning-free eight-worker rebuild. `VLW-LEGACY-INTEGER` is therefore
+    preserved, advancing the width ledger to
+    seven preserved/five active/three physical rows with SHA-256
+    `76a0da465c12f1a7289469073ce1ff898908f514cb8fed300521601dfdcb8f27`;
+    The completed declaration matrix covers ANSI ports, signed and wide ranges,
+    parameters/localparams, nets, regs, integer, time, real/realtime, events,
+    genvars, explicit callable lifetime and source language, plus exact wide
+    initialization. Verilog attributes parse at compilation-unit, module,
+    parameter, port and object boundaries with no unknown-tool effect and
+    stable empty-name/value/closing diagnostics. One-dimensional Verilog
+    memories are legal and retain their packed element plus exact unpacked
+    range expressions; multidimensional and net memories diagnose separately.
+    Ordinary semantic-HIR type references now retain exact executable width and
+    four-state identity, and the Verilog application build retains a 257-bit
+    parameter plus static memory before executing memory write/read behavior.
+    Warning-clean eight-worker focused builds and the frontend, elaboration and
+    application hosts pass. Diagnostic, source-line, resource, VHDL/PSL, UVM
+    and release-inventory contracts pass with 2,142 production codes.
+    `VL05-C04-GAP` advances the clause inventory to 22 supported/12 active/3
+    deferred rows with SHA-256
+    `cea73020834d1cda611a268c944bb2c9c44563b0079eb574fa5a851c0ece999c`;
+    the width ledger remains seven preserved/five active/three physical at
+    SHA-256
+    `76a0da465c12f1a7289469073ce1ff898908f514cb8fed300521601dfdcb8f27`.
+    Preserve the accumulated worktree and the Batch 166 Synopsys-package
+    amendment without commit, push, sanitizer, or hosted-CI inspection. Next
+    implement Batch 164 Change 5 expression semantics only.
+23. Batch 164 Change 5 is complete. Checked packed-to-scalar conversion now
+    accepts arbitrary declared widths only when their known value is exactly
+    zero- or sign-extended into the requested host scalar; fixed/associative
+    container indices and keys preserve all words. LLVM process frames retain
+    process-specific register widths and flattened word offsets without
+    changing the public v1 frame structure. Generated code uses exact-width
+    integers beyond 64 bits and explicit eight-byte plane alignment, which
+    fixes the O2 aligned-store fault exposed by the new 257-bit frame test.
+    Application adapters reconstruct every plane word, and interpreter plus
+    compiled O0/O2 cold/warm runs preserve a 257-bit static-memory index.
+    Direct LLVM evidence covers every arithmetic family, signed/unsigned
+    comparisons, four-state equality, logical/reduction/count operations,
+    514-bit concatenation, conditional selection, all shifts/rotates, and
+    static/dynamic bit and part selections/inserts. Verilog-2005 implicitly
+    static functions are now eligible for the restricted constant-function
+    evaluator; a 257-bit function result retains its high bit. A WebKit-formatted
+    warning-clean 173-step eight-worker focused build passes the frontend,
+    elaboration, runtime, LLVM and two application hosts 6/6 in 19.01 seconds;
+    diagnostic, source-line, resource and Verilog inventory gates pass 4/4.
+    `VL05-C05-GAP` advances the clause inventory to 23 supported/11 active/3
+    deferred rows at SHA-256
+    `5e86ef5f1925c561a5b5e275ff094bd619ad1b730c55ed4a5dc7f24136552051`.
+    `VLW-LOW-WORD` and `VLW-ENGINE-PLANES` advance the width ledger to nine
+    preserved/three active/three physical at SHA-256
+    `fb31418a076ffa87b9df2380753f77e0aec224414f9246af7101278807e44119`.
+    Preserve the accumulated Changes 1-5 worktree and the Batch 166 Synopsys
+    package amendment without commit, push, sanitizer, or hosted-CI inspection.
+    Next implement Batch 164 Change 6 hierarchy and elaboration closure only.
+24. Batch 164 Change 6 is complete in the same accumulated dirty worktree.
+    Verilog-2005/SystemVerilog now parse structured `defparam` declarations in
+    direct and generated module bodies, preserve indexed hierarchy segments,
+    and route direct, owner-prefixed, deep descendant, instance-array and
+    generated targets through specialization before hierarchy publication.
+    Cataloged negatives cover malformed paths, unresolved descendants,
+    duplicate/conflicting overrides, indexed parameter leaves, local parameters
+    and illegal language crossings. SystemVerilog packed range bounds retain
+    arbitrary-width intermediate constants until the final checked signed
+    range consumer, proven by a 257-bit high-bit parameter deriving distinct
+    executable child widths and versioned cache identities. Owning-unit schema
+    18 round-trips structured declarations, and a dedicated merged application
+    case proves interpreter/LLVM equality plus cold/warm analysis and native
+    cache reuse. A WebKit-formatted warning-clean 97-step eight-worker focused
+    rebuild plus the application-case rebuild passes frontend, elaboration,
+    library and specialization/cache hosts 4/4. Diagnostic, source-line,
+    resource and Verilog inventory contracts pass 4/4 with 2,151 production
+    codes. `VL05-C06-GAP` advances the inventory to 24 supported/10 active/3
+    deferred rows at SHA-256
+    `182fdff35fec835c1a03b36bddec11f52239c227d0960b08ab5fd8d88be781d3`;
+    the width ledger remains nine preserved/three active/three physical at
+    SHA-256
+    `fb31418a076ffa87b9df2380753f77e0aec224414f9246af7101278807e44119`.
+    The clean broader application run initially exposed an accumulated
+    class/multiple-root LLVM mismatch: `left.tree.child.leaf` supplied a 32-bit
+    constructor actual while the kernel boundary requested 64 bits. Packed
+    class constructor, property and method values now explicitly request the
+    executor frame's native width; class object handles remain fixed at 64
+    bits. The warning-clean 220-step dependency rebuild, 102-step runtime host,
+    runtime suite, isolated class integration, dedicated specialization case
+    and full application core all pass after the repair. Preserve the
+    accumulated Changes 1-6 worktree and the Batch 166 Synopsys-package
+    amendment without commit, push, sanitizer, or hosted-CI inspection. Next
+    implement Batch 164 Change 7 only.
+25. Batch 164 Change 7 is complete in the same accumulated dirty worktree. The
+    production audit confirmed that all assigned logic/buffer/tristate gate and
+    combinational/sequential UDP semantics were already implemented, including
+    table level/wildcard/binary/edge symbols, initialization, previous state,
+    no-change, arrays, generated and library instances, one/two/three-value
+    delays, strengths, X/Z matching, artifacts, relocation, and caches. The
+    application core now asserts the time-ordered buf/not/and/nand/or/nor/xor/
+    xnor trace, including delayed buffer events and intermediate X propagation,
+    instead of checking only final known values. Frontend, elaboration, library
+    artifact, application core, and transition-delay hosts pass; the latter
+    retains exact tristate, UDP delay, cold/warm compiled, object/design,
+    mapping, debugger, and VCD evidence. `VL05-C07-GAP` advances the inventory
+    to 25 supported/9 active/3 deferred rows at SHA-256
+    `c1961ad44ceff00a5f9ff4363a1a3d34608cf59d73addf7f520a20c771a3a487`;
+    the width ledger remains nine preserved/three active/three physical at
+    SHA-256
+    `fb31418a076ffa87b9df2380753f77e0aec224414f9246af7101278807e44119`.
+    Preserve accumulated Changes 1-7 and the Batch 166 Synopsys package
+    amendment without commit, push, sanitizer, or hosted-CI inspection. Next
+    implement Batch 164 Change 8 only.
+26. Batch 164 Change 8 is complete in the same accumulated dirty worktree. The
+    parser/HIR and runtime already covered all pull, MOS/CMOS, transmission,
+    conditional/resistive, charge-storage and convergent network families, but
+    new timed nmos/pmos/rpmos/cmos/rcmos evidence found that an unresolved
+    variable source contributed no resolved-driver-table strength. Its correct
+    value was therefore silently assigned high-Z strength. The shared runtime
+    strength query now treats the current value of an unresolved source as a
+    default-strong contribution before resistive reduction. HDL-visible timed
+    samples prove all five MOS families conduct `11111` and disconnect to
+    `ZZZZZ` identically in interpreter and compiled cold/warm execution. The
+    existing resolution case continues to prove tran/rtran/conditional cycles,
+    X controls, rank reduction, retained/zero/finite/renewed and packed charge,
+    decay scheduling, serialized topology, debugger/VCD, artifacts, relocation
+    and mapped libraries at O0/O2. Runtime and resolution hosts pass after a
+    warning-clean eight-worker rebuild. `VL05-C08-GAP` advances the inventory
+    to 26 supported/8 active/3 deferred rows at SHA-256
+    `fe25d7fde61774691ffdd491e10fb6957e168395204fe3fda09973301bf9e075`;
+    the width ledger remains nine preserved/three active/three physical at
+    SHA-256
+    `fb31418a076ffa87b9df2380753f77e0aec224414f9246af7101278807e44119`.
+    Preserve accumulated Changes 1-8 and the Batch 166 Synopsys package
+    amendment without commit, push, sanitizer, or hosted-CI inspection. Next
+    implement Batch 164 Change 9 only.
+27. Batch 164 Change 9 is complete in the same accumulated dirty worktree.
+    Comma-separated continuous net assignments now retain every assignment
+    beneath their shared strength/delay and reject malformed empty/trailing
+    entries. Runtime-base indexed part-select continuous targets are legal and
+    no longer capped at 64 bits. Delayed targets use the new append-only
+    `WriteInertialDynamicPartSlice` SimIR alternative; zero-delay targets use
+    the existing dynamic-part update with arbitrary-width selection. Runtime
+    and LLVM dynamic selection/insertion preserve exact packed planes beyond a
+    host word.
+
+    The append-only JIT ABI adds `execute_signal_operation` at offset 592 and
+    grows from 592 to 600 bytes without moving an existing field. Exact-width
+    reads, wide blocking initialization, and wide whole/static/dynamic update
+    and inertial writes delegate to the application executor, while narrow
+    callbacks remain unchanged. The transition-delay application proves
+    129-bit delayed and zero-delay dynamic slices inside 257-bit drivers,
+    rejected pulses, accepted rise/turnoff/X transitions, exact zero-delay
+    ordering, X/Z planes, VCD/debugger equality, cold/warm caches, and all 19
+    processes compiled in both O0 and O2. Direct runtime and LLVM tests cover
+    the same wide selection/scheduling primitives; existing resolution
+    coverage retains multiple-driver, strength, topology and artifact proof.
+
+    The WebKit-formatted 243-step eight-worker dependency build is
+    warning-clean. The focused frontend, elaboration, LLVM, runtime,
+    transition-delay, resolution, catalog, source, resource and inventory
+    gates pass. `VL05-C09-GAP` advances the inventory to 27 supported/7
+    active/3 deferred rows at SHA-256
+    `f8493844f27266d329854d0dfede3f8fa223ffb52db8d675c3de7ac214c0b8b4`;
+    the width ledger remains nine preserved/three active/three physical at
+    SHA-256
+    `fb31418a076ffa87b9df2380753f77e0aec224414f9246af7101278807e44119`.
+    Preserve accumulated Changes 1-9 and the Batch 166 Synopsys-package
+    amendment without commit, push, sanitizer, or hosted-CI inspection. Next
+    implement Batch 164 Change 10 only.
+28. Batch 164 Change 10 is complete in the same accumulated dirty worktree.
+    Verilog-2005 and SystemVerilog now retain procedural assign/deassign as
+    distinct HIR statements, accept force/release in the classic language,
+    and recursively parse concatenated lvalues. Lowering evaluates each RHS
+    and dynamic concatenated target once, before any distributed blocking
+    write, and supports ordinary, selected and concatenated blocking,
+    nonblocking, delayed, force and release targets. Each procedural
+    continuous assignment owns an explicit activation signal and reactive
+    force driver; replacement/deassign deactivate all structurally identical
+    target drivers, and deassign copies the effective value into underlying
+    storage before release.
+
+    Wide signal operations no longer fall back or reject solely because the
+    target exceeds a host word. The exact callback executes whole, static-
+    slice, dynamic-bit and dynamic-part blocking, update, delayed, inertial,
+    force and release operations. The application evidence covers 129- and
+    257-bit drivers, selected and concatenated procedural assignments,
+    replacement, masked stored writes, captured dynamic target indices,
+    reactive updates, deassign preservation, active-driver debugger
+    `(forced)` visibility, exact VCD output, and interpreter/cold-LLVM/warm-
+    LLVM equality with all 29 processes compiled at O0 and O2. Negative
+    evidence covers malformed assign/deassign syntax and automatic-local
+    targets.
+
+    The direct wide-driver literals exposed and corrected a missed Change 2
+    execution path. Runtime literal materialization now expands arbitrary-
+    width binary, octal, decimal and hexadecimal digits, including X/Z/? fill,
+    without a `uint64_t` parse. The application evidence now uses direct 129-
+    and 257-bit hexadecimal literals rather than chunked concatenations; the
+    existing 257/4,097-bit binary/octal/decimal/hex elaboration evidence remains
+    green.
+
+    Signal/output validation was split into a WebKit-formatted 606-line
+    helper, leaving `llvm_jit_validation.cpp` at 1,969 lines. The full
+    109-step eight-worker build is warning-clean. Frontend, elaboration, LLVM,
+    runtime, object/design/library artifact, procedural-assignment,
+    transition-delay, resolution, diagnostics-catalog, source-budget,
+    resource and inventory gates pass. `VL05-C10-GAP` advances the inventory
+    to 28 supported/6 active/3 deferred rows at SHA-256
+    `aec5f7af03d4c544dea705291da20ad8049d6e8effeddb0553ed98c93a7199fe`;
+    the width ledger remains nine preserved/three active/three physical at
+    SHA-256
+    `fb31418a076ffa87b9df2380753f77e0aec224414f9246af7101278807e44119`.
+    Preserve Changes 1-10 and the Batch 166 Synopsys-package amendment without
+    commit, push, sanitizer or hosted-CI inspection. Next implement Batch 164
+    Change 11 only.
+29. Batch 164 Change 11 is complete in the same accumulated dirty worktree.
+    Verilog-2005 procedural `for` is no longer incorrectly gated as
+    SystemVerilog, while inline declaration in that loop remains a cataloged
+    language-mode negative. `disable name` is retained in frontend/HIR and
+    lowers to an exact local jump, named-fork site cancellation, or dynamically
+    active named-sequential-block interval. Named forks remain addressable
+    after `join_none`; same-parent unrelated children survive. A fork child can
+    terminate an enclosing named sequential block, redirect its parent and
+    cancel only descendants inside the interval; nested same-process and
+    inactive-target behavior is also covered. Hierarchical callable and cross-
+    scope disable/return behavior remains owned by Change 12.
+
+    Runtime schema 20 serializes fork sites and named-block intervals.
+    Compiler validation, cache identity and lowering retain both operations,
+    and interpreter plus cold/warm LLVM O0/O2 application evidence is equal
+    through artifact round trips, debugger state and VCD. Existing event,
+    delay/repeat control, scheduler-region, race, cancellation, time-overflow
+    and bounded-delta contracts remain green. The warning-clean affected build
+    completes 278 steps with eight workers; the focused frontend, elaboration,
+    LLVM, runtime and application slice passes 9/9 in 48.00 seconds, and the
+    artifact, diagnostic, source, resource and inventory contract slice passes
+    8/8. The exact Change 11 C/C++ surface passes the repository WebKit dry-run
+    and whitespace is clean.
+
+    `VL05-C11-GAP` advances the inventory to 29 supported/5 active/3 deferred
+    rows at SHA-256
+    `c73ea4d1b36c1992e0887a1bac8abe5ed464c56d789ea0c80133e3353d571a21`;
+    the width ledger remains 9 preserved/3 active/3 physical at SHA-256
+    `fb31418a076ffa87b9df2380753f77e0aec224414f9246af7101278807e44119`.
+    Preserve Changes 1-11 and the Batch 166 Synopsys-package amendment without
+    commit, push, sanitizer or hosted-CI inspection. Next implement Batch 164
+    Change 12 only.
+30. Batch 164 Change 12 is complete in the same accumulated dirty worktree.
+    Dynamic callable stacks now execute direct and indirect recursion without a
+    fixed frame-depth limit. Automatic SystemVerilog functions/tasks and VHDL
+    procedures isolate exact packed arguments, locals, results and suspended
+    contexts per invocation; static callable storage remains shared. Named
+    disable/return unwinds the correct active frame, and process storage remains
+    reference-stable as recursive frames are appended.
+
+    Formatted string/file output and file scanning now consume arbitrary-width
+    packed planes, including 129/137-bit values and X/Z digits, without indexing
+    executor storage by register ID or truncating to the ABI low word.
+    Unconstrained `std::randomize` generates deterministic arbitrary-width known
+    packed values directly instead of enumerating `2^width`; constrained calls
+    still use the governed solver and preserve transactional resource failures.
+    Wide integral `$fseek` arguments undergo the specified 32-bit API conversion
+    instead of a 64-bit admission rejection. VHDL standard logic/string and
+    composite paths touched by the Change 12 closure also retain exact values
+    beyond one host word.
+
+    Runtime state schema 21 and native object schema 87 retain the new callable
+    and service behavior through artifacts and cold/warm caches. The full
+    incremental build completes 59 steps warning-free with eight workers. The
+    focused runtime, LLVM, elaboration and recursive/wide application slice
+    passes 13/13 in 85.76 seconds; the artifact, HIR, cache, diagnostic, source,
+    resource and inventory slice passes 9/9 in 1.84 seconds. The exact late
+    Change 12 C/C++ surface passes the WebKit dry-run and `git diff --check` is
+    clean.
+
+    `VL05-C12-GAP` advances the inventory to 30 supported/4 active/3 deferred
+    rows at SHA-256
+    `25f6b8d1d484dca1c7ab54785551c56bea0a72471fbba40ec0dec4c3a4ac7242`;
+    the width ledger remains 9 preserved/3 active/3 physical at SHA-256
+    `fb31418a076ffa87b9df2380753f77e0aec224414f9246af7101278807e44119`.
+    Preserve Changes 1-12 and the Batch 166 Synopsys-package amendment without
+    commit, push, sanitizer or hosted-CI inspection. Next implement Batch 164
+    Change 13 only.
+31. Batch 164 Change 13 is complete in the same accumulated dirty worktree.
+    IEEE 1364-2005 file and memory services no longer inherit SystemVerilog-only
+    parser or elaboration gates. Fixed memories retain exact arbitrary-width
+    packed values through reads, writes, bit/part selects and selected blocking
+    updates. The compiled container callbacks exchange the complete packed
+    register rather than only the ABI low word. A constant memory-word input
+    port uses a transaction-sensitive bridge: `$readmem*` and later procedural
+    writes publish a memory transaction after the container commit, and the
+    bridge rereads the exact word without depending on process initialization
+    order. Packed Verilog `$fgets` and `$ferror` destinations are exact and EOF
+    preserves the destination.
+
+    Interpreter and cold/warm LLVM O0/O2 application evidence covers 137-bit
+    descending memories, X/Z digits, sparse addresses, selected assignment, a
+    memory-word module port, `$readmem*`/`$writemem*`, standard file services,
+    malformed-input rollback, runtime-state round trips, sandboxing and governed
+    file/work ceilings. Runtime-state schema 23 and native-object schema 89
+    retain the memory-transaction operation field through artifacts and caches.
+    The complete eight-worker incremental tree builds warning-clean. Frontend,
+    diagnostics, elaboration, LLVM, file application, runtime, object/design
+    artifact and artifact-phase gates pass 9/9 in 65.11 seconds; the Verilog
+    inventory contract also passes.
+
+    `VL05-C13-GAP` advances the inventory to 31 supported/3 active/3 deferred
+    rows at SHA-256
+    `d3221a80927a3df4f5c90190d2b4d29e7cef3ec776f98c72a3ca37fbc81cf62b`;
+    `VLW-MEMORY-WORD` advances the width ledger to 10 preserved/2 active/3
+    physical rows at SHA-256
+    `e317fe0103f222e1cad87c6f30b45d49e0354ef007336089e2656b9ad587a56e`.
+    Preserve Changes 1-13 and the Batch 166 Synopsys-package amendment without
+    commit, push, sanitizer or hosted-CI inspection. Next implement Batch 164
+    Change 14 only.
+32. Batch 164 Change 14 is complete in the same accumulated dirty worktree.
+    Normalized specify paths and timing checks now own stable, instance-qualified
+    SDF-ready identities rather than relying on dense build-order IDs or source
+    paths. Runtime construction and artifact restoration reject empty or
+    duplicate identities, and runtime-state schema 24 carries them through
+    round trips and mapped-library relocation without pulling SDF application
+    forward from Batch 170.
+
+    Existing parser, elaboration and runtime coverage retains module/specparam
+    paths, conditions, edge sensitivity, destination data sources, all standard
+    delay-table shapes, PATHPULSE selection, `pulsestyle`, `showcancelled`,
+    cancellation, overlapping recovery, every timing-check family and notifier
+    updates. New direct evidence fixes the exact open-window behavior at both
+    setup/hold boundaries and deterministic same-tick reference/data ordering.
+    The application drives a 137-bit Verilog-2005 port through a 72-bit full-path
+    slice and proves exact values, callbacks, VCD and stable identities across
+    interpreter, debug, cold/warm LLVM O0/O2, runtime-state reload and relocated
+    mapped libraries.
+
+    The exact Change 14 surface is WebKit-formatted and `git diff --check` is
+    clean. The complete 389-step eight-worker dependent build is warning-clean;
+    frontend, diagnostics, inventory, resource, elaboration, LLVM, runtime,
+    specify application, object/design artifact and artifact-phase gates pass
+    11/11 in 39.51 seconds. `VL05-C14-GAP` advances the inventory to 32
+    supported/2 active/3 deferred rows at SHA-256
+    `bdddd135da7f479e8458971d4e763829db75e9fcb94e88e171bb8fbe1f055ee4`;
+    the width ledger remains 10 preserved/2 active/3 physical at SHA-256
+    `e317fe0103f222e1cad87c6f30b45d49e0354ef007336089e2656b9ad587a56e`.
+    Preserve Changes 1-14 and the Batch 166 Synopsys-package amendment without
+    commit, push, sanitizer or hosted-CI inspection. Next implement Batch 164
+    Change 15 only.
+33. A user-approved roadmap amendment inserts two batches before the v2 ABI and
+    artifact freeze. Batch 172 replaces fsim's custom SystemC kernel with the
+    pinned Accellera SystemC 3.0.2 reference implementation while retaining
+    only fsim-specific source/artifact frontends, public compatibility shims and
+    data/execution integration. It also supplies native in-island TLM 1.0/2.0,
+    one shared runtime, an opaque transport-neutral backend with stable
+    serializable identities and deterministic time/delta/island/sequence
+    messages, and a worker-loopback gate. No raw Accellera pointers or
+    coroutine/channel state may escape that boundary. The in-process backend
+    must therefore remain replaceable by a post-v2 kernel-per-worker process
+    backend without changing the public SystemC/TLM/SCV or artifact ABI; the
+    actual partitioner and parallel scheduler remain post-v2.
+
+    Batch 172 also requires complete trace and debugger visibility for every
+    supported SystemC signal, port, export, clock, resolved channel and alias.
+    Port names map onto canonical bound-channel identities; post-update dirty
+    batches preserve time, delta, region and sequence without drops through the
+    internal trace, VCD and FST. Selective and late tracing take an immediate
+    snapshot, backpressure is bounded and lossless, debugger writes occur only
+    at safe points, TLM activity is a correlated transaction stream rather than
+    fabricated signal changes, and unsupported custom channels are explicit or
+    provide the documented observation adapter.
+
+    Batch 173 adds SCV 2.0.1. Vendor the official archive with exact source,
+    license/notice/SBOM and patch digests; attempt an unmodified SystemC 3.0.2
+    build first, then carry only minimal reviewed compatibility patches with
+    rationale, tests and removal criteria. One shared SCV library must cover
+    smart pointers, constraints/distributions/bags, deterministic randomization,
+    extensions introspection, transaction streams/generators/attributes/
+    relations, plug-ins, caches, relocation and Linux/Windows ABI checks.
+    Transaction records use the same pointer-free backend and deterministically
+    correlate with TLM and waveform time/delta identity.
+
+    Batches 172 and 173 are sanitizer and hosted-CI monitoring boundaries. Each
+    Change 20 owns the LLVM-disabled sanitizer, full Debug/Release, upstream and
+    fsim regression/examples, installed/relocation, plug-in/ABI, mixed-language,
+    signal/port trace, transaction/debug, worker-loopback, determinism,
+    performance, memory, backpressure, teardown and failure-containment gates,
+    followed by one commit/push and repair of all non-documentation CI jobs.
+    The former Batches 172-175 are renumbered 174-177: ABI/artifact/migration
+    freeze, cross-platform/performance qualification, release-candidate
+    packaging/documentation and final `v2.0.0` release. This documentation-only
+    amendment does not alter the intentionally dirty Batch 164 Changes 1-14
+    implementation checkpoint: preserve it exactly and next implement Change
+    15 only, with no commit, push, sanitizer or hosted-CI inspection.
+34. Batch 164 Change 15 is complete in the same accumulated dirty worktree.
+    Every live simulation owns a generation-checked VPI hierarchy covering
+    Verilog roots, modules, generated scopes, ports, nets, variables, named
+    events, processes, exact parameters, fixed memories and driver objects.
+    Packed ranges, declared net kinds, scalar profiles, scalar strengths,
+    driver slices, exact arbitrary-width values and X/Z planes survive live
+    publication. Dedicated signal, driver, container and named-event hooks keep
+    aggregate values, individual contributions, memory words, aliases and
+    callbacks synchronized even when a driver change does not alter resolution.
+
+    Lifecycle ordering brackets process execution, finish runs final blocks,
+    stop/resume remains distinct, unsupported reset is rejected, and
+    deposit/force/release changes are transactional across the VPI registry and
+    kernel. Time profiles preserve exactly representable resolutions; foreign
+    simulation handles and stale generations reject. Mixed VHDL-backed
+    Verilog/SystemVerilog aliases consistently use the current Logic4 VPI
+    boundary profile rather than advertising a Logic9 type for a collapsed
+    value. The former arbitrary one-megabit descriptor ceiling is removed;
+    checked arithmetic retains only the explicit `uint32_t` VPI width ABI.
+
+    The eight-worker application target builds warning-clean. The full
+    `fsim.application` gate passes 1/1 in 27.65 seconds after crossing the mixed
+    hierarchy that previously exposed the category mismatch; focused
+    `fsim.application.vpi`, `fsim.runtime` and `fsim.elaboration` pass 3/3 in
+    1.42 seconds. The exact Change 15 surface passes the WebKit dry-run and
+    repository whitespace is clean. `VL05-C15-GAP` advances the inventory to
+    33 supported/1 active/3 deferred rows. `VLW-VPI-VECTOR` now records the
+    descriptor repair under B164-C15 while the width ledger remains 10
+    preserved/2 active/3 physical. Their SHA-256 identities are
+    `c6527dfe4b3ff33d9ff6b41db1a4aa9e839a49adb118107fd93f06bb855a31e0`
+    and `d438f6d356b54f70183bf7febaff87ee01f8dac1434bf69f2311cc8443da5476`.
+    Preserve Changes 1-15 and the Batch 166 Synopsys-package amendment without
+    commit, push, sanitizer or hosted-CI inspection. Next implement Batch 164
+    Change 16 only.
+35. Batch 164 Change 16 is complete in the same accumulated dirty worktree. A
+    focused 137-bit four-state value crosses SystemVerilog, VHDL,
+    `sc_lv<137>`, VHDL and SystemVerilog without losing X/Z planes. The same
+    fixture proves explicit and inferred bindings, unrelated and reordered
+    roots, interpreter and cold/warm compiled execution, debugger display,
+    time/delta-stamped callbacks, exact VCD output and stable wide specify-path
+    identity. A focused mixed-Logic9 regression proves Verilog VPI descriptors
+    and values consistently project the shared backing signal to Logic4.
+
+    Public C, Tcl and actual CLI/VCD tests now exercise exact 137-bit X/Z
+    deposit, force, release or trace paths. VPI instance publication also
+    synthesizes intervening generate scopes beneath the nearest enclosing VPI
+    instance. Repeated project-root aliases retain distinct
+    `selected.lane[0].u` module chains instead of colliding as duplicate `u`
+    roots, while explicit foreign-parent boundaries preserve their established
+    flattened pseudo-root representation. The public API regression proves
+    both alias-specific parent chains and the two-child root inventory.
+
+    The affected targets build warning-clean with eight workers. Focused Tcl
+    and API tests pass 2/2 in 1.56 seconds. The broad application, specify,
+    VHDL Logic9, mixed-conversion, typed-boundary and API tests pass 6/6 in
+    37.59 seconds. `VL05-C16-GAP` closes the clause inventory at 34 supported,
+    zero active and three deferred rows; `VLW-TRACE-PUBLIC` advances the width
+    ledger to 11 preserved, one active artifact/cache obligation and three
+    physical host boundaries. Their SHA-256 identities are
+    `338b64ba883f6243d9f799d31c22f873e871a5977bbb9fc9c45ae3b5ea738c84`
+    and `f296b3d4182c0964ac4444b6e844f6ef79e16b612516a065af3b4caad4a2891e`.
+    Preserve Changes 1-16 and the Batch 166 Synopsys-package amendment without
+    commit, push, sanitizer or hosted-CI inspection. Next implement Batch 164
+    Change 17 only.
+
+36. Batch 164 Change 17 is complete in the same accumulated dirty worktree.
+    Native cache schema 90 hashes packed width, Logic9 identity, every
+    `aval`/`bval` word and every nine-state symbol for load constants and all
+    container-predicate constant sites. Direct 137-bit tests distinguish
+    upper-word values and X from Z while retaining exact warm hits.
+
+    Design-artifact schema 4 now serializes and validates the complete
+    SystemVerilog executable HIR rather than only classes: units, declarations,
+    types, expressions, statements, processes and classes survive standalone
+    reload. That repairs VPI parameter publication from `.fsimdesign` without
+    producer files. Portable objects/libraries preserve exact 257/137-bit text,
+    signedness and X/Z; VPI checkpoints preserve signed 137-bit stored and
+    forced planes. Mapped-library upper-word edits invalidate cache identity.
+    Interpreter, cold/warm LLVM, child-directory relocation, standalone CLI and
+    VCD replay retain exact wide values after source/object producers are
+    hidden, while malformed and future payloads reject.
+
+    A warning-clean 22-step exact-LLVM Debug incremental build completes with
+    eight workers. The library, LLVM, main application, artifact, class and
+    runtime gate passes 6/6 in 77.16 seconds; the strengthened LLVM cache gate
+    passes independently in 40.30 seconds. Direct and CTest inventory contracts
+    pass, WebKit formatting and repository whitespace are clean.
+    `VLW-ARTIFACT-CACHE` closes the width ledger at 12 preserved/zero active/
+    three physical rows. The unchanged clause and completed width SHA-256
+    identities are
+    `338b64ba883f6243d9f799d31c22f873e871a5977bbb9fc9c45ae3b5ea738c84`
+    and `4d0924571f33e54f8d77d66979e290fe223c183eb0bc963fdbffb841429a424e`.
+    Preserve Changes 1-17 and the Batch 166 Synopsys-package amendment without
+    commit, push, sanitizer or hosted-CI inspection. Next implement Batch 164
+    Change 18 only.
+37. Batch 164 Change 18 is complete in the same accumulated dirty worktree.
+    `verilog_release_closure.tsv` freezes 46 rows: 34 supported IEEE
+    1364-2005 clauses plus 12 preserved width paths, with 138 exact witness
+    cells mapped to 23 registered CTests and 17 governed execution stages. The
+    serial runner retains one log per witness and a result ledger, while its
+    transcript owners enforce 6-GiB address-space, 1,000-delta, 64-signal VCD
+    and 7,200-second matrix boundaries. The composed audit rejects missing
+    witnesses/stages, escapes and contract drift and composes the diagnostic,
+    source, SPDX, v1 conformance and portability gates.
+
+    The source-budget gate required a coherent constructor split:
+    `application_simulation.cpp` is now 1,989 lines and the existing setup-TPP
+    seam owns the moved setup body. Full execution exposed three previously
+    latent publication defects. Duplicate generated procedural process names
+    now retain the first natural name and use stable `$process_<runtime-index>`
+    fallbacks. Bidirectional transmission processes remain topology and no
+    longer project nonexistent Driver/Transaction records; projection
+    validation rejects stale phantom records while directional MOS drivers
+    remain readable. Fixed Verilog memories now suppress only their internal
+    selected-word signal aliases and publish canonical Memory children such as
+    `memory[3]` and `memory[2]`.
+
+    Focused procedural-assignment, resolution and SystemVerilog-file tests pass
+    after eight-worker builds. The complete retained 23-witness closure matrix
+    passes in 94.63 seconds. Its SHA-256 is
+    `a80eea635da93dff681c7118cd3339e7b4bb679c83a2cf7137cc3eeccef6f39e`.
+    Preserve Changes 1-18 and the Batch 166 Synopsys-package amendment without
+    reset, commit, push, sanitizer or hosted-CI inspection. Next implement
+    Batch 164 Change 19 only.
+38. Batch 164 Change 19 is complete in the same accumulated dirty worktree.
+    The installed public surface now contains `verilog-2005.md`, its
+    producer-independent tutorial and its exact closure audit, enforced by the
+    registered `fsim.verilog-documentation` contract and the staged-install
+    audit. README, architecture, language support, VPI, feature/evidence,
+    inventory, differential, public and resource records state the same width
+    policy: source/context width, signedness and X/Z planes remain exact;
+    `uint32_t` VPI descriptor addressability and configured memory/work/trace
+    ceilings are physical boundaries rather than Verilog legality rules.
+
+    The synchronized inventory is 2,152 diagnostics, 842 bounded C/C++
+    sources, 972 SPDX-owned files and 320 test/control files. The feature
+    matrix remains 1,279 rows/5,116 cells/604 paths with 138 runtime owners and
+    36 corpus CTests. Removing the obsolete wider-than-64 runtime deferral
+    intentionally advances its digest to
+    `7f879238bfcdbc544e688c710038c97063a8464f9817c758b87c1a2f89e0472d`;
+    the canonical evidence digest remains
+    `2d9a2bf8fdc360b6b484087848eeb00def2a61cff5fecfacf9400fadcec2010b`.
+    Verilog gap/width/closure identities remain
+    `338b64ba883f6243d9f799d31c22f873e871a5977bbb9fc9c45ae3b5ea738c84`,
+    `4d0924571f33e54f8d77d66979e290fe223c183eb0bc963fdbffb841429a424e`
+    and
+    `a80eea635da93dff681c7118cd3339e7b4bb679c83a2cf7137cc3eeccef6f39e`.
+
+    The direct Verilog documentation and inventory/release-candidate gates
+    pass, and the registered documentation, closure, v1 release,
+    installed-public, MSVC/SystemC/tool/resource portability slice passes
+    26/26 in 20.64 seconds. Repository whitespace is clean. Preserve Changes
+    1-19 and the Batch 166 Synopsys-package amendment without reset, commit,
+    push, sanitizer or hosted-CI inspection. Next run Batch 164 Change 20's
+    clean-first Debug/Release and complete local release gates only.
+39. Batch 164 Change 20 local qualification is complete. Fresh clean-first
+    exact-LLVM 22.1.8 Debug and Release eight-worker builds are warning-free.
+    Debug completes in 12:04.92 with 4,795,068 KiB peak RSS and zero swaps;
+    Release completes in 10:18.77 with 3,266,400 KiB peak RSS and zero swaps.
+
+    The first full Debug regression passed 131/132 and isolated its only
+    failure to a 129-bit Logic9 JIT register-plane alignment fault in
+    `vhdl_numeric`. The frame ABI stores planes as contiguous `uint64_t` words
+    and guarantees eight-byte alignment, but LLVM inferred sixteen-byte
+    alignment for wide plane-two and plane-three loads/stores. The four
+    accesses now explicitly use eight-byte alignment. The direct compiler
+    regression exercises three 129-bit Logic9 registers at offsets 0, 3 and 6
+    using caller storage deliberately aligned to eight rather than sixteen
+    bytes in both O0 and O2; adjacent i64-only Logic9 mask and result constants
+    are width-polymorphic as well.
+
+    Final Debug and Release regressions each pass 132/132. Debug reports
+    534.37 seconds of CTest time, 8:54.38 wall time and 3,785,976 KiB peak RSS;
+    Release reports 460.20 seconds of CTest time, 7:40.21 wall time and
+    3,791,508 KiB peak RSS. Both record zero swaps. This batch is neither a
+    sanitizer nor hosted-CI monitoring boundary. Run the final formatting,
+    whitespace and documentation/release contract checks, then commit and push
+    the one accumulated Batch 164 Changes 1-20 implementation. After that,
+    save and push the documentation-only Batch 165 restart plan and clear
+    context before any Batch 165 implementation.
 
 ## Batch 163 planned restart checkpoint - 2026-08-10
 
@@ -6264,7 +6918,7 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
    but its sanitizer and hosted inspection remain Change 20 work. GitHub
    Actions stays at four-way parallelism.
 
-The complete remaining release roadmap is locked through Batch 175:
+The complete remaining release roadmap is locked through Batch 177:
 
 - 149: class constraint solving and randomization.
 - 150-155: real/string/foreign scalars, arbitrary-width and unpacked data,
@@ -6277,20 +6931,27 @@ The complete remaining release roadmap is locked through Batch 175:
 - 168-170: SDF 4.0 parsing plus Verilog/SystemVerilog/VHDL/VITAL/mixed
   annotation with SDF 2.1/3.0 input compatibility.
 - 171: deterministic FST tracing.
-- 172-175: ABI/artifact/migration freeze, cross-platform qualification,
+- 172: pinned Accellera SystemC 3.0.2, native TLM 1.0/2.0, a transport-neutral
+  worker-ready backend, and complete SystemC signal/port waveform visibility.
+- 173: governed SCV 2.0.1 compatibility, randomization/introspection and
+  transaction-recording closure.
+- 174-177: ABI/artifact/migration freeze, cross-platform qualification,
   release-candidate packaging/documentation, and final `v2.0.0` qualification.
 
-Batches 150, 160, and 170 are the only remaining CI-monitoring boundaries.
+Batches 150, 160, 170, 172, and 173 are the remaining CI-monitoring boundaries.
 Only their Change 20 runs the LLVM-disabled sanitizer locally immediately
 before the single commit, then pushes and monitors/repairs all
 non-documentation GitHub Actions jobs. Hosted CI excludes sanitizer
 instrumentation. All other batches run no sanitizer and no hosted CI
 inspection.
 The v2 language-closure boundary is the standardized digital surface recorded
-in the official plan; VHDL-AMS, proprietary semantics, full Accellera SystemC
-kernel/TLM/AMS/CCI compatibility, GUI/reverse/parallel simulation, standalone
-AOT, and Python/notebook product work remain outside v2 unless the user changes
-scope.
+in the official plan. Accellera SystemC 3.0.2, native TLM 1.0/2.0, SCV 2.0.1,
+the opaque worker-ready backend and complete SystemC signal/port debug/trace
+visibility are now v2 requirements. VHDL-AMS, proprietary semantics beyond the
+explicitly planned compatibility packages, SystemC AMS/CCI, GUI/reverse
+execution, the actual post-v2 worker-process partitioner and parallel scheduler,
+standalone AOT, and Python/notebook product work remain outside v2 unless the
+user changes scope.
 
 - Branch: `codex/v2`, tracking `origin/codex/v2`.
 - Baseline: `1462f18`; annotated `v1.0.0` points to `6450599`.

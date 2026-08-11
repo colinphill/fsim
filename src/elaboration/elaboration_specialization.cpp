@@ -3,13 +3,12 @@
 
 namespace fsim::elaboration::elaboration_detail {
 
-
-
 const char* specialization_diagnostic_code(
     const bool is_vhdl,
     const bool is_package,
     const bool is_systemverilog_package,
-    const SpecializationDiagnostic diagnostic) {
+    const SpecializationDiagnostic diagnostic)
+{
     switch (diagnostic) {
     case SpecializationDiagnostic::invalid_actual:
         return is_vhdl
@@ -49,13 +48,12 @@ const char* specialization_diagnostic_code(
         : "FSIM-ELAB-PARAM-001";
 }
 
-
-
 bool parameter_name_matches(
     const std::string_view formal,
     const std::string_view actual,
     const frontend::Language target_language,
-    const frontend::Language association_language) {
+    const frontend::Language association_language)
+{
     if (target_language != frontend::Language::Vhdl2008
         && association_language
             != frontend::Language::Vhdl2008) {
@@ -65,10 +63,8 @@ bool parameter_name_matches(
         return false;
     }
     for (std::size_t index = 0; index < formal.size(); ++index) {
-        const auto formal_character =
-            static_cast<unsigned char>(formal[index]);
-        const auto actual_character =
-            static_cast<unsigned char>(actual[index]);
+        const auto formal_character = static_cast<unsigned char>(formal[index]);
+        const auto actual_character = static_cast<unsigned char>(actual[index]);
         if (std::tolower(formal_character)
             != std::tolower(actual_character)) {
             return false;
@@ -79,306 +75,315 @@ bool parameter_name_matches(
 
 namespace {
 
-bool vhdl_composite_constant_type(const frontend::Type& type) {
-    return type.vhdl_array.has_value() || !type.packed_members.empty()
-        || (type.packed_range.has_value()
-            && type.enumeration_literals.empty()
-            && !type.vhdl_physical
-            && type.domain != frontend::ValueDomain::Integer);
-}
-
-void annotate_systemverilog_constant_casts(
-    frontend::Expression& expression,
-    const frontend::Type& destination_type,
-    const std::vector<frontend::TypeAliasDeclaration>& type_aliases) {
-    for (auto& operand : expression.operands) {
-        annotate_systemverilog_constant_casts(
-            operand, destination_type, type_aliases);
+    bool vhdl_composite_constant_type(const frontend::Type& type)
+    {
+        return type.vhdl_array.has_value() || !type.packed_members.empty()
+            || (type.packed_range.has_value()
+                && type.enumeration_literals.empty()
+                && !type.vhdl_physical
+                && type.domain != frontend::ValueDomain::Integer);
     }
-    for (auto& choices : expression.aggregate_choice_expressions) {
-        for (auto& choice : choices) {
+
+    void annotate_systemverilog_constant_casts(
+        frontend::Expression& expression,
+        const frontend::Type& destination_type,
+        const std::vector<frontend::TypeAliasDeclaration>& type_aliases)
+    {
+        for (auto& operand : expression.operands) {
             annotate_systemverilog_constant_casts(
-                choice, destination_type, type_aliases);
+                operand, destination_type, type_aliases);
         }
-    }
-    if (expression.kind != frontend::ExpressionKind::Call
-        || !expression.text.starts_with("@sv-cast:")) {
-        return;
-    }
-    const auto type_name = std::string_view{expression.text}.substr(
-        std::string_view{"@sv-cast:"}.size());
-    const frontend::Type* cast_type = nullptr;
-    if (type_name == destination_type.spelling
-        || type_name == destination_type.named_type
-        || type_name == destination_type.nominal_type) {
-        cast_type = &destination_type;
-    } else {
-        const auto alias = std::ranges::find_if(
-            type_aliases,
-            [&](const auto& candidate) {
-                return candidate.name == type_name;
-            });
-        if (alias != type_aliases.end()) {
-            cast_type = &alias->type;
+        for (auto& choices : expression.aggregate_choice_expressions) {
+            for (auto& choice : choices) {
+                annotate_systemverilog_constant_casts(
+                    choice, destination_type, type_aliases);
+            }
         }
+        if (expression.kind != frontend::ExpressionKind::Call
+            || !expression.text.starts_with("@sv-cast:")) {
+            return;
+        }
+        const auto type_name = std::string_view { expression.text }.substr(
+            std::string_view { "@sv-cast:" }.size());
+        const frontend::Type* cast_type = nullptr;
+        if (type_name == destination_type.spelling
+            || type_name == destination_type.named_type
+            || type_name == destination_type.nominal_type) {
+            cast_type = &destination_type;
+        } else {
+            const auto alias = std::ranges::find_if(
+                type_aliases,
+                [&](const auto& candidate) {
+                    return candidate.name == type_name;
+                });
+            if (alias != type_aliases.end()) {
+                cast_type = &alias->type;
+            }
+        }
+        if (cast_type == nullptr) {
+            return;
+        }
+        const auto width = cast_type->width();
+        if (!width || *width == 0U) {
+            return;
+        }
+        expression.call_result_width = *width;
+        expression.call_result_domain = cast_type->domain;
+        expression.call_result_signed = cast_type->is_signed;
+        expression.nominal_type = cast_type->nominal_type;
     }
-    if (cast_type == nullptr) {
-        return;
-    }
-    const auto width = cast_type->width();
-    if (!width || *width == 0U) {
-        return;
-    }
-    expression.call_result_width = *width;
-    expression.call_result_domain = cast_type->domain;
-    expression.call_result_signed = cast_type->is_signed;
-    expression.nominal_type = cast_type->nominal_type;
-}
 
-std::optional<frontend::Expression> vital_constant_expression(
-    const frontend::Expression& expression,
-    const frontend::Type& type) {
-    if (expression.kind != frontend::ExpressionKind::Identifier) {
-        return std::nullopt;
-    }
-    const auto separator = expression.text.find_last_of('.');
-    const auto name = std::string_view{expression.text}.substr(
-        separator == std::string::npos ? 0 : separator + 1);
-    std::optional<std::string_view> map;
-    if (name == "vitaldefaultoutputmap") {
-        map = "UX01ZWLH-";
-    } else if (name == "vitaldefaultresultmap") {
-        map = "UX01";
-    } else if (name == "vitaldefaultresultzmap") {
-        map = "UX01Z";
-    }
-    if (map) {
-        return frontend::Expression{
-            frontend::ExpressionKind::StringLiteral,
-            "\"" + std::string{*map} + "\"", {}, expression.span};
-    }
-    if (name != "vitalzerodelay" && name != "vitalzerodelay01"
-        && name != "vitalzerodelay01z"
-        && name != "vitalzerodelay01zx" && name != "vitaldefdelay01"
-        && name != "vitaldefdelay01z") {
-        return std::nullopt;
-    }
-    if (!type.vhdl_array) {
-        return frontend::Expression{
-            frontend::ExpressionKind::IntegerLiteral,
-            "0", {}, expression.span};
-    }
-    const auto total_width = type.width();
-    const auto element_width = type.vhdl_array->element_types.empty()
-        ? std::optional<std::uint64_t>{}
-        : type.vhdl_array->element_types.front().width();
-    if (!total_width || !element_width || *element_width == 0
-        || *total_width % *element_width != 0) {
-        return std::nullopt;
-    }
-    const auto count = static_cast<std::size_t>(
-        *total_width / *element_width);
-    std::vector<frontend::Expression> elements;
-    elements.reserve(count);
-    for (std::size_t index = 0; index < count; ++index) {
-        elements.emplace_back(
-            frontend::ExpressionKind::IntegerLiteral,
-            "0", std::vector<frontend::Expression>{}, expression.span);
-    }
-    return frontend::Expression{
-        frontend::ExpressionKind::Aggregate,
-        "vhdl-aggregate",
-        std::move(elements),
-        expression.span,
-        std::vector<std::string>(count),
-        std::vector<std::vector<frontend::Expression>>(count)};
-}
-
-std::optional<std::int64_t> packed_vhdl_static_value(
-    const frontend::Expression& expression,
-    const frontend::Type& type,
-    std::string& error) {
-    const bool physical_literal =
-        type.vhdl_physical
-        && expression.kind == frontend::ExpressionKind::Call
-        && expression.text.starts_with("@vhdl-physical:");
-    if ((!type.packed_range && !type.vhdl_physical)
-        || (!physical_literal
-            && expression.kind != frontend::ExpressionKind::Aggregate
-            && expression.kind
-                != frontend::ExpressionKind::StringLiteral
-            && expression.kind
-                != frontend::ExpressionKind::LogicLiteral)) {
-        return std::nullopt;
-    }
-    const auto packed = static_vhdl_value(expression, type, error);
-    if (!packed) {
-        return std::nullopt;
-    }
-    for (std::size_t bit = 0; bit < packed->width(); ++bit) {
-        const auto digit = packed->get(bit);
-        if (digit != Logic4::zero && digit != Logic4::one) {
-            error = "the packed aggregate contains an unknown or "
-                    "high-impedance element";
+    std::optional<frontend::Expression> vital_constant_expression(
+        const frontend::Expression& expression,
+        const frontend::Type& type)
+    {
+        if (expression.kind != frontend::ExpressionKind::Identifier) {
             return std::nullopt;
         }
+        const auto separator = expression.text.find_last_of('.');
+        const auto name = std::string_view { expression.text }.substr(
+            separator == std::string::npos ? 0 : separator + 1);
+        std::optional<std::string_view> map;
+        if (name == "vitaldefaultoutputmap") {
+            map = "UX01ZWLH-";
+        } else if (name == "vitaldefaultresultmap") {
+            map = "UX01";
+        } else if (name == "vitaldefaultresultzmap") {
+            map = "UX01Z";
+        }
+        if (map) {
+            return frontend::Expression {
+                frontend::ExpressionKind::StringLiteral,
+                "\"" + std::string { *map } + "\"", { }, expression.span
+            };
+        }
+        if (name != "vitalzerodelay" && name != "vitalzerodelay01"
+            && name != "vitalzerodelay01z"
+            && name != "vitalzerodelay01zx" && name != "vitaldefdelay01"
+            && name != "vitaldefdelay01z") {
+            return std::nullopt;
+        }
+        if (!type.vhdl_array) {
+            return frontend::Expression {
+                frontend::ExpressionKind::IntegerLiteral,
+                "0", { }, expression.span
+            };
+        }
+        const auto total_width = type.width();
+        const auto element_width = type.vhdl_array->element_types.empty()
+            ? std::optional<std::uint64_t> { }
+            : type.vhdl_array->element_types.front().width();
+        if (!total_width || !element_width || *element_width == 0
+            || *total_width % *element_width != 0) {
+            return std::nullopt;
+        }
+        const auto count = static_cast<std::size_t>(
+            *total_width / *element_width);
+        std::vector<frontend::Expression> elements;
+        elements.reserve(count);
+        for (std::size_t index = 0; index < count; ++index) {
+            elements.emplace_back(
+                frontend::ExpressionKind::IntegerLiteral,
+                "0", std::vector<frontend::Expression> { }, expression.span);
+        }
+        return frontend::Expression {
+            frontend::ExpressionKind::Aggregate,
+            "vhdl-aggregate",
+            std::move(elements),
+            expression.span,
+            std::vector<std::string>(count),
+            std::vector<std::vector<frontend::Expression>>(count)
+        };
     }
-    if (packed->width() > 64) {
-        const auto extension = type.is_signed
-            ? packed->get(63) : Logic4::zero;
-        for (std::size_t bit = 64; bit < packed->width(); ++bit) {
-            if (packed->get(bit) != extension) {
-                error = "the packed aggregate value does not fit its "
-                        "portable scalar representation";
+
+    std::optional<std::int64_t> packed_vhdl_static_value(
+        const frontend::Expression& expression,
+        const frontend::Type& type,
+        std::string& error)
+    {
+        const bool physical_literal = type.vhdl_physical
+            && expression.kind == frontend::ExpressionKind::Call
+            && expression.text.starts_with("@vhdl-physical:");
+        if ((!type.packed_range && !type.vhdl_physical)
+            || (!physical_literal
+                && expression.kind != frontend::ExpressionKind::Aggregate
+                && expression.kind
+                    != frontend::ExpressionKind::StringLiteral
+                && expression.kind
+                    != frontend::ExpressionKind::LogicLiteral)) {
+            return std::nullopt;
+        }
+        const auto packed = static_vhdl_value(expression, type, error);
+        if (!packed) {
+            return std::nullopt;
+        }
+        for (std::size_t bit = 0; bit < packed->width(); ++bit) {
+            const auto digit = packed->get(bit);
+            if (digit != Logic4::zero && digit != Logic4::one) {
+                error = "the packed aggregate contains an unknown or "
+                        "high-impedance element";
                 return std::nullopt;
             }
         }
-    }
-    const auto word = packed->low_word();
-    if (type.vhdl_physical) {
-        return static_cast<std::int64_t>(
-            static_cast<std::int32_t>(
-                static_cast<std::uint32_t>(word.aval)));
-    }
-    return static_cast<std::int64_t>(word.aval);
-}
-
-std::string vhdl_value_identity(
-    const frontend::Type& type,
-    const std::int64_t value) {
-    std::string result = "vhdlconst-v1;domain="
-        + std::to_string(static_cast<unsigned>(type.domain))
-        + ";width=" + std::to_string(type.width().value_or(0))
-        + ";signed=" + (type.is_signed ? "1" : "0")
-        + ";type=" + type.spelling
-        + ";nominal=" + type.nominal_type;
-    if (type.packed_range) {
-        result += ";packed="
-            + std::to_string(type.packed_range->left) + ":"
-            + std::to_string(type.packed_range->right) + ":"
-            + (type.packed_range->descending ? "down" : "up");
-    }
-    if (type.integer_range) {
-        result += ";integer="
-            + std::to_string(type.integer_range->left) + ":"
-            + std::to_string(type.integer_range->right);
-    }
-    if (type.enumeration_range) {
-        result += ";enumeration="
-            + std::to_string(type.enumeration_range->left) + ":"
-            + std::to_string(type.enumeration_range->right);
-    }
-    result += ";value=" + std::to_string(value);
-    return result;
-}
-
-std::array<std::uint64_t, 3> transition_delays(
-    const frontend::Delay& delay) {
-    const auto rise = delay.magnitude;
-    const auto fall = delay.additional_values.empty()
-        ? rise
-        : delay.additional_values.front().magnitude;
-    const auto turnoff = delay.additional_values.size() < 2
-        ? std::min(rise, fall)
-        : delay.additional_values[1].magnitude;
-    return {rise, fall, turnoff};
-}
-
-std::optional<frontend::Delay> combined_delay(
-    const frontend::Delay& driver,
-    const frontend::Delay& net,
-    const frontend::SourceSpan& span,
-    std::vector<Diagnostic>& diagnostics) {
-    const auto driver_values = transition_delays(driver);
-    const auto net_values = transition_delays(net);
-    std::array<std::uint64_t, 3> combined{};
-    for (std::size_t index = 0; index < combined.size(); ++index) {
-        if (driver_values[index]
-            > std::numeric_limits<std::uint64_t>::max()
-                - net_values[index]) {
-            diagnostics.push_back({
-                "FSIM-ELAB-SVDELAY-003",
-                "combined continuous-assignment and net-declaration delay "
-                "overflows the 64-bit simulation time range",
-                span});
-            return std::nullopt;
-        }
-        combined[index] = driver_values[index] + net_values[index];
-    }
-    frontend::Delay result;
-    result.magnitude = combined[0];
-    result.additional_values.resize(2);
-    result.additional_values[0].magnitude = combined[1];
-    result.additional_values[1].magnitude = combined[2];
-    result.span = span;
-    return result;
-}
-
-const frontend::Expression* delay_target_base(
-    const frontend::Expression& expression) {
-    if ((expression.kind == frontend::ExpressionKind::Index
-         || expression.kind == frontend::ExpressionKind::Slice)
-        && !expression.operands.empty()) {
-        return delay_target_base(expression.operands.front());
-    }
-    return &expression;
-}
-
-void apply_net_delays(
-    DesignUnit& unit,
-    std::vector<Diagnostic>& diagnostics) {
-    std::vector<const frontend::SignalDeclaration*> delayed;
-    for (const auto& port : unit.ports) {
-        if (port.net_delay) {
-            delayed.push_back(&port);
-        }
-    }
-    for (const auto& signal : unit.signals) {
-        if (signal.net_delay) {
-            delayed.push_back(&signal);
-        }
-    }
-    for (auto& statement : unit.concurrent_statements) {
-        if (statement.kind != frontend::StatementKind::Assignment
-            || statement.assignment_kind
-                != frontend::AssignmentKind::Continuous) {
-            continue;
-        }
-        const auto* base = delay_target_base(statement.target);
-        if (base->kind != frontend::ExpressionKind::Identifier) {
-            continue;
-        }
-        const frontend::SignalDeclaration* declaration = nullptr;
-        for (const auto* candidate : delayed) {
-            const bool matches = base->text == candidate->name
-                || (base->text.starts_with(candidate->name)
-                    && base->text.size() > candidate->name.size()
-                    && base->text[candidate->name.size()] == '.');
-            if (matches
-                && (declaration == nullptr
-                    || candidate->name.size()
-                        > declaration->name.size())) {
-                declaration = candidate;
+        if (packed->width() > 64) {
+            const auto extension = type.is_signed
+                ? packed->get(63)
+                : Logic4::zero;
+            for (std::size_t bit = 64; bit < packed->width(); ++bit) {
+                if (packed->get(bit) != extension) {
+                    error = "the packed aggregate value does not fit its "
+                            "portable scalar representation";
+                    return std::nullopt;
+                }
             }
         }
-        if (declaration == nullptr) {
-            continue;
+        const auto word = packed->low_word();
+        if (type.vhdl_physical) {
+            return static_cast<std::int64_t>(
+                static_cast<std::int32_t>(
+                    static_cast<std::uint32_t>(word.aval)));
         }
-        if (!statement.delay) {
-            statement.delay = declaration->net_delay;
-        } else {
-            statement.delay = combined_delay(
-                *statement.delay,
-                *declaration->net_delay,
-                statement.span,
-                diagnostics);
+        return static_cast<std::int64_t>(word.aval);
+    }
+
+    std::string vhdl_value_identity(
+        const frontend::Type& type,
+        const std::int64_t value)
+    {
+        std::string result = "vhdlconst-v1;domain="
+            + std::to_string(static_cast<unsigned>(type.domain))
+            + ";width=" + std::to_string(type.width().value_or(0))
+            + ";signed=" + (type.is_signed ? "1" : "0")
+            + ";type=" + type.spelling
+            + ";nominal=" + type.nominal_type;
+        if (type.packed_range) {
+            result += ";packed="
+                + std::to_string(type.packed_range->left) + ":"
+                + std::to_string(type.packed_range->right) + ":"
+                + (type.packed_range->descending ? "down" : "up");
+        }
+        if (type.integer_range) {
+            result += ";integer="
+                + std::to_string(type.integer_range->left) + ":"
+                + std::to_string(type.integer_range->right);
+        }
+        if (type.enumeration_range) {
+            result += ";enumeration="
+                + std::to_string(type.enumeration_range->left) + ":"
+                + std::to_string(type.enumeration_range->right);
+        }
+        result += ";value=" + std::to_string(value);
+        return result;
+    }
+
+    std::array<std::uint64_t, 3> transition_delays(
+        const frontend::Delay& delay)
+    {
+        const auto rise = delay.magnitude;
+        const auto fall = delay.additional_values.empty()
+            ? rise
+            : delay.additional_values.front().magnitude;
+        const auto turnoff = delay.additional_values.size() < 2
+            ? std::min(rise, fall)
+            : delay.additional_values[1].magnitude;
+        return { rise, fall, turnoff };
+    }
+
+    std::optional<frontend::Delay> combined_delay(
+        const frontend::Delay& driver,
+        const frontend::Delay& net,
+        const frontend::SourceSpan& span,
+        std::vector<Diagnostic>& diagnostics)
+    {
+        const auto driver_values = transition_delays(driver);
+        const auto net_values = transition_delays(net);
+        std::array<std::uint64_t, 3> combined { };
+        for (std::size_t index = 0; index < combined.size(); ++index) {
+            if (driver_values[index]
+                > std::numeric_limits<std::uint64_t>::max()
+                    - net_values[index]) {
+                diagnostics.push_back({ "FSIM-ELAB-SVDELAY-003",
+                    "combined continuous-assignment and net-declaration delay "
+                    "overflows the 64-bit simulation time range",
+                    span });
+                return std::nullopt;
+            }
+            combined[index] = driver_values[index] + net_values[index];
+        }
+        frontend::Delay result;
+        result.magnitude = combined[0];
+        result.additional_values.resize(2);
+        result.additional_values[0].magnitude = combined[1];
+        result.additional_values[1].magnitude = combined[2];
+        result.span = span;
+        return result;
+    }
+
+    const frontend::Expression* delay_target_base(
+        const frontend::Expression& expression)
+    {
+        if ((expression.kind == frontend::ExpressionKind::Index
+                || expression.kind == frontend::ExpressionKind::Slice)
+            && !expression.operands.empty()) {
+            return delay_target_base(expression.operands.front());
+        }
+        return &expression;
+    }
+
+    void apply_net_delays(
+        DesignUnit& unit,
+        std::vector<Diagnostic>& diagnostics)
+    {
+        std::vector<const frontend::SignalDeclaration*> delayed;
+        for (const auto& port : unit.ports) {
+            if (port.net_delay) {
+                delayed.push_back(&port);
+            }
+        }
+        for (const auto& signal : unit.signals) {
+            if (signal.net_delay) {
+                delayed.push_back(&signal);
+            }
+        }
+        for (auto& statement : unit.concurrent_statements) {
+            if (statement.kind != frontend::StatementKind::Assignment
+                || statement.assignment_kind
+                    != frontend::AssignmentKind::Continuous) {
+                continue;
+            }
+            const auto* base = delay_target_base(statement.target);
+            if (base->kind != frontend::ExpressionKind::Identifier) {
+                continue;
+            }
+            const frontend::SignalDeclaration* declaration = nullptr;
+            for (const auto* candidate : delayed) {
+                const bool matches = base->text == candidate->name
+                    || (base->text.starts_with(candidate->name)
+                        && base->text.size() > candidate->name.size()
+                        && base->text[candidate->name.size()] == '.');
+                if (matches
+                    && (declaration == nullptr
+                        || candidate->name.size()
+                            > declaration->name.size())) {
+                    declaration = candidate;
+                }
+            }
+            if (declaration == nullptr) {
+                continue;
+            }
+            if (!statement.delay) {
+                statement.delay = declaration->net_delay;
+            } else {
+                statement.delay = combined_delay(
+                    *statement.delay,
+                    *declaration->net_delay,
+                    statement.span,
+                    diagnostics);
+            }
         }
     }
-}
 
-}  // namespace
-
-
+} // namespace
 
 SpecializedUnit specialize_unit(
     const DesignUnit& source,
@@ -388,21 +393,17 @@ SpecializedUnit specialize_unit(
     std::vector<Diagnostic>& diagnostics,
     const bool expand_generates,
     const SystemVerilogConstantEnvironment&
-        parent_integral_environment) {
+        parent_integral_environment)
+{
     SpecializedUnit result;
     result.unit = source;
-    const bool is_vhdl =
-        source.language == frontend::Language::Vhdl2008;
-    const bool is_package =
-        source.kind == frontend::UnitKind::VhdlPackage;
-    const bool is_systemverilog_package =
-        source.kind
+    const bool is_vhdl = source.language == frontend::Language::Vhdl2008;
+    const bool is_package = source.kind == frontend::UnitKind::VhdlPackage;
+    const bool is_systemverilog_package = source.kind
         == frontend::UnitKind::SystemVerilogPackage;
-    const bool is_verilog =
-        source.language == frontend::Language::SystemVerilog2017
+    const bool is_verilog = source.language == frontend::Language::SystemVerilog2017
         || source.language == frontend::Language::Verilog2005;
-    const bool association_is_vhdl =
-        association_language == frontend::Language::Vhdl2008;
+    const bool association_is_vhdl = association_language == frontend::Language::Vhdl2008;
     const auto code = [&](const SpecializationDiagnostic diagnostic) {
         return specialization_diagnostic_code(
             is_vhdl,
@@ -410,18 +411,16 @@ SpecializedUnit specialize_unit(
             is_systemverilog_package,
             diagnostic);
     };
-    const auto object_kind =
-        (is_package || is_systemverilog_package)
-            ? std::string_view{"package constant"}
-        : is_vhdl ? std::string_view{"generic"}
-                : std::string_view{"parameter"};
+    const auto object_kind = (is_package || is_systemverilog_package)
+        ? std::string_view { "package constant" }
+        : is_vhdl ? std::string_view { "generic" }
+                  : std::string_view { "parameter" };
     if (!is_vhdl && !is_verilog) {
         if (!overrides.empty()) {
-            diagnostics.push_back({
-                code(SpecializationDiagnostic::invalid_actual),
+            diagnostics.push_back({ code(SpecializationDiagnostic::invalid_actual),
                 "generic or parameter actuals cannot target this design "
                 "unit",
-                overrides.front().span});
+                overrides.front().span });
         }
         return result;
     }
@@ -451,7 +450,8 @@ SpecializedUnit specialize_unit(
         if (override.name) {
             saw_named = true;
             std::vector<
-                const frontend::ParameterDeclaration*> matches;
+                const frontend::ParameterDeclaration*>
+                matches;
             std::copy_if(
                 overridable.begin(),
                 overridable.end(),
@@ -464,20 +464,18 @@ SpecializedUnit specialize_unit(
                         association_language);
                 });
             if (matches.size() > 1) {
-                diagnostics.push_back({
-                    code(SpecializationDiagnostic::ambiguous_name),
+                diagnostics.push_back({ code(SpecializationDiagnostic::ambiguous_name),
                     "VHDL generic name '" + *override.name
                         + "' ambiguously matches multiple "
-                        "case-sensitive target parameters",
-                    override.span});
+                          "case-sensitive target parameters",
+                    override.span });
                 continue;
             }
             if (matches.empty()) {
-                diagnostics.push_back({
-                    code(SpecializationDiagnostic::invalid_actual),
-                    "unknown or local " + std::string{object_kind}
+                diagnostics.push_back({ code(SpecializationDiagnostic::invalid_actual),
+                    "unknown or local " + std::string { object_kind }
                         + " actual '" + *override.name + "'",
-                    override.span});
+                    override.span });
                 continue;
             }
             actual_index = static_cast<std::size_t>(
@@ -490,43 +488,39 @@ SpecializedUnit specialize_unit(
         } else {
             saw_positional = true;
             if (association_is_vhdl && saw_named) {
-                diagnostics.push_back({
-                    code(SpecializationDiagnostic::association_order),
+                diagnostics.push_back({ code(SpecializationDiagnostic::association_order),
                     "a positional generic actual cannot follow a named "
                     "actual",
-                    override.span});
+                    override.span });
             }
             if (next_positional >= overridable.size()) {
-                diagnostics.push_back({
-                    code(SpecializationDiagnostic::invalid_actual),
+                diagnostics.push_back({ code(SpecializationDiagnostic::invalid_actual),
                     "too many positional "
-                        + std::string{object_kind} + " actuals",
-                    override.span});
+                        + std::string { object_kind } + " actuals",
+                    override.span });
                 continue;
             }
             actual_index = next_positional++;
         }
         if (actual_index) {
             if (explicitly_associated[*actual_index]) {
-                diagnostics.push_back({
-                    code(SpecializationDiagnostic::duplicate_actual),
-                    "duplicate " + std::string{object_kind}
+                diagnostics.push_back({ code(SpecializationDiagnostic::duplicate_actual),
+                    "duplicate " + std::string { object_kind }
                         + " actual for '"
                         + overridable[*actual_index]->name + "'",
-                    override.span});
+                    override.span });
                 continue;
             }
             explicitly_associated[*actual_index] = true;
             if (override.default_box) {
                 if (!is_vhdl
                     || !overridable[*actual_index]
-                            ->default_value.valid()) {
-                    diagnostics.push_back({
-                        code(SpecializationDiagnostic::invalid_actual),
-                        std::string{object_kind} + " '"
+                        ->default_value.valid()) {
+                    diagnostics.push_back({ code(SpecializationDiagnostic::invalid_actual),
+                        std::string { object_kind } + " '"
                             + overridable[*actual_index]->name
                             + "' has no default selected by open",
-                        override.span});
+                        override.span });
                     actuals[*actual_index] = 0;
                 }
                 continue;
@@ -537,119 +531,106 @@ SpecializedUnit specialize_unit(
             if (is_verilog) {
                 if (overridable[*actual_index]->type.spelling
                     == "string") {
-                    const auto value =
-                        evaluate_systemverilog_string_expression(
-                            actual_expression,
-                            {},
-                            parent_environment,
-                            error);
+                    const auto value = evaluate_systemverilog_string_expression(
+                        actual_expression,
+                        { },
+                        parent_environment,
+                        error);
                     if (!value) {
-                        diagnostics.push_back({
-                            "FSIM-ELAB-SVSTRING-002",
+                        diagnostics.push_back({ "FSIM-ELAB-SVSTRING-002",
                             "cannot evaluate string parameter actual: "
                                 + error,
-                            override.span});
+                            override.span });
                     } else if (
-                        systemverilog_string_actuals[
-                            *actual_index]) {
-                        diagnostics.push_back({
-                            code(
-                                SpecializationDiagnostic::
-                                    duplicate_actual),
-                            "duplicate " + std::string{object_kind}
+                        systemverilog_string_actuals[*actual_index]) {
+                        diagnostics.push_back({ code(
+                                                    SpecializationDiagnostic::
+                                                        duplicate_actual),
+                            "duplicate " + std::string { object_kind }
                                 + " actual for '"
                                 + overridable[*actual_index]->name + "'",
-                            override.span});
+                            override.span });
                     } else {
-                        systemverilog_string_actuals[
-                            *actual_index] = *value;
+                        systemverilog_string_actuals[*actual_index] = *value;
                     }
                     continue;
                 }
-                bool scalar_applicable{};
-                const auto scalar_value =
-                    evaluate_systemverilog_scalar_parameter(
-                        actual_expression,
-                        overridable[*actual_index]->type,
-                        {}, parent_integral_environment,
-                        parent_environment,
-                        systemverilog_scalar_evaluation_context(source),
-                        scalar_applicable, error);
+                bool scalar_applicable { };
+                const auto scalar_value = evaluate_systemverilog_scalar_parameter(
+                    actual_expression,
+                    overridable[*actual_index]->type,
+                    { }, parent_integral_environment,
+                    parent_environment,
+                    systemverilog_scalar_evaluation_context(source),
+                    scalar_applicable, error);
                 if (scalar_applicable) {
                     if (!scalar_value) {
-                        diagnostics.push_back({
-                            code(SpecializationDiagnostic::actual_evaluation),
-                            "cannot evaluate " + std::string{object_kind}
+                        diagnostics.push_back({ code(SpecializationDiagnostic::actual_evaluation),
+                            "cannot evaluate " + std::string { object_kind }
                                 + " actual: " + error,
-                            override.span});
+                            override.span });
                     } else {
-                        systemverilog_scalar_actuals[*actual_index] =
-                            *scalar_value;
+                        systemverilog_scalar_actuals[*actual_index] = *scalar_value;
                     }
                     continue;
                 }
                 std::string string_error;
                 if (evaluate_systemverilog_string_expression(
                         actual_expression,
-                        {},
+                        { },
                         parent_environment,
                         string_error)) {
-                    diagnostics.push_back({
-                        "FSIM-ELAB-SVSTRING-002",
+                    diagnostics.push_back({ "FSIM-ELAB-SVSTRING-002",
                         "an integral parameter cannot receive a string "
                         "actual",
-                        override.span});
+                        override.span });
                     continue;
                 }
-                const auto& actual_type =
-                    overridable[*actual_index]->type;
+                const auto& actual_type = overridable[*actual_index]->type;
                 annotate_systemverilog_constant_casts(
                     actual_expression,
                     actual_type,
                     source.type_aliases);
                 std::optional<SystemVerilogConstantValue> value;
                 if (!actual_type.packed_members.empty()) {
-                    if (const auto packed =
-                            evaluate_systemverilog_packed_constant(
-                                actual_expression,
-                                actual_type,
-                                parent_integral_environment,
-                                parent_environment,
-                                error)) {
-                        value = SystemVerilogConstantValue{
+                    if (const auto packed = evaluate_systemverilog_packed_constant(
+                            actual_expression,
+                            actual_type,
+                            parent_integral_environment,
+                            parent_environment,
+                            error)) {
+                        value = SystemVerilogConstantValue {
                             *packed,
                             actual_type.is_signed,
                             false,
                             actual_type.domain,
                             actual_type.nominal_type,
-                            actual_expression.span};
+                            actual_expression.span
+                        };
                     }
                 } else {
-                    value =
-                        evaluate_systemverilog_constant_function_expression(
-                            actual_expression,
-                            parent_integral_environment,
-                            parent_environment,
-                            source.functions,
-                            error);
+                    value = evaluate_systemverilog_constant_function_expression(
+                        actual_expression,
+                        parent_integral_environment,
+                        parent_environment,
+                        source.functions,
+                        error);
                 }
                 if (!value) {
-                    diagnostics.push_back({
-                        code(
-                            SpecializationDiagnostic::
-                                actual_evaluation),
-                        "cannot evaluate " + std::string{object_kind}
+                    diagnostics.push_back({ code(
+                                                SpecializationDiagnostic::
+                                                    actual_evaluation),
+                        "cannot evaluate " + std::string { object_kind }
                             + " actual: " + error,
-                        override.span});
+                        override.span });
                     continue;
                 }
                 if (systemverilog_actuals[*actual_index]) {
-                    diagnostics.push_back({
-                        code(SpecializationDiagnostic::duplicate_actual),
-                        "duplicate " + std::string{object_kind}
+                    diagnostics.push_back({ code(SpecializationDiagnostic::duplicate_actual),
+                        "duplicate " + std::string { object_kind }
                             + " actual for '"
                             + overridable[*actual_index]->name + "'",
-                        override.span});
+                        override.span });
                 } else {
                     systemverilog_actuals[*actual_index] = *value;
                 }
@@ -662,14 +643,13 @@ SpecializedUnit specialize_unit(
                     parent_environment,
                     error,
                     range_error)) {
-                diagnostics.push_back({
-                    range_error
+                diagnostics.push_back({ range_error
                         ? "FSIM-ELAB-VHENUMATTR-002"
                         : "FSIM-ELAB-VHENUMATTR-001",
                     "cannot evaluate enumeration attribute in "
-                    + std::string{object_kind}
-                    + " actual: " + error,
-                    override.span});
+                        + std::string { object_kind }
+                        + " actual: " + error,
+                    override.span });
                 continue;
             }
             if (is_vhdl
@@ -679,14 +659,13 @@ SpecializedUnit specialize_unit(
                     parent_environment,
                     error,
                     range_error)) {
-                diagnostics.push_back({
-                    range_error
+                diagnostics.push_back({ range_error
                         ? "FSIM-ELAB-VHSTATIC-002"
                         : "FSIM-ELAB-VHSTATIC-001",
                     "cannot evaluate VHDL static expression in "
-                    + std::string{object_kind}
-                    + " actual: " + error,
-                    override.span});
+                        + std::string { object_kind }
+                        + " actual: " + error,
+                    override.span });
                 continue;
             }
             if (is_vhdl
@@ -702,26 +681,23 @@ SpecializedUnit specialize_unit(
                     overridable[*actual_index]->type,
                     error);
                 if (!packed) {
-                    diagnostics.push_back({
-                        code(error.starts_with(
-                                 "the packed value does not fit")
-                            ? SpecializationDiagnostic::subtype_constraint
-                            : SpecializationDiagnostic::actual_evaluation),
-                        "cannot evaluate " + std::string{object_kind}
+                    diagnostics.push_back({ code(error.starts_with(
+                                                     "the packed value does not fit")
+                                                    ? SpecializationDiagnostic::subtype_constraint
+                                                    : SpecializationDiagnostic::actual_evaluation),
+                        "cannot evaluate " + std::string { object_kind }
                             + " actual: " + error,
-                        override.span});
+                        override.span });
                     continue;
                 }
                 if (vhdl_composite_actuals[*actual_index]) {
-                    diagnostics.push_back({
-                        code(SpecializationDiagnostic::duplicate_actual),
-                        "duplicate " + std::string{object_kind}
+                    diagnostics.push_back({ code(SpecializationDiagnostic::duplicate_actual),
+                        "duplicate " + std::string { object_kind }
                             + " actual for '"
                             + overridable[*actual_index]->name + "'",
-                        override.span});
+                        override.span });
                 } else {
-                    vhdl_composite_actuals[*actual_index] =
-                        std::move(actual_expression);
+                    vhdl_composite_actuals[*actual_index] = std::move(actual_expression);
                 }
                 continue;
             }
@@ -730,7 +706,7 @@ SpecializedUnit specialize_unit(
                       actual_expression,
                       overridable[*actual_index]->type,
                       error)
-                : std::optional<std::int64_t>{};
+                : std::optional<std::int64_t> { };
             if (!value && is_vhdl) {
                 value = vhdl_enumeration_ordinal(
                     actual_expression,
@@ -741,44 +717,40 @@ SpecializedUnit specialize_unit(
                     actual_expression, parent_environment, error);
             }
             if (!value && is_vhdl) {
-                const auto function_value =
-                    evaluate_systemverilog_constant_function_expression(
-                        actual_expression,
-                        {},
-                        parent_environment,
-                        source.functions,
-                        error);
+                const auto function_value = evaluate_systemverilog_constant_function_expression(
+                    actual_expression,
+                    { },
+                    parent_environment,
+                    source.functions,
+                    error);
                 if (function_value) {
                     value = function_value->integer_value();
                 }
             }
             if (!value) {
-                diagnostics.push_back({
-                    code(
-                        SpecializationDiagnostic::
-                            actual_evaluation),
-                    "cannot evaluate " + std::string{object_kind}
+                diagnostics.push_back({ code(
+                                            SpecializationDiagnostic::
+                                                actual_evaluation),
+                    "cannot evaluate " + std::string { object_kind }
                         + " actual: " + error,
-                    override.span});
+                    override.span });
                 continue;
             }
             if (actuals[*actual_index]) {
-                diagnostics.push_back({
-                    code(SpecializationDiagnostic::duplicate_actual),
-                    "duplicate " + std::string{object_kind}
+                diagnostics.push_back({ code(SpecializationDiagnostic::duplicate_actual),
+                    "duplicate " + std::string { object_kind }
                         + " actual for '"
                         + overridable[*actual_index]->name + "'",
-                    override.span});
+                    override.span });
             } else {
                 actuals[*actual_index] = *value;
             }
         }
     }
     if (!association_is_vhdl && saw_named && saw_positional) {
-        diagnostics.push_back({
-            code(SpecializationDiagnostic::association_order),
+        diagnostics.push_back({ code(SpecializationDiagnostic::association_order),
             "named and positional parameter overrides cannot be mixed",
-            overrides.front().span});
+            overrides.front().span });
     }
 
     std::size_t overridable_index = 0;
@@ -788,29 +760,25 @@ SpecializedUnit specialize_unit(
         systemverilog_raw_enum_environment;
     SystemVerilogScalarConstantEnvironment
         systemverilog_scalar_environment;
-    const auto scalar_context =
-        systemverilog_scalar_evaluation_context(source);
+    const auto scalar_context = systemverilog_scalar_evaluation_context(source);
     SystemVerilogStringEnvironment
         systemverilog_string_environment;
     const auto self_qualified_name =
         [&](const std::string_view name) {
-          return source.name + "::" + std::string{name};
+            return source.name + "::" + std::string { name };
         };
     for (std::size_t parameter_index = 0;
-         parameter_index < source.parameters.size();
-         ++parameter_index) {
-        const auto& parameter =
-            source.parameters[parameter_index];
-        auto& specialized_parameter =
-            result.unit.parameters[parameter_index];
+        parameter_index < source.parameters.size();
+        ++parameter_index) {
+        const auto& parameter = source.parameters[parameter_index];
+        auto& specialized_parameter = result.unit.parameters[parameter_index];
         substitute_parameters(
             specialized_parameter.type,
             result.environment,
             domains,
             diagnostics,
             source.language);
-        const auto& parameter_type =
-            specialized_parameter.type;
+        const auto& parameter_type = specialized_parameter.type;
         std::optional<SystemVerilogConstantValue>
             systemverilog_value;
         std::optional<SystemVerilogScalarConstant>
@@ -824,21 +792,17 @@ SpecializedUnit specialize_unit(
         if (!parameter.local) {
             if (is_verilog) {
                 if (parameter_type.spelling == "string") {
-                    systemverilog_string_value =
-                        systemverilog_string_actuals.at(
-                            overridable_index++);
+                    systemverilog_string_value = systemverilog_string_actuals.at(
+                        overridable_index++);
                 } else {
                     const auto actual_index = overridable_index++;
-                    systemverilog_scalar_value =
-                        systemverilog_scalar_actuals.at(actual_index);
+                    systemverilog_scalar_value = systemverilog_scalar_actuals.at(actual_index);
                     if (!systemverilog_scalar_value) {
-                        systemverilog_value =
-                            systemverilog_actuals.at(actual_index);
+                        systemverilog_value = systemverilog_actuals.at(actual_index);
                     }
                 }
             } else if (vhdl_composite_parameter) {
-                vhdl_composite_value =
-                    vhdl_composite_actuals.at(overridable_index++);
+                vhdl_composite_value = vhdl_composite_actuals.at(overridable_index++);
             } else {
                 value = actuals.at(overridable_index++);
             }
@@ -847,11 +811,10 @@ SpecializedUnit specialize_unit(
             if (!vhdl_composite_value) {
                 if (parameter.default_value.kind
                     == ExpressionKind::Invalid) {
-                    diagnostics.push_back({
-                        code(SpecializationDiagnostic::invalid_actual),
-                        std::string{object_kind} + " '" + parameter.name
+                    diagnostics.push_back({ code(SpecializationDiagnostic::invalid_actual),
+                        std::string { object_kind } + " '" + parameter.name
                             + "' requires an actual because it has no default",
-                        parameter.span});
+                        parameter.span });
                     continue;
                 }
                 vhdl_composite_value = parameter.default_value;
@@ -869,17 +832,17 @@ SpecializedUnit specialize_unit(
             const auto packed = static_vhdl_value(
                 *vhdl_composite_value, parameter_type, error);
             if (!packed) {
-                diagnostics.push_back({
-                    code(SpecializationDiagnostic::default_evaluation),
-                    "cannot evaluate " + std::string{object_kind} + " '"
+                diagnostics.push_back({ code(SpecializationDiagnostic::default_evaluation),
+                    "cannot evaluate " + std::string { object_kind } + " '"
                         + parameter.name + "': " + error,
-                    parameter.span});
+                    parameter.span });
                 continue;
             }
-            auto info = ConstantTypeInfo{
+            auto info = ConstantTypeInfo {
                 parameter_type.domain,
                 false,
-                parameter_type.nominal_type};
+                parameter_type.nominal_type
+            };
             info.vhdl_composite_value = *vhdl_composite_value;
             domains[parameter.name] = std::move(info);
             result.values.emplace_back(
@@ -897,50 +860,42 @@ SpecializedUnit specialize_unit(
             if (!systemverilog_string_value) {
                 if (parameter.default_value.kind
                     == ExpressionKind::Invalid) {
-                    diagnostics.push_back({
-                        code(
-                            SpecializationDiagnostic::
-                                invalid_actual),
-                        std::string{object_kind} + " '"
+                    diagnostics.push_back({ code(
+                                                SpecializationDiagnostic::
+                                                    invalid_actual),
+                        std::string { object_kind } + " '"
                             + parameter.name
                             + "' requires an actual because it has no "
                               "default",
-                        parameter.span});
-                    systemverilog_string_value =
-                        SystemVerilogStringValue{{}, parameter.span};
+                        parameter.span });
+                    systemverilog_string_value = SystemVerilogStringValue { { }, parameter.span };
                 } else {
                     std::string error;
-                    auto default_expression =
-                        parameter.default_value;
+                    auto default_expression = parameter.default_value;
                     substitute_systemverilog_strings(
                         default_expression,
                         systemverilog_string_environment,
                         result.environment);
-                    systemverilog_string_value =
-                        evaluate_systemverilog_string_expression(
-                            default_expression,
-                            systemverilog_string_environment,
-                            result.environment,
-                            error);
+                    systemverilog_string_value = evaluate_systemverilog_string_expression(
+                        default_expression,
+                        systemverilog_string_environment,
+                        result.environment,
+                        error);
                     if (!systemverilog_string_value) {
-                        diagnostics.push_back({
-                            "FSIM-ELAB-SVSTRING-001",
+                        diagnostics.push_back({ "FSIM-ELAB-SVSTRING-001",
                             "cannot evaluate default for "
-                                + std::string{object_kind} + " '"
+                                + std::string { object_kind } + " '"
                                 + parameter.name + "': " + error,
-                            parameter.span});
-                        systemverilog_string_value =
-                            SystemVerilogStringValue{
-                                {}, parameter.span};
+                            parameter.span });
+                        systemverilog_string_value = SystemVerilogStringValue {
+                            { }, parameter.span
+                        };
                     }
                 }
             }
-            systemverilog_string_environment[parameter.name] =
-                *systemverilog_string_value;
+            systemverilog_string_environment[parameter.name] = *systemverilog_string_value;
             if (is_systemverilog_package) {
-                systemverilog_string_environment[
-                    self_qualified_name(parameter.name)] =
-                    *systemverilog_string_value;
+                systemverilog_string_environment[self_qualified_name(parameter.name)] = *systemverilog_string_value;
             }
             result.values.emplace_back(
                 parameter.name,
@@ -952,50 +907,43 @@ SpecializedUnit specialize_unit(
         }
         if (is_verilog && !systemverilog_scalar_value
             && parameter.default_value.kind != ExpressionKind::Invalid) {
-            bool scalar_applicable{};
+            bool scalar_applicable { };
             std::string scalar_error;
-            systemverilog_scalar_value =
-                evaluate_systemverilog_scalar_parameter(
-                    parameter.default_value, parameter_type,
-                    systemverilog_scalar_environment,
-                    systemverilog_environment, result.environment,
-                    scalar_context, scalar_applicable, scalar_error);
+            systemverilog_scalar_value = evaluate_systemverilog_scalar_parameter(
+                parameter.default_value, parameter_type,
+                systemverilog_scalar_environment,
+                systemverilog_environment, result.environment,
+                scalar_context, scalar_applicable, scalar_error);
             if (scalar_applicable && !systemverilog_scalar_value) {
-                diagnostics.push_back({
-                    code(SpecializationDiagnostic::default_evaluation),
-                    "cannot evaluate default for " + std::string{object_kind}
+                diagnostics.push_back({ code(SpecializationDiagnostic::default_evaluation),
+                    "cannot evaluate default for " + std::string { object_kind }
                         + " '" + parameter.name + "': " + scalar_error,
-                    parameter.span});
+                    parameter.span });
                 const auto kind = parameter_type.systemverilog_scalar
                         == frontend::SystemVerilogScalarKind::None
                     ? frontend::SystemVerilogScalarKind::Real
                     : parameter_type.systemverilog_scalar;
-                systemverilog_scalar_value =
-                    SystemVerilogScalarConstant{kind, 0};
+                systemverilog_scalar_value = SystemVerilogScalarConstant { kind, 0 };
             }
         }
         if (is_verilog && !systemverilog_scalar_value
             && parameter_type.systemverilog_scalar
                 != frontend::SystemVerilogScalarKind::None
             && parameter.default_value.kind == ExpressionKind::Invalid) {
-            diagnostics.push_back({
-                code(SpecializationDiagnostic::invalid_actual),
-                std::string{object_kind} + " '" + parameter.name
+            diagnostics.push_back({ code(SpecializationDiagnostic::invalid_actual),
+                std::string { object_kind } + " '" + parameter.name
                     + "' requires an actual because it has no default",
-                parameter.span});
-            systemverilog_scalar_value = SystemVerilogScalarConstant{
-                parameter_type.systemverilog_scalar, 0};
+                parameter.span });
+            systemverilog_scalar_value = SystemVerilogScalarConstant {
+                parameter_type.systemverilog_scalar, 0
+            };
         }
         if (is_verilog && systemverilog_scalar_value) {
-            systemverilog_scalar_environment[parameter.name] =
-                *systemverilog_scalar_value;
+            systemverilog_scalar_environment[parameter.name] = *systemverilog_scalar_value;
             if (is_systemverilog_package) {
-                systemverilog_scalar_environment[
-                    self_qualified_name(parameter.name)] =
-                    *systemverilog_scalar_value;
+                systemverilog_scalar_environment[self_qualified_name(parameter.name)] = *systemverilog_scalar_value;
             }
-            specialized_parameter.default_value =
-                systemverilog_scalar_value->expression(parameter.span);
+            specialized_parameter.default_value = systemverilog_scalar_value->expression(parameter.span);
             result.values.emplace_back(
                 parameter.name, systemverilog_scalar_value->display());
             result.identity_values.emplace_back(
@@ -1005,19 +953,17 @@ SpecializedUnit specialize_unit(
         if (is_verilog && !systemverilog_value) {
             if (parameter.default_value.kind
                 == ExpressionKind::Invalid) {
-                diagnostics.push_back({
-                    code(SpecializationDiagnostic::invalid_actual),
-                    std::string{object_kind} + " '"
+                diagnostics.push_back({ code(SpecializationDiagnostic::invalid_actual),
+                    std::string { object_kind } + " '"
                         + parameter.name
                         + "' requires an actual because it has no default",
-                    parameter.span});
-                systemverilog_value =
-                    SystemVerilogConstantValue{
-                        0, 0, 0, 32, true, true, parameter.span};
+                    parameter.span });
+                systemverilog_value = SystemVerilogConstantValue {
+                    0, 0, 0, 32, true, true, parameter.span
+                };
             } else {
                 std::string error;
-                auto default_expression =
-                    parameter.default_value;
+                auto default_expression = parameter.default_value;
                 annotate_systemverilog_constant_casts(
                     default_expression, parameter_type,
                     source.type_aliases);
@@ -1026,60 +972,55 @@ SpecializedUnit specialize_unit(
                     systemverilog_string_environment,
                     result.environment);
                 if (!parameter_type.packed_members.empty()) {
-                    if (const auto packed =
-                            evaluate_systemverilog_packed_constant(
-                                default_expression,
-                                parameter_type,
-                                systemverilog_environment,
-                                result.environment,
-                                error)) {
-                        systemverilog_value =
-                            SystemVerilogConstantValue{
-                                *packed,
-                                parameter_type.is_signed,
-                                false,
-                                parameter_type.domain,
-                                parameter_type.nominal_type,
-                                default_expression.span};
-                    }
-                } else {
-                    systemverilog_value =
-                        evaluate_systemverilog_constant_function_expression(
+                    if (const auto packed = evaluate_systemverilog_packed_constant(
                             default_expression,
+                            parameter_type,
                             systemverilog_environment,
                             result.environment,
-                            source.functions,
-                            error);
+                            error)) {
+                        systemverilog_value = SystemVerilogConstantValue {
+                            *packed,
+                            parameter_type.is_signed,
+                            false,
+                            parameter_type.domain,
+                            parameter_type.nominal_type,
+                            default_expression.span
+                        };
+                    }
+                } else {
+                    systemverilog_value = evaluate_systemverilog_constant_function_expression(
+                        default_expression,
+                        systemverilog_environment,
+                        result.environment,
+                        source.functions,
+                        error);
                 }
                 if (!systemverilog_value) {
-                    diagnostics.push_back({
-                        code(
-                            SpecializationDiagnostic::
-                                default_evaluation),
+                    diagnostics.push_back({ code(
+                                                SpecializationDiagnostic::
+                                                    default_evaluation),
                         "cannot evaluate default for "
-                            + std::string{object_kind} + " '"
+                            + std::string { object_kind } + " '"
                             + parameter.name + "': " + error,
-                        parameter.span});
-                    systemverilog_value =
-                        SystemVerilogConstantValue{
-                            0, 0, 0, 32, true, true, parameter.span};
+                        parameter.span });
+                    systemverilog_value = SystemVerilogConstantValue {
+                        0, 0, 0, 32, true, true, parameter.span
+                    };
                 }
             }
         } else if (!is_verilog && !value) {
             if (parameter.default_value.kind
                 == ExpressionKind::Invalid) {
-                diagnostics.push_back({
-                    code(SpecializationDiagnostic::invalid_actual),
-                    std::string{object_kind} + " '"
+                diagnostics.push_back({ code(SpecializationDiagnostic::invalid_actual),
+                    std::string { object_kind } + " '"
                         + parameter.name
                         + "' requires an actual because it has no default",
-                    parameter.span});
+                    parameter.span });
                 value = 0;
             } else {
                 std::string error;
                 bool range_error = false;
-                auto default_expression =
-                    parameter.default_value;
+                auto default_expression = parameter.default_value;
                 if (is_vhdl
                     && !fold_vhdl_enumeration_attributes(
                         default_expression,
@@ -1087,14 +1028,13 @@ SpecializedUnit specialize_unit(
                         result.environment,
                         error,
                         range_error)) {
-                    diagnostics.push_back({
-                        range_error
+                    diagnostics.push_back({ range_error
                             ? "FSIM-ELAB-VHENUMATTR-002"
                             : "FSIM-ELAB-VHENUMATTR-001",
                         "cannot evaluate enumeration attribute in "
-                        + std::string{object_kind} + " '"
-                        + parameter.name + "': " + error,
-                        parameter.span});
+                            + std::string { object_kind } + " '"
+                            + parameter.name + "': " + error,
+                        parameter.span });
                     value = 0;
                 }
                 if (is_vhdl && !value
@@ -1104,14 +1044,13 @@ SpecializedUnit specialize_unit(
                         result.environment,
                         error,
                         range_error)) {
-                    diagnostics.push_back({
-                        range_error
+                    diagnostics.push_back({ range_error
                             ? "FSIM-ELAB-VHSTATIC-002"
                             : "FSIM-ELAB-VHSTATIC-001",
                         "cannot evaluate VHDL static expression in "
-                        + std::string{object_kind} + " '"
-                        + parameter.name + "': " + error,
-                        parameter.span});
+                            + std::string { object_kind } + " '"
+                            + parameter.name + "': " + error,
+                        parameter.span });
                     value = 0;
                 }
                 if (!value) {
@@ -1120,7 +1059,7 @@ SpecializedUnit specialize_unit(
                               default_expression,
                               parameter_type,
                               error)
-                        : std::optional<std::int64_t>{};
+                        : std::optional<std::int64_t> { };
                     if (!value && is_vhdl) {
                         value = vhdl_enumeration_ordinal(
                             default_expression, parameter_type);
@@ -1132,27 +1071,24 @@ SpecializedUnit specialize_unit(
                             error);
                     }
                     if (!value) {
-                        const auto function_value =
-                            evaluate_systemverilog_constant_function_expression(
-                                default_expression,
-                                {},
-                                result.environment,
-                                result.unit.functions,
-                                error);
+                        const auto function_value = evaluate_systemverilog_constant_function_expression(
+                            default_expression,
+                            { },
+                            result.environment,
+                            result.unit.functions,
+                            error);
                         if (function_value) {
-                            value =
-                                function_value->integer_value();
+                            value = function_value->integer_value();
                         }
                     }
                     if (!value) {
-                        diagnostics.push_back({
-                            code(
-                                SpecializationDiagnostic::
-                                    default_evaluation),
+                        diagnostics.push_back({ code(
+                                                    SpecializationDiagnostic::
+                                                        default_evaluation),
                             "cannot evaluate default for "
-                                + std::string{object_kind} + " '"
+                                + std::string { object_kind } + " '"
                                 + parameter.name + "': " + error,
-                            parameter.span});
+                            parameter.span });
                         value = 0;
                     }
                 }
@@ -1162,91 +1098,80 @@ SpecializedUnit specialize_unit(
             ? std::ranges::find_if(
                   source.type_aliases,
                   [&](const auto& alias) {
-                    return std::ranges::any_of(
-                        alias.enum_literals,
-                        [&](const auto& literal) {
-                          return literal.name == parameter.name
-                              && literal.span.source_name
+                      return std::ranges::any_of(
+                          alias.enum_literals,
+                          [&](const auto& literal) {
+                              return literal.name == parameter.name
+                                  && literal.span.source_name
                                   == parameter.span.source_name;
-                        });
+                          });
                   })
             : source.type_aliases.end();
         const bool enum_literal_parameter = is_verilog
             && std::ranges::find(
-                parameter_type.enumeration_literals,
-                parameter.name)
+                   parameter_type.enumeration_literals,
+                   parameter.name)
                 != parameter_type.enumeration_literals.end();
         if (is_verilog) {
             if (enum_literal_parameter) {
-                systemverilog_raw_enum_environment[parameter.name] =
-                    *systemverilog_value;
-                auto nominal_type =
-                    !parameter_type.nominal_type.empty()
+                systemverilog_raw_enum_environment[parameter.name] = *systemverilog_value;
+                auto nominal_type = !parameter_type.nominal_type.empty()
                     ? parameter_type.nominal_type
                     : enum_literal_alias != source.type_aliases.end()
-                          && !enum_literal_alias->type.nominal_type.empty()
+                        && !enum_literal_alias->type.nominal_type.empty()
                     ? enum_literal_alias->type.nominal_type
                     : enum_literal_alias != source.type_aliases.end()
                     ? "sv:"
                         + (source.library.empty()
-                            ? std::string{"work"}
-                            : source.library)
+                                ? std::string { "work" }
+                                : source.library)
                         + "." + source.name + "."
                         + enum_literal_alias->name
-                    : std::string{};
+                    : std::string { };
                 systemverilog_value->nominal_type = nominal_type;
-                specialized_parameter.type.nominal_type =
-                    std::move(nominal_type);
+                specialized_parameter.type.nominal_type = std::move(nominal_type);
             }
             std::string conversion_error;
-            const auto converted =
-                convert_systemverilog_parameter_value(
-                    *systemverilog_value,
-                    parameter_type,
-                    conversion_error);
+            const auto converted = convert_systemverilog_parameter_value(
+                *systemverilog_value,
+                parameter_type,
+                conversion_error);
             if (!converted) {
-                diagnostics.push_back({
-                    "FSIM-ELAB-SVCONST-001",
-                    "cannot convert " + std::string{object_kind}
+                diagnostics.push_back({ "FSIM-ELAB-SVCONST-001",
+                    "cannot convert " + std::string { object_kind }
                         + " '" + parameter.name + "': "
                         + conversion_error,
-                    parameter.span});
-                systemverilog_value =
-                    SystemVerilogConstantValue{
-                        0,
-                        0,
-                        0,
-                        32,
-                        parameter_type.is_signed,
-                        false,
-                        parameter.span};
-                systemverilog_value->nominal_type =
-                    parameter_type.nominal_type;
+                    parameter.span });
+                systemverilog_value = SystemVerilogConstantValue {
+                    0,
+                    0,
+                    0,
+                    32,
+                    parameter_type.is_signed,
+                    false,
+                    parameter.span
+                };
+                systemverilog_value->nominal_type = parameter_type.nominal_type;
             } else {
                 systemverilog_value = *converted;
             }
-            systemverilog_environment[parameter.name] =
-                *systemverilog_value;
+            systemverilog_environment[parameter.name] = *systemverilog_value;
             if (is_systemverilog_package) {
-                systemverilog_environment[
-                    self_qualified_name(parameter.name)] =
-                    *systemverilog_value;
+                systemverilog_environment[self_qualified_name(parameter.name)] = *systemverilog_value;
             }
-            if (const auto integer =
-                    systemverilog_value->integer_value()) {
+            if (const auto integer = systemverilog_value->integer_value()) {
                 result.environment[parameter.name] = *integer;
                 if (is_systemverilog_package) {
-                    result.environment[
-                        self_qualified_name(parameter.name)] = *integer;
+                    result.environment[self_qualified_name(parameter.name)] = *integer;
                 }
             }
-            domains[parameter.name] = ConstantTypeInfo{
+            domains[parameter.name] = ConstantTypeInfo {
                 parameter_type.domain,
                 false,
-                parameter_type.nominal_type};
+                parameter_type.nominal_type
+            };
             if (is_systemverilog_package) {
-                domains[self_qualified_name(parameter.name)] =
-                    domains.at(parameter.name);
+                domains[self_qualified_name(parameter.name)] = domains.at(parameter.name);
             }
             result.values.emplace_back(
                 parameter.name,
@@ -1258,12 +1183,9 @@ SpecializedUnit specialize_unit(
         }
         if (is_vhdl) {
             const auto spelling = parameter_type.spelling;
-            const bool builtin_time =
-                parameter_type.nominal_type == "@builtin:time";
-            const bool enumeration =
-                !parameter_type.enumeration_literals.empty();
-            const bool supported_packed =
-                parameter_type.packed_range
+            const bool builtin_time = parameter_type.nominal_type == "@builtin:time";
+            const bool enumeration = !parameter_type.enumeration_literals.empty();
+            const bool supported_packed = parameter_type.packed_range
                 && parameter_type.packed_members.empty()
                 && parameter_type.width().value_or(0) <= 64
                 && (parameter_type.domain
@@ -1272,9 +1194,8 @@ SpecializedUnit specialize_unit(
                         == frontend::ValueDomain::Logic4
                     || parameter_type.domain
                         == frontend::ValueDomain::Logic9);
-            const bool violates_supported_type =
-                (parameter_type.packed_range
-                    && !supported_packed && !builtin_time)
+            const bool violates_supported_type = (parameter_type.packed_range
+                                                     && !supported_packed && !builtin_time)
                 || !parameter_type.packed_members.empty()
                 || (!parameter_type.packed_range
                     && parameter_type.domain
@@ -1283,40 +1204,31 @@ SpecializedUnit specialize_unit(
                         != frontend::ValueDomain::Boolean
                     && parameter_type.domain
                         != frontend::ValueDomain::Bit2);
-            const bool violates_natural =
-                spelling == "natural" && *value < 0;
-            const bool violates_positive =
-                spelling == "positive" && *value <= 0;
-            const bool violates_boolean =
-                parameter_type.domain
+            const bool violates_natural = spelling == "natural" && *value < 0;
+            const bool violates_positive = spelling == "positive" && *value <= 0;
+            const bool violates_boolean = parameter_type.domain
                     == frontend::ValueDomain::Boolean
                 && *value != 0 && *value != 1;
-            const bool violates_bit =
-                parameter_type.domain == frontend::ValueDomain::Bit2
+            const bool violates_bit = parameter_type.domain == frontend::ValueDomain::Bit2
                 && !enumeration
                 && !parameter_type.packed_range
                 && *value != 0 && *value != 1;
-            const auto packed_width =
-                parameter_type.width().value_or(0);
-            const bool violates_packed =
-                supported_packed
+            const auto packed_width = parameter_type.width().value_or(0);
+            const bool violates_packed = supported_packed
                 && (*value < 0
                     || (packed_width < 64
                         && static_cast<std::uint64_t>(*value)
-                            >= (std::uint64_t{1} << packed_width)));
-            const bool violates_enumeration =
-                enumeration
+                            >= (std::uint64_t { 1 } << packed_width)));
+            const bool violates_enumeration = enumeration
                 && (*value < 0
                     || static_cast<std::uint64_t>(*value)
                         >= parameter_type
-                               .enumeration_literals.size());
-            const bool violates_enumeration_range =
-                enumeration
+                            .enumeration_literals.size());
+            const bool violates_enumeration_range = enumeration
                 && parameter_type.enumeration_range
                 && !parameter_type.enumeration_range
                         ->contains(*value);
-            const bool violates_integer_range =
-                parameter_type.domain
+            const bool violates_integer_range = parameter_type.domain
                     == frontend::ValueDomain::Integer
                 && parameter_type.integer_range
                 && (*value
@@ -1328,15 +1240,14 @@ SpecializedUnit specialize_unit(
                             parameter_type.integer_range->left,
                             parameter_type.integer_range->right));
             if (violates_supported_type) {
-                diagnostics.push_back({
-                    code(
-                        SpecializationDiagnostic::
-                            subtype_constraint),
-                    std::string{object_kind} + " '"
+                diagnostics.push_back({ code(
+                                            SpecializationDiagnostic::
+                                                subtype_constraint),
+                    std::string { object_kind } + " '"
                         + parameter.name
                         + "' resolves outside the bounded scalar or "
                           "up-to-64-bit packed subtype set",
-                    parameter.span});
+                    parameter.span });
             }
             if (violates_natural || violates_positive
                 || violates_boolean || violates_bit
@@ -1344,40 +1255,38 @@ SpecializedUnit specialize_unit(
                 || violates_integer_range
                 || violates_enumeration
                 || violates_enumeration_range) {
-                diagnostics.push_back({
-                    code(
-                        SpecializationDiagnostic::
-                            subtype_constraint),
-                    std::string{object_kind} + " '"
+                diagnostics.push_back({ code(
+                                            SpecializationDiagnostic::
+                                                subtype_constraint),
+                    std::string { object_kind } + " '"
                         + parameter.name
                         + "' value is outside subtype '"
                         + parameter_type.spelling + "'",
-                    parameter.span});
+                    parameter.span });
             }
         }
         result.environment[parameter.name] = *value;
-        domains[parameter.name] = ConstantTypeInfo{
+        domains[parameter.name] = ConstantTypeInfo {
             parameter_type.packed_range
                 ? frontend::ValueDomain::Integer
                 : parameter_type.domain,
             is_vhdl
                 && !parameter_type.enumeration_literals.empty(),
-            parameter_type.nominal_type};
-        const auto display_value =
-            is_vhdl
-                    && parameter_type.domain
-                        == frontend::ValueDomain::Boolean
-                ? (*value == 0 ? "false" : "true")
-                : is_vhdl
-                        && !parameter_type
-                                .enumeration_literals.empty()
-                        && *value >= 0
-                        && static_cast<std::uint64_t>(*value)
-                            < parameter_type
-                                  .enumeration_literals.size()
-                    ? parameter_type.enumeration_literals[
-                          static_cast<std::size_t>(*value)]
-                : std::to_string(*value);
+            parameter_type.nominal_type
+        };
+        const auto display_value = is_vhdl
+                && parameter_type.domain
+                    == frontend::ValueDomain::Boolean
+            ? (*value == 0 ? "false" : "true")
+            : is_vhdl
+                && !parameter_type
+                        .enumeration_literals.empty()
+                && *value >= 0
+                && static_cast<std::uint64_t>(*value)
+                    < parameter_type
+                          .enumeration_literals.size()
+            ? parameter_type.enumeration_literals[static_cast<std::size_t>(*value)]
+            : std::to_string(*value);
         result.values.emplace_back(parameter.name, display_value);
         if (is_vhdl
             && association_language
@@ -1397,28 +1306,27 @@ SpecializedUnit specialize_unit(
             [&](frontend::Expression& expression,
                 const frontend::SourceSpan& span,
                 const std::string_view description)
-                -> std::optional<SystemVerilogConstantValue> {
-              substitute_systemverilog_parameters(
-                  expression, systemverilog_environment);
-              std::string error;
-              auto value = evaluate_systemverilog_constant_function_expression(
-                  expression,
-                  systemverilog_environment,
-                  result.environment,
-                  result.unit.functions,
-                  error);
-              if (!value) {
-                  diagnostics.push_back({
-                      "FSIM-ELAB-SVSPEC-001",
-                      std::string{description}
-                          + " is not a locally static integral expression: "
-                          + error,
-                      span});
-                  return std::nullopt;
-              }
-              expression = value->expression(span);
-              return value;
-            };
+            -> std::optional<SystemVerilogConstantValue> {
+            substitute_systemverilog_parameters(
+                expression, systemverilog_environment);
+            std::string error;
+            auto value = evaluate_systemverilog_constant_function_expression(
+                expression,
+                systemverilog_environment,
+                result.environment,
+                result.unit.functions,
+                error);
+            if (!value) {
+                diagnostics.push_back({ "FSIM-ELAB-SVSPEC-001",
+                    std::string { description }
+                        + " is not a locally static integral expression: "
+                        + error,
+                    span });
+                return std::nullopt;
+            }
+            expression = value->expression(span);
+            return value;
+        };
         for (auto& block : result.unit.verilog_specify_blocks) {
             for (auto& declaration : block.specparams) {
                 auto value = specialize_specparam_expression(
@@ -1448,13 +1356,11 @@ SpecializedUnit specialize_unit(
                 specialize_optional(
                     declaration.path_pulse_error_limit);
                 if (declaration.path_pulse_reject_delay) {
-                    declaration.path_pulse_reject_delay->expression =
-                        declaration.value;
+                    declaration.path_pulse_reject_delay->expression = declaration.value;
                 }
                 if (declaration.path_pulse_error_delay
                     && declaration.path_pulse_error_limit) {
-                    declaration.path_pulse_error_delay->expression =
-                        *declaration.path_pulse_error_limit;
+                    declaration.path_pulse_error_delay->expression = *declaration.path_pulse_error_limit;
                 }
             }
         }
@@ -1477,10 +1383,8 @@ SpecializedUnit specialize_unit(
             result.environment,
             domains,
             diagnostics);
-        result.string_environment =
-            std::move(systemverilog_string_environment);
-        result.scalar_environment =
-            std::move(systemverilog_scalar_environment);
+        result.string_environment = std::move(systemverilog_string_environment);
+        result.scalar_environment = std::move(systemverilog_scalar_environment);
     } else if (is_vhdl) {
         fold_vhdl_static_type_expressions(
             result.unit, result.environment, diagnostics);
@@ -1489,7 +1393,7 @@ SpecializedUnit specialize_unit(
         // are not locally static remain in the tree for runtime lowering.
         fold_systemverilog_constant_functions(
             result.unit,
-            {},
+            { },
             result.environment,
             diagnostics);
     }
@@ -1521,26 +1425,24 @@ SpecializedUnit specialize_unit(
         }
         const auto width = alias.type.width();
         if (!width || *width == 0
-            || *width > 16U * 1024U * 1024U) {
-            diagnostics.push_back({
-                "FSIM-ELAB-SVENUM-001",
+            || *width > std::numeric_limits<std::size_t>::max()) {
+            diagnostics.push_back({ "FSIM-ELAB-SVENUM-001",
                 "enum '" + alias.name
-                    + "' has an unsupported base width",
-                alias.span});
+                    + "' has no host-addressable base width",
+                alias.span });
             continue;
         }
         std::unordered_map<std::string, std::string> enum_values;
         for (const auto& literal : alias.enum_literals) {
-            const auto raw_value =
-                systemverilog_raw_enum_environment.find(
-                    literal.name);
-            const auto converted_value =
-                systemverilog_environment.find(literal.name);
+            const auto raw_value = systemverilog_raw_enum_environment.find(
+                literal.name);
+            const auto converted_value = systemverilog_environment.find(literal.name);
             const auto* value = raw_value
                     != systemverilog_raw_enum_environment.end()
                 ? &raw_value->second
                 : converted_value != systemverilog_environment.end()
-                    ? &converted_value->second : nullptr;
+                ? &converted_value->second
+                : nullptr;
             if (value == nullptr) {
                 continue;
             }
@@ -1550,20 +1452,19 @@ SpecializedUnit specialize_unit(
                         static_cast<std::size_t>(bit)));
             };
             bool in_range = value->known();
-            const auto source_width =
-                static_cast<std::uint64_t>(value->width);
+            const auto source_width = static_cast<std::uint64_t>(value->width);
             if (in_range && alias.type.is_signed) {
                 if (value->is_signed) {
                     if (source_width > *width) {
                         const auto extension = state_at(*width - 1U);
                         for (auto bit = *width;
-                             in_range && bit < source_width; ++bit) {
+                            in_range && bit < source_width; ++bit) {
                             in_range = state_at(bit) == extension;
                         }
                     }
                 } else {
                     for (auto bit = *width - 1U;
-                         in_range && bit < source_width; ++bit) {
+                        in_range && bit < source_width; ++bit) {
                         in_range = state_at(bit) == Logic4::zero;
                     }
                 }
@@ -1573,39 +1474,37 @@ SpecializedUnit specialize_unit(
                     in_range = false;
                 }
                 for (auto bit = *width;
-                     in_range && bit < source_width; ++bit) {
+                    in_range && bit < source_width; ++bit) {
                     in_range = state_at(bit) == Logic4::zero;
                 }
             }
-            auto normalized = PackedLogic4{
-                static_cast<std::size_t>(*width), Logic4::zero};
+            auto normalized = PackedLogic4 {
+                static_cast<std::size_t>(*width), Logic4::zero
+            };
             if (value->is_signed && source_width != 0
                 && state_at(source_width - 1U) == Logic4::one) {
                 normalized.fill(Logic4::one);
             }
             for (std::uint64_t bit = 0;
-                 bit < std::min(*width, source_width); ++bit) {
+                bit < std::min(*width, source_width); ++bit) {
                 normalized.set(
                     static_cast<std::size_t>(bit), state_at(bit));
             }
             if (!in_range) {
-                diagnostics.push_back({
-                    "FSIM-ELAB-SVENUM-001",
+                diagnostics.push_back({ "FSIM-ELAB-SVENUM-001",
                     "enum literal '" + literal.name
                         + "' does not fit the base type of '"
                         + alias.name + "'",
-                    literal.span});
+                    literal.span });
             }
-            const auto [duplicate, inserted] =
-                enum_values.emplace(
-                    normalized.to_msb_string(), literal.name);
+            const auto [duplicate, inserted] = enum_values.emplace(
+                normalized.to_msb_string(), literal.name);
             if (!inserted) {
-                diagnostics.push_back({
-                    "FSIM-ELAB-SVENUM-002",
+                diagnostics.push_back({ "FSIM-ELAB-SVENUM-002",
                     "enum literals '" + duplicate->second
                         + "' and '" + literal.name
                         + "' have the same value",
-                    literal.span});
+                    literal.span });
             }
         }
     }
@@ -1638,82 +1537,81 @@ SpecializedUnit specialize_unit(
             auto& owner,
             const ConstantEnvironment& enclosing_environment,
             const ConstantDomainEnvironment& enclosing_domains) -> void {
-          auto local_environment = enclosing_environment;
-          auto local_domains = enclosing_domains;
-          frontend::GenerateBody declarations;
-          declarations.constants = std::move(owner.constants);
-          declarations.type_aliases = std::move(owner.type_aliases);
-          evaluate_generated_constants(
-              declarations,
-              local_environment,
-              local_domains,
-              source.language,
-              diagnostics);
-          owner.constants = std::move(declarations.constants);
-          owner.type_aliases =
-              std::move(declarations.type_aliases);
-          for (auto& alias : owner.type_aliases) {
-              substitute_parameters(
-                  alias.type,
-                  local_environment,
-                  local_domains,
-                  diagnostics,
-                  source.language);
-          }
-          for (auto& alias : owner.signal_aliases) {
-              substitute_parameters(
-                  alias.type,
-                  local_environment,
-                  local_domains,
-                  diagnostics,
-                  source.language);
-          }
-          for (auto& variable : owner.variables) {
-              substitute_parameters(
-                  variable,
-                  local_environment,
-                  local_domains,
-                  diagnostics,
-                  source.language);
-          }
-          for (auto& package : owner.package_instances) {
-              for (auto& actual : package.generic_map) {
-                  substitute_parameters(
-                      actual.value,
-                      local_environment,
-                      local_domains,
-                      source.language);
-                  if (actual.type_value) {
-                      substitute_parameters(
-                          *actual.type_value,
-                          local_environment,
-                          local_domains,
-                          diagnostics,
-                          source.language);
-                  }
-              }
-          }
-          for (auto& function : owner.functions) {
-              self(
-                  self,
-                  function,
-                  local_environment,
-                  local_domains);
-          }
-          for (auto& procedure : owner.procedures) {
-              self(
-                  self,
-                  procedure,
-                  local_environment,
-                  local_domains);
-          }
-          substitute_parameters(
-              owner.statements,
-              local_environment,
-              local_domains,
-              diagnostics,
-              source.language);
-        };
+        auto local_environment = enclosing_environment;
+        auto local_domains = enclosing_domains;
+        frontend::GenerateBody declarations;
+        declarations.constants = std::move(owner.constants);
+        declarations.type_aliases = std::move(owner.type_aliases);
+        evaluate_generated_constants(
+            declarations,
+            local_environment,
+            local_domains,
+            source.language,
+            diagnostics);
+        owner.constants = std::move(declarations.constants);
+        owner.type_aliases = std::move(declarations.type_aliases);
+        for (auto& alias : owner.type_aliases) {
+            substitute_parameters(
+                alias.type,
+                local_environment,
+                local_domains,
+                diagnostics,
+                source.language);
+        }
+        for (auto& alias : owner.signal_aliases) {
+            substitute_parameters(
+                alias.type,
+                local_environment,
+                local_domains,
+                diagnostics,
+                source.language);
+        }
+        for (auto& variable : owner.variables) {
+            substitute_parameters(
+                variable,
+                local_environment,
+                local_domains,
+                diagnostics,
+                source.language);
+        }
+        for (auto& package : owner.package_instances) {
+            for (auto& actual : package.generic_map) {
+                substitute_parameters(
+                    actual.value,
+                    local_environment,
+                    local_domains,
+                    source.language);
+                if (actual.type_value) {
+                    substitute_parameters(
+                        *actual.type_value,
+                        local_environment,
+                        local_domains,
+                        diagnostics,
+                        source.language);
+                }
+            }
+        }
+        for (auto& function : owner.functions) {
+            self(
+                self,
+                function,
+                local_environment,
+                local_domains);
+        }
+        for (auto& procedure : owner.procedures) {
+            self(
+                self,
+                procedure,
+                local_environment,
+                local_domains);
+        }
+        substitute_parameters(
+            owner.statements,
+            local_environment,
+            local_domains,
+            diagnostics,
+            source.language);
+    };
     for (auto& function : result.unit.functions) {
         substitute_parameters(
             function.return_type,
@@ -1783,65 +1681,65 @@ SpecializedUnit specialize_unit(
     }
     const auto substitute_generic_parameters =
         [&](auto& parameters) {
-          for (auto& parameter : parameters) {
-            if (parameter.kind
-                    == frontend::ParameterKind::Type
-                && parameter.default_type) {
-              substitute_parameters(
-                  *parameter.default_type,
-                  result.environment,
-                  domains,
-                  diagnostics,
-                  source.language);
-            } else if (
-                parameter.kind
-                    == frontend::ParameterKind::Function
-                && parameter.function_profile) {
-              substitute_parameters(
-                  parameter.function_profile->return_type,
-                  result.environment,
-                  domains,
-                  diagnostics,
-                  source.language);
-              for (auto& argument :
-                   parameter.function_profile->arguments) {
-                substitute_parameters(
-                    argument.type,
-                    result.environment,
-                    domains,
-                    diagnostics,
-                    source.language);
-              }
-            } else if (
-                parameter.kind
-                    == frontend::ParameterKind::Procedure
-                && parameter.procedure_profile) {
-              for (auto& argument :
-                   parameter.procedure_profile->arguments) {
-                substitute_parameters(
-                    argument.type,
-                    result.environment,
-                    domains,
-                    diagnostics,
-                    source.language);
-              }
-            } else {
-              substitute_parameters(
-                  parameter.type,
-                  result.environment,
-                  domains,
-                  diagnostics,
-                  source.language);
-              substitute_parameters(
-                  parameter.default_value,
-                  result.environment,
-                  domains,
-                  source.language);
+            for (auto& parameter : parameters) {
+                if (parameter.kind
+                        == frontend::ParameterKind::Type
+                    && parameter.default_type) {
+                    substitute_parameters(
+                        *parameter.default_type,
+                        result.environment,
+                        domains,
+                        diagnostics,
+                        source.language);
+                } else if (
+                    parameter.kind
+                        == frontend::ParameterKind::Function
+                    && parameter.function_profile) {
+                    substitute_parameters(
+                        parameter.function_profile->return_type,
+                        result.environment,
+                        domains,
+                        diagnostics,
+                        source.language);
+                    for (auto& argument :
+                        parameter.function_profile->arguments) {
+                        substitute_parameters(
+                            argument.type,
+                            result.environment,
+                            domains,
+                            diagnostics,
+                            source.language);
+                    }
+                } else if (
+                    parameter.kind
+                        == frontend::ParameterKind::Procedure
+                    && parameter.procedure_profile) {
+                    for (auto& argument :
+                        parameter.procedure_profile->arguments) {
+                        substitute_parameters(
+                            argument.type,
+                            result.environment,
+                            domains,
+                            diagnostics,
+                            source.language);
+                    }
+                } else {
+                    substitute_parameters(
+                        parameter.type,
+                        result.environment,
+                        domains,
+                        diagnostics,
+                        source.language);
+                    substitute_parameters(
+                        parameter.default_value,
+                        result.environment,
+                        domains,
+                        source.language);
+                }
             }
-          }
         };
     for (auto& generic :
-         result.unit.generic_function_templates) {
+        result.unit.generic_function_templates) {
         substitute_generic_parameters(
             generic.generic_parameters);
         auto& function = generic.function;
@@ -1861,7 +1759,7 @@ SpecializedUnit specialize_unit(
         }
     }
     for (auto& generic :
-         result.unit.generic_procedure_templates) {
+        result.unit.generic_procedure_templates) {
         substitute_generic_parameters(
             generic.generic_parameters);
         auto& procedure = generic.procedure;
@@ -1883,23 +1781,23 @@ SpecializedUnit specialize_unit(
     }
     const auto substitute_generic_maps =
         [&](auto& instances) {
-          for (auto& instance : instances) {
-            for (auto& actual : instance.generic_map) {
-              substitute_parameters(
-                  actual.value,
-                  result.environment,
-                  domains,
-                  source.language);
-              if (actual.type_value) {
-                substitute_parameters(
-                    *actual.type_value,
-                    result.environment,
-                    domains,
-                    diagnostics,
-                    source.language);
-              }
+            for (auto& instance : instances) {
+                for (auto& actual : instance.generic_map) {
+                    substitute_parameters(
+                        actual.value,
+                        result.environment,
+                        domains,
+                        source.language);
+                    if (actual.type_value) {
+                        substitute_parameters(
+                            *actual.type_value,
+                            result.environment,
+                            domains,
+                            diagnostics,
+                            source.language);
+                    }
+                }
             }
-          }
         };
     substitute_generic_maps(
         result.unit.generic_function_instances);
@@ -1934,8 +1832,7 @@ SpecializedUnit specialize_unit(
         expand_specialized_unit_generates(result, diagnostics);
     }
     if (is_verilog) {
-        result.integral_environment =
-            std::move(systemverilog_environment);
+        result.integral_environment = std::move(systemverilog_environment);
     }
     return result;
 }
@@ -1943,14 +1840,15 @@ SpecializedUnit specialize_unit(
 void expand_specialized_unit_generates(
     SpecializedUnit& specialized,
     std::vector<Diagnostic>& diagnostics,
-    const VhdlBlockInterfacePreparer* block_preparer) {
+    const VhdlBlockInterfacePreparer* block_preparer)
+{
     expand_generate_regions(
         specialized.unit.generate_regions,
         specialized.environment,
         specialized.domains,
         specialized.unit.language,
-        {},
-        {},
+        { },
+        { },
         specialized.unit,
         diagnostics,
         block_preparer);
@@ -1958,113 +1856,112 @@ void expand_specialized_unit_generates(
     apply_net_delays(specialized.unit, diagnostics);
     std::vector<frontend::Instance> expanded_instances;
     for (auto& instance : specialized.unit.instances) {
-      if (instance.array_indices.empty()) {
-        expanded_instances.push_back(std::move(instance));
-        continue;
-      }
-      for (std::size_t ordinal = 0;
-           ordinal < instance.array_indices.size(); ++ordinal) {
-        const auto index = instance.array_indices[ordinal];
-        auto expanded = instance;
-        expanded.name += "[" + std::to_string(index) + "]";
-        expanded.array_indices.clear();
-        if (instance.udp_instance) {
-          for (std::size_t connection_index = 0;
-               connection_index < expanded.connections.size();
-               ++connection_index) {
-            auto& connection = expanded.connections[connection_index];
-            if (connection.value.kind
-                != frontend::ExpressionKind::Identifier) {
-              continue;
-            }
-            const auto find_signal = [&](const auto& declarations) {
-              return std::ranges::find(
-                  declarations,
-                  connection.value.text,
-                  &frontend::SignalDeclaration::name);
-            };
-            const frontend::SignalDeclaration* declaration = nullptr;
-            const auto signal = find_signal(specialized.unit.signals);
-            if (signal != specialized.unit.signals.end()) {
-              declaration = &*signal;
-            } else {
-              const auto port = find_signal(specialized.unit.ports);
-              if (port != specialized.unit.ports.end()) {
-                declaration = &*port;
-              }
-            }
-            if (declaration == nullptr) {
-              continue;
-            }
-            const auto width = declaration->type.width();
-            if (width && *width == 1) {
-              continue;
-            }
-            if (!width
-                || *width != instance.array_indices.size()
-                || !declaration->type.packed_range) {
-              diagnostics.push_back({
-                  "FSIM-ELAB-BIND-064",
-                  "UDP instance-array terminal '"
-                      + connection.value.text
-                      + "' must be scalar or match the instance count",
-                  connection.span});
-              continue;
-            }
-            const auto& range = *declaration->type.packed_range;
-            const auto selected = range.left
-                + (range.descending
-                       ? -static_cast<std::int64_t>(ordinal)
-                       : static_cast<std::int64_t>(ordinal));
-            auto base = connection.value;
-            auto selected_expression = frontend::Expression{
-                frontend::ExpressionKind::Index,
-                "",
-                {std::move(base),
-                 frontend::Expression{
-                     frontend::ExpressionKind::IntegerLiteral,
-                     std::to_string(selected),
-                     {},
-                     connection.span}},
-                connection.span};
-            const auto alias = "$udp_array$" + expanded.name + "$"
-                + std::to_string(connection_index);
-            specialized.unit.signals.emplace_back(
-                alias,
-                frontend::Type{
-                    frontend::ValueDomain::Logic4,
-                    "wire",
-                    std::nullopt,
-                    false},
-                frontend::PortDirection::Unknown,
-                false,
-                connection.span);
-            connection.value = frontend::Expression{
-                frontend::ExpressionKind::Identifier,
-                alias,
-                {},
-                connection.span};
-            frontend::Statement bridge;
-            bridge.kind = frontend::StatementKind::Assignment;
-            bridge.assignment_kind = frontend::AssignmentKind::Continuous;
-            if (connection_index == 0) {
-              bridge.target = std::move(selected_expression);
-              bridge.value = connection.value;
-            } else {
-              bridge.target = connection.value;
-              bridge.value = std::move(selected_expression);
-            }
-            bridge.span = connection.span;
-            specialized.unit.concurrent_statements.push_back(
-                std::move(bridge));
-          }
+        if (instance.array_indices.empty()) {
+            expanded_instances.push_back(std::move(instance));
+            continue;
         }
-        expanded_instances.push_back(std::move(expanded));
-      }
+        for (std::size_t ordinal = 0;
+            ordinal < instance.array_indices.size(); ++ordinal) {
+            const auto index = instance.array_indices[ordinal];
+            auto expanded = instance;
+            expanded.name += "[" + std::to_string(index) + "]";
+            expanded.array_indices.clear();
+            if (instance.udp_instance) {
+                for (std::size_t connection_index = 0;
+                    connection_index < expanded.connections.size();
+                    ++connection_index) {
+                    auto& connection = expanded.connections[connection_index];
+                    if (connection.value.kind
+                        != frontend::ExpressionKind::Identifier) {
+                        continue;
+                    }
+                    const auto find_signal = [&](const auto& declarations) {
+                        return std::ranges::find(
+                            declarations,
+                            connection.value.text,
+                            &frontend::SignalDeclaration::name);
+                    };
+                    const frontend::SignalDeclaration* declaration = nullptr;
+                    const auto signal = find_signal(specialized.unit.signals);
+                    if (signal != specialized.unit.signals.end()) {
+                        declaration = &*signal;
+                    } else {
+                        const auto port = find_signal(specialized.unit.ports);
+                        if (port != specialized.unit.ports.end()) {
+                            declaration = &*port;
+                        }
+                    }
+                    if (declaration == nullptr) {
+                        continue;
+                    }
+                    const auto width = declaration->type.width();
+                    if (width && *width == 1) {
+                        continue;
+                    }
+                    if (!width
+                        || *width != instance.array_indices.size()
+                        || !declaration->type.packed_range) {
+                        diagnostics.push_back({ "FSIM-ELAB-BIND-064",
+                            "UDP instance-array terminal '"
+                                + connection.value.text
+                                + "' must be scalar or match the instance count",
+                            connection.span });
+                        continue;
+                    }
+                    const auto& range = *declaration->type.packed_range;
+                    const auto selected = range.left
+                        + (range.descending
+                                ? -static_cast<std::int64_t>(ordinal)
+                                : static_cast<std::int64_t>(ordinal));
+                    auto base = connection.value;
+                    auto selected_expression = frontend::Expression {
+                        frontend::ExpressionKind::Index,
+                        "",
+                        { std::move(base),
+                            frontend::Expression {
+                                frontend::ExpressionKind::IntegerLiteral,
+                                std::to_string(selected),
+                                { },
+                                connection.span } },
+                        connection.span
+                    };
+                    const auto alias = "$udp_array$" + expanded.name + "$"
+                        + std::to_string(connection_index);
+                    specialized.unit.signals.emplace_back(
+                        alias,
+                        frontend::Type {
+                            frontend::ValueDomain::Logic4,
+                            "wire",
+                            std::nullopt,
+                            false },
+                        frontend::PortDirection::Unknown,
+                        false,
+                        connection.span);
+                    connection.value = frontend::Expression {
+                        frontend::ExpressionKind::Identifier,
+                        alias,
+                        { },
+                        connection.span
+                    };
+                    frontend::Statement bridge;
+                    bridge.kind = frontend::StatementKind::Assignment;
+                    bridge.assignment_kind = frontend::AssignmentKind::Continuous;
+                    if (connection_index == 0) {
+                        bridge.target = std::move(selected_expression);
+                        bridge.value = connection.value;
+                    } else {
+                        bridge.target = connection.value;
+                        bridge.value = std::move(selected_expression);
+                    }
+                    bridge.span = connection.span;
+                    specialized.unit.concurrent_statements.push_back(
+                        std::move(bridge));
+                }
+            }
+            expanded_instances.push_back(std::move(expanded));
+        }
     }
     specialized.unit.instances = std::move(expanded_instances);
 }
-
-
 
 } // namespace fsim::elaboration::elaboration_detail

@@ -601,7 +601,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-SV-PP-008` | error | `` `else`` has no matching conditional opener. |
 | `FSIM-SV-PP-009` | error | A conditional block contains more than one `` `else``. |
 | `FSIM-SV-PP-010` | error | `` `endif`` has no matching conditional opener. |
-| `FSIM-SV-PP-011` | error | A recognized compiler directive is outside the currently implemented preprocessing subset. |
+| `FSIM-SV-PP-011` | error | A `protect` pragma is malformed, nested, unmatched, or contains encrypted payload that requires an unavailable decryption provider. |
 | `FSIM-SV-PP-012` | error | A conditional or undefinition directive lacks its required macro identifier. |
 | `FSIM-SV-PP-013` | error | Unexpected tokens follow a directive macro identifier. |
 | `FSIM-SV-PP-014` | error | A no-argument conditional directive has trailing tokens. |
@@ -635,8 +635,8 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-SV-PP-042` | error | A `` `line`` logical file name contains an invalid escape. |
 | `FSIM-SV-PP-043` | error | A `` `line`` level is not `0`, `1`, or `2`. |
 | `FSIM-SV-PP-044` | error | A macro is redefined with a different parameter list, defaults, or replacement. |
-| `FSIM-SV-PP-045` | error | A conditional compilation block opened inside an include remains open when that include ends. |
-| `FSIM-SV-PP-046` | error | An include attempts to continue or close a conditional block opened by its parent source. |
+| `FSIM-SV-PP-045` | error | Reserved legacy diagnostic; textual include semantics no longer emit an include-end conditional restriction. |
+| `FSIM-SV-PP-046` | error | Reserved legacy diagnostic; textual include semantics no longer emit a cross-file conditional restriction. |
 | `FSIM-SV-PP-047` | error | `` `celldefine`` is nested or repeated while already active. |
 | `FSIM-SV-PP-048` | error | `` `nounconnected_drive`` appears without active `` `unconnected_drive`` state. |
 | `FSIM-SV-PP-049` | error | A conditional directive embedded in a macro replacement is malformed or unmatched. |
@@ -755,7 +755,6 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-SV-PARSE-205` | error | A repeated intra-assignment event control is missing its `@` event marker. |
 | `FSIM-SV-PARSE-206` | error | A procedural `fork` block is missing its terminating `join`, `join_any`, or `join_none`. |
 | `FSIM-SV-PARSE-207` | error | A `wait fork` statement is missing its terminating semicolon. |
-| `FSIM-SV-PARSE-208` | error | A bounded `disable` process-control statement does not select `fork`. |
 | `FSIM-SV-PARSE-209` | error | A `disable fork` statement is missing its terminating semicolon. |
 | `FSIM-SV-PARSE-210` | error | A static gate-instance array range is missing its colon. |
 | `FSIM-SV-PARSE-211` | error | A static gate-instance array range is missing its closing bracket. |
@@ -883,6 +882,16 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-SV-PARSE-333` | error | A procedural SystemVerilog `foreach` header is missing its closing parenthesis. |
 | `FSIM-SV-PARSE-334` | error | A `randomize with` clause is missing its opening constraint brace. |
 | `FSIM-SV-PARSE-335` | error | A `randomize with` constraint block is unterminated. |
+| `FSIM-SV-PARSE-336` | error | A Verilog attribute instance has an empty, missing, or malformed attribute specification. |
+| `FSIM-SV-PARSE-337` | error | A Verilog attribute instance is missing its closing `*)`. |
+| `FSIM-SV-PARSE-338` | error | A Verilog attribute assignment is missing its constant expression. |
+| `FSIM-SV-PARSE-339` | error | A `defparam` hierarchy index is missing its closing bracket. |
+| `FSIM-SV-PARSE-340` | error | A `defparam` target is missing its assignment operator. |
+| `FSIM-SV-PARSE-341` | error | A `defparam` declaration is missing its terminating semicolon. |
+| `FSIM-SV-PARSE-342` | error | A procedural continuous assignment is missing its assignment operator. |
+| `FSIM-SV-PARSE-343` | error | A procedural continuous assignment is missing its terminating semicolon. |
+| `FSIM-SV-PARSE-344` | error | A procedural `deassign` statement is missing its terminating semicolon. |
+| `FSIM-SV-PARSE-345` | error | A concatenated assignment target is missing its closing brace. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -994,7 +1003,8 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-VERILOG-SEM-008` | error | A nonblocking named-event trigger (`->>`) was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-VERILOG-SEM-009` | error | `$info`, `$warning`, or `$error` was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-VERILOG-SEM-010` | error | An increment or decrement expression was used in Verilog-2005 rather than SystemVerilog. |
-| `FSIM-VERILOG-SEM-011` | error | A procedural force or release statement was used in Verilog-2005 rather than SystemVerilog. |
+| `FSIM-VERILOG-SEM-012` | error | A Verilog-2005 memory declaration has more than one unpacked dimension. |
+| `FSIM-VERILOG-SEM-013` | error | A declaration appears in a Verilog-2005 procedural `for` initializer rather than in the surrounding named block. |
 | `FSIM-SV-SEM-002` | error | A delay magnitude is not a decimal literal. |
 | `FSIM-SV-SEM-003` | error | Duplicate module-port declaration in the module header. |
 | `FSIM-SV-SEM-004` | error | Duplicate non-ANSI body port declaration. |
@@ -1136,6 +1146,8 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-SV-SEM-228` | error | A compilation-unit callable or owner-local DPI SystemVerilog/C export name is duplicated. |
 | `FSIM-SV-SEM-229` | error | A DPI import conflicts with a native callable in the same owner scope. |
 | `FSIM-SV-SEM-230` | error | A DPI export does not resolve to a native callable of the declared kind in the same owner scope. |
+| `FSIM-SV-SEM-231` | error | A `defparam` target does not name both an instance hierarchy and a parameter. |
+| `FSIM-SV-SEM-232` | error | The final parameter segment of a `defparam` target is incorrectly indexed. |
 | `FSIM-SV-SEM-217` | error | A coverpoint or cross `weight`, `goal`, or `at_least` option is not a bounded integer in its permitted range. |
 | `FSIM-SV-SEM-218` | error | A covergroup-level weight, goal, `per_instance`, or `merge_instances` literal is outside its permitted bounded range. |
 | `FSIM-SV-SEM-219` | error | A covergroup constructor or sample formal uses a real, string, chandle, event, void, or other type outside the bounded integral coverage model. |
@@ -1195,6 +1207,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-SVCLASS-011` | error | A static class-method actual has no executable packed width. |
 | `FSIM-ELAB-SVCLASS-012` | error | A class-handle container element assignment is not a supported blocking indexed assignment. |
 | `FSIM-ELAB-SVCLASS-013` | error | A dynamic class-handle container assignment is not a supported `new[size]` operation. |
+| `FSIM-ELAB-SVCONCAT-001` | error | A concatenated assignment or force target is empty, unsized, overflowing, or used with an unsupported update form. |
 | `FSIM-ELAB-SVCLASS-014` | error | A class-handle container read lacks a receiver or index. |
 | `FSIM-ELAB-SVCLASS-015` | error | A class-handle queue operation has an invalid argument profile. |
 | `FSIM-ELAB-SVCLASS-016` | error | A class-handle container expression is not a supported `pop_front` or `size` call. |
@@ -1211,7 +1224,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-SVRAND-001` | error | `std::randomize` has no arguments or appears outside SystemVerilog execution. |
 | `FSIM-ELAB-SVRAND-002` | error | A `std::randomize` argument is not a writable local identifier. |
 | `FSIM-ELAB-SVRAND-003` | error | A `std::randomize` argument is not a supported packed scalar local. |
-| `FSIM-ELAB-SVRAND-004` | error | A packed `std::randomize` local has no executable width in 1 through 64. |
+| `FSIM-ELAB-SVRAND-004` | error | A packed `std::randomize` local has no nonempty width representable by SimIR metadata. |
 | `FSIM-ELAB-SVIFACE-006` | error | A process writes through a read-only input port or modport input member. |
 | `FSIM-ELAB-SVIFACE-007` | error | A retained interface callable cannot be materialized at its same-language module boundary. |
 | `FSIM-ELAB-SVIFACE-008` | error | An interface callable is visible more than once through the same module port. |
@@ -1256,14 +1269,12 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-SV-SEM-069` | error | A bounded task local conflicts with an argument or earlier local. |
 | `FSIM-SV-SEM-071` | error | A bounded task return statement incorrectly supplies a value. |
 | `FSIM-SV-SEM-073` | error | A module or package declares the same bounded task name more than once. |
-| `FSIM-SV-SEM-074` | error | A bounded text-file system function or task appears outside SystemVerilog-2017 input. |
 | `FSIM-SV-SEM-075` | error | A bounded text-file system function has the wrong argument count. |
 | `FSIM-SV-SEM-076` | error | `$fdisplay` or `$fwrite` has a nonliteral, malformed, unsupported, or multi-value format. |
-| `FSIM-SV-SEM-077` | error | A dynamic array, queue, or associative array is used outside SystemVerilog-2017. |
+| `FSIM-SV-SEM-077` | error | A dynamic array, queue, or associative array is used outside SystemVerilog-2017; a one-dimensional static Verilog-2005 memory remains legal. |
 | `FSIM-SV-SEM-078` | error | An unpacked declaration has an unsupported dimension or associative index type. |
 | `FSIM-SV-SEM-079` | error | A bounded container has an unsupported nonintegral element type. |
 | `FSIM-SV-SEM-081` | error | A supported container method has the wrong argument count. |
-| `FSIM-SV-SEM-083` | error | A `$readmem*` or `$writemem*` task is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-084` | error | An assignment pattern is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-085` | error | An unpacked-container reduction method is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-086` | error | An unpacked-container ordering method is used outside SystemVerilog-2017. |
@@ -1412,6 +1423,10 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-DRV-001` | error | An unresolved variable has multiple process drivers. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |
+| `FSIM-ELAB-DEFPARAM-001` | error | A `defparam` hierarchy index or value cannot be resolved as a locally static SystemVerilog constant. |
+| `FSIM-ELAB-DEFPARAM-002` | error | A `defparam` target does not resolve to an elaborated descendant instance. |
+| `FSIM-ELAB-DEFPARAM-003` | error | Multiple overrides assign the same parameter on a `defparam` target. |
+| `FSIM-ELAB-DEFPARAM-004` | error | A `defparam` path crosses an unsupported language boundary or targets an object that cannot accept parameter overrides. |
 | `FSIM-ELAB-INTEGER-001` | error | A specialization-dependent VHDL integer subtype constraint cannot be evaluated. |
 | `FSIM-ELAB-INTEGER-002` | error | A VHDL integer subtype constraint is null, outside its named base subtype, or outside fsim's portable signed 32-bit representation. |
 | `FSIM-ELAB-INTEGER-003` | error | A locally static VHDL integer value lies outside its assignment target's concrete subtype range. |
@@ -1460,6 +1475,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-SVTYPE-005` | error | SystemVerilog equality compares packed struct, union, or enum values with different or missing nominal types. |
 | `FSIM-ELAB-SVPROCESS-001` | error | A process-handle expression is not a zero-argument `process::self()`, `status()`, or `completed()` call on a direct process receiver. |
 | `FSIM-ELAB-SVPROCESS-002` | error | A process-handle statement is not a zero-argument `await()` or `kill()` call on a direct process receiver. |
+| `FSIM-ELAB-SVDISABLE-001` | error | A procedural `disable` target is not visible as a named sequential or parallel block in the current lexical scope. |
 | `FSIM-ELAB-SVSYNC-001` | error | Mailbox or semaphore construction lacks a compatible 64-bit destination or uses more than one count argument. |
 | `FSIM-ELAB-SVSYNC-002` | error | A typed mailbox has no finite positive packed element width. |
 | `FSIM-ELAB-SVSYNC-003` | error | A mailbox operation has an unsupported method or argument profile. |
@@ -1484,7 +1500,6 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-SVFUNC-003` | error | A bounded function call has the wrong number of arguments. |
 | `FSIM-ELAB-SVFUNC-004` | error | A packed function return or formal type does not specialize to a positive executable width. |
 | `FSIM-ELAB-SVFUNC-005` | error | A return statement is outside an executable function or lacks a value during lowering. |
-| `FSIM-ELAB-SVFUNC-006` | error | Bounded runtime functions contain a direct or indirect recursive call cycle. |
 | `FSIM-ELAB-SVFUNC-007` | error | The same bare function name is directly visible from multiple imported SystemVerilog packages. |
 | `FSIM-ELAB-SVFUNC-008` | error | A bounded SystemVerilog function result or its whole-container destination has an incompatible container kind, element profile, queue bound, or associative index profile. |
 | `FSIM-ELAB-SVFUNC-009` | error | A bounded SystemVerilog function container argument has an incompatible kind, element profile, queue bound, or associative index profile. |
@@ -1567,7 +1582,6 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-VHPROC-007` | error | A selected procedure actual has no executable body. |
 | `FSIM-ELAB-VHPROC-008` | error | An interface-procedure actual names a function rather than a procedure. |
 | `FSIM-ELAB-VHPROC-009` | error | A selected procedure actual contains timing or a non-variable update. |
-| `FSIM-ELAB-VHPROC-010` | error | A recursive VHDL procedure call graph is unsupported. |
 | `FSIM-ELAB-VHPROC-011` | error | An interface-procedure binding conflicts with a child-local subprogram name. |
 | `FSIM-ELAB-VHPROC-012` | error | A generated or scoped procedure actual is outside the bounded interface-procedure subset. |
 | `FSIM-ELAB-VHPROC-014` | error | A VHDL procedure call names no visible procedure. |
@@ -1637,7 +1651,6 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-SVTASK-005` | error | A bounded task call has the wrong number of arguments. |
 | `FSIM-ELAB-SVTASK-006` | error | A packed task formal type does not specialize to a positive executable width. |
 | `FSIM-ELAB-SVTASK-007` | error | A task return statement is outside an executable task during lowering. |
-| `FSIM-ELAB-SVTASK-008` | error | Bounded runtime tasks contain a direct or indirect recursive call cycle. |
 | `FSIM-ELAB-SVTASK-009` | error | The same bare task name is directly visible from multiple imported SystemVerilog packages. |
 | `FSIM-ELAB-SVTASK-010` | error | A suspending bounded task is called from `final`, `always_comb`, or `always_latch`. |
 | `FSIM-ELAB-SVTASK-011` | error | A bounded SystemVerilog task container input or inout actual has an incompatible kind, element profile, queue bound, or associative index profile. |
@@ -1812,12 +1825,12 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-VHFORCE-001` | error | A VHDL force or release target is not a supported signal, static index, or static slice. |
 | `FSIM-ELAB-VHFORCE-002` | error | A VHDL force or release target is not a visible packed signal with an executable layout. |
 | `FSIM-ELAB-VHFORCE-003` | error | A four- or nine-state VHDL value is forced onto a two-state target without explicit conversion. |
-| `FSIM-ELAB-SVFILE-001` | error | A bounded SystemVerilog text-file handle is not a 32-bit integer expression. |
-| `FSIM-ELAB-SVFILE-002` | error | A file read/error target is not a whole mutable string object or automatic local. |
-| `FSIM-ELAB-SVFILE-003` | error | `$fopen` does not have bounded SystemVerilog byte-string filename and mode operands. |
-| `FSIM-ELAB-SVFILE-004` | error | `$fgets` does not have a mutable string target and integer handle. |
+| `FSIM-ELAB-SVFILE-001` | error | A Verilog/SystemVerilog text-file handle is not a 32-bit integer expression. |
+| `FSIM-ELAB-SVFILE-002` | error | A file read/error target is not a whole writable packed or string variable. |
+| `FSIM-ELAB-SVFILE-003` | error | `$fopen` does not have compatible Verilog byte-string filename and mode operands. |
+| `FSIM-ELAB-SVFILE-004` | error | `$fgets` does not have a writable packed or string target and integer handle. |
 | `FSIM-ELAB-SVFILE-005` | error | `$feof` does not have one integer handle. |
-| `FSIM-ELAB-SVFILE-006` | error | `$ferror` does not have an integer handle and mutable string target. |
+| `FSIM-ELAB-SVFILE-006` | error | `$ferror` does not have an integer handle and writable packed or string target. |
 | `FSIM-ELAB-SVFILE-007` | error | A bounded formatted file-output value cannot be lowered. |
 | `FSIM-ELAB-SVFILE-008` | error | A module integer initializer is not a known 32-bit constant. |
 | `FSIM-ELAB-SVFILE-009` | error | `$fgetc` does not have one integer file handle. |
@@ -1925,7 +1938,6 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-SVFIND-006` | error | A predicate container locator result is used outside a whole-queue assignment. |
 | `FSIM-ELAB-SVFIND-007` | error | A named predicate-container iterator is malformed or collides with a visible object. |
 | `FSIM-ELAB-SVFIND-008` | error | A predicate-container iterator has an unknown or unsupported index reference, selection, call, or mixed element/index comparison profile. |
-| `FSIM-ELAB-SVMEMORY-001` | error | A `$readmem*` or `$writemem*` task is lowered outside SystemVerilog-2017. |
 | `FSIM-ELAB-SVMEMORY-002` | error | A memory-file task file name is not a bounded string expression. |
 | `FSIM-ELAB-SVMEMORY-003` | error | A memory-file task object is not a direct bounded static unpacked-array object. |
 | `FSIM-ELAB-SVMEMORY-004` | error | A memory-file task start or finish argument is not a 32-bit integral expression. |
@@ -1941,6 +1953,8 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-SVPORT-010` | error | A mutable string module port is unconnected, crosses a language boundary, or does not use a direct same-language string object actual. |
 | `FSIM-ELAB-SVPORT-011` | error | A mutable string input port is written directly or through a descendant output/inout port. |
 | `FSIM-ELAB-SVPORT-012` | error | Sibling output/inout mutable string ports drive the same object. |
+| `FSIM-ELAB-SVPROCASSIGN-001` | error | A procedural continuous assignment cannot allocate its activation state or does not target a visible process-external packed variable. |
+| `FSIM-ELAB-SVPROCASSIGN-002` | error | A procedural continuous assignment cannot allocate its generated reactive driver process. |
 | `FSIM-ELAB-SVSCALAR-001` | error | A contextual SystemVerilog scalar literal cannot be converted to its required scalar kind. |
 | `FSIM-ELAB-SVSCALAR-002` | error | A runtime real/time/chandle expression uses an operator outside the executable arithmetic/comparison subset. |
 | `FSIM-ELAB-SVSTRING-001` | error | A SystemVerilog string parameter/localparam default is not a supported immutable constant-string expression. |
@@ -1978,7 +1992,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-SVAGG-007` | error | A packed aggregate member initializer is not a valid contextual constant. |
 | `FSIM-ELAB-SVCAST-001` | error | Malformed cast HIR does not contain exactly one operand. |
 | `FSIM-ELAB-SVCAST-002` | error | A SystemVerilog cast names a type that is not visible. |
-| `FSIM-ELAB-SVCAST-003` | error | A SystemVerilog cast type has no executable width in 1..16777216. |
+| `FSIM-ELAB-SVCAST-003` | error | A SystemVerilog cast type has zero width or exceeds the host-addressable executable-width domain. |
 | `FSIM-ELAB-SVCAST-004` | error | A four-state-to-two-state cast is outside the bounded aggregate cast slice. |
 | `FSIM-ELAB-SVMDARRAY-001` | error | A multidimensional static-array access does not supply exactly one index per declared unpacked dimension. |
 | `FSIM-ELAB-SVMDARRAY-002` | error | A runtime multidimensional static-array index cannot lower to a signed 32-bit integral value. |
@@ -2264,7 +2278,7 @@ production emitters use literal or constant literal codes, so the complete
 current set is covered.
 
 The Batch 162 UVM closure audit additionally freezes all 82 unique
-`FSIM-UVM-*` codes inside the current 2,138-code catalog and requires explicit
+`FSIM-UVM-*` codes inside the current 2,152-code catalog and requires explicit
 race/deadlock, cancellation, stale/cross-owner, resource, callback/rollback,
 and checkpoint/replay owners. The count is an inventory check; the individual
 table entries above remain the authority for severity and meaning.

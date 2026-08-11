@@ -62,7 +62,7 @@ void ValueOperationLowerer::lower(
                 branch_to_next();
                 return;
               }
-              auto *mask = constant_i64(context, width_mask(source.width));
+              auto* mask = packed_mask(context, source.width);
               auto *aval = builder.CreateAnd(
                   builder.CreateOr(builder.CreateNot(source.aval),
                                    source.bval),
@@ -81,16 +81,16 @@ void ValueOperationLowerer::lower(
                   load_register(
                       builder, registers, operation.source),
                   ValueKind::logic4);
-              auto *mask =
-                  constant_i64(context, width_mask(source.width));
+              auto* mask = packed_mask(context, source.width);
               auto *known_ones = builder.CreateAnd(
                   builder.CreateAnd(source.aval, mask),
                   builder.CreateNot(source.bval));
-              auto *has_one = builder.CreateICmpNE(
-                  known_ones, constant_i64(context, 0));
-              auto *has_unknown = builder.CreateICmpNE(
+              auto* has_one = builder.CreateICmpNE(
+                  known_ones,
+                  packed_constant(context, source.width, 0));
+              auto* has_unknown = builder.CreateICmpNE(
                   builder.CreateAnd(source.bval, mask),
-                  constant_i64(context, 0));
+                  packed_constant(context, source.width, 0));
               auto *not_true = builder.CreateNot(has_one);
               auto *unknown =
                   builder.CreateAnd(not_true, has_unknown);
@@ -328,51 +328,56 @@ void ValueOperationLowerer::lower(
                   load_register(
                       builder, registers, operation.amount),
                   ValueKind::logic4);
-              auto* value_mask =
-                  constant_i64(context, width_mask(value.width));
-              auto* amount_mask =
-                  constant_i64(context, width_mask(amount.width));
+              auto* value_mask = packed_mask(context, value.width);
+              auto* amount_mask = packed_mask(context, amount.width);
+              auto* amount_zero = packed_constant(
+                  context, amount.width, 0);
+              auto* amount_one = packed_constant(
+                  context, amount.width, 1);
               auto* amount_unknown = builder.CreateICmpNE(
                   builder.CreateAnd(amount.bval, amount_mask),
-                  constant_i64(context, 0));
+                  amount_zero);
               auto* raw_amount_bits =
                   builder.CreateAnd(amount.aval, amount_mask);
               llvm::Value* amount_negative =
                   llvm::ConstantInt::getFalse(context);
               llvm::Value* amount_bits = raw_amount_bits;
               if (operation.signed_amount) {
-                auto* sign_mask = constant_i64(
-                    context,
-                    std::uint64_t{1}
-                        << (amount.width - 1U));
-                amount_negative = builder.CreateICmpNE(
-                    builder.CreateAnd(
-                        raw_amount_bits, sign_mask),
-                    constant_i64(context, 0));
-                auto* magnitude = builder.CreateAnd(
-                    builder.CreateSub(
-                        constant_i64(context, 0),
-                        raw_amount_bits),
-                    amount_mask);
-                amount_bits = builder.CreateSelect(
-                    amount_negative,
-                    magnitude,
-                    raw_amount_bits);
+                  auto* sign_mask = builder.CreateShl(
+                      amount_one,
+                      packed_constant(
+                          context, amount.width, amount.width - 1U));
+                  amount_negative = builder.CreateICmpNE(
+                      builder.CreateAnd(
+                          raw_amount_bits, sign_mask),
+                      amount_zero);
+                  auto* magnitude = builder.CreateAnd(
+                      builder.CreateSub(
+                          amount_zero,
+                          raw_amount_bits),
+                      amount_mask);
+                  amount_bits = builder.CreateSelect(
+                      amount_negative,
+                      magnitude,
+                      raw_amount_bits);
               }
               auto* amount_too_large = builder.CreateICmpUGE(
-                  amount_bits, constant_i64(context, value.width));
+                  amount_bits,
+                  packed_constant(context, amount.width, value.width));
               const auto rotating =
                   operation.operation == ShiftOperator::rotate_left
                   || operation.operation == ShiftOperator::rotate_right;
-              auto* safe_amount =
-                  rotating
-                      ? builder.CreateURem(
-                            amount_bits,
-                            constant_i64(context, value.width))
-                      : builder.CreateSelect(
-                            amount_too_large,
-                            constant_i64(context, 0),
-                            amount_bits);
+              auto* safe_amount = rotating
+                  ? builder.CreateURem(
+                        amount_bits,
+                        packed_constant(
+                            context, amount.width, value.width))
+                  : builder.CreateSelect(
+                        amount_too_large,
+                        amount_zero,
+                        amount_bits);
+              auto* value_amount = builder.CreateZExtOrTrunc(
+                  safe_amount, packed_integer_type(context, value.width));
               const auto shift_component =
                   [&](llvm::Value* component,
                       const ShiftOperator selected_operation,
@@ -382,84 +387,88 @@ void ValueOperationLowerer::lower(
                             == ShiftOperator::rotate_left
                         || selected_operation
                             == ShiftOperator::rotate_right) {
-                      auto* inverse_amount = builder.CreateURem(
-                          builder.CreateSub(
-                              constant_i64(context, value.width),
-                              safe_amount),
-                          constant_i64(context, value.width));
-                      auto* left_amount =
-                          selected_operation
-                                  == ShiftOperator::rotate_left
-                              ? safe_amount
-                              : inverse_amount;
-                      auto* right_amount =
-                          selected_operation
-                                  == ShiftOperator::rotate_left
-                              ? inverse_amount
-                              : safe_amount;
-                      return builder.CreateOr(
-                          builder.CreateShl(component, left_amount),
-                          builder.CreateLShr(component, right_amount));
+                        auto* inverse_amount = builder.CreateURem(
+                            builder.CreateSub(
+                                packed_constant(
+                                    context, value.width, value.width),
+                                value_amount),
+                            packed_constant(
+                                context, value.width, value.width));
+                        auto* left_amount = selected_operation
+                                == ShiftOperator::rotate_left
+                            ? value_amount
+                            : inverse_amount;
+                        auto* right_amount = selected_operation
+                                == ShiftOperator::rotate_left
+                            ? inverse_amount
+                            : value_amount;
+                        return builder.CreateOr(
+                            builder.CreateShl(component, left_amount),
+                            builder.CreateLShr(component, right_amount));
                     }
                     if (selected_operation
                             == ShiftOperator::logical_left
                         || selected_operation
                             == ShiftOperator::arithmetic_left) {
-                      auto* shifted = builder.CreateShl(
-                          component, safe_amount);
-                      if (selected_operation
-                          == ShiftOperator::arithmetic_left) {
-                        auto* fill_mask = builder.CreateSub(
-                            builder.CreateShl(
-                                constant_i64(context, 1),
-                                safe_amount),
-                            constant_i64(context, 1));
-                        auto* rightmost = builder.CreateAnd(
-                            component, constant_i64(context, 1));
-                        auto* fill = builder.CreateSelect(
-                            builder.CreateICmpNE(
-                                rightmost,
-                                constant_i64(context, 0)),
-                            fill_mask,
-                            constant_i64(context, 0));
-                        return builder.CreateOr(shifted, fill);
-                      }
+                        auto* shifted = builder.CreateShl(
+                            component, value_amount);
+                        if (selected_operation
+                            == ShiftOperator::arithmetic_left) {
+                            auto* fill_mask = builder.CreateSub(
+                                builder.CreateShl(
+                                    packed_constant(context, value.width, 1),
+                                    value_amount),
+                                packed_constant(context, value.width, 1));
+                            auto* rightmost = builder.CreateAnd(
+                                component,
+                                packed_constant(context, value.width, 1));
+                            auto* fill = builder.CreateSelect(
+                                builder.CreateICmpNE(
+                                    rightmost,
+                                    packed_constant(
+                                        context, value.width, 0)),
+                                fill_mask,
+                                packed_constant(context, value.width, 0));
+                            return builder.CreateOr(shifted, fill);
+                        }
                       if (zero_plane) {
-                        auto* fill_mask = builder.CreateSub(
-                            builder.CreateShl(
-                                constant_i64(context, 1),
-                                safe_amount),
-                            constant_i64(context, 1));
-                        return builder.CreateOr(
-                            shifted, fill_mask);
+                          auto* fill_mask = builder.CreateSub(
+                              builder.CreateShl(
+                                  packed_constant(context, value.width, 1),
+                                  value_amount),
+                              packed_constant(context, value.width, 1));
+                          return builder.CreateOr(
+                              shifted, fill_mask);
                       }
                       return shifted;
                     }
                     if (selected_operation
                         == ShiftOperator::logical_right) {
-                      auto* shifted = builder.CreateLShr(
-                          component, safe_amount);
-                      if (zero_plane) {
-                        auto* fill_mask = builder.CreateXor(
-                            value_mask,
-                            builder.CreateLShr(
-                                value_mask, safe_amount));
-                        return builder.CreateOr(
-                            shifted, fill_mask);
-                      }
+                        auto* shifted = builder.CreateLShr(
+                            component, value_amount);
+                        if (zero_plane) {
+                            auto* fill_mask = builder.CreateXor(
+                                value_mask,
+                                builder.CreateLShr(
+                                    value_mask, value_amount));
+                            return builder.CreateOr(
+                                shifted, fill_mask);
+                        }
                       return shifted;
                     }
-                    const auto extension_shift =
-                        64U - value.width;
-                    auto* sign_extended = builder.CreateAShr(
-                        builder.CreateShl(
-                            component,
-                            constant_i64(
-                                context, extension_shift)),
-                        constant_i64(
-                            context, extension_shift));
+                    const auto extension_shift = std::max(value.width, 64U) - value.width;
+                    auto* sign_extended = component;
+                    if (extension_shift != 0) {
+                        sign_extended = builder.CreateAShr(
+                            builder.CreateShl(
+                                component,
+                                packed_constant(
+                                    context, value.width, extension_shift)),
+                            packed_constant(
+                                context, value.width, extension_shift));
+                    }
                     return builder.CreateAShr(
-                        sign_extended, safe_amount);
+                        sign_extended, value_amount);
                   };
               const auto selected_shift_component =
                   [&](llvm::Value* component,
@@ -500,28 +509,31 @@ void ValueOperationLowerer::lower(
                       auto* sign = builder.CreateAnd(
                           builder.CreateLShr(
                               component,
-                              constant_i64(
-                                  context, sign_offset)),
-                          constant_i64(context, 1));
+                              packed_constant(
+                                  context, value.width, sign_offset)),
+                          packed_constant(context, value.width, 1));
                       return builder.CreateSelect(
                           builder.CreateICmpNE(
-                              sign, constant_i64(context, 0)),
+                              sign,
+                              packed_constant(context, value.width, 0)),
                           value_mask,
-                          constant_i64(context, 0));
+                          packed_constant(context, value.width, 0));
                     }
                     if (selected_operation
                         == ShiftOperator::arithmetic_left) {
-                      auto* rightmost = builder.CreateAnd(
-                          component, constant_i64(context, 1));
-                      return builder.CreateSelect(
-                          builder.CreateICmpNE(
-                              rightmost,
-                              constant_i64(context, 0)),
-                          value_mask,
-                          constant_i64(context, 0));
+                        auto* rightmost = builder.CreateAnd(
+                            component,
+                            packed_constant(context, value.width, 1));
+                        return builder.CreateSelect(
+                            builder.CreateICmpNE(
+                                rightmost,
+                                packed_constant(context, value.width, 0)),
+                            value_mask,
+                            packed_constant(context, value.width, 0));
                     }
-                    return constant_i64(
-                        context, zero_plane ? width_mask(value.width) : 0);
+                    return zero_plane
+                        ? value_mask
+                        : packed_constant(context, value.width, 0);
                   };
               const auto selected_oversized_component =
                   [&](llvm::Value* component,
@@ -575,31 +587,31 @@ void ValueOperationLowerer::lower(
                   oversized_plane3,
                   builder.CreateAnd(shifted_plane3, value_mask));
               if (value.kind == ValueKind::logic9) {
-                store_register(
-                    builder,
-                    registers,
-                    operation.destination,
-                    EncodedValue{
-                        builder.CreateSelect(
-                            amount_unknown,
-                            value_mask,
-                            known_aval),
-                        builder.CreateSelect(
-                            amount_unknown,
-                            constant_i64(context, 0),
-                            known_bval),
-                        value.width,
-                        builder.CreateSelect(
-                            amount_unknown,
-                            constant_i64(context, 0),
-                            known_plane2),
-                        builder.CreateSelect(
-                            amount_unknown,
-                            constant_i64(context, 0),
-                            known_plane3),
-                        ValueKind::logic9});
-                branch_to_next();
-                return;
+                  store_register(
+                      builder,
+                      registers,
+                      operation.destination,
+                      EncodedValue {
+                          builder.CreateSelect(
+                              amount_unknown,
+                              value_mask,
+                              known_aval),
+                          builder.CreateSelect(
+                              amount_unknown,
+                              packed_constant(context, value.width, 0),
+                              known_bval),
+                          value.width,
+                          builder.CreateSelect(
+                              amount_unknown,
+                              packed_constant(context, value.width, 0),
+                              known_plane2),
+                          builder.CreateSelect(
+                              amount_unknown,
+                              packed_constant(context, value.width, 0),
+                              known_plane3),
+                          ValueKind::logic9 });
+                  branch_to_next();
+                  return;
               }
               store_register(
                   builder, registers, operation.destination,
@@ -618,29 +630,25 @@ void ValueOperationLowerer::lower(
               const auto source =
                   load_register(
                       builder, registers, operation.source);
-              auto* shift =
-                  constant_i64(context, operation.offset);
-              auto* mask =
-                  constant_i64(context, width_mask(operation.width));
+              auto* shift = packed_constant(
+                  context, source.width, operation.offset);
+              auto* mask = packed_low_mask(
+                  context, source.width, operation.width);
+              const auto extract = [&](llvm::Value* value) {
+                  return builder.CreateZExtOrTrunc(
+                      builder.CreateAnd(
+                          builder.CreateLShr(value, shift), mask),
+                      packed_integer_type(context, operation.width));
+              };
               store_register(
                   builder, registers, operation.destination,
-                  EncodedValue{
-                      builder.CreateAnd(
-                          builder.CreateLShr(source.aval, shift),
-                          mask),
-                      builder.CreateAnd(
-                          builder.CreateLShr(source.bval, shift),
-                          mask),
+                  EncodedValue {
+                      extract(source.aval),
+                      extract(source.bval),
                       operation.width,
-                      builder.CreateAnd(
-                          builder.CreateLShr(
-                              source.logic9_plane2, shift),
-                          mask),
-                      builder.CreateAnd(
-                          builder.CreateLShr(
-                              source.logic9_plane3, shift),
-                          mask),
-                      source.kind});
+                      extract(source.logic9_plane2),
+                      extract(source.logic9_plane3),
+                      source.kind });
               branch_to_next();
             
 }

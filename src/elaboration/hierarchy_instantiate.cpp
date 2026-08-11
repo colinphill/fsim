@@ -108,6 +108,78 @@ void adapt_vhdl_array_port_shapes(
   }
 }
 
+struct ResolvedVerilogDefparam {
+    const frontend::VerilogDefparamDeclaration* declaration { };
+    std::vector<std::string> segments;
+    bool matched { };
+};
+
+std::optional<std::vector<std::string>> resolve_defparam_path(
+    const frontend::VerilogDefparamDeclaration& declaration,
+    const SystemVerilogConstantEnvironment& integral_environment,
+    const ConstantEnvironment& integer_environment,
+    std::string& error)
+{
+    std::vector<std::string> result;
+    result.reserve(declaration.path.size());
+    for (const auto& segment : declaration.path) {
+        auto canonical = segment.name;
+        for (const auto& index_expression : segment.indices) {
+            auto index = evaluate_systemverilog_constant_expression(
+                index_expression,
+                integral_environment,
+                integer_environment,
+                error);
+            if (!index) {
+                error = "cannot evaluate hierarchy index: " + error;
+                return std::nullopt;
+            }
+            const auto integer = index->integer_value();
+            if (!integer) {
+                error = "hierarchy index must be a known signed 64-bit integer";
+                return std::nullopt;
+            }
+            canonical += "[" + std::to_string(*integer) + "]";
+        }
+        result.push_back(std::move(canonical));
+    }
+    return result;
+}
+
+std::optional<std::size_t> defparam_instance_prefix(
+    const std::span<const std::string> segments,
+    const std::string_view instance_name)
+{
+    std::string candidate;
+    for (std::size_t index = 0; index + 1U < segments.size(); ++index) {
+        if (!candidate.empty()) {
+            candidate += '.';
+        }
+        candidate += segments[index];
+        if (candidate == instance_name) {
+            return index + 1U;
+        }
+        if (candidate.size() >= instance_name.size()
+            && !instance_name.starts_with(candidate)) {
+            break;
+        }
+    }
+    return std::nullopt;
+}
+
+std::string defparam_path_text(
+    const std::span<const std::string> segments)
+{
+    std::string result;
+    for (const auto& segment : segments) {
+        if (!result.empty()) {
+            result += '.';
+        }
+        result += segment;
+    }
+    return result;
+}
+
 }  // namespace
 
 HierarchyBuilder::HierarchyCheckpoint
@@ -281,6 +353,39 @@ void HierarchyBuilder::rollback_hierarchy(
                         && !parameter.type
                                 .enumeration_literals.empty(),
                     parameter.type.nominal_type});
+        }
+        std::vector<ResolvedVerilogDefparam> resolved_defparams;
+        resolved_defparams.reserve(unit.verilog_defparams.size());
+        for (const auto& declaration : unit.verilog_defparams) {
+            if (unit.language != frontend::Language::Verilog2005
+                && unit.language
+                    != frontend::Language::SystemVerilog2017) {
+                report(
+                    "FSIM-ELAB-DEFPARAM-004",
+                    "defparam declarations cannot cross a non-Verilog "
+                    "hierarchy scope",
+                    declaration.span);
+                continue;
+            }
+            std::string error;
+            auto segments = resolve_defparam_path(
+                declaration,
+                parameter_integral_environment,
+                parameter_environment,
+                error);
+            if (!segments || segments->size() < 2U) {
+                report(
+                    "FSIM-ELAB-DEFPARAM-001",
+                    "cannot resolve defparam hierarchy path: " + error,
+                    declaration.span);
+                continue;
+            }
+            if (segments->size() > 2U
+                && segments->front() == unit.name) {
+                segments->erase(segments->begin());
+            }
+            resolved_defparams.push_back(
+                { &declaration, std::move(*segments), false });
         }
         if (!instance_paths_.insert(path).second) {
             report(
@@ -1461,6 +1566,18 @@ void HierarchyBuilder::rollback_hierarchy(
         validate_vhdl_component_configurations(unit, path);
         for (const auto& instance : unit.instances) {
             const auto child_path = path + "." + instance.name;
+            std::vector<std::pair<ResolvedVerilogDefparam*, std::size_t>>
+                child_defparams;
+            for (auto& declaration : resolved_defparams) {
+                const auto prefix = defparam_instance_prefix(
+                    declaration.segments, instance.name);
+                if (!prefix) {
+                    continue;
+                }
+                declaration.matched = true;
+                child_defparams.emplace_back(
+                    &declaration, *prefix);
+            }
             const auto checkpoint = hierarchy_checkpoint(child_path);
             const ScopeExit rollback_failed_child{[&, checkpoint] {
               if (diagnostics_.size() != checkpoint.diagnostics) {
@@ -1498,6 +1615,15 @@ void HierarchyBuilder::rollback_hierarchy(
                 const auto target = parse_target(*binding->target);
                 if (target
                     && target->language == "systemc") {
+                    if (!child_defparams.empty()) {
+                        report(
+                            "FSIM-ELAB-DEFPARAM-004",
+                            "defparam cannot target SystemC instance '"
+                                + child_path + "'",
+                            child_defparams.front()
+                                .first->declaration->span);
+                        continue;
+                    }
                     build_systemc(instance, *binding->target);
                     continue;
                 }
@@ -1526,6 +1652,15 @@ void HierarchyBuilder::rollback_hierarchy(
                 if (configured.applied) {
                     selected_instance = &configured.instance;
                     if (configured.systemc_target.has_value()) {
+                        if (!child_defparams.empty()) {
+                            report(
+                                "FSIM-ELAB-DEFPARAM-004",
+                                "defparam cannot target SystemC instance '"
+                                    + child_path + "'",
+                                child_defparams.front()
+                                    .first->declaration->span);
+                            continue;
+                        }
                         build_systemc(
                             *selected_instance,
                             *configured.systemc_target);
@@ -1555,12 +1690,30 @@ void HierarchyBuilder::rollback_hierarchy(
                         continue;
                     }
                     if (inferred->systemc_target.has_value()) {
+                        if (!child_defparams.empty()) {
+                            report(
+                                "FSIM-ELAB-DEFPARAM-004",
+                                "defparam cannot target SystemC instance '"
+                                    + child_path + "'",
+                                child_defparams.front()
+                                    .first->declaration->span);
+                            continue;
+                        }
                         build_systemc(
                             *selected_instance,
                             *inferred->systemc_target);
                         continue;
                     }
                     if (inferred->udp != nullptr) {
+                        if (!child_defparams.empty()) {
+                            report(
+                                "FSIM-ELAB-DEFPARAM-004",
+                                "defparam cannot target UDP instance '"
+                                    + child_path + "'",
+                                child_defparams.front()
+                                    .first->declaration->span);
+                            continue;
+                        }
                         instantiate_udp(
                             *inferred->udp,
                             *selected_instance,
@@ -1597,6 +1750,63 @@ void HierarchyBuilder::rollback_hierarchy(
                         + " syntax", selected_instance->span);
                 continue;
             }
+            if (!child_defparams.empty()
+                && target->language != frontend::Language::Verilog2005
+                && target->language
+                    != frontend::Language::SystemVerilog2017) {
+                report(
+                    "FSIM-ELAB-DEFPARAM-004",
+                    "defparam cannot cross into non-Verilog instance '"
+                        + child_path + "'",
+                    child_defparams.front().first->declaration->span);
+                continue;
+            }
+            auto defparam_instance = *selected_instance;
+            std::vector<frontend::VerilogDefparamDeclaration>
+                descendant_defparams;
+            bool valid_defparams = true;
+            for (const auto& [resolved, consumed] : child_defparams) {
+                if (consumed + 1U == resolved->segments.size()) {
+                    const auto& parameter_name = resolved->segments.back();
+                    const bool duplicate = std::ranges::any_of(
+                        defparam_instance.parameter_overrides,
+                        [&](const auto& override) {
+                            return override.name
+                                && *override.name == parameter_name;
+                        });
+                    if (duplicate) {
+                        report(
+                            "FSIM-ELAB-DEFPARAM-003",
+                            "duplicate or conflicting override for defparam "
+                            "target '"
+                                + instance.name + "." + parameter_name
+                                + "'",
+                            resolved->declaration->span);
+                        valid_defparams = false;
+                        continue;
+                    }
+                    defparam_instance.parameter_overrides.emplace_back(
+                        parameter_name,
+                        resolved->declaration->value,
+                        resolved->declaration->span);
+                    continue;
+                }
+                frontend::VerilogDefparamDeclaration descendant;
+                descendant.value = resolved->declaration->value;
+                descendant.span = resolved->declaration->span;
+                for (std::size_t index = consumed;
+                    index < resolved->segments.size(); ++index) {
+                    frontend::VerilogDefparamPathSegment segment;
+                    segment.name = resolved->segments[index];
+                    segment.span = resolved->declaration->span;
+                    descendant.path.push_back(std::move(segment));
+                }
+                descendant_defparams.push_back(std::move(descendant));
+            }
+            if (!valid_defparams) {
+                continue;
+            }
+            selected_instance = &defparam_instance;
             auto child_specialized = specialize_selected_unit(
                 *target,
                 selected_instance->parameter_overrides,
@@ -1608,6 +1818,10 @@ void HierarchyBuilder::rollback_hierarchy(
                 unit.procedures,
                 package_environment,
                 unit.language);
+            child_specialized.unit.verilog_defparams.insert(
+                child_specialized.unit.verilog_defparams.end(),
+                std::make_move_iterator(descendant_defparams.begin()),
+                std::make_move_iterator(descendant_defparams.end()));
             adapt_vhdl_array_port_shapes(
                 child_specialized.unit,
                 *selected_instance,
@@ -1680,6 +1894,15 @@ void HierarchyBuilder::rollback_hierarchy(
                 systemverilog_interface_parameter_identities_
                     .insert_or_assign(
                         child_path, std::move(interface_parameter_identities));
+            }
+        }
+        for (const auto& declaration : resolved_defparams) {
+            if (!declaration.matched) {
+                report(
+                    "FSIM-ELAB-DEFPARAM-002",
+                    "unknown defparam hierarchical target '"
+                        + defparam_path_text(declaration.segments) + "'",
+                    declaration.declaration->span);
             }
         }
         for (const auto& variable : unit.variables) {

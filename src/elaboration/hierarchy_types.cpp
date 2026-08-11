@@ -3,328 +3,38 @@
 namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
-    DesignUnit HierarchyBuilder::effective_unit(
-        const DesignUnit& selected,
-        const DesignUnit* entity_override) {
-        auto result = selected;
-        if (selected.kind
-                == frontend::UnitKind::VerilogModule
-            || selected.kind
-                == frontend::UnitKind::SystemVerilogProgram) {
-            std::vector<const DesignUnit*> import_stack;
-            NamedTypeEnvironment type_environment;
-            import_systemverilog_package_items(
-                result, import_stack, type_environment);
-            import_qualified_systemverilog_package_items(
-                result, import_stack, type_environment);
-            for (const auto& parameter : result.parameters) {
-                if (parameter.kind
-                    != frontend::ParameterKind::Type) {
-                    continue;
-                }
-                type_environment.insert_or_assign(
-                    parameter.name,
-                    NamedTypeBinding{
-                        {},
-                        (result.library.empty()
-                             ? std::string{"work"}
-                             : result.library)
-                            + "." + result.name,
-                        true});
-            }
-            resolve_named_types(
-                result, type_environment);
-            for (const auto& [name, binding] : type_environment) {
-                if (binding.interface_formal
-                    || std::any_of(
-                        result.type_aliases.begin(),
-                        result.type_aliases.end(),
-                        [&](const auto& alias) {
-                            return alias.name == name;
-                        })) {
-                    continue;
-                }
-                result.type_aliases.push_back(
-                    frontend::TypeAliasDeclaration{
-                        name,
-                        binding.type,
-                        result.span,
-                        {},
-                        frontend::TypeDeclarationKind::
-                            SystemVerilogTypedef});
-            }
-            return result;
-        }
-        if (selected.kind
-            != frontend::UnitKind::VhdlArchitecture) {
-            return result;
-        }
-        const auto* entity =
-            entity_override != nullptr
-                ? entity_override
-                : find_vhdl_entity(parsed_, selected);
-        if (entity == nullptr) {
-            return result;
-        }
-        std::vector<frontend::ParameterDeclaration>
-            architecture_constants;
-        for (auto& parameter : result.parameters) {
-            if (parameter.local) {
-                architecture_constants.push_back(
-                    std::move(parameter));
-            }
-        }
-        result.parameters = entity->parameters;
-        result.parameters.insert(
-            result.parameters.end(),
-            std::make_move_iterator(
-                architecture_constants.begin()),
-            std::make_move_iterator(
-                architecture_constants.end()));
-        result.ports = entity->ports;
-        std::vector<frontend::VhdlComponentDeclaration>
-            entity_components =
-                entity->vhdl_component_declarations;
-        for (auto& component : entity_components) {
-            component.region =
-                frontend::VhdlComponentDeclarationRegion::Entity;
-            component.owner_library =
-                entity->library.empty()
-                    ? std::string{"work"}
-                    : entity->library;
-            component.owner_name = entity->name;
-        }
-        result.vhdl_component_declarations.insert(
-            result.vhdl_component_declarations.begin(),
-            std::make_move_iterator(
-                entity_components.begin()),
-            std::make_move_iterator(
-                entity_components.end()));
-        result.package_instances.insert(
-            result.package_instances.begin(),
-            entity->package_instances.begin(),
-            entity->package_instances.end());
-        result.generic_function_templates.insert(
-            result.generic_function_templates.begin(),
-            entity->generic_function_templates.begin(),
-            entity->generic_function_templates.end());
-        result.generic_procedure_templates.insert(
-            result.generic_procedure_templates.begin(),
-            entity->generic_procedure_templates.begin(),
-            entity->generic_procedure_templates.end());
-        result.generic_function_instances.insert(
-            result.generic_function_instances.begin(),
-            entity->generic_function_instances.begin(),
-            entity->generic_function_instances.end());
-        result.generic_procedure_instances.insert(
-            result.generic_procedure_instances.begin(),
-            entity->generic_procedure_instances.begin(),
-            entity->generic_procedure_instances.end());
-        for (const auto& function : entity->functions) {
-            if (function.name.find('.') == std::string::npos
-                || std::ranges::any_of(
-                    result.functions,
-                    [&](const auto& existing) {
-                        return existing.name == function.name;
-                    })) {
-                continue;
-            }
-            result.functions.push_back(function);
-        }
-        for (const auto& procedure : entity->procedures) {
-            if (procedure.name.find('.') == std::string::npos
-                || std::ranges::any_of(
-                    result.procedures,
-                    [&](const auto& existing) {
-                        return existing.name == procedure.name;
-                    })) {
-                continue;
-            }
-            result.procedures.push_back(procedure);
-        }
-        for (const auto& dependency :
-             entity->source_dependencies) {
-            if (std::ranges::find(
-                    result.source_dependencies, dependency)
-                == result.source_dependencies.end()) {
-                result.source_dependencies.push_back(dependency);
-            }
-        }
-        for (const auto& generic : result.parameters) {
-            if (std::any_of(
-                    result.signals.begin(),
-                    result.signals.end(),
-                    [&](const frontend::SignalDeclaration& signal) {
-                        return signal.name == generic.name;
-                    })) {
-                report(
-                    "FSIM-ELAB-GENERIC-009",
-                    "architecture object '" + generic.name
-                        + "' conflicts with an entity generic",
-                    generic.span);
-            }
-        }
-        std::vector<frontend::VhdlContextItem> context =
-            entity->vhdl_context;
-        context.insert(
-            context.end(),
-            selected.vhdl_context.begin(),
-            selected.vhdl_context.end());
-        std::vector<frontend::VhdlContextItem> expanded_context;
-        std::vector<const DesignUnit*> context_stack;
-        const auto unit_library =
-            result.library.empty()
-                ? std::string{"work"}
-                : result.library;
-        expand_vhdl_context_references(
-            result,
-            context,
-            expanded_context,
-            context_stack,
-            unit_library);
+DesignUnit HierarchyBuilder::effective_unit(
+    const DesignUnit& selected,
+    const DesignUnit* entity_override)
+{
+    auto result = selected;
+    if (selected.kind
+            == frontend::UnitKind::VerilogModule
+        || selected.kind
+            == frontend::UnitKind::SystemVerilogProgram) {
         std::vector<const DesignUnit*> import_stack;
         NamedTypeEnvironment type_environment;
-        import_vhdl_package_constants(
-            result,
-            expanded_context,
-            import_stack,
-            type_environment);
-        import_qualified_vhdl_package_constants(
-            result, import_stack);
-        for (const auto& alias : entity->type_aliases) {
-            if (alias.name.find('.') == std::string::npos) {
-                continue;
-            }
-            type_environment.insert_or_assign(
-                alias.name,
-                NamedTypeBinding{
-                    alias.type,
-                    (entity->library.empty()
-                         ? std::string{"work"}
-                         : entity->library)
-                        + "." + entity->name});
-        }
-        import_qualified_vhdl_package_types(
-            result, type_environment, import_stack);
-        for (const auto& generic : result.parameters) {
-            if (generic.kind
+        import_systemverilog_package_items(
+            result, import_stack, type_environment);
+        import_qualified_systemverilog_package_items(
+            result, import_stack, type_environment);
+        for (const auto& parameter : result.parameters) {
+            if (parameter.kind
                 != frontend::ParameterKind::Type) {
                 continue;
             }
             type_environment.insert_or_assign(
-                generic.name,
-                NamedTypeBinding{
-                    {},
-                    (entity->library.empty()
-                         ? std::string{"work"}
-                         : entity->library)
-                        + "." + entity->name,
-                    true});
+                parameter.name,
+                NamedTypeBinding {
+                    { },
+                    (result.library.empty()
+                            ? std::string { "work" }
+                            : result.library)
+                        + "." + result.name,
+                    true });
         }
-        // Entity interfaces have their own declarative region. Resolve them
-        // without exposing architecture-local type declarations, then merge
-        // the typed ports back into the architecture specialization.
-        // Generic and port clauses precede the entity declarative part in
-        // VHDL. Resolve the interface without entity-local type declarations,
-        // then resolve those declarations separately for architecture
-        // visibility.
-        auto effective_interface = *entity;
-        effective_interface.type_aliases.clear();
         resolve_named_types(
-            effective_interface, type_environment, true);
-        for (const auto& generic :
-             effective_interface.parameters) {
-            if (generic.kind
-                == frontend::ParameterKind::Type) {
-                continue;
-            }
-            const auto resolved = std::find_if(
-                result.parameters.begin(),
-                result.parameters.end(),
-                [&](const auto& candidate) {
-                    return candidate.name == generic.name
-                        && candidate.span.source_name
-                            == generic.span.source_name
-                        && candidate.span.begin.offset
-                            == generic.span.begin.offset;
-                });
-            if (resolved != result.parameters.end()) {
-                if (generic.kind
-                    == frontend::ParameterKind::Function) {
-                    resolved->function_profile =
-                        generic.function_profile;
-                } else if (
-                    generic.kind
-                        == frontend::ParameterKind::Procedure) {
-                    resolved->procedure_profile =
-                        generic.procedure_profile;
-                } else if (
-                    generic.kind
-                        == frontend::ParameterKind::Package) {
-                    resolved->package_profile =
-                        generic.package_profile;
-                } else {
-                    resolved->type = generic.type;
-                }
-            }
-            if (generic.kind
-                    == frontend::ParameterKind::Function
-                || generic.kind
-                    == frontend::ParameterKind::Procedure
-                || generic.kind
-                    == frontend::ParameterKind::Package) {
-                continue;
-            }
-            validate_vhdl_generic_type(generic);
-        }
-        result.ports = std::move(effective_interface.ports);
-        auto effective_entity_declarations = *entity;
-        effective_entity_declarations.parameters.clear();
-        effective_entity_declarations.ports.clear();
-        resolve_named_types(
-            effective_entity_declarations,
-            type_environment,
-            true,
-            false);
-        for (const auto& alias :
-             effective_entity_declarations.type_aliases) {
-            type_environment.insert_or_assign(
-                alias.name,
-                NamedTypeBinding{
-                    alias.type,
-                    (entity->library.empty()
-                         ? std::string{"work"}
-                         : entity->library)
-                        + "." + entity->name});
-        }
-        std::erase_if(
-            result.vhdl_component_declarations,
-            [](const auto& component) {
-              return component.region
-                  == frontend::VhdlComponentDeclarationRegion::
-                      Entity;
-            });
-        auto resolved_entity_components =
-            std::move(
-                effective_entity_declarations
-                    .vhdl_component_declarations);
-        for (auto& component : resolved_entity_components) {
-            component.region =
-                frontend::VhdlComponentDeclarationRegion::Entity;
-            component.owner_library =
-                entity->library.empty()
-                    ? std::string{"work"}
-                    : entity->library;
-            component.owner_name = entity->name;
-        }
-        result.vhdl_component_declarations.insert(
-            result.vhdl_component_declarations.begin(),
-            std::make_move_iterator(
-                resolved_entity_components.begin()),
-            std::make_move_iterator(
-                resolved_entity_components.end()));
-        resolve_named_types(
-            result, type_environment, true, false);
+            result, type_environment);
         for (const auto& [name, binding] : type_environment) {
             if (binding.interface_formal
                 || std::any_of(
@@ -336,120 +46,373 @@ using namespace elaboration_detail;
                 continue;
             }
             result.type_aliases.push_back(
-                frontend::TypeAliasDeclaration{
+                frontend::TypeAliasDeclaration {
                     name,
                     binding.type,
                     result.span,
-                    {},
-                    frontend::TypeDeclarationKind::Alias});
-        }
-        for (auto& component :
-             result.vhdl_component_declarations) {
-            if (component.owner_library.empty()) {
-                component.owner_library =
-                    result.library.empty()
-                        ? std::string{"work"}
-                        : result.library;
-            }
-            if (component.owner_name.empty()) {
-                component.owner_name =
-                    component.region
-                            == frontend::
-                                VhdlComponentDeclarationRegion::
-                                    Entity
-                        ? entity->name
-                        : result.name;
-            }
+                    { },
+                    frontend::TypeDeclarationKind::
+                        SystemVerilogTypedef });
         }
         return result;
     }
-    SpecializedUnit HierarchyBuilder::specialize_selected_unit(
-        const DesignUnit& selected,
-        const std::vector<frontend::ParameterOverride>& overrides,
-        const ConstantEnvironment& parent_environment,
-        const SystemVerilogConstantEnvironment&
-            parent_integral_environment,
-        const ConstantDomainEnvironment& parent_domains,
-        const NamedTypeEnvironment& parent_types,
-        const std::vector<frontend::FunctionDeclaration>& parent_functions,
-        const std::vector<frontend::ProcedureDeclaration>& parent_procedures,
-        const PackageEnvironment& parent_packages,
-        const frontend::Language association_language) {
-        auto normalized_overrides = overrides;
-        if (selected.language
-                == frontend::Language::SystemVerilog2017) {
-            const auto annotate_nominal_actual =
-                [&](auto&& self, frontend::Expression& expression)
-                    -> void {
-                  if (expression.kind
-                          == frontend::ExpressionKind::Identifier) {
-                      const auto found =
-                          parent_domains.find(expression.text);
-                      if (found != parent_domains.end()
-                          && !found->second.nominal_type.empty()) {
-                          expression.nominal_type =
-                              found->second.nominal_type;
-                      }
-                  }
-                  for (auto& operand : expression.operands) {
-                      self(self, operand);
-                  }
-                  for (auto& choices :
-                       expression.aggregate_choice_expressions) {
-                      for (auto& choice : choices) {
-                          self(self, choice);
-                      }
-                  }
-                };
-            for (auto& override : normalized_overrides) {
-                annotate_nominal_actual(
-                    annotate_nominal_actual, override.value);
+    if (selected.kind
+        != frontend::UnitKind::VhdlArchitecture) {
+        return result;
+    }
+    const auto* entity = entity_override != nullptr
+        ? entity_override
+        : find_vhdl_entity(parsed_, selected);
+    if (entity == nullptr) {
+        return result;
+    }
+    std::vector<frontend::ParameterDeclaration>
+        architecture_constants;
+    for (auto& parameter : result.parameters) {
+        if (parameter.local) {
+            architecture_constants.push_back(
+                std::move(parameter));
+        }
+    }
+    result.parameters = entity->parameters;
+    result.parameters.insert(
+        result.parameters.end(),
+        std::make_move_iterator(
+            architecture_constants.begin()),
+        std::make_move_iterator(
+            architecture_constants.end()));
+    result.ports = entity->ports;
+    std::vector<frontend::VhdlComponentDeclaration>
+        entity_components = entity->vhdl_component_declarations;
+    for (auto& component : entity_components) {
+        component.region = frontend::VhdlComponentDeclarationRegion::Entity;
+        component.owner_library = entity->library.empty()
+            ? std::string { "work" }
+            : entity->library;
+        component.owner_name = entity->name;
+    }
+    result.vhdl_component_declarations.insert(
+        result.vhdl_component_declarations.begin(),
+        std::make_move_iterator(
+            entity_components.begin()),
+        std::make_move_iterator(
+            entity_components.end()));
+    result.package_instances.insert(
+        result.package_instances.begin(),
+        entity->package_instances.begin(),
+        entity->package_instances.end());
+    result.generic_function_templates.insert(
+        result.generic_function_templates.begin(),
+        entity->generic_function_templates.begin(),
+        entity->generic_function_templates.end());
+    result.generic_procedure_templates.insert(
+        result.generic_procedure_templates.begin(),
+        entity->generic_procedure_templates.begin(),
+        entity->generic_procedure_templates.end());
+    result.generic_function_instances.insert(
+        result.generic_function_instances.begin(),
+        entity->generic_function_instances.begin(),
+        entity->generic_function_instances.end());
+    result.generic_procedure_instances.insert(
+        result.generic_procedure_instances.begin(),
+        entity->generic_procedure_instances.begin(),
+        entity->generic_procedure_instances.end());
+    for (const auto& function : entity->functions) {
+        if (function.name.find('.') == std::string::npos
+            || std::ranges::any_of(
+                result.functions,
+                [&](const auto& existing) {
+                    return existing.name == function.name;
+                })) {
+            continue;
+        }
+        result.functions.push_back(function);
+    }
+    for (const auto& procedure : entity->procedures) {
+        if (procedure.name.find('.') == std::string::npos
+            || std::ranges::any_of(
+                result.procedures,
+                [&](const auto& existing) {
+                    return existing.name == procedure.name;
+                })) {
+            continue;
+        }
+        result.procedures.push_back(procedure);
+    }
+    for (const auto& dependency :
+        entity->source_dependencies) {
+        if (std::ranges::find(
+                result.source_dependencies, dependency)
+            == result.source_dependencies.end()) {
+            result.source_dependencies.push_back(dependency);
+        }
+    }
+    for (const auto& generic : result.parameters) {
+        if (std::any_of(
+                result.signals.begin(),
+                result.signals.end(),
+                [&](const frontend::SignalDeclaration& signal) {
+                    return signal.name == generic.name;
+                })) {
+            report(
+                "FSIM-ELAB-GENERIC-009",
+                "architecture object '" + generic.name
+                    + "' conflicts with an entity generic",
+                generic.span);
+        }
+    }
+    std::vector<frontend::VhdlContextItem> context = entity->vhdl_context;
+    context.insert(
+        context.end(),
+        selected.vhdl_context.begin(),
+        selected.vhdl_context.end());
+    std::vector<frontend::VhdlContextItem> expanded_context;
+    std::vector<const DesignUnit*> context_stack;
+    const auto unit_library = result.library.empty()
+        ? std::string { "work" }
+        : result.library;
+    expand_vhdl_context_references(
+        result,
+        context,
+        expanded_context,
+        context_stack,
+        unit_library);
+    std::vector<const DesignUnit*> import_stack;
+    NamedTypeEnvironment type_environment;
+    import_vhdl_package_constants(
+        result,
+        expanded_context,
+        import_stack,
+        type_environment);
+    import_qualified_vhdl_package_constants(
+        result, import_stack);
+    for (const auto& alias : entity->type_aliases) {
+        if (alias.name.find('.') == std::string::npos) {
+            continue;
+        }
+        type_environment.insert_or_assign(
+            alias.name,
+            NamedTypeBinding {
+                alias.type,
+                (entity->library.empty()
+                        ? std::string { "work" }
+                        : entity->library)
+                    + "." + entity->name });
+    }
+    import_qualified_vhdl_package_types(
+        result, type_environment, import_stack);
+    for (const auto& generic : result.parameters) {
+        if (generic.kind
+            != frontend::ParameterKind::Type) {
+            continue;
+        }
+        type_environment.insert_or_assign(
+            generic.name,
+            NamedTypeBinding {
+                { },
+                (entity->library.empty()
+                        ? std::string { "work" }
+                        : entity->library)
+                    + "." + entity->name,
+                true });
+    }
+    // Entity interfaces have their own declarative region. Resolve them
+    // without exposing architecture-local type declarations, then merge
+    // the typed ports back into the architecture specialization.
+    // Generic and port clauses precede the entity declarative part in
+    // VHDL. Resolve the interface without entity-local type declarations,
+    // then resolve those declarations separately for architecture
+    // visibility.
+    auto effective_interface = *entity;
+    effective_interface.type_aliases.clear();
+    resolve_named_types(
+        effective_interface, type_environment, true);
+    for (const auto& generic :
+        effective_interface.parameters) {
+        if (generic.kind
+            == frontend::ParameterKind::Type) {
+            continue;
+        }
+        const auto resolved = std::find_if(
+            result.parameters.begin(),
+            result.parameters.end(),
+            [&](const auto& candidate) {
+                return candidate.name == generic.name
+                    && candidate.span.source_name
+                    == generic.span.source_name
+                    && candidate.span.begin.offset
+                    == generic.span.begin.offset;
+            });
+        if (resolved != result.parameters.end()) {
+            if (generic.kind
+                == frontend::ParameterKind::Function) {
+                resolved->function_profile = generic.function_profile;
+            } else if (
+                generic.kind
+                == frontend::ParameterKind::Procedure) {
+                resolved->procedure_profile = generic.procedure_profile;
+            } else if (
+                generic.kind
+                == frontend::ParameterKind::Package) {
+                resolved->package_profile = generic.package_profile;
+            } else {
+                resolved->type = generic.type;
             }
         }
-        PackageEnvironment interface_packages;
-        std::vector<std::pair<std::string, std::string>>
-            package_identities;
-        std::optional<DesignUnit> selected_override;
-        std::optional<DesignUnit> entity_override;
-        if (selected.language
-            == frontend::Language::Vhdl2008) {
-            if (selected.kind
-                == frontend::UnitKind::VhdlArchitecture) {
-                if (const auto* entity =
-                        find_vhdl_entity(parsed_, selected);
-                    entity != nullptr) {
-                    entity_override = *entity;
-                    if (std::ranges::any_of(
-                            entity_override->parameters,
-                            [](const auto& parameter) {
-                                return parameter.kind
-                                    == frontend::ParameterKind::
-                                        Package;
-                            })) {
-                        bind_vhdl_interface_packages(
-                            *entity_override,
-                            normalized_overrides,
-                            parent_packages,
-                            parent_environment,
-                            parent_domains,
-                            parent_types,
-                            parent_functions,
-                            parent_procedures,
-                            association_language,
-                            interface_packages,
-                            package_identities);
-                    }
+        if (generic.kind
+                == frontend::ParameterKind::Function
+            || generic.kind
+                == frontend::ParameterKind::Procedure
+            || generic.kind
+                == frontend::ParameterKind::Package) {
+            continue;
+        }
+        validate_vhdl_generic_type(generic);
+    }
+    result.ports = std::move(effective_interface.ports);
+    auto effective_entity_declarations = *entity;
+    effective_entity_declarations.parameters.clear();
+    effective_entity_declarations.ports.clear();
+    resolve_named_types(
+        effective_entity_declarations,
+        type_environment,
+        true,
+        false);
+    for (const auto& alias :
+        effective_entity_declarations.type_aliases) {
+        type_environment.insert_or_assign(
+            alias.name,
+            NamedTypeBinding {
+                alias.type,
+                (entity->library.empty()
+                        ? std::string { "work" }
+                        : entity->library)
+                    + "." + entity->name });
+    }
+    std::erase_if(
+        result.vhdl_component_declarations,
+        [](const auto& component) {
+            return component.region
+                == frontend::VhdlComponentDeclarationRegion::
+                    Entity;
+        });
+    auto resolved_entity_components = std::move(
+        effective_entity_declarations
+            .vhdl_component_declarations);
+    for (auto& component : resolved_entity_components) {
+        component.region = frontend::VhdlComponentDeclarationRegion::Entity;
+        component.owner_library = entity->library.empty()
+            ? std::string { "work" }
+            : entity->library;
+        component.owner_name = entity->name;
+    }
+    result.vhdl_component_declarations.insert(
+        result.vhdl_component_declarations.begin(),
+        std::make_move_iterator(
+            resolved_entity_components.begin()),
+        std::make_move_iterator(
+            resolved_entity_components.end()));
+    resolve_named_types(
+        result, type_environment, true, false);
+    for (const auto& [name, binding] : type_environment) {
+        if (binding.interface_formal
+            || std::any_of(
+                result.type_aliases.begin(),
+                result.type_aliases.end(),
+                [&](const auto& alias) {
+                    return alias.name == name;
+                })) {
+            continue;
+        }
+        result.type_aliases.push_back(
+            frontend::TypeAliasDeclaration {
+                name,
+                binding.type,
+                result.span,
+                { },
+                frontend::TypeDeclarationKind::Alias });
+    }
+    for (auto& component :
+        result.vhdl_component_declarations) {
+        if (component.owner_library.empty()) {
+            component.owner_library = result.library.empty()
+                ? std::string { "work" }
+                : result.library;
+        }
+        if (component.owner_name.empty()) {
+            component.owner_name = component.region
+                    == frontend::
+                        VhdlComponentDeclarationRegion::
+                            Entity
+                ? entity->name
+                : result.name;
+        }
+    }
+    return result;
+}
+SpecializedUnit HierarchyBuilder::specialize_selected_unit(
+    const DesignUnit& selected,
+    const std::vector<frontend::ParameterOverride>& overrides,
+    const ConstantEnvironment& parent_environment,
+    const SystemVerilogConstantEnvironment&
+        parent_integral_environment,
+    const ConstantDomainEnvironment& parent_domains,
+    const NamedTypeEnvironment& parent_types,
+    const std::vector<frontend::FunctionDeclaration>& parent_functions,
+    const std::vector<frontend::ProcedureDeclaration>& parent_procedures,
+    const PackageEnvironment& parent_packages,
+    const frontend::Language association_language)
+{
+    auto normalized_overrides = overrides;
+    if (selected.language
+        == frontend::Language::SystemVerilog2017) {
+        const auto annotate_nominal_actual =
+            [&](auto&& self, frontend::Expression& expression)
+            -> void {
+            if (expression.kind
+                == frontend::ExpressionKind::Identifier) {
+                const auto found = parent_domains.find(expression.text);
+                if (found != parent_domains.end()
+                    && !found->second.nominal_type.empty()) {
+                    expression.nominal_type = found->second.nominal_type;
                 }
-            } else {
-                selected_override = selected;
+            }
+            for (auto& operand : expression.operands) {
+                self(self, operand);
+            }
+            for (auto& choices :
+                expression.aggregate_choice_expressions) {
+                for (auto& choice : choices) {
+                    self(self, choice);
+                }
+            }
+        };
+        for (auto& override : normalized_overrides) {
+            annotate_nominal_actual(
+                annotate_nominal_actual, override.value);
+        }
+    }
+    PackageEnvironment interface_packages;
+    std::vector<std::pair<std::string, std::string>>
+        package_identities;
+    std::optional<DesignUnit> selected_override;
+    std::optional<DesignUnit> entity_override;
+    if (selected.language
+        == frontend::Language::Vhdl2008) {
+        if (selected.kind
+            == frontend::UnitKind::VhdlArchitecture) {
+            if (const auto* entity = find_vhdl_entity(parsed_, selected);
+                entity != nullptr) {
+                entity_override = *entity;
                 if (std::ranges::any_of(
-                        selected_override->parameters,
+                        entity_override->parameters,
                         [](const auto& parameter) {
                             return parameter.kind
-                                == frontend::ParameterKind::Package;
+                                == frontend::ParameterKind::
+                                    Package;
                         })) {
                     bind_vhdl_interface_packages(
-                        *selected_override,
+                        *entity_override,
                         normalized_overrides,
                         parent_packages,
                         parent_environment,
@@ -462,847 +425,866 @@ using namespace elaboration_detail;
                         package_identities);
                 }
             }
-        }
-        auto effective = effective_unit(
-            selected_override ? *selected_override : selected,
-            entity_override ? &*entity_override : nullptr);
-        auto type_specialized =
-            selected.language
-                    == frontend::Language::SystemVerilog2017
-                ? specialize_systemverilog_type_parameters(
-                      effective,
-                      normalized_overrides,
-                      parent_environment,
-                      parent_types,
-                      association_language,
-                      diagnostics_)
-                : specialize_vhdl_interface_types(
-                      effective,
-                      normalized_overrides,
-                      parent_environment,
-                      parent_domains,
-                      parent_types,
-                      parent_functions,
-                      parent_procedures,
-                      association_language,
-                      diagnostics_);
-        if (type_specialized.applied) {
-            resolve_named_types(
-                type_specialized.unit,
-                {},
-                selected.language
-                    == frontend::Language::Vhdl2008);
-        }
-        auto specialized = specialize_unit(
-            type_specialized.unit,
-            type_specialized.value_overrides,
-            parent_environment,
-            association_language,
-            diagnostics_,
-            false,
-            parent_integral_environment);
-        if (selected.language
-                == frontend::Language::SystemVerilog2017
-            && type_specialized.applied) {
-            for (auto& [name, identity] :
-                 type_specialized.values) {
-                const auto alias = std::ranges::find_if(
-                    specialized.unit.type_aliases,
-                    [&](const auto& candidate) {
-                        return candidate.name == name;
-                    });
-                const auto resolved =
-                    alias
-                        == specialized.unit.type_aliases.end()
-                    ? std::optional<std::string>{}
-                    : systemverilog_type_parameter_identity(
-                          alias->type);
-                if (!resolved) {
-                    report(
-                        "FSIM-ELAB-SVTYPEPARAM-003",
-                        "specialized data type for type parameter '"
-                            + name
-                            + "' is outside the bounded 1-64-bit "
-                              "packed integral subset",
-                        alias
-                                == specialized.unit.type_aliases.end()
-                            ? selected.span
-                            : alias->span);
-                    continue;
-                }
-                identity = *resolved;
+        } else {
+            selected_override = selected;
+            if (std::ranges::any_of(
+                    selected_override->parameters,
+                    [](const auto& parameter) {
+                        return parameter.kind
+                            == frontend::ParameterKind::Package;
+                    })) {
+                bind_vhdl_interface_packages(
+                    *selected_override,
+                    normalized_overrides,
+                    parent_packages,
+                    parent_environment,
+                    parent_domains,
+                    parent_types,
+                    parent_functions,
+                    parent_procedures,
+                    association_language,
+                    interface_packages,
+                    package_identities);
             }
         }
-        if (specialized.identity_values.empty()) {
-            specialized.identity_values = specialized.values;
+    }
+    auto effective = effective_unit(
+        selected_override ? *selected_override : selected,
+        entity_override ? &*entity_override : nullptr);
+    auto type_specialized = selected.language
+            == frontend::Language::SystemVerilog2017
+        ? specialize_systemverilog_type_parameters(
+              effective,
+              normalized_overrides,
+              parent_environment,
+              parent_types,
+              association_language,
+              diagnostics_)
+        : specialize_vhdl_interface_types(
+              effective,
+              normalized_overrides,
+              parent_environment,
+              parent_domains,
+              parent_types,
+              parent_functions,
+              parent_procedures,
+              association_language,
+              diagnostics_);
+    if (type_specialized.applied) {
+        resolve_named_types(
+            type_specialized.unit,
+            { },
+            selected.language
+                == frontend::Language::Vhdl2008);
+    }
+    auto specialized = specialize_unit(
+        type_specialized.unit,
+        type_specialized.value_overrides,
+        parent_environment,
+        association_language,
+        diagnostics_,
+        false,
+        parent_integral_environment);
+    if (selected.language
+            == frontend::Language::SystemVerilog2017
+        && type_specialized.applied) {
+        for (auto& [name, identity] :
+            type_specialized.values) {
+            const auto alias = std::ranges::find_if(
+                specialized.unit.type_aliases,
+                [&](const auto& candidate) {
+                    return candidate.name == name;
+                });
+            const auto resolved = alias
+                    == specialized.unit.type_aliases.end()
+                ? std::optional<std::string> { }
+                : systemverilog_type_parameter_identity(
+                      alias->type);
+            if (!resolved) {
+                report(
+                    "FSIM-ELAB-SVTYPEPARAM-003",
+                    "specialized data type for type parameter '"
+                        + name
+                        + "' is outside the bounded 1-64-bit "
+                          "packed integral subset",
+                    alias
+                            == specialized.unit.type_aliases.end()
+                        ? selected.span
+                        : alias->span);
+                continue;
+            }
+            identity = *resolved;
         }
-        if (!type_specialized.values.empty()) {
-            const auto value_values = std::move(specialized.values);
-            const auto value_identities =
-                std::move(specialized.identity_values);
-            std::unordered_set<std::string> consumed_values;
-            std::unordered_set<std::string> consumed_types;
-            const auto append_named =
-                [](auto& destination,
-                   const auto& source_values,
-                   const std::string_view name) {
-                  const auto found = std::ranges::find_if(
-                      source_values,
-                      [&](const auto& value) {
-                          return value.first == name;
-                      });
-                  if (found != source_values.end()) {
-                      destination.push_back(*found);
-                      return true;
-                  }
-                  return false;
-                };
-            for (const auto& parameter : effective.parameters) {
-                if (parameter.kind
-                    != frontend::ParameterKind::Value) {
-                    if (append_named(
-                            specialized.values,
-                            type_specialized.values,
-                            parameter.name)) {
-                        (void)append_named(
-                            specialized.identity_values,
-                            type_specialized.values,
-                            parameter.name);
-                        consumed_types.insert(parameter.name);
-                    }
-                } else if (append_named(
-                               specialized.values,
-                               value_values,
-                               parameter.name)) {
+    }
+    if (specialized.identity_values.empty()) {
+        specialized.identity_values = specialized.values;
+    }
+    if (!type_specialized.values.empty()) {
+        const auto value_values = std::move(specialized.values);
+        const auto value_identities = std::move(specialized.identity_values);
+        std::unordered_set<std::string> consumed_values;
+        std::unordered_set<std::string> consumed_types;
+        const auto append_named =
+            [](auto& destination,
+                const auto& source_values,
+                const std::string_view name) {
+                const auto found = std::ranges::find_if(
+                    source_values,
+                    [&](const auto& value) {
+                        return value.first == name;
+                    });
+                if (found != source_values.end()) {
+                    destination.push_back(*found);
+                    return true;
+                }
+                return false;
+            };
+        for (const auto& parameter : effective.parameters) {
+            if (parameter.kind
+                != frontend::ParameterKind::Value) {
+                if (append_named(
+                        specialized.values,
+                        type_specialized.values,
+                        parameter.name)) {
                     (void)append_named(
                         specialized.identity_values,
-                        value_identities,
+                        type_specialized.values,
                         parameter.name);
-                    consumed_values.insert(parameter.name);
+                    consumed_types.insert(parameter.name);
                 }
-            }
-            for (const auto& value : type_specialized.values) {
-                if (!consumed_types.contains(value.first)) {
-                    specialized.values.push_back(value);
-                    specialized.identity_values.push_back(value);
-                }
-            }
-            for (const auto& value : value_values) {
-                if (consumed_values.contains(value.first)) {
-                    continue;
-                }
-                specialized.values.push_back(value);
+            } else if (append_named(
+                           specialized.values,
+                           value_values,
+                           parameter.name)) {
                 (void)append_named(
                     specialized.identity_values,
                     value_identities,
-                    value.first);
+                    parameter.name);
+                consumed_values.insert(parameter.name);
             }
         }
-        for (const auto& identity : package_identities) {
-            specialized.values.push_back(identity);
-            specialized.identity_values.push_back(identity);
-        }
-        specialized.packages = interface_packages;
-        materialize_vhdl_local_declarations(specialized);
-        instantiate_vhdl_local_packages(
-            specialized, interface_packages);
-        instantiate_vhdl_generic_subprograms(
-            specialized);
-        materialize_vhdl_local_declarations(specialized);
-        instantiate_vhdl_local_packages(
-            specialized, interface_packages);
-        expand_vhdl_block_generates(specialized);
-        return specialized;
-    }
-    std::optional<SignalId> HierarchyBuilder::add_owned_signal(
-        const frontend::SignalDeclaration& declaration,
-        const std::string_view path,
-        SignalMap& local) {
-        if (const auto existing = local.find(declaration.name);
-            existing != local.end()) {
-            return existing->second;
-        }
-        if (declaration.type.domain == frontend::ValueDomain::Unknown
-            && declaration.type.systemverilog_scalar
-                == frontend::SystemVerilogScalarKind::None
-            && declaration.type.systemverilog_class_declaration.empty()) {
-            report(
-                "FSIM-ELAB-TYPE-001",
-                "signal '" + declaration.name
-                    + "' has a type that the packed simulation runtime "
-                      "cannot represent",
-                declaration.span);
-            return std::nullopt;
-        }
-        if (declaration.type.vhdl_array
-            && !declaration.type.width()) {
-            report(
-                "FSIM-ELAB-VHARRAY-005",
-                "VHDL array object '" + declaration.name
-                    + "' requires a concrete index constraint",
-                declaration.span);
-            return std::nullopt;
-        }
-        const auto separator =
-            declaration.type.spelling.find_last_of('.');
-        const auto simple_type_name =
-            declaration.type.spelling.substr(
-                separator == std::string::npos
-                    ? 0
-                    : separator + 1);
-        if (!declaration.type.packed_range
-            && !declaration.type.packed_range_expression
-            && !(declaration.type.vhdl_array
-                 && declaration.type.vhdl_array->flat_width)
-            && (simple_type_name == "bit_vector"
-                || simple_type_name == "std_logic_vector"
-                || simple_type_name == "std_ulogic_vector")) {
-            report(
-                "FSIM-ELAB-VHARRAY-005",
-                "VHDL array object '" + declaration.name
-                    + "' requires a concrete non-null index constraint",
-                declaration.span);
-            return std::nullopt;
-        }
-        const auto width = declaration.type.width().value_or(1);
-        const bool null_vhdl_array =
-            declaration.type.vhdl_array
-            && declaration.type.vhdl_array->flat_width
-            && *declaration.type.vhdl_array->flat_width == 0;
-        if ((!null_vhdl_array && width == 0)
-            || width > std::numeric_limits<std::size_t>::max()) {
-            report(
-                "FSIM-ELAB-010",
-                "signal '" + declaration.name + "' has an invalid width",
-                declaration.span);
-            return std::nullopt;
-        }
-        if (design_.signals_.size()
-            > std::numeric_limits<SignalId>::max()) {
-            report(
-                "FSIM-ELAB-011",
-                "the design has too many signals for dense 32-bit IDs",
-                declaration.span);
-            return std::nullopt;
-        }
-        const auto id = static_cast<SignalId>(design_.signals_.size());
-        const auto full_name =
-            std::string(path) + "." + declaration.name;
-        local.emplace(declaration.name, id);
-        local.emplace(full_name, id);
-        design_.signal_by_name_.emplace(full_name, id);
-        if (design_.roots_.size() == 1 && path == active_root_) {
-            design_.signal_by_name_.emplace(declaration.name, id);
-        }
-        design_.signal_info_.push_back({
-            id,
-            full_name,
-            static_cast<std::size_t>(width),
-            declaration.type.spelling,
-            declaration.type.domain,
-            declaration.type.systemverilog_scalar,
-            declaration.type.systemverilog_net_type,
-            declaration.type.is_signed,
-            declaration.type.packed_range,
-            declaration.type.vhdl_array,
-            declaration.type.vhdl_access,
-            declaration.type.vhdl_physical,
-            declaration.type.packed_members,
-            declaration.type.integer_range,
-            declaration.type.nominal_type,
-            declaration.type.enumeration_literals,
-            declaration.type.enumeration_range,
-            declaration.is_port,
-            declaration.direction,
-            declaration.span});
-        if (!declaration.type.vhdl_resolution_function.empty()) {
-            resolver_by_signal_.insert_or_assign(
-                id, declaration.type.vhdl_resolution_function);
-        }
-        auto initial = declaration.type.systemverilog_scalar
-                    != frontend::SystemVerilogScalarKind::None
-            ? Logic4::zero : Logic4::x;
-        if (declaration.type.spelling == "event") {
-            initial = Logic4::zero;
-        } else if (declaration.type.spelling == "tri0") {
-            initial = Logic4::zero;
-        } else if (declaration.type.spelling == "tri1") {
-            initial = Logic4::one;
-        } else if (declaration.type.spelling == "supply0") {
-            initial = Logic4::zero;
-        } else if (declaration.type.spelling == "supply1") {
-            initial = Logic4::one;
-        } else if (is_two_state_domain(declaration.type.domain)) {
-            initial = Logic4::zero;
-        } else if (
-            declaration.type.domain == frontend::ValueDomain::Logic4
-            && (declaration.type.spelling == "wire"
-                || declaration.type.spelling == "tri"
-                || declaration.type.spelling == "wand"
-                || declaration.type.spelling == "triand"
-                || declaration.type.spelling == "wor"
-                || declaration.type.spelling == "trior"
-                || declaration.type.spelling == "trireg"
-                || declaration.type.spelling == "uwire")) {
-            initial = Logic4::z;
-        }
-        auto initial_value =
-            PackedLogic4(static_cast<std::size_t>(width), initial);
-        if (!declaration.type.packed_members.empty()
-            || !declaration.type.enumeration_literals.empty()
-            || declaration.type.domain
-                == frontend::ValueDomain::Logic9
-            || declaration.type.domain
-                == frontend::ValueDomain::Integer) {
-            initial_value = default_packed_value(
-                declaration.type, static_cast<std::size_t>(width));
-        }
-        runtime::simir::Signal signal{
-            full_name,
-            std::move(initial_value),
-            ResolutionKind::none,
-            value_kind(declaration.type.domain),
-            std::nullopt,
-            {StrengthRank::pull, StrengthRank::pull},
-            std::nullopt,
-            std::nullopt,
-            declaration.type.systemverilog_scalar};
-        if (declaration.type.spelling == "tri0"
-            || declaration.type.spelling == "tri1") {
-            signal.implicit_driver =
-                declaration.type.spelling == "tri0"
-                    ? Logic4::zero : Logic4::one;
-        } else if (declaration.type.spelling == "supply0"
-                   || declaration.type.spelling == "supply1") {
-            signal.implicit_driver =
-                declaration.type.spelling == "supply0"
-                    ? Logic4::zero : Logic4::one;
-            signal.implicit_drive_strength = {
-                StrengthRank::supply, StrengthRank::supply};
-        }
-        if (declaration.type.spelling == "trireg") {
-            const auto rank = [](const frontend::VerilogStrength strength) {
-                using Frontend = frontend::VerilogStrength;
-                switch (strength) {
-                    case Frontend::Small: return StrengthRank::small;
-                    case Frontend::Large: return StrengthRank::large;
-                    case Frontend::Medium: return StrengthRank::medium;
-                    default: return StrengthRank::medium;
-                }
-            };
-            signal.charge_strength = declaration.charge_strength
-                ? rank(declaration.charge_strength->rank)
-                : StrengthRank::medium;
-            if (declaration.charge_decay) {
-                signal.charge_decay = declaration.charge_decay->magnitude;
+        for (const auto& value : type_specialized.values) {
+            if (!consumed_types.contains(value.first)) {
+                specialized.values.push_back(value);
+                specialized.identity_values.push_back(value);
             }
         }
-        design_.signals_.push_back(std::move(signal));
-        return id;
-    }
-    const Binding* HierarchyBuilder::binding_for(const std::string& path) {
-        const auto found = bindings_.find(path);
-        if (found == bindings_.end()) {
-            return nullptr;
-        }
-        used_bindings_.insert(path);
-        return found->second;
-    }
-
-    std::vector<UnitResolutionCandidate>
-    HierarchyBuilder::resolution_candidates(
-        const std::string_view library,
-        const std::string_view name) const {
-        auto result = resolve_unit_candidates(parsed_, library, name);
-        for (const auto& factory : systemc_candidates_) {
-            if (factory.library == library && factory.name == name) {
-                result.push_back({
-                    nullptr,
-                    factory.target,
-                    "systemc:" + factory.library + "." + factory.name});
-            }
-        }
-        std::stable_sort(
-            result.begin(), result.end(),
-            [](const auto& left, const auto& right) {
-                return left.identity < right.identity;
-            });
-        return result;
-    }
-
-    std::vector<UnitResolutionCandidate>
-    HierarchyBuilder::resolution_candidates(
-        const std::span<const std::string> libraries,
-        const std::string_view name,
-        std::vector<std::string>& unavailable_libraries) const {
-        std::vector<UnitResolutionCandidate> result;
-        for (std::size_t index = 0; index < libraries.size(); ++index) {
-            const auto& library = libraries[index];
-            if (!has_logical_library(
-                    parsed_, systemc_candidates_,
-                    systemc_libraries_, library)) {
-                if (index != 0) {
-                    unavailable_libraries.push_back(library);
-                }
+        for (const auto& value : value_values) {
+            if (consumed_values.contains(value.first)) {
                 continue;
             }
-            auto candidates = resolution_candidates(library, name);
-            result.insert(
-                result.end(),
-                std::make_move_iterator(candidates.begin()),
-                std::make_move_iterator(candidates.end()));
+            specialized.values.push_back(value);
+            (void)append_named(
+                specialized.identity_values,
+                value_identities,
+                value.first);
         }
-        std::stable_sort(
-            result.begin(), result.end(),
-            [](const auto& left, const auto& right) {
-                return left.identity < right.identity;
-            });
+    }
+    for (const auto& identity : package_identities) {
+        specialized.values.push_back(identity);
+        specialized.identity_values.push_back(identity);
+    }
+    specialized.packages = interface_packages;
+    materialize_vhdl_local_declarations(specialized);
+    instantiate_vhdl_local_packages(
+        specialized, interface_packages);
+    instantiate_vhdl_generic_subprograms(
+        specialized);
+    materialize_vhdl_local_declarations(specialized);
+    instantiate_vhdl_local_packages(
+        specialized, interface_packages);
+    expand_vhdl_block_generates(specialized);
+    return specialized;
+}
+std::optional<SignalId> HierarchyBuilder::add_owned_signal(
+    const frontend::SignalDeclaration& declaration,
+    const std::string_view path,
+    SignalMap& local)
+{
+    if (const auto existing = local.find(declaration.name);
+        existing != local.end()) {
+        return existing->second;
+    }
+    if (declaration.type.domain == frontend::ValueDomain::Unknown
+        && declaration.type.systemverilog_scalar
+            == frontend::SystemVerilogScalarKind::None
+        && declaration.type.systemverilog_class_declaration.empty()) {
+        report(
+            "FSIM-ELAB-TYPE-001",
+            "signal '" + declaration.name
+                + "' has a type that the packed simulation runtime "
+                  "cannot represent",
+            declaration.span);
+        return std::nullopt;
+    }
+    if (declaration.type.vhdl_array
+        && !declaration.type.width()) {
+        report(
+            "FSIM-ELAB-VHARRAY-005",
+            "VHDL array object '" + declaration.name
+                + "' requires a concrete index constraint",
+            declaration.span);
+        return std::nullopt;
+    }
+    const auto separator = declaration.type.spelling.find_last_of('.');
+    const auto simple_type_name = declaration.type.spelling.substr(
+        separator == std::string::npos
+            ? 0
+            : separator + 1);
+    if (!declaration.type.packed_range
+        && !declaration.type.packed_range_expression
+        && !(declaration.type.vhdl_array
+            && declaration.type.vhdl_array->flat_width)
+        && (simple_type_name == "bit_vector"
+            || simple_type_name == "std_logic_vector"
+            || simple_type_name == "std_ulogic_vector")) {
+        report(
+            "FSIM-ELAB-VHARRAY-005",
+            "VHDL array object '" + declaration.name
+                + "' requires a concrete non-null index constraint",
+            declaration.span);
+        return std::nullopt;
+    }
+    const auto width = declaration.type.width().value_or(1);
+    const bool null_vhdl_array = declaration.type.vhdl_array
+        && declaration.type.vhdl_array->flat_width
+        && *declaration.type.vhdl_array->flat_width == 0;
+    if ((!null_vhdl_array && width == 0)
+        || width > std::numeric_limits<std::size_t>::max()) {
+        report(
+            "FSIM-ELAB-010",
+            "signal '" + declaration.name + "' has an invalid width",
+            declaration.span);
+        return std::nullopt;
+    }
+    if (design_.signals_.size()
+        > std::numeric_limits<SignalId>::max()) {
+        report(
+            "FSIM-ELAB-011",
+            "the design has too many signals for dense 32-bit IDs",
+            declaration.span);
+        return std::nullopt;
+    }
+    const auto id = static_cast<SignalId>(design_.signals_.size());
+    const auto full_name = std::string(path) + "." + declaration.name;
+    local.emplace(declaration.name, id);
+    local.emplace(full_name, id);
+    design_.signal_by_name_.emplace(full_name, id);
+    if (design_.roots_.size() == 1 && path == active_root_) {
+        design_.signal_by_name_.emplace(declaration.name, id);
+    }
+    design_.signal_info_.push_back({ id,
+        full_name,
+        static_cast<std::size_t>(width),
+        declaration.type.spelling,
+        declaration.type.domain,
+        declaration.type.systemverilog_scalar,
+        declaration.type.systemverilog_net_type,
+        declaration.type.is_signed,
+        declaration.type.packed_range,
+        declaration.type.vhdl_array,
+        declaration.type.vhdl_access,
+        declaration.type.vhdl_physical,
+        declaration.type.packed_members,
+        declaration.type.integer_range,
+        declaration.type.nominal_type,
+        declaration.type.enumeration_literals,
+        declaration.type.enumeration_range,
+        declaration.is_port,
+        declaration.direction,
+        declaration.span });
+    if (!declaration.type.vhdl_resolution_function.empty()) {
+        resolver_by_signal_.insert_or_assign(
+            id, declaration.type.vhdl_resolution_function);
+    }
+    auto initial = declaration.type.systemverilog_scalar
+            != frontend::SystemVerilogScalarKind::None
+        ? Logic4::zero
+        : Logic4::x;
+    if (declaration.type.spelling == "event") {
+        initial = Logic4::zero;
+    } else if (declaration.type.spelling == "tri0") {
+        initial = Logic4::zero;
+    } else if (declaration.type.spelling == "tri1") {
+        initial = Logic4::one;
+    } else if (declaration.type.spelling == "supply0") {
+        initial = Logic4::zero;
+    } else if (declaration.type.spelling == "supply1") {
+        initial = Logic4::one;
+    } else if (is_two_state_domain(declaration.type.domain)) {
+        initial = Logic4::zero;
+    } else if (
+        declaration.type.domain == frontend::ValueDomain::Logic4
+        && (declaration.type.spelling == "wire"
+            || declaration.type.spelling == "tri"
+            || declaration.type.spelling == "wand"
+            || declaration.type.spelling == "triand"
+            || declaration.type.spelling == "wor"
+            || declaration.type.spelling == "trior"
+            || declaration.type.spelling == "trireg"
+            || declaration.type.spelling == "uwire")) {
+        initial = Logic4::z;
+    }
+    auto initial_value = PackedLogic4(static_cast<std::size_t>(width), initial);
+    if (!declaration.type.packed_members.empty()
+        || !declaration.type.enumeration_literals.empty()
+        || declaration.type.domain
+            == frontend::ValueDomain::Logic9
+        || declaration.type.domain
+            == frontend::ValueDomain::Integer) {
+        initial_value = default_packed_value(
+            declaration.type, static_cast<std::size_t>(width));
+    }
+    runtime::simir::Signal signal {
+        full_name,
+        std::move(initial_value),
+        ResolutionKind::none,
+        value_kind(declaration.type.domain),
+        std::nullopt,
+        { StrengthRank::pull, StrengthRank::pull },
+        std::nullopt,
+        std::nullopt,
+        declaration.type.systemverilog_scalar
+    };
+    if (declaration.type.spelling == "tri0"
+        || declaration.type.spelling == "tri1") {
+        signal.implicit_driver = declaration.type.spelling == "tri0"
+            ? Logic4::zero
+            : Logic4::one;
+    } else if (declaration.type.spelling == "supply0"
+        || declaration.type.spelling == "supply1") {
+        signal.implicit_driver = declaration.type.spelling == "supply0"
+            ? Logic4::zero
+            : Logic4::one;
+        signal.implicit_drive_strength = {
+            StrengthRank::supply, StrengthRank::supply
+        };
+    }
+    if (declaration.type.spelling == "trireg") {
+        const auto rank = [](const frontend::VerilogStrength strength) {
+            using Frontend = frontend::VerilogStrength;
+            switch (strength) {
+            case Frontend::Small:
+                return StrengthRank::small;
+            case Frontend::Large:
+                return StrengthRank::large;
+            case Frontend::Medium:
+                return StrengthRank::medium;
+            default:
+                return StrengthRank::medium;
+            }
+        };
+        signal.charge_strength = declaration.charge_strength
+            ? rank(declaration.charge_strength->rank)
+            : StrengthRank::medium;
+        if (declaration.charge_decay) {
+            signal.charge_decay = declaration.charge_decay->magnitude;
+        }
+    }
+    design_.signals_.push_back(std::move(signal));
+    return id;
+}
+const Binding* HierarchyBuilder::binding_for(const std::string& path)
+{
+    const auto found = bindings_.find(path);
+    if (found == bindings_.end()) {
+        return nullptr;
+    }
+    used_bindings_.insert(path);
+    return found->second;
+}
+
+std::vector<UnitResolutionCandidate>
+HierarchyBuilder::resolution_candidates(
+    const std::string_view library,
+    const std::string_view name) const
+{
+    auto result = resolve_unit_candidates(parsed_, library, name);
+    for (const auto& factory : systemc_candidates_) {
+        if (factory.library == library && factory.name == name) {
+            result.push_back({ nullptr,
+                factory.target,
+                "systemc:" + factory.library + "." + factory.name });
+        }
+    }
+    std::stable_sort(
+        result.begin(), result.end(),
+        [](const auto& left, const auto& right) {
+            return left.identity < right.identity;
+        });
+    return result;
+}
+
+std::vector<UnitResolutionCandidate>
+HierarchyBuilder::resolution_candidates(
+    const std::span<const std::string> libraries,
+    const std::string_view name,
+    std::vector<std::string>& unavailable_libraries) const
+{
+    std::vector<UnitResolutionCandidate> result;
+    for (std::size_t index = 0; index < libraries.size(); ++index) {
+        const auto& library = libraries[index];
+        if (!has_logical_library(
+                parsed_, systemc_candidates_,
+                systemc_libraries_, library)) {
+            if (index != 0) {
+                unavailable_libraries.push_back(library);
+            }
+            continue;
+        }
+        auto candidates = resolution_candidates(library, name);
+        result.insert(
+            result.end(),
+            std::make_move_iterator(candidates.begin()),
+            std::make_move_iterator(candidates.end()));
+    }
+    std::stable_sort(
+        result.begin(), result.end(),
+        [](const auto& left, const auto& right) {
+            return left.identity < right.identity;
+        });
+    return result;
+}
+
+std::optional<UnitResolutionCandidate>
+HierarchyBuilder::inferred_target(
+    const std::string_view library,
+    const std::string_view name,
+    const std::string& path,
+    const frontend::SourceSpan source)
+{
+    const auto scope = effective_search_scope(
+        library, search_libraries_);
+    std::vector<std::string> unavailable_libraries;
+    const auto candidates = resolution_candidates(
+        scope, name, unavailable_libraries);
+    const auto formatted_scope = [&] {
+        std::string result;
+        for (const auto& entry : scope) {
+            if (!result.empty()) {
+                result += ", ";
+            }
+            result += entry;
+        }
         return result;
+    }();
+    if (!unavailable_libraries.empty()) {
+        std::string unavailable;
+        for (const auto& entry : unavailable_libraries) {
+            if (!unavailable.empty()) {
+                unavailable += ", ";
+            }
+            unavailable += entry;
+        }
+        report(
+            "FSIM-ELAB-BIND-059",
+            "instance '" + path
+                + "' queried unavailable logical "
+                  "library/libraries ["
+                + unavailable
+                + "] while resolving unit '" + std::string { name }
+                + "' in search scope [" + formatted_scope + "]",
+            source);
+        return std::nullopt;
     }
-
-    std::optional<UnitResolutionCandidate>
-    HierarchyBuilder::inferred_target(
-        const std::string_view library,
-        const std::string_view name,
-        const std::string& path,
-        const frontend::SourceSpan source) {
-        const auto scope = effective_search_scope(
-            library, search_libraries_);
-        std::vector<std::string> unavailable_libraries;
-        const auto candidates = resolution_candidates(
-            scope, name, unavailable_libraries);
-        const auto formatted_scope = [&] {
-            std::string result;
-            for (const auto& entry : scope) {
-                if (!result.empty()) {
-                    result += ", ";
-                }
-                result += entry;
-            }
-            return result;
-        }();
-        if (!unavailable_libraries.empty()) {
-            std::string unavailable;
-            for (const auto& entry : unavailable_libraries) {
-                if (!unavailable.empty()) {
-                    unavailable += ", ";
-                }
-                unavailable += entry;
-            }
-            report(
-                "FSIM-ELAB-BIND-059",
-                "instance '" + path
-                    + "' queried unavailable logical "
-                      "library/libraries [" + unavailable
-                    + "] while resolving unit '" + std::string{name}
-                    + "' in search scope [" + formatted_scope + "]",
-                source);
-            return std::nullopt;
-        }
-        if (candidates.empty()) {
-            report(
-                "FSIM-ELAB-BIND-012",
-                "instance '" + path + "' names unit '" + std::string{name}
-                    + "', which was not found across VHDL, Verilog, "
-                      "SystemVerilog, or SystemC in search scope ["
-                    + formatted_scope + "]; candidates: <none>",
-                source);
-            return std::nullopt;
-        }
-        if (candidates.size() != 1) {
-            report(
-                "FSIM-ELAB-BIND-017",
-                "instance '" + path + "' names ambiguous unit '"
-                    + std::string{name} + "' in search scope ["
-                    + formatted_scope + "]; candidates: "
-                    + format_resolution_candidates(candidates),
-                source);
-            return std::nullopt;
-        }
-        return candidates.front();
+    if (candidates.empty()) {
+        report(
+            "FSIM-ELAB-BIND-012",
+            "instance '" + path + "' names unit '" + std::string { name }
+                + "', which was not found across VHDL, Verilog, "
+                  "SystemVerilog, or SystemC in search scope ["
+                + formatted_scope + "]; candidates: <none>",
+            source);
+        return std::nullopt;
     }
-
-    const DesignUnit* HierarchyBuilder::bound_target(
-        const frontend::Instance& instance,
-        const DesignUnit& parent,
-        const std::string& path,
-        const Binding* binding) {
-        if (binding == nullptr || !binding->target.has_value()) {
-            if (instance.unit_name.find_first_of(".(")
-                != std::string::npos) {
-                const auto* target = choose_same_language_instance(
-                    parsed_, parent, instance.unit_name);
-                if (target == nullptr) {
-                    report(
-                        "FSIM-ELAB-BIND-012",
-                        "instance '" + path + "' names explicit unit '"
-                            + instance.unit_name
-                            + "', which was not found",
-                        instance.span);
-                }
-                return target;
-            }
-            const auto library =
-                parent.library.empty() ? std::string{"work"}
-                                       : parent.library;
-            const auto selected = inferred_target(
-                library, instance.unit_name, path, instance.span);
-            return selected ? selected->unit : nullptr;
-        }
-        const auto target = parse_target(*binding->target);
-        if (!target) {
-            report(
-                "FSIM-ELAB-BIND-013",
-                "malformed binding target '" + *binding->target + "'",
-                instance.span);
-            return nullptr;
-        }
-        if (target->language == "systemc") {
-            report(
-                "FSIM-ELAB-BIND-014",
-                "SystemC factory hierarchy is not executable in this slice",
-                instance.span);
-            return nullptr;
-        }
-        if (target->language == "vhdl" && !target->architecture) {
-            report(
-                "FSIM-ELAB-BIND-016",
-                "an explicit VHDL binding target must name an architecture, "
-                "for example vhdl:work.entity(rtl)",
-                instance.span);
-            return nullptr;
-        }
-        const auto* selected = choose_bound_unit(parsed_, *target);
-        if (selected == nullptr) {
-            report(
-                "FSIM-ELAB-BIND-015",
-                "binding target '" + *binding->target + "' was not found",
-                instance.span);
-        }
-        return selected;
+    if (candidates.size() != 1) {
+        report(
+            "FSIM-ELAB-BIND-017",
+            "instance '" + path + "' names ambiguous unit '"
+                + std::string { name } + "' in search scope ["
+                + formatted_scope + "]; candidates: "
+                + format_resolution_candidates(candidates),
+            source);
+        return std::nullopt;
     }
+    return candidates.front();
+}
 
-    HierarchyBuilder::PortAliases HierarchyBuilder::connect_ports(
-        const frontend::Instance& instance,
-        const std::vector<frontend::SignalDeclaration>& ports,
-        const std::string& path,
-        const SignalMap& parent_signals,
-        const StringMap& parent_strings,
-        const std::unordered_set<StringObjectId>&
-            parent_read_only_strings,
-        const ContainerMap& parent_containers,
-        const std::unordered_set<std::string>&
-            parent_read_only_containers,
-        const Binding* binding,
-        const bool cross_language,
-        const bool require_input_connections,
-        DesignUnit* dependency_owner) {
-        PortAliases result;
-        auto& aliases = result.signals;
-        auto& string_aliases = result.strings;
-        auto& container_aliases = result.containers;
-        std::vector<bool> connected(ports.size());
-        std::size_t positional = 0;
-        for (const auto& connection : instance.connections) {
-            std::size_t port_index = ports.size();
-            if (connection.port) {
-                const auto found = std::find_if(
-                    ports.begin(), ports.end(),
-                    [&](const frontend::SignalDeclaration& port) {
-                        return port.name == *connection.port;
-                    });
-                if (found != ports.end()) {
-                    port_index = static_cast<std::size_t>(
-                        std::distance(ports.begin(), found));
-                }
-            } else {
-                while (positional < ports.size() && connected[positional]) {
-                    ++positional;
-                }
-                port_index = positional++;
-            }
-            if (port_index >= ports.size()) {
+const DesignUnit* HierarchyBuilder::bound_target(
+    const frontend::Instance& instance,
+    const DesignUnit& parent,
+    const std::string& path,
+    const Binding* binding)
+{
+    if (binding == nullptr || !binding->target.has_value()) {
+        if (instance.unit_name.find_first_of(".(")
+            != std::string::npos) {
+            const auto* target = choose_same_language_instance(
+                parsed_, parent, instance.unit_name);
+            if (target == nullptr) {
                 report(
-                    "FSIM-ELAB-BIND-025",
-                    connection.port
-                        ? "unknown port '" + *connection.port
-                            + "' on instance '" + path + "'"
-                        : "too many positional connections on instance '"
-                            + path + "'",
-                    connection.span);
-                continue;
+                    "FSIM-ELAB-BIND-012",
+                    "instance '" + path + "' names explicit unit '"
+                        + instance.unit_name
+                        + "', which was not found",
+                    instance.span);
             }
-            if (connected[port_index]) {
-                report(
-                    "FSIM-ELAB-BIND-026",
-                    "port '" + ports[port_index].name
-                        + "' is connected more than once on instance '"
+            return target;
+        }
+        const auto library = parent.library.empty() ? std::string { "work" }
+                                                    : parent.library;
+        const auto selected = inferred_target(
+            library, instance.unit_name, path, instance.span);
+        return selected ? selected->unit : nullptr;
+    }
+    const auto target = parse_target(*binding->target);
+    if (!target) {
+        report(
+            "FSIM-ELAB-BIND-013",
+            "malformed binding target '" + *binding->target + "'",
+            instance.span);
+        return nullptr;
+    }
+    if (target->language == "systemc") {
+        report(
+            "FSIM-ELAB-BIND-014",
+            "SystemC factory hierarchy is not executable in this slice",
+            instance.span);
+        return nullptr;
+    }
+    if (target->language == "vhdl" && !target->architecture) {
+        report(
+            "FSIM-ELAB-BIND-016",
+            "an explicit VHDL binding target must name an architecture, "
+            "for example vhdl:work.entity(rtl)",
+            instance.span);
+        return nullptr;
+    }
+    const auto* selected = choose_bound_unit(parsed_, *target);
+    if (selected == nullptr) {
+        report(
+            "FSIM-ELAB-BIND-015",
+            "binding target '" + *binding->target + "' was not found",
+            instance.span);
+    }
+    return selected;
+}
+
+HierarchyBuilder::PortAliases HierarchyBuilder::connect_ports(
+    const frontend::Instance& instance,
+    const std::vector<frontend::SignalDeclaration>& ports,
+    const std::string& path,
+    const SignalMap& parent_signals,
+    const StringMap& parent_strings,
+    const std::unordered_set<StringObjectId>&
+        parent_read_only_strings,
+    const ContainerMap& parent_containers,
+    const std::unordered_set<std::string>&
+        parent_read_only_containers,
+    const Binding* binding,
+    const bool cross_language,
+    const bool require_input_connections,
+    DesignUnit* dependency_owner)
+{
+    PortAliases result;
+    auto& aliases = result.signals;
+    auto& string_aliases = result.strings;
+    auto& container_aliases = result.containers;
+    std::vector<bool> connected(ports.size());
+    std::size_t positional = 0;
+    for (const auto& connection : instance.connections) {
+        std::size_t port_index = ports.size();
+        if (connection.port) {
+            const auto found = std::find_if(
+                ports.begin(), ports.end(),
+                [&](const frontend::SignalDeclaration& port) {
+                    return port.name == *connection.port;
+                });
+            if (found != ports.end()) {
+                port_index = static_cast<std::size_t>(
+                    std::distance(ports.begin(), found));
+            }
+        } else {
+            while (positional < ports.size() && connected[positional]) {
+                ++positional;
+            }
+            port_index = positional++;
+        }
+        if (port_index >= ports.size()) {
+            report(
+                "FSIM-ELAB-BIND-025",
+                connection.port
+                    ? "unknown port '" + *connection.port
+                        + "' on instance '" + path + "'"
+                    : "too many positional connections on instance '"
                         + path + "'",
+                connection.span);
+            continue;
+        }
+        if (connected[port_index]) {
+            report(
+                "FSIM-ELAB-BIND-026",
+                "port '" + ports[port_index].name
+                    + "' is connected more than once on instance '"
+                    + path + "'",
+                connection.span);
+            continue;
+        }
+        connected[port_index] = true;
+        const auto& port = ports[port_index];
+        if (!port.interface_type.empty()
+            || port.type.spelling == "interface") {
+            std::string actual_name;
+            if (connection.value.kind
+                == frontend::ExpressionKind::Identifier) {
+                actual_name = connection.value.text;
+            } else if (
+                connection.value.kind
+                    == frontend::ExpressionKind::Index
+                && connection.value.operands.size() == 2
+                && connection.value.operands[0].kind
+                    == frontend::ExpressionKind::Identifier
+                && connection.value.operands[1].kind
+                    == frontend::ExpressionKind::IntegerLiteral) {
+                actual_name = connection.value.operands[0].text
+                    + "[" + connection.value.operands[1].text + "]";
+            }
+            if (actual_name.empty()) {
+                report(
+                    "FSIM-ELAB-SVIFACE-001",
+                    "interface port '" + path + "." + port.name
+                        + "' requires a whole interface-instance actual",
+                    connection.value.span);
+                continue;
+            }
+            const auto separator = path.rfind('.');
+            const auto parent_path = separator == std::string::npos
+                ? std::string { }
+                : path.substr(0, separator);
+            auto actual_path = parent_path.empty()
+                ? actual_name
+                : parent_path + "." + actual_name;
+            auto actual_interface = systemverilog_interface_instances_.find(actual_path);
+            auto lexical_path = parent_path;
+            while (actual_interface
+                    == systemverilog_interface_instances_.end()
+                && lexical_path.find('.') != std::string::npos) {
+                lexical_path.resize(lexical_path.rfind('.'));
+                actual_path = lexical_path + "." + actual_name;
+                actual_interface = systemverilog_interface_instances_.find(actual_path);
+            }
+            if (actual_interface
+                == systemverilog_interface_instances_.end()) {
+                report(
+                    "FSIM-ELAB-SVIFACE-002",
+                    "interface actual '" + actual_path
+                        + "' must name an earlier interface instance",
+                    connection.value.span);
+                continue;
+            }
+            const auto interface_unit = actual_interface->second;
+            if (dependency_owner != nullptr) {
+                const auto source = std::string {
+                    frontend::physical_source(interface_unit.span)
+                };
+                if (!source.empty()
+                    && std::ranges::find(
+                           dependency_owner->source_dependencies,
+                           source)
+                        == dependency_owner->source_dependencies.end()) {
+                    dependency_owner->source_dependencies.push_back(source);
+                }
+            }
+            if (!port.interface_type.empty()
+                && port.interface_type != interface_unit.name) {
+                report(
+                    "FSIM-ELAB-SVIFACE-003",
+                    "interface port '" + path + "." + port.name
+                        + "' requires type '" + port.interface_type
+                        + "' but actual '" + actual_path + "' has type '"
+                        + interface_unit.name + "'",
                     connection.span);
                 continue;
             }
-            connected[port_index] = true;
-            const auto& port = ports[port_index];
-            if (!port.interface_type.empty()
-                || port.type.spelling == "interface") {
-                std::string actual_name;
-                if (connection.value.kind
-                    == frontend::ExpressionKind::Identifier) {
-                  actual_name = connection.value.text;
-                } else if (
-                    connection.value.kind
-                        == frontend::ExpressionKind::Index
-                    && connection.value.operands.size() == 2
-                    && connection.value.operands[0].kind
-                        == frontend::ExpressionKind::Identifier
-                    && connection.value.operands[1].kind
-                        == frontend::ExpressionKind::IntegerLiteral) {
-                  actual_name = connection.value.operands[0].text
-                      + "[" + connection.value.operands[1].text + "]";
-                }
-                if (actual_name.empty()) {
-                  report(
-                        "FSIM-ELAB-SVIFACE-001",
-                        "interface port '" + path + "." + port.name
-                            + "' requires a whole interface-instance actual",
-                        connection.value.span);
-                    continue;
-                }
-                const auto separator = path.rfind('.');
-                const auto parent_path = separator == std::string::npos
-                    ? std::string{}
-                    : path.substr(0, separator);
-                auto actual_path = parent_path.empty()
-                    ? actual_name
-                    : parent_path + "." + actual_name;
-                auto actual_interface =
-                    systemverilog_interface_instances_.find(actual_path);
-                auto lexical_path = parent_path;
-                while (actual_interface
-                           == systemverilog_interface_instances_.end()
-                       && lexical_path.find('.') != std::string::npos) {
-                  lexical_path.resize(lexical_path.rfind('.'));
-                  actual_path = lexical_path + "." + actual_name;
-                  actual_interface =
-                      systemverilog_interface_instances_.find(actual_path);
-                }
-                if (actual_interface
-                    == systemverilog_interface_instances_.end()) {
-                    report(
-                        "FSIM-ELAB-SVIFACE-002",
-                        "interface actual '" + actual_path
-                            + "' must name an earlier interface instance",
-                        connection.value.span);
-                    continue;
-                }
-                const auto interface_unit = actual_interface->second;
-                if (dependency_owner != nullptr) {
-                  const auto source = std::string{
-                      frontend::physical_source(interface_unit.span)};
-                  if (!source.empty()
-                      && std::ranges::find(
-                          dependency_owner->source_dependencies,
-                          source)
-                          == dependency_owner->source_dependencies.end()) {
-                    dependency_owner->source_dependencies.push_back(source);
-                  }
-                }
-                if (!port.interface_type.empty()
-                    && port.interface_type != interface_unit.name) {
-                    report(
-                        "FSIM-ELAB-SVIFACE-003",
-                        "interface port '" + path + "." + port.name
-                            + "' requires type '" + port.interface_type
-                            + "' but actual '" + actual_path + "' has type '"
-                            + interface_unit.name + "'",
-                        connection.span);
-                    continue;
-                }
-                const auto actual_view =
-                    systemverilog_interface_modport_views_.find(actual_path);
-                if (actual_view
+            const auto actual_view = systemverilog_interface_modport_views_.find(actual_path);
+            if (actual_view
+                    != systemverilog_interface_modport_views_.end()
+                && !actual_view->second.empty()
+                && (port.modport.empty()
+                    || port.modport != actual_view->second)) {
+                report(
+                    "FSIM-ELAB-SVIFACE-011",
+                    "restricted interface actual '" + actual_path
+                        + "' exposes modport '" + actual_view->second
+                        + "' and cannot bind "
+                        + (port.modport.empty()
+                                ? "an unrestricted interface port"
+                                : "different modport '" + port.modport + "'"),
+                    connection.span);
+                continue;
+            }
+            systemverilog_interface_instances_.insert_or_assign(
+                path + "." + port.name, interface_unit);
+            if (const auto handle = systemverilog_interface_handles_.find(actual_path);
+                handle != systemverilog_interface_handles_.end()) {
+                systemverilog_interface_handles_.insert_or_assign(
+                    path + "." + port.name, handle->second);
+            }
+            if (const auto identity = systemverilog_interface_parameter_identities_.find(
+                    actual_path);
+                identity
+                != systemverilog_interface_parameter_identities_.end()) {
+                systemverilog_interface_parameter_identities_
+                    .insert_or_assign(path + "." + port.name,
+                        identity->second);
+            }
+            systemverilog_interface_port_paths_.insert(
+                path + "." + port.name);
+            systemverilog_interface_modport_views_.insert_or_assign(
+                path + "." + port.name,
+                !port.modport.empty()
+                    ? port.modport
+                    : actual_view
                         != systemverilog_interface_modport_views_.end()
-                    && !actual_view->second.empty()
-                    && (port.modport.empty()
-                        || port.modport != actual_view->second)) {
-                  report(
-                      "FSIM-ELAB-SVIFACE-011",
-                      "restricted interface actual '" + actual_path
-                          + "' exposes modport '" + actual_view->second
-                          + "' and cannot bind "
-                          + (port.modport.empty()
-                                 ? "an unrestricted interface port"
-                                 : "different modport '" + port.modport + "'"),
-                      connection.span);
-                  continue;
+                    ? actual_view->second
+                    : std::string { });
+            const bool forwarded_interface_port = systemverilog_interface_port_paths_.contains(
+                actual_path);
+            const frontend::SystemVerilogModport* modport = nullptr;
+            if (!port.modport.empty()) {
+                const auto found = std::ranges::find_if(
+                    interface_unit.systemverilog_modports,
+                    [&](const frontend::SystemVerilogModport& candidate) {
+                        return candidate.name == port.modport;
+                    });
+                if (found
+                    == interface_unit.systemverilog_modports.end()) {
+                    report(
+                        "FSIM-ELAB-SVIFACE-004",
+                        "interface type '" + interface_unit.name
+                            + "' has no modport '" + port.modport + "'",
+                        port.span);
+                    continue;
                 }
-                systemverilog_interface_instances_.insert_or_assign(
-                    path + "." + port.name, interface_unit);
-                if (const auto handle =
-                        systemverilog_interface_handles_.find(actual_path);
-                    handle != systemverilog_interface_handles_.end()) {
-                  systemverilog_interface_handles_.insert_or_assign(
-                      path + "." + port.name, handle->second);
-                }
-                if (const auto identity =
-                        systemverilog_interface_parameter_identities_.find(
-                            actual_path);
-                    identity
-                        != systemverilog_interface_parameter_identities_.end()) {
-                  systemverilog_interface_parameter_identities_
-                      .insert_or_assign(path + "." + port.name,
-                                        identity->second);
-                }
-                systemverilog_interface_port_paths_.insert(
-                    path + "." + port.name);
-                systemverilog_interface_modport_views_.insert_or_assign(
-                    path + "." + port.name,
-                    !port.modport.empty()
-                        ? port.modport
-                        : actual_view
-                                  != systemverilog_interface_modport_views_.end()
-                            ? actual_view->second : std::string{});
-                const bool forwarded_interface_port =
-                    systemverilog_interface_port_paths_.contains(
-                        actual_path);
-                const frontend::SystemVerilogModport* modport = nullptr;
-                if (!port.modport.empty()) {
-                    const auto found = std::ranges::find_if(
-                        interface_unit.systemverilog_modports,
-                        [&](const frontend::SystemVerilogModport& candidate) {
-                          return candidate.name == port.modport;
-                        });
-                    if (found
-                        == interface_unit.systemverilog_modports.end()) {
-                      report(
-                          "FSIM-ELAB-SVIFACE-004",
-                          "interface type '" + interface_unit.name
-                              + "' has no modport '" + port.modport + "'",
-                          port.span);
-                      continue;
-                    }
-                    modport = &*found;
-                }
-                const auto connect_member =
-                    [&](const std::string& member,
-                        const frontend::PortDirection direction,
-                        const frontend::SourceSpan& member_span) {
-                      const auto signal_name = actual_path + "." + member;
-                      const auto signal =
-                          design_.signal_by_name_.find(signal_name);
-                      if (signal == design_.signal_by_name_.end()) {
+                modport = &*found;
+            }
+            const auto connect_member =
+                [&](const std::string& member,
+                    const frontend::PortDirection direction,
+                    const frontend::SourceSpan& member_span) {
+                    const auto signal_name = actual_path + "." + member;
+                    const auto signal = design_.signal_by_name_.find(signal_name);
+                    if (signal == design_.signal_by_name_.end()) {
                         report(
                             "FSIM-ELAB-SVIFACE-005",
                             "interface member signal '" + signal_name
                                 + "' was not elaborated",
                             member_span);
                         return;
-                      }
-                      const auto local_name = port.name + "." + member;
-                      const auto qualified_name = path + "." + local_name;
-                      aliases.emplace(local_name, signal->second);
-                      aliases.emplace(qualified_name, signal->second);
-                      const auto member_path =
-                          actual_path + "." + member;
-                      const bool inherited_read_only =
-                          systemverilog_read_only_interface_member_paths_
-                              .contains(member_path);
-                      if (direction
-                              == frontend::PortDirection::Input
-                          || inherited_read_only) {
+                    }
+                    const auto local_name = port.name + "." + member;
+                    const auto qualified_name = path + "." + local_name;
+                    aliases.emplace(local_name, signal->second);
+                    aliases.emplace(qualified_name, signal->second);
+                    const auto member_path = actual_path + "." + member;
+                    const bool inherited_read_only = systemverilog_read_only_interface_member_paths_
+                                                         .contains(member_path);
+                    if (direction
+                            == frontend::PortDirection::Input
+                        || inherited_read_only) {
                         result.read_only_signals.insert(signal->second);
                         systemverilog_read_only_interface_member_paths_
                             .insert(qualified_name);
-                      }
-                      design_.signal_by_name_.emplace(
-                          qualified_name, signal->second);
-                      if (!forwarded_interface_port
-                          && (direction
-                                  == frontend::PortDirection::Output
-                          || direction == frontend::PortDirection::Inout
-                          || direction == frontend::PortDirection::Ref
-                          || direction
-                              == frontend::PortDirection::Buffer)) {
+                    }
+                    design_.signal_by_name_.emplace(
+                        qualified_name, signal->second);
+                    if (!forwarded_interface_port
+                        && (direction
+                                == frontend::PortDirection::Output
+                            || direction == frontend::PortDirection::Inout
+                            || direction == frontend::PortDirection::Ref
+                            || direction
+                                == frontend::PortDirection::Buffer)) {
                         note_boundary_driver(
                             signal->second,
                             binding,
                             qualified_name,
                             connection.span);
-                      }
-                    };
-                const auto connect_callable =
-                    [&](const std::string& member,
-                        const bool function,
-                        const bool imported,
-                        const frontend::SourceSpan& member_span) {
-                      if (dependency_owner == nullptr) {
+                    }
+                };
+            const auto connect_callable =
+                [&](const std::string& member,
+                    const bool function,
+                    const bool imported,
+                    const frontend::SourceSpan& member_span) {
+                    if (dependency_owner == nullptr) {
                         report(
                             "FSIM-ELAB-SVIFACE-007",
                             "interface callable '" + member
                                 + "' has no same-language module owner",
                             member_span);
                         return;
-                      }
-                      if (!imported) {
-                        bool supplied{};
+                    }
+                    if (!imported) {
+                        bool supplied { };
                         if (function) {
-                          const auto profile = std::ranges::find(
-                              interface_unit.functions, member,
-                              &frontend::FunctionDeclaration::name);
-                          supplied = profile != interface_unit.functions.end()
-                              && std::ranges::any_of(
-                                  dependency_owner->functions,
-                                  [&](const auto& candidate) {
-                                    return systemverilog_function_profile_matches(
-                                        *profile, candidate);
-                                  });
+                            const auto profile = std::ranges::find(
+                                interface_unit.functions, member,
+                                &frontend::FunctionDeclaration::name);
+                            supplied = profile != interface_unit.functions.end()
+                                && std::ranges::any_of(
+                                    dependency_owner->functions,
+                                    [&](const auto& candidate) {
+                                        return systemverilog_function_profile_matches(
+                                            *profile, candidate);
+                                    });
                         } else {
-                          const auto profile = std::ranges::find(
-                              interface_unit.tasks, member,
-                              &frontend::TaskDeclaration::name);
-                          supplied = profile != interface_unit.tasks.end()
-                              && std::ranges::any_of(
-                                  dependency_owner->tasks,
-                                  [&](const auto& candidate) {
-                                    return systemverilog_task_profile_matches(
-                                        *profile, candidate);
-                                  });
+                            const auto profile = std::ranges::find(
+                                interface_unit.tasks, member,
+                                &frontend::TaskDeclaration::name);
+                            supplied = profile != interface_unit.tasks.end()
+                                && std::ranges::any_of(
+                                    dependency_owner->tasks,
+                                    [&](const auto& candidate) {
+                                        return systemverilog_task_profile_matches(
+                                            *profile, candidate);
+                                    });
                         }
                         if (!supplied) {
-                          report(
-                              "FSIM-ELAB-SVIFACE-009",
-                              "modport export '" + member
-                                  + "' has no matching module callable",
-                              member_span);
+                            report(
+                                "FSIM-ELAB-SVIFACE-009",
+                                "modport export '" + member
+                                    + "' has no matching module callable",
+                                member_span);
                         }
                         return;
-                      }
-                      const auto qualified = port.name + "." + member;
-                      if (function) {
+                    }
+                    const auto qualified = port.name + "." + member;
+                    if (function) {
                         const auto found = std::ranges::find_if(
                             interface_unit.functions,
                             [&](const auto& candidate) {
-                              return candidate.name == member;
+                                return candidate.name == member;
                             });
                         if (found == interface_unit.functions.end()) {
-                          report(
-                              "FSIM-ELAB-SVIFACE-007",
-                              "interface function '" + member
-                                  + "' was not retained",
-                              member_span);
-                          return;
+                            report(
+                                "FSIM-ELAB-SVIFACE-007",
+                                "interface function '" + member
+                                    + "' was not retained",
+                                member_span);
+                            return;
                         }
                         if (std::ranges::any_of(
                                 dependency_owner->functions,
                                 [&](const auto& candidate) {
-                                  return candidate.name == qualified;
+                                    return candidate.name == qualified;
                                 })) {
-                          report(
-                              "FSIM-ELAB-SVIFACE-008",
-                              "interface callable '" + qualified
-                                  + "' is visible more than once",
-                              member_span);
-                          return;
+                            report(
+                                "FSIM-ELAB-SVIFACE-008",
+                                "interface callable '" + qualified
+                                    + "' is visible more than once",
+                                member_span);
+                            return;
                         }
                         auto callable = *found;
                         qualify_interface_callable(
@@ -1310,617 +1292,618 @@ using namespace elaboration_detail;
                         dependency_owner->functions.push_back(
                             std::move(callable));
                         return;
-                      }
-                      const auto found = std::ranges::find_if(
-                          interface_unit.tasks,
-                          [&](const auto& candidate) {
+                    }
+                    const auto found = std::ranges::find_if(
+                        interface_unit.tasks,
+                        [&](const auto& candidate) {
                             return candidate.name == member;
-                          });
-                      if (found == interface_unit.tasks.end()) {
+                        });
+                    if (found == interface_unit.tasks.end()) {
                         report(
                             "FSIM-ELAB-SVIFACE-007",
                             "interface task '" + member
                                 + "' was not retained",
                             member_span);
                         return;
-                      }
-                      if (std::ranges::any_of(
-                              dependency_owner->tasks,
-                              [&](const auto& candidate) {
+                    }
+                    if (std::ranges::any_of(
+                            dependency_owner->tasks,
+                            [&](const auto& candidate) {
                                 return candidate.name == qualified;
-                              })) {
+                            })) {
                         report(
                             "FSIM-ELAB-SVIFACE-008",
                             "interface callable '" + qualified
                                 + "' is visible more than once",
                             member_span);
                         return;
-                      }
-                      auto callable = *found;
-                      qualify_interface_callable(
-                          callable, port.name, interface_unit);
-                      dependency_owner->tasks.push_back(
-                          std::move(callable));
-                    };
-                if (modport != nullptr) {
-                  for (const auto& member : modport->members) {
-                    using Kind =
-                        frontend::SystemVerilogModportMemberKind;
-                    if (member.kind == Kind::Signal) {
-                      connect_member(
-                          member.name, member.direction, member.span);
-                    } else if (member.kind == Kind::Clocking) {
-                      const auto block = std::ranges::find(
-                          interface_unit.systemverilog_clocking_blocks,
-                          member.name,
-                          &frontend::SystemVerilogClockingBlock::name);
-                      if (block ==
-                          interface_unit.systemverilog_clocking_blocks.end()) {
-                        report(
-                            "FSIM-ELAB-CLOCK-007",
-                            "modport clocking member '" + member.name
-                                + "' was not retained by interface '"
-                                + interface_unit.name + "'",
-                            member.span);
-                        continue;
-                      }
-                      connect_member(
-                          block->name,
-                          frontend::PortDirection::Input,
-                          block->span);
-                      for (const auto& clocking_signal : block->signals) {
-                        connect_member(
-                            block->name + "." + clocking_signal.name,
-                            clocking_signal.direction,
-                            clocking_signal.span);
-                      }
-                    } else {
-                      connect_callable(
-                          member.name,
-                          member.kind == Kind::FunctionImport
-                              || member.kind == Kind::FunctionExport,
-                          member.kind == Kind::FunctionImport
-                              || member.kind == Kind::TaskImport,
-                          member.span);
                     }
-                  }
-                } else {
-                  for (const auto& member : interface_unit.signals) {
+                    auto callable = *found;
+                    qualify_interface_callable(
+                        callable, port.name, interface_unit);
+                    dependency_owner->tasks.push_back(
+                        std::move(callable));
+                };
+            if (modport != nullptr) {
+                for (const auto& member : modport->members) {
+                    using Kind = frontend::SystemVerilogModportMemberKind;
+                    if (member.kind == Kind::Signal) {
+                        connect_member(
+                            member.name, member.direction, member.span);
+                    } else if (member.kind == Kind::Clocking) {
+                        const auto block = std::ranges::find(
+                            interface_unit.systemverilog_clocking_blocks,
+                            member.name,
+                            &frontend::SystemVerilogClockingBlock::name);
+                        if (block == interface_unit.systemverilog_clocking_blocks.end()) {
+                            report(
+                                "FSIM-ELAB-CLOCK-007",
+                                "modport clocking member '" + member.name
+                                    + "' was not retained by interface '"
+                                    + interface_unit.name + "'",
+                                member.span);
+                            continue;
+                        }
+                        connect_member(
+                            block->name,
+                            frontend::PortDirection::Input,
+                            block->span);
+                        for (const auto& clocking_signal : block->signals) {
+                            connect_member(
+                                block->name + "." + clocking_signal.name,
+                                clocking_signal.direction,
+                                clocking_signal.span);
+                        }
+                    } else {
+                        connect_callable(
+                            member.name,
+                            member.kind == Kind::FunctionImport
+                                || member.kind == Kind::FunctionExport,
+                            member.kind == Kind::FunctionImport
+                                || member.kind == Kind::TaskImport,
+                            member.span);
+                    }
+                }
+            } else {
+                for (const auto& member : interface_unit.signals) {
                     connect_member(
                         member.name,
                         frontend::PortDirection::Unknown,
                         member.span);
-                  }
-                  for (const auto& function : interface_unit.functions) {
+                }
+                for (const auto& function : interface_unit.functions) {
                     connect_callable(
                         function.name, true, true, function.span);
-                  }
-                  for (const auto& task : interface_unit.tasks) {
+                }
+                for (const auto& task : interface_unit.tasks) {
                     connect_callable(
                         task.name, false, true, task.span);
-                  }
                 }
-                continue;
             }
-            if (connection.kind
-                    == frontend::PortActualKind::Open) {
-                if (port.direction
-                    == frontend::PortDirection::Input) {
-                    if (!cross_language
-                        && dependency_owner != nullptr
-                        && port.default_value) {
-                        auto default_connection = connection;
-                        default_connection.kind =
-                            frontend::PortActualKind::Default;
-                        default_connection.value = *port.default_value;
-                        (void)connect_vhdl_expression_port(
-                            port,
-                            default_connection,
-                            path,
-                            parent_signals,
-                            result,
-                            *dependency_owner);
-                        continue;
-                    }
-                    report(
-                        "FSIM-ELAB-BIND-027",
-                        "input port '" + path + "." + port.name
-                            + "' cannot be open without a component "
-                              "default",
-                        connection.span);
-                }
-                continue;
-            }
-            if (connection.kind
-                    == frontend::PortActualKind::Default) {
-                if (port.type.systemverilog_container) {
-                    report(
-                        "FSIM-ELAB-SVPORT-003",
-                        "container input ports do not support default "
-                        "connection values",
-                        connection.span);
-                    continue;
-                }
-                if (port.direction
-                    != frontend::PortDirection::Input) {
-                    report(
-                        "FSIM-ELAB-VHCOMP-013",
-                        "only an input component port can materialize "
-                        "a default on '" + path + "." + port.name + "'",
-                        connection.span);
-                    continue;
-                }
-                const auto signal =
-                    add_owned_signal(port, path, aliases);
-                if (!signal) {
-                    continue;
-                }
-                const auto width =
-                    static_cast<std::size_t>(
-                        port.type.width().value_or(1));
-                std::string default_error;
-                auto lowered = static_vhdl_value(
-                    connection.value,
-                    port.type,
-                    default_error);
-                if (!lowered
-                    || lowered->width() != width) {
-                    report(
-                        "FSIM-ELAB-VHCOMP-013",
-                        "component input default for '" + path + "."
-                            + port.name
-                            + "' is not a statically foldable value "
-                              "compatible with the selected port type: "
-                            + default_error,
-                        connection.value.span);
-                    continue;
-                }
-                design_.signals_.at(*signal).initial_value =
-                    std::move(*lowered);
-                continue;
-            }
-            if (port.type.systemverilog_container) {
-                const auto object =
-                    connect_container_port(
+            continue;
+        }
+        if (connection.kind
+            == frontend::PortActualKind::Open) {
+            if (port.direction
+                == frontend::PortDirection::Input) {
+                if (!cross_language
+                    && dependency_owner != nullptr
+                    && port.default_value) {
+                    auto default_connection = connection;
+                    default_connection.kind = frontend::PortActualKind::Default;
+                    default_connection.value = *port.default_value;
+                    (void)connect_vhdl_expression_port(
                         port,
-                        connection,
+                        default_connection,
                         path,
                         parent_signals,
-                        parent_containers,
-                        parent_read_only_containers,
-                        cross_language);
-                if (object) {
-                    container_aliases.emplace(
-                        port.name, *object);
-                    container_aliases.emplace(
-                        path + "." + port.name, *object);
-                    design_.container_by_name_.emplace(
-                        path + "." + port.name, *object);
-                }
-                continue;
-            }
-            if (port.type.domain
-                == frontend::ValueDomain::String) {
-                const auto object = connect_string_port(
-                    port,
-                    connection,
-                    path,
-                    parent_strings,
-                    parent_read_only_strings,
-                    cross_language);
-                if (object) {
-                    string_aliases.emplace(port.name, *object);
-                    string_aliases.emplace(
-                        path + "." + port.name, *object);
-                    design_.string_by_name_.emplace(
-                        path + "." + port.name, *object);
-                    design_.string_object_info_.push_back(
-                        StringObjectInfo{
-                            *object,
-                            path + "." + port.name,
-                            port.span,
-                            true,
-                            port.direction});
-                    if (port.direction
-                        == frontend::PortDirection::Input) {
-                      result.read_only_strings.insert(*object);
-                    }
-                }
-                continue;
-            }
-            if (!cross_language
-                && dependency_owner != nullptr
-                && dependency_owner->language
-                    == frontend::Language::Vhdl2008
-                && connect_vhdl_expression_port(
-                    port,
-                    connection,
-                    path,
-                    parent_signals,
-                    result,
-                    *dependency_owner)) {
-                continue;
-            }
-            if (connection.value.kind != frontend::ExpressionKind::Identifier) {
-                report(
-                    "FSIM-ELAB-BIND-027",
-                    "boundary connection actuals must be whole signals",
-                    connection.value.span);
-                continue;
-            }
-            const auto actual = parent_signals.find(connection.value.text);
-            if (actual == parent_signals.end()) {
-                report(
-                    "FSIM-ELAB-BIND-028",
-                    "unknown connection signal '" + connection.value.text
-                        + "' on instance '" + path + "'",
-                    connection.value.span);
-                continue;
-            }
-            // Adapter creation may append an owned formal signal and reallocate
-            // signal_info_.  Keep the actual metadata by value across that
-            // append instead of retaining a reference into the vector.
-            const auto actual_info = design_.signal_info_.at(actual->second);
-            const auto diagnostics_before = diagnostics_.size();
-            validate_boundary_type(
-                port,
-                actual_info,
-                path,
-                connection.span,
-                cross_language);
-            const auto formal_width = static_cast<std::size_t>(
-                port.type.width().value_or(1));
-            auto formal_signal = actual->second;
-            std::optional<ProcessId> conversion_process;
-            const bool width_changed = formal_width != actual_info.width;
-            const bool signedness_changed =
-                formal_width > 1
-                && port.type.is_signed != actual_info.is_signed;
-            const bool boolean_boundary =
-                formal_width == 1 && actual_info.width == 1
-                && ((port.type.domain == frontend::ValueDomain::Boolean
-                     && (actual_info.source_domain
-                             == frontend::ValueDomain::Bit2
-                         || actual_info.source_domain
-                             == frontend::ValueDomain::Logic4))
-                    || (actual_info.source_domain
-                            == frontend::ValueDomain::Boolean
-                        && (port.type.domain
-                                == frontend::ValueDomain::Bit2
-                            || port.type.domain
-                                == frontend::ValueDomain::Logic4)));
-            const bool integer_boundary =
-                formal_width == 32 && actual_info.width == 32
-                && port.type.is_signed && actual_info.is_signed
-                && ((port.type.domain
-                         == frontend::ValueDomain::Integer
-                     && (actual_info.source_domain
-                             == frontend::ValueDomain::Bit2
-                         || actual_info.source_domain
-                             == frontend::ValueDomain::Logic4))
-                    || (actual_info.source_domain
-                            == frontend::ValueDomain::Integer
-                        && (port.type.domain
-                                == frontend::ValueDomain::Bit2
-                            || port.type.domain
-                                == frontend::ValueDomain::Logic4)));
-            const bool two_state_boundary =
-                port.type.domain == frontend::ValueDomain::Bit2
-                && actual_info.source_domain
-                    == frontend::ValueDomain::Bit2;
-            const bool state_domain_boundary =
-                (port.type.domain == frontend::ValueDomain::Logic4
-                 && actual_info.source_domain
-                     == frontend::ValueDomain::Logic9)
-                || (port.type.domain == frontend::ValueDomain::Logic9
-                    && actual_info.source_domain
-                        == frontend::ValueDomain::Logic4);
-            const bool needs_adapter =
-                diagnostics_.size() == diagnostics_before
-                && cross_language
-                && (width_changed || signedness_changed
-                    || boolean_boundary || integer_boundary)
-                && (port.direction == frontend::PortDirection::Input
-                    || port.direction == frontend::PortDirection::Output
-                    || port.direction == frontend::PortDirection::Buffer);
-            if (needs_adapter) {
-                const auto owned = add_owned_signal(port, path, aliases);
-                if (!owned) {
+                        result,
+                        *dependency_owner);
                     continue;
                 }
-                formal_signal = *owned;
-                const bool input =
-                    port.direction == frontend::PortDirection::Input;
-                const auto source = input ? actual->second : formal_signal;
-                const auto destination = input ? formal_signal : actual->second;
-                const auto source_width =
-                    input ? actual_info.width : formal_width;
-                const auto destination_width =
-                    input ? formal_width : actual_info.width;
-                const auto source_domain = input
-                    ? actual_info.source_domain : port.type.domain;
-                const auto destination_domain = input
-                    ? port.type.domain : actual_info.source_domain;
-                const bool sign_extend = input
-                    ? actual_info.is_signed : port.type.is_signed;
-                Process adapter;
-                adapter.id = static_cast<ProcessId>(
-                    design_.processes_.size());
-                adapter.name = path + "." + port.name
-                    + (boolean_boundary
+                report(
+                    "FSIM-ELAB-BIND-027",
+                    "input port '" + path + "." + port.name
+                        + "' cannot be open without a component "
+                          "default",
+                    connection.span);
+            }
+            continue;
+        }
+        if (connection.kind
+            == frontend::PortActualKind::Default) {
+            if (port.type.systemverilog_container) {
+                report(
+                    "FSIM-ELAB-SVPORT-003",
+                    "container input ports do not support default "
+                    "connection values",
+                    connection.span);
+                continue;
+            }
+            if (port.direction
+                != frontend::PortDirection::Input) {
+                report(
+                    "FSIM-ELAB-VHCOMP-013",
+                    "only an input component port can materialize "
+                    "a default on '"
+                        + path + "." + port.name + "'",
+                    connection.span);
+                continue;
+            }
+            const auto signal = add_owned_signal(port, path, aliases);
+            if (!signal) {
+                continue;
+            }
+            const auto width = static_cast<std::size_t>(
+                port.type.width().value_or(1));
+            std::string default_error;
+            auto lowered = static_vhdl_value(
+                connection.value,
+                port.type,
+                default_error);
+            if (!lowered
+                || lowered->width() != width) {
+                report(
+                    "FSIM-ELAB-VHCOMP-013",
+                    "component input default for '" + path + "."
+                        + port.name
+                        + "' is not a statically foldable value "
+                          "compatible with the selected port type: "
+                        + default_error,
+                    connection.value.span);
+                continue;
+            }
+            design_.signals_.at(*signal).initial_value = std::move(*lowered);
+            continue;
+        }
+        if (port.type.systemverilog_container) {
+            const auto object = connect_container_port(
+                port,
+                connection,
+                path,
+                parent_signals,
+                parent_containers,
+                parent_read_only_containers,
+                cross_language);
+            if (object) {
+                container_aliases.emplace(
+                    port.name, *object);
+                container_aliases.emplace(
+                    path + "." + port.name, *object);
+                design_.container_by_name_.emplace(
+                    path + "." + port.name, *object);
+            }
+            continue;
+        }
+        if (port.type.domain
+            == frontend::ValueDomain::String) {
+            const auto object = connect_string_port(
+                port,
+                connection,
+                path,
+                parent_strings,
+                parent_read_only_strings,
+                cross_language);
+            if (object) {
+                string_aliases.emplace(port.name, *object);
+                string_aliases.emplace(
+                    path + "." + port.name, *object);
+                design_.string_by_name_.emplace(
+                    path + "." + port.name, *object);
+                design_.string_object_info_.push_back(
+                    StringObjectInfo {
+                        *object,
+                        path + "." + port.name,
+                        port.span,
+                        true,
+                        port.direction });
+                if (port.direction
+                    == frontend::PortDirection::Input) {
+                    result.read_only_strings.insert(*object);
+                }
+            }
+            continue;
+        }
+        if (!cross_language
+            && dependency_owner != nullptr
+            && dependency_owner->language
+                != frontend::Language::Vhdl2008
+            && connect_verilog_memory_word_port(
+                port,
+                connection,
+                path,
+                parent_containers,
+                result)) {
+            continue;
+        }
+        if (!cross_language
+            && dependency_owner != nullptr
+            && dependency_owner->language
+                == frontend::Language::Vhdl2008
+            && connect_vhdl_expression_port(
+                port,
+                connection,
+                path,
+                parent_signals,
+                result,
+                *dependency_owner)) {
+            continue;
+        }
+        if (connection.value.kind != frontend::ExpressionKind::Identifier) {
+            report(
+                "FSIM-ELAB-BIND-027",
+                "boundary connection actuals must be whole signals",
+                connection.value.span);
+            continue;
+        }
+        const auto actual = parent_signals.find(connection.value.text);
+        if (actual == parent_signals.end()) {
+            report(
+                "FSIM-ELAB-BIND-028",
+                "unknown connection signal '" + connection.value.text
+                    + "' on instance '" + path + "'",
+                connection.value.span);
+            continue;
+        }
+        // Adapter creation may append an owned formal signal and reallocate
+        // signal_info_.  Keep the actual metadata by value across that
+        // append instead of retaining a reference into the vector.
+        const auto actual_info = design_.signal_info_.at(actual->second);
+        const auto diagnostics_before = diagnostics_.size();
+        validate_boundary_type(
+            port,
+            actual_info,
+            path,
+            connection.span,
+            cross_language);
+        const auto formal_width = static_cast<std::size_t>(
+            port.type.width().value_or(1));
+        auto formal_signal = actual->second;
+        std::optional<ProcessId> conversion_process;
+        const bool width_changed = formal_width != actual_info.width;
+        const bool signedness_changed = formal_width > 1
+            && port.type.is_signed != actual_info.is_signed;
+        const bool boolean_boundary = formal_width == 1 && actual_info.width == 1
+            && ((port.type.domain == frontend::ValueDomain::Boolean
+                    && (actual_info.source_domain
+                            == frontend::ValueDomain::Bit2
+                        || actual_info.source_domain
+                            == frontend::ValueDomain::Logic4))
+                || (actual_info.source_domain
+                        == frontend::ValueDomain::Boolean
+                    && (port.type.domain
+                            == frontend::ValueDomain::Bit2
+                        || port.type.domain
+                            == frontend::ValueDomain::Logic4)));
+        const bool integer_boundary = formal_width == 32 && actual_info.width == 32
+            && port.type.is_signed && actual_info.is_signed
+            && ((port.type.domain
+                        == frontend::ValueDomain::Integer
+                    && (actual_info.source_domain
+                            == frontend::ValueDomain::Bit2
+                        || actual_info.source_domain
+                            == frontend::ValueDomain::Logic4))
+                || (actual_info.source_domain
+                        == frontend::ValueDomain::Integer
+                    && (port.type.domain
+                            == frontend::ValueDomain::Bit2
+                        || port.type.domain
+                            == frontend::ValueDomain::Logic4)));
+        const bool two_state_boundary = port.type.domain == frontend::ValueDomain::Bit2
+            && actual_info.source_domain
+                == frontend::ValueDomain::Bit2;
+        const bool state_domain_boundary = (port.type.domain == frontend::ValueDomain::Logic4
+                                               && actual_info.source_domain
+                                                   == frontend::ValueDomain::Logic9)
+            || (port.type.domain == frontend::ValueDomain::Logic9
+                && actual_info.source_domain
+                    == frontend::ValueDomain::Logic4);
+        const bool needs_adapter = diagnostics_.size() == diagnostics_before
+            && cross_language
+            && (width_changed || signedness_changed
+                || boolean_boundary || integer_boundary)
+            && (port.direction == frontend::PortDirection::Input
+                || port.direction == frontend::PortDirection::Output
+                || port.direction == frontend::PortDirection::Buffer);
+        if (needs_adapter) {
+            const auto owned = add_owned_signal(port, path, aliases);
+            if (!owned) {
+                continue;
+            }
+            formal_signal = *owned;
+            const bool input = port.direction == frontend::PortDirection::Input;
+            const auto source = input ? actual->second : formal_signal;
+            const auto destination = input ? formal_signal : actual->second;
+            const auto source_width = input ? actual_info.width : formal_width;
+            const auto destination_width = input ? formal_width : actual_info.width;
+            const auto source_domain = input
+                ? actual_info.source_domain
+                : port.type.domain;
+            const auto destination_domain = input
+                ? port.type.domain
+                : actual_info.source_domain;
+            const bool sign_extend = input
+                ? actual_info.is_signed
+                : port.type.is_signed;
+            Process adapter;
+            adapter.id = static_cast<ProcessId>(
+                design_.processes_.size());
+            adapter.name = path + "." + port.name
+                + (boolean_boundary
                         ? "$boundary_boolean"
                         : integer_boundary
-                            ? "$boundary_integer"
-                            : "$boundary_integral");
-                adapter.static_sensitivity.push_back(
-                    Sensitivity{source, EdgeKind::any});
-                InstructionIndex conversion_start = 0;
-                if (destination_domain
-                        == frontend::ValueDomain::Boolean
-                    || (destination_domain
-                            == frontend::ValueDomain::Integer
-                        && !is_two_state_domain(source_domain))) {
-                    adapter.operations.emplace_back(WaitSensitivity{});
-                    adapter.operations.emplace_back(Jump{2});
-                    conversion_start = 2;
-                }
-                adapter.operations.emplace_back(ReadSignal{0, source});
-                RegisterId converted = 1;
-                if (destination_domain
-                    == frontend::ValueDomain::Boolean) {
-                    adapter.register_count = 3;
-                    converted = 0;
-                    adapter.register_value_kinds = {
-                        value_kind(source_domain),
-                        value_kind(source_domain),
-                        value_kind(source_domain)};
-                    adapter.operations.emplace_back(
-                        LoadConstant{
-                            1,
-                            PackedLogic4(31, Logic4::zero)});
-                    adapter.operations.emplace_back(
-                        Concatenate{2, {1, 0}, 32});
-                    adapter.operations.emplace_back(
-                        IntegerCheck{2, 0, 1});
-                } else if (destination_domain
-                    == frontend::ValueDomain::Integer) {
-                    const auto range = input
-                        ? port.type.integer_range
-                        : actual_info.integer_range;
-                    const auto lower = range
-                        ? static_cast<std::int32_t>(
-                            std::min(range->left, range->right))
-                        : std::numeric_limits<std::int32_t>::min();
-                    const auto upper = range
-                        ? static_cast<std::int32_t>(
-                            std::max(range->left, range->right))
-                        : std::numeric_limits<std::int32_t>::max();
-                    adapter.register_count = 1;
-                    converted = 0;
-                    adapter.register_value_kinds = {
-                        value_kind(source_domain)};
-                    adapter.operations.emplace_back(
-                        IntegerCheck{0, lower, upper});
-                } else if (destination_width == source_width) {
-                    adapter.register_count = 2;
-                    adapter.register_value_kinds = {
-                        value_kind(source_domain),
-                        value_kind(destination_domain)};
-                    adapter.operations.emplace_back(
-                        CopyRegister{converted, 0});
-                } else if (destination_width < source_width) {
-                    adapter.register_count = 2;
-                    adapter.register_value_kinds = {
-                        value_kind(source_domain),
-                        value_kind(destination_domain)};
-                    adapter.operations.emplace_back(
-                        Extract{
-                            converted,
-                            0,
-                            0,
-                            static_cast<std::uint32_t>(destination_width)});
-                } else {
-                    adapter.register_count = 3;
-                    converted = 2;
-                    std::vector<RegisterId> operands;
-                    if (sign_extend) {
-                        adapter.operations.emplace_back(
-                            Extract{
-                                1,
-                                0,
-                                static_cast<std::uint32_t>(
-                                    source_width - 1U),
-                                1});
-                        operands.assign(
-                            destination_width - source_width, 1);
-                    } else {
-                        adapter.operations.emplace_back(
-                            LoadConstant{
-                                1,
-                                PackedLogic4(
-                                    destination_width - source_width,
-                                    Logic4::zero)});
-                        operands.push_back(1);
-                    }
-                    operands.push_back(0);
-                    adapter.register_value_kinds = {
-                        value_kind(source_domain),
-                        value_kind(sign_extend
-                            ? source_domain : destination_domain),
-                        value_kind(destination_domain)};
-                    adapter.operations.emplace_back(
-                        Concatenate{
-                            converted,
-                            std::move(operands),
-                            static_cast<std::uint32_t>(destination_width)});
-                }
+                        ? "$boundary_integer"
+                        : "$boundary_integral");
+            adapter.static_sensitivity.push_back(
+                Sensitivity { source, EdgeKind::any });
+            InstructionIndex conversion_start = 0;
+            if (destination_domain
+                    == frontend::ValueDomain::Boolean
+                || (destination_domain
+                        == frontend::ValueDomain::Integer
+                    && !is_two_state_domain(source_domain))) {
+                adapter.operations.emplace_back(WaitSensitivity { });
+                adapter.operations.emplace_back(Jump { 2 });
+                conversion_start = 2;
+            }
+            adapter.operations.emplace_back(ReadSignal { 0, source });
+            RegisterId converted = 1;
+            if (destination_domain
+                == frontend::ValueDomain::Boolean) {
+                adapter.register_count = 3;
+                converted = 0;
+                adapter.register_value_kinds = {
+                    value_kind(source_domain),
+                    value_kind(source_domain),
+                    value_kind(source_domain)
+                };
                 adapter.operations.emplace_back(
-                    WriteUpdate{destination, converted});
-                adapter.operations.emplace_back(WaitSensitivity{});
+                    LoadConstant {
+                        1,
+                        PackedLogic4(31, Logic4::zero) });
                 adapter.operations.emplace_back(
-                    Jump{conversion_start});
-                adapter.driver_regions.push_back(
-                    Process::DriverRegion{
-                        destination,
+                    Concatenate { 2, { 1, 0 }, 32 });
+                adapter.operations.emplace_back(
+                    IntegerCheck { 2, 0, 1 });
+            } else if (destination_domain
+                == frontend::ValueDomain::Integer) {
+                const auto range = input
+                    ? port.type.integer_range
+                    : actual_info.integer_range;
+                const auto lower = range
+                    ? static_cast<std::int32_t>(
+                          std::min(range->left, range->right))
+                    : std::numeric_limits<std::int32_t>::min();
+                const auto upper = range
+                    ? static_cast<std::int32_t>(
+                          std::max(range->left, range->right))
+                    : std::numeric_limits<std::int32_t>::max();
+                adapter.register_count = 1;
+                converted = 0;
+                adapter.register_value_kinds = {
+                    value_kind(source_domain)
+                };
+                adapter.operations.emplace_back(
+                    IntegerCheck { 0, lower, upper });
+            } else if (destination_width == source_width) {
+                adapter.register_count = 2;
+                adapter.register_value_kinds = {
+                    value_kind(source_domain),
+                    value_kind(destination_domain)
+                };
+                adapter.operations.emplace_back(
+                    CopyRegister { converted, 0 });
+            } else if (destination_width < source_width) {
+                adapter.register_count = 2;
+                adapter.register_value_kinds = {
+                    value_kind(source_domain),
+                    value_kind(destination_domain)
+                };
+                adapter.operations.emplace_back(
+                    Extract {
+                        converted,
                         0,
-                        static_cast<std::uint32_t>(destination_width),
-                        true});
-                conversion_process = adapter.id;
-                design_.specializations_.back().processes.push_back(adapter.id);
-                design_.processes_.push_back(std::move(adapter));
-            }
-            if (diagnostics_.size() == diagnostics_before
-                && cross_language
-                && ((port.type.packed_range
-                    && actual_info.packed_range)
-                    || boolean_boundary || integer_boundary
-                    || two_state_boundary || state_domain_boundary)) {
-                design_.boundary_conversions_.push_back(
-                    BoundaryConversionInfo{
-                        boolean_boundary
-                            ? BoundaryConversionKind::boolean_adapter
-                        : integer_boundary
-                            ? BoundaryConversionKind::integer_adapter
-                        : state_domain_boundary && !width_changed
-                                && !signedness_changed
-                            ? BoundaryConversionKind::state_domain_alias
-                        : width_changed && signedness_changed
-                            ? BoundaryConversionKind::width_signedness_adapter
-                        : width_changed
-                            ? BoundaryConversionKind::width_adapter
-                        : signedness_changed
-                            ? BoundaryConversionKind::signedness_adapter
-                            : BoundaryConversionKind::ordinal_alias,
-                        path + "." + port.name,
-                        formal_signal,
-                        actual_info.id,
-                        conversion_process,
-                        port.direction,
-                        formal_width,
-                        actual_info.width,
-                        port.type.domain,
-                        actual_info.source_domain,
-                        port.type.is_signed,
-                        actual_info.is_signed,
-                        state_domain_boundary,
-                        port.type.packed_range,
-                        actual_info.packed_range,
-                        port.type.integer_range,
-                        actual_info.integer_range,
-                        connection.span,
-                        port.span,
-                        frontend::physical_source(
-                            actual_info.declaration_span).empty()
-                            ? connection.value.span
-                            : actual_info.declaration_span});
-            }
-            if (cross_language
-                && port.direction == frontend::PortDirection::Inout) {
-                if (binding == nullptr || !binding->resolver) {
-                    report(
-                        "FSIM-ELAB-BIND-030",
-                        "cross-language inout '" + path + "." + port.name
-                            + "' requires resolver = \"std_logic\" or "
-                              "\"sv_wire\"",
-                        connection.span);
+                        0,
+                        static_cast<std::uint32_t>(destination_width) });
+            } else {
+                adapter.register_count = 3;
+                converted = 2;
+                std::vector<RegisterId> operands;
+                if (sign_extend) {
+                    adapter.operations.emplace_back(
+                        Extract {
+                            1,
+                            0,
+                            static_cast<std::uint32_t>(
+                                source_width - 1U),
+                            1 });
+                    operands.assign(
+                        destination_width - source_width, 1);
+                } else {
+                    adapter.operations.emplace_back(
+                        LoadConstant {
+                            1,
+                            PackedLogic4(
+                                destination_width - source_width,
+                                Logic4::zero) });
+                    operands.push_back(1);
                 }
+                operands.push_back(0);
+                adapter.register_value_kinds = {
+                    value_kind(source_domain),
+                    value_kind(sign_extend
+                            ? source_domain
+                            : destination_domain),
+                    value_kind(destination_domain)
+                };
+                adapter.operations.emplace_back(
+                    Concatenate {
+                        converted,
+                        std::move(operands),
+                        static_cast<std::uint32_t>(destination_width) });
             }
-            aliases.emplace(port.name, formal_signal);
-            aliases.emplace(path + "." + port.name, formal_signal);
-            design_.signal_by_name_.emplace(
-                path + "." + port.name, formal_signal);
-            if (port.direction == frontend::PortDirection::Input) {
-                result.read_only_signals.insert(formal_signal);
-            }
-            if (port.direction == frontend::PortDirection::Output
-                || port.direction == frontend::PortDirection::Inout
-                || port.direction == frontend::PortDirection::Buffer) {
-                note_boundary_driver(
-                    actual->second,
-                    binding,
-                    path,
+            adapter.operations.emplace_back(
+                WriteUpdate { destination, converted });
+            adapter.operations.emplace_back(WaitSensitivity { });
+            adapter.operations.emplace_back(
+                Jump { conversion_start });
+            adapter.driver_regions.push_back(
+                Process::DriverRegion {
+                    destination,
+                    0,
+                    static_cast<std::uint32_t>(destination_width),
+                    true });
+            conversion_process = adapter.id;
+            design_.specializations_.back().processes.push_back(adapter.id);
+            design_.processes_.push_back(std::move(adapter));
+        }
+        if (diagnostics_.size() == diagnostics_before
+            && cross_language
+            && ((port.type.packed_range
+                    && actual_info.packed_range)
+                || boolean_boundary || integer_boundary
+                || two_state_boundary || state_domain_boundary)) {
+            design_.boundary_conversions_.push_back(
+                BoundaryConversionInfo {
+                    boolean_boundary
+                        ? BoundaryConversionKind::boolean_adapter
+                        : integer_boundary
+                        ? BoundaryConversionKind::integer_adapter
+                        : state_domain_boundary && !width_changed
+                            && !signedness_changed
+                        ? BoundaryConversionKind::state_domain_alias
+                        : width_changed && signedness_changed
+                        ? BoundaryConversionKind::width_signedness_adapter
+                        : width_changed
+                        ? BoundaryConversionKind::width_adapter
+                        : signedness_changed
+                        ? BoundaryConversionKind::signedness_adapter
+                        : BoundaryConversionKind::ordinal_alias,
+                    path + "." + port.name,
+                    formal_signal,
+                    actual_info.id,
+                    conversion_process,
+                    port.direction,
+                    formal_width,
+                    actual_info.width,
+                    port.type.domain,
+                    actual_info.source_domain,
+                    port.type.is_signed,
+                    actual_info.is_signed,
+                    state_domain_boundary,
+                    port.type.packed_range,
+                    actual_info.packed_range,
+                    port.type.integer_range,
+                    actual_info.integer_range,
+                    connection.span,
+                    port.span,
+                    frontend::physical_source(
+                        actual_info.declaration_span)
+                            .empty()
+                        ? connection.value.span
+                        : actual_info.declaration_span });
+        }
+        if (cross_language
+            && port.direction == frontend::PortDirection::Inout) {
+            if (binding == nullptr || !binding->resolver) {
+                report(
+                    "FSIM-ELAB-BIND-030",
+                    "cross-language inout '" + path + "." + port.name
+                        + "' requires resolver = \"std_logic\" or "
+                          "\"sv_wire\"",
                     connection.span);
             }
         }
-        if (instance.unconnected_drive
-            != frontend::VerilogUnconnectedDrive::None) {
-            for (std::size_t port_index = 0;
-                 port_index < ports.size(); ++port_index) {
-                const auto& port = ports[port_index];
-                if (connected[port_index]
-                    || port.direction
-                        != frontend::PortDirection::Input
-                    || port.type.domain
-                        == frontend::ValueDomain::String
-                    || port.type.systemverilog_container) {
+        aliases.emplace(port.name, formal_signal);
+        aliases.emplace(path + "." + port.name, formal_signal);
+        design_.signal_by_name_.emplace(
+            path + "." + port.name, formal_signal);
+        if (port.direction == frontend::PortDirection::Input) {
+            result.read_only_signals.insert(formal_signal);
+        }
+        if (port.direction == frontend::PortDirection::Output
+            || port.direction == frontend::PortDirection::Inout
+            || port.direction == frontend::PortDirection::Buffer) {
+            note_boundary_driver(
+                actual->second,
+                binding,
+                path,
+                connection.span);
+        }
+    }
+    if (instance.unconnected_drive
+        != frontend::VerilogUnconnectedDrive::None) {
+        for (std::size_t port_index = 0;
+            port_index < ports.size(); ++port_index) {
+            const auto& port = ports[port_index];
+            if (connected[port_index]
+                || port.direction
+                    != frontend::PortDirection::Input
+                || port.type.domain
+                    == frontend::ValueDomain::String
+                || port.type.systemverilog_container) {
+                continue;
+            }
+            auto pulled = port;
+            pulled.type.spelling = instance.unconnected_drive
+                    == frontend::VerilogUnconnectedDrive::Pull0
+                ? "tri0"
+                : "tri1";
+            (void)add_owned_signal(pulled, path, aliases);
+        }
+    }
+    if (require_input_connections
+        || std::ranges::any_of(
+            ports,
+            [](const auto& port) {
+                return (port.type.systemverilog_container
+                           || port.type.domain
+                               == frontend::ValueDomain::String)
+                    && port.direction
+                    == frontend::PortDirection::Input;
+            })) {
+        for (std::size_t port_index = 0;
+            port_index < ports.size(); ++port_index) {
+            if (!connected[port_index]
+                && ports[port_index].direction
+                    == frontend::PortDirection::Input) {
+                if (!cross_language
+                    && dependency_owner != nullptr
+                    && ports[port_index].default_value) {
+                    frontend::PortConnection default_connection;
+                    default_connection.port = ports[port_index].name;
+                    default_connection.value = *ports[port_index].default_value;
+                    default_connection.kind = frontend::PortActualKind::Default;
+                    default_connection.span = ports[port_index].span;
+                    (void)connect_vhdl_expression_port(
+                        ports[port_index],
+                        default_connection,
+                        path,
+                        parent_signals,
+                        result,
+                        *dependency_owner);
                     continue;
                 }
-                auto pulled = port;
-                pulled.type.spelling =
-                    instance.unconnected_drive
-                            == frontend::VerilogUnconnectedDrive::Pull0
-                        ? "tri0"
-                        : "tri1";
-                (void)add_owned_signal(pulled, path, aliases);
-            }
-        }
-        if (require_input_connections
-            || std::ranges::any_of(
-                ports,
-                [](const auto& port) {
-                  return (port.type.systemverilog_container
-                          || port.type.domain
-                              == frontend::ValueDomain::String)
-                      && port.direction
-                          == frontend::PortDirection::Input;
-                })) {
-            for (std::size_t port_index = 0;
-                 port_index < ports.size(); ++port_index) {
-                if (!connected[port_index]
-                    && ports[port_index].direction
-                        == frontend::PortDirection::Input) {
-                    if (!cross_language
-                        && dependency_owner != nullptr
-                        && ports[port_index].default_value) {
-                        frontend::PortConnection default_connection;
-                        default_connection.port =
-                            ports[port_index].name;
-                        default_connection.value =
-                            *ports[port_index].default_value;
-                        default_connection.kind =
-                            frontend::PortActualKind::Default;
-                        default_connection.span =
-                            ports[port_index].span;
-                        (void)connect_vhdl_expression_port(
-                            ports[port_index],
-                            default_connection,
-                            path,
-                            parent_signals,
-                            result,
-                            *dependency_owner);
-                        continue;
-                    }
-                    report(
-                        ports[port_index].type.domain
-                                    == frontend::ValueDomain::String
-                            ? "FSIM-ELAB-SVPORT-010"
+                report(
+                    ports[port_index].type.domain
+                            == frontend::ValueDomain::String
+                        ? "FSIM-ELAB-SVPORT-010"
                         : ports[port_index].type.systemverilog_container
-                            ? "FSIM-ELAB-SVPORT-006"
-                            : "FSIM-ELAB-BIND-027",
-                        std::string{
-                            ports[port_index].type.domain
-                                    == frontend::ValueDomain::String
-                                ? "required mutable string input port '"
-                            : ports[port_index].type
-                                      .systemverilog_container
-                                ? "required container input port '"
-                                : "required VHDL input port '"}
-                            + path + "." + ports[port_index].name
-                            + "' is not associated",
-                        ports[port_index].span);
-                }
+                        ? "FSIM-ELAB-SVPORT-006"
+                        : "FSIM-ELAB-BIND-027",
+                    std::string {
+                        ports[port_index].type.domain
+                                == frontend::ValueDomain::String
+                            ? "required mutable string input port '"
+                            : ports[port_index].type.systemverilog_container
+                            ? "required container input port '"
+                            : "required VHDL input port '" }
+                        + path + "." + ports[port_index].name
+                        + "' is not associated",
+                    ports[port_index].span);
             }
         }
-        return result;
     }
+    return result;
+}
 } // namespace fsim::elaboration

@@ -22,6 +22,16 @@ This repository is an **internal vertical slice**, not the fsim v1 release.
 It establishes the semantic and platform spine on which the full language
 implementations will be built.
 
+Verilog and SystemVerilog bit strings and based-number literals have no
+implementation-selected language width limit. Source- and context-determined
+width, signedness, and `X`/`Z` planes remain exact through parsing, folding,
+execution, VPI/public values, traces, artifacts, relocation, and caches. A
+host-addressability boundary or configured memory/work/trace ceiling is a
+physical resource limit, never a Verilog legality rule, and fails with a
+distinct checked diagnostic rather than narrowing the value. See the
+[Verilog-2005 guide](docs/verilog-2005.md) and its
+[closure audit](docs/verilog-2005-closure-audit.md).
+
 The current tree contains:
 
 - C++20 value kernels for packed 2-, 4-, and 9-state logic, including governed
@@ -129,12 +139,14 @@ The current tree contains:
   `package::constant`/`package::type` references; recursive dependency
   diagnostics; and precise specialization provenance;
 - bounded SystemVerilog module/package functions with explicit `automatic`
-  lifetime, 1–64-bit integral value arguments/locals/results, parameter-sized
+  lifetime, arbitrary-width packed integral value arguments/locals/results,
+  parameter-sized
   types, function-name or explicit-return results, constant evaluation,
   package visibility, nested nonrecursive calls, debugger safe points, and
   interpreter/LLVM O0/O2 plus native-cache equivalence;
 - bounded SystemVerilog module/package tasks with explicit `automatic`
-  lifetime, 1–64-bit integral input/output/inout formals, parameter-sized
+  lifetime, arbitrary-width packed integral input/output/inout formals,
+  parameter-sized
   types, deterministic copy-in/copy-out, local/imported/package-selected
   nested nonrecursive calls, delays/event/condition waits, deferred copy-out,
   post-suspension early return, debugger stop/resume locals and safe points,
@@ -847,13 +859,13 @@ crosses the generated ABI; edge-qualified sensitivities require scalar
 signals. Builds without LLVM execute entirely through the reference evaluator.
 The bounded O0 debug path is differentially tested against the interpreter for
 source breakpoints and statement/process/scheduler stepping.
-General native arithmetic on values wider than 64 bits, complete
-local-variable scope/type semantics, complete parameter/generic type and
-sizing rules, reusable code-specialization deduplication, and broader
-differential coverage remain work in progress. SystemVerilog's Batch 151
-interpreter/runtime surface already preserves arbitrary-width constants,
-aggregates, callables, class values, mixed boundaries, debugger/trace/API/file
-services, and portable artifacts under explicit width/work/storage budgets.
+Direct allocation-free native arithmetic remains a single-word optimization;
+eligible arbitrary-width operations execute through exact caller-owned frame
+planes and validated runtime services, with deterministic per-process fallback
+only for an unsupported capability. SystemVerilog's Batch 151 and Verilog-2005
+Batch 164 surfaces preserve arbitrary-width constants, literals, aggregates,
+callables, mixed boundaries, debugger/trace/API/file services, artifacts, and
+native-cache identity under explicit work/storage budgets.
 
 The application suite also compares a bounded scheduled-write design exactly
 between the interpreter and O2 hybrid engine. It checks an update commit at

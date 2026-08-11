@@ -3,11 +3,12 @@
 
 namespace fsim::tests::elaboration {
 
-void test_systemverilog_fork_lowering() {
-  using namespace fsim::runtime::simir;
-  const auto parsed = fsim::frontend::parse_text(
-      "forks.sv",
-      R"(
+void test_systemverilog_fork_lowering()
+{
+    using namespace fsim::runtime::simir;
+    const auto parsed = fsim::frontend::parse_text(
+        "forks.sv",
+        R"(
 module forks;
   logic [7:0] result;
   initial begin
@@ -33,58 +34,124 @@ module forks;
   end
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(parsed.ok());
-  const auto elaborated =
-      fsim::elaboration::elaborate(parsed.design, "forks");
-  if (!elaborated.ok()) {
-    for (const auto& diagnostic : elaborated.diagnostics) {
-      std::cerr << diagnostic.code << ": "
-                << diagnostic.message << '\n';
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(parsed.ok());
+    const auto elaborated = fsim::elaboration::elaborate(parsed.design, "forks");
+    if (!elaborated.ok()) {
+        for (const auto& diagnostic : elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
     }
-  }
-  assert(elaborated.ok());
-  assert(elaborated.design->processes().size() == 1);
-  const auto& operations =
-      elaborated.design->processes().front().operations;
-  assert(
-      std::count_if(
-          operations.begin(), operations.end(),
-          [](const auto& operation) {
-            return fsim::runtime::simir::operation_holds<Fork>(operation);
-          })
-      == 3);
-  assert(
-      std::count_if(
-          operations.begin(), operations.end(),
-          [](const auto& operation) {
-            return fsim::runtime::simir::operation_holds<ForkEnd>(operation);
-          })
-      == 5);
-  assert(std::any_of(
-      operations.begin(), operations.end(),
-      [](const auto& operation) {
-        return fsim::runtime::simir::operation_holds<WaitFork>(operation);
-      }));
-  assert(std::any_of(
-      operations.begin(), operations.end(),
-      [](const auto& operation) {
-        return fsim::runtime::simir::operation_holds<DisableFork>(operation);
-      }));
+    assert(elaborated.ok());
+    assert(elaborated.design->processes().size() == 1);
+    const auto& operations = elaborated.design->processes().front().operations;
+    assert(
+        std::count_if(
+            operations.begin(), operations.end(),
+            [](const auto& operation) {
+                return fsim::runtime::simir::operation_holds<Fork>(operation);
+            })
+        == 3);
+    assert(
+        std::count_if(
+            operations.begin(), operations.end(),
+            [](const auto& operation) {
+                return fsim::runtime::simir::operation_holds<ForkEnd>(operation);
+            })
+        == 5);
+    assert(std::any_of(
+        operations.begin(), operations.end(),
+        [](const auto& operation) {
+            return fsim::runtime::simir::operation_holds<WaitFork>(operation);
+        }));
+    assert(std::any_of(
+        operations.begin(), operations.end(),
+        [](const auto& operation) {
+            return fsim::runtime::simir::operation_holds<DisableFork>(operation);
+        }));
 
-  const auto result = elaborated.design->find_signal("result");
-  assert(result);
-  auto interpreter = elaborated.design->create_interpreter();
-  const auto run = interpreter->run();
-  assert(
-      run.status == fsim::runtime::RunStatus::stopped
-      && run.time == 11
-      && interpreter->signal_value(*result).to_msb_string()
-          == "10111111");
+    const auto result = elaborated.design->find_signal("result");
+    assert(result);
+    auto interpreter = elaborated.design->create_interpreter();
+    const auto run = interpreter->run();
+    assert(
+        run.status == fsim::runtime::RunStatus::stopped
+        && run.time == 11
+        && interpreter->signal_value(*result).to_msb_string()
+            == "10111111");
 
-  const auto handles = fsim::frontend::parse_text(
-      "process_handles.sv",
-      R"(
+    const auto named_disable = fsim::frontend::parse_text(
+        "named_disable.v",
+        R"(
+module named_disable;
+  reg [2:0] result;
+  initial begin
+    result = 3'b001;
+    fork : stopped_children
+      disable stopped_children;
+      #2 result = 3'b000;
+    join : stopped_children
+    begin : outer
+      begin : inner
+        result[1] = 1'b1;
+        disable outer;
+        result = 3'b000;
+      end
+      result = 3'b000;
+    end
+    begin : parallel_outer
+      fork
+        disable parallel_outer;
+        result[0] = 1'b0;
+      join
+      result = 3'b000;
+    end
+    result[2] = 1'b1;
+  end
+  initial #1 $finish;
+endmodule
+)",
+        fsim::frontend::Language::Verilog2005);
+    assert(named_disable.ok());
+    const auto named_disable_elaborated = fsim::elaboration::elaborate(
+        named_disable.design, "named_disable");
+    if (!named_disable_elaborated.ok()) {
+        for (const auto& diagnostic : named_disable_elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(named_disable_elaborated.ok());
+    const auto named_result = named_disable_elaborated.design->find_signal("result");
+    assert(named_result);
+    auto named_interpreter = named_disable_elaborated.design->create_interpreter();
+    const auto named_run = named_interpreter->run();
+    assert(
+        named_run.status == fsim::runtime::RunStatus::stopped
+        && named_run.time == 1
+        && named_interpreter->signal_value(*named_result)
+                .to_msb_string()
+            == "111");
+
+    const auto unknown_disable = fsim::frontend::parse_text(
+        "unknown_disable.v",
+        R"(
+module unknown_disable;
+  initial disable missing;
+endmodule
+)",
+        fsim::frontend::Language::Verilog2005);
+    assert(unknown_disable.ok());
+    const auto rejected_disable = fsim::elaboration::elaborate(
+        unknown_disable.design, "unknown_disable");
+    assert(!rejected_disable.ok());
+    assert(has_diagnostic(
+        rejected_disable, "FSIM-ELAB-SVDISABLE-001"));
+
+    const auto handles = fsim::frontend::parse_text(
+        "process_handles.sv",
+        R"(
 module process_handles;
   process handle;
   int status_value;
@@ -104,42 +171,39 @@ module process_handles;
   end
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(handles.ok());
-  assert(
-      handles.design.units.front().signals.front().type.spelling
-      == "process");
-  const auto handles_elaborated =
-      fsim::elaboration::elaborate(handles.design, "process_handles");
-  if (!handles_elaborated.ok()) {
-    for (const auto& diagnostic : handles_elaborated.diagnostics) {
-      std::cerr << diagnostic.code << ": "
-                << diagnostic.message << '\n';
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(handles.ok());
+    assert(
+        handles.design.units.front().signals.front().type.spelling
+        == "process");
+    const auto handles_elaborated = fsim::elaboration::elaborate(handles.design, "process_handles");
+    if (!handles_elaborated.ok()) {
+        for (const auto& diagnostic : handles_elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
     }
-  }
-  assert(handles_elaborated.ok());
-  const auto& handle_operations =
-      handles_elaborated.design->processes().front().operations;
-  const auto has_operation = [&](const auto* tag) {
-    using OperationType =
-        std::remove_cv_t<
+    assert(handles_elaborated.ok());
+    const auto& handle_operations = handles_elaborated.design->processes().front().operations;
+    const auto has_operation = [&](const auto* tag) {
+        using OperationType = std::remove_cv_t<
             std::remove_pointer_t<decltype(tag)>>;
-    return std::ranges::any_of(
-        handle_operations,
-        [](const auto& operation) {
-          return fsim::runtime::simir::operation_holds<
-              OperationType>(operation);
-        });
-  };
-  assert(has_operation(static_cast<ProcessSelf*>(nullptr)));
-  assert(has_operation(static_cast<ProcessStatusQuery*>(nullptr)));
-  assert(has_operation(static_cast<ProcessCompleted*>(nullptr)));
-  assert(has_operation(static_cast<ProcessAwait*>(nullptr)));
-  assert(has_operation(static_cast<ProcessKill*>(nullptr)));
+        return std::ranges::any_of(
+            handle_operations,
+            [](const auto& operation) {
+                return fsim::runtime::simir::operation_holds<
+                    OperationType>(operation);
+            });
+    };
+    assert(has_operation(static_cast<ProcessSelf*>(nullptr)));
+    assert(has_operation(static_cast<ProcessStatusQuery*>(nullptr)));
+    assert(has_operation(static_cast<ProcessCompleted*>(nullptr)));
+    assert(has_operation(static_cast<ProcessAwait*>(nullptr)));
+    assert(has_operation(static_cast<ProcessKill*>(nullptr)));
 
-  const auto callable = fsim::frontend::parse_text(
-      "callable_fork.sv",
-      R"(
+    const auto callable = fsim::frontend::parse_text(
+        "callable_fork.sv",
+        R"(
 module callable_fork(output logic value);
   function automatic logic compute();
     fork
@@ -149,17 +213,17 @@ module callable_fork(output logic value);
   assign value = compute();
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(!callable.ok());
-  assert(std::any_of(
-      callable.diagnostics.begin(), callable.diagnostics.end(),
-      [](const auto& diagnostic) {
-        return diagnostic.code == "FSIM-SV-SEM-064";
-      }));
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(!callable.ok());
+    assert(std::any_of(
+        callable.diagnostics.begin(), callable.diagnostics.end(),
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-064";
+        }));
 
-  auto malformed = fsim::frontend::parse_text(
-      "malformed_callable_fork.sv",
-      R"(
+    auto malformed = fsim::frontend::parse_text(
+        "malformed_callable_fork.sv",
+        R"(
 module callable_fork(output logic value);
   function automatic logic compute();
     return 1'b1;
@@ -167,35 +231,36 @@ module callable_fork(output logic value);
   assign value = compute();
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(malformed.ok());
-  auto fork = fsim::frontend::Statement{};
-  fork.kind = fsim::frontend::StatementKind::Fork;
-  fork.span = malformed.design.units.front().functions.front().span;
-  auto child = fsim::frontend::Statement{};
-  child.kind = fsim::frontend::StatementKind::Null;
-  child.span = fork.span;
-  fork.statements.push_back(std::move(child));
-  malformed.design.units.front().functions.front().statements = {
-      std::move(fork)};
-  const auto rejected = fsim::elaboration::elaborate(
-      malformed.design, "callable_fork");
-  assert(!rejected.ok());
-  assert(has_diagnostic(rejected, "FSIM-ELAB-107"));
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(malformed.ok());
+    auto fork = fsim::frontend::Statement { };
+    fork.kind = fsim::frontend::StatementKind::Fork;
+    fork.span = malformed.design.units.front().functions.front().span;
+    auto child = fsim::frontend::Statement { };
+    child.kind = fsim::frontend::StatementKind::Null;
+    child.span = fork.span;
+    fork.statements.push_back(std::move(child));
+    malformed.design.units.front().functions.front().statements = {
+        std::move(fork)
+    };
+    const auto rejected = fsim::elaboration::elaborate(
+        malformed.design, "callable_fork");
+    assert(!rejected.ok());
+    assert(has_diagnostic(rejected, "FSIM-ELAB-107"));
 
-  const auto invalid_strobe = fsim::frontend::parse_text(
-      "invalid_strobe.sv",
-      R"(
+    const auto invalid_strobe = fsim::frontend::parse_text(
+        "invalid_strobe.sv",
+        R"(
 module invalid_strobe(input logic lhs, rhs);
   initial $strobe("%b", lhs & rhs);
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(invalid_strobe.ok());
-  const auto rejected_strobe = fsim::elaboration::elaborate(
-      invalid_strobe.design, "invalid_strobe");
-  assert(!rejected_strobe.ok());
-  assert(has_diagnostic(rejected_strobe, "FSIM-ELAB-108"));
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_strobe.ok());
+    const auto rejected_strobe = fsim::elaboration::elaborate(
+        invalid_strobe.design, "invalid_strobe");
+    assert(!rejected_strobe.ok());
+    assert(has_diagnostic(rejected_strobe, "FSIM-ELAB-108"));
 }
 
-}  // namespace fsim::tests::elaboration
+} // namespace fsim::tests::elaboration

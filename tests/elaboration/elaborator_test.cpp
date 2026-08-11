@@ -11,6 +11,7 @@ int main() {
   test_systemverilog_string_constants();
   test_systemverilog_type_parameters();
   test_generate_elaboration();
+  test_verilog_defparam_elaboration();
   test_mixed_language_and_systemc();
   test_multi_library_resolution();
   test_verilog_udp_resolution();

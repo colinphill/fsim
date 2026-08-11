@@ -39,6 +39,16 @@ These are retained local baselines, not a promise that arbitrary UVM projects
 use the same memory. CI should preserve exact logs and avoid concurrent full
 release matrices unless the host can supply their combined resident memory.
 
+## V2 Batch 164 governed Verilog addendum
+
+The serial Verilog closure runner applies a 6 GiB child-process address-space
+ceiling, a 1,000-delta scheduler work limit, a 64-signal VCD capacity, a
+1,200-second stage boundary, and a 7,200-second matrix boundary. These limits
+bound the evidence process; they are not Verilog literal-width or legality
+limits. The runner retains every witness transcript and a 23-row result ledger
+so resource failure cannot be mistaken for language rejection or a passing
+zero exit status.
+
 Change 20's fresh clean-first Debug/Release builds complete 733 steps in
 9:36.84/8:49.59 at 4,070,136/2,506,320 KiB maximum RSS. Their 122/122 complete
 regressions pass in 6:24.90/5:26.29 at 3,777,748/3,783,548 KiB. The final exact

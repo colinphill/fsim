@@ -15,185 +15,189 @@ VerilogParser::VerilogParser(LexResult lexed, bool system_verilog)
 ParseResult VerilogParser::run() {
   ParsedDesign design;
   while (!at_end()) {
-    if (time_declaration_start()) {
-      const auto declaration = advance();
-      parse_time_declaration(nullptr, declaration);
-    } else if (
-        match_keyword("module")
-        || match_keyword("macromodule")) {
-      compilation_unit_has_design_item_ = true;
-      design.units.push_back(parse_module(previous()));
-    } else if (match_keyword("interface")) {
-      compilation_unit_has_design_item_ = true;
-      const auto interface_token = previous();
-      if (match_keyword("class")) {
-        add_class_declaration(
-            design.systemverilog_classes,
-            parse_class(previous(), "$unit", false, true),
-            interface_token);
-      } else {
-        design.units.push_back(parse_module(
-            interface_token, UnitKind::SystemVerilogInterface));
-      }
-    } else if (match_keyword("program")) {
-      compilation_unit_has_design_item_ = true;
-      design.units.push_back(parse_module(
-          previous(), UnitKind::SystemVerilogProgram));
-    } else if (match_keyword("virtual")) {
-      compilation_unit_has_design_item_ = true;
-      const auto qualifier = previous();
-      if (match_keyword("class")) {
-        add_class_declaration(
-            design.systemverilog_classes,
-            parse_class(previous(), "$unit", true),
-            qualifier);
-      } else {
-        error(
-            qualifier,
-            "FSIM-SV-PARSE-254",
-            "compilation-unit 'virtual' must introduce a class");
-        skip_to_semicolon();
-      }
-    } else if (match_keyword("class")) {
-      compilation_unit_has_design_item_ = true;
-      const auto declaration = previous();
-      add_class_declaration(
-          design.systemverilog_classes,
-          parse_class(declaration, "$unit"),
-          declaration);
-    } else if (keyword("typedef") && keyword("class", 1)) {
-      compilation_unit_has_design_item_ = true;
-      const auto declaration = advance();
-      add_class_declaration(
-          design.systemverilog_classes,
-          parse_class_forward_declaration(declaration, "$unit"),
-          declaration);
-    } else if (match_keyword("function")) {
-      compilation_unit_has_design_item_ = true;
-      const auto declaration = previous();
-      if (compilation_unit_class_method_definition_start()) {
-        design.systemverilog_class_method_definitions.push_back(
-            parse_class_out_of_block_method(
-                declaration, SystemVerilogClassMethodKind::Function));
-      } else if (compilation_unit_dpi_export_definition_start(
-                     design.systemverilog_dpi_declarations,
-                     SystemVerilogDpiCallableKind::Function)) {
-        auto function = parse_function(declaration);
-        const bool duplicate = std::ranges::any_of(
-            design.functions,
-            [&](const FunctionDeclaration& existing) {
-              return existing.name == function.name;
-            }) || std::ranges::any_of(
-            design.tasks,
-            [&](const TaskDeclaration& existing) {
-              return existing.name == function.name;
-            });
-        if (duplicate) {
-          error(
+      if (verilog_attribute_instance_start()) {
+          parse_verilog_attribute_instances();
+      } else if (time_declaration_start()) {
+          const auto declaration = advance();
+          parse_time_declaration(nullptr, declaration);
+      } else if (
+          match_keyword("module")
+          || match_keyword("macromodule")) {
+          compilation_unit_has_design_item_ = true;
+          design.units.push_back(parse_module(previous()));
+      } else if (match_keyword("interface")) {
+          compilation_unit_has_design_item_ = true;
+          const auto interface_token = previous();
+          if (match_keyword("class")) {
+              add_class_declaration(
+                  design.systemverilog_classes,
+                  parse_class(previous(), "$unit", false, true),
+                  interface_token);
+          } else {
+              design.units.push_back(parse_module(
+                  interface_token, UnitKind::SystemVerilogInterface));
+          }
+      } else if (match_keyword("program")) {
+          compilation_unit_has_design_item_ = true;
+          design.units.push_back(parse_module(
+              previous(), UnitKind::SystemVerilogProgram));
+      } else if (match_keyword("virtual")) {
+          compilation_unit_has_design_item_ = true;
+          const auto qualifier = previous();
+          if (match_keyword("class")) {
+              add_class_declaration(
+                  design.systemverilog_classes,
+                  parse_class(previous(), "$unit", true),
+                  qualifier);
+          } else {
+              error(
+                  qualifier,
+                  "FSIM-SV-PARSE-254",
+                  "compilation-unit 'virtual' must introduce a class");
+              skip_to_semicolon();
+          }
+      } else if (match_keyword("class")) {
+          compilation_unit_has_design_item_ = true;
+          const auto declaration = previous();
+          add_class_declaration(
+              design.systemverilog_classes,
+              parse_class(declaration, "$unit"),
+              declaration);
+      } else if (keyword("typedef") && keyword("class", 1)) {
+          compilation_unit_has_design_item_ = true;
+          const auto declaration = advance();
+          add_class_declaration(
+              design.systemverilog_classes,
+              parse_class_forward_declaration(declaration, "$unit"),
+              declaration);
+      } else if (match_keyword("function")) {
+          compilation_unit_has_design_item_ = true;
+          const auto declaration = previous();
+          if (compilation_unit_class_method_definition_start()) {
+              design.systemverilog_class_method_definitions.push_back(
+                  parse_class_out_of_block_method(
+                      declaration, SystemVerilogClassMethodKind::Function));
+          } else if (compilation_unit_dpi_export_definition_start(
+                         design.systemverilog_dpi_declarations,
+                         SystemVerilogDpiCallableKind::Function)) {
+              auto function = parse_function(declaration);
+              const bool duplicate = std::ranges::any_of(
+                                         design.functions,
+                                         [&](const FunctionDeclaration& existing) {
+                                             return existing.name == function.name;
+                                         })
+                  || std::ranges::any_of(
+                      design.tasks,
+                      [&](const TaskDeclaration& existing) {
+                          return existing.name == function.name;
+                      });
+              if (duplicate) {
+                  error(
+                      declaration,
+                      "FSIM-SV-SEM-228",
+                      "duplicate compilation-unit callable '"
+                          + function.name + "'");
+              } else {
+                  design.functions.push_back(std::move(function));
+              }
+          } else {
+              design.systemverilog_class_method_definitions.push_back(
+                  parse_class_out_of_block_method(
+                      declaration, SystemVerilogClassMethodKind::Function));
+          }
+      } else if (match_keyword("task")) {
+          compilation_unit_has_design_item_ = true;
+          const auto declaration = previous();
+          if (compilation_unit_class_method_definition_start()) {
+              design.systemverilog_class_method_definitions.push_back(
+                  parse_class_out_of_block_method(
+                      declaration, SystemVerilogClassMethodKind::Task));
+          } else if (compilation_unit_dpi_export_definition_start(
+                         design.systemverilog_dpi_declarations,
+                         SystemVerilogDpiCallableKind::Task)) {
+              auto task = parse_task(declaration);
+              const bool duplicate = std::ranges::any_of(
+                                         design.tasks,
+                                         [&](const TaskDeclaration& existing) {
+                                             return existing.name == task.name;
+                                         })
+                  || std::ranges::any_of(
+                      design.functions,
+                      [&](const FunctionDeclaration& existing) {
+                          return existing.name == task.name;
+                      });
+              if (duplicate) {
+                  error(
+                      declaration,
+                      "FSIM-SV-SEM-228",
+                      "duplicate compilation-unit callable '" + task.name + "'");
+              } else {
+                  design.tasks.push_back(std::move(task));
+              }
+          } else {
+              design.systemverilog_class_method_definitions.push_back(
+                  parse_class_out_of_block_method(
+                      declaration, SystemVerilogClassMethodKind::Task));
+          }
+      } else if (match_keyword("primitive")) {
+          compilation_unit_has_design_item_ = true;
+          auto declaration = parse_udp_declaration(previous());
+          const bool duplicate = std::ranges::any_of(
+                                     design.udp_declarations,
+                                     [&](const VerilogUdpDeclaration& existing) {
+                                         return existing.name == declaration.name;
+                                     })
+              || std::ranges::any_of(
+                  design.units, [&](const DesignUnit& existing) {
+                      return existing.name == declaration.name;
+                  });
+          if (duplicate) {
+              error(
+                  previous(),
+                  "FSIM-SV-SEM-135",
+                  "duplicate Verilog design declaration '"
+                      + declaration.name + "'");
+          } else {
+              design.udp_declarations.push_back(std::move(declaration));
+          }
+      } else if (match_keyword("package")) {
+          compilation_unit_has_design_item_ = true;
+          auto package = parse_package(previous());
+          auto& exports = package_constant_names_[package.name];
+          for (const auto& parameter : package.parameters) {
+              exports.insert(parameter.name);
+          }
+          design.units.push_back(std::move(package));
+      } else if (dpi_declaration_start("import")) {
+          compilation_unit_has_design_item_ = true;
+          const auto declaration = advance();
+          parse_dpi_declaration(
+              design.systemverilog_dpi_declarations,
               declaration,
-              "FSIM-SV-SEM-228",
-              "duplicate compilation-unit callable '"
-                  + function.name + "'");
-        } else {
-          design.functions.push_back(std::move(function));
-        }
-      } else {
-        design.systemverilog_class_method_definitions.push_back(
-            parse_class_out_of_block_method(
-                declaration, SystemVerilogClassMethodKind::Function));
-      }
-    } else if (match_keyword("task")) {
-      compilation_unit_has_design_item_ = true;
-      const auto declaration = previous();
-      if (compilation_unit_class_method_definition_start()) {
-        design.systemverilog_class_method_definitions.push_back(
-            parse_class_out_of_block_method(
-                declaration, SystemVerilogClassMethodKind::Task));
-      } else if (compilation_unit_dpi_export_definition_start(
-                     design.systemverilog_dpi_declarations,
-                     SystemVerilogDpiCallableKind::Task)) {
-        auto task = parse_task(declaration);
-        const bool duplicate = std::ranges::any_of(
-            design.tasks,
-            [&](const TaskDeclaration& existing) {
-              return existing.name == task.name;
-            }) || std::ranges::any_of(
-            design.functions,
-            [&](const FunctionDeclaration& existing) {
-              return existing.name == task.name;
-            });
-        if (duplicate) {
-          error(
+              SystemVerilogDpiDirection::Import,
+              SystemVerilogDpiOwnerKind::CompilationUnit,
+              "$unit");
+      } else if (dpi_declaration_start("export")) {
+          compilation_unit_has_design_item_ = true;
+          const auto declaration = advance();
+          parse_dpi_declaration(
+              design.systemverilog_dpi_declarations,
               declaration,
-              "FSIM-SV-SEM-228",
-              "duplicate compilation-unit callable '" + task.name + "'");
-        } else {
-          design.tasks.push_back(std::move(task));
-        }
+              SystemVerilogDpiDirection::Export,
+              SystemVerilogDpiOwnerKind::CompilationUnit,
+              "$unit");
+      } else if (match_keyword("import")) {
+          compilation_unit_has_design_item_ = true;
+          parse_import_clause(
+              compilation_unit_imports_, previous());
+      } else if (at(TokenKind::Backtick)) {
+          parse_directive();
       } else {
-        design.systemverilog_class_method_definitions.push_back(
-            parse_class_out_of_block_method(
-                declaration, SystemVerilogClassMethodKind::Task));
+          const auto unexpected = advance();
+          error(unexpected, "FSIM-SV-UNSUPPORTED-001",
+              "unsupported compilation-unit item '" + unexpected.text + "'");
+          skip_to_semicolon();
       }
-    } else if (match_keyword("primitive")) {
-      compilation_unit_has_design_item_ = true;
-      auto declaration = parse_udp_declaration(previous());
-      const bool duplicate = std::ranges::any_of(
-          design.udp_declarations,
-          [&](const VerilogUdpDeclaration& existing) {
-            return existing.name == declaration.name;
-          }) || std::ranges::any_of(
-          design.units, [&](const DesignUnit& existing) {
-            return existing.name == declaration.name;
-          });
-      if (duplicate) {
-        error(
-            previous(),
-            "FSIM-SV-SEM-135",
-            "duplicate Verilog design declaration '"
-                + declaration.name + "'");
-      } else {
-        design.udp_declarations.push_back(std::move(declaration));
-      }
-    } else if (match_keyword("package")) {
-      compilation_unit_has_design_item_ = true;
-      auto package = parse_package(previous());
-      auto& exports =
-          package_constant_names_[package.name];
-      for (const auto& parameter : package.parameters) {
-        exports.insert(parameter.name);
-      }
-      design.units.push_back(std::move(package));
-    } else if (dpi_declaration_start("import")) {
-      compilation_unit_has_design_item_ = true;
-      const auto declaration = advance();
-      parse_dpi_declaration(
-          design.systemverilog_dpi_declarations,
-          declaration,
-          SystemVerilogDpiDirection::Import,
-          SystemVerilogDpiOwnerKind::CompilationUnit,
-          "$unit");
-    } else if (dpi_declaration_start("export")) {
-      compilation_unit_has_design_item_ = true;
-      const auto declaration = advance();
-      parse_dpi_declaration(
-          design.systemverilog_dpi_declarations,
-          declaration,
-          SystemVerilogDpiDirection::Export,
-          SystemVerilogDpiOwnerKind::CompilationUnit,
-          "$unit");
-    } else if (match_keyword("import")) {
-      compilation_unit_has_design_item_ = true;
-      parse_import_clause(
-          compilation_unit_imports_, previous());
-    } else if (at(TokenKind::Backtick)) {
-      parse_directive();
-    } else {
-      const auto unexpected = advance();
-      error(unexpected, "FSIM-SV-UNSUPPORTED-001",
-            "unsupported compilation-unit item '" + unexpected.text + "'");
-      skip_to_semicolon();
-    }
   }
   if (!keyword_stack_.empty()) {
     error(
@@ -256,6 +260,75 @@ Token VerilogParser::expect_keyword(
 
 SourceSpan VerilogParser::span_from(const Token& first, const Token& last) {
   return cover(first.span, last.span);
+}
+
+bool VerilogParser::verilog_attribute_instance_start() const
+{
+    return at(TokenKind::LeftParen) && at(TokenKind::Star, 1);
+}
+
+void VerilogParser::parse_verilog_attribute_instances()
+{
+    while (verilog_attribute_instance_start()) {
+        const auto start = advance();
+        (void)advance();
+        bool require_specification = true;
+        while (!at_end()
+            && !(at(TokenKind::Star) && at(TokenKind::RightParen, 1))) {
+            if (!at(TokenKind::Identifier)
+                || keyword_reserved(keyword_set_, current().text)) {
+                error(
+                    current(),
+                    "FSIM-SV-PARSE-336",
+                    "an attribute specification requires an attribute name");
+                while (!at_end() && !at(TokenKind::Comma)
+                    && !(at(TokenKind::Star)
+                        && at(TokenKind::RightParen, 1))) {
+                    (void)advance();
+                }
+            } else {
+                (void)advance();
+                if (match(TokenKind::Assign)) {
+                    if (at(TokenKind::Comma)
+                        || (at(TokenKind::Star)
+                            && at(TokenKind::RightParen, 1))) {
+                        error(
+                            current(),
+                            "FSIM-SV-PARSE-338",
+                            "an attribute assignment requires a constant expression");
+                    } else {
+                        in_verilog_attribute_ = true;
+                        (void)parse_expression();
+                        in_verilog_attribute_ = false;
+                    }
+                }
+            }
+            require_specification = false;
+            if (!match(TokenKind::Comma)) {
+                break;
+            }
+            require_specification = true;
+        }
+        if (require_specification) {
+            error(
+                current(),
+                "FSIM-SV-PARSE-336",
+                "an attribute instance requires a specification after ','");
+        }
+        if (!match(TokenKind::Star)) {
+            error(
+                start,
+                "FSIM-SV-PARSE-337",
+                "an attribute instance is missing its closing '*)'");
+            continue;
+        }
+        if (!match(TokenKind::RightParen)) {
+            error(
+                start,
+                "FSIM-SV-PARSE-337",
+                "an attribute instance is missing its closing '*)'");
+        }
+    }
 }
 
 std::string VerilogParser::string_literal_text(const Token& token) {
@@ -1022,284 +1095,289 @@ DesignUnit VerilogParser::parse_module(
                      : std::string_view{"endmodule"};
   while (!at_end() && !keyword(terminator)) {
     const auto before = position();
-    if (time_declaration_start()) {
-      const auto declaration = advance();
-      parse_time_declaration(&unit, declaration);
+    if (verilog_attribute_instance_start()) {
+        parse_verilog_attribute_instances();
+    } else if (time_declaration_start()) {
+        const auto declaration = advance();
+        parse_time_declaration(&unit, declaration);
     } else if (match_keyword("parameter")) {
-      module_has_non_time_item_ = true;
-      parse_parameter_group(unit, false, false, previous());
+        module_has_non_time_item_ = true;
+        parse_parameter_group(unit, false, false, previous());
     } else if (match_keyword("localparam")) {
-      module_has_non_time_item_ = true;
-      parse_parameter_group(unit, true, false, previous());
+        module_has_non_time_item_ = true;
+        parse_parameter_group(unit, true, false, previous());
+    } else if (match_keyword("defparam")) {
+        module_has_non_time_item_ = true;
+        parse_defparam_declaration(
+            unit.verilog_defparams, previous());
     } else if (dpi_declaration_start("import")) {
-      module_has_non_time_item_ = true;
-      const auto declaration = advance();
-      parse_dpi_declaration(
-          unit.systemverilog_dpi_declarations,
-          declaration,
-          SystemVerilogDpiDirection::Import,
-          SystemVerilogDpiOwnerKind::DesignUnit,
-          unit.name);
+        module_has_non_time_item_ = true;
+        const auto declaration = advance();
+        parse_dpi_declaration(
+            unit.systemverilog_dpi_declarations,
+            declaration,
+            SystemVerilogDpiDirection::Import,
+            SystemVerilogDpiOwnerKind::DesignUnit,
+            unit.name);
     } else if (dpi_declaration_start("export")) {
-      module_has_non_time_item_ = true;
-      const auto declaration = advance();
-      parse_dpi_declaration(
-          unit.systemverilog_dpi_declarations,
-          declaration,
-          SystemVerilogDpiDirection::Export,
-          SystemVerilogDpiOwnerKind::DesignUnit,
-          unit.name);
+        module_has_non_time_item_ = true;
+        const auto declaration = advance();
+        parse_dpi_declaration(
+            unit.systemverilog_dpi_declarations,
+            declaration,
+            SystemVerilogDpiDirection::Export,
+            SystemVerilogDpiOwnerKind::DesignUnit,
+            unit.name);
     } else if (match_keyword("import")) {
-      module_has_non_time_item_ = true;
-      parse_import_clause(
-          unit.systemverilog_imports, previous());
-      active_package_imports_ =
-          unit.systemverilog_imports;
+        module_has_non_time_item_ = true;
+        parse_import_clause(
+            unit.systemverilog_imports, previous());
+        active_package_imports_ = unit.systemverilog_imports;
     } else if (match_keyword("typedef")) {
-      module_has_non_time_item_ = true;
-      const auto declaration = previous();
-      if (keyword("class")) {
-        add_class_declaration(
-            unit.systemverilog_classes,
-            parse_class_forward_declaration(declaration, unit.name),
-            declaration);
-      } else {
-        parse_typedef(unit, declaration);
-      }
+        module_has_non_time_item_ = true;
+        const auto declaration = previous();
+        if (keyword("class")) {
+            add_class_declaration(
+                unit.systemverilog_classes,
+                parse_class_forward_declaration(declaration, unit.name),
+                declaration);
+        } else {
+            parse_typedef(unit, declaration);
+        }
     } else if (match_keyword("virtual")) {
-      module_has_non_time_item_ = true;
-      const auto qualifier = previous();
-      if (match_keyword("class")) {
-        add_class_declaration(
-            unit.systemverilog_classes,
-            parse_class(previous(), unit.name, true),
-            qualifier);
-      } else {
-        parse_virtual_interface_declaration(
-            unit, qualifier);
-      }
+        module_has_non_time_item_ = true;
+        const auto qualifier = previous();
+        if (match_keyword("class")) {
+            add_class_declaration(
+                unit.systemverilog_classes,
+                parse_class(previous(), unit.name, true),
+                qualifier);
+        } else {
+            parse_virtual_interface_declaration(
+                unit, qualifier);
+        }
     } else if (match_keyword("interface")) {
-      module_has_non_time_item_ = true;
-      const auto qualifier = previous();
-      if (match_keyword("class")) {
+        module_has_non_time_item_ = true;
+        const auto qualifier = previous();
+        if (match_keyword("class")) {
+            add_class_declaration(
+                unit.systemverilog_classes,
+                parse_class(previous(), unit.name, false, true),
+                qualifier);
+        } else {
+            error(
+                qualifier,
+                "FSIM-SV-PARSE-255",
+                "a nested interface declaration must be an interface class");
+            skip_to_semicolon();
+        }
+    } else if (match_keyword("class")) {
+        module_has_non_time_item_ = true;
+        const auto declaration = previous();
         add_class_declaration(
             unit.systemverilog_classes,
-            parse_class(previous(), unit.name, false, true),
-            qualifier);
-      } else {
-        error(
-            qualifier,
-            "FSIM-SV-PARSE-255",
-            "a nested interface declaration must be an interface class");
-        skip_to_semicolon();
-      }
-    } else if (match_keyword("class")) {
-      module_has_non_time_item_ = true;
-      const auto declaration = previous();
-      add_class_declaration(
-          unit.systemverilog_classes,
-          parse_class(declaration, unit.name),
-          declaration);
+            parse_class(declaration, unit.name),
+            declaration);
     } else if (match_keyword("modport")) {
-      module_has_non_time_item_ = true;
-      if (!interface_unit) {
-        error(
-            previous(),
-            "FSIM-SV-SEM-115",
-            "a modport declaration is only valid inside an interface");
-        skip_to_semicolon();
-      } else {
-        parse_modport(unit, previous());
-      }
+        module_has_non_time_item_ = true;
+        if (!interface_unit) {
+            error(
+                previous(),
+                "FSIM-SV-SEM-115",
+                "a modport declaration is only valid inside an interface");
+            skip_to_semicolon();
+        } else {
+            parse_modport(unit, previous());
+        }
     } else if (match_keyword("clocking")) {
-      module_has_non_time_item_ = true;
-      parse_clocking_block(unit, previous());
+        module_has_non_time_item_ = true;
+        parse_clocking_block(unit, previous());
     } else if (match_keyword("default")) {
-      module_has_non_time_item_ = true;
-      const auto default_start = previous();
-      if (!match_keyword("clocking")) {
-        error(
-            default_start,
-            "FSIM-SV-SEM-187",
-            "a design-unit default declaration must select a clocking block");
-        skip_to_semicolon();
-      } else {
-        parse_default_clocking(unit, default_start);
-      }
+        module_has_non_time_item_ = true;
+        const auto default_start = previous();
+        if (!match_keyword("clocking")) {
+            error(
+                default_start,
+                "FSIM-SV-SEM-187",
+                "a design-unit default declaration must select a clocking block");
+            skip_to_semicolon();
+        } else {
+            parse_default_clocking(unit, default_start);
+        }
     } else if (
         at(TokenKind::Identifier)
         && current().text == "covergroup") {
-      module_has_non_time_item_ = true;
-      const auto declaration_start = advance();
-      add_covergroup_declaration(
-          unit.systemverilog_covergroups,
-          parse_covergroup_declaration(
-              declaration_start,
-              SystemVerilogCovergroupOwnerKind::DesignUnit),
-          declaration_start);
+        module_has_non_time_item_ = true;
+        const auto declaration_start = advance();
+        add_covergroup_declaration(
+            unit.systemverilog_covergroups,
+            parse_covergroup_declaration(
+                declaration_start,
+                SystemVerilogCovergroupOwnerKind::DesignUnit),
+            declaration_start);
     } else if (
         at(TokenKind::Identifier)
         && contains_word(
-            {"sequence", "property", "checker"},
+            { "sequence", "property", "checker" },
             current().text)) {
-      module_has_non_time_item_ = true;
-      const auto declaration_start = advance();
-      const auto assertion_kind = declaration_start.text == "sequence"
-          ? SystemVerilogAssertionDeclarationKind::Sequence
-          : declaration_start.text == "property"
-              ? SystemVerilogAssertionDeclarationKind::Property
-              : SystemVerilogAssertionDeclarationKind::Checker;
-      auto declaration =
-          parse_assertion_declaration(declaration_start, assertion_kind);
-      const auto duplicate = std::ranges::any_of(
-          unit.systemverilog_assertion_declarations,
-          [&](const SystemVerilogAssertionDeclaration& existing) {
-            return !declaration.name.empty()
-                && existing.name == declaration.name;
-          });
-      if (duplicate) {
-        error(
-            declaration_start,
-            "FSIM-SV-SEM-192",
-            "duplicate assertion declaration '" + declaration.name + "'");
-      } else {
-        unit.systemverilog_assertion_declarations.push_back(
-            std::move(declaration));
-      }
+        module_has_non_time_item_ = true;
+        const auto declaration_start = advance();
+        const auto assertion_kind = declaration_start.text == "sequence"
+            ? SystemVerilogAssertionDeclarationKind::Sequence
+            : declaration_start.text == "property"
+            ? SystemVerilogAssertionDeclarationKind::Property
+            : SystemVerilogAssertionDeclarationKind::Checker;
+        auto declaration = parse_assertion_declaration(declaration_start, assertion_kind);
+        const auto duplicate = std::ranges::any_of(
+            unit.systemverilog_assertion_declarations,
+            [&](const SystemVerilogAssertionDeclaration& existing) {
+                return !declaration.name.empty()
+                    && existing.name == declaration.name;
+            });
+        if (duplicate) {
+            error(
+                declaration_start,
+                "FSIM-SV-SEM-192",
+                "duplicate assertion declaration '" + declaration.name + "'");
+        } else {
+            unit.systemverilog_assertion_declarations.push_back(
+                std::move(declaration));
+        }
     } else if (
         (at(TokenKind::Identifier)
-         && contains_word(
-             {"assert", "assume", "cover", "restrict"},
-             current().text))
+            && contains_word(
+                { "assert", "assume", "cover", "restrict" },
+                current().text))
         || (at(TokenKind::Identifier)
             && at(TokenKind::Colon, 1)
             && at(TokenKind::Identifier, 2)
             && contains_word(
-                {"assert", "assume", "cover", "restrict"},
+                { "assert", "assume", "cover", "restrict" },
                 current(2).text))) {
-      module_has_non_time_item_ = true;
-      std::optional<Token> label;
-      if (at(TokenKind::Colon, 1)) {
-        label = advance();
-        advance();
-      }
-      const auto directive = advance();
-      const auto assertion_kind = directive.text == "assert"
-          ? SystemVerilogConcurrentAssertionKind::Assert
-          : directive.text == "assume"
-              ? SystemVerilogConcurrentAssertionKind::Assume
-              : directive.text == "cover"
-                  ? SystemVerilogConcurrentAssertionKind::Cover
-                  : SystemVerilogConcurrentAssertionKind::Restrict;
-      unit.systemverilog_concurrent_assertions.push_back(
-          parse_concurrent_assertion(
-              directive, assertion_kind, std::move(label)));
-    } else if (match_keyword("function")) {
-      module_has_non_time_item_ = true;
-      auto function = parse_function(previous());
-      const bool duplicate = std::ranges::any_of(
-          unit.functions,
-          [&](const FunctionDeclaration& existing) {
-            return existing.name == function.name;
-          })
-          || std::ranges::any_of(
-              unit.tasks,
-              [&](const TaskDeclaration& existing) {
-            return existing.name == function.name;
-          });
-      if (duplicate) {
-        error(
-            start,
-            "FSIM-SV-SEM-066",
-            "duplicate module function '" + function.name + "'");
-      } else {
-        unit.functions.push_back(std::move(function));
-      }
-    } else if (match_keyword("task")) {
-      module_has_non_time_item_ = true;
-      auto task = parse_task(previous());
-      const bool duplicate = std::ranges::any_of(
-          unit.tasks,
-          [&](const TaskDeclaration& existing) {
-            return existing.name == task.name;
-          })
-          || std::ranges::any_of(
-              unit.functions,
-              [&](const FunctionDeclaration& existing) {
-            return existing.name == task.name;
-          });
-      if (duplicate) {
-        error(
-            start,
-            "FSIM-SV-SEM-073",
-            "duplicate module task '" + task.name + "'");
-      } else {
-        unit.tasks.push_back(std::move(task));
-      }
-    } else if (match_keyword("genvar")) {
-      module_has_non_time_item_ = true;
-      parse_genvar_declaration(unit);
-    } else if (match_keyword("event")) {
-      module_has_non_time_item_ = true;
-      parse_event_declaration(unit, previous());
-    } else if (match_keyword("specify")) {
-      module_has_non_time_item_ = true;
-      if (interface_unit || program_unit) {
-        error(
-            previous(),
-            "FSIM-SV-SEM-164",
-            "a specify block is legal only in a module");
-      }
-      auto block = parse_specify_block(previous());
-      for (const auto& declaration : block.specparams) {
-        const bool duplicate = std::ranges::any_of(
-            unit.verilog_specify_blocks,
-            [&](const VerilogSpecifyBlock& existing_block) {
-              return std::ranges::any_of(
-                  existing_block.specparams,
-                  [&](const VerilogSpecparamDeclaration& existing) {
-                    return existing.name == declaration.name;
-                  });
-            });
-        if (duplicate) {
-          error(
-              Token{
-                  TokenKind::Identifier,
-                  declaration.name,
-                  declaration.span,
-                  {}},
-              "FSIM-SV-SEM-165",
-              "duplicate specparam declaration '"
-                  + declaration.name + "'");
+        module_has_non_time_item_ = true;
+        std::optional<Token> label;
+        if (at(TokenKind::Colon, 1)) {
+            label = advance();
+            advance();
         }
-      }
-      unit.verilog_specify_blocks.push_back(std::move(block));
+        const auto directive = advance();
+        const auto assertion_kind = directive.text == "assert"
+            ? SystemVerilogConcurrentAssertionKind::Assert
+            : directive.text == "assume"
+            ? SystemVerilogConcurrentAssertionKind::Assume
+            : directive.text == "cover"
+            ? SystemVerilogConcurrentAssertionKind::Cover
+            : SystemVerilogConcurrentAssertionKind::Restrict;
+        unit.systemverilog_concurrent_assertions.push_back(
+            parse_concurrent_assertion(
+                directive, assertion_kind, std::move(label)));
+    } else if (match_keyword("function")) {
+        module_has_non_time_item_ = true;
+        auto function = parse_function(previous());
+        const bool duplicate = std::ranges::any_of(
+                                   unit.functions,
+                                   [&](const FunctionDeclaration& existing) {
+                                       return existing.name == function.name;
+                                   })
+            || std::ranges::any_of(
+                unit.tasks,
+                [&](const TaskDeclaration& existing) {
+                    return existing.name == function.name;
+                });
+        if (duplicate) {
+            error(
+                start,
+                "FSIM-SV-SEM-066",
+                "duplicate module function '" + function.name + "'");
+        } else {
+            unit.functions.push_back(std::move(function));
+        }
+    } else if (match_keyword("task")) {
+        module_has_non_time_item_ = true;
+        auto task = parse_task(previous());
+        const bool duplicate = std::ranges::any_of(
+                                   unit.tasks,
+                                   [&](const TaskDeclaration& existing) {
+                                       return existing.name == task.name;
+                                   })
+            || std::ranges::any_of(
+                unit.functions,
+                [&](const FunctionDeclaration& existing) {
+                    return existing.name == task.name;
+                });
+        if (duplicate) {
+            error(
+                start,
+                "FSIM-SV-SEM-073",
+                "duplicate module task '" + task.name + "'");
+        } else {
+            unit.tasks.push_back(std::move(task));
+        }
+    } else if (match_keyword("genvar")) {
+        module_has_non_time_item_ = true;
+        parse_genvar_declaration(unit);
+    } else if (match_keyword("event")) {
+        module_has_non_time_item_ = true;
+        parse_event_declaration(unit, previous());
+    } else if (match_keyword("specify")) {
+        module_has_non_time_item_ = true;
+        if (interface_unit || program_unit) {
+            error(
+                previous(),
+                "FSIM-SV-SEM-164",
+                "a specify block is legal only in a module");
+        }
+        auto block = parse_specify_block(previous());
+        for (const auto& declaration : block.specparams) {
+            const bool duplicate = std::ranges::any_of(
+                unit.verilog_specify_blocks,
+                [&](const VerilogSpecifyBlock& existing_block) {
+                    return std::ranges::any_of(
+                        existing_block.specparams,
+                        [&](const VerilogSpecparamDeclaration& existing) {
+                            return existing.name == declaration.name;
+                        });
+                });
+            if (duplicate) {
+                error(
+                    Token {
+                        TokenKind::Identifier,
+                        declaration.name,
+                        declaration.span,
+                        { } },
+                    "FSIM-SV-SEM-165",
+                    "duplicate specparam declaration '"
+                        + declaration.name + "'");
+            }
+        }
+        unit.verilog_specify_blocks.push_back(std::move(block));
     } else if (
         keyword("final")
         || (language_ == Language::Verilog2005
             && at(TokenKind::Identifier)
             && current().text == "final")) {
-      module_has_non_time_item_ = true;
-      unit.processes.push_back(parse_final());
+        module_has_non_time_item_ = true;
+        unit.processes.push_back(parse_final());
     } else if (is_declaration_start() && !instance_start()) {
-      module_has_non_time_item_ = true;
-      parse_declaration(unit);
+        module_has_non_time_item_ = true;
+        parse_declaration(unit);
     } else if (is_gate_primitive()) {
-      module_has_non_time_item_ = true;
-      parse_gate_primitive(
-          unit.concurrent_statements, unit.signals, unit.ports);
-    } else if (any_keyword({
-                   "cmos", "rcmos", "nmos", "pmos", "rnmos",
+        module_has_non_time_item_ = true;
+        parse_gate_primitive(
+            unit.concurrent_statements, unit.signals, unit.ports);
+    } else if (any_keyword({ "cmos", "rcmos", "nmos", "pmos", "rnmos",
                    "rpmos", "tran", "rtran", "tranif0", "tranif1",
-                   "rtranif0", "rtranif1", "pullup", "pulldown"})) {
-      module_has_non_time_item_ = true;
-      parse_switch_primitive(
-          unit.concurrent_statements, unit.signals, unit.ports);
+                   "rtranif0", "rtranif1", "pullup", "pulldown" })) {
+        module_has_non_time_item_ = true;
+        parse_switch_primitive(
+            unit.concurrent_statements, unit.signals, unit.ports);
     } else if (match_keyword("assign")) {
-      module_has_non_time_item_ = true;
-      if (auto assignment = parse_continuous_assignment(previous())) {
-        unit.concurrent_statements.push_back(std::move(*assignment));
-      }
+        module_has_non_time_item_ = true;
+        auto assignments = parse_continuous_assignments(previous());
+        unit.concurrent_statements.insert(
+            unit.concurrent_statements.end(),
+            std::make_move_iterator(assignments.begin()),
+            std::make_move_iterator(assignments.end()));
     } else if (
         keyword("always") || keyword("always_ff")
         || keyword("always_comb") || keyword("always_latch")
@@ -1308,44 +1386,44 @@ DesignUnit VerilogParser::parse_module(
             && (current().text == "always_ff"
                 || current().text == "always_comb"
                 || current().text == "always_latch"))) {
-      module_has_non_time_item_ = true;
-      unit.processes.push_back(parse_always());
+        module_has_non_time_item_ = true;
+        unit.processes.push_back(parse_always());
     } else if (keyword("initial")) {
-      module_has_non_time_item_ = true;
-      unit.processes.push_back(parse_initial());
+        module_has_non_time_item_ = true;
+        unit.processes.push_back(parse_initial());
     } else if (match_keyword("generate")) {
-      module_has_non_time_item_ = true;
-      parse_generate_region(unit, previous());
+        module_has_non_time_item_ = true;
+        parse_generate_region(unit, previous());
     } else if (match_keyword("if")) {
-      module_has_non_time_item_ = true;
-      unit.generate_regions.push_back(
-          parse_conditional_generate(previous()));
+        module_has_non_time_item_ = true;
+        unit.generate_regions.push_back(
+            parse_conditional_generate(previous()));
     } else if (match_keyword("for")) {
-      module_has_non_time_item_ = true;
-      unit.generate_regions.push_back(
-          parse_iterative_generate(previous()));
+        module_has_non_time_item_ = true;
+        unit.generate_regions.push_back(
+            parse_iterative_generate(previous()));
     } else if (match_keyword("case")) {
-      module_has_non_time_item_ = true;
-      unit.generate_regions.push_back(
-          parse_selection_generate(previous()));
+        module_has_non_time_item_ = true;
+        unit.generate_regions.push_back(
+            parse_selection_generate(previous()));
     } else if (instance_start()) {
-      module_has_non_time_item_ = true;
-      auto instances = parse_instances();
-      unit.instances.insert(
-          unit.instances.end(),
-          std::make_move_iterator(instances.begin()),
-          std::make_move_iterator(instances.end()));
+        module_has_non_time_item_ = true;
+        auto instances = parse_instances();
+        unit.instances.insert(
+            unit.instances.end(),
+            std::make_move_iterator(instances.begin()),
+            std::make_move_iterator(instances.end()));
     } else if (at(TokenKind::Backtick)) {
-      parse_directive();
+        parse_directive();
     } else {
-      module_has_non_time_item_ = true;
-      const auto unexpected = advance();
-      error(
-          unexpected,
-          "FSIM-SV-UNSUPPORTED-004",
-          "unsupported " + std::string{unit_kind}
-              + " item starting with '" + unexpected.text + "'");
-      skip_to_semicolon();
+        module_has_non_time_item_ = true;
+        const auto unexpected = advance();
+        error(
+            unexpected,
+            "FSIM-SV-UNSUPPORTED-004",
+            "unsupported " + std::string { unit_kind }
+                + " item starting with '" + unexpected.text + "'");
+        skip_to_semicolon();
     }
     if (position() == before) {
       advance();

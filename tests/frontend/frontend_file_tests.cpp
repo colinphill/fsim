@@ -12,30 +12,33 @@ namespace fsim::tests::frontend {
 
 namespace {
 
-void require(const bool condition, const std::string_view message) {
-  if (!condition) {
-    throw std::runtime_error{std::string{message}};
-  }
-}
+    void require(const bool condition, const std::string_view message)
+    {
+        if (!condition) {
+            throw std::runtime_error { std::string { message } };
+        }
+    }
 
-[[nodiscard]] bool has_code(
-    const fsim::frontend::ParseResult& result,
-    const std::string_view code) {
-  return std::ranges::any_of(
-      result.diagnostics,
-      [code](const auto& diagnostic) {
-        return diagnostic.code == code;
-      });
-}
+    [[nodiscard]] bool has_code(
+        const fsim::frontend::ParseResult& result,
+        const std::string_view code)
+    {
+        return std::ranges::any_of(
+            result.diagnostics,
+            [code](const auto& diagnostic) {
+                return diagnostic.code == code;
+            });
+    }
 
-}  // namespace
+} // namespace
 
-void test_systemverilog_text_files() {
-  using namespace fsim::frontend;
+void test_systemverilog_text_files()
+{
+    using namespace fsim::frontend;
 
-  const auto parsed = parse_text(
-      "text-files.sv",
-      R"(
+    const auto parsed = parse_text(
+        "text-files.sv",
+        R"(
 module text_files;
   integer handle;
   integer count;
@@ -68,70 +71,69 @@ module text_files;
   end
 endmodule
 )",
-      Language::SystemVerilog2017);
-  require(parsed.ok(), "bounded file syntax parses");
-  const auto* unit =
-      parsed.design.find(UnitKind::VerilogModule, "text_files");
-  require(
-      unit != nullptr && unit->processes.size() == 1,
-      "file fixture retains one process");
-  const auto& block = unit->processes[0].statements.at(0);
-  require(
-      block.kind == StatementKind::Block
-          && block.statements.size() == 19,
-      "file statements remain ordered in their block");
-  require(
-      block.statements[0].value.text == "$fopen"
-          && block.statements[0].value.operands.size() == 1
-          && block.statements[1].kind == StatementKind::Assignment
-          && block.statements[1].value.kind
-              == ExpressionKind::Call
-          && block.statements[1].value.text == "$fopen"
-          && block.statements[1].value.operands.size() == 2,
-      "$fopen retains multichannel and file-descriptor forms");
-  require(
-      block.statements[2].value.text == "$fgets"
-          && block.statements[3].value.text == "$fgetc"
-          && block.statements[4].value.text == "$ungetc"
-          && block.statements[5].value.text == "$feof"
-          && block.statements[6].value.text == "$ferror"
-          && block.statements[7].value.text == "$fscanf"
-          && block.statements[7].value.operands.size() == 4
-          && block.statements[8].value.text == "$sscanf"
-          && block.statements[8].value.operands.size() == 3
-          && block.statements[9].value.text == "$fread"
-          && block.statements[9].value.operands.size() == 2
-          && block.statements[10].value.text == "$fread"
-          && block.statements[10].value.operands.size() == 4
-          && block.statements[11].value.text == "$ftell"
-          && block.statements[12].value.text == "$fseek"
-          && block.statements[13].value.text == "$rewind"
-          && block.statements[14].kind == StatementKind::FileFlush
-          && block.statements[15].kind == StatementKind::FileFlush,
-      "file system functions retain distinct call identities");
-  require(
-      block.statements[16].kind == StatementKind::FileDisplay
-          && block.statements[16].output_newline
-          && block.statements[16].output_values.size() == 2
-          && block.statements[16].output_values[0].format
-              == OutputFormat::Decimal
-          && block.statements[16].output_values[1].format
-              == OutputFormat::String
-          && block.statements[17].kind
-              == StatementKind::FileDisplay
-          && !block.statements[17].output_newline
-          && block.statements[17].output_values.size() == 1
-          && block.statements[17].output_values[0].value.text
-              == "line",
-      "file output tasks retain ordered and unformatted values");
-  require(
-      block.statements[18].kind == StatementKind::FileClose
-          && block.statements[18].file_handle.text == "handle",
-      "$fclose retains its handle expression");
+        Language::SystemVerilog2017);
+    require(parsed.ok(), "bounded file syntax parses");
+    const auto* unit = parsed.design.find(UnitKind::VerilogModule, "text_files");
+    require(
+        unit != nullptr && unit->processes.size() == 1,
+        "file fixture retains one process");
+    const auto& block = unit->processes[0].statements.at(0);
+    require(
+        block.kind == StatementKind::Block
+            && block.statements.size() == 19,
+        "file statements remain ordered in their block");
+    require(
+        block.statements[0].value.text == "$fopen"
+            && block.statements[0].value.operands.size() == 1
+            && block.statements[1].kind == StatementKind::Assignment
+            && block.statements[1].value.kind
+                == ExpressionKind::Call
+            && block.statements[1].value.text == "$fopen"
+            && block.statements[1].value.operands.size() == 2,
+        "$fopen retains multichannel and file-descriptor forms");
+    require(
+        block.statements[2].value.text == "$fgets"
+            && block.statements[3].value.text == "$fgetc"
+            && block.statements[4].value.text == "$ungetc"
+            && block.statements[5].value.text == "$feof"
+            && block.statements[6].value.text == "$ferror"
+            && block.statements[7].value.text == "$fscanf"
+            && block.statements[7].value.operands.size() == 4
+            && block.statements[8].value.text == "$sscanf"
+            && block.statements[8].value.operands.size() == 3
+            && block.statements[9].value.text == "$fread"
+            && block.statements[9].value.operands.size() == 2
+            && block.statements[10].value.text == "$fread"
+            && block.statements[10].value.operands.size() == 4
+            && block.statements[11].value.text == "$ftell"
+            && block.statements[12].value.text == "$fseek"
+            && block.statements[13].value.text == "$rewind"
+            && block.statements[14].kind == StatementKind::FileFlush
+            && block.statements[15].kind == StatementKind::FileFlush,
+        "file system functions retain distinct call identities");
+    require(
+        block.statements[16].kind == StatementKind::FileDisplay
+            && block.statements[16].output_newline
+            && block.statements[16].output_values.size() == 2
+            && block.statements[16].output_values[0].format
+                == OutputFormat::Decimal
+            && block.statements[16].output_values[1].format
+                == OutputFormat::String
+            && block.statements[17].kind
+                == StatementKind::FileDisplay
+            && !block.statements[17].output_newline
+            && block.statements[17].output_values.size() == 1
+            && block.statements[17].output_values[0].value.text
+                == "line",
+        "file output tasks retain ordered and unformatted values");
+    require(
+        block.statements[18].kind == StatementKind::FileClose
+            && block.statements[18].file_handle.text == "handle",
+        "$fclose retains its handle expression");
 
-  const auto invalid_arity = parse_text(
-      "file-arity.sv",
-      R"(
+    const auto invalid_arity = parse_text(
+        "file-arity.sv",
+        R"(
 module file_arity;
   integer handle;
   string line;
@@ -154,15 +156,15 @@ module file_arity;
   end
 endmodule
 )",
-      Language::SystemVerilog2017);
-  require(
-      !invalid_arity.ok()
-          && has_code(invalid_arity, "FSIM-SV-SEM-075"),
-      "file system function arity is diagnosed");
+        Language::SystemVerilog2017);
+    require(
+        !invalid_arity.ok()
+            && has_code(invalid_arity, "FSIM-SV-SEM-075"),
+        "file system function arity is diagnosed");
 
-  const auto invalid_format = parse_text(
-      "file-format.sv",
-      R"(
+    const auto invalid_format = parse_text(
+        "file-format.sv",
+        R"(
 module file_format;
   integer handle;
   initial begin
@@ -171,28 +173,46 @@ module file_format;
   end
 endmodule
 )",
-      Language::SystemVerilog2017);
-  require(
-      !invalid_format.ok()
-          && has_code(invalid_format, "FSIM-SV-SEM-076"),
-      "malformed file-output formatting is diagnosed");
+        Language::SystemVerilog2017);
+    require(
+        !invalid_format.ok()
+            && has_code(invalid_format, "FSIM-SV-SEM-076"),
+        "malformed file-output formatting is diagnosed");
 
-  const auto verilog = parse_text(
-      "file-verilog.v",
-      R"(
+    const auto verilog = parse_text(
+        "file-verilog.v",
+        R"(
 module file_verilog;
   integer handle;
+  integer result;
+  reg [136:0] line;
+  reg [136:0] memory [3:0];
   initial begin
     handle = $fopen("file.txt", "r");
+    result = $fgets(line, handle);
+    result = $fgetc(handle);
+    result = $ungetc(result, handle);
+    result = $feof(handle);
+    result = $ferror(handle, line);
+    result = $fscanf(handle, "%h", line);
+    result = $sscanf("2a", "%h", line);
+    result = $fread(line, handle);
+    result = $fseek(handle, 0, 0);
+    result = $ftell(handle);
+    result = $rewind(handle);
+    $fdisplay(handle, "value=%h", line);
+    $fwrite(handle, "tail");
+    $fflush(handle);
+    $readmemh("input.hex", memory);
+    $writememh("output.hex", memory);
     $fclose(handle);
   end
 endmodule
 )",
-      Language::Verilog2005);
-  require(
-      !verilog.ok()
-          && has_code(verilog, "FSIM-SV-SEM-074"),
-      "bounded file operations require SystemVerilog-2017");
+        Language::Verilog2005);
+    require(
+        verilog.ok(),
+        "IEEE 1364-2005 file services parse in Verilog mode");
 }
 
-}  // namespace fsim::tests::frontend
+} // namespace fsim::tests::frontend

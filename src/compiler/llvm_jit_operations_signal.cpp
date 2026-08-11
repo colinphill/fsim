@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "llvm_jit_lowering_internal.hpp"
 
+#include <llvm/ADT/APInt.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 
@@ -39,17 +40,17 @@ llvm::StructType* create_jit_runtime_type(llvm::LLVMContext& context) {
   auto* pointer = llvm::PointerType::getUnqual(context);
   return llvm::StructType::create(
       context,
-      {i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
-       i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer, pointer},
+      { i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
+          i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
+          pointer, pointer, pointer, pointer, pointer, pointer, pointer,
+          pointer, pointer, pointer, pointer, pointer, pointer, pointer,
+          pointer, pointer, pointer, pointer, pointer, pointer, pointer,
+          pointer, pointer, pointer, pointer, pointer, pointer, pointer,
+          pointer, pointer, pointer, pointer, pointer, pointer, pointer,
+          pointer, pointer, pointer, pointer, pointer, pointer, pointer,
+          pointer, pointer, pointer, pointer, pointer, pointer,
+          pointer, pointer, pointer, pointer, pointer, pointer, pointer,
+          pointer, pointer, pointer, pointer, pointer, pointer, pointer },
       "fsim_jit_runtime_v1");
 }
 
@@ -66,11 +67,28 @@ void SignalOperationLowerer::lower(
                     constant_i64(context, word.planes[3]),
                     ValueKind::logic9};
               } else {
-                const auto word = operation.value.low_word();
-                value = {
-                    constant_i64(context, word.aval),
-                    constant_i64(context, word.bval),
-                    static_cast<std::uint32_t>(word.width)};
+                  const auto width = static_cast<std::uint32_t>(
+                      operation.value.width());
+                  if (width <= 64) {
+                      const auto word = operation.value.low_word();
+                      value = {
+                          constant_i64(context, word.aval),
+                          constant_i64(context, word.bval),
+                          width
+                      };
+                  } else {
+                      value = {
+                          llvm::ConstantInt::get(
+                              context,
+                              llvm::APInt(
+                                  width, operation.value.aval_words())),
+                          llvm::ConstantInt::get(
+                              context,
+                              llvm::APInt(
+                                  width, operation.value.bval_words())),
+                          width
+                      };
+                  }
               }
               store_register(
                   builder, registers, operation.destination,

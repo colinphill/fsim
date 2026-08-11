@@ -8,20 +8,40 @@ namespace fsim::app::application_detail {
 
 [[nodiscard]] runtime::simir::ProcessResumeResult LlvmProcessExecutor::resume(
     runtime::simir::ProcessExecutionContext& context,
-    const runtime::simir::InstructionIndex start_instruction)  {
+    const runtime::simir::InstructionIndex start_instruction)
+{
     if (frame_.program_counter != start_instruction) {
-      throw compiler::LlvmJitError(
-          "compiled process frame PC disagrees with the simulation kernel");
+        const bool kernel_owned_callable_boundary = frame_.program_counter < process_.operations.size()
+            && [&] {
+                   const auto& operation = process_.operations[frame_.program_counter];
+                   const auto* call = fsim::runtime::simir::operation_get_if<
+                       runtime::simir::Call>(&operation);
+                   const auto* return_operation = fsim::runtime::simir::operation_get_if<
+                       runtime::simir::Return>(&operation);
+                   return (call != nullptr && call->stack.capacity == 0)
+                       || (return_operation != nullptr
+                           && return_operation->stack.capacity == 0)
+                       || fsim::runtime::simir::operation_holds<
+                           runtime::simir::CallableFramePush>(operation)
+                       || fsim::runtime::simir::operation_holds<
+                           runtime::simir::CallableFramePop>(operation);
+               }();
+        if (!kernel_owned_callable_boundary) {
+            throw compiler::LlvmJitError(
+                "compiled process frame PC disagrees with the simulation kernel");
+        }
+        frame_.program_counter = start_instruction;
     }
 
-    CallbackState callback_state{
+    CallbackState callback_state {
         this,
         &context,
         &process_,
         signal_widths_,
         signal_value_kinds_,
-        {}};
-    fsim_jit_runtime_v1 runtime{};
+        { }
+    };
+    fsim_jit_runtime_v1 runtime { };
     runtime.abi_version = FSIM_JIT_RUNTIME_ABI_VERSION_V1;
     runtime.struct_size = sizeof(runtime);
     runtime.context = &callback_state;
@@ -30,10 +50,9 @@ namespace fsim::app::application_detail {
     runtime.assert_failed = assert_failed;
     runtime.write_update = write_update;
     runtime.write_after = write_after;
-    runtime.flags =
-        context.execution_points_enabled()
-            ? FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS
-            : 0;
+    runtime.flags = context.execution_points_enabled()
+        ? FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS
+        : 0;
     runtime.write_signal_slice = write_signal_slice;
     runtime.write_update_slice = write_update_slice;
     runtime.write_after_slice = write_after_slice;
@@ -61,37 +80,27 @@ namespace fsim::app::application_detail {
     runtime.write_projected = write_projected;
     runtime.write_projected_slice = write_projected_slice;
     runtime.write_projected_waveform = write_projected_waveform;
-    runtime.write_projected_waveform_slice =
-        write_projected_waveform_slice;
+    runtime.write_projected_waveform_slice = write_projected_waveform_slice;
     runtime.read_signal_logic9 = read_signal_logic9;
     runtime.write_signal_logic9 = write_signal_logic9;
     runtime.write_update_logic9 = write_update_logic9;
     runtime.write_after_logic9 = write_after_logic9;
-    runtime.write_signal_slice_logic9 =
-        write_signal_slice_logic9;
-    runtime.write_update_slice_logic9 =
-        write_update_slice_logic9;
-    runtime.write_after_slice_logic9 =
-        write_after_slice_logic9;
-    runtime.signal_last_value_logic9 =
-        signal_last_value_logic9;
+    runtime.write_signal_slice_logic9 = write_signal_slice_logic9;
+    runtime.write_update_slice_logic9 = write_update_slice_logic9;
+    runtime.write_after_slice_logic9 = write_after_slice_logic9;
+    runtime.signal_last_value_logic9 = signal_last_value_logic9;
     runtime.write_inertial_logic9 = write_inertial_logic9;
-    runtime.write_inertial_slice_logic9 =
-        write_inertial_slice_logic9;
+    runtime.write_inertial_slice_logic9 = write_inertial_slice_logic9;
     runtime.write_projected_logic9 = write_projected_logic9;
-    runtime.write_projected_slice_logic9 =
-        write_projected_slice_logic9;
-    runtime.write_projected_waveform_logic9 =
-        write_projected_waveform_logic9;
-    runtime.write_projected_waveform_slice_logic9 =
-        write_projected_waveform_slice_logic9;
+    runtime.write_projected_slice_logic9 = write_projected_slice_logic9;
+    runtime.write_projected_waveform_logic9 = write_projected_waveform_logic9;
+    runtime.write_projected_waveform_slice_logic9 = write_projected_waveform_slice_logic9;
     runtime.write_formatted_logic9 = write_formatted_logic9;
     runtime.force_signal_slice = force_signal_slice;
     runtime.force_signal_slice_logic9 = force_signal_slice_logic9;
     runtime.release_signal_slice = release_signal_slice;
     runtime.force_driver_signal_slice = force_driver_signal_slice;
-    runtime.force_driver_signal_slice_logic9 =
-        force_driver_signal_slice_logic9;
+    runtime.force_driver_signal_slice_logic9 = force_driver_signal_slice_logic9;
     runtime.release_driver_signal_slice = release_driver_signal_slice;
     runtime.load_string = load_string;
     runtime.copy_string = copy_string;
@@ -110,241 +119,251 @@ namespace fsim::app::application_detail {
     runtime.file_end_of_file = file_end_of_file;
     runtime.file_error = file_error;
     runtime.container_operation = container_operation;
+    runtime.execute_signal_operation = execute_signal_operation;
 
-    fsim_jit_resume_result_v1 result{};
+    fsim_jit_resume_result_v1 result { };
     result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
     result.struct_size = sizeof(result);
     const auto status = [&]() -> compiler::JitResumeStatus {
-      try {
-        return jit_.resume(handle_, runtime, frame_, result);
-      } catch (const compiler::LlvmJitGeneratedRuntimeError& error) {
-        if (callback_state.failure) {
-          std::rethrow_exception(callback_state.failure);
+        try {
+            return jit_.resume(handle_, runtime, frame_, result);
+        } catch (const compiler::LlvmJitGeneratedRuntimeError& error) {
+            if (callback_state.failure) {
+                std::rethrow_exception(callback_state.failure);
+            }
+            switch (error.reason()) {
+            case compiler::JitGeneratedRuntimeErrorReason::
+                unknown_branch_condition:
+                throw runtime::simir::InterpreterError(
+                    process_.id,
+                    error.instruction(),
+                    "branch condition is unknown or high impedance");
+            case compiler::JitGeneratedRuntimeErrorReason::
+                integer_operand_unknown:
+                throw runtime::simir::InterpreterError(
+                    process_.id,
+                    error.instruction(),
+                    "VHDL integer operand contains an unknown or "
+                    "high-impedance value");
+            case compiler::JitGeneratedRuntimeErrorReason::
+                integer_overflow:
+                throw runtime::simir::InterpreterError(
+                    process_.id,
+                    error.instruction(),
+                    "VHDL integer arithmetic overflow");
+            case compiler::JitGeneratedRuntimeErrorReason::
+                integer_division_by_zero:
+                throw runtime::simir::InterpreterError(
+                    process_.id,
+                    error.instruction(),
+                    "VHDL integer division by zero");
+            case compiler::JitGeneratedRuntimeErrorReason::
+                integer_negative_exponent:
+                throw runtime::simir::InterpreterError(
+                    process_.id,
+                    error.instruction(),
+                    "VHDL integer exponent must be nonnegative");
+            case compiler::JitGeneratedRuntimeErrorReason::
+                integer_subtype_range:
+                throw runtime::simir::InterpreterError(
+                    process_.id,
+                    error.instruction(),
+                    "VHDL integer subtype range check failed");
+            case compiler::JitGeneratedRuntimeErrorReason::
+                dynamic_index_unknown:
+                throw runtime::simir::InterpreterError(
+                    process_.id,
+                    error.instruction(),
+                    "dynamic packed index contains an unknown or "
+                    "high-impedance value");
+            case compiler::JitGeneratedRuntimeErrorReason::
+                dynamic_index_range:
+                throw runtime::simir::InterpreterError(
+                    process_.id,
+                    error.instruction(),
+                    "dynamic packed index is outside the declared range");
+            case compiler::JitGeneratedRuntimeErrorReason::
+                call_stack_unknown:
+                throw runtime::simir::InterpreterError(
+                    process_.id,
+                    error.instruction(),
+                    "call-stack pointer or return target is unknown");
+            case compiler::JitGeneratedRuntimeErrorReason::
+                call_stack_overflow:
+                throw runtime::simir::InterpreterError(
+                    process_.id,
+                    error.instruction(),
+                    "call-stack capacity is exhausted");
+            case compiler::JitGeneratedRuntimeErrorReason::
+                call_stack_underflow:
+                throw runtime::simir::InterpreterError(
+                    process_.id,
+                    error.instruction(),
+                    "call-stack underflow");
+            case compiler::JitGeneratedRuntimeErrorReason::
+                call_stack_target:
+                throw runtime::simir::InterpreterError(
+                    process_.id,
+                    error.instruction(),
+                    "call-stack return target is invalid");
+            case compiler::JitGeneratedRuntimeErrorReason::
+                string_callback_failure:
+                throw runtime::simir::InterpreterError(
+                    process_.id,
+                    error.instruction(),
+                    "mutable string runtime callback failed");
+            case compiler::JitGeneratedRuntimeErrorReason::
+                file_callback_failure:
+                throw runtime::simir::InterpreterError(
+                    process_.id,
+                    error.instruction(),
+                    "text file runtime callback failed");
+            case compiler::JitGeneratedRuntimeErrorReason::
+                container_callback_failure:
+                throw runtime::simir::InterpreterError(
+                    process_.id,
+                    error.instruction(),
+                    "bounded container runtime callback failed");
+            case compiler::JitGeneratedRuntimeErrorReason::
+                signal_callback_failure:
+                throw runtime::simir::InterpreterError(
+                    process_.id,
+                    error.instruction(),
+                    "exact-width signal runtime callback failed");
+            }
+            throw;
+        } catch (...) {
+            // A callback failure is the first language/runtime failure observed by
+            // generated code and must not be masked by a later adapter status.
+            if (callback_state.failure) {
+                std::rethrow_exception(callback_state.failure);
+            }
+            throw;
         }
-        switch (error.reason()) {
-          case compiler::JitGeneratedRuntimeErrorReason::
-              unknown_branch_condition:
-            throw runtime::simir::InterpreterError(
-                process_.id,
-                error.instruction(),
-                "branch condition is unknown or high impedance");
-          case compiler::JitGeneratedRuntimeErrorReason::
-              integer_operand_unknown:
-            throw runtime::simir::InterpreterError(
-                process_.id,
-                error.instruction(),
-                "VHDL integer operand contains an unknown or "
-                "high-impedance value");
-          case compiler::JitGeneratedRuntimeErrorReason::
-              integer_overflow:
-            throw runtime::simir::InterpreterError(
-                process_.id,
-                error.instruction(),
-                "VHDL integer arithmetic overflow");
-          case compiler::JitGeneratedRuntimeErrorReason::
-              integer_division_by_zero:
-            throw runtime::simir::InterpreterError(
-                process_.id,
-                error.instruction(),
-                "VHDL integer division by zero");
-          case compiler::JitGeneratedRuntimeErrorReason::
-              integer_negative_exponent:
-            throw runtime::simir::InterpreterError(
-                process_.id,
-                error.instruction(),
-                "VHDL integer exponent must be nonnegative");
-          case compiler::JitGeneratedRuntimeErrorReason::
-              integer_subtype_range:
-            throw runtime::simir::InterpreterError(
-                process_.id,
-                error.instruction(),
-                "VHDL integer subtype range check failed");
-          case compiler::JitGeneratedRuntimeErrorReason::
-              dynamic_index_unknown:
-            throw runtime::simir::InterpreterError(
-                process_.id,
-                error.instruction(),
-                "dynamic packed index contains an unknown or "
-                "high-impedance value");
-          case compiler::JitGeneratedRuntimeErrorReason::
-              dynamic_index_range:
-            throw runtime::simir::InterpreterError(
-                process_.id,
-                error.instruction(),
-                "dynamic packed index is outside the declared range");
-          case compiler::JitGeneratedRuntimeErrorReason::
-              call_stack_unknown:
-            throw runtime::simir::InterpreterError(
-                process_.id,
-                error.instruction(),
-                "call-stack pointer or return target is unknown");
-          case compiler::JitGeneratedRuntimeErrorReason::
-              call_stack_overflow:
-            throw runtime::simir::InterpreterError(
-                process_.id,
-                error.instruction(),
-                "call-stack capacity is exhausted");
-          case compiler::JitGeneratedRuntimeErrorReason::
-              call_stack_underflow:
-            throw runtime::simir::InterpreterError(
-                process_.id,
-                error.instruction(),
-                "call-stack underflow");
-          case compiler::JitGeneratedRuntimeErrorReason::
-              call_stack_target:
-            throw runtime::simir::InterpreterError(
-                process_.id,
-                error.instruction(),
-                "call-stack return target is invalid");
-          case compiler::JitGeneratedRuntimeErrorReason::
-              string_callback_failure:
-            throw runtime::simir::InterpreterError(
-                process_.id,
-                error.instruction(),
-                "mutable string runtime callback failed");
-          case compiler::JitGeneratedRuntimeErrorReason::
-              file_callback_failure:
-            throw runtime::simir::InterpreterError(
-                process_.id,
-                error.instruction(),
-                "text file runtime callback failed");
-          case compiler::JitGeneratedRuntimeErrorReason::
-              container_callback_failure:
-            throw runtime::simir::InterpreterError(
-                process_.id,
-                error.instruction(),
-                "bounded container runtime callback failed");
-        }
-        throw;
-      } catch (...) {
-        // A callback failure is the first language/runtime failure observed by
-        // generated code and must not be masked by a later adapter status.
-        if (callback_state.failure) {
-          std::rethrow_exception(callback_state.failure);
-        }
-        throw;
-      }
     }();
     if (callback_state.failure) {
-      std::rethrow_exception(callback_state.failure);
+        std::rethrow_exception(callback_state.failure);
     }
     if (result.instruction >= process_.operations.size()) {
-      throw compiler::LlvmJitError(
-          "compiled process returned an invalid boundary instruction");
+        throw compiler::LlvmJitError(
+            "compiled process returned an invalid boundary instruction");
     }
 
     switch (status) {
-      case compiler::JitResumeStatus::completed:
+    case compiler::JitResumeStatus::completed:
         require_boundary<runtime::simir::Halt>(
             result.instruction, "completion");
         break;
-      case compiler::JitResumeStatus::assertion_failed: {
+    case compiler::JitResumeStatus::assertion_failed: {
         const auto* assertion = fsim::runtime::simir::operation_get_if<runtime::simir::Assert>(
             &process_.operations[result.instruction]);
         if (assertion != nullptr) {
-          throw runtime::simir::AssertionError(
-              process_.id,
-              result.instruction,
-              assertion->message.empty()
-                  ? "assertion failed"
-                  : assertion->message,
-              assertion->severity,
-              assertion->source);
+            throw runtime::simir::AssertionError(
+                process_.id,
+                result.instruction,
+                assertion->message.empty()
+                    ? "assertion failed"
+                    : assertion->message,
+                assertion->severity,
+                assertion->source);
         }
         const auto* report = fsim::runtime::simir::operation_get_if<runtime::simir::Report>(
             &process_.operations[result.instruction]);
         if (report != nullptr
             && report->severity
                 == runtime::simir::AssertionSeverity::failure) {
-          throw runtime::simir::AssertionError(
-              process_.id,
-              result.instruction,
-              report->message.empty()
-                  ? "report failure"
-                  : report->message,
-              report->severity,
-              report->source,
-              true);
+            throw runtime::simir::AssertionError(
+                process_.id,
+                result.instruction,
+                report->message.empty()
+                    ? "report failure"
+                    : report->message,
+                report->severity,
+                report->source,
+                true);
         }
         throw compiler::LlvmJitError(
             "compiled process reported an assertion at an incompatible "
             "instruction");
-      }
-      case compiler::JitResumeStatus::wait_for: {
+    }
+    case compiler::JitResumeStatus::wait_for: {
         const auto* wait = fsim::runtime::simir::operation_get_if<runtime::simir::WaitFor>(
             &process_.operations[result.instruction]);
         if (wait == nullptr) {
-          throw compiler::LlvmJitError(
-              "compiled process reported WaitFor at a non-wait instruction");
+            throw compiler::LlvmJitError(
+                "compiled process reported WaitFor at a non-wait instruction");
         }
         const auto expected_delay = wait->source ? 0 : wait->delay;
         if (result.delay != expected_delay) {
-          throw compiler::LlvmJitError(
-              "compiled process returned a WaitFor delay that disagrees "
-              "with SimIR");
+            throw compiler::LlvmJitError(
+                "compiled process returned a WaitFor delay that disagrees "
+                "with SimIR");
         }
         break;
-      }
-      case compiler::JitResumeStatus::wait_on: {
+    }
+    case compiler::JitResumeStatus::wait_on: {
         const auto* wait = fsim::runtime::simir::operation_get_if<
             runtime::simir::WaitOn>(
             &process_.operations[result.instruction]);
         if (wait == nullptr) {
-          throw compiler::LlvmJitError(
-              "compiled process reported WaitOn at a non-wait instruction");
+            throw compiler::LlvmJitError(
+                "compiled process reported WaitOn at a non-wait instruction");
         }
         if (result.delay != wait->timeout.value_or(0)) {
-          throw compiler::LlvmJitError(
-              "compiled process returned a WaitOn timeout that disagrees "
-              "with SimIR");
+            throw compiler::LlvmJitError(
+                "compiled process returned a WaitOn timeout that disagrees "
+                "with SimIR");
         }
         break;
-      }
-      case compiler::JitResumeStatus::wait_sensitivity:
+    }
+    case compiler::JitResumeStatus::wait_sensitivity:
         require_boundary<runtime::simir::WaitSensitivity>(
             result.instruction, "WaitSensitivity");
         break;
-      case compiler::JitResumeStatus::wait_forever:
+    case compiler::JitResumeStatus::wait_forever:
         require_boundary<runtime::simir::WaitForever>(
             result.instruction, "WaitForever");
         break;
-      case compiler::JitResumeStatus::yielded:
+    case compiler::JitResumeStatus::yielded:
         require_boundary<runtime::simir::Yield>(
             result.instruction, "yield");
         break;
-      case compiler::JitResumeStatus::fork:
+    case compiler::JitResumeStatus::fork:
         require_boundary<runtime::simir::Fork>(
             result.instruction, "fork");
         break;
-      case compiler::JitResumeStatus::fork_end:
+    case compiler::JitResumeStatus::fork_end:
         require_boundary<runtime::simir::ForkEnd>(
             result.instruction, "fork end");
         break;
-      case compiler::JitResumeStatus::wait_fork:
+    case compiler::JitResumeStatus::wait_fork:
         require_boundary<runtime::simir::WaitFork>(
             result.instruction, "wait fork");
         break;
-      case compiler::JitResumeStatus::disable_fork:
+    case compiler::JitResumeStatus::disable_fork:
         require_boundary<runtime::simir::DisableFork>(
             result.instruction, "disable fork");
         break;
-      case compiler::JitResumeStatus::debug_point:
+    case compiler::JitResumeStatus::debug_point:
         require_boundary<runtime::simir::DebugPoint>(
             result.instruction, "debug point");
         break;
-      case compiler::JitResumeStatus::paused:
+    case compiler::JitResumeStatus::paused:
         require_boundary<runtime::simir::Pause>(
             result.instruction, "pause");
         break;
-      case compiler::JitResumeStatus::stopped:
+    case compiler::JitResumeStatus::stopped:
         require_boundary<runtime::simir::Stop>(
             result.instruction, "stop");
         break;
-      case compiler::JitResumeStatus::simir_boundary: {
+    case compiler::JitResumeStatus::simir_boundary: {
         const auto& operation = process_.operations[result.instruction];
-        const auto host_boundary =
-            fsim::runtime::simir::operation_holds<
-                runtime::simir::ClassAllocate>(operation)
+        const auto* call = fsim::runtime::simir::operation_get_if<
+            runtime::simir::Call>(&operation);
+        const auto* return_operation = fsim::runtime::simir::operation_get_if<
+            runtime::simir::Return>(&operation);
+        const auto host_boundary = fsim::runtime::simir::operation_holds<
+                                       runtime::simir::ClassAllocate>(operation)
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::ClassPropertyRead>(operation)
             || fsim::runtime::simir::operation_holds<
@@ -368,6 +387,8 @@ namespace fsim::app::application_detail {
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::ProcessKill>(operation)
             || fsim::runtime::simir::operation_holds<
+                runtime::simir::DisableBlock>(operation)
+            || fsim::runtime::simir::operation_holds<
                 runtime::simir::MailboxCreate>(operation)
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::MailboxPut>(operation)
@@ -380,180 +401,261 @@ namespace fsim::app::application_detail {
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::SemaphoreGet>(operation)
             || fsim::runtime::simir::operation_holds<
-                runtime::simir::SemaphorePut>(operation);
+                runtime::simir::SemaphorePut>(operation)
+            || (call != nullptr && call->stack.capacity == 0)
+            || (return_operation != nullptr
+                && return_operation->stack.capacity == 0)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::CallableFramePush>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::CallableFramePop>(operation);
         if (!host_boundary) {
-          throw compiler::LlvmJitError(
-              "compiled process reported an unsupported SimIR boundary");
+            throw compiler::LlvmJitError(
+                "compiled process reported an unsupported SimIR boundary");
         }
         break;
-      }
     }
-    if (frame_.program_counter != result.instruction + 1U) {
-      throw compiler::LlvmJitError(
-          "compiled process returned a non-sequential boundary PC");
     }
-    return {result.instruction, frame_.program_counter};
-  }
+    const auto& boundary_operation = process_.operations[result.instruction];
+    const auto* boundary_call = fsim::runtime::simir::operation_get_if<
+        runtime::simir::Call>(&boundary_operation);
+    const auto* boundary_return = fsim::runtime::simir::operation_get_if<
+        runtime::simir::Return>(&boundary_operation);
+    const bool callable_boundary = status
+            == compiler::JitResumeStatus::simir_boundary
+        && ((boundary_call != nullptr
+                && boundary_call->stack.capacity == 0)
+            || (boundary_return != nullptr
+                && boundary_return->stack.capacity == 0)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::CallableFramePush>(boundary_operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::CallableFramePop>(boundary_operation));
+    const auto expected_program_counter = callable_boundary
+        ? result.instruction
+        : result.instruction + 1U;
+    if (frame_.program_counter != expected_program_counter) {
+        throw compiler::LlvmJitError(
+            "compiled process returned a non-sequential boundary PC");
+    }
+    return { result.instruction, frame_.program_counter };
+}
 
 [[nodiscard]] PackedLogic4 LlvmProcessExecutor::read_register(
     const runtime::simir::RegisterId id,
-    const std::size_t width) const  {
-    if (id >= register_aval_.size() || width > 64) {
-      throw compiler::LlvmJitError{
-          "compiled process debug-register request is out of range"};
+    const std::size_t width) const
+{
+    const auto layout = jit_.frame_layout(handle_);
+    const auto resolved_width = id < layout.register_count
+            && width == runtime::simir::ProcessExecutor::native_register_width
+        ? layout.register_widths[id]
+        : width;
+    if (id >= layout.register_count
+        || layout.register_widths[id] != resolved_width) {
+        const auto layout_width = id < layout.register_count
+            ? std::to_string(layout.register_widths[id])
+            : std::string { "<missing>" };
+        throw compiler::LlvmJitError {
+            "compiled process '" + process_.name
+            + "' debug-register request " + std::to_string(id) + " width "
+            + std::to_string(resolved_width)
+            + " does not match frame layout count "
+            + std::to_string(layout.register_count) + " width " + layout_width
+        };
     }
-    if (width == 0) {
-      return PackedLogic4{};
+    if (resolved_width == 0) {
+        return PackedLogic4 { };
     }
     if (register_initialized_[id] == 0) {
-      throw std::logic_error{
-          "compiled process debug local has not been initialized"};
+        throw std::logic_error {
+            "compiled process debug local has not been initialized"
+        };
     }
-    const auto kind =
-        process_.register_value_kinds.empty()
-            ? runtime::simir::ValueKind::logic4
-            : process_.register_value_kinds[id];
+    const auto kind = process_.register_value_kinds.empty()
+        ? runtime::simir::ValueKind::logic4
+        : process_.register_value_kinds[id];
+    const auto offset = layout.register_word_offsets[id];
+    const auto words = (resolved_width + 63U) / 64U;
     if (kind == runtime::simir::ValueKind::logic9) {
-      return PackedLogic4::from_logic9_word(
-          {
-              width,
-              {
-                  register_aval_[id],
-                  register_bval_[id],
-                  register_logic9_plane2_[id],
-                  register_logic9_plane3_[id]}});
+        if (resolved_width > 64) {
+            throw compiler::LlvmJitError {
+                "compiled wide exact-Logic9 register is unsupported"
+            };
+        }
+        return PackedLogic4::from_logic9_word(
+            { resolved_width,
+                { register_aval_[offset],
+                    register_bval_[offset],
+                    register_logic9_plane2_[offset],
+                    register_logic9_plane3_[offset] } });
     }
-    return PackedLogic4::from_aval_bval(
-        width, register_aval_[id], register_bval_[id]);
-  }
+    return PackedLogic4::from_word_planes(
+        resolved_width,
+        std::span<const std::uint64_t> { register_aval_ }.subspan(offset, words),
+        std::span<const std::uint64_t> { register_bval_ }.subspan(offset, words));
+}
+
+[[nodiscard]] PackedLogic4 LlvmProcessExecutor::snapshot_register(
+    const runtime::simir::RegisterId id) const
+{
+    const auto layout = jit_.frame_layout(handle_);
+    if (id >= layout.register_count) {
+        throw compiler::LlvmJitError {
+            "compiled automatic-frame register is outside the frame layout"
+        };
+    }
+    if (register_initialized_[id] == 0) {
+        return PackedLogic4 {
+            layout.register_widths[id], runtime::Logic4::x
+        };
+    }
+    return read_register(
+        id, runtime::simir::ProcessExecutor::native_register_width);
+}
 
 void LlvmProcessExecutor::write_register(
     const runtime::simir::RegisterId id,
-    const PackedLogic4& value)  {
-    if (id >= register_aval_.size() || value.width() > 64) {
-      throw compiler::LlvmJitError{
-          "compiled process register write is out of range"};
+    const PackedLogic4& value)
+{
+    const auto layout = jit_.frame_layout(handle_);
+    if (id >= layout.register_count
+        || layout.register_widths[id] != value.width()) {
+        throw compiler::LlvmJitError {
+            "compiled process register write is out of range"
+        };
     }
     if (value.width() == 0) {
-      register_initialized_[id] = 1;
-      return;
+        register_initialized_[id] = 1;
+        return;
     }
-    const auto kind =
-        process_.register_value_kinds.empty()
-            ? runtime::simir::ValueKind::logic4
-            : process_.register_value_kinds[id];
+    const auto kind = process_.register_value_kinds.empty()
+        ? runtime::simir::ValueKind::logic4
+        : process_.register_value_kinds[id];
+    const auto offset = layout.register_word_offsets[id];
     if (kind == runtime::simir::ValueKind::logic9) {
-      const auto word = value.logic9_low_word();
-      register_aval_[id] = word.planes[0];
-      register_bval_[id] = word.planes[1];
-      register_logic9_plane2_[id] = word.planes[2];
-      register_logic9_plane3_[id] = word.planes[3];
+        if (value.width() > 64) {
+            throw compiler::LlvmJitError {
+                "compiled wide exact-Logic9 register is unsupported"
+            };
+        }
+        const auto word = value.logic9_low_word();
+        register_aval_[offset] = word.planes[0];
+        register_bval_[offset] = word.planes[1];
+        register_logic9_plane2_[offset] = word.planes[2];
+        register_logic9_plane3_[offset] = word.planes[3];
     } else {
-      const auto word = value.low_word();
-      register_aval_[id] = word.aval;
-      register_bval_[id] = word.bval;
+        std::ranges::copy(
+            value.aval_words(), register_aval_.begin() + offset);
+        std::ranges::copy(
+            value.bval_words(), register_bval_.begin() + offset);
     }
     register_initialized_[id] = 1;
-  }
+}
 
 template <typename Boundary>
 void LlvmProcessExecutor::require_boundary(
     const runtime::simir::InstructionIndex instruction,
-    const std::string_view status) const  {
+    const std::string_view status) const
+{
     if (!fsim::runtime::simir::operation_holds<Boundary>(
             process_.operations[instruction])) {
-      throw compiler::LlvmJitError(
-          "compiled process reported " + std::string{status}
-          + " at the wrong SimIR instruction");
+        throw compiler::LlvmJitError(
+            "compiled process reported " + std::string { status }
+            + " at the wrong SimIR instruction");
     }
-  }
+}
 
-void LlvmProcessExecutor::capture_failure(CallbackState& state) noexcept  {
+void LlvmProcessExecutor::capture_failure(CallbackState& state) noexcept
+{
     if (!state.failure) {
-      state.failure = std::current_exception();
+        state.failure = std::current_exception();
     }
-  }
+}
 
 std::uint32_t LlvmProcessExecutor::load_string(
     void* context,
     const std::uint32_t destination,
     const char* bytes,
-    const std::uint64_t byte_count) noexcept {
-  auto& state = *static_cast<CallbackState*>(context);
-  if (state.failure) {
-    return 1;
-  }
-  try {
-    if (state.executor == nullptr
-        || byte_count > runtime::simir::maximum_string_bytes
-        || (byte_count != 0 && bytes == nullptr)) {
-      throw std::logic_error{"invalid generated string-load callback"};
+    const std::uint64_t byte_count) noexcept
+{
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+        return 1;
     }
-    (void)runtime::systemverilog_string_length(
-        std::string_view{bytes, static_cast<std::size_t>(byte_count)});
-    state.executor->write_string_register(
-        destination,
-        std::string_view{bytes, static_cast<std::size_t>(byte_count)});
-    return 0;
-  } catch (...) {
-    capture_failure(state);
-    return 1;
-  }
+    try {
+        if (state.executor == nullptr
+            || byte_count > runtime::simir::maximum_string_bytes
+            || (byte_count != 0 && bytes == nullptr)) {
+            throw std::logic_error { "invalid generated string-load callback" };
+        }
+        (void)runtime::systemverilog_string_length(
+            std::string_view { bytes, static_cast<std::size_t>(byte_count) });
+        state.executor->write_string_register(
+            destination,
+            std::string_view { bytes, static_cast<std::size_t>(byte_count) });
+        return 0;
+    } catch (...) {
+        capture_failure(state);
+        return 1;
+    }
 }
 
 std::uint32_t LlvmProcessExecutor::copy_string(
     void* context,
     const std::uint32_t destination,
-    const std::uint32_t source) noexcept {
-  auto& state = *static_cast<CallbackState*>(context);
-  if (state.failure) {
-    return 1;
-  }
-  try {
-    state.executor->write_string_register(
-        destination,
-        state.executor->read_string_register(source));
-    return 0;
-  } catch (...) {
-    capture_failure(state);
-    return 1;
-  }
+    const std::uint32_t source) noexcept
+{
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+        return 1;
+    }
+    try {
+        state.executor->write_string_register(
+            destination,
+            state.executor->read_string_register(source));
+        return 0;
+    } catch (...) {
+        capture_failure(state);
+        return 1;
+    }
 }
 
 std::uint32_t LlvmProcessExecutor::read_string_object(
     void* context,
     const std::uint32_t destination,
-    const std::uint32_t object) noexcept {
-  auto& state = *static_cast<CallbackState*>(context);
-  if (state.failure) {
-    return 1;
-  }
-  try {
-    state.executor->write_string_register(
-        destination, state.context->read_string_object(object));
-    return 0;
-  } catch (...) {
-    capture_failure(state);
-    return 1;
-  }
+    const std::uint32_t object) noexcept
+{
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+        return 1;
+    }
+    try {
+        state.executor->write_string_register(
+            destination, state.context->read_string_object(object));
+        return 0;
+    } catch (...) {
+        capture_failure(state);
+        return 1;
+    }
 }
 
 std::uint32_t LlvmProcessExecutor::write_string_object(
     void* context,
     const std::uint32_t object,
-    const std::uint32_t source) noexcept {
-  auto& state = *static_cast<CallbackState*>(context);
-  if (state.failure) {
-    return 1;
-  }
-  try {
-    state.context->write_string_object(
-        object, state.executor->read_string_register(source));
-    return 0;
-  } catch (...) {
-    capture_failure(state);
-    return 1;
-  }
+    const std::uint32_t source) noexcept
+{
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+        return 1;
+    }
+    try {
+        state.context->write_string_object(
+            object, state.executor->read_string_register(source));
+        return 0;
+    } catch (...) {
+        capture_failure(state);
+        return 1;
+    }
 }
 
 std::uint32_t LlvmProcessExecutor::concatenate_strings(
@@ -562,36 +664,37 @@ std::uint32_t LlvmProcessExecutor::concatenate_strings(
     const std::uint32_t instruction,
     const std::uint32_t destination,
     const std::uint32_t* operands,
-    const std::uint32_t operand_count) noexcept {
-  auto& state = *static_cast<CallbackState*>(context);
-  if (state.failure) {
-    return 1;
-  }
-  try {
-    if (state.process == nullptr || process != state.process->id
-        || (operand_count != 0 && operands == nullptr)) {
-      throw std::logic_error{
-          "invalid generated string-concatenation callback"};
+    const std::uint32_t operand_count) noexcept
+{
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+        return 1;
     }
-    std::string result;
-    for (std::uint32_t index = 0; index < operand_count; ++index) {
-      const auto value =
-          state.executor->read_string_register(operands[index]);
-      if (value.size()
-          > runtime::simir::maximum_string_bytes - result.size()) {
-        throw runtime::simir::InterpreterError(
-            state.process->id,
-            instruction,
-            "string concatenation exceeds 4096-byte limit");
-      }
-      result += value;
+    try {
+        if (state.process == nullptr || process != state.process->id
+            || (operand_count != 0 && operands == nullptr)) {
+            throw std::logic_error {
+                "invalid generated string-concatenation callback"
+            };
+        }
+        std::string result;
+        for (std::uint32_t index = 0; index < operand_count; ++index) {
+            const auto value = state.executor->read_string_register(operands[index]);
+            if (value.size()
+                > runtime::simir::maximum_string_bytes - result.size()) {
+                throw runtime::simir::InterpreterError(
+                    state.process->id,
+                    instruction,
+                    "string concatenation exceeds 4096-byte limit");
+            }
+            result += value;
+        }
+        state.executor->write_string_register(destination, result);
+        return 0;
+    } catch (...) {
+        capture_failure(state);
+        return 1;
     }
-    state.executor->write_string_register(destination, result);
-    return 0;
-  } catch (...) {
-    capture_failure(state);
-    return 1;
-  }
 }
 
 std::uint32_t LlvmProcessExecutor::compare_strings(
@@ -599,47 +702,49 @@ std::uint32_t LlvmProcessExecutor::compare_strings(
     const std::uint32_t lhs,
     const std::uint32_t rhs,
     const std::uint32_t not_equal,
-    std::uint32_t* result) noexcept {
-  auto& state = *static_cast<CallbackState*>(context);
-  if (state.failure) {
-    return 1;
-  }
-  try {
-    if (result == nullptr || not_equal > 1) {
-      throw std::logic_error{"invalid generated string-compare callback"};
+    std::uint32_t* result) noexcept
+{
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+        return 1;
     }
-    const bool equal = runtime::systemverilog_string_compare(
-                           state.executor->read_string_register(lhs),
-                           state.executor->read_string_register(rhs))
-        == 0;
-    *result = equal != (not_equal != 0) ? 1U : 0U;
-    return 0;
-  } catch (...) {
-    capture_failure(state);
-    return 1;
-  }
+    try {
+        if (result == nullptr || not_equal > 1) {
+            throw std::logic_error { "invalid generated string-compare callback" };
+        }
+        const bool equal = runtime::systemverilog_string_compare(
+                               state.executor->read_string_register(lhs),
+                               state.executor->read_string_register(rhs))
+            == 0;
+        *result = equal != (not_equal != 0) ? 1U : 0U;
+        return 0;
+    } catch (...) {
+        capture_failure(state);
+        return 1;
+    }
 }
 
 std::uint32_t LlvmProcessExecutor::string_length(
     void* context,
     const std::uint32_t source,
-    std::uint32_t* result) noexcept {
-  auto& state = *static_cast<CallbackState*>(context);
-  if (state.failure) {
-    return 1;
-  }
-  try {
-    if (result == nullptr) {
-      throw std::logic_error{"invalid generated string-length callback"};
+    std::uint32_t* result) noexcept
+{
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+        return 1;
     }
-    *result = static_cast<std::uint32_t>(
-        runtime::systemverilog_string_length(
-            state.executor->read_string_register(source)));
-    return 0;
-  } catch (...) {
-    capture_failure(state);
-    return 1;
-  }
+    try {
+        if (result == nullptr) {
+            throw std::logic_error { "invalid generated string-length callback" };
+        }
+        *result = static_cast<std::uint32_t>(
+            runtime::systemverilog_string_length(
+                state.executor->read_string_register(source)));
+        return 0;
+    } catch (...) {
+        capture_failure(state);
+        return 1;
+    }
 }
 
 std::uint32_t LlvmProcessExecutor::string_index(
@@ -650,39 +755,40 @@ std::uint32_t LlvmProcessExecutor::string_index(
     const std::uint64_t index_aval,
     const std::uint64_t index_bval,
     const std::uint32_t signed_index,
-    std::uint32_t* result) noexcept {
-  auto& state = *static_cast<CallbackState*>(context);
-  if (state.failure) {
-    return 1;
-  }
-  try {
-    const auto& value = state.executor->string_registers_.at(source);
-    if (state.process == nullptr || process != state.process->id
-        || result == nullptr || signed_index > 1 || index_bval != 0) {
-      throw runtime::simir::InterpreterError(
-          state.process->id,
-          instruction,
-          "string index contains X or Z");
+    std::uint32_t* result) noexcept
+{
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+        return 1;
     }
-    const auto raw = static_cast<std::uint32_t>(index_aval);
-    const auto index = signed_index != 0
-        ? static_cast<std::int64_t>(static_cast<std::int32_t>(raw))
-        : static_cast<std::int64_t>(raw);
-    const auto length = runtime::systemverilog_string_length(value);
-    if (index < 0
-        || static_cast<std::uint64_t>(index) >= length) {
-      throw runtime::simir::InterpreterError(
-          state.process->id,
-          instruction,
-          "string index is outside the current code-point range");
+    try {
+        const auto& value = state.executor->string_registers_.at(source);
+        if (state.process == nullptr || process != state.process->id
+            || result == nullptr || signed_index > 1 || index_bval != 0) {
+            throw runtime::simir::InterpreterError(
+                state.process->id,
+                instruction,
+                "string index contains X or Z");
+        }
+        const auto raw = static_cast<std::uint32_t>(index_aval);
+        const auto index = signed_index != 0
+            ? static_cast<std::int64_t>(static_cast<std::int32_t>(raw))
+            : static_cast<std::int64_t>(raw);
+        const auto length = runtime::systemverilog_string_length(value);
+        if (index < 0
+            || static_cast<std::uint64_t>(index) >= length) {
+            throw runtime::simir::InterpreterError(
+                state.process->id,
+                instruction,
+                "string index is outside the current code-point range");
+        }
+        *result = runtime::systemverilog_string_at(
+            value, static_cast<std::size_t>(index));
+        return 0;
+    } catch (...) {
+        capture_failure(state);
+        return 1;
     }
-    *result = runtime::systemverilog_string_at(
-        value, static_cast<std::size_t>(index));
-    return 0;
-  } catch (...) {
-    capture_failure(state);
-    return 1;
-  }
 }
 
 std::uint32_t LlvmProcessExecutor::string_replace_code_point(
@@ -694,48 +800,49 @@ std::uint32_t LlvmProcessExecutor::string_replace_code_point(
     const std::uint64_t index_bval,
     const std::uint32_t signed_index,
     const std::uint64_t source_aval,
-    const std::uint64_t source_bval) noexcept {
-  auto& state = *static_cast<CallbackState*>(context);
-  if (state.failure) {
-    return 1;
-  }
-  try {
-    auto& value = state.executor->string_registers_.at(target);
-    if (state.process == nullptr || process != state.process->id
-        || signed_index > 1 || index_bval != 0) {
-      throw runtime::simir::InterpreterError(
-          state.process->id,
-          instruction,
-          "string index contains X or Z");
+    const std::uint64_t source_bval) noexcept
+{
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+        return 1;
     }
-    const auto raw = static_cast<std::uint32_t>(index_aval);
-    const auto selected = signed_index != 0
-        ? static_cast<std::int64_t>(static_cast<std::int32_t>(raw))
-        : static_cast<std::int64_t>(raw);
-    const auto length = runtime::systemverilog_string_length(value);
-    if (selected < 0
-        || static_cast<std::uint64_t>(selected) >= length) {
-      throw runtime::simir::InterpreterError(
-          state.process->id,
-          instruction,
-          "string index is outside the current code-point range");
+    try {
+        auto& value = state.executor->string_registers_.at(target);
+        if (state.process == nullptr || process != state.process->id
+            || signed_index > 1 || index_bval != 0) {
+            throw runtime::simir::InterpreterError(
+                state.process->id,
+                instruction,
+                "string index contains X or Z");
+        }
+        const auto raw = static_cast<std::uint32_t>(index_aval);
+        const auto selected = signed_index != 0
+            ? static_cast<std::int64_t>(static_cast<std::int32_t>(raw))
+            : static_cast<std::int64_t>(raw);
+        const auto length = runtime::systemverilog_string_length(value);
+        if (selected < 0
+            || static_cast<std::uint64_t>(selected) >= length) {
+            throw runtime::simir::InterpreterError(
+                state.process->id,
+                instruction,
+                "string index is outside the current code-point range");
+        }
+        if (source_bval != 0) {
+            throw runtime::simir::InterpreterError(
+                state.process->id,
+                instruction,
+                "string replacement code point contains X or Z");
+        }
+        runtime::systemverilog_string_replace(
+            value,
+            static_cast<std::size_t>(selected),
+            static_cast<std::uint32_t>(source_aval),
+            runtime::simir::maximum_string_bytes);
+        return 0;
+    } catch (...) {
+        capture_failure(state);
+        return 1;
     }
-    if (source_bval != 0) {
-      throw runtime::simir::InterpreterError(
-          state.process->id,
-          instruction,
-          "string replacement code point contains X or Z");
-    }
-    runtime::systemverilog_string_replace(
-        value,
-        static_cast<std::size_t>(selected),
-        static_cast<std::uint32_t>(source_aval),
-        runtime::simir::maximum_string_bytes);
-    return 0;
-  } catch (...) {
-    capture_failure(state);
-    return 1;
-  }
 }
 
 std::uint32_t LlvmProcessExecutor::write_string_output(
@@ -747,205 +854,210 @@ std::uint32_t LlvmProcessExecutor::write_string_output(
     const char* suffix,
     const std::uint64_t suffix_size,
     const std::uint32_t newline,
-    const std::uint32_t postponed) noexcept {
-  auto& state = *static_cast<CallbackState*>(context);
-  if (state.failure) {
-    return 1;
-  }
-  try {
-    if (state.process == nullptr || process != state.process->id
-        || (prefix_size != 0 && prefix == nullptr)
-        || (suffix_size != 0 && suffix == nullptr)
-        || newline > 1 || postponed > 1) {
-      throw std::logic_error{"invalid generated string-output callback"};
+    const std::uint32_t postponed) noexcept
+{
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+        return 1;
     }
-    std::string text{prefix, static_cast<std::size_t>(prefix_size)};
-    text += state.executor->read_string_register(source);
-    text.append(suffix, static_cast<std::size_t>(suffix_size));
-    if (postponed != 0) {
-      state.context->postpone_display(text, newline != 0);
-    } else {
-      state.context->display(text, newline != 0);
+    try {
+        if (state.process == nullptr || process != state.process->id
+            || (prefix_size != 0 && prefix == nullptr)
+            || (suffix_size != 0 && suffix == nullptr)
+            || newline > 1 || postponed > 1) {
+            throw std::logic_error { "invalid generated string-output callback" };
+        }
+        std::string text { prefix, static_cast<std::size_t>(prefix_size) };
+        text += state.executor->read_string_register(source);
+        text.append(suffix, static_cast<std::size_t>(suffix_size));
+        if (postponed != 0) {
+            state.context->postpone_display(text, newline != 0);
+        } else {
+            state.context->display(text, newline != 0);
+        }
+        return 0;
+    } catch (...) {
+        capture_failure(state);
+        return 1;
     }
-    return 0;
-  } catch (...) {
-    capture_failure(state);
-    return 1;
-  }
 }
 
 std::uint64_t LlvmProcessExecutor::read_signal(
     void* context,
     const std::uint32_t signal,
-    std::uint64_t* bval) noexcept  {
+    std::uint64_t* bval) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      if (bval != nullptr) {
-        *bval = 0;
-      }
-      return 0;
+        if (bval != nullptr) {
+            *bval = 0;
+        }
+        return 0;
     }
     try {
-      if (bval == nullptr || state.context == nullptr
-          || signal >= state.signal_widths.size()) {
-        throw std::logic_error("invalid generated read-signal callback");
-      }
-      const auto value = state.context->read_signal_word(signal);
-      const auto expected_width = state.signal_widths[signal];
-      if (value.width != expected_width
-          || value.width == 0
-          || value.width > 64) {
-        throw std::logic_error(
-            "generated read-signal callback observed an invalid width");
-      }
-      *bval = value.bval;
-      return value.aval;
+        if (bval == nullptr || state.context == nullptr
+            || signal >= state.signal_widths.size()) {
+            throw std::logic_error("invalid generated read-signal callback");
+        }
+        const auto value = state.context->read_signal_word(signal);
+        const auto expected_width = state.signal_widths[signal];
+        if (value.width != expected_width
+            || value.width == 0
+            || value.width > 64) {
+            throw std::logic_error(
+                "generated read-signal callback observed an invalid width");
+        }
+        *bval = value.bval;
+        return value.aval;
     } catch (...) {
-      capture_failure(state);
-      if (bval != nullptr) {
-        *bval = 0;
-      }
-      return 0;
+        capture_failure(state);
+        if (bval != nullptr) {
+            *bval = 0;
+        }
+        return 0;
     }
-  }
+}
 
 void LlvmProcessExecutor::read_signal_logic9(
     void* context,
     const std::uint32_t signal,
-    fsim_jit_logic9_word_v1* result) noexcept  {
+    fsim_jit_logic9_word_v1* result) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     clear_logic9_word(result);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      require_logic9_signal(state, signal, result);
-      const auto value =
-          state.context->read_signal_logic9_word(signal);
-      if (value.width != state.signal_widths[signal]) {
-        throw std::logic_error(
-            "generated Logic9 read observed an invalid width");
-      }
-      result->planes[0] = value.planes[0];
-      result->planes[1] = value.planes[1];
-      result->planes[2] = value.planes[2];
-      result->planes[3] = value.planes[3];
+        require_logic9_signal(state, signal, result);
+        const auto value = state.context->read_signal_logic9_word(signal);
+        if (value.width != state.signal_widths[signal]) {
+            throw std::logic_error(
+                "generated Logic9 read observed an invalid width");
+        }
+        result->planes[0] = value.planes[0];
+        result->planes[1] = value.planes[1];
+        result->planes[2] = value.planes[2];
+        result->planes[3] = value.planes[3];
     } catch (...) {
-      capture_failure(state);
-      clear_logic9_word(result);
+        capture_failure(state);
+        clear_logic9_word(result);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_signal(
     void* context,
     const std::uint32_t signal,
     const std::uint64_t aval,
-    const std::uint64_t bval) noexcept  {
+    const std::uint64_t bval) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      const auto value =
-          checked_write_word(state, signal, aval, bval);
-      state.context->write_blocking_word(
-          signal, value);
+        const auto value = checked_write_word(state, signal, aval, bval);
+        state.context->write_blocking_word(
+            signal, value);
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_signal_logic9(
     void* context,
     const std::uint32_t signal,
-    const fsim_jit_logic9_word_v1* value) noexcept  {
+    const fsim_jit_logic9_word_v1* value) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      state.context->write_blocking(
-          signal,
-          checked_logic9_value(state, signal, value));
+        state.context->write_blocking(
+            signal,
+            checked_logic9_value(state, signal, value));
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_update(
     void* context,
     const std::uint32_t signal,
     const std::uint64_t aval,
-    const std::uint64_t bval) noexcept  {
+    const std::uint64_t bval) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      const auto value =
-          checked_write_word(state, signal, aval, bval);
-      state.context->write_update_word(
-          signal, value);
+        const auto value = checked_write_word(state, signal, aval, bval);
+        state.context->write_update_word(
+            signal, value);
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_update_logic9(
     void* context,
     const std::uint32_t signal,
-    const fsim_jit_logic9_word_v1* value) noexcept  {
+    const fsim_jit_logic9_word_v1* value) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      state.context->write_update(
-          signal,
-          checked_logic9_value(state, signal, value));
+        state.context->write_update(
+            signal,
+            checked_logic9_value(state, signal, value));
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_after(
     void* context,
     const std::uint32_t signal,
     const std::uint64_t aval,
     const std::uint64_t bval,
-    const std::uint64_t delay) noexcept  {
+    const std::uint64_t delay) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      const auto value =
-          checked_write_word(state, signal, aval, bval);
-      state.context->write_after_word(
-          signal, value, delay);
+        const auto value = checked_write_word(state, signal, aval, bval);
+        state.context->write_after_word(
+            signal, value, delay);
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_after_logic9(
     void* context,
     const std::uint32_t signal,
     const fsim_jit_logic9_word_v1* value,
-    const std::uint64_t delay) noexcept  {
+    const std::uint64_t delay) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      state.context->write_after(
-          signal,
-          checked_logic9_value(state, signal, value),
-          delay);
+        state.context->write_after(
+            signal,
+            checked_logic9_value(state, signal, value),
+            delay);
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_inertial(
     void* context,
@@ -954,22 +1066,22 @@ void LlvmProcessExecutor::write_inertial(
     const std::uint64_t bval,
     const std::uint64_t rise_delay,
     const std::uint64_t fall_delay,
-    const std::uint64_t turnoff_delay) noexcept  {
+    const std::uint64_t turnoff_delay) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      const auto value =
-          checked_write_word(state, signal, aval, bval);
-      state.context->write_inertial_word(
-          signal,
-          value,
-          {rise_delay, fall_delay, turnoff_delay});
+        const auto value = checked_write_word(state, signal, aval, bval);
+        state.context->write_inertial_word(
+            signal,
+            value,
+            { rise_delay, fall_delay, turnoff_delay });
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_inertial_logic9(
     void* context,
@@ -977,20 +1089,21 @@ void LlvmProcessExecutor::write_inertial_logic9(
     const fsim_jit_logic9_word_v1* value,
     const std::uint64_t rise_delay,
     const std::uint64_t fall_delay,
-    const std::uint64_t turnoff_delay) noexcept  {
+    const std::uint64_t turnoff_delay) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      state.context->write_inertial(
-          signal,
-          checked_logic9_value(state, signal, value),
-          {rise_delay, fall_delay, turnoff_delay});
+        state.context->write_inertial(
+            signal,
+            checked_logic9_value(state, signal, value),
+            { rise_delay, fall_delay, turnoff_delay });
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_projected(
     void* context,
@@ -999,24 +1112,24 @@ void LlvmProcessExecutor::write_projected(
     const std::uint64_t bval,
     const std::uint64_t delay,
     const std::uint64_t rejection,
-    const std::uint32_t mode) noexcept  {
+    const std::uint32_t mode) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      const auto value =
-          checked_write_word(state, signal, aval, bval);
-      state.context->write_projected_word(
-          signal,
-          value,
-          delay,
-          rejection,
-          projected_delay_mode(mode));
+        const auto value = checked_write_word(state, signal, aval, bval);
+        state.context->write_projected_word(
+            signal,
+            value,
+            delay,
+            rejection,
+            projected_delay_mode(mode));
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_projected_logic9(
     void* context,
@@ -1024,22 +1137,23 @@ void LlvmProcessExecutor::write_projected_logic9(
     const fsim_jit_logic9_word_v1* value,
     const std::uint64_t delay,
     const std::uint64_t rejection,
-    const std::uint32_t mode) noexcept  {
+    const std::uint32_t mode) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      state.context->write_projected(
-          signal,
-          checked_logic9_value(state, signal, value),
-          delay,
-          rejection,
-          projected_delay_mode(mode));
+        state.context->write_projected(
+            signal,
+            checked_logic9_value(state, signal, value),
+            delay,
+            rejection,
+            projected_delay_mode(mode));
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_signal_slice(
     void* context,
@@ -1047,41 +1161,43 @@ void LlvmProcessExecutor::write_signal_slice(
     const std::uint32_t offset,
     const std::uint32_t width,
     const std::uint64_t aval,
-    const std::uint64_t bval) noexcept  {
+    const std::uint64_t bval) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      const auto value = checked_slice_word(
-          state, signal, offset, width, aval, bval);
-      state.context->write_blocking_slice_word(
-          signal, value, offset);
+        const auto value = checked_slice_word(
+            state, signal, offset, width, aval, bval);
+        state.context->write_blocking_slice_word(
+            signal, value, offset);
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_signal_slice_logic9(
     void* context,
     const std::uint32_t signal,
     const std::uint32_t offset,
     const std::uint32_t width,
-    const fsim_jit_logic9_word_v1* value) noexcept  {
+    const fsim_jit_logic9_word_v1* value) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      state.context->write_blocking_slice(
-          signal,
-          checked_logic9_slice(
-              state, signal, offset, width, value),
-          offset);
+        state.context->write_blocking_slice(
+            signal,
+            checked_logic9_slice(
+                state, signal, offset, width, value),
+            offset);
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_update_slice(
     void* context,
@@ -1089,41 +1205,43 @@ void LlvmProcessExecutor::write_update_slice(
     const std::uint32_t offset,
     const std::uint32_t width,
     const std::uint64_t aval,
-    const std::uint64_t bval) noexcept  {
+    const std::uint64_t bval) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      const auto value = checked_slice_word(
-          state, signal, offset, width, aval, bval);
-      state.context->write_update_slice_word(
-          signal, value, offset);
+        const auto value = checked_slice_word(
+            state, signal, offset, width, aval, bval);
+        state.context->write_update_slice_word(
+            signal, value, offset);
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_update_slice_logic9(
     void* context,
     const std::uint32_t signal,
     const std::uint32_t offset,
     const std::uint32_t width,
-    const fsim_jit_logic9_word_v1* value) noexcept  {
+    const fsim_jit_logic9_word_v1* value) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      state.context->write_update_slice(
-          signal,
-          checked_logic9_slice(
-              state, signal, offset, width, value),
-          offset);
+        state.context->write_update_slice(
+            signal,
+            checked_logic9_slice(
+                state, signal, offset, width, value),
+            offset);
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_after_slice(
     void* context,
@@ -1132,20 +1250,21 @@ void LlvmProcessExecutor::write_after_slice(
     const std::uint32_t width,
     const std::uint64_t aval,
     const std::uint64_t bval,
-    const std::uint64_t delay) noexcept  {
+    const std::uint64_t delay) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      const auto value = checked_slice_word(
-          state, signal, offset, width, aval, bval);
-      state.context->write_after_slice_word(
-          signal, value, offset, delay);
+        const auto value = checked_slice_word(
+            state, signal, offset, width, aval, bval);
+        state.context->write_after_slice_word(
+            signal, value, offset, delay);
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_after_slice_logic9(
     void* context,
@@ -1153,22 +1272,23 @@ void LlvmProcessExecutor::write_after_slice_logic9(
     const std::uint32_t offset,
     const std::uint32_t width,
     const fsim_jit_logic9_word_v1* value,
-    const std::uint64_t delay) noexcept  {
+    const std::uint64_t delay) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      state.context->write_after_slice(
-          signal,
-          checked_logic9_slice(
-              state, signal, offset, width, value),
-          offset,
-          delay);
+        state.context->write_after_slice(
+            signal,
+            checked_logic9_slice(
+                state, signal, offset, width, value),
+            offset,
+            delay);
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_inertial_slice(
     void* context,
@@ -1179,23 +1299,24 @@ void LlvmProcessExecutor::write_inertial_slice(
     const std::uint64_t bval,
     const std::uint64_t rise_delay,
     const std::uint64_t fall_delay,
-    const std::uint64_t turnoff_delay) noexcept  {
+    const std::uint64_t turnoff_delay) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      const auto value = checked_slice_word(
-          state, signal, offset, width, aval, bval);
-      state.context->write_inertial_slice_word(
-          signal,
-          value,
-          offset,
-          {rise_delay, fall_delay, turnoff_delay});
+        const auto value = checked_slice_word(
+            state, signal, offset, width, aval, bval);
+        state.context->write_inertial_slice_word(
+            signal,
+            value,
+            offset,
+            { rise_delay, fall_delay, turnoff_delay });
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_inertial_slice_logic9(
     void* context,
@@ -1205,22 +1326,23 @@ void LlvmProcessExecutor::write_inertial_slice_logic9(
     const fsim_jit_logic9_word_v1* value,
     const std::uint64_t rise_delay,
     const std::uint64_t fall_delay,
-    const std::uint64_t turnoff_delay) noexcept  {
+    const std::uint64_t turnoff_delay) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      state.context->write_inertial_slice(
-          signal,
-          checked_logic9_slice(
-              state, signal, offset, width, value),
-          offset,
-          {rise_delay, fall_delay, turnoff_delay});
+        state.context->write_inertial_slice(
+            signal,
+            checked_logic9_slice(
+                state, signal, offset, width, value),
+            offset,
+            { rise_delay, fall_delay, turnoff_delay });
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_projected_slice(
     void* context,
@@ -1231,25 +1353,26 @@ void LlvmProcessExecutor::write_projected_slice(
     const std::uint64_t bval,
     const std::uint64_t delay,
     const std::uint64_t rejection,
-    const std::uint32_t mode) noexcept  {
+    const std::uint32_t mode) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      const auto value = checked_slice_word(
-          state, signal, offset, width, aval, bval);
-      state.context->write_projected_slice_word(
-          signal,
-          value,
-          offset,
-          delay,
-          rejection,
-          projected_delay_mode(mode));
+        const auto value = checked_slice_word(
+            state, signal, offset, width, aval, bval);
+        state.context->write_projected_slice_word(
+            signal,
+            value,
+            offset,
+            delay,
+            rejection,
+            projected_delay_mode(mode));
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_projected_slice_logic9(
     void* context,
@@ -1259,24 +1382,25 @@ void LlvmProcessExecutor::write_projected_slice_logic9(
     const fsim_jit_logic9_word_v1* value,
     const std::uint64_t delay,
     const std::uint64_t rejection,
-    const std::uint32_t mode) noexcept  {
+    const std::uint32_t mode) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      state.context->write_projected_slice(
-          signal,
-          checked_logic9_slice(
-              state, signal, offset, width, value),
-          offset,
-          delay,
-          rejection,
-          projected_delay_mode(mode));
+        state.context->write_projected_slice(
+            signal,
+            checked_logic9_slice(
+                state, signal, offset, width, value),
+            offset,
+            delay,
+            rejection,
+            projected_delay_mode(mode));
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_projected_waveform(
     void* context,
@@ -1285,40 +1409,40 @@ void LlvmProcessExecutor::write_projected_waveform(
     const fsim_jit_projected_element_v1* elements,
     const std::uint32_t count,
     const std::uint64_t rejection,
-    const std::uint32_t mode) noexcept  {
+    const std::uint32_t mode) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      if (elements == nullptr || count == 0
-          || signal >= state.signal_widths.size()
-          || width != state.signal_widths[signal]) {
-        throw std::logic_error(
-            "invalid generated projected-waveform callback");
-      }
-      std::vector<runtime::simir::ProjectedWaveformValue> values;
-      values.reserve(count);
-      for (std::uint32_t index = 0; index < count; ++index) {
-        const auto word = checked_write_word(
-            state,
+        if (elements == nullptr || count == 0
+            || signal >= state.signal_widths.size()
+            || width != state.signal_widths[signal]) {
+            throw std::logic_error(
+                "invalid generated projected-waveform callback");
+        }
+        std::vector<runtime::simir::ProjectedWaveformValue> values;
+        values.reserve(count);
+        for (std::uint32_t index = 0; index < count; ++index) {
+            const auto word = checked_write_word(
+                state,
+                signal,
+                elements[index].aval,
+                elements[index].bval);
+            values.push_back({ PackedLogic4::from_aval_bval(
+                                   word.width, word.aval, word.bval),
+                elements[index].delay });
+        }
+        state.context->write_projected_waveform(
             signal,
-            elements[index].aval,
-            elements[index].bval);
-        values.push_back({
-            PackedLogic4::from_aval_bval(
-                word.width, word.aval, word.bval),
-            elements[index].delay});
-      }
-      state.context->write_projected_waveform(
-          signal,
-          std::move(values),
-          rejection,
-          projected_delay_mode(mode));
+            std::move(values),
+            rejection,
+            projected_delay_mode(mode));
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_projected_waveform_logic9(
     void* context,
@@ -1327,35 +1451,35 @@ void LlvmProcessExecutor::write_projected_waveform_logic9(
     const fsim_jit_logic9_projected_element_v1* elements,
     const std::uint32_t count,
     const std::uint64_t rejection,
-    const std::uint32_t mode) noexcept  {
+    const std::uint32_t mode) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      if (elements == nullptr || count == 0
-          || signal >= state.signal_widths.size()
-          || width != state.signal_widths[signal]) {
-        throw std::logic_error(
-            "invalid generated Logic9 projected-waveform callback");
-      }
-      std::vector<runtime::simir::ProjectedWaveformValue> values;
-      values.reserve(count);
-      for (std::uint32_t index = 0; index < count; ++index) {
-        values.push_back({
-            checked_logic9_value(
-                state, signal, &elements[index].value),
-            elements[index].delay});
-      }
-      state.context->write_projected_waveform(
-          signal,
-          std::move(values),
-          rejection,
-          projected_delay_mode(mode));
+        if (elements == nullptr || count == 0
+            || signal >= state.signal_widths.size()
+            || width != state.signal_widths[signal]) {
+            throw std::logic_error(
+                "invalid generated Logic9 projected-waveform callback");
+        }
+        std::vector<runtime::simir::ProjectedWaveformValue> values;
+        values.reserve(count);
+        for (std::uint32_t index = 0; index < count; ++index) {
+            values.push_back({ checked_logic9_value(
+                                   state, signal, &elements[index].value),
+                elements[index].delay });
+        }
+        state.context->write_projected_waveform(
+            signal,
+            std::move(values),
+            rejection,
+            projected_delay_mode(mode));
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_projected_waveform_slice(
     void* context,
@@ -1365,41 +1489,41 @@ void LlvmProcessExecutor::write_projected_waveform_slice(
     const fsim_jit_projected_element_v1* elements,
     const std::uint32_t count,
     const std::uint64_t rejection,
-    const std::uint32_t mode) noexcept  {
+    const std::uint32_t mode) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      if (elements == nullptr || count == 0) {
-        throw std::logic_error(
-            "invalid generated projected-slice-waveform callback");
-      }
-      std::vector<runtime::simir::ProjectedWaveformValue> values;
-      values.reserve(count);
-      for (std::uint32_t index = 0; index < count; ++index) {
-        const auto word = checked_slice_word(
-            state,
+        if (elements == nullptr || count == 0) {
+            throw std::logic_error(
+                "invalid generated projected-slice-waveform callback");
+        }
+        std::vector<runtime::simir::ProjectedWaveformValue> values;
+        values.reserve(count);
+        for (std::uint32_t index = 0; index < count; ++index) {
+            const auto word = checked_slice_word(
+                state,
+                signal,
+                offset,
+                width,
+                elements[index].aval,
+                elements[index].bval);
+            values.push_back({ PackedLogic4::from_aval_bval(
+                                   word.width, word.aval, word.bval),
+                elements[index].delay });
+        }
+        state.context->write_projected_waveform_slice(
             signal,
+            std::move(values),
             offset,
-            width,
-            elements[index].aval,
-            elements[index].bval);
-        values.push_back({
-            PackedLogic4::from_aval_bval(
-                word.width, word.aval, word.bval),
-            elements[index].delay});
-      }
-      state.context->write_projected_waveform_slice(
-          signal,
-          std::move(values),
-          offset,
-          rejection,
-          projected_delay_mode(mode));
+            rejection,
+            projected_delay_mode(mode));
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_projected_waveform_slice_logic9(
     void* context,
@@ -1409,84 +1533,88 @@ void LlvmProcessExecutor::write_projected_waveform_slice_logic9(
     const fsim_jit_logic9_projected_element_v1* elements,
     const std::uint32_t count,
     const std::uint64_t rejection,
-    const std::uint32_t mode) noexcept  {
+    const std::uint32_t mode) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      if (elements == nullptr || count == 0) {
-        throw std::logic_error(
-            "invalid generated Logic9 projected-slice-waveform "
-            "callback");
-      }
-      std::vector<runtime::simir::ProjectedWaveformValue> values;
-      values.reserve(count);
-      for (std::uint32_t index = 0; index < count; ++index) {
-        values.push_back({
-            checked_logic9_slice(
-                state,
-                signal,
-                offset,
-                width,
-                &elements[index].value),
-            elements[index].delay});
-      }
-      state.context->write_projected_waveform_slice(
-          signal,
-          std::move(values),
-          offset,
-          rejection,
-          projected_delay_mode(mode));
+        if (elements == nullptr || count == 0) {
+            throw std::logic_error(
+                "invalid generated Logic9 projected-slice-waveform "
+                "callback");
+        }
+        std::vector<runtime::simir::ProjectedWaveformValue> values;
+        values.reserve(count);
+        for (std::uint32_t index = 0; index < count; ++index) {
+            values.push_back({ checked_logic9_slice(
+                                   state,
+                                   signal,
+                                   offset,
+                                   width,
+                                   &elements[index].value),
+                elements[index].delay });
+        }
+        state.context->write_projected_waveform_slice(
+            signal,
+            std::move(values),
+            offset,
+            rejection,
+            projected_delay_mode(mode));
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 [[nodiscard]] runtime::simir::ProjectedDelayMode
-LlvmProcessExecutor::projected_delay_mode(const std::uint32_t mode)  {
+LlvmProcessExecutor::projected_delay_mode(const std::uint32_t mode)
+{
     if (mode == FSIM_JIT_PROJECTED_TRANSPORT) {
-      return runtime::simir::ProjectedDelayMode::transport;
+        return runtime::simir::ProjectedDelayMode::transport;
     }
     if (mode == FSIM_JIT_PROJECTED_INERTIAL) {
-      return runtime::simir::ProjectedDelayMode::inertial;
+        return runtime::simir::ProjectedDelayMode::inertial;
     }
     throw compiler::LlvmJitError(
         "generated process requested an invalid projected delay mode");
-  }
+}
 
 [[nodiscard]] runtime::Logic4Word LlvmProcessExecutor::checked_write_word(
     const CallbackState& state,
     const std::uint32_t signal,
     const std::uint64_t aval,
-    const std::uint64_t bval)  {
+    const std::uint64_t bval)
+{
     if (state.context == nullptr
         || signal >= state.signal_widths.size()) {
-      throw std::logic_error("invalid generated write-signal callback");
+        throw std::logic_error("invalid generated write-signal callback");
     }
     const auto width = state.signal_widths[signal];
     if (width == 0 || width > 64) {
-      throw std::logic_error(
-          "generated write-signal callback received an invalid width");
+        throw std::logic_error(
+            "generated write-signal callback received an invalid width");
     }
-    return {width, aval, bval};
-  }
+    return { width, aval, bval };
+}
 
 void LlvmProcessExecutor::clear_logic9_word(
-    fsim_jit_logic9_word_v1* value) noexcept  {
+    fsim_jit_logic9_word_v1* value) noexcept
+{
     if (value == nullptr) {
-      return;
+        return;
     }
     value->planes[0] = 0;
     value->planes[1] = 0;
     value->planes[2] = 0;
     value->planes[3] = 0;
-  }
+}
 
 void LlvmProcessExecutor::require_logic9_signal(
     const CallbackState& state,
     const std::uint32_t signal,
-    const fsim_jit_logic9_word_v1* value)  {
+    const fsim_jit_logic9_word_v1* value)
+{
     if (value == nullptr
         || state.context == nullptr
         || signal >= state.signal_widths.size()
@@ -1495,49 +1623,47 @@ void LlvmProcessExecutor::require_logic9_signal(
             != runtime::simir::ValueKind::logic9
         || state.signal_widths[signal] == 0
         || state.signal_widths[signal] > 64) {
-      throw std::logic_error(
-          "invalid generated Logic9 signal callback");
+        throw std::logic_error(
+            "invalid generated Logic9 signal callback");
     }
-  }
+}
 
 [[nodiscard]] PackedLogic4 LlvmProcessExecutor::checked_logic9_value(
     const CallbackState& state,
     const std::uint32_t signal,
-    const fsim_jit_logic9_word_v1* value)  {
+    const fsim_jit_logic9_word_v1* value)
+{
     require_logic9_signal(state, signal, value);
     return PackedLogic4::from_logic9_word(
-        {
-            state.signal_widths[signal],
-            {
-                value->planes[0],
+        { state.signal_widths[signal],
+            { value->planes[0],
                 value->planes[1],
                 value->planes[2],
-                value->planes[3]}});
-  }
+                value->planes[3] } });
+}
 
 [[nodiscard]] PackedLogic4 LlvmProcessExecutor::checked_logic9_slice(
     const CallbackState& state,
     const std::uint32_t signal,
     const std::uint32_t offset,
     const std::uint32_t width,
-    const fsim_jit_logic9_word_v1* value)  {
+    const fsim_jit_logic9_word_v1* value)
+{
     require_logic9_signal(state, signal, value);
     const auto target_width = state.signal_widths[signal];
     if (width == 0 || width > 64
         || offset > target_width
         || width > target_width - offset) {
-      throw std::logic_error(
-          "invalid generated Logic9 partial-write callback");
+        throw std::logic_error(
+            "invalid generated Logic9 partial-write callback");
     }
     return PackedLogic4::from_logic9_word(
-        {
-            width,
-            {
-                value->planes[0],
+        { width,
+            { value->planes[0],
                 value->planes[1],
                 value->planes[2],
-                value->planes[3]}});
-  }
+                value->planes[3] } });
+}
 
 [[nodiscard]] runtime::Logic4Word LlvmProcessExecutor::checked_slice_word(
     const CallbackState& state,
@@ -1545,215 +1671,444 @@ void LlvmProcessExecutor::require_logic9_signal(
     const std::uint32_t offset,
     const std::uint32_t width,
     const std::uint64_t aval,
-    const std::uint64_t bval)  {
+    const std::uint64_t bval)
+{
     if (state.context == nullptr
         || signal >= state.signal_widths.size()
         || width == 0 || width > 64) {
-      throw std::logic_error(
-          "invalid generated partial-write callback");
+        throw std::logic_error(
+            "invalid generated partial-write callback");
     }
     const auto target_width = state.signal_widths[signal];
     if (offset > target_width
         || width > target_width - offset) {
-      throw std::logic_error(
-          "generated partial-write range is outside its target");
+        throw std::logic_error(
+            "generated partial-write range is outside its target");
     }
-    return {width, aval, bval};
-  }
+    return { width, aval, bval };
+}
 
 void LlvmProcessExecutor::assert_failed(
     void* context,
     std::uint32_t,
     std::uint32_t,
     const char*,
-    std::uint64_t) noexcept  {
+    std::uint64_t) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     // The generated status and the immutable SimIR assertion carry all data
     // needed after the C ABI returns. No C++ allocation or exception is
     // permitted in this thunk.
-  }
+}
 
 std::uint32_t LlvmProcessExecutor::signal_event(
     void* context,
-    const std::uint32_t signal) noexcept  {
+    const std::uint32_t signal) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure || state.context == nullptr
         || signal >= state.signal_widths.size()) {
-      return 0;
+        return 0;
     }
     try {
-      return state.context->signal_event(signal) ? 1U : 0U;
+        return state.context->signal_event(signal) ? 1U : 0U;
     } catch (...) {
-      capture_failure(state);
-      return 0;
+        capture_failure(state);
+        return 0;
     }
-  }
+}
 
 std::uint64_t LlvmProcessExecutor::signal_last_value(
     void* context,
     const std::uint32_t signal,
-    std::uint64_t* bval) noexcept  {
+    std::uint64_t* bval) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      if (bval != nullptr) {
-        *bval = 0;
-      }
-      return 0;
+        if (bval != nullptr) {
+            *bval = 0;
+        }
+        return 0;
     }
     try {
-      if (bval == nullptr || state.context == nullptr
-          || signal >= state.signal_widths.size()) {
-        throw std::logic_error(
-            "invalid generated signal-last-value callback");
-      }
-      const auto value =
-          state.context->signal_last_value_word(signal);
-      if (value.width != state.signal_widths[signal]
-          || value.width == 0 || value.width > 64) {
-        throw std::logic_error(
-            "generated signal-last-value callback observed an invalid width");
-      }
-      *bval = value.bval;
-      return value.aval;
+        if (bval == nullptr || state.context == nullptr
+            || signal >= state.signal_widths.size()) {
+            throw std::logic_error(
+                "invalid generated signal-last-value callback");
+        }
+        const auto value = state.context->signal_last_value_word(signal);
+        if (value.width != state.signal_widths[signal]
+            || value.width == 0 || value.width > 64) {
+            throw std::logic_error(
+                "generated signal-last-value callback observed an invalid width");
+        }
+        *bval = value.bval;
+        return value.aval;
     } catch (...) {
-      capture_failure(state);
-      if (bval != nullptr) {
-        *bval = 0;
-      }
-      return 0;
+        capture_failure(state);
+        if (bval != nullptr) {
+            *bval = 0;
+        }
+        return 0;
     }
-  }
+}
 
 void LlvmProcessExecutor::signal_last_value_logic9(
     void* context,
     const std::uint32_t signal,
-    fsim_jit_logic9_word_v1* result) noexcept  {
+    fsim_jit_logic9_word_v1* result) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     clear_logic9_word(result);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      require_logic9_signal(state, signal, result);
-      const auto value =
-          state.context->signal_last_value_logic9_word(signal);
-      if (value.width != state.signal_widths[signal]) {
-        throw std::logic_error(
-            "generated Logic9 last-value read observed an invalid width");
-      }
-      result->planes[0] = value.planes[0];
-      result->planes[1] = value.planes[1];
-      result->planes[2] = value.planes[2];
-      result->planes[3] = value.planes[3];
+        require_logic9_signal(state, signal, result);
+        const auto value = state.context->signal_last_value_logic9_word(signal);
+        if (value.width != state.signal_widths[signal]) {
+            throw std::logic_error(
+                "generated Logic9 last-value read observed an invalid width");
+        }
+        result->planes[0] = value.planes[0];
+        result->planes[1] = value.planes[1];
+        result->planes[2] = value.planes[2];
+        result->planes[3] = value.planes[3];
     } catch (...) {
-      capture_failure(state);
-      clear_logic9_word(result);
+        capture_failure(state);
+        clear_logic9_word(result);
     }
-  }
+}
 
 std::uint64_t LlvmProcessExecutor::signal_last_event(
     void* context,
-    const std::uint32_t signal) noexcept {
-  auto& state = *static_cast<CallbackState*>(context);
-  if (state.failure || state.context == nullptr
-      || signal >= state.signal_widths.size()) {
-    return std::numeric_limits<std::uint64_t>::max();
-  }
-  try {
-    return state.context->signal_last_event(signal);
-  } catch (...) {
-    capture_failure(state);
-    return std::numeric_limits<std::uint64_t>::max();
-  }
+    const std::uint32_t signal) noexcept
+{
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure || state.context == nullptr
+        || signal >= state.signal_widths.size()) {
+        return std::numeric_limits<std::uint64_t>::max();
+    }
+    try {
+        return state.context->signal_last_event(signal);
+    } catch (...) {
+        capture_failure(state);
+        return std::numeric_limits<std::uint64_t>::max();
+    }
+}
+
+std::uint32_t LlvmProcessExecutor::execute_signal_operation(
+    void* context,
+    const std::uint32_t process,
+    const std::uint32_t instruction,
+    fsim_jit_frame_v1* frame) noexcept
+{
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+        return 1;
+    }
+    try {
+        if (state.executor == nullptr || state.context == nullptr
+            || state.process == nullptr || state.process->id != process
+            || instruction >= state.process->operations.size()
+            || frame != &state.executor->frame_) {
+            throw std::logic_error(
+                "invalid generated exact-width signal callback");
+        }
+        const auto& stored = state.process->operations[instruction];
+        const auto dynamic_offset = [&](const runtime::simir::DynamicIndex& selection) {
+            return runtime::simir::dynamic_index_offset(
+                state.executor->read_register(selection.index, 32),
+                selection);
+        };
+        if (const auto* read = runtime::simir::operation_get_if<runtime::simir::ReadSignal>(
+                &stored)) {
+            state.executor->write_register(
+                read->destination,
+                state.context->read_signal(read->signal));
+        } else if (const auto* blocking = runtime::simir::operation_get_if<
+                       runtime::simir::WriteBlocking>(&stored)) {
+            state.context->write_blocking(
+                blocking->signal,
+                state.executor->read_register(
+                    blocking->source,
+                    runtime::simir::ProcessExecutor::native_register_width));
+        } else if (const auto* blocking_slice = runtime::simir::operation_get_if<
+                       runtime::simir::WriteBlockingSlice>(&stored)) {
+            state.context->write_blocking_slice(
+                blocking_slice->signal,
+                state.executor->read_register(
+                    blocking_slice->source,
+                    runtime::simir::ProcessExecutor::native_register_width),
+                blocking_slice->offset);
+        } else if (const auto* dynamic_blocking = runtime::simir::operation_get_if<
+                       runtime::simir::WriteBlockingDynamicSlice>(&stored)) {
+            state.context->write_blocking_slice(
+                dynamic_blocking->signal,
+                state.executor->read_register(dynamic_blocking->source, 1),
+                dynamic_offset(dynamic_blocking->selection));
+        } else if (const auto* dynamic_blocking_part = runtime::simir::operation_get_if<
+                       runtime::simir::WriteBlockingDynamicPartSlice>(&stored)) {
+            auto selected_write = runtime::simir::dynamic_part_write_value(
+                state.executor->read_register(
+                    dynamic_blocking_part->source,
+                    dynamic_blocking_part->selection.width),
+                state.executor->read_register(
+                    dynamic_blocking_part->selection.base, 32),
+                dynamic_blocking_part->selection);
+            if (selected_write) {
+                state.context->write_blocking_slice(
+                    dynamic_blocking_part->signal,
+                    std::move(selected_write->value),
+                    selected_write->offset);
+            }
+        } else if (const auto* update = runtime::simir::operation_get_if<
+                       runtime::simir::WriteUpdate>(&stored)) {
+            state.context->write_update(
+                update->signal,
+                state.executor->read_register(
+                    update->source,
+                    runtime::simir::ProcessExecutor::native_register_width));
+        } else if (const auto* update_slice = runtime::simir::operation_get_if<
+                       runtime::simir::WriteUpdateSlice>(&stored)) {
+            state.context->write_update_slice(
+                update_slice->signal,
+                state.executor->read_register(
+                    update_slice->source,
+                    runtime::simir::ProcessExecutor::native_register_width),
+                update_slice->offset);
+        } else if (const auto* dynamic_update_bit = runtime::simir::operation_get_if<
+                       runtime::simir::WriteUpdateDynamicSlice>(&stored)) {
+            state.context->write_update_slice(
+                dynamic_update_bit->signal,
+                state.executor->read_register(dynamic_update_bit->source, 1),
+                dynamic_offset(dynamic_update_bit->selection));
+        } else if (const auto* dynamic_update = runtime::simir::operation_get_if<
+                       runtime::simir::WriteUpdateDynamicPartSlice>(
+                       &stored)) {
+            auto selected_write = runtime::simir::dynamic_part_write_value(
+                state.executor->read_register(
+                    dynamic_update->source,
+                    dynamic_update->selection.width),
+                state.executor->read_register(
+                    dynamic_update->selection.base, 32),
+                dynamic_update->selection);
+            if (selected_write) {
+                state.context->write_update_slice(
+                    dynamic_update->signal,
+                    std::move(selected_write->value),
+                    selected_write->offset);
+            }
+        } else if (const auto* write = runtime::simir::operation_get_if<
+                       runtime::simir::WriteInertial>(&stored)) {
+            state.context->write_inertial(
+                write->signal,
+                state.executor->read_register(
+                    write->source,
+                    runtime::simir::ProcessExecutor::native_register_width),
+                write->delays);
+        } else if (const auto* after = runtime::simir::operation_get_if<
+                       runtime::simir::WriteAfter>(&stored)) {
+            state.context->write_after(
+                after->signal,
+                state.executor->read_register(
+                    after->source,
+                    runtime::simir::ProcessExecutor::native_register_width),
+                after->delay);
+        } else if (const auto* after_slice = runtime::simir::operation_get_if<
+                       runtime::simir::WriteAfterSlice>(&stored)) {
+            state.context->write_after_slice(
+                after_slice->signal,
+                state.executor->read_register(
+                    after_slice->source,
+                    runtime::simir::ProcessExecutor::native_register_width),
+                after_slice->offset,
+                after_slice->delay);
+        } else if (const auto* dynamic_after = runtime::simir::operation_get_if<
+                       runtime::simir::WriteAfterDynamicSlice>(&stored)) {
+            state.context->write_after_slice(
+                dynamic_after->signal,
+                state.executor->read_register(dynamic_after->source, 1),
+                dynamic_offset(dynamic_after->selection),
+                dynamic_after->delay);
+        } else if (const auto* dynamic_after_part = runtime::simir::operation_get_if<
+                       runtime::simir::WriteAfterDynamicPartSlice>(&stored)) {
+            auto selected_write = runtime::simir::dynamic_part_write_value(
+                state.executor->read_register(
+                    dynamic_after_part->source,
+                    dynamic_after_part->selection.width),
+                state.executor->read_register(
+                    dynamic_after_part->selection.base, 32),
+                dynamic_after_part->selection);
+            if (selected_write) {
+                state.context->write_after_slice(
+                    dynamic_after_part->signal,
+                    std::move(selected_write->value),
+                    selected_write->offset,
+                    dynamic_after_part->delay);
+            }
+        } else if (const auto* slice = runtime::simir::operation_get_if<
+                       runtime::simir::WriteInertialSlice>(&stored)) {
+            state.context->write_inertial_slice(
+                slice->signal,
+                state.executor->read_register(
+                    slice->source,
+                    runtime::simir::ProcessExecutor::native_register_width),
+                slice->offset,
+                slice->delays);
+        } else if (const auto* dynamic_part = runtime::simir::operation_get_if<
+                       runtime::simir::WriteInertialDynamicPartSlice>(
+                       &stored)) {
+            auto selected_write = runtime::simir::dynamic_part_write_value(
+                state.executor->read_register(
+                    dynamic_part->source, dynamic_part->selection.width),
+                state.executor->read_register(dynamic_part->selection.base, 32),
+                dynamic_part->selection);
+            if (selected_write) {
+                state.context->write_inertial_slice(
+                    dynamic_part->signal,
+                    std::move(selected_write->value),
+                    selected_write->offset,
+                    dynamic_part->delays);
+            }
+        } else if (const auto* dynamic_inertial = runtime::simir::operation_get_if<
+                       runtime::simir::WriteInertialDynamicSlice>(&stored)) {
+            state.context->write_inertial_slice(
+                dynamic_inertial->signal,
+                state.executor->read_register(dynamic_inertial->source, 1),
+                dynamic_offset(dynamic_inertial->selection),
+                dynamic_inertial->delays);
+        } else if (const auto* force = runtime::simir::operation_get_if<
+                       runtime::simir::ForceSignalSlice>(&stored)) {
+            const auto offset = force->selection
+                ? dynamic_offset(*force->selection)
+                : force->offset;
+            auto value = state.executor->read_register(
+                force->source,
+                runtime::simir::ProcessExecutor::native_register_width);
+            if (force->driving_value) {
+                state.context->force_driver_signal_slice(
+                    force->signal, std::move(value), offset);
+            } else {
+                state.context->force_signal_slice(
+                    force->signal, std::move(value), offset);
+            }
+        } else if (const auto* release = runtime::simir::operation_get_if<
+                       runtime::simir::ReleaseSignalSlice>(&stored)) {
+            const auto offset = release->selection
+                ? dynamic_offset(*release->selection)
+                : release->offset;
+            if (release->driving_value) {
+                state.context->release_driver_signal_slice(
+                    release->signal, offset, release->width);
+            } else {
+                state.context->release_signal_slice(
+                    release->signal, offset, release->width);
+            }
+        } else {
+            throw std::logic_error(
+                "generated exact-width signal callback references a different "
+                "operation");
+        }
+        return 0;
+    } catch (...) {
+        capture_failure(state);
+        return 1;
+    }
 }
 
 std::uint64_t LlvmProcessExecutor::read_simulation_time(
-    void* context) noexcept {
-  auto& state = *static_cast<CallbackState*>(context);
-  if (state.failure || state.context == nullptr) {
-    return 0;
-  }
-  return state.context->current_time();
+    void* context) noexcept
+{
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure || state.context == nullptr) {
+        return 0;
+    }
+    return state.context->current_time();
 }
 
 std::uint32_t LlvmProcessExecutor::signal_active(
     void* context,
-    const std::uint32_t signal) noexcept {
+    const std::uint32_t signal) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure || state.context == nullptr
         || signal >= state.signal_widths.size()) {
-      return 0;
+        return 0;
     }
     try {
-      return state.context->signal_active(signal) ? 1U : 0U;
+        return state.context->signal_active(signal) ? 1U : 0U;
     } catch (...) {
-      capture_failure(state);
-      return 0;
+        capture_failure(state);
+        return 0;
     }
-  }
+}
 
 void LlvmProcessExecutor::write_output(
     void* context,
     const std::uint32_t,
     const char* text,
     const std::uint64_t text_size,
-    const std::uint32_t newline) noexcept  {
+    const std::uint32_t newline) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      if (state.context == nullptr
-          || (text == nullptr && text_size != 0)
-          || newline > 1
-          || text_size
-              > static_cast<std::uint64_t>(
-                  std::numeric_limits<std::size_t>::max())) {
-        throw std::logic_error(
-            "invalid generated language-output callback");
-      }
-      state.context->display(
-          std::string_view{
-              text == nullptr ? "" : text,
-              static_cast<std::size_t>(text_size)},
-          newline != 0);
+        if (state.context == nullptr
+            || (text == nullptr && text_size != 0)
+            || newline > 1
+            || text_size
+                > static_cast<std::uint64_t>(
+                    std::numeric_limits<std::size_t>::max())) {
+            throw std::logic_error(
+                "invalid generated language-output callback");
+        }
+        state.context->display(
+            std::string_view {
+                text == nullptr ? "" : text,
+                static_cast<std::size_t>(text_size) },
+            newline != 0);
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::schedule_output(
     void* context,
     const std::uint32_t,
     const char* text,
     const std::uint64_t text_size,
-    const std::uint32_t newline) noexcept  {
+    const std::uint32_t newline) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      if (state.context == nullptr
-          || (text == nullptr && text_size != 0)
-          || newline > 1
-          || text_size
-              > static_cast<std::uint64_t>(
-                  std::numeric_limits<std::size_t>::max())) {
-        throw std::logic_error{
-            "invalid generated postponed-output callback"};
-      }
-      state.context->postpone_display(
-          std::string_view{
-              text == nullptr ? "" : text,
-              static_cast<std::size_t>(text_size)},
-          newline != 0);
+        if (state.context == nullptr
+            || (text == nullptr && text_size != 0)
+            || newline > 1
+            || text_size
+                > static_cast<std::uint64_t>(
+                    std::numeric_limits<std::size_t>::max())) {
+            throw std::logic_error {
+                "invalid generated postponed-output callback"
+            };
+        }
+        state.context->postpone_display(
+            std::string_view {
+                text == nullptr ? "" : text,
+                static_cast<std::size_t>(text_size) },
+            newline != 0);
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_formatted(
     void* context,
@@ -1761,199 +2116,207 @@ void LlvmProcessExecutor::write_formatted(
     const std::uint32_t instruction,
     const std::uint32_t width,
     const std::uint64_t aval,
-    const std::uint64_t bval) noexcept  {
+    const std::uint64_t bval) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      if (state.context == nullptr
-          || state.process == nullptr
-          || state.process->id != process
-          || instruction >= state.process->operations.size()
-          || width == 0
-          || width > 64) {
-        throw std::logic_error{
-            "invalid generated formatted-output callback"};
-      }
-      const auto* operation =
-          fsim::runtime::simir::operation_get_if<runtime::simir::FormatDisplay>(
-              &state.process->operations[instruction]);
-      if (operation == nullptr) {
-        throw std::logic_error{
-            "generated formatted-output callback references a "
-            "different operation"};
-      }
-      const auto value = PackedLogic4::from_aval_bval(
-          width, aval, bval);
-      state.context->display_formatted(
-          operation->prefix,
-          operation->suffix,
-          operation->format,
-          value,
-          operation->newline,
-          operation->postponed,
-          operation->signed_decimal,
-          operation->suppress_leading_zero,
-          operation->minimum_width,
-          operation->left_justify,
-          operation->zero_pad,
-          operation->scalar_kind);
+        if (state.context == nullptr
+            || state.process == nullptr
+            || state.process->id != process
+            || instruction >= state.process->operations.size()
+            || width == 0
+            || width > 64) {
+            throw std::logic_error {
+                "invalid generated formatted-output callback"
+            };
+        }
+        const auto* operation = fsim::runtime::simir::operation_get_if<runtime::simir::FormatDisplay>(
+            &state.process->operations[instruction]);
+        if (operation == nullptr) {
+            throw std::logic_error {
+                "generated formatted-output callback references a "
+                "different operation"
+            };
+        }
+        const auto value = PackedLogic4::from_aval_bval(
+            width, aval, bval);
+        state.context->display_formatted(
+            operation->prefix,
+            operation->suffix,
+            operation->format,
+            value,
+            operation->newline,
+            operation->postponed,
+            operation->signed_decimal,
+            operation->suppress_leading_zero,
+            operation->minimum_width,
+            operation->left_justify,
+            operation->zero_pad,
+            operation->scalar_kind);
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_formatted_logic9(
     void* context,
     const std::uint32_t process,
     const std::uint32_t instruction,
     const std::uint32_t width,
-    const fsim_jit_logic9_word_v1* value) noexcept  {
+    const fsim_jit_logic9_word_v1* value) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      if (state.context == nullptr
-          || state.process == nullptr
-          || state.process->id != process
-          || instruction >= state.process->operations.size()
-          || width == 0 || width > 64
-          || value == nullptr) {
-        throw std::logic_error{
-            "invalid generated Logic9 formatted-output callback"};
-      }
-      const auto* operation =
-          fsim::runtime::simir::operation_get_if<runtime::simir::FormatDisplay>(
-              &state.process->operations[instruction]);
-      if (operation == nullptr) {
-        throw std::logic_error{
-            "generated Logic9 formatted-output callback references a "
-            "different operation"};
-      }
-      const auto packed = PackedLogic4::from_logic9_word(
-          {
-              width,
-              {
-                  value->planes[0],
-                  value->planes[1],
-                  value->planes[2],
-                  value->planes[3]}});
-      state.context->display_formatted(
-          operation->prefix,
-          operation->suffix,
-          operation->format,
-          packed,
-          operation->newline,
-          operation->postponed,
-          operation->signed_decimal,
-          operation->suppress_leading_zero,
-          operation->minimum_width,
-          operation->left_justify,
-          operation->zero_pad,
-          operation->scalar_kind);
+        if (state.context == nullptr
+            || state.process == nullptr
+            || state.process->id != process
+            || instruction >= state.process->operations.size()
+            || width == 0 || width > 64
+            || value == nullptr) {
+            throw std::logic_error {
+                "invalid generated Logic9 formatted-output callback"
+            };
+        }
+        const auto* operation = fsim::runtime::simir::operation_get_if<runtime::simir::FormatDisplay>(
+            &state.process->operations[instruction]);
+        if (operation == nullptr) {
+            throw std::logic_error {
+                "generated Logic9 formatted-output callback references a "
+                "different operation"
+            };
+        }
+        const auto packed = PackedLogic4::from_logic9_word(
+            { width,
+                { value->planes[0],
+                    value->planes[1],
+                    value->planes[2],
+                    value->planes[3] } });
+        state.context->display_formatted(
+            operation->prefix,
+            operation->suffix,
+            operation->format,
+            packed,
+            operation->newline,
+            operation->postponed,
+            operation->signed_decimal,
+            operation->suppress_leading_zero,
+            operation->minimum_width,
+            operation->left_justify,
+            operation->zero_pad,
+            operation->scalar_kind);
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::write_time(
     void* context,
     const std::uint32_t process,
-    const std::uint32_t instruction) noexcept  {
+    const std::uint32_t instruction) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      if (state.context == nullptr
-          || state.process == nullptr
-          || state.process->id != process
-          || instruction >= state.process->operations.size()) {
-        throw std::logic_error{
-            "invalid generated time-output callback"};
-      }
-      const auto* operation =
-          fsim::runtime::simir::operation_get_if<runtime::simir::TimeDisplay>(
-              &state.process->operations[instruction]);
-      if (operation == nullptr) {
-        throw std::logic_error{
-            "generated time-output callback references a "
-            "different operation"};
-      }
-      state.context->display_time(
-          operation->prefix,
-          operation->suffix,
-          operation->newline,
-          operation->postponed,
-          operation->minimum_width,
-          operation->left_justify,
-          operation->zero_pad);
+        if (state.context == nullptr
+            || state.process == nullptr
+            || state.process->id != process
+            || instruction >= state.process->operations.size()) {
+            throw std::logic_error {
+                "invalid generated time-output callback"
+            };
+        }
+        const auto* operation = fsim::runtime::simir::operation_get_if<runtime::simir::TimeDisplay>(
+            &state.process->operations[instruction]);
+        if (operation == nullptr) {
+            throw std::logic_error {
+                "generated time-output callback references a "
+                "different operation"
+            };
+        }
+        state.context->display_time(
+            operation->prefix,
+            operation->suffix,
+            operation->newline,
+            operation->postponed,
+            operation->minimum_width,
+            operation->left_justify,
+            operation->zero_pad);
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::install_monitor(
     void* context,
     const std::uint32_t process,
-    const std::uint32_t instruction) noexcept  {
+    const std::uint32_t instruction) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      if (state.context == nullptr
-          || state.process == nullptr
-          || state.process->id != process
-          || instruction >= state.process->operations.size()) {
-        throw std::logic_error{
-            "invalid generated monitor-install callback"};
-      }
-      const auto* operation =
-          fsim::runtime::simir::operation_get_if<runtime::simir::MonitorInstall>(
-              &state.process->operations[instruction]);
-      if (operation == nullptr) {
-        throw std::logic_error{
-            "generated monitor-install callback references a "
-            "different operation"};
-      }
-      state.context->install_monitor(*operation);
+        if (state.context == nullptr
+            || state.process == nullptr
+            || state.process->id != process
+            || instruction >= state.process->operations.size()) {
+            throw std::logic_error {
+                "invalid generated monitor-install callback"
+            };
+        }
+        const auto* operation = fsim::runtime::simir::operation_get_if<runtime::simir::MonitorInstall>(
+            &state.process->operations[instruction]);
+        if (operation == nullptr) {
+            throw std::logic_error {
+                "generated monitor-install callback references a "
+                "different operation"
+            };
+        }
+        state.context->install_monitor(*operation);
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 void LlvmProcessExecutor::control_monitor(
     void* context,
     const std::uint32_t process,
-    const std::uint32_t instruction) noexcept  {
+    const std::uint32_t instruction) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
-      return;
+        return;
     }
     try {
-      if (state.context == nullptr
-          || state.process == nullptr
-          || state.process->id != process
-          || instruction >= state.process->operations.size()) {
-        throw std::logic_error{
-            "invalid generated monitor-control callback"};
-      }
-      const auto* operation =
-          fsim::runtime::simir::operation_get_if<runtime::simir::MonitorControl>(
-              &state.process->operations[instruction]);
-      if (operation == nullptr) {
-        throw std::logic_error{
-            "generated monitor-control callback references a "
-            "different operation"};
-      }
-      state.context->set_monitor_enabled(operation->enabled);
+        if (state.context == nullptr
+            || state.process == nullptr
+            || state.process->id != process
+            || instruction >= state.process->operations.size()) {
+            throw std::logic_error {
+                "invalid generated monitor-control callback"
+            };
+        }
+        const auto* operation = fsim::runtime::simir::operation_get_if<runtime::simir::MonitorControl>(
+            &state.process->operations[instruction]);
+        if (operation == nullptr) {
+            throw std::logic_error {
+                "generated monitor-control callback references a "
+                "different operation"
+            };
+        }
+        state.context->set_monitor_enabled(operation->enabled);
     } catch (...) {
-      capture_failure(state);
+        capture_failure(state);
     }
-  }
+}
 
 std::uint64_t LlvmProcessExecutor::random_value(
     void* context,
@@ -1963,51 +2326,52 @@ std::uint64_t LlvmProcessExecutor::random_value(
     const std::uint64_t maximum_bval,
     const std::uint64_t minimum_aval,
     const std::uint64_t minimum_bval,
-    std::uint64_t* result_bval) noexcept  {
+    std::uint64_t* result_bval) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure || result_bval == nullptr) {
-      return 0;
+        return 0;
     }
     try {
-      if (state.context == nullptr
-          || state.process == nullptr
-          || state.process->id != process
-          || instruction >= state.process->operations.size()) {
-        throw std::logic_error{
-            "invalid generated random-value callback"};
-      }
-      const auto* operation =
-          fsim::runtime::simir::operation_get_if<runtime::simir::RandomValue>(
-              &state.process->operations[instruction]);
-      if (operation == nullptr) {
-        throw std::logic_error{
-            "generated random-value callback references a "
-            "different operation"};
-      }
-      const auto maximum =
-          operation->maximum
-              ? std::optional<PackedLogic4>{
-                    PackedLogic4::from_aval_bval(
-                        32, maximum_aval, maximum_bval)}
-              : std::nullopt;
-      const auto minimum =
-          operation->minimum
-              ? std::optional<PackedLogic4>{
-                    PackedLogic4::from_aval_bval(
-                        32, minimum_aval, minimum_bval)}
-              : std::nullopt;
-      const auto result =
-          state.context->random_value(
-              operation->kind, maximum, minimum);
-      const auto encoded = result.low_word();
-      *result_bval = encoded.bval;
-      return encoded.aval;
+        if (state.context == nullptr
+            || state.process == nullptr
+            || state.process->id != process
+            || instruction >= state.process->operations.size()) {
+            throw std::logic_error {
+                "invalid generated random-value callback"
+            };
+        }
+        const auto* operation = fsim::runtime::simir::operation_get_if<runtime::simir::RandomValue>(
+            &state.process->operations[instruction]);
+        if (operation == nullptr) {
+            throw std::logic_error {
+                "generated random-value callback references a "
+                "different operation"
+            };
+        }
+        const auto maximum = operation->maximum
+            ? std::optional<PackedLogic4> {
+                  PackedLogic4::from_aval_bval(
+                      32, maximum_aval, maximum_bval)
+              }
+            : std::nullopt;
+        const auto minimum = operation->minimum
+            ? std::optional<PackedLogic4> {
+                  PackedLogic4::from_aval_bval(
+                      32, minimum_aval, minimum_bval)
+              }
+            : std::nullopt;
+        const auto result = state.context->random_value(
+            operation->kind, maximum, minimum);
+        const auto encoded = result.low_word();
+        *result_bval = encoded.bval;
+        return encoded.aval;
     } catch (...) {
-      capture_failure(state);
-      *result_bval = std::numeric_limits<std::uint64_t>::max();
-      return std::numeric_limits<std::uint64_t>::max();
+        capture_failure(state);
+        *result_bval = std::numeric_limits<std::uint64_t>::max();
+        return std::numeric_limits<std::uint64_t>::max();
     }
-  }
+}
 
 #endif
 

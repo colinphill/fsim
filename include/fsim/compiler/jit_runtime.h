@@ -57,6 +57,8 @@ typedef struct fsim_jit_logic9_projected_element_v1 {
   uint64_t delay;
 } fsim_jit_logic9_projected_element_v1;
 
+typedef struct fsim_jit_frame_v1 fsim_jit_frame_v1;
+
 /*
  * Versioned plain-C boundary used by generated process functions.
  * Signal values use aval/bval encoding in the low bits selected by the
@@ -596,29 +598,41 @@ typedef struct fsim_jit_runtime_v1 {
       uint32_t signal,
       uint32_t offset,
       uint32_t width);
+
+  /*
+   * Append-only exact-width signal callback. The immutable SimIR operation
+   * identifies its registers and scheduling metadata; frame supplies their
+   * arbitrary-width word planes.
+   */
+  uint32_t (*execute_signal_operation)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      fsim_jit_frame_v1* frame);
 } fsim_jit_runtime_v1;
 
 /*
  * Caller-owned persistent process frame. register_aval and register_bval each
- * point to register_count uint64_t elements and register_initialized points to
- * register_count bytes supplied by the caller. layout_id is process-specific
- * and must come from the adapter's frame-layout query.
+ * point to the flattened uint64_t word plane described by the adapter's
+ * process-specific frame-layout query. register_initialized points to
+ * register_count bytes supplied by the caller. layout_id must come from that
+ * same frame-layout query.
  */
-typedef struct fsim_jit_frame_v1 {
-  uint32_t abi_version;
-  uint32_t struct_size;
-  uint64_t layout_id_low;
-  uint64_t layout_id_high;
-  uint32_t register_count;
-  uint32_t program_counter;
-  uint32_t state;
-  uint32_t last_instruction;
-  uint64_t* register_aval;
-  uint64_t* register_bval;
-  uint8_t* register_initialized;
-  uint64_t* register_logic9_plane2;
-  uint64_t* register_logic9_plane3;
-} fsim_jit_frame_v1;
+struct fsim_jit_frame_v1 {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t layout_id_low;
+    uint64_t layout_id_high;
+    uint32_t register_count;
+    uint32_t program_counter;
+    uint32_t state;
+    uint32_t last_instruction;
+    uint64_t* register_aval;
+    uint64_t* register_bval;
+    uint8_t* register_initialized;
+    uint64_t* register_logic9_plane2;
+    uint64_t* register_logic9_plane3;
+};
 
 /*
  * Caller-owned result for one invocation. status mirrors the generated

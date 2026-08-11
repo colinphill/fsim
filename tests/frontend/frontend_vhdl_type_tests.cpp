@@ -1385,19 +1385,61 @@ module verilog_expression_updates;
 endmodule
 )",
                                               Language::Verilog2005);
-  require(!verilog_expressions.ok() &&
-              std::ranges::any_of(verilog_expressions.diagnostics,
-                                  [](const auto &diagnostic) {
-                                    return diagnostic.code ==
-                                           "FSIM-VERILOG-SEM-010";
-                                  }) &&
-              std::ranges::any_of(verilog_expressions.diagnostics,
-                                  [](const auto &diagnostic) {
-                                    return diagnostic.code ==
-                                           "FSIM-VERILOG-SEM-011";
-                                  }),
-          "expression updates and procedural force/release remain "
-          "SystemVerilog-only");
+  require(!verilog_expressions.ok() && std::ranges::any_of(verilog_expressions.diagnostics, [](const auto& diagnostic) {
+      return diagnostic.code == "FSIM-VERILOG-SEM-010";
+  }) && std::ranges::none_of(verilog_expressions.diagnostics, [](const auto& diagnostic) {
+      return diagnostic.code == "FSIM-VERILOG-SEM-011";
+  }),
+      "expression updates remain SystemVerilog-only while Verilog-2005 "
+      "force/release is accepted");
+
+  const auto classic = parse_text("classic_procedural_drivers.v",
+      R"(
+module classic_procedural_drivers;
+  reg [7:0] source;
+  reg [7:0] value;
+  initial begin
+    {value[7:4], value[3:0]} = source;
+    assign value = source;
+    deassign value;
+    force value[3:0] = source[3:0];
+    release value[3:0];
+  end
+endmodule
+)",
+      Language::Verilog2005);
+  require(classic.ok(),
+      "Verilog-2005 procedural assign/deassign and force/release must "
+      "parse");
+  const auto& classic_statements = classic.design.units.front().processes.front().statements;
+  require(classic_statements.size() == 5 && classic_statements[0].kind == StatementKind::Assignment && classic_statements[0].target.kind == ExpressionKind::Concatenation && classic_statements[1].kind == StatementKind::ProceduralAssign && classic_statements[2].kind == StatementKind::Deassign && classic_statements[3].kind == StatementKind::Force && classic_statements[4].kind == StatementKind::Release,
+      "classic procedural driver statements retain distinct HIR kinds");
+
+  const auto malformed_assign = parse_text(
+      "malformed_procedural_assign.v",
+      "module malformed_procedural_assign; reg value; initial assign value; "
+      "endmodule",
+      Language::Verilog2005);
+  require(!malformed_assign.ok()
+          && std::ranges::any_of(
+              malformed_assign.diagnostics,
+              [](const auto& diagnostic) {
+                  return diagnostic.code == "FSIM-SV-PARSE-342";
+              }),
+      "procedural assign must require an equals sign");
+
+  const auto malformed_deassign = parse_text(
+      "malformed_deassign.v",
+      "module malformed_deassign; reg value; initial deassign value "
+      "endmodule",
+      Language::Verilog2005);
+  require(!malformed_deassign.ok()
+          && std::ranges::any_of(
+              malformed_deassign.diagnostics,
+              [](const auto& diagnostic) {
+                  return diagnostic.code == "FSIM-SV-PARSE-344";
+              }),
+      "procedural deassign must require a semicolon");
 
   const auto malformed_force = parse_text(
       "malformed_force.sv",

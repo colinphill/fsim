@@ -3,10 +3,11 @@
 
 namespace fsim::tests::elaboration {
 
-void test_systemverilog_function_lowering() {
-  const auto parsed = fsim::frontend::parse_text(
-      "function_runtime.sv",
-      R"(
+void test_systemverilog_function_lowering()
+{
+    const auto parsed = fsim::frontend::parse_text(
+        "function_runtime.sv",
+        R"(
 module function_runtime #(
     parameter int WIDTH = 8
 ) (
@@ -33,50 +34,45 @@ module function_runtime #(
   initial result = choose(select, value);
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(parsed.ok());
-  const auto elaborated = fsim::elaboration::elaborate(
-      parsed.design, "sv:work.function_runtime");
-  assert(elaborated.ok());
-  const auto select =
-      elaborated.design->find_signal("select");
-  const auto value =
-      elaborated.design->find_signal("value");
-  const auto result =
-      elaborated.design->find_signal("result");
-  assert(select && value && result);
-  const auto& operations =
-      elaborated.design->processes().front().operations;
-  assert(std::ranges::any_of(
-      operations,
-      [](const auto& operation) {
-        return fsim::runtime::simir::operation_holds<
-            fsim::runtime::simir::Call>(operation);
-      }));
-  assert(std::ranges::any_of(
-      operations,
-      [](const auto& operation) {
-        return fsim::runtime::simir::operation_holds<
-            fsim::runtime::simir::Return>(operation);
-      }));
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(parsed.ok());
+    const auto elaborated = fsim::elaboration::elaborate(
+        parsed.design, "sv:work.function_runtime");
+    assert(elaborated.ok());
+    const auto select = elaborated.design->find_signal("select");
+    const auto value = elaborated.design->find_signal("value");
+    const auto result = elaborated.design->find_signal("result");
+    assert(select && value && result);
+    const auto& operations = elaborated.design->processes().front().operations;
+    assert(std::ranges::any_of(
+        operations,
+        [](const auto& operation) {
+            return fsim::runtime::simir::operation_holds<
+                fsim::runtime::simir::Call>(operation);
+        }));
+    assert(std::ranges::any_of(
+        operations,
+        [](const auto& operation) {
+            return fsim::runtime::simir::operation_holds<
+                fsim::runtime::simir::Return>(operation);
+        }));
 
-  auto interpreter =
-      elaborated.design->create_interpreter();
-  interpreter->deposit_signal(
-      *select,
-      fsim::runtime::PackedLogic4::from_msb_string("1"));
-  interpreter->deposit_signal(
-      *value,
-      fsim::runtime::PackedLogic4::from_msb_string("00101001"));
-  const auto run = interpreter->run();
-  assert(run.status == fsim::runtime::RunStatus::completed);
-  assert(
-      interpreter->signal_value(*result).to_msb_string()
-      == "00101010");
+    auto interpreter = elaborated.design->create_interpreter();
+    interpreter->deposit_signal(
+        *select,
+        fsim::runtime::PackedLogic4::from_msb_string("1"));
+    interpreter->deposit_signal(
+        *value,
+        fsim::runtime::PackedLogic4::from_msb_string("00101001"));
+    const auto run = interpreter->run();
+    assert(run.status == fsim::runtime::RunStatus::completed);
+    assert(
+        interpreter->signal_value(*result).to_msb_string()
+        == "00101010");
 
-  const auto closure = fsim::frontend::parse_text(
-      "callable_closure.sv",
-      R"(
+    const auto closure = fsim::frontend::parse_text(
+        "callable_closure.sv",
+        R"(
 module callable_closure(
     output logic [7:0] static_first,
     output logic [7:0] static_second,
@@ -149,45 +145,44 @@ module callable_closure(
   end
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(closure.ok());
-  const auto closure_elaborated = fsim::elaboration::elaborate(
-      closure.design, "sv:work.callable_closure");
-  if (!closure_elaborated.ok()) {
-    for (const auto& diagnostic : closure_elaborated.diagnostics) {
-      std::cerr << diagnostic.code << ": "
-                << diagnostic.message << '\n';
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(closure.ok());
+    const auto closure_elaborated = fsim::elaboration::elaborate(
+        closure.design, "sv:work.callable_closure");
+    if (!closure_elaborated.ok()) {
+        for (const auto& diagnostic : closure_elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
     }
-  }
-  assert(closure_elaborated.ok());
-  auto closure_interpreter =
-      closure_elaborated.design->create_interpreter();
-  assert(
-      closure_interpreter->run().status
-      == fsim::runtime::RunStatus::completed);
-  const auto expect_closure_signal =
-      [&](const std::string_view name,
-          const std::string_view expected) {
-        const auto signal = closure_elaborated.design->find_signal(name);
-        assert(signal);
-        assert(
-            closure_interpreter->signal_value(*signal).to_msb_string()
-            == expected);
-      };
-  expect_closure_signal("static_first", "00000001");
-  expect_closure_signal("static_second", "00000011");
-  expect_closure_signal("copied", "00101000");
-  expect_closure_signal("returned", "00101010");
-  expect_closure_signal("ref_result", "00001100");
-  expect_closure_signal("task_first", "00000001");
-  expect_closure_signal("task_second", "00000010");
-  expect_closure_signal("task_ref_result", "00001111");
-  expect_closure_signal("generated_function_result", "00101011");
-  expect_closure_signal("generated_task_result", "00101100");
+    assert(closure_elaborated.ok());
+    auto closure_interpreter = closure_elaborated.design->create_interpreter();
+    assert(
+        closure_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto expect_closure_signal =
+        [&](const std::string_view name,
+            const std::string_view expected) {
+            const auto signal = closure_elaborated.design->find_signal(name);
+            assert(signal);
+            assert(
+                closure_interpreter->signal_value(*signal).to_msb_string()
+                == expected);
+        };
+    expect_closure_signal("static_first", "00000001");
+    expect_closure_signal("static_second", "00000011");
+    expect_closure_signal("copied", "00101000");
+    expect_closure_signal("returned", "00101010");
+    expect_closure_signal("ref_result", "00001100");
+    expect_closure_signal("task_first", "00000001");
+    expect_closure_signal("task_second", "00000010");
+    expect_closure_signal("task_ref_result", "00001111");
+    expect_closure_signal("generated_function_result", "00101011");
+    expect_closure_signal("generated_task_result", "00101100");
 
-  const auto association_error = fsim::frontend::parse_text(
-      "function_association_error.sv",
-      R"(
+    const auto association_error = fsim::frontend::parse_text(
+        "function_association_error.sv",
+        R"(
 module function_association_error(output logic result);
   function automatic logic selected(
       input logic left = 1'b0,
@@ -197,29 +192,28 @@ module function_association_error(output logic result);
   initial result = selected(.left(1'b0), .left(1'b1));
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(association_error.ok());
-  const auto rejected_association = fsim::elaboration::elaborate(
-      association_error.design,
-      "sv:work.function_association_error");
-  assert(
-      !rejected_association.ok()
-      && has_diagnostic(
-          rejected_association, "FSIM-ELAB-SVFUNC-010"));
-  auto malformed_association = association_error.design;
-  malformed_association.units.front().processes.front()
-      .statements.front().value.call_argument_names.pop_back();
-  const auto rejected_malformed = fsim::elaboration::elaborate(
-      malformed_association,
-      "sv:work.function_association_error");
-  assert(
-      !rejected_malformed.ok()
-      && has_diagnostic(
-          rejected_malformed, "FSIM-ELAB-SVFUNC-010"));
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(association_error.ok());
+    const auto rejected_association = fsim::elaboration::elaborate(
+        association_error.design,
+        "sv:work.function_association_error");
+    assert(
+        !rejected_association.ok()
+        && has_diagnostic(
+            rejected_association, "FSIM-ELAB-SVFUNC-010"));
+    auto malformed_association = association_error.design;
+    malformed_association.units.front().processes.front().statements.front().value.call_argument_names.pop_back();
+    const auto rejected_malformed = fsim::elaboration::elaborate(
+        malformed_association,
+        "sv:work.function_association_error");
+    assert(
+        !rejected_malformed.ok()
+        && has_diagnostic(
+            rejected_malformed, "FSIM-ELAB-SVFUNC-010"));
 
-  const auto ref_signal = fsim::frontend::parse_text(
-      "function_ref_signal.sv",
-      R"(
+    const auto ref_signal = fsim::frontend::parse_text(
+        "function_ref_signal.sv",
+        R"(
 module function_ref_signal(output logic result);
   logic value;
   function automatic logic mutate(ref logic target);
@@ -229,30 +223,31 @@ module function_ref_signal(output logic result);
   initial result = mutate(value);
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(ref_signal.ok());
-  const auto elaborated_ref_signal = fsim::elaboration::elaborate(
-      ref_signal.design, "sv:work.function_ref_signal");
-  assert(elaborated_ref_signal.ok());
-  auto ref_signal_interpreter =
-      elaborated_ref_signal.design->create_interpreter();
-  const auto ref_signal_value =
-      elaborated_ref_signal.design->find_signal("value");
-  const auto ref_signal_result =
-      elaborated_ref_signal.design->find_signal("result");
-  assert(ref_signal_value && ref_signal_result);
-  assert(
-      ref_signal_interpreter->run().status
-      == fsim::runtime::RunStatus::completed);
-  assert(
-      ref_signal_interpreter
-          ->signal_value(*ref_signal_value).to_msb_string() == "1"
-      && ref_signal_interpreter
-             ->signal_value(*ref_signal_result).to_msb_string() == "1");
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(ref_signal.ok());
+    const auto elaborated_ref_signal = fsim::elaboration::elaborate(
+        ref_signal.design, "sv:work.function_ref_signal");
+    assert(elaborated_ref_signal.ok());
+    auto ref_signal_interpreter = elaborated_ref_signal.design->create_interpreter();
+    const auto ref_signal_value = elaborated_ref_signal.design->find_signal("value");
+    const auto ref_signal_result = elaborated_ref_signal.design->find_signal("result");
+    assert(ref_signal_value && ref_signal_result);
+    assert(
+        ref_signal_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        ref_signal_interpreter
+                ->signal_value(*ref_signal_value)
+                .to_msb_string()
+            == "1"
+        && ref_signal_interpreter
+                ->signal_value(*ref_signal_result)
+                .to_msb_string()
+            == "1");
 
-  const auto ref_literal = fsim::frontend::parse_text(
-      "function_ref_literal.sv",
-      R"(
+    const auto ref_literal = fsim::frontend::parse_text(
+        "function_ref_literal.sv",
+        R"(
 module function_ref_literal(output logic result);
   function automatic logic mutate(ref logic target);
     target = 1'b1;
@@ -261,18 +256,18 @@ module function_ref_literal(output logic result);
   initial result = mutate(1'b0);
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(ref_literal.ok());
-  const auto rejected_ref_literal = fsim::elaboration::elaborate(
-      ref_literal.design, "sv:work.function_ref_literal");
-  assert(
-      !rejected_ref_literal.ok()
-      && has_diagnostic(
-          rejected_ref_literal, "FSIM-ELAB-SVFUNC-012"));
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(ref_literal.ok());
+    const auto rejected_ref_literal = fsim::elaboration::elaborate(
+        ref_literal.design, "sv:work.function_ref_literal");
+    assert(
+        !rejected_ref_literal.ok()
+        && has_diagnostic(
+            rejected_ref_literal, "FSIM-ELAB-SVFUNC-012"));
 
-  const auto static_container = fsim::frontend::parse_text(
-      "static_function_container.sv",
-      R"(
+    const auto static_container = fsim::frontend::parse_text(
+        "static_function_container.sv",
+        R"(
 module static_function_container(output logic result);
   function logic retained;
     logic values[1:0];
@@ -282,28 +277,27 @@ module static_function_container(output logic result);
   initial result = retained();
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(static_container.ok());
-  const auto elaborated_static_container = fsim::elaboration::elaborate(
-      static_container.design,
-      "sv:work.static_function_container");
-  assert(elaborated_static_container.ok());
-  auto static_container_interpreter =
-      elaborated_static_container.design->create_interpreter();
-  assert(
-      static_container_interpreter->run().status
-      == fsim::runtime::RunStatus::completed);
-  const auto static_container_result =
-      elaborated_static_container.design->find_signal("result");
-  assert(
-      static_container_result
-      && static_container_interpreter
-             ->signal_value(*static_container_result)
-             .to_msb_string() == "1");
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(static_container.ok());
+    const auto elaborated_static_container = fsim::elaboration::elaborate(
+        static_container.design,
+        "sv:work.static_function_container");
+    assert(elaborated_static_container.ok());
+    auto static_container_interpreter = elaborated_static_container.design->create_interpreter();
+    assert(
+        static_container_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto static_container_result = elaborated_static_container.design->find_signal("result");
+    assert(
+        static_container_result
+        && static_container_interpreter
+                ->signal_value(*static_container_result)
+                .to_msb_string()
+            == "1");
 
-  const auto recursive = fsim::frontend::parse_text(
-      "recursive_function.sv",
-      R"(
+    const auto recursive = fsim::frontend::parse_text(
+        "recursive_function.sv",
+        R"(
 module recursive_function(
     input logic value,
     output logic result);
@@ -313,17 +307,29 @@ module recursive_function(
   initial result = recurse(value);
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(recursive.ok());
-  const auto rejected = fsim::elaboration::elaborate(
-      recursive.design, "sv:work.recursive_function");
-  assert(
-      !rejected.ok()
-      && has_diagnostic(rejected, "FSIM-ELAB-SVFUNC-006"));
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(recursive.ok());
+    const auto recursive_result = fsim::elaboration::elaborate(
+        recursive.design, "sv:work.recursive_function");
+    assert(recursive_result.ok());
+    const auto& recursive_operations = recursive_result.design->processes().front().operations;
+    assert(std::ranges::any_of(
+        recursive_operations,
+        [](const auto& operation) {
+            return fsim::runtime::simir::operation_holds<
+                fsim::runtime::simir::CallableFramePush>(operation);
+        }));
+    assert(std::ranges::any_of(
+        recursive_operations,
+        [](const auto& operation) {
+            const auto* call = fsim::runtime::simir::operation_get_if<
+                fsim::runtime::simir::Call>(&operation);
+            return call != nullptr && call->stack.capacity == 0;
+        }));
 
-  const auto wrong_arity = fsim::frontend::parse_text(
-      "function_arity.sv",
-      R"(
+    const auto wrong_arity = fsim::frontend::parse_text(
+        "function_arity.sv",
+        R"(
 module function_arity(output logic result);
   function automatic logic identity(input logic argument);
     identity = argument;
@@ -331,18 +337,18 @@ module function_arity(output logic result);
   initial result = identity();
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(wrong_arity.ok());
-  const auto rejected_arity = fsim::elaboration::elaborate(
-      wrong_arity.design, "sv:work.function_arity");
-  assert(
-      !rejected_arity.ok()
-      && has_diagnostic(
-          rejected_arity, "FSIM-ELAB-SVFUNC-003"));
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(wrong_arity.ok());
+    const auto rejected_arity = fsim::elaboration::elaborate(
+        wrong_arity.design, "sv:work.function_arity");
+    assert(
+        !rejected_arity.ok()
+        && has_diagnostic(
+            rejected_arity, "FSIM-ELAB-SVFUNC-003"));
 
-  const auto packages = fsim::frontend::parse_text(
-      "package_functions.sv",
-      R"(
+    const auto packages = fsim::frontend::parse_text(
+        "package_functions.sv",
+        R"(
 package math_pkg;
   function automatic logic [7:0] add_two(
       input logic [7:0] argument);
@@ -359,32 +365,29 @@ module qualified_function(output logic [7:0] result);
   initial result = math_pkg::add_two(8'd40);
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(packages.ok());
-  for (const auto top :
-       {"sv:work.imported_function",
-        "sv:work.qualified_function"}) {
-    const auto package_elaborated =
-        fsim::elaboration::elaborate(packages.design, top);
-    assert(package_elaborated.ok());
-    const auto package_result =
-        package_elaborated.design->find_signal("result");
-    assert(package_result);
-    auto package_interpreter =
-        package_elaborated.design->create_interpreter();
-    assert(
-        package_interpreter->run().status
-        == fsim::runtime::RunStatus::completed);
-    assert(
-        package_interpreter
-            ->signal_value(*package_result)
-            .to_msb_string()
-        == "00101010");
-  }
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(packages.ok());
+    for (const auto top :
+        { "sv:work.imported_function",
+            "sv:work.qualified_function" }) {
+        const auto package_elaborated = fsim::elaboration::elaborate(packages.design, top);
+        assert(package_elaborated.ok());
+        const auto package_result = package_elaborated.design->find_signal("result");
+        assert(package_result);
+        auto package_interpreter = package_elaborated.design->create_interpreter();
+        assert(
+            package_interpreter->run().status
+            == fsim::runtime::RunStatus::completed);
+        assert(
+            package_interpreter
+                ->signal_value(*package_result)
+                .to_msb_string()
+            == "00101010");
+    }
 
-  const auto constant = fsim::frontend::parse_text(
-      "constant_function.sv",
-      R"(
+    const auto constant = fsim::frontend::parse_text(
+        "constant_function.sv",
+        R"(
 module constant_function(output logic [3:0] result);
   function automatic int width_for(input int argument);
     if (argument > 3)
@@ -401,34 +404,67 @@ module constant_function(output logic [3:0] result);
   end
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(constant.ok());
-  const auto constant_elaborated =
-      fsim::elaboration::elaborate(
-          constant.design, "sv:work.constant_function");
-  assert(constant_elaborated.ok());
-  const auto internal =
-      constant_elaborated.design->find_signal("internal");
-  const auto constant_result =
-      constant_elaborated.design->find_signal("result");
-  assert(internal && constant_result);
-  assert(
-      constant_elaborated.design->signals().at(*internal).width
-      == 4);
-  auto constant_interpreter =
-      constant_elaborated.design->create_interpreter();
-  assert(
-      constant_interpreter->run().status
-      == fsim::runtime::RunStatus::completed);
-  assert(
-      constant_interpreter
-          ->signal_value(*constant_result)
-          .to_msb_string()
-      == "1010");
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(constant.ok());
+    const auto constant_elaborated = fsim::elaboration::elaborate(
+        constant.design, "sv:work.constant_function");
+    assert(constant_elaborated.ok());
+    const auto internal = constant_elaborated.design->find_signal("internal");
+    const auto constant_result = constant_elaborated.design->find_signal("result");
+    assert(internal && constant_result);
+    assert(
+        constant_elaborated.design->signals().at(*internal).width
+        == 4);
+    auto constant_interpreter = constant_elaborated.design->create_interpreter();
+    assert(
+        constant_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        constant_interpreter
+            ->signal_value(*constant_result)
+            .to_msb_string()
+        == "1010");
 
-  const auto fixed_returns = fsim::frontend::parse_text(
-      "fixed_function_returns.sv",
-      R"(
+    const auto wide_constant = fsim::frontend::parse_text(
+        "wide_constant_function.v",
+        R"(
+module wide_constant_function(output reg [256:0] result);
+  function [256:0] add_three;
+    input [256:0] value;
+    begin
+      add_three = value + 257'd3;
+    end
+  endfunction
+  localparam [256:0] WIDE =
+      add_three((257'd1 << 256) | 257'd5);
+  initial result = WIDE;
+endmodule
+)",
+        fsim::frontend::Language::Verilog2005);
+    assert(wide_constant.ok());
+    const auto wide_constant_elaborated = fsim::elaboration::elaborate(
+        wide_constant.design, "verilog:work.wide_constant_function");
+    if (!wide_constant_elaborated.ok()) {
+        for (const auto& diagnostic : wide_constant_elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+        }
+    }
+    assert(wide_constant_elaborated.ok());
+    const auto wide_constant_result = wide_constant_elaborated.design->find_signal("result");
+    assert(wide_constant_result);
+    auto wide_constant_interpreter = wide_constant_elaborated.design->create_interpreter();
+    assert(wide_constant_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto& wide_constant_value = wide_constant_interpreter->signal_value(*wide_constant_result);
+    assert(wide_constant_value.width() == 257);
+    assert(wide_constant_value.get(256) == fsim::runtime::Logic4::one);
+    assert(wide_constant_value.get(3) == fsim::runtime::Logic4::one);
+    assert(wide_constant_value.get(2) == fsim::runtime::Logic4::zero);
+    assert(wide_constant_value.get(0) == fsim::runtime::Logic4::zero);
+
+    const auto fixed_returns = fsim::frontend::parse_text(
+        "fixed_function_returns.sv",
+        R"(
 module fixed_function_returns;
   logic [7:0] source[7:2];
   logic [7:0] whole[20:17];
@@ -510,118 +546,123 @@ module fixed_function_returns;
   end
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(fixed_returns.ok());
-  const auto fixed_elaborated = fsim::elaboration::elaborate(
-      fixed_returns.design,
-      "sv:work.fixed_function_returns");
-  if (!fixed_elaborated.ok()) {
-    for (const auto& diagnostic : fixed_elaborated.diagnostics) {
-      std::cerr << diagnostic.code << ": "
-                << diagnostic.message << '\n';
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(fixed_returns.ok());
+    const auto fixed_elaborated = fsim::elaboration::elaborate(
+        fixed_returns.design,
+        "sv:work.fixed_function_returns");
+    if (!fixed_elaborated.ok()) {
+        for (const auto& diagnostic : fixed_elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
     }
-  }
-  assert(fixed_elaborated.ok());
-  const auto& fixed_process =
-      fixed_elaborated.design->processes().front();
-  assert(std::ranges::count_if(
-             fixed_process.operations,
-             [](const auto& operation) {
-               return fsim::runtime::simir::operation_holds<
-                   fsim::runtime::simir::Call>(operation);
-             })
-         == 17);
-  assert(std::ranges::count_if(
-             fixed_process.operations,
-             [](const auto& operation) {
-               return fsim::runtime::simir::operation_holds<
-                   fsim::runtime::simir::ConditionalContainerSelect>(
-                   operation);
-             })
-         == 2);
-  assert(std::ranges::any_of(
-      fixed_process.debug_container_locals,
-      [](const auto& local) {
-        return local.name == "from_slice.from_slice"
-            && local.type.fixed
-            && local.type.index_left == 10
-            && local.type.index_right == 7;
-      }));
-  auto fixed_interpreter =
-      fixed_elaborated.design->create_interpreter();
-  assert(
-      fixed_interpreter->run().status
-      == fsim::runtime::RunStatus::completed);
-  const auto object_value =
-      [&](const std::string_view name) -> const auto& {
+    assert(fixed_elaborated.ok());
+    const auto& fixed_process = fixed_elaborated.design->processes().front();
+    assert(std::ranges::count_if(
+               fixed_process.operations,
+               [](const auto& operation) {
+                   return fsim::runtime::simir::operation_holds<
+                       fsim::runtime::simir::Call>(operation);
+               })
+        == 17);
+    assert(std::ranges::count_if(
+               fixed_process.operations,
+               [](const auto& operation) {
+                   return fsim::runtime::simir::operation_holds<
+                       fsim::runtime::simir::ConditionalContainerSelect>(
+                       operation);
+               })
+        == 2);
+    assert(std::ranges::any_of(
+        fixed_process.debug_container_locals,
+        [](const auto& local) {
+            return local.name == "from_slice.from_slice"
+                && local.type.fixed
+                && local.type.index_left == 10
+                && local.type.index_right == 7;
+        }));
+    auto fixed_interpreter = fixed_elaborated.design->create_interpreter();
+    assert(
+        fixed_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto object_value =
+        [&](const std::string_view name) -> const auto& {
         const auto id = fixed_elaborated.design->find_container(name);
         assert(id);
         return fixed_interpreter->container_object_value(*id);
-      };
-  const auto bytes =
-      [](const auto& container_value) {
-        std::vector<std::uint64_t> octets;
-        for (const auto& element : container_value.elements) {
-          octets.push_back(element.low_word().aval);
-        }
-        return octets;
-      };
-  assert(bytes(object_value("whole"))
-         == std::vector<std::uint64_t>({0x60, 0xa3, 0x40, 0x30}));
-  assert(bytes(object_value("colon_whole"))
-         == std::vector<std::uint64_t>({0x60, 0xa3, 0x40, 0x30}));
-  assert(
-      object_value("whole").elements[1].low_word().bval == 0x30
-      && object_value("colon_whole")
-             .elements[1].low_word().bval == 0x30);
-  assert(bytes(object_value("selected"))
-         == std::vector<std::uint64_t>(
-             {0xee, 0x10, 0x11, 0x12, 0x13, 0xee}));
-  assert(bytes(object_value("nested"))
-         == std::vector<std::uint64_t>({0x20, 0x21, 0x22, 0x23}));
-  assert(bytes(object_value("partial_first"))
-         == std::vector<std::uint64_t>({0x91, 0x82, 0x73, 0x64}));
-  assert(bytes(object_value("conditional_fixed"))
-         == std::vector<std::uint64_t>({0x40, 0x41, 0x42, 0x43}));
-  const auto fixed_query =
-      fixed_elaborated.design->find_signal("fixed_query");
-  assert(
-      fixed_query
-      && fixed_interpreter->signal_value(*fixed_query)
-             .low_word().aval == 46);
-  const auto fixed_logical_equal =
-      fixed_elaborated.design->find_signal("fixed_logical_equal");
-  const auto fixed_case_equal =
-      fixed_elaborated.design->find_signal("fixed_case_equal");
-  const auto fixed_case_not_equal =
-      fixed_elaborated.design->find_signal("fixed_case_not_equal");
-  assert(
-      fixed_logical_equal && fixed_case_equal
-      && fixed_case_not_equal
-      && fixed_interpreter->signal_value(*fixed_logical_equal)
-             .low_word().bval == 1
-      && fixed_interpreter->signal_value(*fixed_case_equal)
-             .low_word().aval == 1
-      && fixed_interpreter->signal_value(*fixed_case_not_equal)
-             .low_word().aval == 1);
-  const auto& merged_fixed = object_value("merged_fixed");
-  assert(
-      merged_fixed.elements.size() == 4
-      && merged_fixed.elements[0].low_word().bval == 0x08
-      && merged_fixed.elements[1].low_word().bval == 0x08
-      && merged_fixed.elements[2].low_word().bval == 0x08
-      && merged_fixed.elements[3].low_word().bval == 0x08);
-  const auto& reset = object_value("partial_second");
-  assert(
-      reset.elements[0].low_word().aval == 0x91
-      && reset.elements[0].low_word().bval == 0
-      && reset.elements[1].low_word().bval == 0xff
-      && reset.elements[2].low_word().bval == 0xff
-      && reset.elements[3].low_word().bval == 0xff);
+    };
+    const auto bytes =
+        [](const auto& container_value) {
+            std::vector<std::uint64_t> octets;
+            for (const auto& element : container_value.elements) {
+                octets.push_back(element.low_word().aval);
+            }
+            return octets;
+        };
+    assert(bytes(object_value("whole"))
+        == std::vector<std::uint64_t>({ 0x60, 0xa3, 0x40, 0x30 }));
+    assert(bytes(object_value("colon_whole"))
+        == std::vector<std::uint64_t>({ 0x60, 0xa3, 0x40, 0x30 }));
+    assert(
+        object_value("whole").elements[1].low_word().bval == 0x30
+        && object_value("colon_whole")
+                .elements[1]
+                .low_word()
+                .bval
+            == 0x30);
+    assert(bytes(object_value("selected"))
+        == std::vector<std::uint64_t>(
+            { 0xee, 0x10, 0x11, 0x12, 0x13, 0xee }));
+    assert(bytes(object_value("nested"))
+        == std::vector<std::uint64_t>({ 0x20, 0x21, 0x22, 0x23 }));
+    assert(bytes(object_value("partial_first"))
+        == std::vector<std::uint64_t>({ 0x91, 0x82, 0x73, 0x64 }));
+    assert(bytes(object_value("conditional_fixed"))
+        == std::vector<std::uint64_t>({ 0x40, 0x41, 0x42, 0x43 }));
+    const auto fixed_query = fixed_elaborated.design->find_signal("fixed_query");
+    assert(
+        fixed_query
+        && fixed_interpreter->signal_value(*fixed_query)
+                .low_word()
+                .aval
+            == 46);
+    const auto fixed_logical_equal = fixed_elaborated.design->find_signal("fixed_logical_equal");
+    const auto fixed_case_equal = fixed_elaborated.design->find_signal("fixed_case_equal");
+    const auto fixed_case_not_equal = fixed_elaborated.design->find_signal("fixed_case_not_equal");
+    assert(
+        fixed_logical_equal && fixed_case_equal
+        && fixed_case_not_equal
+        && fixed_interpreter->signal_value(*fixed_logical_equal)
+                .low_word()
+                .bval
+            == 1
+        && fixed_interpreter->signal_value(*fixed_case_equal)
+                .low_word()
+                .aval
+            == 1
+        && fixed_interpreter->signal_value(*fixed_case_not_equal)
+                .low_word()
+                .aval
+            == 1);
+    const auto& merged_fixed = object_value("merged_fixed");
+    assert(
+        merged_fixed.elements.size() == 4
+        && merged_fixed.elements[0].low_word().bval == 0x08
+        && merged_fixed.elements[1].low_word().bval == 0x08
+        && merged_fixed.elements[2].low_word().bval == 0x08
+        && merged_fixed.elements[3].low_word().bval == 0x08);
+    const auto& reset = object_value("partial_second");
+    assert(
+        reset.elements[0].low_word().aval == 0x91
+        && reset.elements[0].low_word().bval == 0
+        && reset.elements[1].low_word().bval == 0xff
+        && reset.elements[2].low_word().bval == 0xff
+        && reset.elements[3].low_word().bval == 0xff);
 
-  const auto nonstatic_returns = fsim::frontend::parse_text(
-      "nonstatic_function_returns.sv",
-      R"(
+    const auto nonstatic_returns = fsim::frontend::parse_text(
+        "nonstatic_function_returns.sv",
+        R"(
 module nonstatic_function_returns;
   byte dynamic_source[];
   byte dynamic_result[];
@@ -722,182 +763,198 @@ module nonstatic_function_returns;
   end
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(nonstatic_returns.ok());
-  const auto nonstatic_elaborated = fsim::elaboration::elaborate(
-      nonstatic_returns.design,
-      "sv:work.nonstatic_function_returns");
-  if (!nonstatic_elaborated.ok()) {
-    for (const auto& diagnostic : nonstatic_elaborated.diagnostics) {
-      std::cerr << diagnostic.code << ": "
-                << diagnostic.message << '\n';
-    }
-  }
-  assert(nonstatic_elaborated.ok());
-  const auto& nonstatic_process =
-      nonstatic_elaborated.design->processes().front();
-  assert(std::ranges::count_if(
-             nonstatic_process.operations,
-             [](const auto& operation) {
-               return fsim::runtime::simir::operation_holds<
-                   fsim::runtime::simir::Call>(operation);
-             })
-         == 30);
-  assert(std::ranges::count_if(
-             nonstatic_process.operations,
-             [](const auto& operation) {
-               return fsim::runtime::simir::operation_holds<
-                   fsim::runtime::simir::ConditionalContainerSelect>(
-                   operation);
-             })
-         == 3);
-  assert(std::ranges::any_of(
-      nonstatic_process.debug_container_locals,
-      [](const auto& local) {
-        return local.name == "copy_dynamic.copy_dynamic"
-            && !local.type.fixed
-            && !local.type.queue
-            && !local.type.associative;
-      }));
-  assert(std::ranges::any_of(
-      nonstatic_process.debug_container_locals,
-      [](const auto& local) {
-        return local.type.queue
-            && local.type.maximum_elements
-                == std::optional<std::uint32_t>{4};
-      }));
-  assert(std::ranges::any_of(
-      nonstatic_process.debug_container_locals,
-      [](const auto& local) {
-        return local.type.associative
-            && local.type.index_width == 32
-            && local.type.signed_indices;
-      }));
-  auto nonstatic_interpreter =
-      nonstatic_elaborated.design->create_interpreter();
-  assert(
-      nonstatic_interpreter->run().status
-      == fsim::runtime::RunStatus::completed);
-  const auto nonstatic_value =
-      [&](const std::string_view name) -> const auto& {
-        const auto id =
-            nonstatic_elaborated.design->find_container(name);
-        assert(id);
-        return nonstatic_interpreter->container_object_value(*id);
-      };
-  const auto& dynamic_value = nonstatic_value("dynamic_result");
-  const auto& queue_value = nonstatic_value("queue_result");
-  const auto& associative_value =
-      nonstatic_value("associative_result");
-  assert(
-      bytes(dynamic_value)
-          == std::vector<std::uint64_t>({11, 12, 13})
-      && !dynamic_value.type.fixed
-      && !dynamic_value.type.queue
-      && !dynamic_value.type.associative);
-  assert(
-      bytes(queue_value)
-          == std::vector<std::uint64_t>({21, 22, 23})
-      && queue_value.type.queue
-      && queue_value.type.maximum_elements
-          == std::optional<std::uint32_t>{4});
-  assert(
-      bytes(associative_value)
-          == std::vector<std::uint64_t>({31, 44})
-      && associative_value.type.associative
-      && associative_value.keys.size() == 2
-      && associative_value.keys[0].low_word().aval
-          == UINT64_C(0xffffffff)
-      && associative_value.keys[1].low_word().aval == 4);
-  const auto query_result =
-      nonstatic_elaborated.design->find_signal("query_result");
-  const auto reduction_result =
-      nonstatic_elaborated.design->find_signal("reduction_result");
-  const auto direct_result =
-      nonstatic_elaborated.design->find_signal("direct_result");
-  assert(query_result && reduction_result && direct_result);
-  assert(
-      nonstatic_interpreter->signal_value(*query_result)
-              .low_word().aval == 36
-      && nonstatic_interpreter->signal_value(*reduction_result)
-              .low_word().aval == 36
-      && nonstatic_interpreter->signal_value(*direct_result)
-              .low_word().aval == 12
-      && bytes(nonstatic_value("maximum_result"))
-          == std::vector<std::uint64_t>({23}));
-  assert(bytes(nonstatic_value("conditional_result"))
-         == std::vector<std::uint64_t>({11, 12, 13}));
-  const auto& conditional_merged =
-      nonstatic_value("conditional_merged");
-  assert(
-      bytes(conditional_merged)
-          == std::vector<std::uint64_t>({11, 0, 13})
-      && conditional_merged.elements[0].low_word().bval == 0
-      && conditional_merged.elements[1].low_word().bval == 0
-      && conditional_merged.elements[2].low_word().bval == 0);
-  assert(nonstatic_value("conditional_shape").elements.empty());
-  const auto transformed_result =
-      nonstatic_elaborated.design->find_signal("transformed_result");
-  assert(
-      transformed_result
-      && nonstatic_interpreter->signal_value(*transformed_result)
-             .low_word().aval == 12
-      && bytes(nonstatic_value("found_result"))
-          == std::vector<std::uint64_t>({12, 13})
-      && bytes(nonstatic_value("found_index_result"))
-          == std::vector<std::uint64_t>({1, 2})
-      && bytes(nonstatic_value("unique_result"))
-          == std::vector<std::uint64_t>({11, 12}));
-  const auto dynamic_equal =
-      nonstatic_elaborated.design->find_signal("dynamic_equal");
-  const auto queue_not_equal =
-      nonstatic_elaborated.design->find_signal("queue_not_equal");
-  const auto associative_case_equal =
-      nonstatic_elaborated.design->find_signal(
-          "associative_case_equal");
-  const auto associative_not_equal =
-      nonstatic_elaborated.design->find_signal(
-          "associative_not_equal");
-  assert(
-      dynamic_equal && queue_not_equal && associative_case_equal
-      && associative_not_equal
-      && nonstatic_interpreter->signal_value(*dynamic_equal)
-             .low_word().aval == 1
-      && nonstatic_interpreter->signal_value(*queue_not_equal)
-             .low_word().aval == 0
-      && nonstatic_interpreter->signal_value(*associative_case_equal)
-             .low_word().aval == 1
-      && nonstatic_interpreter->signal_value(*associative_not_equal)
-             .low_word().aval == 1);
-
-  const auto reject_fixed_return =
-      [](const std::string_view path,
-         const std::string_view source,
-         const std::string_view top,
-         const std::string_view code) {
-        const auto candidate = fsim::frontend::parse_text(
-            path,
-            source,
-            fsim::frontend::Language::SystemVerilog2017);
-        assert(candidate.ok());
-        const auto rejected_result = fsim::elaboration::elaborate(
-            candidate.design, top);
-        if (rejected_result.ok()
-            || !has_diagnostic(rejected_result, code)) {
-          std::cerr << "unexpected fixed-return diagnostic set for "
-                    << path << " (expected " << code << ")\n";
-          for (const auto& diagnostic : rejected_result.diagnostics) {
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(nonstatic_returns.ok());
+    const auto nonstatic_elaborated = fsim::elaboration::elaborate(
+        nonstatic_returns.design,
+        "sv:work.nonstatic_function_returns");
+    if (!nonstatic_elaborated.ok()) {
+        for (const auto& diagnostic : nonstatic_elaborated.diagnostics) {
             std::cerr << diagnostic.code << ": "
                       << diagnostic.message << '\n';
-          }
         }
-        assert(
-            !rejected_result.ok()
-            && has_diagnostic(rejected_result, code));
-      };
-  reject_fixed_return(
-      "conditional_container_profile_mismatch.sv",
-      R"(
+    }
+    assert(nonstatic_elaborated.ok());
+    const auto& nonstatic_process = nonstatic_elaborated.design->processes().front();
+    assert(std::ranges::count_if(
+               nonstatic_process.operations,
+               [](const auto& operation) {
+                   return fsim::runtime::simir::operation_holds<
+                       fsim::runtime::simir::Call>(operation);
+               })
+        == 30);
+    assert(std::ranges::count_if(
+               nonstatic_process.operations,
+               [](const auto& operation) {
+                   return fsim::runtime::simir::operation_holds<
+                       fsim::runtime::simir::ConditionalContainerSelect>(
+                       operation);
+               })
+        == 3);
+    assert(std::ranges::any_of(
+        nonstatic_process.debug_container_locals,
+        [](const auto& local) {
+            return local.name == "copy_dynamic.copy_dynamic"
+                && !local.type.fixed
+                && !local.type.queue
+                && !local.type.associative;
+        }));
+    assert(std::ranges::any_of(
+        nonstatic_process.debug_container_locals,
+        [](const auto& local) {
+            return local.type.queue
+                && local.type.maximum_elements
+                == std::optional<std::uint32_t> { 4 };
+        }));
+    assert(std::ranges::any_of(
+        nonstatic_process.debug_container_locals,
+        [](const auto& local) {
+            return local.type.associative
+                && local.type.index_width == 32
+                && local.type.signed_indices;
+        }));
+    auto nonstatic_interpreter = nonstatic_elaborated.design->create_interpreter();
+    assert(
+        nonstatic_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto nonstatic_value =
+        [&](const std::string_view name) -> const auto& {
+        const auto id = nonstatic_elaborated.design->find_container(name);
+        assert(id);
+        return nonstatic_interpreter->container_object_value(*id);
+    };
+    const auto& dynamic_value = nonstatic_value("dynamic_result");
+    const auto& queue_value = nonstatic_value("queue_result");
+    const auto& associative_value = nonstatic_value("associative_result");
+    assert(
+        bytes(dynamic_value)
+            == std::vector<std::uint64_t>({ 11, 12, 13 })
+        && !dynamic_value.type.fixed
+        && !dynamic_value.type.queue
+        && !dynamic_value.type.associative);
+    assert(
+        bytes(queue_value)
+            == std::vector<std::uint64_t>({ 21, 22, 23 })
+        && queue_value.type.queue
+        && queue_value.type.maximum_elements
+            == std::optional<std::uint32_t> { 4 });
+    assert(
+        bytes(associative_value)
+            == std::vector<std::uint64_t>({ 31, 44 })
+        && associative_value.type.associative
+        && associative_value.keys.size() == 2
+        && associative_value.keys[0].low_word().aval
+            == UINT64_C(0xffffffff)
+        && associative_value.keys[1].low_word().aval == 4);
+    const auto query_result = nonstatic_elaborated.design->find_signal("query_result");
+    const auto reduction_result = nonstatic_elaborated.design->find_signal("reduction_result");
+    const auto direct_result = nonstatic_elaborated.design->find_signal("direct_result");
+    assert(query_result && reduction_result && direct_result);
+    assert(
+        nonstatic_interpreter->signal_value(*query_result)
+                .low_word()
+                .aval
+            == 36
+        && nonstatic_interpreter->signal_value(*reduction_result)
+                .low_word()
+                .aval
+            == 36
+        && nonstatic_interpreter->signal_value(*direct_result)
+                .low_word()
+                .aval
+            == 12
+        && bytes(nonstatic_value("maximum_result"))
+            == std::vector<std::uint64_t>({ 23 }));
+    assert(bytes(nonstatic_value("conditional_result"))
+        == std::vector<std::uint64_t>({ 11, 12, 13 }));
+    const auto& conditional_merged = nonstatic_value("conditional_merged");
+    assert(
+        bytes(conditional_merged)
+            == std::vector<std::uint64_t>({ 11, 0, 13 })
+        && conditional_merged.elements[0].low_word().bval == 0
+        && conditional_merged.elements[1].low_word().bval == 0
+        && conditional_merged.elements[2].low_word().bval == 0);
+    assert(nonstatic_value("conditional_shape").elements.empty());
+    const auto transformed_result = nonstatic_elaborated.design->find_signal("transformed_result");
+    assert(
+        transformed_result
+        && nonstatic_interpreter->signal_value(*transformed_result)
+                .low_word()
+                .aval
+            == 12
+        && bytes(nonstatic_value("found_result"))
+            == std::vector<std::uint64_t>({ 12, 13 })
+        && bytes(nonstatic_value("found_index_result"))
+            == std::vector<std::uint64_t>({ 1, 2 })
+        && bytes(nonstatic_value("unique_result"))
+            == std::vector<std::uint64_t>({ 11, 12 }));
+    const auto dynamic_equal = nonstatic_elaborated.design->find_signal("dynamic_equal");
+    const auto queue_not_equal = nonstatic_elaborated.design->find_signal("queue_not_equal");
+    const auto associative_case_equal = nonstatic_elaborated.design->find_signal(
+        "associative_case_equal");
+    const auto associative_not_equal = nonstatic_elaborated.design->find_signal(
+        "associative_not_equal");
+    assert(
+        dynamic_equal && queue_not_equal && associative_case_equal
+        && associative_not_equal
+        && nonstatic_interpreter->signal_value(*dynamic_equal)
+                .low_word()
+                .aval
+            == 1
+        && nonstatic_interpreter->signal_value(*queue_not_equal)
+                .low_word()
+                .aval
+            == 0
+        && nonstatic_interpreter->signal_value(*associative_case_equal)
+                .low_word()
+                .aval
+            == 1
+        && nonstatic_interpreter->signal_value(*associative_not_equal)
+                .low_word()
+                .aval
+            == 1);
+
+    const auto reject_fixed_return =
+        [](const std::string_view path,
+            const std::string_view source,
+            const std::string_view top,
+            const std::string_view code) {
+            const auto candidate = fsim::frontend::parse_text(
+                path,
+                source,
+                fsim::frontend::Language::SystemVerilog2017);
+            assert(candidate.ok());
+            const auto rejected_result = fsim::elaboration::elaborate(
+                candidate.design, top);
+            if (rejected_result.ok()
+                || !has_diagnostic(rejected_result, code)) {
+                std::cerr << "unexpected fixed-return diagnostic set for "
+                          << path << " (expected " << code << ")\n";
+                for (const auto& diagnostic : rejected_result.diagnostics) {
+                    std::cerr << diagnostic.code << ": "
+                              << diagnostic.message << '\n';
+                }
+            }
+            assert(
+                !rejected_result.ok()
+                && has_diagnostic(rejected_result, code));
+        };
+    const auto accept_recursive_return =
+        [](const std::string_view path,
+            const std::string_view source,
+            const std::string_view top) {
+            const auto candidate = fsim::frontend::parse_text(
+                path,
+                source,
+                fsim::frontend::Language::SystemVerilog2017);
+            assert(candidate.ok());
+            const auto accepted_result = fsim::elaboration::elaborate(
+                candidate.design, top);
+            assert(accepted_result.ok());
+        };
+    reject_fixed_return(
+        "conditional_container_profile_mismatch.sv",
+        R"(
 module conditional_container_profile_mismatch;
   byte dynamic_source[];
   byte queue_source[$];
@@ -912,11 +969,11 @@ module conditional_container_profile_mismatch;
       1'b1 ? dynamic_value() : queue_value());
 endmodule
 )",
-      "sv:work.conditional_container_profile_mismatch",
-      "FSIM-ELAB-SVCOND-002");
-  reject_fixed_return(
-      "conditional_associative_result.sv",
-      R"(
+        "sv:work.conditional_container_profile_mismatch",
+        "FSIM-ELAB-SVCOND-002");
+    reject_fixed_return(
+        "conditional_associative_result.sv",
+        R"(
 module conditional_associative_result;
   byte source[int];
   byte target[int];
@@ -926,11 +983,11 @@ module conditional_associative_result;
   initial target = 1'b1 ? value() : value();
 endmodule
 )",
-      "sv:work.conditional_associative_result",
-      "FSIM-ELAB-SVCOND-003");
-  reject_fixed_return(
-      "mutating_temporary_function_result.sv",
-      R"(
+        "sv:work.conditional_associative_result",
+        "FSIM-ELAB-SVCOND-003");
+    reject_fixed_return(
+        "mutating_temporary_function_result.sv",
+        R"(
 module mutating_temporary_function_result;
   byte source[$];
   logic [7:0] target;
@@ -940,11 +997,11 @@ module mutating_temporary_function_result;
   initial target = value().pop_front();
 endmodule
 )",
-      "sv:work.mutating_temporary_function_result",
-      "FSIM-ELAB-SVCONTAINER-022");
-  reject_fixed_return(
-      "container_equality_scalar_operand.sv",
-      R"(
+        "sv:work.mutating_temporary_function_result",
+        "FSIM-ELAB-SVCONTAINER-022");
+    reject_fixed_return(
+        "container_equality_scalar_operand.sv",
+        R"(
 module container_equality_scalar_operand;
   byte source[];
   logic result;
@@ -952,11 +1009,11 @@ module container_equality_scalar_operand;
   initial result = value() == 1;
 endmodule
 )",
-      "sv:work.container_equality_scalar_operand",
-      "FSIM-ELAB-SVEQUAL-002");
-  reject_fixed_return(
-      "container_equality_profile_mismatch.sv",
-      R"(
+        "sv:work.container_equality_scalar_operand",
+        "FSIM-ELAB-SVEQUAL-002");
+    reject_fixed_return(
+        "container_equality_profile_mismatch.sv",
+        R"(
 module container_equality_profile_mismatch;
   byte dynamic_source[];
   byte queue_source[$];
@@ -970,11 +1027,11 @@ module container_equality_profile_mismatch;
   initial result = dynamic_value() == queue_value();
 endmodule
 )",
-      "sv:work.container_equality_profile_mismatch",
-      "FSIM-ELAB-SVEQUAL-003");
-  reject_fixed_return(
-      "container_relational_unsupported.sv",
-      R"(
+        "sv:work.container_equality_profile_mismatch",
+        "FSIM-ELAB-SVEQUAL-003");
+    reject_fixed_return(
+        "container_relational_unsupported.sv",
+        R"(
 module container_relational_unsupported;
   byte source[];
   logic result;
@@ -982,11 +1039,11 @@ module container_relational_unsupported;
   initial result = value() < value();
 endmodule
 )",
-      "sv:work.container_relational_unsupported",
-      "FSIM-ELAB-SVEQUAL-001");
-  reject_fixed_return(
-      "container_wildcard_equality_unsupported.sv",
-      R"(
+        "sv:work.container_relational_unsupported",
+        "FSIM-ELAB-SVEQUAL-001");
+    reject_fixed_return(
+        "container_wildcard_equality_unsupported.sv",
+        R"(
 module container_wildcard_equality_unsupported;
   byte source[];
   logic result;
@@ -994,11 +1051,11 @@ module container_wildcard_equality_unsupported;
   initial result = value() ==? value();
 endmodule
 )",
-      "sv:work.container_wildcard_equality_unsupported",
-      "FSIM-ELAB-SVEQUAL-001");
-  reject_fixed_return(
-      "dynamic_function_return.sv",
-      R"(
+        "sv:work.container_wildcard_equality_unsupported",
+        "FSIM-ELAB-SVEQUAL-001");
+    reject_fixed_return(
+        "dynamic_function_return.sv",
+        R"(
 module dynamic_function_return;
   byte result[1:0];
   function automatic byte dynamic_result[]();
@@ -1007,11 +1064,11 @@ module dynamic_function_return;
   initial result = dynamic_result();
 endmodule
 )",
-      "sv:work.dynamic_function_return",
-      "FSIM-ELAB-SVSLICE-006");
-  reject_fixed_return(
-      "queue_function_return.sv",
-      R"(
+        "sv:work.dynamic_function_return",
+        "FSIM-ELAB-SVSLICE-006");
+    reject_fixed_return(
+        "queue_function_return.sv",
+        R"(
 module queue_function_return;
   byte result[1:0];
   function automatic byte queue_result[$:2]();
@@ -1020,11 +1077,11 @@ module queue_function_return;
   initial result = queue_result();
 endmodule
 )",
-      "sv:work.queue_function_return",
-      "FSIM-ELAB-SVSLICE-006");
-  reject_fixed_return(
-      "associative_function_return.sv",
-      R"(
+        "sv:work.queue_function_return",
+        "FSIM-ELAB-SVSLICE-006");
+    reject_fixed_return(
+        "associative_function_return.sv",
+        R"(
 module associative_function_return;
   byte result[1:0];
   function automatic byte associative_result[int]();
@@ -1033,11 +1090,11 @@ module associative_function_return;
   initial result = associative_result();
 endmodule
 )",
-      "sv:work.associative_function_return",
-      "FSIM-ELAB-SVSLICE-006");
-  reject_fixed_return(
-      "nonstatic_kind_mismatch_function_return.sv",
-      R"(
+        "sv:work.associative_function_return",
+        "FSIM-ELAB-SVSLICE-006");
+    reject_fixed_return(
+        "nonstatic_kind_mismatch_function_return.sv",
+        R"(
 module nonstatic_kind_mismatch_function_return;
   byte dynamic_result[];
   byte queue_source[$];
@@ -1047,11 +1104,11 @@ module nonstatic_kind_mismatch_function_return;
   initial dynamic_result = queue_result();
 endmodule
 )",
-      "sv:work.nonstatic_kind_mismatch_function_return",
-      "FSIM-ELAB-SVFUNC-008");
-  reject_fixed_return(
-      "queue_bound_mismatch_function_return.sv",
-      R"(
+        "sv:work.nonstatic_kind_mismatch_function_return",
+        "FSIM-ELAB-SVFUNC-008");
+    reject_fixed_return(
+        "queue_bound_mismatch_function_return.sv",
+        R"(
 module queue_bound_mismatch_function_return;
   byte target[$:2];
   byte source[$:3];
@@ -1061,11 +1118,11 @@ module queue_bound_mismatch_function_return;
   initial target = result();
 endmodule
 )",
-      "sv:work.queue_bound_mismatch_function_return",
-      "FSIM-ELAB-SVFUNC-008");
-  reject_fixed_return(
-      "element_profile_mismatch_function_return.sv",
-      R"(
+        "sv:work.queue_bound_mismatch_function_return",
+        "FSIM-ELAB-SVFUNC-008");
+    reject_fixed_return(
+        "element_profile_mismatch_function_return.sv",
+        R"(
 module element_profile_mismatch_function_return;
   bit [7:0] target[];
   logic [7:0] source[];
@@ -1075,11 +1132,11 @@ module element_profile_mismatch_function_return;
   initial target = result();
 endmodule
 )",
-      "sv:work.element_profile_mismatch_function_return",
-      "FSIM-ELAB-SVFUNC-008");
-  reject_fixed_return(
-      "index_profile_mismatch_function_return.sv",
-      R"(
+        "sv:work.element_profile_mismatch_function_return",
+        "FSIM-ELAB-SVFUNC-008");
+    reject_fixed_return(
+        "index_profile_mismatch_function_return.sv",
+        R"(
 module index_profile_mismatch_function_return;
   byte target[byte];
   byte source[int];
@@ -1089,11 +1146,11 @@ module index_profile_mismatch_function_return;
   initial target = result();
 endmodule
 )",
-      "sv:work.index_profile_mismatch_function_return",
-      "FSIM-ELAB-SVFUNC-008");
-  reject_fixed_return(
-      "function_container_argument_mismatch.sv",
-      R"(
+        "sv:work.index_profile_mismatch_function_return",
+        "FSIM-ELAB-SVFUNC-008");
+    reject_fixed_return(
+        "function_container_argument_mismatch.sv",
+        R"(
 module function_container_argument_mismatch;
   byte queue_source[$];
   byte dynamic_target[];
@@ -1104,11 +1161,11 @@ module function_container_argument_mismatch;
   initial dynamic_target = copy_dynamic(queue_source);
 endmodule
 )",
-      "sv:work.function_container_argument_mismatch",
-      "FSIM-ELAB-SVFUNC-009");
-  reject_fixed_return(
-      "task_container_argument_mismatch.sv",
-      R"(
+        "sv:work.function_container_argument_mismatch",
+        "FSIM-ELAB-SVFUNC-009");
+    reject_fixed_return(
+        "task_container_argument_mismatch.sv",
+        R"(
 module task_container_argument_mismatch;
   byte queue_source[$];
   task automatic take_dynamic(input byte value[]);
@@ -1116,11 +1173,11 @@ module task_container_argument_mismatch;
   initial take_dynamic(queue_source);
 endmodule
 )",
-      "sv:work.task_container_argument_mismatch",
-      "FSIM-ELAB-SVTASK-011");
-  reject_fixed_return(
-      "recursive_dynamic_function_return.sv",
-      R"(
+        "sv:work.task_container_argument_mismatch",
+        "FSIM-ELAB-SVTASK-011");
+    accept_recursive_return(
+        "recursive_dynamic_function_return.sv",
+        R"(
 module recursive_dynamic_function_return;
   byte source[];
   byte target[];
@@ -1130,11 +1187,10 @@ module recursive_dynamic_function_return;
   initial target = recurse(source);
 endmodule
 )",
-      "sv:work.recursive_dynamic_function_return",
-      "FSIM-ELAB-SVFUNC-006");
-  reject_fixed_return(
-      "dynamic_slice_function_return.sv",
-      R"(
+        "sv:work.recursive_dynamic_function_return");
+    reject_fixed_return(
+        "dynamic_slice_function_return.sv",
+        R"(
 module dynamic_slice_function_return;
   byte source[];
   byte target[$];
@@ -1144,11 +1200,11 @@ module dynamic_slice_function_return;
   initial target = sliced();
 endmodule
 )",
-      "sv:work.dynamic_slice_function_return",
-      "FSIM-ELAB-SVSLICE-001");
-  reject_fixed_return(
-      "runtime_bound_function_return.sv",
-      R"(
+        "sv:work.dynamic_slice_function_return",
+        "FSIM-ELAB-SVSLICE-001");
+    reject_fixed_return(
+        "runtime_bound_function_return.sv",
+        R"(
 module runtime_bound_function_return(input int limit);
   byte result[1:0];
   function automatic byte runtime_bound[limit:0]();
@@ -1157,11 +1213,11 @@ module runtime_bound_function_return(input int limit);
   initial result = runtime_bound();
 endmodule
 )",
-      "sv:work.runtime_bound_function_return",
-      "FSIM-ELAB-SVCONTAINER-020");
-  reject_fixed_return(
-      "runtime_slice_function_return.sv",
-      R"(
+        "sv:work.runtime_bound_function_return",
+        "FSIM-ELAB-SVCONTAINER-020");
+    reject_fixed_return(
+        "runtime_slice_function_return.sv",
+        R"(
 module runtime_slice_function_return;
   byte source[3:0];
   byte result[1:0];
@@ -1171,11 +1227,11 @@ module runtime_slice_function_return;
   initial result = runtime_slice(1);
 endmodule
 )",
-      "sv:work.runtime_slice_function_return",
-      "FSIM-ELAB-SVSLICE-002");
-  reject_fixed_return(
-      "count_mismatch_function_return.sv",
-      R"(
+        "sv:work.runtime_slice_function_return",
+        "FSIM-ELAB-SVSLICE-002");
+    reject_fixed_return(
+        "count_mismatch_function_return.sv",
+        R"(
 module count_mismatch_function_return;
   byte source[1:0];
   byte result[2:0];
@@ -1185,11 +1241,11 @@ module count_mismatch_function_return;
   initial result = wrong_count();
 endmodule
 )",
-      "sv:work.count_mismatch_function_return",
-      "FSIM-ELAB-SVSLICE-005");
-  reject_fixed_return(
-      "profile_mismatch_function_return.sv",
-      R"(
+        "sv:work.count_mismatch_function_return",
+        "FSIM-ELAB-SVSLICE-005");
+    reject_fixed_return(
+        "profile_mismatch_function_return.sv",
+        R"(
 module profile_mismatch_function_return;
   logic [7:0] source[1:0];
   bit [7:0] result[1:0];
@@ -1199,11 +1255,11 @@ module profile_mismatch_function_return;
   initial result = wrong_profile();
 endmodule
 )",
-      "sv:work.profile_mismatch_function_return",
-      "FSIM-ELAB-SVSLICE-006");
-  reject_fixed_return(
-      "recursive_fixed_function_return.sv",
-      R"(
+        "sv:work.profile_mismatch_function_return",
+        "FSIM-ELAB-SVSLICE-006");
+    accept_recursive_return(
+        "recursive_fixed_function_return.sv",
+        R"(
 module recursive_fixed_function_return;
   byte source[1:0];
   byte result[1:0];
@@ -1213,8 +1269,7 @@ module recursive_fixed_function_return;
   initial result = recurse(source);
 endmodule
 )",
-      "sv:work.recursive_fixed_function_return",
-      "FSIM-ELAB-SVFUNC-006");
+        "sv:work.recursive_fixed_function_return");
 }
 
 } // namespace fsim::tests::elaboration

@@ -194,8 +194,11 @@ _Static_assert(
 _Static_assert(
     offsetof(fsim_jit_runtime_v1, release_driver_signal_slice) == 584,
     "runtime driver release helper was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 592,
-               "unexpected extended runtime ABI size");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, execute_signal_operation) == 592,
+    "runtime exact-width signal helper was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 600,
+    "unexpected extended runtime ABI size");
 _Static_assert(sizeof(fsim_jit_projected_element_v1) == 24,
                "unexpected projected-waveform element size");
 _Static_assert(offsetof(fsim_jit_projected_element_v1, aval) == 0,
@@ -734,7 +737,9 @@ int main(void) {
       vital_delay,
       NULL,
       NULL,
-      NULL};
+      NULL,
+      NULL
+  };
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
   runtime.write_signal(runtime.context, 0, aval, bval);

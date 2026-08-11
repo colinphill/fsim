@@ -22,7 +22,7 @@ complexity.
 The exact SHA-256 identities are:
 
 - gap inventory: `0a60ca24775a1e5e7282059b282557d36656e1f926d4207f1f3df48f4c8b891b`;
-- release closure: `169bc75fd1d0713fcc5760da8a22fe12376f0e655b26510566e33d78a336de35`.
+- release closure: `1c26a3b13d7832d36f4b6ba6488ceef11e4be0eb1050426099851d842be1cccd`.
 
 ## Runtime and resource evidence
 
@@ -47,9 +47,10 @@ The reviewed runner functions have maximum cognitive complexity 20, loop depth
 `RLIMIT_AS` or Windows `JOB_OBJECT_LIMIT_PROCESS_MEMORY`. The installed-public
 contract executes staged `fsim-vhdl --help` in a Unicode installation root.
 
-The strict C ABI retains the old runtime-table tail at offset 560 and appends
-the VHDL driver-force callbacks at offsets 568, 576, and 584; the current table
-size is 592 bytes. Object/library/design payloads and portable VHPI checkpoints
+The strict C ABI retains the old runtime-table tail at offset 560, appends the
+VHDL driver-force callbacks at offsets 568, 576, and 584, and places the
+exact-width signal callback at offset 592; the current table size is 600 bytes.
+Object/library/design payloads and portable VHPI checkpoints
 retain checksummed artifact and cache identity rather than host addresses.
 
 ## Passing criteria

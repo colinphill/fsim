@@ -33,6 +33,12 @@
 #include "fsim/runtime/uvm_tlm2.hpp"
 #include "fsim/runtime/vhdl_psl.hpp"
 #include "fsim/runtime/vhpi_object.hpp"
+#include "fsim/runtime/vpi_callback.hpp"
+#include "fsim/runtime/vpi_control.hpp"
+#include "fsim/runtime/vpi_object.hpp"
+#include "fsim/runtime/vpi_system.hpp"
+#include "fsim/runtime/vpi_time.hpp"
+#include "fsim/runtime/vpi_value_control.hpp"
 #include "fsim/semantic/design_ir.hpp"
 #include "fsim/semantic/model.hpp"
 #include "fsim/semantic/systemverilog_hir.hpp"
@@ -649,6 +655,31 @@ public:
     vhdl_vhpi_objects() noexcept;
     [[nodiscard]] const runtime::VhdlVhpiObjectRegistry&
     vhdl_vhpi_objects() const noexcept;
+    /// Live Verilog/SystemVerilog VPI hierarchy and effective/stored values.
+    [[nodiscard]] runtime::SystemVerilogVpiObjectRegistry&
+    systemverilog_vpi_objects() noexcept;
+    [[nodiscard]] const runtime::SystemVerilogVpiObjectRegistry&
+    systemverilog_vpi_objects() const noexcept;
+    [[nodiscard]] runtime::SystemVerilogVpiTimeService&
+    systemverilog_vpi_time() noexcept;
+    [[nodiscard]] const runtime::SystemVerilogVpiTimeService&
+    systemverilog_vpi_time() const noexcept;
+    [[nodiscard]] runtime::SystemVerilogVpiCallbackManager&
+    systemverilog_vpi_callbacks() noexcept;
+    [[nodiscard]] const runtime::SystemVerilogVpiCallbackManager&
+    systemverilog_vpi_callbacks() const noexcept;
+    [[nodiscard]] runtime::SystemVerilogVpiValueControl&
+    systemverilog_vpi_values() noexcept;
+    [[nodiscard]] const runtime::SystemVerilogVpiValueControl&
+    systemverilog_vpi_values() const noexcept;
+    [[nodiscard]] runtime::SystemVerilogVpiControlService&
+    systemverilog_vpi_control() noexcept;
+    [[nodiscard]] const runtime::SystemVerilogVpiControlService&
+    systemverilog_vpi_control() const noexcept;
+    [[nodiscard]] runtime::SystemVerilogVpiSystemRegistry&
+    systemverilog_vpi_systems() noexcept;
+    [[nodiscard]] const runtime::SystemVerilogVpiSystemRegistry&
+    systemverilog_vpi_systems() const noexcept;
     [[nodiscard]] runtime::SystemVerilogUvmCheckpointCaptureResult
     capture_uvm_checkpoint(
         runtime::SystemVerilogUvmCheckpointLimits limits = { });

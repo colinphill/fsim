@@ -205,7 +205,7 @@ void test_display(
   assert(reference.result.time == 4);
   assert(compiled.result.time == 4);
   assert(reference.output == compiled.output);
-  assert(reference.output.size() == 33);
+  assert(reference.output.size() == 37);
   assert(reference.output[0].process == 0);
   assert(reference.output[0].text == "first\t");
   assert(!reference.output[0].newline);
@@ -285,15 +285,27 @@ void test_display(
   assert(reference.output[28].time == 3);
   assert(reference.output[29].text == "time=0004");
   assert(reference.output[29].time == 4);
-  assert(reference.output[30].text == "second");
-  assert(!reference.output[30].newline);
+  assert(reference.output[30].text == "18446744073709551616");
+  assert(reference.output[30].newline);
   assert(reference.output[30].time == 4);
-  assert(reference.output[31].text.empty());
-  assert(!reference.output[31].newline);
+  assert(reference.output[31].text == "18446744073709551616");
+  assert(reference.output[31].newline);
   assert(reference.output[31].time == 4);
-  assert(reference.output[32].text.empty());
+  assert(reference.output[32].text == "-18446744073709551616");
   assert(reference.output[32].newline);
   assert(reference.output[32].time == 4);
+  assert(reference.output[33].text == "1");
+  assert(reference.output[33].newline);
+  assert(reference.output[33].time == 4);
+  assert(reference.output[34].text == "second");
+  assert(!reference.output[34].newline);
+  assert(reference.output[34].time == 4);
+  assert(reference.output[35].text.empty());
+  assert(!reference.output[35].newline);
+  assert(reference.output[35].time == 4);
+  assert(reference.output[36].text.empty());
+  assert(reference.output[36].newline);
+  assert(reference.output[36].time == 4);
   assert(reference.compiled_processes == 0);
 #if defined(FSIM_HAS_LLVM)
   assert(compiled.compiled_processes == 1);
@@ -512,6 +524,10 @@ module display_test;
     #1 $monitoron;
     q = 4'b0111;
     #1 $display("time=%04t");
+    $display(18_446_744_073_709_551_616);
+    $display(257'h1_0000000000000000);
+    $display(65'sh1_0000000000000000);
+    $display(4097'h1);
     $write("second");
     $write;
     $display;
@@ -610,7 +626,9 @@ end architecture;
             "zero=-00001\nmulti=0011/a5 tail=-1\n3165\n"
             "scope=display_test q=0011\n"
             "post=1110\nmon=1110 t=0\nmon=0101 t=1\n"
-            "mon=0111 t=3\ntime=0004\nsecond\n"
+            "mon=0111 t=3\ntime=0004\n"
+            "18446744073709551616\n18446744073709551616\n"
+            "-18446744073709551616\n1\nsecond\n"
             "simulation stopped at tick 4")
         != std::string::npos);
   }

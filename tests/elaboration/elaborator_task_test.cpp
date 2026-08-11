@@ -3,10 +3,11 @@
 
 namespace fsim::tests::elaboration {
 
-void test_systemverilog_task_lowering() {
-  const auto parsed = fsim::frontend::parse_text(
-      "task_runtime.sv",
-      R"(
+void test_systemverilog_task_lowering()
+{
+    const auto parsed = fsim::frontend::parse_text(
+        "task_runtime.sv",
+        R"(
 package task_pkg;
   task automatic add_two(
       input logic [7:0] value,
@@ -46,48 +47,44 @@ module task_runtime #(
   end
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(parsed.ok());
-  const auto elaborated = fsim::elaboration::elaborate(
-      parsed.design, "sv:work.task_runtime");
-  assert(elaborated.ok());
-  const auto result =
-      elaborated.design->find_signal("result");
-  const auto accumulator =
-      elaborated.design->find_signal("accumulator");
-  assert(result && accumulator);
-  const auto& operations =
-      elaborated.design->processes().front().operations;
-  assert(std::ranges::count_if(
-             operations,
-             [](const auto& operation) {
-               return fsim::runtime::simir::operation_holds<
-                   fsim::runtime::simir::Call>(operation);
-             })
-         >= 3);
-  assert(std::ranges::count_if(
-             operations,
-             [](const auto& operation) {
-               return fsim::runtime::simir::operation_holds<
-                   fsim::runtime::simir::Return>(operation);
-             })
-         >= 3);
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(parsed.ok());
+    const auto elaborated = fsim::elaboration::elaborate(
+        parsed.design, "sv:work.task_runtime");
+    assert(elaborated.ok());
+    const auto result = elaborated.design->find_signal("result");
+    const auto accumulator = elaborated.design->find_signal("accumulator");
+    assert(result && accumulator);
+    const auto& operations = elaborated.design->processes().front().operations;
+    assert(std::ranges::count_if(
+               operations,
+               [](const auto& operation) {
+                   return fsim::runtime::simir::operation_holds<
+                       fsim::runtime::simir::Call>(operation);
+               })
+        >= 3);
+    assert(std::ranges::count_if(
+               operations,
+               [](const auto& operation) {
+                   return fsim::runtime::simir::operation_holds<
+                       fsim::runtime::simir::Return>(operation);
+               })
+        >= 3);
 
-  auto interpreter =
-      elaborated.design->create_interpreter();
-  assert(
-      interpreter->run().status
-      == fsim::runtime::RunStatus::completed);
-  assert(
-      interpreter->signal_value(*result).to_msb_string()
-      == "00101010");
-  assert(
-      interpreter->signal_value(*accumulator).to_msb_string()
-      == "00101011");
+    auto interpreter = elaborated.design->create_interpreter();
+    assert(
+        interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        interpreter->signal_value(*result).to_msb_string()
+        == "00101010");
+    assert(
+        interpreter->signal_value(*accumulator).to_msb_string()
+        == "00101011");
 
-  const auto association_error = fsim::frontend::parse_text(
-      "task_association_error.sv",
-      R"(
+    const auto association_error = fsim::frontend::parse_text(
+        "task_association_error.sv",
+        R"(
 module task_association_error(output logic result);
   task automatic selected(
       input logic left = 1'b0,
@@ -97,19 +94,19 @@ module task_association_error(output logic result);
   initial selected(.missing(1'b1), .right(result));
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(association_error.ok());
-  const auto rejected_association = fsim::elaboration::elaborate(
-      association_error.design,
-      "sv:work.task_association_error");
-  assert(
-      !rejected_association.ok()
-      && has_diagnostic(
-          rejected_association, "FSIM-ELAB-SVTASK-012"));
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(association_error.ok());
+    const auto rejected_association = fsim::elaboration::elaborate(
+        association_error.design,
+        "sv:work.task_association_error");
+    assert(
+        !rejected_association.ok()
+        && has_diagnostic(
+            rejected_association, "FSIM-ELAB-SVTASK-012"));
 
-  const auto ref_signal = fsim::frontend::parse_text(
-      "task_ref_signal.sv",
-      R"(
+    const auto ref_signal = fsim::frontend::parse_text(
+        "task_ref_signal.sv",
+        R"(
 module task_ref_signal(output logic result);
   logic value;
   task automatic mutate(ref logic target);
@@ -121,30 +118,31 @@ module task_ref_signal(output logic result);
   end
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(ref_signal.ok());
-  const auto elaborated_ref_signal = fsim::elaboration::elaborate(
-      ref_signal.design, "sv:work.task_ref_signal");
-  assert(elaborated_ref_signal.ok());
-  auto ref_signal_interpreter =
-      elaborated_ref_signal.design->create_interpreter();
-  const auto ref_signal_value =
-      elaborated_ref_signal.design->find_signal("value");
-  const auto ref_signal_result =
-      elaborated_ref_signal.design->find_signal("result");
-  assert(ref_signal_value && ref_signal_result);
-  assert(
-      ref_signal_interpreter->run().status
-      == fsim::runtime::RunStatus::completed);
-  assert(
-      ref_signal_interpreter
-          ->signal_value(*ref_signal_value).to_msb_string() == "1"
-      && ref_signal_interpreter
-             ->signal_value(*ref_signal_result).to_msb_string() == "1");
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(ref_signal.ok());
+    const auto elaborated_ref_signal = fsim::elaboration::elaborate(
+        ref_signal.design, "sv:work.task_ref_signal");
+    assert(elaborated_ref_signal.ok());
+    auto ref_signal_interpreter = elaborated_ref_signal.design->create_interpreter();
+    const auto ref_signal_value = elaborated_ref_signal.design->find_signal("value");
+    const auto ref_signal_result = elaborated_ref_signal.design->find_signal("result");
+    assert(ref_signal_value && ref_signal_result);
+    assert(
+        ref_signal_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        ref_signal_interpreter
+                ->signal_value(*ref_signal_value)
+                .to_msb_string()
+            == "1"
+        && ref_signal_interpreter
+                ->signal_value(*ref_signal_result)
+                .to_msb_string()
+            == "1");
 
-  const auto ref_literal = fsim::frontend::parse_text(
-      "task_ref_literal.sv",
-      R"(
+    const auto ref_literal = fsim::frontend::parse_text(
+        "task_ref_literal.sv",
+        R"(
 module task_ref_literal;
   task automatic mutate(ref logic target);
     target = 1'b1;
@@ -152,18 +150,18 @@ module task_ref_literal;
   initial mutate(1'b0);
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(ref_literal.ok());
-  const auto rejected_ref_literal = fsim::elaboration::elaborate(
-      ref_literal.design, "sv:work.task_ref_literal");
-  assert(
-      !rejected_ref_literal.ok()
-      && has_diagnostic(
-          rejected_ref_literal, "FSIM-ELAB-SVTASK-013"));
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(ref_literal.ok());
+    const auto rejected_ref_literal = fsim::elaboration::elaborate(
+        ref_literal.design, "sv:work.task_ref_literal");
+    assert(
+        !rejected_ref_literal.ok()
+        && has_diagnostic(
+            rejected_ref_literal, "FSIM-ELAB-SVTASK-013"));
 
-  const auto static_suspension = fsim::frontend::parse_text(
-      "static_task_suspension.sv",
-      R"(
+    const auto static_suspension = fsim::frontend::parse_text(
+        "static_task_suspension.sv",
+        R"(
 module static_task_suspension;
   task retained;
     #1;
@@ -171,25 +169,22 @@ module static_task_suspension;
   initial retained();
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(static_suspension.ok());
-  const auto elaborated_static_suspension =
-      fsim::elaboration::elaborate(
-          static_suspension.design,
-          "sv:work.static_task_suspension");
-  assert(elaborated_static_suspension.ok());
-  auto static_suspension_interpreter =
-      elaborated_static_suspension.design->create_interpreter();
-  const auto static_suspension_run =
-      static_suspension_interpreter->run();
-  assert(
-      static_suspension_run.status
-          == fsim::runtime::RunStatus::completed
-      && static_suspension_run.time == 1);
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(static_suspension.ok());
+    const auto elaborated_static_suspension = fsim::elaboration::elaborate(
+        static_suspension.design,
+        "sv:work.static_task_suspension");
+    assert(elaborated_static_suspension.ok());
+    auto static_suspension_interpreter = elaborated_static_suspension.design->create_interpreter();
+    const auto static_suspension_run = static_suspension_interpreter->run();
+    assert(
+        static_suspension_run.status
+            == fsim::runtime::RunStatus::completed
+        && static_suspension_run.time == 1);
 
-  const auto static_container = fsim::frontend::parse_text(
-      "static_task_container.sv",
-      R"(
+    const auto static_container = fsim::frontend::parse_text(
+        "static_task_container.sv",
+        R"(
 module static_task_container;
   task retained;
     logic values[1:0];
@@ -198,22 +193,20 @@ module static_task_container;
   initial retained();
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(static_container.ok());
-  const auto elaborated_static_container =
-      fsim::elaboration::elaborate(
-          static_container.design,
-          "sv:work.static_task_container");
-  assert(elaborated_static_container.ok());
-  auto static_container_interpreter =
-      elaborated_static_container.design->create_interpreter();
-  assert(
-      static_container_interpreter->run().status
-      == fsim::runtime::RunStatus::completed);
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(static_container.ok());
+    const auto elaborated_static_container = fsim::elaboration::elaborate(
+        static_container.design,
+        "sv:work.static_task_container");
+    assert(elaborated_static_container.ok());
+    auto static_container_interpreter = elaborated_static_container.design->create_interpreter();
+    assert(
+        static_container_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
 
-  const auto qualified = fsim::frontend::parse_text(
-      "qualified_task.sv",
-      R"(
+    const auto qualified = fsim::frontend::parse_text(
+        "qualified_task.sv",
+        R"(
 package qualified_pkg;
   task automatic assign_value(
       output logic [7:0] result);
@@ -224,29 +217,26 @@ module qualified_task(output logic [7:0] result);
   initial qualified_pkg::assign_value(result);
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(qualified.ok());
-  const auto qualified_elaborated =
-      fsim::elaboration::elaborate(
-          qualified.design, "sv:work.qualified_task");
-  assert(qualified_elaborated.ok());
-  auto qualified_interpreter =
-      qualified_elaborated.design->create_interpreter();
-  const auto qualified_result =
-      qualified_elaborated.design->find_signal("result");
-  assert(qualified_result);
-  assert(
-      qualified_interpreter->run().status
-      == fsim::runtime::RunStatus::completed);
-  assert(
-      qualified_interpreter
-          ->signal_value(*qualified_result)
-          .to_msb_string()
-      == "00101010");
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(qualified.ok());
+    const auto qualified_elaborated = fsim::elaboration::elaborate(
+        qualified.design, "sv:work.qualified_task");
+    assert(qualified_elaborated.ok());
+    auto qualified_interpreter = qualified_elaborated.design->create_interpreter();
+    const auto qualified_result = qualified_elaborated.design->find_signal("result");
+    assert(qualified_result);
+    assert(
+        qualified_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        qualified_interpreter
+            ->signal_value(*qualified_result)
+            .to_msb_string()
+        == "00101010");
 
-  const auto suspending = fsim::frontend::parse_text(
-      "suspending_task.sv",
-      R"(
+    const auto suspending = fsim::frontend::parse_text(
+        "suspending_task.sv",
+        R"(
 `timescale 1ns/1ns
 module suspending_task(
     output logic [7:0] result,
@@ -291,78 +281,72 @@ module suspending_task(
   end
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(suspending.ok());
-  const auto elaborated_suspending =
-      fsim::elaboration::elaborate(
-          suspending.design, "sv:work.suspending_task");
-  if (!elaborated_suspending.ok()) {
-    for (const auto& diagnostic :
-         elaborated_suspending.diagnostics) {
-      std::cerr << diagnostic.code << ": "
-                << diagnostic.message << '\n';
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(suspending.ok());
+    const auto elaborated_suspending = fsim::elaboration::elaborate(
+        suspending.design, "sv:work.suspending_task");
+    if (!elaborated_suspending.ok()) {
+        for (const auto& diagnostic :
+            elaborated_suspending.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
     }
-  }
-  assert(elaborated_suspending.ok());
-  std::size_t calls = 0;
-  std::size_t returns = 0;
-  std::size_t waits = 0;
-  for (const auto& process :
-       elaborated_suspending.design->processes()) {
-    calls += static_cast<std::size_t>(std::ranges::count_if(
-        process.operations,
-        [](const auto& operation) {
-          return fsim::runtime::simir::operation_holds<
-              fsim::runtime::simir::Call>(operation);
-        }));
-    returns += static_cast<std::size_t>(std::ranges::count_if(
-        process.operations,
-        [](const auto& operation) {
-          return fsim::runtime::simir::operation_holds<
-              fsim::runtime::simir::Return>(operation);
-        }));
-    waits += static_cast<std::size_t>(std::ranges::count_if(
-        process.operations,
-        [](const auto& operation) {
-          return fsim::runtime::simir::operation_holds<
-                     fsim::runtime::simir::WaitFor>(operation)
-              || fsim::runtime::simir::operation_holds<
-                     fsim::runtime::simir::WaitOn>(operation);
-        }));
-  }
-  assert(calls >= 2 && returns >= 2 && waits >= 5);
-  auto suspending_interpreter =
-      elaborated_suspending.design->create_interpreter();
-  assert(
-      suspending_interpreter->run().status
-      == fsim::runtime::RunStatus::completed);
-  const auto suspended_result =
-      elaborated_suspending.design->find_signal("result");
-  const auto suspended_total =
-      elaborated_suspending.design->find_signal("total");
-  const auto early_result =
-      elaborated_suspending.design->find_signal("early");
-  assert(suspended_result && suspended_total && early_result);
-  assert(
-      suspending_interpreter
-          ->signal_value(*suspended_result)
-          .to_msb_string()
-      == "00101010");
-  assert(
-      suspending_interpreter
-          ->signal_value(*suspended_total)
-          .to_msb_string()
-      == "00101011");
-  assert(
-      suspending_interpreter
-          ->signal_value(*early_result)
-          .to_msb_string()
-      == "00000000");
+    assert(elaborated_suspending.ok());
+    std::size_t calls = 0;
+    std::size_t returns = 0;
+    std::size_t waits = 0;
+    for (const auto& process :
+        elaborated_suspending.design->processes()) {
+        calls += static_cast<std::size_t>(std::ranges::count_if(
+            process.operations,
+            [](const auto& operation) {
+                return fsim::runtime::simir::operation_holds<
+                    fsim::runtime::simir::Call>(operation);
+            }));
+        returns += static_cast<std::size_t>(std::ranges::count_if(
+            process.operations,
+            [](const auto& operation) {
+                return fsim::runtime::simir::operation_holds<
+                    fsim::runtime::simir::Return>(operation);
+            }));
+        waits += static_cast<std::size_t>(std::ranges::count_if(
+            process.operations,
+            [](const auto& operation) {
+                return fsim::runtime::simir::operation_holds<
+                           fsim::runtime::simir::WaitFor>(operation)
+                    || fsim::runtime::simir::operation_holds<
+                        fsim::runtime::simir::WaitOn>(operation);
+            }));
+    }
+    assert(calls >= 2 && returns >= 2 && waits >= 5);
+    auto suspending_interpreter = elaborated_suspending.design->create_interpreter();
+    assert(
+        suspending_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto suspended_result = elaborated_suspending.design->find_signal("result");
+    const auto suspended_total = elaborated_suspending.design->find_signal("total");
+    const auto early_result = elaborated_suspending.design->find_signal("early");
+    assert(suspended_result && suspended_total && early_result);
+    assert(
+        suspending_interpreter
+            ->signal_value(*suspended_result)
+            .to_msb_string()
+        == "00101010");
+    assert(
+        suspending_interpreter
+            ->signal_value(*suspended_total)
+            .to_msb_string()
+        == "00101011");
+    assert(
+        suspending_interpreter
+            ->signal_value(*early_result)
+            .to_msb_string()
+        == "00000000");
 
-  const auto forbidden_suspension =
-      fsim::frontend::parse_text(
-          "forbidden_suspending_task.sv",
-          R"(
+    const auto forbidden_suspension = fsim::frontend::parse_text(
+        "forbidden_suspending_task.sv",
+        R"(
 module forbidden_suspending_task(
     input logic source,
     output logic sink);
@@ -383,20 +367,19 @@ module forbidden_suspending_task(
   end
 endmodule
 )",
-          fsim::frontend::Language::SystemVerilog2017);
-  assert(forbidden_suspension.ok());
-  const auto rejected_suspension =
-      fsim::elaboration::elaborate(
-          forbidden_suspension.design,
-          "sv:work.forbidden_suspending_task");
-  assert(
-      !rejected_suspension.ok()
-      && has_diagnostic(
-          rejected_suspension, "FSIM-ELAB-SVTASK-010"));
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(forbidden_suspension.ok());
+    const auto rejected_suspension = fsim::elaboration::elaborate(
+        forbidden_suspension.design,
+        "sv:work.forbidden_suspending_task");
+    assert(
+        !rejected_suspension.ok()
+        && has_diagnostic(
+            rejected_suspension, "FSIM-ELAB-SVTASK-010"));
 
-  const auto event_process = fsim::frontend::parse_text(
-      "event_process_task.sv",
-      R"(
+    const auto event_process = fsim::frontend::parse_text(
+        "event_process_task.sv",
+        R"(
 module event_process_task(
     input logic clock,
     output logic value);
@@ -407,16 +390,16 @@ module event_process_task(
   always @(posedge clock) delayed();
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(event_process.ok());
-  assert(
-      fsim::elaboration::elaborate(
-          event_process.design, "sv:work.event_process_task")
-          .ok());
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(event_process.ok());
+    assert(
+        fsim::elaboration::elaborate(
+            event_process.design, "sv:work.event_process_task")
+            .ok());
 
-  const auto recursive = fsim::frontend::parse_text(
-      "recursive_task.sv",
-      R"(
+    const auto recursive = fsim::frontend::parse_text(
+        "recursive_task.sv",
+        R"(
 module recursive_task;
   task automatic recurse;
     recurse();
@@ -424,34 +407,36 @@ module recursive_task;
   initial recurse();
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(recursive.ok());
-  const auto rejected_recursive =
-      fsim::elaboration::elaborate(
-          recursive.design, "sv:work.recursive_task");
-  assert(
-      !rejected_recursive.ok()
-      && has_diagnostic(
-          rejected_recursive, "FSIM-ELAB-SVTASK-008"));
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(recursive.ok());
+    const auto recursive_result = fsim::elaboration::elaborate(
+        recursive.design, "sv:work.recursive_task");
+    assert(recursive_result.ok());
+    const auto& recursive_operations = recursive_result.design->processes().front().operations;
+    assert(std::ranges::any_of(
+        recursive_operations,
+        [](const auto& operation) {
+            return fsim::runtime::simir::operation_holds<
+                fsim::runtime::simir::CallableFramePush>(operation);
+        }));
 
-  const auto wrong_arity = fsim::frontend::parse_text(
-      "task_arity.sv",
-      R"(
+    const auto wrong_arity = fsim::frontend::parse_text(
+        "task_arity.sv",
+        R"(
 module task_arity;
   task automatic consume(input logic value);
   endtask
   initial consume();
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(wrong_arity.ok());
-  const auto rejected_arity =
-      fsim::elaboration::elaborate(
-          wrong_arity.design, "sv:work.task_arity");
-  assert(
-      !rejected_arity.ok()
-      && has_diagnostic(
-          rejected_arity, "FSIM-ELAB-SVTASK-005"));
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(wrong_arity.ok());
+    const auto rejected_arity = fsim::elaboration::elaborate(
+        wrong_arity.design, "sv:work.task_arity");
+    assert(
+        !rejected_arity.ok()
+        && has_diagnostic(
+            rejected_arity, "FSIM-ELAB-SVTASK-005"));
 }
 
 } // namespace fsim::tests::elaboration

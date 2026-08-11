@@ -179,12 +179,43 @@ void test_packed_values() {
           && wide_value.aval_words().size() == 2
           && wide_value.bval_words().size() == 2,
       "wide four-state values must retain multi-word storage");
+  require(
+      !wide_value.known_unsigned_value()
+          && !wide_value.known_signed_value(),
+      "unknown wide values must not convert to host integers");
   try {
     (void)wide_value.low_word();
     throw std::runtime_error(
         "wide four-state value exposed a single low word");
   } catch (const std::invalid_argument&) {
   }
+
+  const auto wide_zero = PackedLogic4::from_msb_string(
+      std::string(257, '0'));
+  require(
+      wide_zero.known_unsigned_value() == 0
+          && wide_zero.known_signed_value() == 0,
+      "known wide zero must convert without narrowing by declared width");
+  auto wide_positive_text = std::string(257, '0');
+  wide_positive_text.back() = '1';
+  const auto wide_positive = PackedLogic4::from_msb_string(wide_positive_text);
+  require(
+      wide_positive.known_unsigned_value() == 1
+          && wide_positive.known_signed_value() == 1,
+      "known wide positive values must accept zero-extension");
+  const auto wide_negative = PackedLogic4::from_msb_string(
+      std::string(257, '1'));
+  require(
+      !wide_negative.known_unsigned_value()
+          && wide_negative.known_signed_value() == -1,
+      "known wide signed values must accept exact sign-extension");
+  auto wide_overflow_text = std::string(257, '0');
+  wide_overflow_text[192] = '1';
+  const auto wide_overflow = PackedLogic4::from_msb_string(wide_overflow_text);
+  require(
+      !wide_overflow.known_unsigned_value()
+          && !wide_overflow.known_signed_value(),
+      "known wide values outside host range must not be narrowed");
 
   const auto nine = PackedLogic9::from_msb_string("U01ZWLH-");
   require(nine.to_msb_string() == "U01ZWLH-", "nine-state round trip");

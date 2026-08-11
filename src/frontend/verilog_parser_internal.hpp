@@ -32,92 +32,295 @@ inline constexpr std::size_t maximum_instance_array_elements =
 using detail::decimal_i64;
 using detail::decimal_u64;
 
+namespace detail {
+
+    class OutputUnsignedInteger {
+    public:
+        [[nodiscard]] static std::optional<OutputUnsignedInteger> parse(
+            const std::string_view digits,
+            const unsigned base)
+        {
+            OutputUnsignedInteger result;
+            bool saw_digit = false;
+            for (const char character : digits) {
+                if (character == '_') {
+                    continue;
+                }
+                unsigned digit { };
+                if (character >= '0' && character <= '9') {
+                    digit = static_cast<unsigned>(character - '0');
+                } else if (character >= 'a' && character <= 'f') {
+                    digit = 10U + static_cast<unsigned>(character - 'a');
+                } else if (character >= 'A' && character <= 'F') {
+                    digit = 10U + static_cast<unsigned>(character - 'A');
+                } else {
+                    return std::nullopt;
+                }
+                if (digit >= base) {
+                    return std::nullopt;
+                }
+                saw_digit = true;
+                result.multiply_add(base, digit);
+            }
+            return saw_digit
+                ? std::optional { std::move(result) }
+                : std::nullopt;
+        }
+
+        [[nodiscard]] std::size_t bit_width() const
+        {
+            if (words_.empty()) {
+                return 1U;
+            }
+            auto high = words_.back();
+            std::size_t high_width = 0;
+            while (high != 0U) {
+                ++high_width;
+                high >>= 1U;
+            }
+            return (words_.size() - 1U) * word_bits + high_width;
+        }
+
+        [[nodiscard]] bool test_bit(const std::size_t bit) const
+        {
+            const auto word = bit / word_bits;
+            return word < words_.size()
+                && ((words_[word] >> (bit % word_bits)) & 1U) != 0U;
+        }
+
+        void truncate(const std::size_t width)
+        {
+            if (width >= bit_width()) {
+                return;
+            }
+            const auto word_count = (width + word_bits - 1U) / word_bits;
+            words_.resize(word_count);
+            if ((width % word_bits) != 0U) {
+                words_.back() &= (std::uint32_t { 1 } << (width % word_bits)) - 1U;
+            }
+            trim();
+        }
+
+        void twos_complement_magnitude(const std::size_t width)
+        {
+            const auto word_count = (width + word_bits - 1U) / word_bits;
+            words_.resize(word_count, 0U);
+            for (auto& word : words_) {
+                word = ~word;
+            }
+            mask_to_width(width);
+            std::uint64_t carry = 1U;
+            for (auto& word : words_) {
+                const auto sum = static_cast<std::uint64_t>(word) + carry;
+                word = static_cast<std::uint32_t>(sum);
+                carry = sum >> word_bits;
+                if (carry == 0U) {
+                    break;
+                }
+            }
+            mask_to_width(width);
+            trim();
+        }
+
+        [[nodiscard]] std::string decimal_string() const
+        {
+            if (words_.empty()) {
+                return "0";
+            }
+            auto quotient = words_;
+            std::vector<std::uint32_t> chunks;
+            while (!quotient.empty()) {
+                std::uint64_t remainder = 0U;
+                for (auto word = quotient.rbegin(); word != quotient.rend(); ++word) {
+                    const auto dividend = (remainder << word_bits) | *word;
+                    *word = static_cast<std::uint32_t>(dividend / decimal_chunk_base);
+                    remainder = dividend % decimal_chunk_base;
+                }
+                chunks.push_back(static_cast<std::uint32_t>(remainder));
+                while (!quotient.empty() && quotient.back() == 0U) {
+                    quotient.pop_back();
+                }
+            }
+            auto result = std::to_string(chunks.back());
+            for (auto chunk = chunks.rbegin() + 1U; chunk != chunks.rend(); ++chunk) {
+                const auto text = std::to_string(*chunk);
+                result.append(decimal_chunk_digits - text.size(), '0');
+                result += text;
+            }
+            return result;
+        }
+
+    private:
+        static constexpr std::size_t word_bits = 32U;
+        static constexpr std::uint64_t decimal_chunk_base = 1'000'000'000U;
+        static constexpr std::size_t decimal_chunk_digits = 9U;
+
+        void multiply_add(const unsigned multiplier, const unsigned addend)
+        {
+            std::uint64_t carry = addend;
+            for (auto& word : words_) {
+                const auto product = static_cast<std::uint64_t>(word) * multiplier + carry;
+                word = static_cast<std::uint32_t>(product);
+                carry = product >> word_bits;
+            }
+            if (carry != 0U) {
+                words_.push_back(static_cast<std::uint32_t>(carry));
+            }
+        }
+
+        void mask_to_width(const std::size_t width)
+        {
+            if ((width % word_bits) != 0U) {
+                words_.back() &= (std::uint32_t { 1 } << (width % word_bits)) - 1U;
+            }
+        }
+
+        void trim()
+        {
+            while (!words_.empty() && words_.back() == 0U) {
+                words_.pop_back();
+            }
+        }
+
+        std::vector<std::uint32_t> words_;
+    };
+
+    struct OutputLiteralWidth {
+        std::size_t bits { };
+        bool exceeds_host_size { };
+    };
+
+    [[nodiscard]] inline std::optional<OutputLiteralWidth>
+    output_literal_width(const std::string_view spelling)
+    {
+        OutputLiteralWidth result;
+        bool saw_digit = false;
+        bool nonzero = false;
+        for (const char character : spelling) {
+            if (character == '_') {
+                continue;
+            }
+            if (character < '0' || character > '9') {
+                return std::nullopt;
+            }
+            saw_digit = true;
+            const auto digit = static_cast<std::size_t>(character - '0');
+            nonzero = nonzero || digit != 0U;
+            if (!result.exceeds_host_size) {
+                if (result.bits
+                    > (std::numeric_limits<std::size_t>::max() - digit) / 10U) {
+                    result.exceeds_host_size = true;
+                } else {
+                    result.bits = result.bits * 10U + digit;
+                }
+            }
+        }
+        return saw_digit && nonzero
+            ? std::optional { result }
+            : std::nullopt;
+    }
+
+} // namespace detail
+
 struct VerilogTypeSpec {
-  Type type;
-  PortDirection direction{PortDirection::Unknown};
+    Type type;
+    PortDirection direction { PortDirection::Unknown };
 };
 
 [[nodiscard]] inline std::optional<std::string>
-constant_output_number(const std::string_view spelling) {
-  const auto quote = spelling.find('\'');
-  if (quote == std::string_view::npos) {
-    const auto value = decimal_u64(spelling);
-    return value
-        ? std::optional{std::to_string(*value)}
-        : std::nullopt;
-  }
-  const auto width = decimal_u64(spelling.substr(0, quote));
-  if (!width || *width == 0) {
-    return std::nullopt;
-  }
-  auto digits = spelling.substr(quote + 1);
-  bool is_signed = false;
-  if (!digits.empty()
-      && (digits.front() == 's' || digits.front() == 'S')) {
-    is_signed = true;
-    digits.remove_prefix(1);
-  }
-  if (digits.size() < 2) {
-    return std::nullopt;
-  }
-  const char radix = detail::ascii_lower(digits.substr(0, 1)).front();
-  digits.remove_prefix(1);
-  int base{};
-  switch (radix) {
-  case 'b':
-    base = 2;
-    break;
-  case 'o':
-    base = 8;
-    break;
-  case 'd':
-    base = 10;
-    break;
-  case 'h':
-    base = 16;
-    break;
-  default:
-    return std::nullopt;
-  }
-  std::string cleaned;
-  cleaned.reserve(digits.size());
-  for (const char digit : digits) {
-    if (digit != '_') {
-      cleaned.push_back(digit);
+constant_output_number(const std::string_view spelling)
+{
+    const auto quote = spelling.find('\'');
+    if (quote == std::string_view::npos) {
+        const auto value = detail::OutputUnsignedInteger::parse(spelling, 10U);
+        return value
+            ? std::optional { value->decimal_string() }
+            : std::nullopt;
     }
-  }
-  std::uint64_t value{};
-  const auto [end, error] = std::from_chars(
-      cleaned.data(),
-      cleaned.data() + cleaned.size(),
-      value,
-      base);
-  if (error != std::errc{}
-      || end != cleaned.data() + cleaned.size()) {
-    return std::nullopt;
-  }
-  if (*width < 64) {
-    value &= (std::uint64_t{1} << *width) - 1U;
-  }
-  if (!is_signed
-      || *width > 64
-      || (value & (std::uint64_t{1} << (*width - 1U))) == 0) {
-    return std::to_string(value);
-  }
-  const auto magnitude =
-      *width == 64
-          ? (~value) + 1U
-          : (std::uint64_t{1} << *width) - value;
-  if (magnitude == (std::uint64_t{1} << 63U)) {
-    return std::to_string(std::numeric_limits<std::int64_t>::min());
-  }
-  return "-" + std::to_string(magnitude);
+    std::optional<detail::OutputLiteralWidth> explicit_width;
+    const auto width_text = spelling.substr(0, quote);
+    if (!width_text.empty()) {
+        explicit_width = detail::output_literal_width(width_text);
+        if (!explicit_width) {
+            return std::nullopt;
+        }
+    }
+    auto digits = spelling.substr(quote + 1);
+    bool is_signed = false;
+    if (!digits.empty()
+        && (digits.front() == 's' || digits.front() == 'S')) {
+        is_signed = true;
+        digits.remove_prefix(1);
+    }
+    if (digits.size() < 2) {
+        return std::nullopt;
+    }
+    const char radix = detail::ascii_lower(digits.substr(0, 1)).front();
+    digits.remove_prefix(1);
+    unsigned base { };
+    std::size_t digit_width { };
+    switch (radix) {
+    case 'b':
+        base = 2U;
+        digit_width = 1U;
+        break;
+    case 'o':
+        base = 8U;
+        digit_width = 3U;
+        break;
+    case 'd':
+        base = 10U;
+        break;
+    case 'h':
+        base = 16U;
+        digit_width = 4U;
+        break;
+    default:
+        return std::nullopt;
+    }
+    auto value = detail::OutputUnsignedInteger::parse(digits, base);
+    if (!value) {
+        return std::nullopt;
+    }
+    if (explicit_width && !explicit_width->exceeds_host_size) {
+        value->truncate(explicit_width->bits);
+    }
+    std::size_t selected_width { };
+    bool selected_width_exceeds_host = false;
+    if (explicit_width) {
+        selected_width = explicit_width->bits;
+        selected_width_exceeds_host = explicit_width->exceeds_host_size;
+    } else if (base == 10U) {
+        selected_width = std::max(
+            std::size_t { 32 },
+            value->bit_width() + (is_signed ? 1U : 0U));
+    } else {
+        const auto digit_count = static_cast<std::size_t>(std::ranges::count_if(
+            digits,
+            [](const char character) { return character != '_'; }));
+        if (digit_count > std::numeric_limits<std::size_t>::max() / digit_width) {
+            selected_width_exceeds_host = true;
+        } else {
+            selected_width = std::max(std::size_t { 32 }, digit_count * digit_width);
+        }
+    }
+    const bool negative = is_signed
+        && !selected_width_exceeds_host
+        && value->test_bit(selected_width - 1U);
+    if (negative) {
+        value->twos_complement_magnitude(selected_width);
+    }
+    return (negative ? "-" : "") + value->decimal_string();
 }
 
 [[nodiscard]] inline std::optional<std::int64_t> simple_integer_constant(
     const Expression& expression) {
   if (expression.kind == ExpressionKind::IntegerLiteral) {
     return decimal_i64(expression.text);
+  }
+  if (expression.kind == ExpressionKind::LogicLiteral) {
+      const auto value = constant_output_number(expression.text);
+      return value ? decimal_i64(*value) : std::nullopt;
   }
   if (expression.kind == ExpressionKind::Unary
       && expression.operands.size() == 1
@@ -323,6 +526,10 @@ class VerilogParser final : private detail::ParserBase {
       std::string code = "FSIM-FE-PARSE-001");
 
   static SourceSpan span_from(const Token& first, const Token& last);
+
+  [[nodiscard]] bool verilog_attribute_instance_start() const;
+
+  void parse_verilog_attribute_instances();
 
   static std::string string_literal_text(const Token& token);
 
@@ -662,6 +869,10 @@ class VerilogParser final : private detail::ParserBase {
 
   std::vector<Instance> parse_instances();
 
+  void parse_defparam_declaration(
+      std::vector<VerilogDefparamDeclaration>& declarations,
+      const Token& start);
+
   void normalize_udp_instances(ParsedDesign& design);
 
   void parse_parameter_overrides(
@@ -739,7 +950,7 @@ class VerilogParser final : private detail::ParserBase {
   std::optional<VerilogChargeStrength>
   parse_verilog_charge_strength(std::string_view context);
 
-  std::optional<Statement> parse_continuous_assignment(const Token& start);
+  std::vector<Statement> parse_continuous_assignments(const Token& start);
 
   [[nodiscard]] bool is_gate_primitive() const;
 
@@ -886,6 +1097,7 @@ class VerilogParser final : private detail::ParserBase {
   bool module_time_unit_declared_{};
   bool module_time_precision_declared_{};
   bool module_has_non_time_item_{};
+  bool in_verilog_attribute_ { };
 };
 
 }  // namespace fsim::frontend

@@ -22,10 +22,17 @@
 namespace fsim::frontend {
 namespace {
 
-struct MacroParameter {
-  std::string name;
-  std::optional<std::vector<Token>> default_value;
-};
+    // Preserve the published diagnostic identities after adopting true textual
+    // include semantics. They must not be reused for a different failure class.
+    [[maybe_unused]] constexpr std::string_view
+        legacy_include_open_conditional_code = "FSIM-SV-PP-045";
+    [[maybe_unused]] constexpr std::string_view
+        legacy_include_cross_conditional_code = "FSIM-SV-PP-046";
+
+    struct MacroParameter {
+        std::string name;
+        std::optional<std::vector<Token>> default_value;
+    };
 
 struct Macro {
   std::string name;
@@ -497,57 +504,44 @@ class VerilogPreprocessor {
     }
     if (depth != 0
         && current_dependency_names_.insert(name).second) {
-      current_dependencies_.push_back(
-          {normalized, snapshot->second});
+        current_dependencies_.push_back(
+            { normalized, snapshot->second });
     }
 
     auto lexed = lex(
-        SourceText{name, snapshot->second}, language_);
+        SourceText { name, snapshot->second }, language_);
     const auto lexical_diagnostics_begin = diagnostics_.size();
     for (auto& diagnostic : lexed.diagnostics) {
-      diagnostic.expansion_stack.insert(
-          diagnostic.expansion_stack.begin(),
-          include_ancestry_.begin(),
-          include_ancestry_.end());
-      diagnostics_.push_back(std::move(diagnostic));
+        diagnostic.expansion_stack.insert(
+            diagnostic.expansion_stack.begin(),
+            include_ancestry_.begin(),
+            include_ancestry_.end());
+        diagnostics_.push_back(std::move(diagnostic));
     }
     const auto lexical_diagnostics_end = diagnostics_.size();
     if (!include_ancestry_.empty()) {
-      for (auto& token : lexed.tokens) {
-        token.expansion_stack.insert(
-            token.expansion_stack.begin(),
-            include_ancestry_.begin(),
-            include_ancestry_.end());
-      }
+        for (auto& token : lexed.tokens) {
+            token.expansion_stack.insert(
+                token.expansion_stack.begin(),
+                include_ancestry_.begin(),
+                include_ancestry_.end());
+        }
     }
-    const auto conditional_depth = conditionals_.size();
     include_stack_.push_back(normalized);
     auto processed = process_tokens(lexed.tokens, depth);
     include_stack_.pop_back();
-    if (depth != 0 && conditionals_.size() > conditional_depth) {
-      for (auto index = conditional_depth;
-           index < conditionals_.size(); ++index) {
-        diagnose(
-            "FSIM-SV-PP-045",
-            "conditional compilation block opened in an include must "
-            "close before the include ends",
-            conditionals_[index].opening);
-      }
-      conditionals_.resize(conditional_depth);
-    }
     for (auto diagnostic_index = lexical_diagnostics_begin;
-         diagnostic_index < lexical_diagnostics_end; ++diagnostic_index) {
-      auto& diagnostic = diagnostics_[diagnostic_index];
-      for (auto mapping = processed.mappings.rbegin();
-           mapping != processed.mappings.rend(); ++mapping) {
-        if (diagnostic.span.source_name == mapping->physical_source
-            && diagnostic.span.begin.line
-                >= mapping->physical_anchor_line) {
-          diagnostic.span =
-              remap_span(std::move(diagnostic.span), *mapping);
-          break;
+        diagnostic_index < lexical_diagnostics_end; ++diagnostic_index) {
+        auto& diagnostic = diagnostics_[diagnostic_index];
+        for (auto mapping = processed.mappings.rbegin();
+            mapping != processed.mappings.rend(); ++mapping) {
+            if (diagnostic.span.source_name == mapping->physical_source
+                && diagnostic.span.begin.line
+                    >= mapping->physical_anchor_line) {
+                diagnostic.span = remap_span(std::move(diagnostic.span), *mapping);
+                break;
+            }
         }
-      }
     }
     if (depth == 0) {
       root_eof_ = std::move(processed.eof);
@@ -586,69 +580,81 @@ class VerilogPreprocessor {
       return processed;
     }
     std::vector<Token> mapped_tokens = tokens;
-    SourceMapping mapping{
+    SourceMapping mapping {
         tokens.front().span.source_name,
         tokens.front().span.source_name,
         1,
         1,
-        0};
+        0
+    };
     processed.mappings.push_back(mapping);
     std::size_t index = 0;
     while (index < tokens.size()
-           && tokens[index].kind != TokenKind::EndOfFile) {
-      for (auto position = index; position < tokens.size(); ++position) {
-        mapped_tokens[position].span =
-            remap_span(tokens[position].span, mapping);
-      }
-      if (mapped_tokens[index].kind == TokenKind::Backtick
-          && index + 1 < tokens.size()
-          && mapped_tokens[index + 1].kind == TokenKind::Identifier) {
-        const auto directive = mapped_tokens[index + 1].text;
-        if (is_directive(directive)) {
-          const auto end = line_end(tokens, index);
-          if (directive == "line" && active()) {
-            const auto next_physical_line =
-                end == index
-                    ? tokens[index].span.end.line + 1
-                    : tokens[end - 1].span.end.line + 1;
-            if (auto next_mapping = line_mapping(
-                    mapped_tokens,
-                    index + 2,
-                    end,
-                    mapped_tokens[index + 1],
-                    mapping.physical_source,
-                    next_physical_line)) {
-              mapping = std::move(*next_mapping);
-              processed.mappings.push_back(mapping);
+        && tokens[index].kind != TokenKind::EndOfFile) {
+        for (auto position = index; position < tokens.size(); ++position) {
+            mapped_tokens[position].span = remap_span(tokens[position].span, mapping);
+        }
+        if (protected_envelope_) {
+            if (mapped_tokens[index].kind == TokenKind::Backtick
+                && index + 1 < tokens.size()
+                && mapped_tokens[index + 1].kind == TokenKind::Identifier
+                && mapped_tokens[index + 1].text == "pragma") {
+                const auto end = line_end(tokens, index);
+                handle_directive(
+                    mapped_tokens, index, end, include_depth);
+                index = end;
+            } else {
+                ++index;
             }
-            index = end;
             continue;
-          }
-          handle_directive(
-              mapped_tokens, index, end, include_depth);
-          index = end;
-          continue;
         }
-        if (!active()) {
-          ++index;
-          continue;
+        if (mapped_tokens[index].kind == TokenKind::Backtick
+            && index + 1 < tokens.size()
+            && mapped_tokens[index + 1].kind == TokenKind::Identifier) {
+            const auto directive = mapped_tokens[index + 1].text;
+            if (is_directive(directive)) {
+                const auto end = line_end(tokens, index);
+                if (directive == "line" && active()) {
+                    const auto next_physical_line = end == index
+                        ? tokens[index].span.end.line + 1
+                        : tokens[end - 1].span.end.line + 1;
+                    if (auto next_mapping = line_mapping(
+                            mapped_tokens,
+                            index + 2,
+                            end,
+                            mapped_tokens[index + 1],
+                            mapping.physical_source,
+                            next_physical_line)) {
+                        mapping = std::move(*next_mapping);
+                        processed.mappings.push_back(mapping);
+                    }
+                    index = end;
+                    continue;
+                }
+                handle_directive(
+                    mapped_tokens, index, end, include_depth);
+                index = end;
+                continue;
+            }
+            if (!active()) {
+                ++index;
+                continue;
+            }
+            auto expanded = expand_invocation(mapped_tokens, index, 0, { });
+            output_.insert(
+                output_.end(),
+                std::make_move_iterator(expanded.begin()),
+                std::make_move_iterator(expanded.end()));
+            continue;
         }
-        auto expanded =
-            expand_invocation(mapped_tokens, index, 0, {});
-        output_.insert(
-            output_.end(),
-            std::make_move_iterator(expanded.begin()),
-            std::make_move_iterator(expanded.end()));
-        continue;
-      }
-      if (is_line_continuation(mapped_tokens[index])) {
+        if (is_line_continuation(mapped_tokens[index])) {
+            ++index;
+            continue;
+        }
+        if (active()) {
+            output_.push_back(mapped_tokens[index]);
+        }
         ++index;
-        continue;
-      }
-      if (active()) {
-        output_.push_back(mapped_tokens[index]);
-      }
-      ++index;
     }
     mapped_tokens.back().span =
         remap_span(tokens.back().span, mapping);
@@ -755,136 +761,143 @@ class VerilogPreprocessor {
       const std::size_t begin,
       const std::size_t end,
       const std::size_t include_depth) {
-    const auto& tick = tokens[begin];
-    const auto& name_token = tokens[begin + 1];
-    const auto name = name_token.text;
-    const auto arguments = begin + 2;
+      const auto& tick = tokens[begin];
+      const auto& name_token = tokens[begin + 1];
+      const auto name = name_token.text;
+      const auto arguments = begin + 2;
 
-    if (name == "ifdef" || name == "ifndef") {
-      const auto macro_name =
-          directive_macro_name(tokens, arguments, end, name_token);
-      const bool parent = active();
-      const bool defined =
-          macro_name && macros_.contains(*macro_name);
-      const bool take =
-          macro_name && (name == "ifdef" ? defined : !defined);
-      conditionals_.push_back(
-          {parent, parent && take, parent && take, false,
-           cover(tick.span, name_token.span)});
-      return;
-    }
-    if (name == "elsif") {
-      if (conditionals_.empty()) {
-        diagnose(
-            "FSIM-SV-PP-006",
-            "`elsif without a matching `ifdef or `ifndef",
-            name_token.span);
-        return;
+      if (name == "ifdef" || name == "ifndef") {
+          const auto macro_name = directive_macro_name(tokens, arguments, end, name_token);
+          const bool parent = active();
+          const bool defined = macro_name && macros_.contains(*macro_name);
+          const bool take = macro_name && (name == "ifdef" ? defined : !defined);
+          conditionals_.push_back(
+              { parent, parent && take, parent && take, false,
+                  cover(tick.span, name_token.span) });
+          return;
       }
-      auto& conditional = conditionals_.back();
-      if (include_stack_.size() > 1
-          && physical_source(name_token.span)
-              != physical_source(conditional.opening)) {
-        diagnose(
-            "FSIM-SV-PP-046",
-            "an include cannot continue a conditional compilation block "
-            "opened by its parent source",
-            name_token.span);
-        return;
+      if (name == "elsif") {
+          if (conditionals_.empty()) {
+              diagnose(
+                  "FSIM-SV-PP-006",
+                  "`elsif without a matching `ifdef or `ifndef",
+                  name_token.span);
+              return;
+          }
+          auto& conditional = conditionals_.back();
+          if (conditional.saw_else) {
+              diagnose(
+                  "FSIM-SV-PP-007",
+                  "`elsif cannot follow `else in one conditional block",
+                  name_token.span);
+          }
+          const auto macro_name = directive_macro_name(tokens, arguments, end, name_token);
+          const bool take = conditional.parent_active && !conditional.branch_taken
+              && macro_name && macros_.contains(*macro_name);
+          conditional.active = take;
+          conditional.branch_taken = conditional.branch_taken || take;
+          return;
       }
-      if (conditional.saw_else) {
-        diagnose(
-            "FSIM-SV-PP-007",
-            "`elsif cannot follow `else in one conditional block",
-            name_token.span);
+      if (name == "else") {
+          if (conditionals_.empty()) {
+              diagnose(
+                  "FSIM-SV-PP-008",
+                  "`else without a matching `ifdef or `ifndef",
+                  name_token.span);
+              return;
+          }
+          auto& conditional = conditionals_.back();
+          if (conditional.saw_else) {
+              diagnose(
+                  "FSIM-SV-PP-009",
+                  "duplicate `else in one conditional block",
+                  name_token.span);
+          }
+          conditional.saw_else = true;
+          conditional.active = conditional.parent_active && !conditional.branch_taken;
+          conditional.branch_taken = true;
+          reject_extra_directive_tokens(
+              tokens, arguments, end, name_token);
+          return;
       }
-      const auto macro_name =
-          directive_macro_name(tokens, arguments, end, name_token);
-      const bool take =
-          conditional.parent_active && !conditional.branch_taken
-          && macro_name && macros_.contains(*macro_name);
-      conditional.active = take;
-      conditional.branch_taken = conditional.branch_taken || take;
-      return;
-    }
-    if (name == "else") {
-      if (conditionals_.empty()) {
-        diagnose(
-            "FSIM-SV-PP-008",
-            "`else without a matching `ifdef or `ifndef",
-            name_token.span);
-        return;
+      if (name == "endif") {
+          if (conditionals_.empty()) {
+              diagnose(
+                  "FSIM-SV-PP-010",
+                  "`endif without a matching `ifdef or `ifndef",
+                  name_token.span);
+              return;
+          }
+          reject_extra_directive_tokens(
+              tokens, arguments, end, name_token);
+          conditionals_.pop_back();
+          return;
       }
-      auto& conditional = conditionals_.back();
-      if (include_stack_.size() > 1
-          && physical_source(name_token.span)
-              != physical_source(conditional.opening)) {
-        diagnose(
-            "FSIM-SV-PP-046",
-            "an include cannot continue a conditional compilation block "
-            "opened by its parent source",
-            name_token.span);
-        return;
-      }
-      if (conditional.saw_else) {
-        diagnose(
-            "FSIM-SV-PP-009",
-            "duplicate `else in one conditional block",
-            name_token.span);
-      }
-      conditional.saw_else = true;
-      conditional.active =
-          conditional.parent_active && !conditional.branch_taken;
-      conditional.branch_taken = true;
-      reject_extra_directive_tokens(
-          tokens, arguments, end, name_token);
-      return;
-    }
-    if (name == "endif") {
-      if (conditionals_.empty()) {
-        diagnose(
-            "FSIM-SV-PP-010",
-            "`endif without a matching `ifdef or `ifndef",
-            name_token.span);
-        return;
-      }
-      if (include_stack_.size() > 1
-          && physical_source(name_token.span)
-              != physical_source(conditionals_.back().opening)) {
-        diagnose(
-            "FSIM-SV-PP-046",
-            "an include cannot close a conditional compilation block "
-            "opened by its parent source",
-            name_token.span);
-        return;
-      }
-      reject_extra_directive_tokens(
-          tokens, arguments, end, name_token);
-      conditionals_.pop_back();
-      return;
-    }
 
-    if (!active()) {
-      return;
-    }
-    if (name == "define") {
-      define_macro(tokens, arguments, end, name_token);
-      return;
-    }
-    if (name == "undef") {
-      const auto macro_name =
-          directive_macro_name(tokens, arguments, end, name_token);
-      if (macro_name) {
-        macros_.erase(*macro_name);
+      if (!active()) {
+          return;
       }
-      return;
-    }
-    if (name == "undefineall") {
-      reject_extra_directive_tokens(
-          tokens, arguments, end, name_token);
-      macros_.clear();
-      return;
-    }
+      if (name == "pragma") {
+          if (arguments >= end
+              || tokens[arguments].kind != TokenKind::Identifier
+              || tokens[arguments].text != "protect") {
+              return;
+          }
+          if (arguments + 1 >= end
+              || tokens[arguments + 1].kind != TokenKind::Identifier) {
+              diagnose(
+                  "FSIM-SV-PP-011",
+                  "`pragma protect requires a protect keyword",
+                  name_token.span);
+              return;
+          }
+          const auto keyword = tokens[arguments + 1].text;
+          if (keyword == "begin_protected") {
+              if (protected_envelope_) {
+                  diagnose(
+                      "FSIM-SV-PP-011",
+                      "a protected envelope cannot be nested",
+                      name_token.span);
+                  return;
+              }
+              diagnose(
+                  "FSIM-SV-PP-011",
+                  "encrypted protected-envelope payload requires a decryption "
+                  "provider",
+                  name_token.span);
+              protected_envelope_ = true;
+              return;
+          }
+          if (keyword == "end_protected") {
+              if (!protected_envelope_) {
+                  diagnose(
+                      "FSIM-SV-PP-011",
+                      "`pragma protect end_protected has no matching "
+                      "begin_protected",
+                      name_token.span);
+                  return;
+              }
+              protected_envelope_ = false;
+          }
+          return;
+      }
+      if (name == "define") {
+          define_macro(tokens, arguments, end, name_token);
+          return;
+      }
+      if (name == "undef") {
+          const auto macro_name = directive_macro_name(tokens, arguments, end, name_token);
+          if (macro_name) {
+              macros_.erase(*macro_name);
+          }
+          return;
+      }
+      if (name == "undefineall") {
+          reject_extra_directive_tokens(
+              tokens, arguments, end, name_token);
+          macros_.clear();
+          return;
+      }
     if (name == "include") {
       include_file(
           tokens, arguments, end, name_token, include_depth);
@@ -1749,15 +1762,17 @@ class VerilogPreprocessor {
   std::vector<Token> output_;
   std::vector<Diagnostic> diagnostics_;
   std::optional<Token> root_eof_;
+  bool protected_envelope_ { };
 };
 
-}  // namespace
+} // namespace
 
 PreprocessResult preprocess_verilog_file(
     const std::filesystem::path& path,
     const Language language,
-    const PreprocessorOptions& options) {
-  return VerilogPreprocessor(language, options).run(path);
+    const PreprocessorOptions& options)
+{
+    return VerilogPreprocessor(language, options).run(path);
 }
 
 PreprocessResult preprocess_verilog(

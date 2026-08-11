@@ -387,6 +387,12 @@ void VerilogParser::parse_generate_region(
           previous());
       continue;
     }
+    if (match_keyword("defparam")) {
+        parse_defparam_declaration(
+            direct_region.then_body.verilog_defparams,
+            previous());
+        continue;
+    }
     if (match_keyword("function")) {
       direct_region.then_body.functions.push_back(
           parse_function(previous()));
@@ -420,12 +426,12 @@ void VerilogParser::parse_generate_region(
       continue;
     }
     if (match_keyword("assign")) {
-      if (auto assignment =
-              parse_continuous_assignment(previous())) {
-        direct_region.then_body.concurrent_statements.push_back(
-            std::move(*assignment));
-      }
-      continue;
+        auto assignments = parse_continuous_assignments(previous());
+        direct_region.then_body.concurrent_statements.insert(
+            direct_region.then_body.concurrent_statements.end(),
+            std::make_move_iterator(assignments.begin()),
+            std::make_move_iterator(assignments.end()));
+        continue;
     }
     if (
         keyword("always") || keyword("always_ff")
@@ -463,15 +469,15 @@ void VerilogParser::parse_generate_region(
       "endgenerate", false, "FSIM-SV-PARSE-064");
   direct_region.span =
       span_from(generate_token, previous());
-  const bool has_direct_items =
-      !direct_region.then_body.constants.empty()
+  const bool has_direct_items = !direct_region.then_body.constants.empty()
       || !direct_region.then_body.type_aliases.empty()
       || !direct_region.then_body.signals.empty()
       || !direct_region.then_body.functions.empty()
       || !direct_region.then_body.tasks.empty()
       || !direct_region.then_body.concurrent_statements.empty()
       || !direct_region.then_body.processes.empty()
-      || !direct_region.then_body.instances.empty();
+      || !direct_region.then_body.instances.empty()
+      || !direct_region.then_body.verilog_defparams.empty();
   if (has_direct_items) {
     unit.generate_regions.push_back(
         std::move(direct_region));
@@ -735,58 +741,60 @@ void VerilogParser::parse_generate_branch(
     } else if (match_keyword("localparam")) {
       parse_generated_parameter_group(
           body, local_names, true, previous());
+    } else if (match_keyword("defparam")) {
+        parse_defparam_declaration(
+            body.verilog_defparams, previous());
     } else if (match_keyword("function")) {
-      body.functions.push_back(parse_function(previous()));
+        body.functions.push_back(parse_function(previous()));
     } else if (match_keyword("task")) {
-      body.tasks.push_back(parse_task(previous()));
+        body.tasks.push_back(parse_task(previous()));
     } else if (match_keyword("typedef")) {
-      parse_generate_typedef(body, local_names, previous());
+        parse_generate_typedef(body, local_names, previous());
     } else if (match_keyword("assign")) {
-      if (auto assignment =
-              parse_continuous_assignment(previous())) {
-        body.concurrent_statements.push_back(
-            std::move(*assignment));
-      }
+        auto assignments = parse_continuous_assignments(previous());
+        body.concurrent_statements.insert(
+            body.concurrent_statements.end(),
+            std::make_move_iterator(assignments.begin()),
+            std::make_move_iterator(assignments.end()));
     } else if (is_gate_primitive()) {
-      parse_gate_primitive(
-          body.concurrent_statements, body.signals, {});
-    } else if (any_keyword({
-                   "cmos", "rcmos", "nmos", "pmos", "rnmos",
+        parse_gate_primitive(
+            body.concurrent_statements, body.signals, { });
+    } else if (any_keyword({ "cmos", "rcmos", "nmos", "pmos", "rnmos",
                    "rpmos", "tran", "rtran", "tranif0", "tranif1",
-                   "rtranif0", "rtranif1", "pullup", "pulldown"})) {
-      parse_switch_primitive(
-          body.concurrent_statements, body.signals, {});
+                   "rtranif0", "rtranif1", "pullup", "pulldown" })) {
+        parse_switch_primitive(
+            body.concurrent_statements, body.signals, { });
     } else if (
         keyword("always") || keyword("always_ff")
         || keyword("always_comb") || keyword("always_latch")) {
-      body.processes.push_back(parse_always());
+        body.processes.push_back(parse_always());
     } else if (keyword("initial")) {
-      body.processes.push_back(parse_initial());
+        body.processes.push_back(parse_initial());
     } else if (match_keyword("if")) {
-      body.generate_regions.push_back(
-          parse_conditional_generate(previous()));
+        body.generate_regions.push_back(
+            parse_conditional_generate(previous()));
     } else if (match_keyword("for")) {
-      body.generate_regions.push_back(
-          parse_iterative_generate(previous()));
+        body.generate_regions.push_back(
+            parse_iterative_generate(previous()));
     } else if (match_keyword("case")) {
-      body.generate_regions.push_back(
-          parse_selection_generate(previous()));
+        body.generate_regions.push_back(
+            parse_selection_generate(previous()));
     } else if (keyword("begin")) {
-      body.generate_regions.push_back(
-          parse_static_generate_block());
+        body.generate_regions.push_back(
+            parse_static_generate_block());
     } else if (instance_start()) {
-      auto instances = parse_instances();
-      body.instances.insert(
-          body.instances.end(),
-          std::make_move_iterator(instances.begin()),
-          std::make_move_iterator(instances.end()));
+        auto instances = parse_instances();
+        body.instances.insert(
+            body.instances.end(),
+            std::make_move_iterator(instances.begin()),
+            std::make_move_iterator(instances.end()));
     } else {
-      const auto unsupported = advance();
-      error(
-          unsupported,
-          "FSIM-SV-UNSUPPORTED-021",
-          "unsupported item in generated module body");
-      skip_to_semicolon();
+        const auto unsupported = advance();
+        error(
+            unsupported,
+            "FSIM-SV-UNSUPPORTED-021",
+            "unsupported item in generated module body");
+        skip_to_semicolon();
     }
   }
   expect_keyword("end", false, "FSIM-SV-PARSE-063");
@@ -1310,6 +1318,9 @@ void VerilogParser::parse_parameter_group(
     if (!match(TokenKind::Comma)) {
       break;
     }
+    if (verilog_attribute_instance_start()) {
+        parse_verilog_attribute_instances();
+    }
     const bool next_class_parameter =
         class_list
         && (keyword("type") || keyword("string")
@@ -1342,27 +1353,29 @@ void VerilogParser::parse_parameter_port_list(
           : "'(' after module parameter '#'",
       "FSIM-SV-PARSE-052");
   while (!at_end() && !at(TokenKind::RightParen)) {
-    if (match_keyword("parameter")) {
-      parse_parameter_group(
-          unit, false, true, previous(), class_list);
-    } else if (match_keyword("localparam")) {
-      parse_parameter_group(
-          unit, true, true, previous(), class_list);
-    } else if (class_list) {
-      parse_parameter_group(
-          unit, false, true, current(), true);
-    } else {
-      error(
-          current(),
-          "FSIM-SV-PARSE-053",
-          "a module parameter port list item must begin with parameter "
-          "or localparam");
-      while (!at_end() && !at(TokenKind::Comma)
-             && !at(TokenKind::RightParen)) {
-        advance();
+      if (verilog_attribute_instance_start()) {
+          parse_verilog_attribute_instances();
+      } else if (match_keyword("parameter")) {
+          parse_parameter_group(
+              unit, false, true, previous(), class_list);
+      } else if (match_keyword("localparam")) {
+          parse_parameter_group(
+              unit, true, true, previous(), class_list);
+      } else if (class_list) {
+          parse_parameter_group(
+              unit, false, true, current(), true);
+      } else {
+          error(
+              current(),
+              "FSIM-SV-PARSE-053",
+              "a module parameter port list item must begin with parameter "
+              "or localparam");
+          while (!at_end() && !at(TokenKind::Comma)
+              && !at(TokenKind::RightParen)) {
+              advance();
+          }
+          (void)match(TokenKind::Comma);
       }
-      (void)match(TokenKind::Comma);
-    }
   }
   expect(
       TokenKind::RightParen,
@@ -1497,6 +1510,63 @@ std::vector<Instance> VerilogParser::parse_instances() {
       TokenKind::Semicolon, "';' after module or UDP instance",
       "FSIM-SV-PARSE-038");
   return instances;
+}
+
+void VerilogParser::parse_defparam_declaration(
+    std::vector<VerilogDefparamDeclaration>& declarations,
+    const Token& start)
+{
+    bool first = true;
+    do {
+        const auto assignment_start = current();
+        VerilogDefparamDeclaration declaration;
+        for (;;) {
+            const auto name = expect_identifier("defparam hierarchical name");
+            VerilogDefparamPathSegment segment;
+            segment.name = name.text;
+            while (match(TokenKind::LeftBracket)) {
+                segment.indices.push_back(parse_expression());
+                expect(
+                    TokenKind::RightBracket,
+                    "']' after defparam hierarchy index",
+                    "FSIM-SV-PARSE-339");
+            }
+            segment.span = span_from(name, previous());
+            declaration.path.push_back(std::move(segment));
+            if (!match(TokenKind::Dot)) {
+                break;
+            }
+        }
+        if (declaration.path.size() < 2U) {
+            error(
+                assignment_start,
+                "FSIM-SV-SEM-231",
+                "a defparam target must contain an instance path and parameter "
+                "name");
+        }
+        if (!declaration.path.empty()
+            && !declaration.path.back().indices.empty()) {
+            error(
+                assignment_start,
+                "FSIM-SV-SEM-232",
+                "the final defparam path segment must name a parameter, not an "
+                "indexed object");
+        }
+        expect(
+            TokenKind::Assign,
+            "'=' after defparam hierarchical name",
+            "FSIM-SV-PARSE-340");
+        declaration.value = parse_expression();
+        declaration.span = first
+            ? span_from(start, previous())
+            : span_from(assignment_start, previous());
+        declarations.push_back(std::move(declaration));
+        first = false;
+    } while (match(TokenKind::Comma));
+    expect(
+        TokenKind::Semicolon,
+        "';' after defparam declaration",
+        "FSIM-SV-PARSE-341");
 }
 
 }  // namespace fsim::frontend

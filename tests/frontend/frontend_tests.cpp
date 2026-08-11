@@ -385,6 +385,7 @@ int main() {
     test_systemverilog_select_and_concatenation_expressions();
     test_conditional_statement_trees();
     test_conditional_generate_hierarchy();
+    test_verilog_defparam_declarations();
     test_systemverilog_named_events();
     test_verilog_literal_display();
     test_systemverilog_random_functions();

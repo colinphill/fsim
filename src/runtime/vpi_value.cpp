@@ -9,7 +9,6 @@ namespace fsim::runtime {
 
 namespace {
 
-constexpr std::size_t maximum_value_bits = 1U << 20U;
 constexpr std::size_t maximum_string_bytes = 1U << 20U;
 
 bool valid_strength(const SystemVerilogVpiDriveStrength& strength) {
@@ -103,12 +102,12 @@ bool validate_systemverilog_vpi_stored_value(
     case SystemVerilogVpiValueCategory::Integer2:
       return std::holds_alternative<PackedBit2>(value.payload)
           && width == type.width && width != 0U
-          && width <= maximum_value_bits && !value.strength;
+          && !value.strength;
     case SystemVerilogVpiValueCategory::Logic4:
     case SystemVerilogVpiValueCategory::Integer4: {
       const auto* logic = std::get_if<PackedLogic4>(&value.payload);
       return logic && !logic->is_logic9() && width == type.width
-          && width != 0U && width <= maximum_value_bits
+          && width != 0U
           && (!value.strength
               || (type.category == SystemVerilogVpiValueCategory::Logic4
                   && width == 1U));
@@ -116,7 +115,7 @@ bool validate_systemverilog_vpi_stored_value(
     case SystemVerilogVpiValueCategory::Logic9:
       return std::holds_alternative<PackedLogic9>(value.payload)
           && width == type.width && width != 0U
-          && width <= maximum_value_bits && !value.strength;
+          && !value.strength;
     case SystemVerilogVpiValueCategory::Real:
       return std::holds_alternative<double>(value.payload)
           && type.width == 64U && !value.strength;

@@ -11,6 +11,7 @@ struct NamedApplicationCase {
 
 #if FSIM_APPLICATION_SHARD == 0
 int fsim_application_case_core();
+int fsim_application_case_specialization();
 int fsim_application_case_artifact_phases();
 int fsim_application_case_classes();
 int fsim_application_case_systemc_matrix();
@@ -32,6 +33,7 @@ int fsim_application_case_resolution();
 
 constexpr NamedApplicationCase application_cases[] = {
     {"core", fsim_application_case_core},
+    {"specialization", fsim_application_case_specialization},
     {"artifact_phases", fsim_application_case_artifact_phases},
     {"classes", fsim_application_case_classes},
     {"systemc_matrix", fsim_application_case_systemc_matrix},

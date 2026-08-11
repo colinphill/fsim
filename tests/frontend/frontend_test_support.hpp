@@ -96,6 +96,7 @@ void test_verilog_udp_declarations();
 void test_systemverilog_select_and_concatenation_expressions();
 void test_conditional_statement_trees();
 void test_conditional_generate_hierarchy();
+void test_verilog_defparam_declarations();
 void test_systemverilog_named_events();
 void test_verilog_literal_display();
 void test_systemverilog_random_functions();

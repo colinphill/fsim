@@ -6,22 +6,24 @@ using namespace runtime::simir;
 using namespace elaboration_detail;
 
 const frontend::FunctionDeclaration* Lowerer::visible_function(
-    const std::string_view name) const {
-    const auto found = function_indices_.find(std::string{name});
+    const std::string_view name) const
+{
+    const auto found = function_indices_.find(std::string { name });
     return found == function_indices_.end()
             || found->second.size() != 1
         ? nullptr
         : function_frames_[found->second.front()].source;
 }
 
-void Lowerer::initialize_function_support() {
+void Lowerer::initialize_function_support()
+{
     function_frames_.clear();
     function_indices_.clear();
     pending_functions_.clear();
     function_dependencies_.clear();
     active_function_.reset();
     function_return_jumps_.clear();
-    function_call_stack_ = {};
+    function_call_stack_ = { };
     function_support_initialized_ = false;
     if (functions_.empty()) {
         return;
@@ -47,38 +49,35 @@ void Lowerer::initialize_function_support() {
                 function.span);
             continue;
         }
-        const bool duplicate_vhdl_profile =
-            function.language == frontend::Language::Vhdl2008
+        const bool duplicate_vhdl_profile = function.language == frontend::Language::Vhdl2008
             && std::ranges::any_of(
                 overloads,
                 [&](const std::size_t candidate_index) {
-                  const auto& candidate =
-                      *function_frames_[candidate_index].source;
-                  const bool imported_distinct_declarations =
-                      !candidate.visibility_owner.empty()
-                      && !function.visibility_owner.empty()
-                      && candidate.visibility_owner
-                          != function.visibility_owner;
-                  if (candidate.arguments.size()
-                          != function.arguments.size()
-                      || imported_distinct_declarations
-                      || !vhdl_callable_type_matches(
-                          candidate.return_type,
-                          function.return_type)) {
-                    return false;
-                  }
-                  for (std::size_t argument = 0;
-                       argument < function.arguments.size();
-                       ++argument) {
-                    if (candidate.arguments[argument].direction
-                            != function.arguments[argument].direction
+                    const auto& candidate = *function_frames_[candidate_index].source;
+                    const bool imported_distinct_declarations = !candidate.visibility_owner.empty()
+                        && !function.visibility_owner.empty()
+                        && candidate.visibility_owner
+                            != function.visibility_owner;
+                    if (candidate.arguments.size()
+                            != function.arguments.size()
+                        || imported_distinct_declarations
                         || !vhdl_callable_type_matches(
-                            candidate.arguments[argument].type,
-                            function.arguments[argument].type)) {
-                      return false;
+                            candidate.return_type,
+                            function.return_type)) {
+                        return false;
                     }
-                  }
-                  return true;
+                    for (std::size_t argument = 0;
+                        argument < function.arguments.size();
+                        ++argument) {
+                        if (candidate.arguments[argument].direction
+                                != function.arguments[argument].direction
+                            || !vhdl_callable_type_matches(
+                                candidate.arguments[argument].type,
+                                function.arguments[argument].type)) {
+                            return false;
+                        }
+                    }
+                    return true;
                 });
         if (duplicate_vhdl_profile) {
             report(
@@ -91,12 +90,12 @@ void Lowerer::initialize_function_support() {
         const auto index = function_frames_.size();
         FunctionFrame frame;
         frame.source = &function;
+        frame.invocation_identity = next_callable_invocation_identity_++;
         if (!function.automatic) {
-            frame.static_variables =
-                allocate_static_callable_variables(
-                    function.variables,
-                    function.statements,
-                    function.name);
+            frame.static_variables = allocate_static_callable_variables(
+                function.variables,
+                function.statements,
+                function.name);
         }
         function_frames_.push_back(std::move(frame));
         overloads.push_back(index);
@@ -146,7 +145,7 @@ void Lowerer::initialize_function_support() {
         const auto signal = std::ranges::find_if(
             dependencies,
             [&](const auto& name) {
-              return signals_.contains(name);
+                return signals_.contains(name);
             });
         if (signal != dependencies.end()) {
             report(
@@ -158,21 +157,21 @@ void Lowerer::initialize_function_support() {
         const auto calls_procedure =
             [&](const auto& self,
                 const std::vector<Statement>& statements) -> bool {
-              for (const auto& statement : statements) {
+            for (const auto& statement : statements) {
                 if (statement.kind == StatementKind::ProcedureCall
                     || self(self, statement.statements)
                     || self(self, statement.else_statements)) {
                     return true;
                 }
                 for (const auto& alternative :
-                     statement.case_alternatives) {
+                    statement.case_alternatives) {
                     if (self(self, alternative.statements)) {
                         return true;
                     }
                 }
-              }
-              return false;
-            };
+            }
+            return false;
+        };
         if (calls_procedure(
                 calls_procedure, function.statements)) {
             report(
@@ -183,30 +182,17 @@ void Lowerer::initialize_function_support() {
         }
     }
 
-    function_call_stack_.pointer =
-        allocate_register(32, frontend::ValueDomain::Bit2);
-    function_call_stack_.entries = next_register_;
-    function_call_stack_.capacity =
-        static_cast<std::uint32_t>(function_frames_.size());
-    process_.operations.emplace_back(LoadConstant{
-        function_call_stack_.pointer, unsigned_value(0, 32)});
-    for (std::uint32_t index = 0;
-         index < function_call_stack_.capacity; ++index) {
-        const auto entry =
-            allocate_register(32, frontend::ValueDomain::Bit2);
-        process_.operations.emplace_back(
-            LoadConstant{entry, unsigned_value(0, 32)});
-    }
     function_support_initialized_ = true;
 }
 
 Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
     const Expression& expression,
     const std::size_t expected_width,
-    const frontend::Type* expected_type) {
+    const frontend::Type* expected_type)
+{
     if (expression.kind != ExpressionKind::Call
         || !function_support_initialized_) {
-        return ExpressionAttempt{};
+        return ExpressionAttempt { };
     }
     if (expression.text.starts_with(".")
         && !expression.operands.empty()
@@ -217,8 +203,8 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
             + qualified.text;
         qualified.operands.erase(qualified.operands.begin());
         if (!qualified.call_argument_names.empty()) {
-          qualified.call_argument_names.erase(
-              qualified.call_argument_names.begin());
+            qualified.call_argument_names.erase(
+                qualified.call_argument_names.begin());
         }
         return lower_user_function_expression(
             qualified, expected_width, expected_type);
@@ -226,7 +212,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
     const auto selected = select_function_overload(
         expression, expected_type, FunctionResultKind::Packed);
     if (!selected.named) {
-        return ExpressionAttempt{};
+        return ExpressionAttempt { };
     }
     if (!selected.index) {
         return std::nullopt;
@@ -237,12 +223,12 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
     if (function.return_type.domain
             == frontend::ValueDomain::String
         || function.return_type.systemverilog_container) {
-        return ExpressionAttempt{};
+        return ExpressionAttempt { };
     }
     const bool has_defaults = std::ranges::any_of(
         function.arguments,
         [](const frontend::FunctionArgument& argument) {
-          return argument.default_value.has_value();
+            return argument.default_value.has_value();
         });
     if (expression.call_argument_names.empty()
         && !has_defaults
@@ -282,13 +268,12 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
         frame.argument_is_container.reserve(function.arguments.size());
         for (const auto& argument : function.arguments) {
             if (argument.type.systemverilog_container) {
-                const auto type =
-                    container_type(argument.type, argument.span);
+                const auto type = container_type(argument.type, argument.span);
                 if (!type) {
                     return std::nullopt;
                 }
-                frame.arguments.push_back({});
-                frame.string_arguments.push_back({});
+                frame.arguments.push_back({ });
+                frame.string_arguments.push_back({ });
                 frame.container_arguments.push_back(
                     allocate_container_register(*type));
                 frame.argument_is_string.push_back(false);
@@ -297,10 +282,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
             }
             if (argument.type.domain
                 == frontend::ValueDomain::String) {
-                frame.arguments.push_back({});
+                frame.arguments.push_back({ });
                 frame.string_arguments.push_back(
                     allocate_string_register());
-                frame.container_arguments.push_back({});
+                frame.container_arguments.push_back({ });
                 frame.argument_is_string.push_back(true);
                 frame.argument_is_container.push_back(false);
                 continue;
@@ -317,17 +302,32 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
             frame.arguments.push_back(allocate_register(
                 static_cast<std::size_t>(*width),
                 argument.type.domain));
-            frame.string_arguments.push_back({});
-            frame.container_arguments.push_back({});
+            frame.string_arguments.push_back({ });
+            frame.container_arguments.push_back({ });
             frame.argument_is_string.push_back(false);
             frame.argument_is_container.push_back(false);
+        }
+        if (function.automatic) {
+            frame.invocation_packed.push_back(frame.result);
+            for (std::size_t index = 0;
+                index < function.arguments.size(); ++index) {
+                if (frame.argument_is_container[index]) {
+                    frame.invocation_containers.push_back(
+                        frame.container_arguments[index]);
+                } else if (frame.argument_is_string[index]) {
+                    frame.invocation_strings.push_back(
+                        frame.string_arguments[index]);
+                } else {
+                    frame.invocation_packed.push_back(frame.arguments[index]);
+                }
+            }
         }
         frame.allocated = true;
     }
 
     std::vector<Expression> copy_out_targets(function.arguments.size());
     for (std::size_t index = 0;
-         index < function.arguments.size(); ++index) {
+        index < function.arguments.size(); ++index) {
         if (function.arguments[index].direction
             == frontend::PortDirection::Input) {
             continue;
@@ -343,8 +343,12 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
         copy_out_targets[index] = std::move(*target);
     }
 
+    std::vector<RegisterId> packed_actuals(function.arguments.size());
+    std::vector<StringRegisterId> string_actuals(function.arguments.size());
+    std::vector<ContainerRegisterId> container_actuals(
+        function.arguments.size());
     for (std::size_t index = 0;
-         index < function.arguments.size(); ++index) {
+        index < function.arguments.size(); ++index) {
         const auto& formal = function.arguments[index];
         if (formal.direction != frontend::PortDirection::Output
             && !validate_sv_nominal_assignment(
@@ -361,26 +365,22 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
                     formal.span);
                 return std::nullopt;
             }
-            const auto width = static_cast<std::size_t>(
-                *formal.type.width());
-            process_.operations.emplace_back(LoadConstant{
-                frame.arguments[index],
-                default_packed_value(formal.type, width)});
+            packed_actuals[index] = allocate_register(
+                static_cast<std::size_t>(*formal.type.width()),
+                formal.type.domain);
             continue;
         }
         if (frame.argument_is_container[index]) {
-            const auto formal_type =
-                container_type(formal.type, formal.span);
+            const auto formal_type = container_type(formal.type, formal.span);
             if (!formal_type) {
                 return std::nullopt;
             }
-            const auto actual =
-                formal_type->fixed
-                    ? lower_static_container_assignment_value(
-                          *(*actuals)[index],
-                          *formal_type)
-                    : lower_container_expression(
-                          *(*actuals)[index]);
+            const auto actual = formal_type->fixed
+                ? lower_static_container_assignment_value(
+                      *(*actuals)[index],
+                      *formal_type)
+                : lower_container_expression(
+                      *(*actuals)[index]);
             if (!actual) {
                 return std::nullopt;
             }
@@ -393,21 +393,20 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
                     (*actuals)[index]->span);
                 return std::nullopt;
             }
-            process_.operations.emplace_back(
-                CopyContainerRegister{
-                    frame.container_arguments[index], *actual});
+            container_actuals[index] = allocate_container_register(*formal_type);
+            process_.operations.emplace_back(CopyContainerRegister {
+                container_actuals[index], *actual });
             continue;
         }
         if (frame.argument_is_string[index]) {
-            const auto actual =
-                lower_string_expression(
-                    *(*actuals)[index]);
+            const auto actual = lower_string_expression(
+                *(*actuals)[index]);
             if (!actual) {
                 return std::nullopt;
             }
-            process_.operations.emplace_back(
-                CopyStringRegister{
-                    frame.string_arguments[index], *actual});
+            string_actuals[index] = allocate_string_register();
+            process_.operations.emplace_back(CopyStringRegister {
+                string_actuals[index], *actual });
             continue;
         }
         const auto width = static_cast<std::size_t>(
@@ -423,23 +422,55 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
                 width,
                 is_signed_expression(*(*actuals)[index]));
         }
+        packed_actuals[index] = allocate_register(width, formal.type.domain);
         process_.operations.emplace_back(
-            CopyRegister{frame.arguments[index], *actual});
+            CopyRegister { packed_actuals[index], *actual });
     }
-    const auto return_width =
-        static_cast<std::size_t>(*function.return_type.width());
-    process_.operations.emplace_back(LoadConstant{
+
+    if (function.automatic) {
+        const auto push_site = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(CallableFramePush {
+            frame.invocation_identity,
+            frame.invocation_packed,
+            frame.invocation_strings,
+            frame.invocation_containers });
+        if (!frame.invocation_layout_finalized) {
+            frame.invocation_push_sites.push_back(push_site);
+        }
+    }
+    for (std::size_t index = 0;
+        index < function.arguments.size(); ++index) {
+        const auto& formal = function.arguments[index];
+        if (formal.direction == frontend::PortDirection::Output) {
+            const auto width = static_cast<std::size_t>(
+                *formal.type.width());
+            process_.operations.emplace_back(LoadConstant {
+                frame.arguments[index],
+                default_packed_value(formal.type, width) });
+        } else if (frame.argument_is_container[index]) {
+            process_.operations.emplace_back(CopyContainerRegister {
+                frame.container_arguments[index], container_actuals[index] });
+        } else if (frame.argument_is_string[index]) {
+            process_.operations.emplace_back(CopyStringRegister {
+                frame.string_arguments[index], string_actuals[index] });
+        } else {
+            process_.operations.emplace_back(CopyRegister {
+                frame.arguments[index], packed_actuals[index] });
+        }
+    }
+    const auto return_width = static_cast<std::size_t>(*function.return_type.width());
+    process_.operations.emplace_back(LoadConstant {
         frame.result,
-        default_packed_value(function.return_type, return_width)});
+        default_packed_value(function.return_type, return_width) });
     const auto call_site = static_cast<InstructionIndex>(
         process_.operations.size());
-    process_.operations.emplace_back(Call{
+    process_.operations.emplace_back(Call {
         frame.target.value_or(0),
         static_cast<InstructionIndex>(call_site + 1U),
-        function_call_stack_});
+        function_call_stack_ });
     if (frame.target) {
-        fsim::runtime::simir::operation_get<Call>(process_.operations[call_site]).target =
-            *frame.target;
+        fsim::runtime::simir::operation_get<Call>(process_.operations[call_site]).target = *frame.target;
     } else {
         frame.call_sites.push_back(call_site);
     }
@@ -451,8 +482,53 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
         function_dependencies_[*active_function_].insert(
             function_index);
     }
+    const auto destination = allocate_register(
+        return_width, function.return_type.domain);
+    process_.operations.emplace_back(
+        CopyRegister { destination, frame.result });
     for (std::size_t index = 0;
-         index < function.arguments.size(); ++index) {
+        index < function.arguments.size(); ++index) {
+        const auto& formal = function.arguments[index];
+        if (formal.direction == frontend::PortDirection::Input) {
+            continue;
+        }
+        if (frame.argument_is_container[index]) {
+            process_.operations.emplace_back(CopyContainerRegister {
+                container_actuals[index], frame.container_arguments[index] });
+        } else if (frame.argument_is_string[index]) {
+            process_.operations.emplace_back(CopyStringRegister {
+                string_actuals[index], frame.string_arguments[index] });
+        } else {
+            process_.operations.emplace_back(CopyRegister {
+                packed_actuals[index], frame.arguments[index] });
+        }
+    }
+    if (function.automatic) {
+        std::vector<RegisterId> preserve_packed { destination };
+        std::vector<StringRegisterId> preserve_strings;
+        std::vector<ContainerRegisterId> preserve_containers;
+        for (std::size_t index = 0;
+            index < function.arguments.size(); ++index) {
+            if (function.arguments[index].direction
+                == frontend::PortDirection::Input) {
+                continue;
+            }
+            if (frame.argument_is_container[index]) {
+                preserve_containers.push_back(container_actuals[index]);
+            } else if (frame.argument_is_string[index]) {
+                preserve_strings.push_back(string_actuals[index]);
+            } else {
+                preserve_packed.push_back(packed_actuals[index]);
+            }
+        }
+        process_.operations.emplace_back(CallableFramePop {
+            frame.invocation_identity,
+            std::move(preserve_packed),
+            std::move(preserve_strings),
+            std::move(preserve_containers) });
+    }
+    for (std::size_t index = 0;
+        index < function.arguments.size(); ++index) {
         const auto& formal = function.arguments[index];
         if (formal.direction == frontend::PortDirection::Input) {
             continue;
@@ -460,19 +536,14 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
         lower_callable_copy_out(
             copy_out_targets[index],
             formal.type,
-            frame.arguments[index],
-            frame.string_arguments[index],
-            frame.container_arguments[index],
+            packed_actuals[index],
+            string_actuals[index],
+            container_actuals[index],
             frame.argument_is_string[index],
             frame.argument_is_container[index],
             "@function_copyout_" + std::to_string(function_index)
                 + "_" + std::to_string(index));
     }
-
-    const auto destination = allocate_register(
-        return_width, function.return_type.domain);
-    process_.operations.emplace_back(
-        CopyRegister{destination, frame.result});
     if (expected_width != 0 && expected_width != return_width) {
         return resize_register(
             destination,
@@ -484,7 +555,8 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
 
 std::optional<ContainerRegisterId>
 Lowerer::lower_user_container_function_expression(
-    const Expression& expression) {
+    const Expression& expression)
+{
     if (expression.kind != ExpressionKind::Call
         || !function_support_initialized_) {
         return std::nullopt;
@@ -498,8 +570,8 @@ Lowerer::lower_user_container_function_expression(
             + qualified.text;
         qualified.operands.erase(qualified.operands.begin());
         if (!qualified.call_argument_names.empty()) {
-          qualified.call_argument_names.erase(
-              qualified.call_argument_names.begin());
+            qualified.call_argument_names.erase(
+                qualified.call_argument_names.begin());
         }
         return lower_user_container_function_expression(qualified);
     }
@@ -520,7 +592,7 @@ Lowerer::lower_user_container_function_expression(
     const bool has_defaults = std::ranges::any_of(
         function.arguments,
         [](const frontend::FunctionArgument& argument) {
-          return argument.default_value.has_value();
+            return argument.default_value.has_value();
         });
     if (expression.call_argument_names.empty()
         && !has_defaults
@@ -540,17 +612,14 @@ Lowerer::lower_user_container_function_expression(
         return std::nullopt;
     }
 
-    const auto result_type =
-        container_type(function.return_type, function.span);
+    const auto result_type = container_type(function.return_type, function.span);
     if (!result_type) {
         return std::nullopt;
     }
     if (!frame.allocated) {
         frame.result_is_container = true;
-        frame.container_result =
-            allocate_container_register(*result_type);
-        frame.container_result_default =
-            allocate_container_register(*result_type);
+        frame.container_result = allocate_container_register(*result_type);
+        frame.container_result_default = allocate_container_register(*result_type);
         frame.arguments.reserve(function.arguments.size());
         frame.string_arguments.reserve(function.arguments.size());
         frame.container_arguments.reserve(function.arguments.size());
@@ -558,13 +627,12 @@ Lowerer::lower_user_container_function_expression(
         frame.argument_is_container.reserve(function.arguments.size());
         for (const auto& argument : function.arguments) {
             if (argument.type.systemverilog_container) {
-                const auto type =
-                    container_type(argument.type, argument.span);
+                const auto type = container_type(argument.type, argument.span);
                 if (!type) {
                     return std::nullopt;
                 }
-                frame.arguments.push_back({});
-                frame.string_arguments.push_back({});
+                frame.arguments.push_back({ });
+                frame.string_arguments.push_back({ });
                 frame.container_arguments.push_back(
                     allocate_container_register(*type));
                 frame.argument_is_string.push_back(false);
@@ -573,10 +641,10 @@ Lowerer::lower_user_container_function_expression(
             }
             if (argument.type.domain
                 == frontend::ValueDomain::String) {
-                frame.arguments.push_back({});
+                frame.arguments.push_back({ });
                 frame.string_arguments.push_back(
                     allocate_string_register());
-                frame.container_arguments.push_back({});
+                frame.container_arguments.push_back({ });
                 frame.argument_is_string.push_back(true);
                 frame.argument_is_container.push_back(false);
                 continue;
@@ -593,17 +661,48 @@ Lowerer::lower_user_container_function_expression(
             frame.arguments.push_back(allocate_register(
                 static_cast<std::size_t>(*width),
                 argument.type.domain));
-            frame.string_arguments.push_back({});
-            frame.container_arguments.push_back({});
+            frame.string_arguments.push_back({ });
+            frame.container_arguments.push_back({ });
             frame.argument_is_string.push_back(false);
             frame.argument_is_container.push_back(false);
+        }
+        if (function.automatic) {
+            frame.invocation_containers.push_back(frame.container_result);
+            for (std::size_t index = 0;
+                index < function.arguments.size(); ++index) {
+                if (frame.argument_is_container[index]) {
+                    frame.invocation_containers.push_back(
+                        frame.container_arguments[index]);
+                } else if (frame.argument_is_string[index]) {
+                    frame.invocation_strings.push_back(
+                        frame.string_arguments[index]);
+                } else {
+                    frame.invocation_packed.push_back(frame.arguments[index]);
+                }
+            }
         }
         frame.allocated = true;
     }
 
+    std::vector<Expression> copy_out_targets(function.arguments.size());
+    std::vector<RegisterId> packed_actuals(function.arguments.size());
+    std::vector<StringRegisterId> string_actuals(function.arguments.size());
+    std::vector<ContainerRegisterId> container_actuals(
+        function.arguments.size());
     for (std::size_t index = 0;
-         index < function.arguments.size(); ++index) {
+        index < function.arguments.size(); ++index) {
         const auto& formal = function.arguments[index];
+        if (formal.direction != frontend::PortDirection::Input) {
+            auto target = capture_callable_copy_out_target(
+                *(*actuals)[index],
+                "@function_target_" + std::to_string(function_index)
+                    + "_" + std::to_string(index)
+                    + "_" + std::to_string(process_.operations.size()));
+            if (!target) {
+                return std::nullopt;
+            }
+            copy_out_targets[index] = std::move(*target);
+        }
         if (formal.direction == frontend::PortDirection::Output) {
             if (frame.argument_is_container[index]
                 || frame.argument_is_string[index]) {
@@ -614,26 +713,22 @@ Lowerer::lower_user_container_function_expression(
                     formal.span);
                 return std::nullopt;
             }
-            const auto width = static_cast<std::size_t>(
-                *formal.type.width());
-            process_.operations.emplace_back(LoadConstant{
-                frame.arguments[index],
-                default_packed_value(formal.type, width)});
+            packed_actuals[index] = allocate_register(
+                static_cast<std::size_t>(*formal.type.width()),
+                formal.type.domain);
             continue;
         }
         if (frame.argument_is_container[index]) {
-            const auto formal_type =
-                container_type(formal.type, formal.span);
+            const auto formal_type = container_type(formal.type, formal.span);
             if (!formal_type) {
                 return std::nullopt;
             }
-            const auto actual =
-                formal_type->fixed
-                    ? lower_static_container_assignment_value(
-                          *(*actuals)[index],
-                          *formal_type)
-                    : lower_container_expression(
-                          *(*actuals)[index]);
+            const auto actual = formal_type->fixed
+                ? lower_static_container_assignment_value(
+                      *(*actuals)[index],
+                      *formal_type)
+                : lower_container_expression(
+                      *(*actuals)[index]);
             if (!actual) {
                 return std::nullopt;
             }
@@ -646,20 +741,19 @@ Lowerer::lower_user_container_function_expression(
                     (*actuals)[index]->span);
                 return std::nullopt;
             }
-            process_.operations.emplace_back(
-                CopyContainerRegister{
-                    frame.container_arguments[index], *actual});
+            container_actuals[index] = allocate_container_register(*formal_type);
+            process_.operations.emplace_back(CopyContainerRegister {
+                container_actuals[index], *actual });
             continue;
         }
         if (frame.argument_is_string[index]) {
-            const auto actual =
-                lower_string_expression(*(*actuals)[index]);
+            const auto actual = lower_string_expression(*(*actuals)[index]);
             if (!actual) {
                 return std::nullopt;
             }
-            process_.operations.emplace_back(
-                CopyStringRegister{
-                    frame.string_arguments[index], *actual});
+            string_actuals[index] = allocate_string_register();
+            process_.operations.emplace_back(CopyStringRegister {
+                string_actuals[index], *actual });
             continue;
         }
         const auto width = static_cast<std::size_t>(
@@ -675,23 +769,57 @@ Lowerer::lower_user_container_function_expression(
                 width,
                 is_signed_expression(*(*actuals)[index]));
         }
+        packed_actuals[index] = allocate_register(width, formal.type.domain);
         process_.operations.emplace_back(
-            CopyRegister{frame.arguments[index], *actual});
+            CopyRegister { packed_actuals[index], *actual });
+    }
+
+    if (function.automatic) {
+        const auto push_site = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(CallableFramePush {
+            frame.invocation_identity,
+            frame.invocation_packed,
+            frame.invocation_strings,
+            frame.invocation_containers });
+        if (!frame.invocation_layout_finalized) {
+            frame.invocation_push_sites.push_back(push_site);
+        }
+    }
+
+    for (std::size_t index = 0;
+        index < function.arguments.size(); ++index) {
+        const auto& formal = function.arguments[index];
+        if (formal.direction == frontend::PortDirection::Output) {
+            const auto width = static_cast<std::size_t>(
+                *formal.type.width());
+            process_.operations.emplace_back(LoadConstant {
+                frame.arguments[index],
+                default_packed_value(formal.type, width) });
+        } else if (frame.argument_is_container[index]) {
+            process_.operations.emplace_back(CopyContainerRegister {
+                frame.container_arguments[index], container_actuals[index] });
+        } else if (frame.argument_is_string[index]) {
+            process_.operations.emplace_back(CopyStringRegister {
+                frame.string_arguments[index], string_actuals[index] });
+        } else {
+            process_.operations.emplace_back(CopyRegister {
+                frame.arguments[index], packed_actuals[index] });
+        }
     }
 
     process_.operations.emplace_back(
-        CopyContainerRegister{
+        CopyContainerRegister {
             frame.container_result,
-            frame.container_result_default});
+            frame.container_result_default });
     const auto call_site = static_cast<InstructionIndex>(
         process_.operations.size());
-    process_.operations.emplace_back(Call{
+    process_.operations.emplace_back(Call {
         frame.target.value_or(0),
         static_cast<InstructionIndex>(call_site + 1U),
-        function_call_stack_});
+        function_call_stack_ });
     if (frame.target) {
-        fsim::runtime::simir::operation_get<Call>(process_.operations[call_site]).target =
-            *frame.target;
+        fsim::runtime::simir::operation_get<Call>(process_.operations[call_site]).target = *frame.target;
     } else {
         frame.call_sites.push_back(call_site);
     }
@@ -703,33 +831,73 @@ Lowerer::lower_user_container_function_expression(
         function_dependencies_[*active_function_].insert(
             function_index);
     }
+    const auto destination = allocate_container_register(*result_type);
+    process_.operations.emplace_back(
+        CopyContainerRegister {
+            destination, frame.container_result });
     for (std::size_t index = 0;
-         index < function.arguments.size(); ++index) {
+        index < function.arguments.size(); ++index) {
+        if (function.arguments[index].direction
+            == frontend::PortDirection::Input) {
+            continue;
+        }
+        if (frame.argument_is_container[index]) {
+            process_.operations.emplace_back(CopyContainerRegister {
+                container_actuals[index], frame.container_arguments[index] });
+        } else if (frame.argument_is_string[index]) {
+            process_.operations.emplace_back(CopyStringRegister {
+                string_actuals[index], frame.string_arguments[index] });
+        } else {
+            process_.operations.emplace_back(CopyRegister {
+                packed_actuals[index], frame.arguments[index] });
+        }
+    }
+    if (function.automatic) {
+        std::vector<RegisterId> preserve_packed;
+        std::vector<StringRegisterId> preserve_strings;
+        std::vector<ContainerRegisterId> preserve_containers { destination };
+        for (std::size_t index = 0;
+            index < function.arguments.size(); ++index) {
+            if (function.arguments[index].direction
+                == frontend::PortDirection::Input) {
+                continue;
+            }
+            if (frame.argument_is_container[index]) {
+                preserve_containers.push_back(container_actuals[index]);
+            } else if (frame.argument_is_string[index]) {
+                preserve_strings.push_back(string_actuals[index]);
+            } else {
+                preserve_packed.push_back(packed_actuals[index]);
+            }
+        }
+        process_.operations.emplace_back(CallableFramePop {
+            frame.invocation_identity,
+            std::move(preserve_packed),
+            std::move(preserve_strings),
+            std::move(preserve_containers) });
+    }
+    for (std::size_t index = 0;
+        index < function.arguments.size(); ++index) {
         const auto& formal = function.arguments[index];
         if (formal.direction == frontend::PortDirection::Input) {
             continue;
         }
         lower_callable_copy_out(
-            *(*actuals)[index],
+            copy_out_targets[index],
             formal.type,
-            frame.arguments[index],
-            frame.string_arguments[index],
-            frame.container_arguments[index],
+            packed_actuals[index],
+            string_actuals[index],
+            container_actuals[index],
             frame.argument_is_string[index],
             frame.argument_is_container[index],
             "@function_copyout_" + std::to_string(function_index)
                 + "_" + std::to_string(index));
     }
-
-    const auto destination =
-        allocate_container_register(*result_type);
-    process_.operations.emplace_back(
-        CopyContainerRegister{
-            destination, frame.container_result});
     return destination;
 }
 
-void Lowerer::lower_function_return(const Statement& statement) {
+void Lowerer::lower_function_return(const Statement& statement)
+{
     if (!active_function_) {
         report(
             "FSIM-ELAB-SVFUNC-005",
@@ -749,12 +917,11 @@ void Lowerer::lower_function_return(const Statement& statement) {
             const auto result_type = container_type(
                 function.return_type, function.span);
             if (result_type) {
-                const auto value =
-                    result_type->fixed
-                        ? lower_static_container_assignment_value(
-                              statement.value, *result_type)
-                        : lower_container_expression(
-                              statement.value);
+                const auto value = result_type->fixed
+                    ? lower_static_container_assignment_value(
+                          statement.value, *result_type)
+                    : lower_container_expression(
+                          statement.value);
                 if (value) {
                     if (!result_type->fixed
                         && process_.container_register_types.at(*value)
@@ -766,8 +933,8 @@ void Lowerer::lower_function_return(const Statement& statement) {
                             statement.value.span);
                     } else {
                         process_.operations.emplace_back(
-                            CopyContainerRegister{
-                                frame.container_result, *value});
+                            CopyContainerRegister {
+                                frame.container_result, *value });
                     }
                 }
             }
@@ -775,7 +942,7 @@ void Lowerer::lower_function_return(const Statement& statement) {
         function_return_jumps_.push_back(
             static_cast<InstructionIndex>(
                 process_.operations.size()));
-        process_.operations.emplace_back(Jump{});
+        process_.operations.emplace_back(Jump { });
         return;
     }
     if (frame.result_is_string) {
@@ -784,20 +951,18 @@ void Lowerer::lower_function_return(const Statement& statement) {
                 "FSIM-ELAB-SVFUNC-005",
                 "string function return requires a value",
                 statement.span);
-        } else if (const auto value =
-                       lower_string_expression(statement.value)) {
+        } else if (const auto value = lower_string_expression(statement.value)) {
             process_.operations.emplace_back(
-                CopyStringRegister{
-                    frame.string_result, *value});
+                CopyStringRegister {
+                    frame.string_result, *value });
         }
         function_return_jumps_.push_back(
             static_cast<InstructionIndex>(
                 process_.operations.size()));
-        process_.operations.emplace_back(Jump{});
+        process_.operations.emplace_back(Jump { });
         return;
     }
-    const auto width =
-        static_cast<std::size_t>(*function.return_type.width());
+    const auto width = static_cast<std::size_t>(*function.return_type.width());
     if (!statement.value.valid()) {
         report(
             "FSIM-ELAB-SVFUNC-005",
@@ -817,16 +982,17 @@ void Lowerer::lower_function_return(const Statement& statement) {
                     is_signed_expression(statement.value));
             }
             process_.operations.emplace_back(
-                CopyRegister{frame.result, *value});
+                CopyRegister { frame.result, *value });
         }
     }
     function_return_jumps_.push_back(
         static_cast<InstructionIndex>(
             process_.operations.size()));
-    process_.operations.emplace_back(Jump{});
+    process_.operations.emplace_back(Jump { });
 }
 
-void Lowerer::lower_function_body(const std::size_t function_index) {
+void Lowerer::lower_function_body(const std::size_t function_index)
+{
     auto& frame = function_frames_[function_index];
     if (frame.lowered || !frame.allocated) {
         return;
@@ -834,16 +1000,14 @@ void Lowerer::lower_function_body(const std::size_t function_index) {
     frame.target = static_cast<InstructionIndex>(
         process_.operations.size());
     for (const auto call_site : frame.call_sites) {
-        fsim::runtime::simir::operation_get<Call>(process_.operations[call_site]).target =
-            *frame.target;
+        fsim::runtime::simir::operation_get<Call>(process_.operations[call_site]).target = *frame.target;
     }
     frame.call_sites.clear();
     frame.lowered = true;
 
     auto saved_locals = std::move(locals_);
     auto saved_string_locals = std::move(string_locals_);
-    auto saved_container_locals =
-        std::move(container_locals_);
+    auto saved_container_locals = std::move(container_locals_);
     auto saved_signed = std::move(local_signed_);
     auto saved_ranges = std::move(local_ranges_);
     auto saved_integer_ranges = std::move(local_integer_ranges_);
@@ -851,6 +1015,9 @@ void Lowerer::lower_function_body(const std::size_t function_index) {
     auto saved_types = std::move(local_types_);
     auto saved_scope = std::move(local_scope_);
     auto saved_loop_controls = std::move(loop_controls_);
+    auto saved_block_controls = std::move(block_controls_);
+    auto saved_named_block_controls = std::move(named_block_controls_);
+    auto saved_named_fork_controls = std::move(named_fork_controls_);
     auto saved_return_jumps = std::move(function_return_jumps_);
     const auto saved_active = active_function_;
     locals_.clear();
@@ -861,8 +1028,11 @@ void Lowerer::lower_function_body(const std::size_t function_index) {
     local_integer_ranges_.clear();
     local_members_.clear();
     local_types_.clear();
-    local_scope_ = {frame.source->name};
+    local_scope_ = { frame.source->name };
     loop_controls_.clear();
+    block_controls_.clear();
+    named_block_controls_.clear();
+    named_fork_controls_.clear();
     function_return_jumps_.clear();
     active_function_ = function_index;
 
@@ -870,14 +1040,14 @@ void Lowerer::lower_function_body(const std::size_t function_index) {
         [&](const std::string& name,
             const frontend::Type& type,
             const RegisterId register_id) {
-          locals_.insert_or_assign(name, register_id);
-          local_signed_.insert_or_assign(name, type.is_signed);
-          local_ranges_.insert_or_assign(name, type.packed_range);
-          local_integer_ranges_.insert_or_assign(
-              name, type.integer_range);
-          local_members_.insert_or_assign(
-              name, type.packed_members);
-          local_types_.insert_or_assign(name, &type);
+            locals_.insert_or_assign(name, register_id);
+            local_signed_.insert_or_assign(name, type.is_signed);
+            local_ranges_.insert_or_assign(name, type.packed_range);
+            local_integer_ranges_.insert_or_assign(
+                name, type.integer_range);
+            local_members_.insert_or_assign(
+                name, type.packed_members);
+            local_types_.insert_or_assign(name, &type);
         };
     if (frame.result_is_container) {
         container_locals_.insert_or_assign(
@@ -885,22 +1055,21 @@ void Lowerer::lower_function_body(const std::size_t function_index) {
         local_types_.insert_or_assign(
             frame.source->name, &frame.source->return_type);
         const auto separator = frame.source->name.rfind("::");
-        const auto alias =
-            separator == std::string::npos
-                ? frame.source->name
-                : frame.source->name.substr(separator + 2);
+        const auto alias = separator == std::string::npos
+            ? frame.source->name
+            : frame.source->name.substr(separator + 2);
         process_.debug_container_locals.push_back(
-            DebugContainerLocal{
+            DebugContainerLocal {
                 scoped_local_name(alias),
                 frame.container_result,
                 process_.container_register_types.at(
                     frame.container_result),
-                SourceLocation{
+                SourceLocation {
                     frame.source->span.source_name,
                     static_cast<std::uint32_t>(
                         frame.source->span.begin.line),
                     static_cast<std::uint32_t>(
-                        frame.source->span.begin.column)}});
+                        frame.source->span.begin.column) } });
     } else if (frame.result_is_string) {
         string_locals_.insert_or_assign(
             frame.source->name, frame.string_result);
@@ -912,12 +1081,10 @@ void Lowerer::lower_function_body(const std::size_t function_index) {
             frame.source->return_type,
             frame.result);
     }
-    if (const auto separator =
-            frame.source->name.rfind("::");
+    if (const auto separator = frame.source->name.rfind("::");
         separator != std::string::npos) {
         if (frame.result_is_container) {
-            const auto alias =
-                frame.source->name.substr(separator + 2);
+            const auto alias = frame.source->name.substr(separator + 2);
             container_locals_.insert_or_assign(
                 alias, frame.container_result);
             local_types_.insert_or_assign(
@@ -934,7 +1101,7 @@ void Lowerer::lower_function_body(const std::size_t function_index) {
         }
     }
     for (std::size_t index = 0;
-         index < frame.source->arguments.size(); ++index) {
+        index < frame.source->arguments.size(); ++index) {
         if (frame.argument_is_container[index]) {
             container_locals_.insert_or_assign(
                 frame.source->arguments[index].name,
@@ -957,80 +1124,69 @@ void Lowerer::lower_function_body(const std::size_t function_index) {
         }
     }
     if (frame.source->automatic) {
+        const auto packed_begin = next_register_;
+        const auto string_begin = next_string_register_;
+        const auto container_begin = next_container_register_;
         initialize_variables(frame.source->variables);
+        lower_statements(frame.source->statements);
+        for (auto id = packed_begin; id < next_register_; ++id) {
+            frame.invocation_packed.push_back(id);
+        }
+        for (auto id = string_begin; id < next_string_register_; ++id) {
+            frame.invocation_strings.push_back(id);
+        }
+        for (auto id = container_begin;
+            id < next_container_register_; ++id) {
+            frame.invocation_containers.push_back(id);
+        }
     } else {
         bind_static_callable_variables(
             frame.source->variables, frame.static_variables);
+        lower_statements(frame.source->statements);
     }
-    lower_statements(frame.source->statements);
     const auto epilogue = static_cast<InstructionIndex>(
         process_.operations.size());
     for (const auto jump : function_return_jumps_) {
-        process_.operations[jump] = Jump{epilogue};
+        process_.operations[jump] = Jump { epilogue };
     }
     process_.operations.emplace_back(
-        Return{function_call_stack_});
+        Return { function_call_stack_ });
+    for (const auto push_site : frame.invocation_push_sites) {
+        process_.operations[push_site] = CallableFramePush {
+            frame.invocation_identity,
+            frame.invocation_packed,
+            frame.invocation_strings,
+            frame.invocation_containers
+        };
+    }
+    frame.invocation_push_sites.clear();
+    frame.invocation_layout_finalized = true;
 
     active_function_ = saved_active;
     function_return_jumps_ = std::move(saved_return_jumps);
     loop_controls_ = std::move(saved_loop_controls);
+    block_controls_ = std::move(saved_block_controls);
+    named_block_controls_ = std::move(saved_named_block_controls);
+    named_fork_controls_ = std::move(saved_named_fork_controls);
     local_scope_ = std::move(saved_scope);
     local_types_ = std::move(saved_types);
     local_members_ = std::move(saved_members);
-    local_integer_ranges_ =
-        std::move(saved_integer_ranges);
+    local_integer_ranges_ = std::move(saved_integer_ranges);
     local_ranges_ = std::move(saved_ranges);
     local_signed_ = std::move(saved_signed);
     locals_ = std::move(saved_locals);
     string_locals_ = std::move(saved_string_locals);
-    container_locals_ =
-        std::move(saved_container_locals);
+    container_locals_ = std::move(saved_container_locals);
 }
 
-void Lowerer::diagnose_function_cycles() {
-    std::vector<std::uint8_t> state(
-        function_frames_.size(), 0);
-    const auto visit =
-        [&](const auto& self, const std::size_t index) -> bool {
-          if (state[index] == 1) {
-              report(
-                  "FSIM-ELAB-SVFUNC-006",
-                  "recursive function call graph involving '"
-                      + function_frames_[index].source->name
-                      + "' is not supported",
-                  function_frames_[index].source->span);
-              return true;
-          }
-          if (state[index] == 2) {
-              return false;
-          }
-          state[index] = 1;
-          for (const auto dependency :
-               function_dependencies_[index]) {
-              if (self(self, dependency)) {
-                  state[index] = 2;
-                  return true;
-              }
-          }
-          state[index] = 2;
-          return false;
-        };
-    for (std::size_t index = 0;
-         index < function_frames_.size(); ++index) {
-        if (state[index] == 0) {
-            (void)visit(visit, index);
-        }
-    }
-}
-
-void Lowerer::lower_pending_functions() {
+void Lowerer::lower_pending_functions()
+{
     while (!pending_functions_.empty()) {
         const auto function = pending_functions_.front();
         pending_functions_.pop_front();
         function_frames_[function].queued = false;
         lower_function_body(function);
     }
-    diagnose_function_cycles();
 }
 
 } // namespace fsim::elaboration

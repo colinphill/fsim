@@ -536,6 +536,16 @@ void substitute_parameters(
     }
     substitute_parameters(
         body.instances, environment, domains, language);
+    for (auto& declaration : body.verilog_defparams) {
+        for (auto& segment : declaration.path) {
+            for (auto& index : segment.indices) {
+                substitute_parameters(
+                    index, environment, domains, language);
+            }
+        }
+        substitute_parameters(
+            declaration.value, environment, domains, language);
+    }
     substitute_parameters(
         body.generate_regions,
         environment,

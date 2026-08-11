@@ -60,6 +60,7 @@ struct ValidatedProcess {
   bool uses_strings{};
   bool uses_files{};
   bool uses_containers{};
+  bool uses_exact_signal_operation { };
 };
 
 [[nodiscard]] bool valid_symbol(std::string_view symbol) noexcept;
@@ -114,6 +115,9 @@ void validate_process_shape(
     const runtime::simir::Process& process,
     std::span<const std::uint32_t> signal_widths,
     std::span<const runtime::simir::ValueKind> signal_value_kinds);
+[[nodiscard]] bool supports_wide_register_operation(
+    const runtime::simir::Operation& operation,
+    std::span<const std::uint32_t> register_widths);
 [[nodiscard]] std::optional<std::string>
 validate_extract_bounds(
     const runtime::simir::Extract& operation,
@@ -205,7 +209,7 @@ void validate_fork_operation(
 
 [[nodiscard]] JitProcessFrameLayout make_frame_layout(
     std::string_view cache_key,
-    std::size_t register_count,
+    std::span<const std::uint32_t> register_widths,
     std::size_t string_register_count,
     bool uses_logic9);
 

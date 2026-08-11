@@ -55,9 +55,9 @@ validate_dynamic_index_bounds(const DynamicIndex& selection,
 
 [[nodiscard]] std::optional<std::string>
 validate_dynamic_part_select_metadata(const DynamicPartSelect& operation) {
-  if (operation.width == 0 || operation.width > 64) {
-    return "DynamicPartSelect width must be from 1 through 64";
-  }
+    if (operation.width == 0) {
+        return "DynamicPartSelect width must be greater than zero";
+    }
   if (operation.left < std::numeric_limits<std::int32_t>::min()
       || operation.left > std::numeric_limits<std::int32_t>::max()
       || operation.right < std::numeric_limits<std::int32_t>::min()
@@ -86,9 +86,9 @@ validate_dynamic_part_select_source_width(
 
 [[nodiscard]] std::optional<std::string>
 validate_dynamic_part_index_metadata(const DynamicPartIndex& selection) {
-  if (selection.width == 0 || selection.width > 64) {
-    return "dynamic part-select write width must be from 1 through 64";
-  }
+    if (selection.width == 0) {
+        return "dynamic part-select write width must be greater than zero";
+    }
   if (!dynamic_range_width(selection.left, selection.right)) {
     return "dynamic part-select write bounds must fit signed 32-bit integers";
   }

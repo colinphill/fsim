@@ -85,6 +85,10 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
   VerilogTypeSpec inherited;
   bool have_inherited_type = false;
   while (!at_end() && !at(TokenKind::RightParen)) {
+      if (verilog_attribute_instance_start()) {
+          parse_verilog_attribute_instances();
+          continue;
+      }
     if (at(TokenKind::Dot)) {
       const auto dot = advance();
       error(dot, "FSIM-SV-UNSUPPORTED-005",
@@ -1466,12 +1470,13 @@ bool VerilogParser::parse_optional_container_dimension(Type& type) {
       }
     }
   }
-  if (language_ != Language::SystemVerilog2017) {
-    error(
-        start,
-        "FSIM-SV-SEM-077",
-        "dynamic arrays, queues, associative arrays, and static unpacked "
-        "arrays require SystemVerilog-2017");
+  if (language_ != Language::SystemVerilog2017
+      && container.kind != SystemVerilogContainerKind::StaticArray) {
+      error(
+          start,
+          "FSIM-SV-SEM-077",
+          "dynamic arrays, queues, and associative arrays require "
+          "SystemVerilog-2017");
   }
   if (type.spelling == "wire"
       || (type.domain == ValueDomain::Unknown
@@ -1493,6 +1498,13 @@ bool VerilogParser::parse_optional_container_dimension(Type& type) {
     return at(TokenKind::Identifier, 1)
         && at(TokenKind::RightBracket, 2);
   };
+  if (language_ == Language::Verilog2005
+      && at(TokenKind::LeftBracket)) {
+      error(
+          current(),
+          "FSIM-VERILOG-SEM-012",
+          "Verilog-2005 memories support exactly one unpacked dimension");
+  }
   if (at(TokenKind::LeftBracket)
       && (container.kind
               != SystemVerilogContainerKind::StaticArray
@@ -1972,33 +1984,41 @@ bool VerilogParser::update_existing_port_type(
   return false;
 }
 
-std::optional<Statement> VerilogParser::parse_continuous_assignment(const Token& start) {
-  auto strength = parse_verilog_drive_strength("continuous assignment");
-  std::optional<Delay> delay;
-  if (match(TokenKind::Hash)) {
-    delay = parse_verilog_delay(previous(), 3);
-  }
-  if (!at(TokenKind::Identifier)) {
-    error(current(), "FSIM-SV-PARSE-009",
-          "expected continuous assignment target");
-    skip_to_semicolon();
-    return std::nullopt;
-  }
-  Expression target = parse_lvalue();
-  expect(TokenKind::Assign, "'=' in continuous assignment",
-         "FSIM-SV-PARSE-010");
-  Expression value = parse_expression();
-  expect(TokenKind::Semicolon, "';' after continuous assignment",
-         "FSIM-SV-PARSE-011");
-  Statement statement;
-  statement.kind = StatementKind::Assignment;
-  statement.assignment_kind = AssignmentKind::Continuous;
-  statement.target = std::move(target);
-  statement.value = std::move(value);
-  statement.delay = std::move(delay);
-  statement.verilog_drive_strength = std::move(strength);
-  statement.span = span_from(start, previous());
-  return statement;
+std::vector<Statement> VerilogParser::parse_continuous_assignments(
+    const Token& start)
+{
+    auto strength = parse_verilog_drive_strength("continuous assignment");
+    std::optional<Delay> delay;
+    if (match(TokenKind::Hash)) {
+        delay = parse_verilog_delay(previous(), 3);
+    }
+    std::vector<Statement> statements;
+    do {
+        if (!at(TokenKind::Identifier)) {
+            error(
+                current(), "FSIM-SV-PARSE-009",
+                "expected continuous assignment target");
+            skip_to_semicolon();
+            return statements;
+        }
+        Expression target = parse_lvalue();
+        expect(
+            TokenKind::Assign, "'=' in continuous assignment",
+            "FSIM-SV-PARSE-010");
+        Expression value = parse_expression();
+        Statement statement;
+        statement.kind = StatementKind::Assignment;
+        statement.assignment_kind = AssignmentKind::Continuous;
+        statement.target = std::move(target);
+        statement.value = std::move(value);
+        statement.delay = delay;
+        statement.verilog_drive_strength = strength;
+        statement.span = cover(start.span, previous().span);
+        statements.push_back(std::move(statement));
+    } while (match(TokenKind::Comma));
+    expect(TokenKind::Semicolon, "';' after continuous assignment",
+        "FSIM-SV-PARSE-011");
+    return statements;
 }
 
 [[nodiscard]] bool VerilogParser::is_gate_primitive() const {

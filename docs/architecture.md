@@ -1337,6 +1337,16 @@ pointer-based four-plane Logic9 callbacks plus caller-owned third/fourth
 register planes. Per-process/per-signal SimIR value-kind metadata selects the
 correct path and drives explicit conversion at mixed-domain boundaries.
 
+Verilog/SystemVerilog literal width is a semantic property, not a resource
+policy. The lexer, constant services, SimIR values, public/VPI planes, trace
+writers, artifact codecs, and native-cache keys preserve every source- or
+context-determined bit, including signedness and `X`/`Z`, without a fixed
+implementation cap. Checked `size_t` arithmetic, the public VPI descriptor's
+explicit `uint32_t` width representation, and configured memory/work/trace
+budgets are physical boundaries. They reject transactionally with resource or
+host-representation diagnostics and must not be reported as illegal Verilog or
+silently narrowed.
+
 Concrete VHDL user-array layout retains a source-ordered dimension vector in
 addition to the packed runtime view. Each dimension stores its exact evaluated
 left/right bounds, `to`/`downto` direction, null state, and packed-bit stride;
@@ -1805,8 +1815,9 @@ to that result. SystemVerilog wildcard equality `==?` masks `X` and `Z` bits
 only in its right operand. An unmasked left-side `X` or `Z` produces `X`;
 otherwise the remaining known bits determine equality. Wildcard inequality
 `!=?` applies four-state inversion, preserving an indeterminate result.
-The interpreter supports arbitrary packed widths while LLVM uses the common
-single-word fast path and falls back for wider value-bearing processes.
+The interpreter supports arbitrary packed widths. LLVM uses the common
+single-word fast path when eligible and exact frame/service operations for
+wider values; only unsupported capabilities fall back per process.
 
 Logical conjunction and disjunction reduce the left operand first, so packed
 operands need not have the same width. A known false controls `&&` and a known
@@ -2085,6 +2096,9 @@ The Batch 139 append-only tail adds `signal_last_active`, `signal_driving`,
 `read_simulation_time` and `vital_timing_check` at offsets 544 and 552 for a
 560-byte table. Batch 142 appends `vital_delay` at offset 560 for a 568-byte
 table while retaining the complete 560-byte timing-check prefix.
+Batch 163 appends the three VHDL driver force/release callbacks at offsets 568,
+576, and 584. Batch 164 appends `execute_signal_operation` at offset 592; the
+runtime table is now 600 bytes without moving an earlier field.
 Transaction-sensitive support processes drive
 interned `'stable(T)`, `'quiet(T)`, `'transaction`, and `'delayed(T)` signals
 through ordinary projected writes; their scheduler state therefore remains in

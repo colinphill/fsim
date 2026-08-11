@@ -414,6 +414,23 @@ enum class GenerateKind {
 
 struct GenerateRegion;
 
+struct VerilogDefparamPathSegment {
+    std::string name;
+    // Hierarchical instance and generate-array selections remain expressions
+    // until specialization supplies the declaring scope's constant values.
+    std::vector<Expression> indices;
+    SourceSpan span;
+};
+
+struct VerilogDefparamDeclaration {
+    // The final segment names the target parameter. All preceding segments
+    // name an instance path relative to the declaring module or generate
+    // scope. Generate expansion prefixes the selected lexical scope.
+    std::vector<VerilogDefparamPathSegment> path;
+    Expression value;
+    SourceSpan span;
+};
+
 struct GenerateBody {
     // Locally static VHDL constants and SystemVerilog parameters/localparams.
     // These are evaluated in declaration order during generate expansion and
@@ -438,6 +455,7 @@ struct GenerateBody {
     std::vector<Statement> concurrent_statements;
     std::vector<Process> processes;
     std::vector<Instance> instances;
+    std::vector<VerilogDefparamDeclaration> verilog_defparams;
     std::vector<GenerateRegion> generate_regions;
 };
 
@@ -1350,6 +1368,7 @@ struct DesignUnit {
     std::vector<Statement> concurrent_statements;
     std::vector<Process> processes;
     std::vector<Instance> instances;
+    std::vector<VerilogDefparamDeclaration> verilog_defparams;
     std::vector<GenerateRegion> generate_regions;
     // Verilog specify blocks retain timing-only declarations separately from
     // executable module items. Elaboration specializes and normalizes them into

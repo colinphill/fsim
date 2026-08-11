@@ -3,7 +3,8 @@
 
 namespace fsim::tests::elaboration {
 
-void test_vhdl_interface_procedure_generics() {
+void test_vhdl_interface_procedure_generics()
+{
     auto parsed = fsim::frontend::parse_text(
         "vhdl-procedure-generics.vhd",
         R"(
@@ -170,7 +171,7 @@ end architecture;
         });
     assert(nested != elaborated.design->specializations().end());
     assert(package_actual
-           != elaborated.design->specializations().end());
+        != elaborated.design->specializations().end());
     assert(!nested->parameter_values.empty());
     assert(nested->parameter_values.front().first == "selected");
     assert(!package_actual->parameter_values.empty());
@@ -301,10 +302,9 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(illegal_call.ok());
-    const auto illegal_call_result =
-        fsim::elaboration::elaborate(
-            illegal_call.design,
-            "vhdl:work.illegal_call(rtl)");
+    const auto illegal_call_result = fsim::elaboration::elaborate(
+        illegal_call.design,
+        "vhdl:work.illegal_call(rtl)");
     assert(!illegal_call_result.ok());
     assert(has_diagnostic(
         illegal_call_result, "FSIM-ELAB-VHPROC-018"));
@@ -336,9 +336,7 @@ end architecture;
     assert(recursive.ok());
     const auto recursive_result = fsim::elaboration::elaborate(
         recursive.design, "vhdl:work.recursive_top(rtl)");
-    assert(!recursive_result.ok());
-    assert(has_diagnostic(
-        recursive_result, "FSIM-ELAB-VHPROC-010"));
+    assert(recursive_result.ok());
 
     auto timed = fsim::frontend::parse_text(
         "timed-procedure-actual.vhd",
@@ -369,7 +367,7 @@ end architecture;
         timed.design.units,
         [](const auto& unit) {
             return unit.kind
-                    == fsim::frontend::UnitKind::VhdlArchitecture
+                == fsim::frontend::UnitKind::VhdlArchitecture
                 && unit.primary_name == "timed_top";
         });
     assert(top_architecture != timed.design.units.end());
@@ -405,21 +403,19 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(cross_language_parent.ok()
-           && cross_language_child.ok());
+        && cross_language_child.ok());
     for (auto& unit : cross_language_child.design.units) {
         cross_language_parent.design.units.push_back(
             std::move(unit));
     }
     const std::vector<fsim::elaboration::Binding>
-        cross_language_binding{{
-            "cross_language_procedure.child",
+        cross_language_binding { { "cross_language_procedure.child",
             "vhdl:work.foreign_target(rtl)",
-            std::nullopt}};
-    const auto cross_language_result =
-        fsim::elaboration::elaborate(
-            cross_language_parent.design,
-            "sv:work.cross_language_procedure",
-            cross_language_binding);
+            std::nullopt } };
+    const auto cross_language_result = fsim::elaboration::elaborate(
+        cross_language_parent.design,
+        "sv:work.cross_language_procedure",
+        cross_language_binding);
     assert(!cross_language_result.ok());
     assert(has_diagnostic(
         cross_language_result, "FSIM-ELAB-VHPROC-002"));

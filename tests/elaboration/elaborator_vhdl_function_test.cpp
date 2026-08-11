@@ -3,7 +3,8 @@
 
 namespace fsim::tests::elaboration {
 
-void test_vhdl_interface_function_generics() {
+void test_vhdl_interface_function_generics()
+{
     const auto parsed = fsim::frontend::parse_text(
         "interface-function-generics.vhd",
         R"(
@@ -120,24 +121,19 @@ end architecture;
 
     const auto find_specialization =
         [&](const std::string_view instance) {
-          return std::ranges::find_if(
-              elaborated.design->specializations(),
-              [&](const auto& specialization) {
-                return specialization.instance == instance;
-              });
+            return std::ranges::find_if(
+                elaborated.design->specializations(),
+                [&](const auto& specialization) {
+                    return specialization.instance == instance;
+                });
         };
-    const auto direct =
-        find_specialization("function_top.direct_instance");
-    const auto wrapper =
-        find_specialization("function_top.nested_instance");
-    const auto nested =
-        find_specialization(
-            "function_top.nested_instance.nested");
-    const auto boxed =
-        find_specialization("function_top.boxed_instance");
-    const auto package_actual =
-        find_specialization(
-            "function_top.package_instance.nested");
+    const auto direct = find_specialization("function_top.direct_instance");
+    const auto wrapper = find_specialization("function_top.nested_instance");
+    const auto nested = find_specialization(
+        "function_top.nested_instance.nested");
+    const auto boxed = find_specialization("function_top.boxed_instance");
+    const auto package_actual = find_specialization(
+        "function_top.package_instance.nested");
     assert(direct != elaborated.design->specializations().end());
     assert(wrapper != elaborated.design->specializations().end());
     assert(nested != elaborated.design->specializations().end());
@@ -283,15 +279,13 @@ end architecture;
             std::move(unit));
     }
     const std::vector<fsim::elaboration::Binding>
-        cross_language_binding{{
-            "cross_language_function.child",
+        cross_language_binding { { "cross_language_function.child",
             "vhdl:work.foreign_target(rtl)",
-            std::nullopt}};
-    const auto cross_language_result =
-        fsim::elaboration::elaborate(
-            cross_language_parent.design,
-            "sv:work.cross_language_function",
-            cross_language_binding);
+            std::nullopt } };
+    const auto cross_language_result = fsim::elaboration::elaborate(
+        cross_language_parent.design,
+        "sv:work.cross_language_function",
+        cross_language_binding);
     assert(!cross_language_result.ok());
     assert(has_diagnostic(
         cross_language_result, "FSIM-ELAB-VHFUNC-002"));
@@ -332,17 +326,7 @@ end architecture;
     assert(recursive.ok());
     const auto recursive_result = fsim::elaboration::elaborate(
         recursive.design, "vhdl:work.recursive_top(rtl)");
-    assert(!recursive_result.ok());
-    if (!has_diagnostic(
-            recursive_result, "FSIM-ELAB-SVFUNC-006")) {
-        for (const auto& diagnostic :
-             recursive_result.diagnostics) {
-            std::cerr << diagnostic.code << ": "
-                      << diagnostic.message << '\n';
-        }
-    }
-    assert(has_diagnostic(
-        recursive_result, "FSIM-ELAB-SVFUNC-006"));
+    assert(recursive_result.ok());
 }
 
 } // namespace fsim::tests::elaboration

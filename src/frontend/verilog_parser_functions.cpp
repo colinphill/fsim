@@ -11,6 +11,7 @@ FunctionDeclaration VerilogParser::parse_function(
     const bool prototype,
     const bool default_automatic) {
   FunctionDeclaration function;
+  function.language = language_;
   if (match_keyword("automatic")) {
     function.automatic = true;
     function.lifetime_explicit = true;

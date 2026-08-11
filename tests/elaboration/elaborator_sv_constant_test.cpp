@@ -285,7 +285,9 @@ module typed_constant_top #(
   logic [15:0] signed_q;
   logic [3:0] unknown_q;
   logic [63:0] child_q;
-  logic [WIDE_SMALL:0] wide_range_q;
+  logic [257'h00000000000000000000000000000000000000000000000000000000000000004:
+         257'h00000000000000000000000000000000000000000000000000000000000000000]
+      wide_range_q;
   logic [127:0] wide_q;
   bit [127:0] wide_two_state_q;
   logic [95:0] wide_unknown_q;
@@ -352,9 +354,7 @@ endmodule
         }
     }
     assert(elaborated.ok());
-
-    const auto* top =
-        specialization_at(*elaborated.design, "typed_constant_top");
+    const auto* top = specialization_at(*elaborated.design, "typed_constant_top");
     const auto* child = specialization_at(
         *elaborated.design, "typed_constant_top.child");
     const auto* wide_child = specialization_at(
@@ -663,6 +663,59 @@ endmodule
     assert(
         interpreter->signal_value(*wide_cast_q).to_msb_string()
         == std::string(32, '0') + std::string(96, 'Z'));
+
+    const auto arbitrary_width_literals = fsim::frontend::parse_text(
+        "arbitrary-width-literals.sv",
+        R"(
+module arbitrary_width_literals #(
+  parameter logic [256:0] BINARY =
+      257'b1_0000000000000000000000000000000000000000000000000000000000000000,
+  parameter logic [256:0] OCTAL =
+      257'o2_000000000000000000000,
+  parameter logic [256:0] DECIMAL =
+      257'd18_446_744_073_709_551_616,
+  parameter logic [256:0] HEX = 257'h1_0000000000000000,
+  parameter logic signed [64:0] SIGNED = 65'sh1_0000000000000000,
+  parameter logic [4096:0] BOUNDARY = 4097'h1
+) ();
+  logic [4096:0] q;
+  initial q = BOUNDARY;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(arbitrary_width_literals.ok());
+    const auto arbitrary_width_elaborated = fsim::elaboration::elaborate(
+        arbitrary_width_literals.design,
+        "sv:work.arbitrary_width_literals");
+    assert(arbitrary_width_elaborated.ok());
+    const auto* arbitrary_width_top = specialization_at(
+        *arbitrary_width_elaborated.design,
+        "arbitrary_width_literals");
+    assert(arbitrary_width_top != nullptr);
+    const auto exact_257 = std::string { "257'b" } + std::string(192, '0')
+        + "1" + std::string(64, '0');
+    assert(parameter_value(*arbitrary_width_top, "BINARY") == exact_257);
+    assert(parameter_value(*arbitrary_width_top, "OCTAL") == exact_257);
+    assert(parameter_value(*arbitrary_width_top, "DECIMAL") == exact_257);
+    assert(parameter_value(*arbitrary_width_top, "HEX") == exact_257);
+    assert(
+        parameter_value(*arbitrary_width_top, "SIGNED")
+        == std::string { "65'sb1" } + std::string(64, '0'));
+    assert(parameter_value(*arbitrary_width_top, "BOUNDARY") == "1");
+    assert(
+        parameter_identity(*arbitrary_width_top, "BOUNDARY")
+            .starts_with("svconst-v2:w=4097:"));
+    const auto exact_4097_bits = std::string(4096, '0') + "1";
+    const auto arbitrary_width_q = arbitrary_width_elaborated.design->find_signal(
+        "arbitrary_width_literals.q");
+    assert(arbitrary_width_q);
+    auto arbitrary_width_interpreter = arbitrary_width_elaborated.design->create_interpreter();
+    arbitrary_width_interpreter->start();
+    (void)arbitrary_width_interpreter->run();
+    assert(
+        arbitrary_width_interpreter->signal_value(*arbitrary_width_q)
+            .to_msb_string()
+        == exact_4097_bits);
 
     const auto lossy = fsim::frontend::parse_text(
         "lossy-two-state-constant.sv",

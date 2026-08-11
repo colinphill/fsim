@@ -2,10 +2,13 @@
 # Batch 130 Task 9 final release-candidate corpus.
 # Every required row is classified execute and owns nonempty P+/P-/E/R links.
 # matrix-rows: 1279
-# matrix-sha256: e38217f0ced26556c13e4ef6d4f32aa4d46172192ec54e926e739d165abbbab7
+# matrix-sha256: 7f879238bfcdbc544e688c710038c97063a8464f9817c758b87c1a2f89e0472d
 # evidence-slots: 5116
 # evidence-paths: 604
 # evidence-sha256: 2d9a2bf8fdc360b6b484087848eeb00def2a61cff5fecfacf9400fadcec2010b
+# verilog-gap-sha256: 338b64ba883f6243d9f799d31c22f873e871a5977bbb9fc9c45ae3b5ea738c84
+# verilog-width-sha256: 4d0924571f33e54f8d77d66979e290fe223c183eb0bc963fdbffb841429a424e
+# verilog-closure-sha256: a80eea635da93dff681c7118cd3339e7b4bb679c83a2cf7137cc3eeccef6f39e
 # test-evidence-paths: 265
 # production-evidence-paths: 312
 # release-evidence-paths: 27
@@ -13,7 +16,7 @@
 # corpus-ctests: 36
 # required-status: execute
 #
-# B130-T9-ROWS: all 1170 required IDs are unique and in one of the eight
+# B130-T9-ROWS: all 1279 required IDs are unique and in one of the eight
 # reviewed SV/VHDL/mixed/SystemC/common release surfaces.
 # B130-T9-CLASSIFICATION: no required row remains parse, v1-target, deferred,
 # or an evidence gap; every row is reclassified only through its exact matrix

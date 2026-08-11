@@ -1965,30 +1965,56 @@ endmodule
 module numeric_output;
   initial begin
     $display(42);
+    $display(18_446_744_073_709_551_616);
     $write(8'h2a);
     $strobe(6'b10_1010);
     $display(8'shff);
     $write(4'sb0111);
+    $display(257'b1_0000000000000000000000000000000000000000000000000000000000000000);
+    $display(257'o2_000000000000000000000);
+    $display(257'd18_446_744_073_709_551_616);
+    $display(257'h1_0000000000000000);
+    $display(65'sh1_0000000000000000);
+    $display(65'h3_0000000000000000);
+    $display('sh800000000);
+    $display(4097'h1);
+    $display(999999999999999999999999999999999999999999'h1);
   end
 endmodule
 )",
       Language::SystemVerilog2017);
   require(numeric.ok(), "constant numeric output tasks must parse");
-  const auto& numeric_statements =
-      numeric.design.units.front().processes.front().statements;
+  const auto& numeric_statements = numeric.design.units.front().processes.front().statements;
   require(
-      numeric_statements.size() == 5
+      numeric_statements.size() == 15
           && numeric_statements[0].output_text == "42"
           && numeric_statements[0].output_newline
-          && numeric_statements[1].output_text == "42"
-          && !numeric_statements[1].output_newline
+          && numeric_statements[1].output_text
+              == "18446744073709551616"
           && numeric_statements[2].output_text == "42"
-          && numeric_statements[2].output_postponed
-          && numeric_statements[3].output_text == "-1"
-          && numeric_statements[3].output_newline
-          && numeric_statements[4].output_text == "7"
-          && !numeric_statements[4].output_newline,
-      "unsigned and signed numeric output literal folding");
+          && !numeric_statements[2].output_newline
+          && numeric_statements[3].output_text == "42"
+          && numeric_statements[3].output_postponed
+          && numeric_statements[4].output_text == "-1"
+          && numeric_statements[4].output_newline
+          && numeric_statements[5].output_text == "7"
+          && !numeric_statements[5].output_newline
+          && std::all_of(
+              numeric_statements.begin() + 6,
+              numeric_statements.begin() + 10,
+              [](const Statement& statement) {
+                  return statement.output_text
+                      == "18446744073709551616";
+              })
+          && numeric_statements[10].output_text
+              == "-18446744073709551616"
+          && numeric_statements[11].output_text
+              == "18446744073709551616"
+          && numeric_statements[12].output_text
+              == "-34359738368"
+          && numeric_statements[13].output_text == "1"
+          && numeric_statements[14].output_text == "1",
+      "arbitrary-width binary, octal, decimal, and hex output literal folding");
 
   const auto unknown_numeric = parse_text(
       "unknown_numeric_output.sv",
@@ -2002,7 +2028,7 @@ endmodule
       std::ranges::any_of(
           unknown_numeric.diagnostics,
           [](const auto& diagnostic) {
-            return diagnostic.code == "FSIM-SV-SEM-037";
+              return diagnostic.code == "FSIM-SV-SEM-037";
           }),
       "unknown numeric output literals need a targeted diagnostic");
 }
@@ -2053,6 +2079,50 @@ endmodule
           && statements[6].value.operands[0].kind
               == ExpressionKind::LogicLiteral,
       "bare/empty random calls and range arguments in typed HIR");
+}
+
+void test_verilog_defparam_declarations()
+{
+    const auto parsed = parse_text(
+        "defparam-hierarchy.v",
+        R"(
+module defparam_leaf #(parameter [256:0] VALUE = 257'd0) ();
+endmodule
+
+module defparam_top;
+  defparam_leaf lanes [1:0] ();
+  defparam lanes[1].VALUE = (257'h1 << 256),
+           lanes[0].VALUE = 257'h2;
+  generate
+    if (1) begin : active
+      defparam_leaf child ();
+      defparam child.VALUE = 257'h3;
+    end
+  endgenerate
+endmodule
+)",
+        Language::Verilog2005);
+    require(parsed.ok(), "Verilog defparam declarations must parse");
+    require(
+        parsed.design.units.size() == 2U,
+        "defparam frontend unit count");
+    const auto& top = parsed.design.units.back();
+    require(
+        top.verilog_defparams.size() == 2U,
+        "comma-separated module defparams are retained");
+    require(
+        top.verilog_defparams.front().path.size() == 2U
+            && top.verilog_defparams.front().path.front().name == "lanes"
+            && top.verilog_defparams.front().path.front().indices.size() == 1U
+            && top.verilog_defparams.front().path.front().indices.front().text
+                == "1"
+            && top.verilog_defparams.front().path.back().name == "VALUE",
+        "indexed defparam hierarchy is structured");
+    require(
+        top.generate_regions.size() == 1U
+            && top.generate_regions.front().then_body.verilog_defparams.size()
+                == 1U,
+        "generated defparam remains branch-owned");
 }
 
 } // namespace fsim::tests::frontend

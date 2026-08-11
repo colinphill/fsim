@@ -562,66 +562,45 @@ std::optional<std::int64_t> constant_literal_integer(
         error = "constant expression contains a non-integral literal";
         return std::nullopt;
     }
-    const auto lowered = literal_value(
-        expression, 64, frontend::Language::SystemVerilog2017);
-    if (!lowered || lowered->value.width() > 64) {
-        error = "literal is malformed or wider than 64 bits";
+    const bool scalar_character = expression.text.size() == 3U
+        && expression.text.front() == '\'' && expression.text.back() == '\'';
+    std::optional<SystemVerilogConstantValue> lowered;
+    if (expression.text.find('\'') == std::string::npos || scalar_character) {
+        auto legacy = literal_value(
+            expression, 64, frontend::Language::SystemVerilog2017);
+        if (legacy) {
+            lowered.emplace(
+                std::move(legacy->value), false, false, legacy->domain,
+                std::string { }, expression.span);
+        }
+    } else {
+        lowered = evaluate_systemverilog_constant_expression(
+            expression, { }, { }, error);
+    }
+    if (!lowered) {
+        if (error.empty()) {
+            error = "integral literal is malformed";
+        }
         return std::nullopt;
     }
-    std::uint64_t bits = 0;
-    for (std::size_t bit = 0; bit < lowered->value.width(); ++bit) {
-        const auto value = lowered->value.get(bit);
-        if (value == Logic4::x || value == Logic4::z) {
-            error = "X and Z digits are not valid in an elaboration "
-                    "constant";
-            return std::nullopt;
-        }
-        if (value == Logic4::one) {
-            bits |= std::uint64_t{1} << bit;
-        }
-    }
-    const auto quote = expression.text.find('\'');
-    const bool is_signed =
-        quote != std::string::npos
-        && quote + 1 < expression.text.size()
-        && (expression.text[quote + 1] == 's'
-            || expression.text[quote + 1] == 'S');
-    const auto width = lowered->value.width();
-    if (is_signed && width != 0
-        && lowered->value.get(width - 1) == Logic4::one) {
-        if (width < 64) {
-            bits |= ~std::uint64_t{0} << width;
-        }
-        const auto magnitude = (~bits) + 1U;
-        if (magnitude
-            == (std::uint64_t{1} << 63U)) {
-            return std::numeric_limits<std::int64_t>::min();
-        }
-        if (magnitude
-            > static_cast<std::uint64_t>(
-                std::numeric_limits<std::int64_t>::max())) {
-            error = "signed literal is outside fsim's signed 64-bit "
-                    "constant range";
-            return std::nullopt;
-        }
-        return -static_cast<std::int64_t>(magnitude);
-    }
-    if (bits
-        > static_cast<std::uint64_t>(
-            std::numeric_limits<std::int64_t>::max())) {
-        error = "unsigned literal is outside fsim's signed 64-bit "
-                "constant range";
+    if (!lowered->known()) {
+        error = "X and Z digits are not valid in an elaboration constant";
         return std::nullopt;
     }
-    return static_cast<std::int64_t>(bits);
+    const auto integer = lowered->integer_value();
+    if (!integer) {
+        error = "literal value is outside the signed 64-bit range required "
+                "by this integer-only elaboration consumer";
+        return std::nullopt;
+    }
+    return integer;
 }
-
-
 
 bool checked_add(
     const std::int64_t left,
     const std::int64_t right,
-    std::int64_t& result) {
+    std::int64_t& result)
+{
     if ((right > 0
          && left
              > std::numeric_limits<std::int64_t>::max() - right)
@@ -633,8 +612,6 @@ bool checked_add(
     result = left + right;
     return true;
 }
-
-
 
 bool checked_subtract(
     const std::int64_t left,
@@ -1799,13 +1776,27 @@ void substitute_parameters(
         return;
     }
     std::string error;
-    const auto left = evaluate_constant_expression(
-        type.packed_range_expression->left, environment, error);
+    const auto evaluate_bound = [&](const Expression& expression)
+        -> std::optional<std::int64_t> {
+        if (language == frontend::Language::Vhdl2008) {
+            return evaluate_constant_expression(
+                expression, environment, error);
+        }
+        const auto value = evaluate_systemverilog_constant_expression(
+            expression, { }, environment, error);
+        if (!value) {
+            return std::nullopt;
+        }
+        const auto integer = value->integer_value();
+        if (!integer) {
+            error = "packed range bound must be a known signed 64-bit integer";
+        }
+        return integer;
+    };
+    const auto left = evaluate_bound(
+        type.packed_range_expression->left);
     const auto right = left
-        ? evaluate_constant_expression(
-              type.packed_range_expression->right,
-              environment,
-              error)
+        ? evaluate_bound(type.packed_range_expression->right)
         : std::nullopt;
     if (!left || !right) {
         diagnostics.push_back({

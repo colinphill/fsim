@@ -1643,6 +1643,19 @@ void append_generated_body(
         qualify_generated_instance(instance, body_names, scope);
         unit.instances.push_back(std::move(instance));
     }
+    for (auto& declaration : body.verilog_defparams) {
+        for (auto& segment : declaration.path) {
+            for (auto& index : segment.indices) {
+                qualify_generated_expression(index, body_names);
+            }
+        }
+        qualify_generated_expression(declaration.value, body_names);
+        if (!scope.empty() && !declaration.path.empty()) {
+            declaration.path.front().name = generated_scope(
+                scope, declaration.path.front().name);
+        }
+        unit.verilog_defparams.push_back(std::move(declaration));
+    }
     expand_generate_regions(
         body.generate_regions,
         body_environment,

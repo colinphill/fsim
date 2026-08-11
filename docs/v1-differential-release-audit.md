@@ -145,3 +145,9 @@ compatibility, core/flow/register smoke, platform, inventory, artifact/cache,
 and zero-gap closure evidence advance the linked totals to 489 interpreter,
 406 LLVM, 271 cache, 113 debugger, 138 VCD/trace, 489 scheduling, and 114
 failure rows. The reviewed 36-CTest corpus inventory is unchanged.
+
+Batch 164 does not change those accumulated feature-matrix totals. Its
+separate retained closure matrix binds 34 Verilog-2005 clauses and 12 exact
+literal-width paths to 23 registered witnesses across 17 execution and
+artifact stages, including interpreter, LLVM O0/O2, cold/warm cache,
+debug/VCD, relocation/replay, multiple roots, and mixed VHDL/SystemC.

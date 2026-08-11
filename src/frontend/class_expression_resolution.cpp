@@ -2270,8 +2270,10 @@ class Resolver final {
                       : SystemVerilogScalarKind::None;
     const bool typed_assignment = statement.kind == StatementKind::Assignment
         || statement.kind == StatementKind::Force
+        || statement.kind == StatementKind::ProceduralAssign
         || statement.kind == StatementKind::Return;
-    const auto value_type = statement.kind == StatementKind::Assignment
+    const auto value_type = (statement.kind == StatementKind::Assignment
+                                || statement.kind == StatementKind::ProceduralAssign)
             && target_type
         ? resolve_typed_expression(statement.value, scope, *target_type)
         : resolve_expression(

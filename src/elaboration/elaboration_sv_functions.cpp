@@ -263,7 +263,8 @@ private:
         const Expression& call,
         const SystemVerilogConstantEnvironment& caller,
         std::string& error) {
-        if (!function.automatic) {
+        if (!function.automatic
+            && function.language != frontend::Language::Verilog2005) {
             error = "static or implicit-lifetime function '"
                 + function.name + "' is not a constant function";
             return std::nullopt;
@@ -1225,6 +1226,16 @@ void fold_generate_body(
                 connection.value, functions, environment, fallback);
         }
     }
+    for (auto& declaration : body.verilog_defparams) {
+        for (auto& segment : declaration.path) {
+            for (auto& index : segment.indices) {
+                fold_expression(
+                    index, functions, environment, fallback);
+            }
+        }
+        fold_expression(
+            declaration.value, functions, environment, fallback);
+    }
     fold_generate_regions(
         body.generate_regions, functions, environment, fallback);
 }
@@ -1456,6 +1467,22 @@ void fold_systemverilog_constant_functions(
                 environment,
                 fallback_environment);
         }
+    }
+    for (auto& declaration : unit.verilog_defparams) {
+        for (auto& segment : declaration.path) {
+            for (auto& index : segment.indices) {
+                fold_expression(
+                    index,
+                    functions,
+                    environment,
+                    fallback_environment);
+            }
+        }
+        fold_expression(
+            declaration.value,
+            functions,
+            environment,
+            fallback_environment);
     }
     fold_generate_regions(
         unit.generate_regions,

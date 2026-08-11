@@ -325,6 +325,16 @@ void substitute_sv_generate_body(
             process.statements, body_environment);
     }
     substitute_sv_instances(body.instances, body_environment);
+    for (auto& declaration : body.verilog_defparams) {
+        for (auto& segment : declaration.path) {
+            for (auto& index : segment.indices) {
+                substitute_systemverilog_parameters(
+                    index, body_environment);
+            }
+        }
+        substitute_systemverilog_parameters(
+            declaration.value, body_environment);
+    }
     substitute_sv_generate_regions(
         body.generate_regions, body_environment);
 }
@@ -441,6 +451,15 @@ void substitute_systemverilog_parameters(
             process.statements, environment);
     }
     substitute_sv_instances(unit.instances, environment);
+    for (auto& declaration : unit.verilog_defparams) {
+        for (auto& segment : declaration.path) {
+            for (auto& index : segment.indices) {
+                substitute_systemverilog_parameters(index, environment);
+            }
+        }
+        substitute_systemverilog_parameters(
+            declaration.value, environment);
+    }
     substitute_sv_generate_regions(
         unit.generate_regions, environment);
     for (auto& block : unit.verilog_specify_blocks) {

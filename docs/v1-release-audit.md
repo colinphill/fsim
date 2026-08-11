@@ -98,8 +98,8 @@ two-release zero-unresolved-supported-gap closure audit.
 
 The composed local gates currently establish:
 
-- 2,138 production diagnostics are cataloged;
-- 835 authored C/C++ sources remain within the 2,500-line hard limit; any file
+- 2,152 production diagnostics are cataloged;
+- 842 authored C/C++ sources remain within the 2,500-line hard limit; any file
   that exceeds it must be refactored below the 2,000-line target;
 - all 1,279 required matrix rows are executable with no explicit evidence gap;
 - 105 independently authored conformance expectations in 28 fixtures are
@@ -115,11 +115,11 @@ through 9 must re-read the owning rows and tests, repair any mismatch found,
 and retain focused executable evidence. Task 10 owns the accumulated local
 release gates and hosted proof.
 
-The synchronized Batch 163 Change 19 candidate corpus freezes 1,279 executable rows,
+The synchronized Batch 164 Change 19 candidate corpus freezes 1,279 executable rows,
 5,116 linked evidence cells, and 604 exact paths split across 265 test, 312
 production, and 27 release/build owners. It retains 138 runtime files and 36
 corpus CTests with matrix digest
-`e38217f0ced26556c13e4ef6d4f32aa4d46172192ec54e926e739d165abbbab7`
+`7f879238bfcdbc544e688c710038c97063a8464f9817c758b87c1a2f89e0472d`
 and evidence digest
 `2d9a2bf8fdc360b6b484087848eeb00def2a61cff5fecfacf9400fadcec2010b`.
 

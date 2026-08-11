@@ -107,6 +107,8 @@ bool valid_scope_kind(const SystemVerilogVpiObjectKind kind) noexcept {
     case SystemVerilogVpiObjectKind::Array:
     case SystemVerilogVpiObjectKind::ClassProperty:
     case SystemVerilogVpiObjectKind::NamedEvent:
+    case SystemVerilogVpiObjectKind::Process:
+    case SystemVerilogVpiObjectKind::Driver:
       return false;
   }
   return false;
