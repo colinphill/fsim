@@ -7619,22 +7619,82 @@ carry an explicit evidence-backed scope disposition approved by the user.
   or governed resource ceilings, diagnose those physical boundaries distinctly
   from language legality, and prove the behavior across parsing, constant
   folding, execution, serialization, caching, and mixed-language conversion.
-- **Changes 1-4:** inventory every remaining IEEE 1800-2017 grammar and semantic
-  gap after Batches 147-155, including checker, let, nettype, alias, bind,
-  package, interface, class, and callable corners.
-- **Changes 5-8:** close remaining expression/type/assignment-pattern/cast,
-  aggregate/container, streaming, random, process, timing, and scheduler rules.
-- **Changes 9-12:** close remaining hierarchy/configuration, assertions,
-  coverage, clocking/program, system task/function, file/memory, and
-  introspection behavior.
-- **Changes 13-16:** integrate all residual constructs with UVM, DPI/VPI,
-  multiple roots, mixed language, debugger/trace, artifacts, relocation, and
-  caches.
-- **Changes 17-19:** publish a complete LRM-indexed zero-gap matrix with
-  positives/negatives and cross-engine/platform evidence; update all docs and
-  inventories.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push once without hosted CI monitoring.
+- **Change 1:** freeze an authoritative IEEE 1800-2017 clause-indexed residual
+  inventory against the completed SystemVerilog batches, plus a separate
+  arbitrary-bit-string-limit ledger. Assign every active row one owner in
+  Changes 2-16, every supported row exact executable evidence, and every true
+  deferral its locked later-batch or post-v2 owner; make drift, duplication and
+  unowned scope fail a registered contract.
+- **Change 2:** close preprocessing, lexical, attribute, keyword, number,
+  string, time, unbased-unsized and compiler-directive residuals. Remove every
+  language-level bit-string/based-number width cap and preserve exact
+  signedness and X/Z planes through source provenance and diagnostics.
+- **Change 3:** close declaration and namespace residuals: parameters,
+  localparams, specparams, genvars, nets/variables, user-defined nettypes,
+  aliases, lets, packages, imports/exports, forward/extern declarations and
+  lifetime rules.
+- **Change 4:** close the type system: two-/four-state scalar families,
+  arbitrary-width enums, packed structs/unions, tagged unions, packed and
+  unpacked dimensions, typedef/typeof/type parameters, virtual interfaces and
+  assignment compatibility without host-word narrowing.
+- **Change 5:** complete expression sizing/signing, casts, assignment patterns,
+  streaming/concatenation/replication, selections, inside/dist/matches,
+  wildcard equality and short-circuit semantics across constant, interpreter
+  and LLVM paths.
+- **Change 6:** complete aggregate and data-container behavior for strings,
+  fixed/dynamic arrays, queues, associative arrays, methods, slicing,
+  iteration, files and memories, including arbitrary-width elements and
+  deterministic governed capacity diagnostics.
+- **Change 7:** complete class/interface/program/checker/callable semantics:
+  inheritance, virtual/pure methods, constructors, static/automatic storage,
+  ref/const-ref/default arguments, recursion, nested scopes, modports and
+  interface/class handles.
+- **Change 8:** complete constraints and randomization, rand/randc state,
+  solve-before, implication, distribution, inline constraints, object graphs,
+  seeding and deterministic cross-engine replay without fixed bit-width caps.
+- **Change 9:** complete hierarchy and elaboration residuals for bind,
+  configurations, packages, interfaces, programs, checkers, extern modules,
+  generate/defparam interactions and stable specialization identity.
+- **Change 10:** complete processes, continuous/procedural assignments,
+  force/release, event variables, fork/join/process control, disable/wait and
+  scheduler-region ordering with deterministic driver and delta semantics.
+- **Change 11:** complete delay/event controls, clocking blocks, program/reactive
+  regions, cycle delays, timing checks and remaining specify integration while
+  preserving exact time/delta/region identity.
+- **Change 12:** complete immediate/concurrent assertions, sequences,
+  properties, checkers, covergroups, coverpoints, crosses, bins, transitions,
+  sampling and coverage-control behavior with actionable diagnostics.
+- **Change 13:** complete standard system tasks/functions, command-line and
+  plusarg services, file/memory I/O, formatting/scanning, severity/reporting,
+  process/random/coverage services and source/runtime introspection.
+- **Change 14:** close DPI and VPI residuals for exact type/range/value/strength,
+  hierarchy, memories, classes, packages, interfaces, assertions, callbacks,
+  control, checkpoint identity and arbitrary-width public values.
+- **Change 15:** integrate every new construct with UVM 1.2/2020-3.1 factory,
+  configuration/resource/reporting, phases, objections, TLM, sequence,
+  register-model and reflection behavior without semantic forks.
+- **Change 16:** integrate multiple roots, VHDL/SystemC boundaries, debugger,
+  activity/callbacks, VCD, public C/Tcl/CLI services and stable source/object/
+  timing identity; keep later FST, SDF and Accellera-SystemC work in their
+  already assigned batches.
+- **Change 17:** preserve exact frontend/HIR/DesignIR/SimIR and runtime state
+  through libraries, object/design artifacts, checkpoints, cold/warm caches,
+  relocation, replay and schema rejection, including wide X/Z constants and
+  deterministic invalidation.
+- **Change 18:** publish and run the complete zero-gap IEEE 1800-2017 closure
+  matrix: positive/negative, interpreter, LLVM O0/O2, cold/warm cache, debug,
+  trace, artifact, relocation, replay, multiple-root, UVM and mixed-language
+  witnesses under explicit memory/work/time/trace ceilings.
+- **Change 19:** synchronize diagnostics, support tables, feature/evidence and
+  closure inventories, public guides/tutorials, architecture/API documents,
+  counts, digests, installed/platform/resource/release contracts and the
+  restart handoff. Physical host/resource ceilings must never be documented as
+  SystemVerilog legality limits.
+- **Change 20:** run fresh clean-first exact-LLVM Debug/Release eight-worker
+  builds, complete regressions and all release gates with retained timing/RSS/
+  swap evidence, then commit and push the one accumulated implementation. This
+  is not a sanitizer or hosted-CI monitoring boundary. Save and push the Batch
+  166 restart plan and clear context before implementation.
 
 ### Batch 166 - Older VHDL standard modes
 

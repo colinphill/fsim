@@ -5,6 +5,96 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
+## Batch 165 planned restart checkpoint - 2026-08-11
+
+1. Start in `/home/colin/projects/fsim`, read this section and the authoritative
+   expanded Batch 165 allocation in `implementation_plan_v2.md`, and verify
+   branch `codex/v2` is clean and synchronized at Batch 164 implementation
+   `42aa87515532e19a0c750c644d08a88a3947d719` plus this documentation-only
+   Batch 165 planning checkpoint.
+2. This checkpoint implements the required pre-batch flow. Batch 165 is
+   expanded into exactly twenty changes without broadening its locked
+   SystemVerilog-2017 residual-language closure scope. No Batch 165
+   implementation file has changed; clear context after pushing this plan and
+   resume only from this section and the authoritative allocation.
+3. Preserve Batch 164's complete IEEE 1364-2005 clause/width inventories,
+   arbitrary-width Verilog frontend, elaboration, interpreter, LLVM, VPI,
+   artifacts and cache behavior, scheduler/timing/hierarchy closure, public
+   guide/tutorial and governed zero-gap matrix at pushed commit `42aa875`.
+4. Batch 164's fresh clean-first exact-LLVM 22.1.8 Debug and Release
+   eight-worker builds are warning-free. Debug completes in 12:04.92 with
+   4,795,068 KiB peak RSS; Release completes in 10:18.77 with 3,266,400 KiB
+   peak RSS. Both record zero swaps.
+5. Complete Debug and Release regressions each pass 132/132. Debug reports
+   534.37 seconds of CTest time, 8:54.38 wall time and 3,785,976 KiB peak RSS;
+   Release reports 460.20 seconds of CTest time, 7:40.21 wall time and
+   3,791,508 KiB peak RSS. Both record zero swaps. Final post-documentation
+   release-contract slices pass 7/7 in both configurations, touched Change 20
+   sources pass the WebKit gate, and repository whitespace is clean.
+6. Preserve the Change 20 correction for wide Logic9 JIT frame planes: the
+   public ABI guarantees eight-byte alignment, all four wide plane-two/
+   plane-three loads and stores declare exactly that alignment, and the O0/O2
+   regression deliberately supplies 129-bit register planes aligned to eight
+   rather than sixteen bytes. Keep its adjacent width-polymorphic Logic9 masks
+   and result constants.
+7. The synchronized Batch 164 baseline is 2,152 diagnostics, 842 bounded C/C++
+   sources, 972 SPDX-owned files and 320 authored test/control files. The
+   feature matrix has 1,279 executable rows, 5,116 evidence cells and 604 exact
+   paths split 265/312/27 test/production/release, with 138 runtime owners and
+   36 corpus CTests.
+8. Its feature and canonical evidence SHA-256 identities are
+   `7f879238bfcdbc544e688c710038c97063a8464f9817c758b87c1a2f89e0472d`
+   and
+   `2d9a2bf8fdc360b6b484087848eeb00def2a61cff5fecfacf9400fadcec2010b`.
+   Verilog gap, literal-width and closure identities are
+   `338b64ba883f6243d9f799d31c22f873e871a5977bbb9fc9c45ae3b5ea738c84`,
+   `4d0924571f33e54f8d77d66979e290fe223c183eb0bc963fdbffb841429a424e`
+   and
+   `a80eea635da93dff681c7118cd3339e7b4bb679c83a2cf7137cc3eeccef6f39e`.
+9. Batch 165's cross-cutting requirement is to inventory and remove every
+   arbitrary SystemVerilog bit-string, based-number, unbased and unsized
+   literal-width limit. Exact source/context-determined width, signedness and
+   X/Z planes must survive parsing, constant folding, elaboration, interpreter,
+   LLVM, public boundaries, artifacts, caches, relocation and mixed-language
+   conversion. Retain and distinctly diagnose only true host-addressability or
+   governed resource ceilings.
+10. Changes 1-4 freeze the IEEE 1800-2017 residual and width-limit inventories,
+    then close lexical/preprocessing/declaration/namespace and type-system
+    gaps, including nettype, alias, let, packages, arbitrary-width enums,
+    packed aggregates and virtual interfaces.
+11. Changes 5-8 close expression sizing/casts/patterns/streaming, containers and
+    files, classes/interfaces/programs/checkers/callables, constraints and
+    deterministic randomization without host-word narrowing.
+12. Changes 9-12 close hierarchy/bind/configuration, process/assignment/
+    scheduler semantics, timing/clocking/program regions, assertions and
+    functional coverage with exact time/delta/region and driver identity.
+13. Changes 13-16 close standard services and introspection, DPI/VPI, UVM, and
+    multiple-root/mixed-language/debug/VCD/public integration. Preserve the
+    locked later ownership of FST, SDF and Accellera SystemC/TLM/SCV work.
+14. Changes 17-19 preserve all new behavior through artifacts, checkpoints,
+    libraries, caches, relocation and replay; run the governed zero-gap
+    cross-engine/platform matrix; and synchronize public documentation,
+    diagnostics, matrices, counts, digests, contracts and this handoff.
+15. Change 20 runs fresh clean-first exact-LLVM Debug/Release builds with at
+    least eight workers and 120-minute command timeouts, full regressions and
+    every release gate. Retain timing/RSS/swap/transcript evidence and create
+    the sole Batch 165 implementation commit/push only after all local gates
+    are clean. Batch 165 is not a sanitizer or hosted-CI monitoring boundary.
+16. Accumulate Changes 1-20 in one intentionally dirty worktree. Do not reset,
+    commit or push implementation before Change 20. After that implementation
+    commit, save and push the exact Batch 166 restart plan and clear context
+    before Batch 166 implementation. The approved Batch 166 scope includes the
+    legacy non-standard Synopsys `ieee.std_logic_signed`,
+    `ieee.std_logic_unsigned`, `ieee.std_logic_arith` and
+    `ieee.std_logic_misc` packages without arbitrary numeric width limits.
+17. Next action after this checkpoint is pushed and context is cleared:
+    implement Batch 165 Change 1 only. Reconcile an IEEE 1800-2017
+    clause-indexed residual inventory and separate arbitrary-width-limit ledger
+    against the live code and executable evidence, assign Changes 2-16 exact
+    owners, freeze supported/unsupported/deferred scope, and make duplicates,
+    missing evidence, unowned rows and plan/registration drift fail a
+    registered contract.
+
 ## Batch 164 planned restart checkpoint - 2026-08-10
 
 1. Start in `/home/colin/projects/fsim`, read this file and the authoritative
