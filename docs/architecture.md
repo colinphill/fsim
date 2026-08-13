@@ -56,6 +56,7 @@ than independent semantic definitions.
 |---|---|---|
 | Source manager | Files, source locations, include and macro ancestry | Exact ordered compilation-unit/transitive snapshots, owning VHDL/SV/SystemC source records, and interned include/macro ancestry are current |
 | Language frontend | Tokenization, preprocessing, parsing, name/type rules | Hand-written bounded VHDL and SV parsers, a multi-root SV preprocessor, and complete owning typed HIR for the v1 profile are current |
+| SDF ingestion | Revision parsing, exact normalization, hierarchy/endpoint resolution, portable annotation state | Clean-room SDF 4.0 plus explicit 2.1/3.0 adapters, immutable IR, mixed Verilog/VHDL/SystemC mappings, and checksummed library/design/cache persistence are current; Batches 169-170 own timing application |
 | Design elaboration | Candidate resolution, specialization, hierarchy, bindings, drivers, stable IDs | Recursive VHDL/SV/SystemC hierarchy, configurable complete-scope logical-library resolution with explicit overrides and lazy read-only mapped libraries, dense instance-specific specialization records, bounded scalar VHDL generic and integral SV parameter specialization, executable conditional/iterative/selection generate expansion, construction-actual transfer across all three languages, port aliasing, strength/charge provenance, and boundary checks are current; general generic/parameter typing remains planned |
 | SimIR lowering | Explicit reads, writes, waits, branches, assertions and yields | A typed executable subset is current |
 | Reference engine | Execute any supported SimIR with deterministic scheduling | Current |
@@ -1556,8 +1557,16 @@ Owning-unit, portable-library, and runtime-state schemas serialize this HIR and
 normalized state with checked enums, dense IDs, expression roots, sizes, and
 time ranges. The selected specify specialization and normalized records enter
 native-cache provenance; restored state is validated before either interpreter
-or LLVM execution. SDF annotation is deliberately outside this layer and will
-translate into the same normalized timing model in its dedicated v2 batch.
+or LLVM execution.
+
+The SDF ingestion layer is deliberately adjacent to, but not part of, this
+runtime timing layer. It accepts SDF 4.0 and explicit 2.1/3.0 profiles, retains
+exact decimal/triple values and source coordinates in immutable normalized IR,
+resolves cells and endpoints against mixed-language elaborated identities, and
+persists the validated mapping through libraries, standalone designs,
+relocation and native-cache identity. Batch 168 does not mutate module paths,
+timing checks, scheduler events, or observed simulation time; Batches 169-170
+apply the archived mappings to Verilog/SystemVerilog and VHDL/VITAL timing.
 
 ## SimIR
 

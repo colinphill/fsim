@@ -86,7 +86,7 @@ foreach(FSIM_TOKEN IN ITEMS
     "46-row release-closure matrix"
     "138 witness cells, exactly 23 registered CTests, and 17"
     "94.63 seconds"
-    "2,246 production diagnostics, 887 bounded C/C++ sources, 1,035 SPDX-owned"
+    "2,324 production diagnostics, 925 bounded C/C++ sources, 1,083 SPDX-owned"
     "not Verilog width or")
   string(FIND "${FSIM_AUDIT}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)
   if(FSIM_TOKEN_INDEX EQUAL -1)

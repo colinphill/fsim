@@ -97,8 +97,10 @@ must reject before simulation state is published.
 
 Specify blocks may add parameterized module paths, pulse policy, notifiers, and
 the twelve standard timing-check families. Their normalized occurrence
-identities survive the same artifact and cache flow; SDF annotation remains a
-separate Batch 170 feature.
+identities survive the same artifact and cache flow. Batch 168 SDF parsing,
+resolution and persistence can validate those identities without changing
+runtime timing; Batch 169 owns Verilog/SystemVerilog backannotation. See
+[SDF support](sdf.md) for the current programmatic and portable-format boundary.
 
 VPI clients should request vector formats for values wider than 64 bits. The
 integer format is intentionally scalar, but the vector descriptor has no

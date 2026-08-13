@@ -77,6 +77,215 @@ if(FSIM_UVM_1_2_SOURCE_DIR AND FSIM_UVM_2020_3_1_SOURCE_DIR)
 endif()
 add_test(NAME fsim.frontend COMMAND fsim_frontend_tests)
 
+add_executable(
+  fsim_sdf_frontend_tests
+  frontend/sdf_lexer_test.cpp
+)
+fsim_configure_test(fsim_sdf_frontend_tests)
+target_link_libraries(fsim_sdf_frontend_tests PRIVATE fsim_frontend)
+add_test(NAME fsim.frontend.sdf COMMAND fsim_sdf_frontend_tests)
+set_tests_properties(
+  fsim.frontend.sdf
+  PROPERTIES LABELS "fast;frontend;sdf;lexical;positive;negative;coordinates;resources"
+)
+add_executable(
+  fsim_sdf_parser_tests
+  frontend/sdf_parser_test.cpp
+)
+fsim_configure_test(fsim_sdf_parser_tests)
+target_link_libraries(fsim_sdf_parser_tests PRIVATE fsim_frontend)
+add_test(NAME fsim.frontend.sdf_parser COMMAND fsim_sdf_parser_tests)
+set_tests_properties(
+  fsim.frontend.sdf_parser
+  PROPERTIES LABELS "fast;frontend;sdf;parser;headers;positive;negative;coordinates;revision"
+)
+add_executable(
+  fsim_sdf_construct_parser_tests
+  frontend/sdf_construct_parser_test.cpp
+)
+fsim_configure_test(fsim_sdf_construct_parser_tests)
+target_link_libraries(fsim_sdf_construct_parser_tests PRIVATE fsim_frontend)
+add_test(
+  NAME fsim.frontend.sdf_constructs
+  COMMAND fsim_sdf_construct_parser_tests
+)
+set_tests_properties(
+  fsim.frontend.sdf_constructs
+  PROPERTIES LABELS "fast;frontend;sdf;parser;constructs;positive;negative;coordinates;revision"
+)
+add_executable(
+  fsim_sdf21_adapter_tests
+  frontend/sdf21_adapter_test.cpp
+)
+fsim_configure_test(fsim_sdf21_adapter_tests)
+target_link_libraries(fsim_sdf21_adapter_tests PRIVATE fsim_frontend)
+add_test(NAME fsim.frontend.sdf21 COMMAND fsim_sdf21_adapter_tests)
+set_tests_properties(
+  fsim.frontend.sdf21
+  PROPERTIES LABELS "fast;frontend;sdf;parser;adapter;sdf21;positive;negative;coordinates;revision"
+)
+add_executable(
+  fsim_sdf30_adapter_tests
+  frontend/sdf30_adapter_test.cpp
+)
+fsim_configure_test(fsim_sdf30_adapter_tests)
+target_link_libraries(fsim_sdf30_adapter_tests PRIVATE fsim_frontend)
+add_test(NAME fsim.frontend.sdf30 COMMAND fsim_sdf30_adapter_tests)
+
+add_executable(
+  fsim_sdf_normalization_tests
+  frontend/sdf_normalization_test.cpp
+)
+fsim_configure_test(fsim_sdf_normalization_tests)
+target_link_libraries(fsim_sdf_normalization_tests PRIVATE fsim_frontend)
+add_test(
+  NAME fsim.frontend.sdf_normalization
+  COMMAND fsim_sdf_normalization_tests
+)
+add_executable(
+  fsim_sdf_ir_tests
+  frontend/sdf_ir_test.cpp
+)
+fsim_configure_test(fsim_sdf_ir_tests)
+target_link_libraries(fsim_sdf_ir_tests PRIVATE fsim_frontend)
+add_test(NAME fsim.frontend.sdf_ir COMMAND fsim_sdf_ir_tests)
+set_tests_properties(
+  fsim.frontend.sdf30
+  PROPERTIES LABELS "fast;frontend;sdf;parser;adapter;sdf30;positive;negative;coordinates;revision"
+)
+set_tests_properties(
+  fsim.frontend.sdf_normalization
+  PROPERTIES LABELS "fast;frontend;sdf;normalization;positive;negative;coordinates;revision;resources"
+)
+set_tests_properties(
+  fsim.frontend.sdf_ir
+  PROPERTIES LABELS "fast;frontend;sdf;ir;positive;negative;coordinates;revision;resources"
+)
+
+add_executable(
+  fsim_sdf_annotation_scope_tests
+  app/sdf_annotation_scope_test.cpp
+)
+fsim_configure_test(fsim_sdf_annotation_scope_tests)
+target_link_libraries(
+  fsim_sdf_annotation_scope_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_scope
+  COMMAND fsim_sdf_annotation_scope_tests
+)
+set_tests_properties(
+  fsim.application.sdf_scope
+  PROPERTIES LABELS "fast;application;sdf;scope;positive;negative;multi-root;revision"
+)
+
+add_executable(
+  fsim_sdf_cell_resolution_tests
+  app/sdf_cell_resolution_test.cpp
+)
+fsim_configure_test(fsim_sdf_cell_resolution_tests)
+target_link_libraries(
+  fsim_sdf_cell_resolution_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_cell_resolution
+  COMMAND fsim_sdf_cell_resolution_tests
+)
+set_tests_properties(
+  fsim.application.sdf_cell_resolution
+  PROPERTIES LABELS "fast;application;sdf;resolution;positive;negative;multi-root;revision;resources"
+)
+
+add_executable(
+  fsim_sdf_endpoint_resolution_tests
+  app/sdf_endpoint_resolution_test.cpp
+)
+fsim_configure_test(fsim_sdf_endpoint_resolution_tests)
+target_link_libraries(
+  fsim_sdf_endpoint_resolution_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_endpoint_resolution
+  COMMAND fsim_sdf_endpoint_resolution_tests
+)
+set_tests_properties(
+  fsim.application.sdf_endpoint_resolution
+  PROPERTIES LABELS "fast;application;sdf;resolution;endpoints;positive;negative;mixed-language;revision;resources"
+)
+
+add_executable(
+  fsim_sdf_mapping_validation_tests
+  app/sdf_mapping_validation_test.cpp
+)
+fsim_configure_test(fsim_sdf_mapping_validation_tests)
+target_link_libraries(
+  fsim_sdf_mapping_validation_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_mapping_validation
+  COMMAND fsim_sdf_mapping_validation_tests
+)
+set_tests_properties(
+  fsim.application.sdf_mapping_validation
+  PROPERTIES LABELS "fast;application;sdf;validation;mapping;positive;negative;mixed-language;revision;resources"
+)
+
+add_executable(
+  fsim_sdf_schema_tests
+  app/sdf_schema_test.cpp
+)
+fsim_configure_test(fsim_sdf_schema_tests)
+target_link_libraries(
+  fsim_sdf_schema_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_schema
+  COMMAND fsim_sdf_schema_tests
+)
+set_tests_properties(
+  fsim.application.sdf_schema
+  PROPERTIES LABELS "fast;application;sdf;schema;positive;negative;revision;roundtrip;resources"
+)
+
+add_executable(
+  fsim_sdf_artifact_identity_tests
+  app/sdf_artifact_identity_test.cpp
+)
+fsim_configure_test(fsim_sdf_artifact_identity_tests)
+target_link_libraries(
+  fsim_sdf_artifact_identity_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_artifact_identity
+  COMMAND fsim_sdf_artifact_identity_tests
+)
+set_tests_properties(
+  fsim.application.sdf_artifact_identity
+  PROPERTIES LABELS "fast;application;sdf;artifact;cache;positive;negative;revision;roundtrip;resources"
+)
+
+add_executable(
+  fsim_sdf_corpus_tests
+  app/sdf_corpus_test.cpp
+)
+fsim_configure_test(fsim_sdf_corpus_tests)
+target_compile_definitions(
+  fsim_sdf_corpus_tests
+  PRIVATE FSIM_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
+target_link_libraries(fsim_sdf_corpus_tests PRIVATE fsim_application)
+add_test(NAME fsim.application.sdf_corpus COMMAND fsim_sdf_corpus_tests)
+set_tests_properties(
+  fsim.application.sdf_corpus
+  PROPERTIES LABELS "fast;application;sdf;corpus;positive;revision;normalization;resolution;mixed-language;roundtrip"
+)
+
 add_executable(fsim_project_tests project/project_config_test.cpp)
 fsim_configure_test(fsim_project_tests)
 target_link_libraries(fsim_project_tests PRIVATE fsim_project)
@@ -175,6 +384,29 @@ add_test(
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckVerilogSystemVerilogStandardModeInventory.cmake"
+)
+add_test(
+  NAME fsim.sdf-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSdfInventory.cmake"
+)
+add_test(
+  NAME fsim.sdf-closure
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/sdf-closure-evidence"
+    -P "${PROJECT_SOURCE_DIR}/cmake/RunSdfClosure.cmake"
+)
+set_tests_properties(
+  fsim.sdf-closure
+  PROPERTIES
+    LABELS "sdf;closure;negative;resources;artifact;cache;interpreter;llvm"
+    TIMEOUT 1200
 )
 add_test(
   NAME fsim.vhdl-standard-mode-closure-matrix
@@ -486,6 +718,10 @@ set_tests_properties(
 set_tests_properties(
   fsim.verilog-systemverilog-standard-mode-inventory
   PROPERTIES LABELS "fast;verilog;systemverilog;conformance;inventory;corpus;closure;positive;negative;semantic;execution;diagnostics;width;artifact;cache;mixed;provenance;resources;cmake"
+)
+set_tests_properties(
+  fsim.sdf-inventory
+  PROPERTIES LABELS "fast;sdf;conformance;inventory;positive;negative;revision;coordinates;artifact;roundtrip;diagnostics;resources;cmake"
 )
 set_tests_properties(
   fsim.vhdl-standard-mode-closure-matrix

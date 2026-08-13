@@ -130,6 +130,94 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-FE-PARSE-001` | error | A parser expectation using the common fallback code failed. |
 | `FSIM-FE-PP-0001` | error | Include directories or macro definitions were supplied for a VHDL source set; these settings apply only to Verilog/SystemVerilog or SystemC. |
 
+## Standard Delay Format frontend
+
+These diagnostics cover Batch 168 parsing, normalization, hierarchy resolution,
+schema and portable persistence. Successful resolution does not modify runtime
+timing; Batches 169-170 own Verilog/SystemVerilog and VHDL/VITAL
+backannotation. See [SDF support](sdf.md) for the format and API contract.
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `FSIM-SDF-LEX-001` | error | An SDF source contains a non-ASCII control byte outside the permitted whitespace set. |
+| `FSIM-SDF-LEX-002` | error | An SDF block comment is unterminated. |
+| `FSIM-SDF-LEX-003` | error | An SDF quoted string is unterminated. |
+| `FSIM-SDF-LEX-004` | error | An SDF identifier ends with an incomplete escape. |
+| `FSIM-SDF-LEX-005` | error | An SDF decimal exponent has no digits. |
+| `FSIM-SDF-LEX-006` | error | An SDF numeric token exceeds the configured byte limit. |
+| `FSIM-SDF-LEX-007` | error | An SDF source exceeds the configured byte limit. |
+| `FSIM-SDF-LEX-008` | error | An SDF token stream exceeds the configured token-count limit. |
+| `FSIM-SDF-LEX-009` | error | SDF parenthesis nesting exceeds the configured depth limit. |
+| `FSIM-SDF-LEX-010` | error | An SDF closing parenthesis is unmatched or the source ends inside parenthesis nesting. |
+| `FSIM-SDF-LEX-011` | error | An SDF comment, string, identifier, or other token exceeds the configured byte limit. |
+| `FSIM-SDF-PARSE-001` | error | An SDF root, header, or child form is missing an expected delimiter. |
+| `FSIM-SDF-PARSE-002` | error | The SDF root or a DELAYFILE child has an invalid structural keyword. |
+| `FSIM-SDF-PARSE-003` | error | An SDF header has invalid arity, nesting, value syntax, divider, numeric triple, or timescale. |
+| `FSIM-SDF-PARSE-004` | error | An SDF header is duplicated. |
+| `FSIM-SDF-PARSE-005` | error | The selected SDF revision is known but not enabled by the current parser, or is an unsupported future revision. |
+| `FSIM-SDF-PARSE-006` | error | SDF headers are outside their canonical standard order. |
+| `FSIM-SDF-PARSE-007` | error | A DELAYFILE has no SDFVERSION header. |
+| `FSIM-SDF-PARSE-008` | error | An SDF header appears after a CELL or another body form. |
+| `FSIM-SDF-PARSE-009` | error | A DELAYFILE contains an unsupported body form. |
+| `FSIM-SDF-PARSE-010` | error | Tokens follow the closing DELAYFILE form. |
+| `FSIM-SDF-PARSE-011` | error | A CELL form has an invalid root shape or omits its required CELLTYPE or INSTANCE child. |
+| `FSIM-SDF-PARSE-012` | error | CELLTYPE does not contain exactly one quoted type name. |
+| `FSIM-SDF-PARSE-013` | error | INSTANCE is not an empty selector, one exact hierarchy selector, or the sole wildcard `*`. |
+| `FSIM-SDF-PARSE-014` | error | An SDF construct occurs outside the construct family that owns it. |
+| `FSIM-SDF-PARSE-015` | error | A delay, timing-check, timing-environment, label, selector, or constraint construct has invalid arity. |
+| `FSIM-SDF-PARSE-016` | error | A delay or constraint value is not an empty value, one decimal, or a min:typ:max triple. |
+| `FSIM-SDF-PARSE-017` | error | An SDF edge form does not select exactly one port instance. |
+| `FSIM-SDF-PARSE-018` | error | A delay or timing-check condition is empty, misplaced, or has an invalid nested target or label order. |
+| `FSIM-SDF-PARSE-019` | error | Required CELL children or IOPATH edge, RETAIN, and delay-value children are out of order. |
+| `FSIM-SDF-PARSE-020` | error | An SDF 4.0 CELL contains an unsupported nested construct. |
+| `FSIM-SDF-21-001` | error | An SDF 2.1 file uses a later-revision construct, spelling, symbolic condition label, or nesting profile. |
+| `FSIM-SDF-21-002` | error | Repeated SDF 2.1 INSTANCE forms or the optional CORRELATION form have invalid selector, order, multiplicity, or arity. |
+| `FSIM-SDF-21-003` | error | An SDF 2.1 file mixes single delay values and min:typ:max triples. |
+| `FSIM-SDF-21-004` | error | An SDF 2.1 delay list does not contain exactly 1, 2, 3, 6, or 12 values. |
+| `FSIM-SDF-21-005` | error | An SDF 2.1 path, sum, diff, or skew constraint has invalid path, port, or value arity. |
+| `FSIM-SDF-21-006` | error | An SDF 2.1 TIMESCALE does not use a legal 1/10/100 decimal scale with us, ns, or ps. |
+| `FSIM-SDF-30-001` | error | An SDF 3.0 file uses a removed SDF 2.1 construct or spelling, or an IEEE SDF 4.0-only construct. |
+| `FSIM-SDF-30-002` | error | An SDF 3.0 CELL repeats its INSTANCE form instead of using one divider-qualified selector. |
+| `FSIM-SDF-30-003` | error | An SDF 3.0 TIMESCALE does not use a legal 1/10/100 decimal scale with us, ns, or ps. |
+| `FSIM-SDF-30-004` | error | An SDF 3.0 delay list has invalid length or the file mixes single values and min:typ:max triples. |
+| `FSIM-SDF-NORM-001` | error | An SDF decimal exponent exceeds the exact normalization range. |
+| `FSIM-SDF-NORM-002` | error | An SDF value cannot be normalized without changing its empty, scalar, or min:typ:max shape. |
+| `FSIM-SDF-NORM-003` | error | An SDF timescale or value has an invalid exact scale or overflows exact femtosecond scaling. |
+| `FSIM-SDF-NORM-004` | error | An exact SDF hierarchy name contains an empty segment or incomplete escape. |
+| `FSIM-SDF-IR-001` | error | Immutable SDF IR lowering encounters incomplete normalized timescale, instance, node, or exact-value state. |
+| `FSIM-SDF-IR-002` | error | Immutable SDF IR lowering exceeds a configured cell, node, identity-byte, depth, or identity-space limit. |
+| `FSIM-SDF-SCOPE-001` | error | SDF annotation scope input has incomplete normalized IR, root aliases, semantic root identities, hierarchy-divider state, or project/design identity. |
+| `FSIM-SDF-SCOPE-002` | error | An SDF annotation root selection is malformed, duplicated, or absent from the elaborated design. |
+| `FSIM-SDF-SCOPE-003` | error | An SDF annotation scope was created for a different project identity. |
+| `FSIM-SDF-SCOPE-004` | error | An SDF annotation scope targets a stale elaborated-design identity. |
+| `FSIM-SDF-SCOPE-005` | error | SDF annotation scope construction exceeds the configured root-count or semantic-identity byte limit. |
+| `FSIM-SDF-RESOLVE-001` | error | SDF cell resolution encounters an incomplete/stale scope, a missing semantic parent/root, or duplicate elaborated instance ownership. |
+| `FSIM-SDF-RESOLVE-002` | error | An SDF CELLTYPE and INSTANCE selector has no match in the selected elaborated roots; the message includes deterministic candidate paths and types. |
+| `FSIM-SDF-RESOLVE-003` | error | A non-wildcard SDF cell selector resolves ambiguously to multiple elaborated instances. |
+| `FSIM-SDF-RESOLVE-005` | error | SDF cell resolution exceeds a configured candidate, match, diagnostic-candidate, or semantic-identity limit. |
+| `FSIM-SDF-ENDPOINT-001` | error | SDF endpoint resolution encounters incomplete, stale, duplicate, or structurally invalid resolved-cell or normalized-IR state. |
+| `FSIM-SDF-ENDPOINT-002` | error | An SDF port, net, interconnect, device, path, timing-check, or condition endpoint has no elaborated match; the message includes deterministic candidates. |
+| `FSIM-SDF-ENDPOINT-003` | error | An SDF endpoint resolves ambiguously to multiple elaborated signal or native-SystemC objects. |
+| `FSIM-SDF-ENDPOINT-004` | error | An endpoint-bearing SDF construct contains no decodable endpoint and has no legal implicit device output set. |
+| `FSIM-SDF-ENDPOINT-005` | error | SDF endpoint resolution exceeds a configured IR-node, candidate, mapping, endpoint, reported-candidate, or semantic-identity limit. |
+| `FSIM-SDF-MAP-001` | error | Whole-SDF mapping validation encounters incomplete, stale, duplicate, structurally invalid, or nondeterministically ordered cell, IR, target, signal, or endpoint-resolution state. |
+| `FSIM-SDF-MAP-002` | error | A resolved SDF mapping repeats a node/target pair, endpoint, or complete semantic annotation. |
+| `FSIM-SDF-MAP-003` | error | Resolved SDF mappings conflict in object kind, direction, width, selector, conversion, semantic application key, or overlapping wildcard/exact cell ownership. |
+| `FSIM-SDF-MAP-004` | error | A resolved SDF mapping is unsupported/unowned or leaves an endpoint-bearing annotation construct unconsumed. |
+| `FSIM-SDF-MAP-005` | error | Whole-SDF mapping validation exceeds a configured mapping, endpoint, target, or immutable-summary identity limit. |
+| `FSIM-SDF-SCHEMA-001` | error | SDF schema encoding encounters incomplete or stale syntax, normalized IR, resolved mapping, option, or compiler-compatibility ownership. |
+| `FSIM-SDF-SCHEMA-002` | error | An SDF syntax, IR, endpoint, mapping, or envelope schema version is newer than this consumer supports. |
+| `FSIM-SDF-SCHEMA-003` | error | An SDF schema has a stale compiler-compatibility or resolved-mapping semantic identity. |
+| `FSIM-SDF-SCHEMA-004` | error | An SDF schema record is omitted, duplicated, reordered, truncated, corrupt, checksum-invalid, or contains an invalid field. |
+| `FSIM-SDF-SCHEMA-005` | error | SDF schema encoding or decoding exceeds a configured envelope-byte, header, string-count, or string-byte limit. |
+| `FSIM-SDF-ARTIFACT-001` | error | SDF portable artifact identity is incomplete, stale, noncanonical, incompatible with its schema/mapping, or attached to a different design digest. |
+| `FSIM-SDF-ARTIFACT-002` | error | Portable design metadata contains a duplicate or conflicting SDF annotation scope/cache identity. |
+| `FSIM-SDF-ARTIFACT-003` | error | SDF artifact identity exceeds its configured selected-root, semantic-unit, semantic-object, or identity-byte budget. |
+| `FSIM-SDF-PORTABLE-001` | error | Portable SDF archive production encounters incomplete, stale, noncanonical, or incompatible schema, mapping, or artifact identity state. |
+| `FSIM-SDF-PORTABLE-002` | error | A portable SDF archive has a future format, invalid field, corrupt checksum, truncation, trailing bytes, or mapping-to-semantic-identity mismatch. |
+| `FSIM-SDF-PORTABLE-003` | error | A mapped library or portable design is missing a compatible SDF annotation payload or contains a payload incompatible with the selected design identity. |
+| `FSIM-SDF-PORTABLE-004` | error | Portable SDF archive encoding, decoding, or mapped-library loading exceeds a configured byte, record, string, or identity limit. |
+
 ## Precompiled library artifacts
 
 | Code | Severity | Meaning |

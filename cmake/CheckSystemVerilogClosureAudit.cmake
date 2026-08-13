@@ -202,8 +202,8 @@ foreach(FSIM_TOKEN IN ITEMS
     "Exactly 14"
     "registered tests cover 17"
     "165.34 seconds"
-    "2,246 production diagnostics, 887 bounded"
-    "1,035 SPDX-owned files, and 332 authored test/control files"
+    "2,324 production diagnostics, 925 bounded"
+    "1,083 SPDX-owned files, and 346 authored test/control files"
     "not SystemVerilog legality limits")
   string(FIND "${FSIM_AUDIT_CONTENTS}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)
   if(FSIM_TOKEN_INDEX EQUAL -1)

@@ -8,8 +8,9 @@ Fsim implements a governed digital VHDL-2008 boundary with an embedded IEEE
 witnesses, no active row is unresolved, and four boundaries are explicitly
 deferred.
 
-The deferrals are VHDL-AMS, SDF parsing and backannotation (owned by Batch
-170), PSL features beyond the embedded digital subset, and post-2008/vendor
+The deferrals are VHDL-AMS, SDF backannotation (parsing, resolution and
+portable persistence are complete in Batch 168; timing application is owned by
+Batch 170), PSL features beyond the embedded digital subset, and post-2008/vendor
 extensions. This is a closed support statement for the inventoried boundary,
 not a claim of exhaustive IEEE 1076 or IEEE 1850 conformance.
 

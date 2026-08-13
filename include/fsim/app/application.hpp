@@ -65,6 +65,8 @@ class HierarchyRegistry;
 
 namespace fsim::app {
 
+class SdfPhaseArtifact;
+
 struct CheckedSource {
     std::filesystem::path path;
     std::string language;
@@ -244,6 +246,8 @@ struct BuiltProject {
         verilog_unit_revisions;
     std::map<std::string, std::string, std::less<>>
         verilog_unit_compatibility_profiles;
+    /// Validated immutable SDF state carried across non-project phase boundaries.
+    std::vector<std::shared_ptr<const SdfPhaseArtifact>> sdf_phase_artifacts { };
 };
 
 [[nodiscard]] std::vector<VerilogScopeProvenance>

@@ -1561,14 +1561,19 @@ Deferred rows are not release blockers unless the v1 scope is explicitly
 changed and the row is promoted to a required section.
 
 The later v2 Batch 163 closure supersedes the broad `D-VH-01` PSL/VHPI
-deferral for its documented digital subset only. The authoritative
+deferral for its documented digital subset only. Batch 168 also supersedes the
+SDF parsing portions of `D-VH-01` and `D-SV-02`: SDF 2.1/3.0/4.0 parsing,
+normalization, mixed-language hierarchy resolution and portable persistence are
+implemented, while Batches 169-170 still own application to
+Verilog/SystemVerilog and VHDL/VITAL runtime timing. The authoritative
 [`vhdl_psl_gap_inventory.tsv`](../tests/feature_matrix/vhdl_psl_gap_inventory.tsv)
 now contains 29 supported VHDL-2008/embedded-PSL rows, zero unresolved active
 rows, and four narrower deferrals; the 44-row
 [`vhdl_psl_release_closure.tsv`](../tests/feature_matrix/vhdl_psl_release_closure.tsv)
 governs engine, artifact, platform, resource, and installed-public evidence.
-VHDL-AMS, SDF, PSL beyond that embedded subset, and post-2008/vendor extensions
-remain deferred. See [`vhdl-psl.md`](vhdl-psl.md) for the current boundary.
+VHDL-AMS, SDF backannotation, PSL beyond that embedded subset, and post-2008/
+vendor extensions remain deferred. See [`vhdl-psl.md`](vhdl-psl.md) and
+[`sdf.md`](sdf.md) for the current boundaries.
 
 ## Release-gate rule
 

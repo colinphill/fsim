@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: Apache-2.0
+(DELAYFILE
+  (SDFVERSION "4.0")
+  (DESIGN "mixed")
+  (DIVIDER /)
+  (TIMESCALE 1 ns)
+  (CELL (CELLTYPE "top") (INSTANCE top)
+    (DELAY (ABSOLUTE
+      (IOPATH A[0] Z (1:2:3))
+      (COND (EN == 1) (IOPATH A[1] Z (2:3:4)))
+      (INTERCONNECT A[3] net[1] (1:2:3))
+      (PORT Z (1:2:3))))
+    (TIMINGCHECK (SETUP A[0] CLK (1:2:3))))
+  (CELL (CELLTYPE "gate") (INSTANCE *)
+    (DELAY (ABSOLUTE (IOPATH A Z (1:2:3)))))
+  (CELL (CELLTYPE "native_top") (INSTANCE native)
+    (DELAY (ABSOLUTE (IOPATH in out (1:2:3))))))

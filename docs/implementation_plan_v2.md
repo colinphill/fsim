@@ -18,6 +18,11 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
   warnings-as-errors builds and targeted tests.
 - Change 20 owns the full exact-LLVM Debug and Release regressions,
   documentation, one commit, and one push.
+- Release builds and testing are not required during Changes 1 through 19;
+  run them only as part of the final Change 20 batch checks.
+- Avoid header-only formatting changes that induce long rebuilds. Edit headers
+  only for required semantic changes, and keep formatting work confined to
+  changed implementation source where practical.
 - Until fsim has external users and a separately declared stable-format
   release boundary, every manifest, library, object, design, checkpoint,
   runtime-state, HIR/IR and native-cache schema is development-only. A schema
@@ -9124,103 +9129,446 @@ carry an explicit evidence-backed scope disposition approved by the user.
   language annotation remains Batch 170. Preserve exact decimal/triple values,
   arbitrary hierarchy depth, source spans and existing portable-artifact
   rejection guarantees without copying unlicensed standard text.
-- **Change 1:** freeze authoritative SDF revision, lexical, header, cell,
-  delay, timing-check, normalization, resolution, artifact and resource
-  inventories. Assign every obligation one-to-one to Changes 2-18 with exact
-  positive, negative, revision, coordinate, round-trip and resource owners;
-  register the inventory and its stable digest before implementation expands.
-- **Change 2:** add a bounded SDF lexer retaining comments, quoted strings,
-  escaped and divider-qualified identifiers, keywords, delimiters, signed
-  decimal/realtime values, min/typ/max triples and exact byte/line/column spans.
-  Reject invalid bytes, unterminated forms, numeric overflow and governed token/
-  nesting/resource limits with stable source-owned diagnostics.
-- **Change 3:** parse the complete SDF 4.0 file/header surface, including
-  revision, design, date, vendor, program/version, hierarchy divider, voltage,
-  process, temperature and timescale records. Preserve optionality, ordering,
-  exact values and original/canonical identities while diagnosing duplicates,
-  incompatible headers and unsupported future revisions.
-- **Change 4:** parse the complete SDF 4.0 cell, instance, delay, timing-check,
-  timing-environment, label, conditional, edge, port/interconnect/device/path,
-  retain/pulse and incremental/absolute construct families into syntax nodes.
-  Cover legal empty/optional/list forms and issue precise construct-owned
-  diagnostics for malformed arity, ordering, selectors and conditions.
-- **Change 5:** accept SDF 2.1 only through an explicit typed revision adapter.
-  Map every legal 2.1 header and delay/timing-check form to the common syntax
-  vocabulary, retain original revision/provenance and reject later-only forms
-  rather than silently parsing them as SDF 4.0.
-- **Change 6:** accept SDF 3.0 only through an independent typed revision
-  adapter. Preserve its exact supported construct/profile differences, retain
-  original revision/provenance and reject 4.0-only forms at the narrowest
-  stable source boundary without contaminating the 2.1 or 4.0 profiles.
-- **Change 7:** normalize decimal values, min/typ/max triples, timescale units,
-  scaling, edges, conditions, hierarchy dividers and escaped names into exact
-  canonical values. Detect overflow, invalid scaling and lossy conversion;
-  never select min/typ/max or simulator time precision during parsing.
-- **Change 8:** lower every accepted revision's delay, timing-check, timing-
-  environment and label construct into one immutable ordered SDF IR with stable
-  node/source identities, canonical equality and deterministic introspection.
-  Prove equivalent 2.1/3.0/4.0 inputs normalize identically where their
-  semantics overlap and remain distinct where the standards differ.
-- **Change 9:** define explicit annotation scope over one selected elaborated
-  root or a deterministic set of roots. Bind SDF source identity, design name,
-  hierarchy divider and case policy to that scope; reject missing, stale or
-  cross-project scopes before publishing any resolved mapping.
-- **Change 10:** resolve celltype, exact instance, wildcard instance and divider-
-  qualified hierarchy names against elaborated multi-root designs. Preserve
-  declaration/elaboration identities, deterministic match order and empty-
-  instance semantics; diagnose missing and ambiguous cells with actionable
-  candidate paths.
-- **Change 11:** resolve ports, port instances, nets/interconnects, device/path
-  endpoints and timing-check signals/conditions against Verilog,
-  SystemVerilog, VHDL/VITAL and native-SystemC proxy boundaries without
-  applying timing. Preserve language ownership, vector selectors, edge forms
-  and exact mixed-language conversion endpoints.
-- **Change 12:** validate the complete resolved mapping for duplicates,
-  conflicts, unsupported object kinds, direction/width/select mismatches,
-  overlapping wildcard/exact matches and unconsumed constructs. Emit stable
-  deterministic missing/ambiguous/conflict diagnostics and publish an
-  immutable annotation summary only after the whole mapping succeeds.
-- **Change 13:** version normalized SDF syntax/IR and resolved-mapping schemas;
-  retain source checksum, canonical revision, headers, exact source spans,
-  parse/normalization options and compiler compatibility identity. Reject
-  omitted, duplicate, reordered, stale, corrupt and future-schema records
-  before partial materialization.
-- **Change 14:** preserve exact timescale, min/typ/max selection policy,
-  annotation scope, source/design digests and resolved semantic-unit/object
-  identities in portable design artifacts and cache/specialization keys.
-  Prove deterministic invalidation for source, revision, option, hierarchy and
-  selected-root changes without path-dependent cache identity.
-- **Change 15:** preserve normalized and resolved SDF through analyzed
-  libraries, mapped libraries, design save/load, relocation and source-hidden
-  consumption. Reconstruct mappings against archived semantic identities,
-  reject incompatible library/design combinations and avoid re-resolving an
-  archived annotation under language-wide defaults.
-- **Change 16:** preserve SDF state through direct compile/object/elaborate/
-  design/simulate phases, interpreter/LLVM consumers and cold/warm native
-  caches. Remove producer source/object paths, relocate outputs and prove exact
-  standalone round trips plus deterministic partial/stale/corrupt rejection;
-  simulator timing remains deliberately unchanged in this batch.
-- **Change 17:** publish authoritative clean-room SDF 2.1, 3.0 and 4.0 positive
-  corpora covering headers, dividers/escaping, decimals/triples, conditions,
-  cells, delays, timing checks, timing environments, normalization and exact/
-  wildcard mixed-hierarchy resolution with retained parser/mapping summaries.
-- **Change 18:** add exhaustive lexical/parser/revision/schema/corruption,
-  missing/ambiguous/conflict, relocation/cache and governed depth/token/memory/
-  time negatives. Run retained-log interpreter/LLVM, mixed-language,
-  Linux/MSVC and portable-artifact differentials that verify progress, expected
-  diagnostics and resource ceilings rather than trusting exit status alone.
-- **Change 19:** synchronize public CLI/API and format documentation,
-  architecture, language support, diagnostics, feature/evidence matrices,
-  inventories, counts, digests and this restart handoff. State explicitly that
-  Batch 168 resolves and persists SDF but Batches 169-170 own application to
-  Verilog/SystemVerilog and VHDL/VITAL timing behavior.
-- **Change 20:** run fresh clean-first exact-LLVM Debug and Release eight-worker
-  builds, complete non-sanitized regressions and every release gate with
-  retained timing/RSS/swap/transcript evidence. Release build/testing is not
-  required before this final batch check. Avoid formatting-only public-header
-  churn that would induce broad rebuilds. This is not a hosted-CI monitoring
-  boundary; commit and push the accumulated implementation once after all
-  local gates pass, then save and push the exact Batch 169 restart plan.
+- **Change 1: Complete.** The authoritative 17-row SDF ledger assigns Changes
+  2-18 one-to-one across lexical, header, SDF 4.0 construct, SDF 2.1/3.0
+  adapter, exact-value normalization, immutable IR, annotation scope, instance/
+  endpoint resolution, whole-mapping validation, schema, artifact identity,
+  library/relocation, non-project/cache, corpus and closure domains. Every
+  active row binds all three governed revisions plus exact implementation,
+  positive, negative, revision, diagnostic-coordinate, portable-round-trip,
+  diagnostic-catalog and resource owners. The registered validator freezes row
+  order, plan allocation, unique IDs/closures, path classes and SHA-256 identity
+  `55025a506669f4596b9962e06e6f75dc6546bc55ec6e50523b44382ed55727af`.
+  The exact-LLVM Debug tree regenerates without a source rebuild; inventory,
+  diagnostic-catalog and source-budget gates pass 3/3 in 0.25 seconds. No
+  Release qualification, sanitizer, hosted-CI inspection or header formatting
+  ran. Preserve Change 1 and proceed to Change 2 in the same accumulated
+  worktree.
+- **Change 2: Complete.** A standalone clean-room SDF lexer retains line/block
+  comments, raw quoted strings, plain and escaped divider-qualified names,
+  canonical keyword classification, structural delimiters, signed decimal/
+  realtime spellings and min/typ/max separators with exact physical byte and
+  logical line/column spans across LF, CRLF and CR. It recovers from invalid
+  control bytes and unmatched delimiters, diagnoses unterminated comments/
+  strings, dangling escapes and malformed exponents, and stops deterministically
+  at configurable 64 MiB source, 1,000,000-token, 4,096-depth, 1 MiB token and
+  4,096-byte numeric ceilings. Eleven `FSIM-SDF-LEX-*` diagnostics are cataloged.
+  The dedicated warning-clean Debug target and existing frontend pass with the
+  inventory, diagnostic and source gates 5/5 in 0.25 seconds. Graph audit
+  reports maximum cognitive complexity 25, loop depth 1, no scan-in-loop site
+  and no recursion. The ledger preserves Change 2 with sixteen active rows and
+  SHA-256 identity
+  `27f6590b53d323f6f961dd87ebb0bd5cca87be317caa68b2ff1f47f34c79045a`.
+  Pinned formatting touched only the two new `.cpp` files; the new public
+  header received no formatting-only churn. No Release qualification,
+  sanitizer or hosted-CI inspection ran. Preserve Changes 1-2 and proceed to
+  Change 3 in the same accumulated worktree.
+- **Change 3: Complete.** The typed SDF parser validates the DELAYFILE root and
+  complete ordered SDFVERSION, DESIGN, DATE, VENDOR, PROGRAM, VERSION, DIVIDER,
+  VOLTAGE, PROCESS, TEMPERATURE and TIMESCALE surface. It retains original
+  keyword/value spellings, decoded canonical strings, exact single/triple
+  decimals, normalized divider/timescale identity, all comments/tokens,
+  physical source spans and ordered raw CELL forms for Change 4. Known 2.1/3.0
+  and unknown future revisions retain their selected identity but receive the
+  adapter-owned rejection; ten `FSIM-SDF-PARSE-*` diagnostics cover root/form,
+  arity/value, duplicate, revision, order, required header, late header,
+  unsupported body and trailing-token failures. The warning-clean Debug parser,
+  lexer and existing frontend targets pass with inventory, catalog and source
+  gates 6/6 in 0.25 seconds. Graph audit reports maximum cognitive complexity
+  23, loop depth 1, no scan-in-loop site and no recursion. The ledger preserves
+  Changes 2-3 with fifteen active rows and SHA-256 identity
+  `ee048625fa4588fc6efebb89e797062a77c69857b4d0449c0a9dda3896257f4f`.
+  Pinned formatting touched only the new parser/test `.cpp` files; the semantic
+  public-header addition received no formatting-only churn. No Release
+  qualification, sanitizer or hosted-CI inspection ran. Preserve Changes 1-3
+  and proceed to Change 4 in the same accumulated worktree.
+- **Change 4: Complete.** The non-recursive SDF 4.0 construct parser lowers
+  every retained CELL into typed celltype and distinct exact, wildcard or
+  empty instance selectors plus ordered token-addressable syntax nodes. Delay,
+  ABSOLUTE/INCREMENT, IOPATH/RETAIN, conditional/else, edge, port,
+  interconnect, device, MIPD and pulse forms; every timing-check and optional
+  condition family; timing-environment constraints, paths, arrival/departure,
+  slack/waveform/exception; and arbitrary label entries retain original
+  keyword/value spellings and physical spans. Legal empty values, partial
+  triples, lists and grouped conditions are preserved. Ten cataloged
+  construct-owned diagnostics distinguish CELL/CELLTYPE/INSTANCE, placement,
+  arity, value, edge, condition, ordering and unknown-form failures. The
+  warning-clean Debug construct, parser, lexer and existing frontend targets
+  pass with inventory, catalog and source gates 7/7 in 0.29 seconds. Graph
+  audit reports maximum cognitive complexity 25, bounded local loop depth 2
+  for the iterative worklist, and no recursion. The ledger preserves Changes
+  2-4 with fourteen active rows and SHA-256 identity
+  `6eaa4d43839cae37a0b454b8f73a24a3e3f715b192f0c83c10f9e4fd38c7e7d5`.
+  Pinned formatting touched only the construct parser/test `.cpp` files; the
+  public-header edits were semantic only. No Release qualification, sanitizer
+  or hosted-CI inspection ran. Preserve Changes 1-4 and proceed to Change 5 in
+  the same accumulated worktree.
+- **Change 5: Complete.** A dedicated OVI SDF 2.1 adapter retains the original
+  version string and explicit adapter identity, accepts decimal 1/10/100
+  us/ns/ps timescales, repeated INSTANCE path segments, the physical-primitive
+  wildcard restriction, CORRELATION, PATHPULSE/GLOBALPATHPULSE, NETDELAY,
+  legacy 01/10/x-to-z edge spellings, governed 1/2/3/6/12 delay lists, and the
+  complete 2.1 timing-check/constraint surface still nested under
+  TIMINGCHECK. It maps those forms into the common typed syntax vocabulary
+  while rejecting 3.0/4.0-only spellings, condition labels, CONDELSE, RETAIN,
+  combined/removal checks, TIMINGENV and LABEL without enabling the still
+  independent 3.0 adapter. Six cataloged adapter diagnostics cover profile,
+  repeated-instance/correlation, mixed scalar/triple, delay-list, constraint
+  and timescale failures. The warning-clean Debug adapter and all prior SDF/
+  frontend targets pass with inventory, catalog and source gates 8/8 in 0.28
+  seconds. Graph audit reports maximum cognitive complexity 19, bounded local
+  loop depth 2 and no recursion. The ledger preserves Changes 2-5 with thirteen
+  active rows and SHA-256 identity
+  `f0ace636e3c9339a26335bd1d40cc3eb564254ecd5bac7467a453941cfd82b0f`.
+  Pinned formatting touched only changed `.cpp` files; the public-header edits
+  were semantic only. No Release qualification, sanitizer or hosted-CI
+  inspection ran. Preserve Changes 1-5 and proceed to Change 6 in the same
+  accumulated worktree.
+- **Change 6: Complete.** An independent OVI SDF 3.0 adapter retains exact
+  version and adapter provenance, accepts its single divider-qualified or
+  wildcard/empty INSTANCE form, decimal legacy timescale, modern pulse and
+  embedded pulse-limit delay lists, named conditions, CONDELSE, RETAIN,
+  REMOVAL/RECREM, combined checks and the complete TIMINGENV family. Removed
+  2.1 CORRELATION, GLOBALPATHPULSE and NETDELAY plus IEEE 4.0 LABEL and MIPD
+  remain rejected without changing either neighboring revision profile.
+  Four cataloged diagnostics own profile, repeated-instance, timescale and
+  delay-list/value-style failures. The warning-clean Debug adapter and all
+  prior SDF/frontend targets pass with inventory, catalog and source gates 9/9
+  in 0.25 seconds. Graph audit reports maximum cognitive complexity 13,
+  bounded local loop depth 2 and no recursion. The ledger preserves Changes
+  2-6 with twelve active rows and SHA-256 identity
+  `3688226ce242c2b7e04efc7f021e4c1616fac1aabc2a42e15556680b98742908`.
+  Pinned formatting touched only changed `.cpp` files; public-header edits were
+  semantic only. No Release qualification, sanitizer or hosted-CI inspection
+  ran. Preserve Changes 1-6 and proceed to Change 7 in the accumulated
+  worktree.
+- **Change 7: Complete.** Exact normalization now represents every decimal as
+  an unbounded governed coefficient plus checked base-ten exponent, preserves
+  empty/scalar and all three present-or-missing min/typ/max slots, and scales
+  time values to exact rational femtoseconds without floating point. Typed
+  timescale units, case-stable edges, exact condition atoms, divider-independent
+  hierarchy segments and escaped-name characters retain canonical identities.
+  A bounded exact-integer conversion API reports loss and expansion overflow
+  instead of rounding; parsing selects neither a triple component nor simulator
+  precision. Four cataloged `FSIM-SDF-NORM-*` diagnostics own exponent, shape,
+  scaling and hierarchy failures. Positive evidence includes 4,000-digit
+  coefficients, negative zero, partial triples, sub-femtosecond values and
+  equivalent 2.1/3.0/4.0 inputs. The warning-clean Debug targets plus inventory,
+  catalog and source gates pass 10/10 in 0.55 seconds. Graph audit reports
+  maximum cognitive complexity 17, bounded iterative loop depth 2, no scan in
+  loop and no recursion. The ledger preserves Changes 2-7 with eleven active
+  rows and SHA-256 identity
+  `8cc096a2ea6a05d97ae473f34c2bdc3a11a84f000e72fb95b4748f82ac4878fd`.
+  Pinned formatting touched only changed `.cpp` files; required public-header
+  additions were semantic and no formatting-only header churn occurred. No
+  Release qualification, sanitizer or hosted-CI inspection ran. Preserve
+  Changes 1-7 and proceed to Change 8 in the accumulated worktree.
+- **Change 8: Complete.** Every accepted revision now transactionally lowers
+  cells plus all delay, timing-check, timing-environment and label descendants
+  into one immutable `shared_ptr<const SdfIr>` snapshot. A single deterministic
+  pre-order vector retains contiguous node IDs, cell/parent/sibling/depth
+  relationships, exact/scaled values, canonical atoms, token intervals, spans,
+  structural source IDs and revision-specific profile identity. Length-framed
+  canonical serialization provides collision-free semantic equality while
+  revision, adapter, source path and coordinates remain independently
+  introspectable. Equivalent 2.1/3.0/4.0 fixtures compare equal despite spelling,
+  repeated-instance and provenance differences; SDF 2.1's physical-only
+  wildcard remains distinct. Two cataloged `FSIM-SDF-IR-*` diagnostics reject
+  incomplete normalized state and governed cell/node/identity/depth resource
+  exhaustion before publication. The warning-clean Debug targets, inventory,
+  catalog and source gates pass 11/11 in 0.54 seconds. Graph audit reports
+  maximum cognitive complexity 8, loop depth 1, no scan in loop and no
+  recursion. The ledger preserves Changes 2-8 with ten active rows and SHA-256
+  identity
+  `2f090531c6e8feeaa6c57256e77c9482cd437b11e7509bfe9a9b3039d94f51e1`.
+  Pinned formatting touched only changed `.cpp` files; required public-header
+  additions were semantic and no formatting-only header churn occurred. No
+  Release qualification, sanitizer or hosted-CI inspection ran. Preserve
+  Changes 1-8 and proceed to Change 9 in the accumulated worktree.
+- **Change 9: Complete.** A transactional annotation-scope binder now selects
+  exactly one elaborated root, an explicit root set or all roots in canonical
+  lexical order. The immutable scope retains the normalized IR and its
+  semantic source identity, independent source provenance, optional DESIGN
+  header, hierarchy divider, exact project/design identities and each root's
+  selected HDL/SystemC semantic unit, language and hierarchy case policy.
+  It rejects incomplete IR, malformed/duplicate/missing roots, conflicting or
+  empty elaborated identities, cross-project ownership, stale designs and
+  governed root/identity exhaustion without publishing partial scope state.
+  SDF 2.1/3.0/4.0, relocated-source, mixed Verilog/SystemVerilog/VHDL/SystemC,
+  deterministic-order and diagnostic-coordinate evidence is registered in a
+  dedicated warning-clean Debug target. Focused dependent, inventory, catalog
+  and source gates pass 12/12 in 0.56 seconds. Graph audit reports maximum
+  cognitive complexity 16, loop depth 1, no scan in loop and no recursion. The
+  ledger preserves Changes 2-9 with nine active rows and SHA-256 identity
+  `f1b381a55dada1ecbe77903370c38f9879ed38521d27f17afbf882b2f2e17bbd`.
+  Pinned formatting touched only the new implementation/test `.cpp` files;
+  the new semantic header received no formatting-only churn. No Release
+  qualification, sanitizer or hosted-CI inspection ran. Preserve Changes 1-9
+  and proceed to Change 10 in the accumulated worktree.
+- **Change 10: Complete.** Transactional cell resolution now catalogs HDL and
+  native-SystemC instances beneath the selected roots, reconstructs structural
+  hierarchy segments from semantic parents (including escaped divider
+  characters), and applies the owning parent language's case policy to each
+  instance label. CELLTYPE matching retains VHDL configured-entity identity,
+  exact selectors accept full or scope-relative names, empty INSTANCE selects
+  matching roots, and wildcards publish all type matches in lexical path order
+  while retaining the SDF 2.1 physical-cell restriction. Every target retains
+  its root, elaborated path, unit/configuration identity, declaration ID,
+  language, case policy and physical-cell profile. Missing and ambiguous cells
+  report stable actionable candidates; stale/missing/duplicate hierarchy and
+  candidate/match/identity exhaustion publish no partial result. The dedicated
+  warning-clean Debug target covers SDF 2.1/3.0/4.0, multi-root mixed-language,
+  configuration, relative/full/escaped/exact/wildcard/empty, coordinates and
+  resources. Focused dependent, inventory, catalog and source gates pass 13/13
+  in 0.55 seconds at 91,540 KiB peak RSS with zero swaps. Graph audit reports
+  maximum cognitive complexity 18, loop depth 2, ten bounded string/path scan
+  sites, no candidate-quadratic scan and no recursion. The ledger preserves
+  Changes 2-10 with eight active rows
+  and SHA-256 identity
+  `bf574b388323960b4e1d74b41322155b285aedfff2f34c721c98b577c9def135`.
+  Pinned formatting touched only the new
+  implementation/test `.cpp` files; the new semantic header received no
+  formatting-only churn. No Release qualification, sanitizer or hosted-CI
+  inspection ran. Preserve Changes 1-10 and proceed to Change 11 in the
+  accumulated worktree.
+- **Change 11: Complete.** Transactional endpoint resolution binds ports, port
+  instances, nets, interconnects, devices, path terminals, timing-check
+  signals and identifiable condition signals against elaborated Verilog,
+  SystemVerilog, VHDL/VITAL and native-SystemC proxy objects without applying
+  timing. Every immutable mapping retains its SDF node/cell and exact target,
+  dense signal/object identity, language and direction, vector bit/range
+  selector, edge/condition identity, mixed-language boundary-conversion kind
+  and peer, plus stable retained specify-path or timing-check identity when a
+  unique semantic object exists. Full and cell-relative names obey the owning
+  language's hierarchy case policy; empty DEVICE selectors expand to the
+  cell's output-port set; deterministic lookup returns all mappings for one IR
+  node. Five cataloged diagnostics reject incomplete/stale mappings, missing
+  endpoints with actionable candidates, ambiguity, undecodable endpoint
+  constructs and governed node/candidate/mapping/endpoint/identity exhaustion
+  without publishing a partial result. SDF 2.1/3.0/4.0 identities are
+  deterministic and revision-equivalent fixtures retain equal resolved state.
+  The warning-clean eight-worker Debug build and 13 focused SDF, application,
+  diagnostic-catalog, source-budget and inventory gates pass in 0.45 seconds
+  at 20,068 KiB peak RSS with zero swaps. Graph audit reports maximum cognitive
+  complexity 17, local loop depth 2, four bounded scan-in-loop sites, indexed
+  per-cell node traversal instead of target-by-whole-IR rescanning, and no
+  recursion. The ledger preserves Changes 2-11 with seven active rows and
+  SHA-256 identity
+  `f8ec33725de8c7a321d31c9e6e97db88608aab7827a453310c0682dea5abe866`.
+  Pinned formatting touched only the implementation/test `.cpp` files; the
+  new semantic public header received no formatting-only churn. No Release
+  qualification, sanitizer or hosted-CI inspection ran. Preserve Changes 1-11
+  and proceed to Change 12 in the accumulated worktree.
+- **Change 12: Complete.** A transactional whole-mapping validator rechecks
+  normalized-IR, cell, target, signal, native-SystemC object and conversion
+  ownership before publishing an immutable annotation summary. It requires
+  deterministic node/target order and complete one-to-one consumption of every
+  endpoint-bearing construct, rejects duplicate node/target pairs, endpoints
+  and semantic application keys, and distinguishes duplicate, conflicting and
+  unsupported/unconsumed mappings. Exact object kind, port direction, object
+  width, bit/range selector, language, conversion peer and wildcard-versus-
+  explicit cell ownership are validated against the elaborated design. The
+  successful summary retains its endpoint-resolution snapshot, canonical
+  per-cell/target annotation and endpoint totals, sorted unique signal IDs,
+  delay/timing-check/timing-environment counts and a bounded deterministic
+  semantic identity; failures publish no partial summary. Five cataloged
+  `FSIM-SDF-MAP-*` diagnostics own stale/incomplete, duplicate, conflict,
+  unsupported/unconsumed and resource failures with exact SDF coordinates.
+  SDF 2.1/3.0/4.0 equivalent mappings and repeated validation produce equal
+  summaries. The warning-clean eight-worker Debug build and 14 focused SDF,
+  application, diagnostic-catalog, source-budget and inventory gates pass in
+  0.46 seconds at 20,164 KiB peak RSS with zero swaps. Graph audit reports
+  maximum cognitive complexity 12, local loop depth 2, one bounded
+  scan-in-loop site and no recursion. The ledger preserves Changes 2-12 with
+  six active rows and SHA-256 identity
+  `ee7136ce5cfe34fbd1e03df1549ac2f2c93a5e3bf1c31daf6ce4de30edd01ae1`.
+  Pinned formatting touched only the implementation/test `.cpp` files; the
+  new semantic public header received no formatting-only churn. No Release
+  qualification, sanitizer or hosted-CI inspection ran. Preserve Changes 1-12
+  and proceed to Change 13 in the accumulated worktree.
+- **Change 13: Complete.** A bounded, ordered binary SDF schema envelope now
+  versions the envelope, syntax, normalized IR, endpoint resolution and mapping
+  summary independently. It retains the canonical governed revision and
+  adapter, SHA-256 source checksum, parse/normalization option identities,
+  compiler-compatibility identity, exact file/header spellings and physical
+  source spans including expansion provenance, immutable IR/resolution/summary
+  identities and exact cell/node/mapping counts. Every length-delimited record
+  has a fixed unique order and the complete payload has its own SHA-256
+  checksum. The all-or-nothing decoder validates all sizes, enum values,
+  versions, ordering, required fields, nested strings/spans, payload checksum,
+  compiler identity and optional expected mapping identity before publishing
+  an immutable snapshot. Five cataloged diagnostics distinguish incomplete or
+  stale producers, future schemas, compatibility staleness, corrupt/omitted/
+  duplicate/reordered/truncated fields and resource exhaustion. Dedicated
+  evidence covers deterministic SDF 2.1/3.0/4.0 envelopes, exact metadata
+  round trips, truncation, reordering/omission, corruption, future versions,
+  stale compiler/mapping identities and encode/decode ceilings. The warning-
+  clean eight-worker Debug build and 15 focused SDF, application, catalog,
+  source and inventory gates pass in 0.46 seconds at 20,332 KiB peak RSS with
+  zero swaps. Graph audit reports maximum cognitive complexity 20, local loop
+  depth 2, one bounded scan-in-loop site and no recursion. The ledger preserves
+  Changes 2-13 with five active rows and SHA-256 identity
+  `930ccb69473c04471eda4f43b1bbfd7587fc7d99aeee895a644dd8d8bab88273`.
+  Pinned formatting touched only the implementation/test `.cpp` files; the
+  semantic public header received no formatting-only churn. No Release,
+  sanitizer or hosted-CI inspection ran. Preserve Changes 1-13 and proceed to
+  Change 14 in the accumulated worktree.
+- **Change 14: Complete.** Preserve exact timescale, min/typ/max selection
+  policy, annotation scope, source/design digests and resolved semantic-unit/
+  object identities in portable design artifacts and cache/specialization
+  keys. Format-9 `.fsimdesign` metadata now owns ordered SDF annotation records
+  containing governed revision/adapter, exact optional timescale, selection
+  policy, scope, content and design digests, IR/resolution/mapping identities,
+  selected roots, resolved semantic units and hashed semantic objects. The
+  transactional builder verifies the complete schema-to-mapping ownership
+  chain, applies materialization budgets, composes design and specialization
+  cache keys and recomputes the artifact digest only after success. Dedicated
+  evidence proves deterministic source, revision, policy, hierarchy and
+  selected-root invalidation, exact format-9 round trips, duplicate/stale/
+  resource rejection, and identical identities after source-path relocation
+  while the coordinate envelope remains path-sensitive. The warning-clean
+  eight-worker Debug build and 17 focused SDF, artifact, catalog, source and
+  inventory gates pass in 0.47 seconds at 20,212 KiB peak RSS with zero swaps.
+  Graph audit reports maximum cognitive complexity 10, local loop depth 2, no
+  scan-in-loop site and no recursion for Change-14-owned code; the factored
+  legacy artifact decoder remains at its pre-change cognitive score 56. The
+  ledger preserves Changes 2-14 with four active rows and SHA-256 identity
+  `0a5ed4a27c4fb6f60ce4318dd09256dca637406d644659e25dd2d4f29702ccf0`.
+  Pinned formatting was confined to the new implementation/test `.cpp` files;
+  both semantic public headers and the legacy artifact implementation avoided
+  formatting-only churn. No Release, sanitizer or hosted-CI inspection ran.
+  Preserve Changes 1-14 and proceed to Change 15 in the accumulated worktree.
+- **Change 15: Complete.** A checksummed `FSDFPORT` schema-1 archive preserves
+  every normalized cell/node and resolved cell/endpoint mapping beside the
+  exact schema envelope and format-9 artifact identity. Archived mappings
+  retain target paths and IDs plus hashed semantic unit/object identities, so
+  consumers verify the selected design identity and reconstruct immutable
+  state without resolving source again under language-wide defaults. Generic
+  analyzed-library metadata now indexes an exact revision/cache/profile-
+  qualified SDF unit; standalone designs index the same bytes as an `sdf:`
+  payload. Dedicated evidence publishes an analyzed library, physically
+  relocates it, hides the producer source, reloads its mapping state, then
+  publishes and reloads a standalone design. Corrupt/future/truncated/
+  checksum, mapping-identity, incompatible library/design and byte/record/
+  string/identity resource failures are transactional and own four cataloged
+  diagnostics. The warning-clean eight-worker Debug build and 19 focused SDF,
+  project, library, design-artifact, catalog, source and inventory gates pass
+  in 0.62 seconds at 20,180 KiB peak RSS with zero swaps. Graph audit reports
+  maximum cognitive complexity 10, local loop depth 2, one bounded generic
+  decode scan-in-loop site and no recursion. The ledger preserves Changes 2-15
+  with three active rows and SHA-256 identity
+  `13d5037c85186a377d5faf4cb115e0c022014ef6c8a52ebacf62a60bb29e7d6d`.
+  Pinned formatting was confined to the new implementation/test `.cpp` files;
+  semantic public headers and legacy artifact sources received no formatting-
+  only churn. No Release, sanitizer, hosted-CI inspection, reset, commit or
+  push ran. Preserve Changes 1-15 and proceed to Change 16 in the accumulated
+  worktree.
+- **Change 16: Complete.** Validated immutable SDF phase artifacts now travel
+  on the built-project owner, publish as exact `sdf:` design payloads and
+  restore transactionally into the standalone project before any simulation
+  consumer is constructed. Fresh annotations compose design and specialization
+  cache identities once; reloaded archives retain that composition, and the
+  portable UVM bootstrap is regenerated against the composed cache identity so
+  all state projections remain consistent. The production non-project
+  regression compiles and reloads portable HDL objects, resolves a real SDF
+  interconnect, publishes the base and annotated designs, hides the SDF source,
+  relocates the standalone design and reconstructs exact normalized/mapping
+  state. Interpreter, LLVM cold/warm and relocated-warm execution all stop at
+  the unchanged tick 3, proving this batch does not apply timing. Missing,
+  stale and corrupt SDF design state rejects before execution. The warning-
+  clean eight-worker Debug build and 20 focused SDF, phase, project, library,
+  design-artifact, catalog, source and inventory gates pass in 31.54 seconds at
+  323,920 KiB peak RSS with zero swaps. Change-16-owned graph complexity peaks
+  at cognitive 15 and loop depth 2 with three bounded scan-in-loop sites and no
+  recursion; factored legacy publish/load functions are cognitive 34/33. The
+  ledger preserves Changes 2-16 with two active rows and SHA-256 identity
+  `b82fe415ba73daba25ce1002e47928bf7f25e5d96414b1a0e59db2d4957dd843`.
+  Pinned formatting touched only the new implementation `.cpp`; the one
+  necessary semantic project-state header addition and both legacy phase/test
+  sources received no formatting-only churn. No Release, sanitizer, hosted-CI
+  inspection, reset, commit or push ran. Preserve Changes 1-16 and proceed to
+  Change 17 in the accumulated worktree.
+- **Change 17: Complete.** Six checked-in clean-room corpus files are indexed by
+  SDF 2.1, 3.0 and 4.0 revision with independent profile and mixed-resolution
+  inputs. Profile corpora cover all ordered headers, divider-qualified names,
+  exact signed decimal/triple/timescale values, exact/wildcard/empty cells,
+  revision-legal condition, delay, timing-check and timing-environment families
+  and immutable normalized identities. Mixed-resolution corpora use exact
+  Verilog and native-SystemC cells plus a wildcard physical VHDL cell, resolve
+  ports/nets/selectors, conditions, IOPATH, INTERCONNECT and SETUP constructs,
+  and publish deterministic whole-mapping summaries. The dedicated retained-
+  summary runner emits one stable PASS signature for three revisions and six
+  files. The warning-clean eight-worker Debug build and 20 focused SDF,
+  project, library, design-artifact, catalog, source and inventory gates pass
+  in 0.53 seconds at 20,208 KiB peak RSS with zero swaps. Graph audit reports
+  maximum cognitive complexity 5, local loop depth 1, no scan-in-loop site and
+  no recursion. The ledger preserves Changes 2-17 with one active row and
+  SHA-256 identity
+  `17b890c8054656c85f847c6e37daea2532ecf1d885a762de9abe96417d727794`.
+  Pinned formatting touched only the new corpus-runner `.cpp`; no header or
+  legacy source formatting ran. No Release, sanitizer, hosted-CI inspection,
+  reset, commit or push ran. Preserve Changes 1-17 and proceed to Change 18
+  retained-log negative and differential closure in the accumulated worktree.
+- **Change 18: Complete.** A cross-platform retained-log closure harness runs
+  every SDF frontend, adapter, normalization, IR, scope, cell/endpoint/mapping,
+  schema, artifact, corpus, project/library/design, application-engine and
+  resource-portability gate under a governed 1,200-second ceiling. It rejects
+  missing corpus, application, older-standard artifact or complete-CTest
+  progress markers even when a subprocess returns success, and statically
+  requires asserted lexical, parser, 2.1/3.0 revision, cell, endpoint, mapping,
+  schema, artifact and portable negative families. The retained console covers
+  interpreter/LLVM, cold/warm/relocated cache, portable artifacts, mixed
+  Verilog/VHDL/SystemC, Linux execution and the Windows portability contract;
+  its final marker is `FSIM-SDF-CLOSURE-PASS engines=interpreter-llvm cache=cold-
+  warm-relocated negatives=10 resources=governed`. The warning-clean eight-
+  worker Debug build and closure pass in 32.51 seconds at 324,020 KiB peak RSS
+  with zero swaps. The complete 17-row ledger is preserved with no active rows
+  and SHA-256 identity
+  `5a4817053834c76fef49650d38b73957a4be5560c62d1eb0f8c72c7180340c4b`.
+  No source/header formatting ran. No Release, sanitizer, hosted-CI inspection,
+  reset, commit or push ran. Preserve Changes 1-18 and proceed to Change 19
+  public documentation/evidence synchronization in the accumulated worktree.
+- **Change 19: Complete.** Public README, architecture, language, Verilog,
+  VHDL/PSL, diagnostic, feature/evidence and release-audit surfaces now describe
+  the Batch 168 boundary consistently. The new installed `sdf.md` contract
+  documents SDF 2.1/3.0/4.0 profiles, exact normalization, mixed-language
+  resolution, the source-tree C++ phase APIs, `FSDFPORT` schema 1,
+  library/design/cache persistence, retained corpus/closure evidence, the
+  absence of a timing-applying CLI switch, and the explicit rule that Batches
+  169-170 own Verilog/SystemVerilog and VHDL/VITAL timing application. The
+  governing shorthand remains: Batches 169-170 own application to runtime
+  timing. The
+  historical v1 deferral table remains intact with a current v2 supersession
+  statement. Release audits are synchronized at 2,324 production diagnostics,
+  925 bounded sources, 1,083 SPDX-owned artifacts and 346 authored test/control
+  files. The reviewed feature-matrix digest is
+  `ac8c85884b50854481f4eb68aa621b6b6b1ff080f00b0745fcf3046de7dba1b9`,
+  the VHDL/PSL release-closure digest is
+  `ae197625c75869bc8d60d4c7f66151f1196f78c22d2e566664dba62bd1bec1f0`,
+  and the complete 17-row SDF ledger remains
+  `5a4817053834c76fef49650d38b73957a4be5560c62d1eb0f8c72c7180340c4b`.
+  All six clean-room SDF corpus inputs now carry explicit Apache-2.0 ownership.
+  Documentation, catalog, source, inventory, public/install, language-closure
+  and composed release-candidate gates pass. No source/header formatting ran;
+  no Release build, sanitizer, hosted-CI inspection, reset, commit or push ran.
+  Preserve Changes 1-19 and proceed to final Change 20 qualification.
+- **Change 20: Complete.** Fresh clean-first exact-LLVM 22.1.8 Debug and Release
+  eight-worker builds complete all 824 steps warning-free in 12:16.97 and
+  10:27.27 at 5,084,240 and 2,255,404 KiB peak RSS with zero swaps. Complete
+  non-sanitized Debug and Release regressions pass 162/162 in 11:19.96 and
+  10:30.22 wall time, with CTest totals of 679.95 and 630.22 seconds, peak RSS
+  of 3,782,884 and 3,794,928 KiB and zero swaps. The registered SDF closure
+  passes inside those full runs in 30.48 and 26.15 seconds. A final pinned
+  clang-format 22 repair touched only the new `sdf_parser.cpp`; no header or
+  legacy implementation formatting ran. Both eight-worker incremental
+  rebuilds then pass, followed by 16/16 SDF/core application gates in Debug and
+  Release in 32.03 and 26.93 seconds. Build/test transcripts are retained under
+  `build/change20-evidence/`; their warning/error scan and repository whitespace
+  check are clean. The refreshed code graph contains 28,836 nodes and 135,445
+  edges. Release qualification ran only at this final batch check. Batch 168 is
+  not a sanitizer or hosted-CI monitoring boundary. Commit and push the
+  accumulated implementation once, then save and push the exact Batch 169
+  restart plan.
 
 ### Batch 169 - Verilog/SystemVerilog SDF annotation
 

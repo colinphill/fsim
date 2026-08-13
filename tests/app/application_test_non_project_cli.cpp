@@ -3,6 +3,7 @@
 
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
+#include "fsim/app/sdf_phase_persistence.hpp"
 #include "fsim/artifact/design.hpp"
 #include "fsim/artifact/object.hpp"
 #include "fsim/library/portable_unit.hpp"
@@ -678,6 +679,192 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
       published_design_metadata->roots.front().selected_identity
       == "sv:work.tb");
   std::cerr << "non-project cli: HDL design published\n";
+
+  const auto sdf_base_design = directory / "sdf-base.fsimdesign";
+  const auto sdf_design = directory / "sdf-state.fsimdesign";
+  const auto sdf_source = directory / "timing.sdf";
+  const std::string sdf_text =
+      "(DELAYFILE\n"
+      "  (SDFVERSION \"4.0\")\n"
+      "  (DESIGN \"tb\")\n"
+      "  (VENDOR \"fsim\")\n"
+      "  (DIVIDER .)\n"
+      "  (TIMESCALE 1 ns)\n"
+      "  (CELL (CELLTYPE \"tb\") (INSTANCE primary)\n"
+      "    (DELAY (ABSOLUTE (INTERCONNECT q child_y (1)))))\n"
+      ")";
+  {
+    std::ofstream sdf_output(sdf_source, std::ios::binary);
+    sdf_output << sdf_text;
+    assert(sdf_output.good());
+  }
+  diagnostic::Engine sdf_build_diagnostics;
+  auto sdf_build = app::build_objects(
+      object_config, object_inputs, sdf_build_diagnostics);
+  assert(sdf_build && !sdf_build_diagnostics.has_error());
+  diagnostic::Engine sdf_base_diagnostics;
+  assert(app::publish_design_artifact(object_config, *sdf_build,
+      sdf_base_design, sdf_base_diagnostics));
+  assert(!sdf_base_diagnostics.has_error());
+  diagnostic::Engine sdf_base_metadata_diagnostics;
+  const auto sdf_base_metadata = artifact::load_design_metadata(
+      sdf_base_design, sdf_base_metadata_diagnostics);
+  assert(sdf_base_metadata && !sdf_base_metadata_diagnostics.has_error());
+  auto parsed_sdf = frontend::parse_sdf(
+      { support::path_to_utf8(sdf_source), sdf_text });
+  assert(parsed_sdf.ok());
+  app::SdfAnnotationScopeRequest sdf_scope_request;
+  sdf_scope_request.selection = app::SdfScopeSelection::All;
+  sdf_scope_request.expected_project_identity = "non-project-sdf";
+  sdf_scope_request.expected_design_identity = sdf_build->cache_key;
+  const auto sdf_scope = app::bind_sdf_annotation_scope(parsed_sdf.file,
+      sdf_build->design, "non-project-sdf", sdf_build->cache_key,
+      sdf_scope_request);
+  assert(sdf_scope.ok());
+  const auto sdf_cells = app::resolve_sdf_cells(
+      sdf_scope.scope, sdf_build->design);
+  assert(sdf_cells.ok());
+  const auto sdf_endpoints = app::resolve_sdf_endpoints(
+      sdf_cells.resolution, sdf_build->design);
+  if (!sdf_endpoints.ok()) {
+    for (const auto& diagnostic : sdf_endpoints.diagnostics)
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    for (const auto& [path, signal] : sdf_build->design.signal_paths()) {
+      (void)signal;
+      std::cerr << "SDF candidate signal: " << path << '\n';
+    }
+  }
+  assert(sdf_endpoints.ok());
+  const auto sdf_mapping = app::validate_sdf_mapping(
+      sdf_endpoints.resolution, sdf_build->design);
+  assert(sdf_mapping.ok());
+  const app::SdfSchemaOptions sdf_options { "sdf-parse-options-v1",
+    "sdf-normalization-options-v1", "fsim-compiler-compat-v1" };
+  const auto sdf_schema = app::encode_sdf_schema(parsed_sdf.file,
+      *sdf_mapping.summary, sdf_text, sdf_options);
+  assert(sdf_schema.ok());
+  const auto sdf_snapshot = app::decode_sdf_schema(sdf_schema.bytes,
+      "fsim-compiler-compat-v1", sdf_mapping.summary->semantic_identity());
+  assert(sdf_snapshot.ok());
+  const auto sdf_identity = app::build_sdf_artifact_identity(
+      *sdf_snapshot.snapshot, *sdf_mapping.summary,
+      sdf_base_metadata->design_digest,
+      app::SdfDelaySelectionPolicy::Typical);
+  assert(sdf_identity.ok());
+  const auto sdf_archive = app::encode_sdf_portable_archive(
+      *sdf_snapshot.snapshot, *sdf_mapping.summary, *sdf_identity.annotation,
+      sdf_schema.bytes);
+  assert(sdf_archive.ok());
+  diagnostic::Engine sdf_install_diagnostics;
+  assert(app::install_sdf_phase_artifact(*sdf_build, sdf_archive.bytes,
+      *sdf_identity.annotation, sdf_install_diagnostics));
+  assert(!sdf_install_diagnostics.has_error());
+  diagnostic::Engine sdf_publish_diagnostics;
+  assert(app::publish_design_artifact(object_config, *sdf_build, sdf_design,
+      sdf_publish_diagnostics));
+  assert(!sdf_publish_diagnostics.has_error());
+  std::filesystem::rename(
+      sdf_source, directory / "timing.sdf.producer-hidden");
+  diagnostic::Engine sdf_metadata_diagnostics;
+  const auto sdf_metadata = artifact::load_design_metadata(
+      sdf_design, sdf_metadata_diagnostics);
+  assert(sdf_metadata && !sdf_metadata_diagnostics.has_error());
+  assert(sdf_metadata->sdf_annotations.size() == 1);
+  assert(sdf_metadata->cache_key != sdf_base_metadata->cache_key);
+  assert(sdf_metadata->specialization_cache_keys
+      != sdf_base_metadata->specialization_cache_keys);
+  const auto sdf_cache = directory / "sdf-native-cache";
+  const auto run_sdf_design = [&](const std::filesystem::path& path,
+                                  const app::SimulationEngine engine) {
+    diagnostic::Engine diagnostics;
+    auto loaded_sdf = app::load_design_artifact(path, diagnostics);
+    if (!loaded_sdf)
+      diagnostic::print_text(std::cerr, diagnostics);
+    assert(loaded_sdf && !diagnostics.has_error());
+    assert(app::sdf_phase_artifacts(*loaded_sdf).size() == 1);
+    assert(app::sdf_phase_artifacts(*loaded_sdf).front()->snapshot().annotation()
+        == sdf_metadata->sdf_annotations.front());
+    loaded_sdf->cache_path = sdf_cache;
+    app::Simulation simulation { std::move(*loaded_sdf), 1000, engine };
+    const auto cache = simulation.native_cache_statistics();
+    const auto result = simulation.run();
+    assert(result.status == runtime::RunStatus::stopped && result.time == 3);
+    return cache;
+  };
+  run_sdf_design(sdf_design, app::SimulationEngine::interpreter);
+  const auto sdf_cold = run_sdf_design(
+      sdf_design, app::SimulationEngine::compiled);
+  const auto sdf_warm = run_sdf_design(
+      sdf_design, app::SimulationEngine::compiled);
+#if defined(FSIM_HAS_LLVM)
+  assert(sdf_cold.misses != 0 && sdf_cold.stores != 0);
+  assert(sdf_warm.hits != 0);
+#endif
+  const auto relocated_sdf_design = directory / "relocated-sdf.fsimdesign";
+  copy_tree(sdf_design, relocated_sdf_design);
+  make_tree_writable(relocated_sdf_design);
+  make_writable(sdf_design, "SDF design permissions");
+  rename_producer(sdf_design,
+      directory / "sdf-state.fsimdesign.producer-hidden",
+      "SDF design relocation");
+  const auto sdf_relocated = run_sdf_design(
+      relocated_sdf_design, app::SimulationEngine::compiled);
+#if defined(FSIM_HAS_LLVM)
+  assert(sdf_relocated.hits != 0);
+#endif
+  const auto corrupt_sdf_design = directory / "corrupt-sdf.fsimdesign";
+  copy_tree(relocated_sdf_design, corrupt_sdf_design);
+  make_tree_writable(corrupt_sdf_design);
+  const auto sdf_payload = std::ranges::find_if(sdf_metadata->payloads,
+      [](const auto& payload) { return payload.kind.starts_with("sdf:"); });
+  assert(sdf_payload != sdf_metadata->payloads.end());
+  {
+    std::fstream corrupt_output(corrupt_sdf_design / sdf_payload->artifact,
+        std::ios::binary | std::ios::in | std::ios::out);
+    assert(corrupt_output);
+    char value { };
+    corrupt_output.read(&value, 1);
+    value = static_cast<char>(value ^ 1);
+    corrupt_output.seekp(0);
+    corrupt_output.write(&value, 1);
+    assert(corrupt_output.good());
+  }
+  diagnostic::Engine corrupt_sdf_diagnostics;
+  assert(!app::load_design_artifact(
+      corrupt_sdf_design, corrupt_sdf_diagnostics));
+  assert(corrupt_sdf_diagnostics.has_error());
+  const auto partial_sdf_design = directory / "partial-sdf.fsimdesign";
+  copy_tree(relocated_sdf_design, partial_sdf_design);
+  make_tree_writable(partial_sdf_design);
+  assert(std::filesystem::remove(
+      partial_sdf_design / sdf_payload->artifact));
+  diagnostic::Engine partial_sdf_diagnostics;
+  assert(!app::load_design_artifact(
+      partial_sdf_design, partial_sdf_diagnostics));
+  assert(partial_sdf_diagnostics.has_error());
+  const auto stale_sdf_design = directory / "stale-sdf.fsimdesign";
+  copy_tree(relocated_sdf_design, stale_sdf_design);
+  make_tree_writable(stale_sdf_design);
+  auto stale_sdf_metadata = *sdf_metadata;
+  stale_sdf_metadata.sdf_annotations.front().design_digest
+      = std::string(64, '0');
+  stale_sdf_metadata.design_digest
+      = artifact::compute_design_digest(stale_sdf_metadata);
+  {
+    std::ofstream stale_output(
+        stale_sdf_design / artifact::kDesignMetadataFilename,
+        std::ios::binary | std::ios::trunc);
+    stale_output << artifact::serialize_design_metadata(stale_sdf_metadata);
+    assert(stale_output.good());
+  }
+  diagnostic::Engine stale_sdf_diagnostics;
+  assert(!app::load_design_artifact(
+      stale_sdf_design, stale_sdf_diagnostics));
+  assert(std::ranges::any_of(stale_sdf_diagnostics.diagnostics(),
+      [](const auto& diagnostic) {
+        return diagnostic.code == "FSIM-SDF-PORTABLE-003";
+      }));
+  std::cerr << "non-project cli: SDF phase/cache persistence validated\n";
 
   const auto hidden_object = directory / "unit.fsimobj.producer-hidden";
   const auto hidden_extra_object = directory / "extra.fsimobj.producer-hidden";

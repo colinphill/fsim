@@ -3,6 +3,7 @@
 
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
+#include "fsim/app/sdf_phase_persistence.hpp"
 #include "fsim/artifact/design.hpp"
 #include "fsim/artifact/object.hpp"
 #include "fsim/support/path.hpp"
@@ -633,6 +634,21 @@ bool publish_design_artifact(
     metadata.signal_count = project.design.signals().size();
     metadata.process_count = project.design.processes().size();
     metadata.design_digest = artifact::compute_design_digest(metadata);
+    if (!append_sdf_phase_payloads(project, metadata, payloads, diagnostics))
+        return false;
+    if (!project.sdf_phase_artifacts.empty()) {
+        uvm_bootstrap.artifact.provenance.content_identity = metadata.cache_key;
+        uvm_bootstrap.artifact.provenance.cache_identity = metadata.cache_key
+            + ":" + std::string { project::to_string(project.optimization) };
+        auto updated_uvm_state = serialize_systemverilog_uvm_state(
+            uvm_bootstrap.artifact, diagnostics);
+        if (!updated_uvm_state)
+            return false;
+        metadata.payloads[7].checksum = support::Sha256::hex(
+            support::Sha256::digest(*updated_uvm_state));
+        payloads[7].bytes = std::move(*updated_uvm_state);
+    }
+    metadata.design_digest = artifact::compute_design_digest(metadata);
     return artifact::publish_design(
         destination, metadata, payloads, diagnostics);
 }
@@ -883,7 +899,7 @@ std::optional<BuiltProject> load_design_artifact(
     auto primary_hierarchy = live_systemc->registries.empty()
         ? std::shared_ptr<systemc::HierarchyRegistry> { }
         : live_systemc->registries.front();
-    return BuiltProject {
+    auto built = BuiltProject {
         std::move(*runtime), std::move(*design_ir), std::move(*semantics),
         std::move(*constraint_hir), std::move(*vhdl_hir),
         metadata->cache_key, metadata->time_resolution,
@@ -903,6 +919,9 @@ std::optional<BuiltProject> load_design_artifact(
         std::move(verilog_unit_revisions),
         std::move(verilog_unit_compatibility_profiles)
     };
+    if (!restore_sdf_phase_artifacts(directory, *metadata, built, diagnostics))
+        return std::nullopt;
+    return built;
 }
 
 bool elaborate_artifact(

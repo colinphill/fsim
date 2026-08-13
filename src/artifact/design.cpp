@@ -196,6 +196,135 @@ class Reader {
   std::size_t position_{};
 };
 
+void write_sdf_annotations(
+    Writer& writer, const std::vector<DesignSdfAnnotation>& annotations) {
+  writer.sequence(annotations, [&](const auto& annotation) {
+    writer.u32(annotation.schema);
+    writer.string(annotation.revision);
+    writer.string(annotation.revision_adapter);
+    writer.boolean(annotation.has_timescale);
+    writer.string(annotation.timescale);
+    writer.string(annotation.selection_policy);
+    writer.string(annotation.scope_identity);
+    writer.string(annotation.source_digest);
+    writer.string(annotation.design_digest);
+    writer.string(annotation.ir_identity);
+    writer.string(annotation.resolution_identity);
+    writer.string(annotation.mapping_identity);
+    writer.sequence(annotation.selected_root_identities,
+        [&](const auto& identity) { writer.string(identity); });
+    writer.sequence(annotation.semantic_unit_identities,
+        [&](const auto& identity) { writer.string(identity); });
+    writer.sequence(annotation.semantic_object_identities,
+        [&](const auto& identity) { writer.string(identity); });
+    writer.string(annotation.cache_key);
+  });
+}
+
+template <typename Callback>
+bool read_sequence(Reader& reader, Callback&& callback) {
+  const auto count = reader.count();
+  if (!count) {
+    return false;
+  }
+  for (std::size_t index = 0; index < *count; ++index) {
+    if (!callback()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool read_sdf_annotations(Reader& reader, DesignMetadata& metadata) {
+  const auto read_string = [&](std::string& value) {
+    auto read = reader.string();
+    if (!read) {
+      return false;
+    }
+    value = std::move(*read);
+    return true;
+  };
+  return read_sequence(reader, [&] {
+    DesignSdfAnnotation annotation;
+    const auto schema = reader.u32();
+    if (!schema || !read_string(annotation.revision)
+        || !read_string(annotation.revision_adapter)) {
+      return false;
+    }
+    const auto has_timescale = reader.boolean();
+    if (!has_timescale || !read_string(annotation.timescale)
+        || !read_string(annotation.selection_policy)
+        || !read_string(annotation.scope_identity)
+        || !read_string(annotation.source_digest)
+        || !read_string(annotation.design_digest)
+        || !read_string(annotation.ir_identity)
+        || !read_string(annotation.resolution_identity)
+        || !read_string(annotation.mapping_identity)) {
+      return false;
+    }
+    annotation.schema = *schema;
+    annotation.has_timescale = *has_timescale;
+    const auto read_identities = [&](auto& identities) {
+      return read_sequence(reader, [&] {
+        auto identity = reader.string();
+        if (identity) {
+          identities.push_back(std::move(*identity));
+        }
+        return identity.has_value();
+      });
+    };
+    if (!read_identities(annotation.selected_root_identities)
+        || !read_identities(annotation.semantic_unit_identities)
+        || !read_identities(annotation.semantic_object_identities)
+        || !read_string(annotation.cache_key)) {
+      return false;
+    }
+    metadata.sdf_annotations.push_back(std::move(annotation));
+    return true;
+  });
+}
+
+bool valid_ordered_identities(const std::vector<std::string>& values) {
+  return !values.empty() && std::ranges::is_sorted(values)
+      && std::adjacent_find(values.begin(), values.end()) == values.end()
+      && std::ranges::none_of(
+          values, [](const auto& value) { return value.empty(); });
+}
+
+void validate_sdf_annotations(
+    const DesignMetadata& metadata,
+    diagnostic::Engine& diagnostics,
+    const std::string& source) {
+  std::set<std::string> cache_keys;
+  for (const auto& annotation : metadata.sdf_annotations) {
+    if (metadata.format < 9 || annotation.schema != 1
+        || (annotation.revision != "2.1" && annotation.revision != "3.0"
+            && annotation.revision != "4.0")
+        || annotation.revision_adapter.empty()
+        || (annotation.has_timescale != !annotation.timescale.empty())
+        || (annotation.selection_policy != "min"
+            && annotation.selection_policy != "typ"
+            && annotation.selection_policy != "max")
+        || annotation.scope_identity.empty()
+        || !checksum_spelling(annotation.source_digest)
+        || !checksum_spelling(annotation.design_digest)
+        || annotation.ir_identity.empty()
+        || annotation.resolution_identity.empty()
+        || annotation.mapping_identity.empty()
+        || !valid_ordered_identities(annotation.selected_root_identities)
+        || !valid_ordered_identities(annotation.semantic_unit_identities)
+        || !valid_ordered_identities(annotation.semantic_object_identities)
+        || !checksum_spelling(annotation.cache_key)
+        || !cache_keys.insert(annotation.cache_key).second) {
+      report(
+          diagnostics, kValueCode,
+          "design SDF annotations require complete ordered portable semantic "
+          "identities, exact policy, and unique content cache keys",
+          source);
+    }
+  }
+}
+
 void write_digest_fields(Writer& writer, const DesignMetadata& metadata) {
     writer.string(metadata.format == 1
             ? "fsim-design-provenance-v1"
@@ -209,7 +338,9 @@ void write_digest_fields(Writer& writer, const DesignMetadata& metadata) {
             ? "fsim-design-provenance-v5-vhdl-package-dependencies"
             : metadata.format < 8
             ? "fsim-design-provenance-v6-vhdl-unit-provenance"
-            : "fsim-design-provenance-v7-verilog-unit-provenance");
+            : metadata.format < 9
+            ? "fsim-design-provenance-v7-verilog-unit-provenance"
+            : "fsim-design-provenance-v8-sdf-identity");
     writer.u32(metadata.runtime_abi);
     writer.string(metadata.time_resolution);
     writer.string(metadata.delay_mode);
@@ -280,6 +411,9 @@ void write_digest_fields(Writer& writer, const DesignMetadata& metadata) {
       writer.string(unit.compatibility_profile);
     });
   }
+  if (metadata.format >= 9) {
+    write_sdf_annotations(writer, metadata.sdf_annotations);
+  }
   if (metadata.format >= 2) {
     writer.sequence(metadata.systemc_plugins, [&](const auto& plugin) {
       writer.string(plugin.logical_library);
@@ -313,7 +447,7 @@ bool validate(
     const std::string& source) {
     if ((metadata.format != 1 && metadata.format != 2 && metadata.format != 4
             && metadata.format != 5 && metadata.format != 6
-            && metadata.format != 7
+            && metadata.format != 7 && metadata.format != 8
             && metadata.format != kDesignFormatVersion)
         || metadata.runtime_abi != runtime_abi_version) {
         report(
@@ -485,6 +619,7 @@ bool validate(
           source);
     }
   }
+  validate_sdf_annotations(metadata, diagnostics, source);
   std::set<std::string> systemc_libraries;
   std::set<std::string> systemc_directories;
   if (metadata.format == 1 && !metadata.systemc_plugins.empty()) {
@@ -780,6 +915,9 @@ std::string serialize_design_metadata(const DesignMetadata& metadata) {
       writer.string(unit.compatibility_profile);
     });
   }
+  if (metadata.format >= 9) {
+    write_sdf_annotations(writer, metadata.sdf_annotations);
+  }
   if (metadata.format >= 2) {
     writer.sequence(metadata.systemc_plugins, [&](const auto& plugin) {
       writer.string(plugin.logical_library);
@@ -830,7 +968,7 @@ std::optional<DesignMetadata> deserialize_design_metadata(
   metadata.runtime_abi = *runtime_abi;
   if (metadata.format != 1 && metadata.format != 2 && metadata.format != 4
       && metadata.format != 5 && metadata.format != 6
-      && metadata.format != 7
+      && metadata.format != 7 && metadata.format != 8
       && metadata.format != kDesignFormatVersion) {
       report(
           diagnostics, kSchemaCode,
@@ -960,6 +1098,7 @@ std::optional<DesignMetadata> deserialize_design_metadata(
            metadata.verilog_unit_provenance.push_back(std::move(unit));
            return true;
          }))
+      || (metadata.format >= 9 && !read_sdf_annotations(reader, metadata))
       || (metadata.format >= 2 && !read_sequence([&] {
            DesignSystemCPlugin plugin;
            if (!read_string(plugin.logical_library)

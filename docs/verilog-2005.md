@@ -5,7 +5,8 @@ Fsim implements the governed IEEE 1364-2005 boundary recorded by
 [`verilog_gap_inventory.tsv`](../tests/feature_matrix/verilog_gap_inventory.tsv).
 Its 34 supported clause rows have independent positive, negative, and execution
 witnesses, no active residual row is unresolved, and three boundaries are
-explicitly deferred. SDF parsing and backannotation belong to Batch 170;
+explicitly deferred. SDF parsing, resolution and portable persistence are
+complete in Batch 168; Verilog/SystemVerilog backannotation belongs to Batch 169;
 removed legacy TF/ACC interfaces and informative optional annex services remain
 post-v2 compatibility work.
 
@@ -64,8 +65,10 @@ pulse, notifier, delayed-terminal, and timing-check state. Each normalized path
 or timing check has a stable instance-qualified identity suitable for later SDF
 application. The common scheduler supplies inertial path routing, cancellation
 policy, exact simultaneous-boundary ordering, callbacks, debugger visibility,
-and VCD publication. SDF syntax and annotation are deliberately outside this
-layer until Batch 170.
+and VCD publication. Batch 168 parses, resolves and persists SDF against these
+stable identities without changing runtime timing; Batch 169 owns
+Verilog/SystemVerilog backannotation. See [SDF support](sdf.md) for the exact
+format and API boundary.
 
 Each live simulation publishes generation-qualified VPI roots, modules,
 generated scopes, ports, nets, variables, parameters, memories and words,

@@ -89,8 +89,8 @@ The exact SHA-256 identities are:
 - literal-width inventory: `f661b219e251e6369750ab406b19adf9c193cfb9570baaa0fdeab4f7984bad93`;
 - release closure: `f4e8dcdfb60362544e6958449fa2a1e852cedcbba2ef6e929d5fb0a3aee1d124`.
 
-The synchronized static baseline is 2,246 production diagnostics, 887 bounded
-C/C++ sources, 1,035 SPDX-owned files, and 332 authored test/control files.
+The synchronized static baseline is 2,324 production diagnostics, 925 bounded
+C/C++ sources, 1,083 SPDX-owned files, and 346 authored test/control files.
 Installed documentation, diagnostic/source/license, platform/resource, public
 API, artifact/cache, and release gates must compose without waivers before the
 accumulated Batch 165 implementation is published.

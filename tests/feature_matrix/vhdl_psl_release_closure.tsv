@@ -36,10 +36,10 @@ VPC-033	license_review	SPDX+third-party	cmake/CheckV1ConformanceAudit.cmake
 VPC-034	artifact_provenance	checksum+identity	tests/app/application_test_artifact_phases.cpp
 VPC-035	platform_process_limit	POSIX+Windows	tests/app/vhdl_psl_application_test.cpp
 VPC-036	installed_public_alias	fsim-vhdl	cmake/CheckInstalledPublicContract.cmake
-VPC-037	diagnostic_catalog	2246	cmake/CheckDiagnosticCatalog.cmake
+VPC-037	diagnostic_catalog	2324	cmake/CheckDiagnosticCatalog.cmake
 VPC-038	vhdl_psl_diagnostics	19	docs/diagnostics.md
-VPC-039	bounded_authored_sources	887	cmake/CheckSourceLineBudget.cmake
-VPC-040	authored_test_controls	332	cmake/CheckV1ConformanceAudit.cmake
+VPC-039	bounded_authored_sources	925	cmake/CheckSourceLineBudget.cmake
+VPC-040	authored_test_controls	346	cmake/CheckV1ConformanceAudit.cmake
 VPC-041	reviewed_max_cognitive_complexity	20	tests/app/vhdl_psl_application_test.cpp
 VPC-042	reviewed_max_loop_depth	1	tests/app/vhdl_psl_application_test.cpp
 VPC-043	reviewed_recursion	none	tests/app/vhdl_psl_application_test.cpp

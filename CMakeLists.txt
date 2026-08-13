@@ -407,6 +407,13 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_report.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_sampling.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/lexer.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/sdf_lexer.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/sdf21_adapter.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/sdf30_adapter.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/sdf_construct_parser.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/sdf_ir.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/sdf_normalization.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/sdf_parser.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/parser.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_preprocessor.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser.cpp"
@@ -901,6 +908,14 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
     STATIC
       src/app/application.cpp
       src/app/application_analysis.cpp
+      src/app/application_sdf_annotation_scope.cpp
+      src/app/application_sdf_cell_resolution.cpp
+      src/app/application_sdf_endpoint_resolution.cpp
+      src/app/application_sdf_mapping_validation.cpp
+      src/app/application_sdf_schema.cpp
+      src/app/application_sdf_artifact_identity.cpp
+  src/app/application_sdf_portable_archive.cpp
+  src/app/application_sdf_phase_persistence.cpp
       src/app/application_build.cpp
       src/app/application_check.cpp
       src/app/application_standard_library.cpp

@@ -14,7 +14,7 @@
 
 namespace fsim::artifact {
 
-inline constexpr std::uint32_t kDesignFormatVersion = 8;
+inline constexpr std::uint32_t kDesignFormatVersion = 9;
 inline constexpr std::string_view kDesignMetadataFilename = "fsim-design.bin";
 
 struct DesignRoot {
@@ -65,6 +65,28 @@ struct DesignVerilogUnitProvenance {
       const DesignVerilogUnitProvenance&) = default;
 };
 
+struct DesignSdfAnnotation {
+  std::uint32_t schema{1};
+  std::string revision;
+  std::string revision_adapter;
+  bool has_timescale{};
+  std::string timescale;
+  std::string selection_policy;
+  std::string scope_identity;
+  std::string source_digest;
+  std::string design_digest;
+  std::string ir_identity;
+  std::string resolution_identity;
+  std::string mapping_identity;
+  std::vector<std::string> selected_root_identities;
+  std::vector<std::string> semantic_unit_identities;
+  std::vector<std::string> semantic_object_identities;
+  std::string cache_key;
+
+  friend bool operator==(
+      const DesignSdfAnnotation&, const DesignSdfAnnotation&) = default;
+};
+
 struct DesignPayload {
   std::string kind;
   std::filesystem::path artifact;
@@ -107,6 +129,7 @@ struct DesignMetadata {
   std::vector<DesignObjectInput> objects;
   std::vector<DesignVhdlUnitProvenance> vhdl_unit_provenance;
   std::vector<DesignVerilogUnitProvenance> verilog_unit_provenance;
+  std::vector<DesignSdfAnnotation> sdf_annotations;
   std::vector<DesignSystemCPlugin> systemc_plugins;
   std::vector<DesignPayload> payloads;
   std::vector<std::string> specialization_cache_keys;
