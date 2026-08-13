@@ -804,7 +804,7 @@ void Lowerer::materialize_procedural_continuous_assignments()
             design_, extended_signals, read_only_signals_, string_objects_,
             read_only_string_objects_, container_objects_,
             read_only_container_objects_, visible_types_, visible_type_marks_,
-            functions_, tasks_, procedures_, diagnostics_);
+            functions_, tasks_, procedures_, scalar_context_, diagnostics_);
         auto driver = driver_lowerer.lower_concurrent(
             active, language_, hierarchy_, index);
         const auto process_index = design_.processes_.size()

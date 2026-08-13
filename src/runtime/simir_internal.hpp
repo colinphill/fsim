@@ -19,6 +19,17 @@
 
 namespace fsim::runtime::simir {
 
+struct RandomDistributionResult {
+    std::int32_t value { };
+    std::int32_t seed { };
+};
+
+[[nodiscard]] RandomDistributionResult evaluate_random_distribution(
+    RandomDistributionKind kind,
+    std::int32_t seed,
+    std::int32_t first,
+    std::optional<std::int32_t> second);
+
 void validate_container_value(const ContainerValue& value);
 
 [[nodiscard]] std::optional<std::size_t>
@@ -59,6 +70,8 @@ void unpack_container_signal_value(
     const std::string_view prefix,
     const std::string_view suffix,
     const SimulationTick tick,
+    const SystemVerilogTimeFormat& time_format,
+    const bool use_timeformat_width,
     const std::uint32_t minimum_width,
     const bool left_justify,
     const bool zero_pad);
@@ -258,7 +271,11 @@ struct Interpreter::Impl {
         bool queued { };
         bool waiting_on_static { };
         bool waiting_on_signal { };
+        std::optional<ContainerObjectId> waiting_on_container;
         bool dynamic_wait_all { };
+        std::vector<std::optional<SignalId>> wait_order_events;
+        std::size_t wait_order_index { };
+        std::optional<RegisterId> wait_order_result;
         std::optional<InstructionIndex> wait_timeout_origin;
         std::optional<SimulationTick> wait_timeout_deadline;
         std::optional<RegisterId> wait_timeout_result;
@@ -273,6 +290,9 @@ struct Interpreter::Impl {
         std::size_t callable_context_storage_bytes { };
         std::uint32_t generation { };
         ProcessStatus status { ProcessStatus::running };
+        ProcessStatus suspended_status { ProcessStatus::running };
+        bool suspended { };
+        bool suspended_wake { };
         bool halted { };
         bool killed { };
         std::optional<ProcessId> fork_parent;
@@ -290,6 +310,20 @@ struct Interpreter::Impl {
         ProcessId process { };
         RegisterId destination { };
         bool peek { };
+    };
+
+    struct SampledHistoryKey {
+        SignalId signal { };
+        std::optional<SignalId> clock;
+        SampledClockEdge edge { SampledClockEdge::any };
+        std::optional<SignalId> gate;
+
+        auto operator<=>(const SampledHistoryKey&) const = default;
+    };
+
+    struct SampledHistoryState {
+        std::deque<PackedLogic4> values;
+        std::optional<std::pair<SimulationTick, std::uint64_t>> last_slot;
     };
 
     struct MailboxWriter {
@@ -313,6 +347,25 @@ struct Interpreter::Impl {
     struct SemaphoreState {
         std::uint32_t keys { };
         std::deque<SemaphoreWaiter> waiters;
+    };
+
+    struct StochasticQueueEntry {
+        std::int32_t job_id { };
+        std::int32_t information_id { };
+        SimulationTick arrival { };
+    };
+
+    struct StochasticQueueState {
+        bool lifo { };
+        std::uint32_t maximum_length { };
+        std::deque<StochasticQueueEntry> entries;
+        std::uint64_t arrivals { };
+        std::optional<SimulationTick> last_arrival;
+        SimulationTick total_interarrival { };
+        std::uint64_t maximum_occupancy { };
+        std::optional<SimulationTick> shortest_wait;
+        SimulationTick total_removed_wait { };
+        std::uint64_t removals { };
     };
 
     struct ForkGroup {
@@ -437,6 +490,8 @@ struct Interpreter::Impl {
     std::vector<std::optional<ContainerSignalAlias>>
         container_signal_aliases;
     std::filesystem::path file_root;
+    std::vector<std::string> plusargs;
+    SystemVerilogTimeFormat time_format;
     std::map<FileHandle, FileState> files;
     FileHandle next_file_handle { 1 };
     std::uint32_t next_multichannel_channel { 1 };
@@ -449,11 +504,19 @@ struct Interpreter::Impl {
     std::vector<std::optional<ScheduledTaskHandle>> charge_decay_handles;
     std::vector<std::optional<PackedLogic4>> charge_values;
     std::vector<PackedLogic4> signal_last_values;
+    std::vector<PackedLogic4> sampled_values;
+    std::vector<PackedLogic4> sampled_defaults;
+    std::map<SampledHistoryKey, SampledHistoryState> sampled_histories;
     std::vector<std::optional<PackedLogic4>> forced_values;
     std::vector<PackedLogic4> forced_masks;
+    // Named-event variables carry synchronization-object identities rather
+    // than copied packed values. Each event starts with its own stable object.
+    std::vector<std::optional<SignalId>> event_identities;
     std::deque<ProcessState> processes;
     std::vector<MailboxState> mailboxes;
     std::vector<SemaphoreState> semaphores;
+    std::unordered_map<std::int32_t, StochasticQueueState>
+        stochastic_queues;
     std::vector<ModulePath> module_paths;
     std::vector<ModuleTimingCheck> module_timing_checks;
     std::vector<ModuleTimingCheckState> module_timing_check_states;
@@ -462,6 +525,7 @@ struct Interpreter::Impl {
     std::uint32_t next_process_generation { 1 };
     std::vector<std::vector<Fanout>> static_fanout;
     std::vector<std::vector<Fanout>> dynamic_fanout;
+    std::vector<std::vector<ProcessId>> container_dynamic_fanout;
     std::vector<EventState> event_states;
     std::vector<std::optional<std::pair<
         SimulationTick, std::uint64_t>>>
@@ -496,6 +560,12 @@ struct Interpreter::Impl {
     ExecutionPointHook execution_point_hook;
     OutputHook output_hook;
     ReportHook report_hook;
+    CoverageSampleHook coverage_sample_hook;
+    CoverageQueryHook coverage_query_hook;
+    SystemCommandHook system_command_hook;
+    VcdControlHook vcd_control_hook;
+    CoverageDatabaseControlHook coverage_database_control_hook;
+    ForkSpawnFilter fork_spawn_filter;
     ClassAllocateHook class_allocate_hook;
     ClassPropertyReadHook class_property_read_hook;
     ClassPropertyWriteHook class_property_write_hook;
@@ -505,6 +575,7 @@ struct Interpreter::Impl {
     ClassStaticMethodCallHook class_static_method_call_hook;
     std::optional<MonitorInstall> monitor;
     ProcessId monitor_process { };
+    std::optional<FileHandle> monitor_file_handle;
     bool monitor_enabled { true };
     std::uint64_t monitor_generation { };
     std::optional<std::pair<SimulationTick, std::uint64_t>>
@@ -514,6 +585,8 @@ struct Interpreter::Impl {
     bool started { };
     bool stopped_by_design { };
     bool finals_ran { };
+    std::set<std::uint32_t> program_owners;
+    std::set<std::uint32_t> exited_programs;
 
     [[nodiscard]] Signal& get_signal(SignalId id);
 
@@ -635,6 +708,9 @@ struct Interpreter::Impl {
     void execute_container(ProcessState&, const PushContainer&);
     void execute_container(ProcessState&, const PopContainer&);
     void execute_string(ProcessState&, const StringMethod&);
+    void execute_stochastic_queue(
+        ProcessState&, const StochasticQueueOperation&);
+    void execute_pla(ProcessState&, const PlaEvaluate&);
 
     [[nodiscard]] static ValueKind register_value_kind(
         const ProcessState& process,
@@ -654,6 +730,10 @@ struct Interpreter::Impl {
         ProcessState& process,
         const RegisterId destination,
         const PackedLogic4& value);
+
+    void execute_sampled_read(
+        ProcessState& process,
+        const ReadSignal& operation);
 
     void clear_wait_timeout(ProcessState& process);
 
@@ -733,6 +813,10 @@ struct Interpreter::Impl {
         ProcessState& child,
         ProcessStatus status = ProcessStatus::finished);
     void cancel_fork_descendants(ProcessState& parent);
+    void kill_dynamic_processes(
+        std::span<const ProcessId> design_processes);
+    void exit_program(ProcessState& process);
+    void complete_program_process(ProcessState& process);
     [[nodiscard]] std::uint64_t process_handle(
         const ProcessState& process) const;
     [[nodiscard]] ProcessState& process_from_handle(
@@ -783,6 +867,9 @@ struct Interpreter::Impl {
         const MonitorInstall& registration);
 
     void set_monitor_enabled(const bool enabled);
+    void set_time_format(
+        ProcessState& process,
+        const TimeFormatControl& operation);
 
     [[nodiscard]] static std::uint64_t initial_random_state(
         const std::uint64_t seed,
@@ -800,7 +887,9 @@ struct Interpreter::Impl {
         const std::optional<PackedLogic4>& maximum,
         const std::optional<PackedLogic4>& minimum);
 
-    void publish(SignalId signal_id, PackedLogic4 value);
+    void publish(
+        SignalId signal_id, PackedLogic4 value,
+        bool notify_fanout = true);
 
     [[nodiscard]] PackedLogic4 apply_force(
         SignalId signal_id, PackedLogic4 value) const;

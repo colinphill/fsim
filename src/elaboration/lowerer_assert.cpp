@@ -28,6 +28,8 @@ std::uint64_t severity_ordinal(const AssertionSeverity severity) {
 void Lowerer::lower_assert(const Statement& statement) {
   if (statement.kind == StatementKind::Assert
       && language_ == frontend::Language::SystemVerilog2017) {
+    const bool concurrent = statement.assertion_message.starts_with(
+        "concurrent assertion '");
     const auto condition = lower_condition(
         statement.condition, "FSIM-ELAB-051", "assertion");
     if (!condition) {
@@ -39,12 +41,20 @@ void Lowerer::lower_assert(const Statement& statement) {
         *condition, 0, 0, UnknownBranchPolicy::when_false});
     const auto pass_start = static_cast<InstructionIndex>(
         process_.operations.size());
+    if (concurrent) {
+      process_.operations.emplace_back(
+          WaitRegion{runtime::SchedulerPhase::reactive});
+    }
     lower_statements(statement.statements);
     const auto jump_index = static_cast<InstructionIndex>(
         process_.operations.size());
     process_.operations.emplace_back(Jump{0});
     const auto failure_start = static_cast<InstructionIndex>(
         process_.operations.size());
+    if (concurrent) {
+      process_.operations.emplace_back(
+          WaitRegion{runtime::SchedulerPhase::reactive});
+    }
     if (statement.assertion_has_failure_action) {
       lower_statements(statement.else_statements);
     } else {

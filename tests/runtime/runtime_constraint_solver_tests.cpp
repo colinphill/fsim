@@ -1047,6 +1047,48 @@ void test_systemverilog_constraint_solver()
             && std::ranges::all_of(
                 wide.bval_words(), [](const auto word) { return word == 0; }),
         "unconstrained std::randomize must generate deterministic arbitrary-width known packed values without enumerating the domain");
+
+    auto constrained_wide_value = PackedLogic4(137, Logic4::zero);
+    constrained_wide_value.set(136, Logic4::one);
+    constrained_wide_value.set(72, Logic4::one);
+    constrained_wide_value.set(3, Logic4::one);
+    constrained_wide_value.set(0, Logic4::one);
+    auto constrained_wide = PackedLogic4(137, Logic4::zero);
+    SystemVerilogConstraintTemplate wide_name;
+    wide_name.kind = SystemVerilogConstraintTemplateKind::Name;
+    wide_name.text = "wide";
+    SystemVerilogConstraintTemplate wide_constant;
+    wide_constant.kind = SystemVerilogConstraintTemplateKind::Constant;
+    wide_constant.constant = constrained_wide_value;
+    wide_constant.profile = {
+        SystemVerilogConstraintDomainKind::BitVector,
+        constrained_wide_value.width(), false, "logic[136:0]", true
+    };
+    SystemVerilogConstraintTemplate wide_equal;
+    wide_equal.kind = SystemVerilogConstraintTemplateKind::Binary;
+    wide_equal.text = "==";
+    wide_equal.operands = { std::move(wide_name), std::move(wide_constant) };
+    SystemVerilogScopeRandomizeRequest constrained_wide_request;
+    constrained_wide_request.selection = 991;
+    constrained_wide_request.limits.maximum_domain_values = 1;
+    constrained_wide_request.variables = {
+        { "process::wide",
+            { SystemVerilogConstraintDomainKind::BitVector, 137, false,
+                "logic[136:0]" },
+            { constrained_wide_value }, &constrained_wide }
+    };
+    constrained_wide_request.inline_constraints = [&](auto& configured,
+                                                      const auto& ids) {
+        configure_systemverilog_inline_constraints(
+            configured, ids, std::span { &wide_equal, 1U },
+            "process::wide-inline");
+    };
+    const auto constrained_wide_result
+        = randomize_systemverilog_scope(constrained_wide_request);
+    require(
+        constrained_wide_result.language_result() == 1
+            && constrained_wide == constrained_wide_value,
+        "portable inline constraint templates must preserve exact 137-bit values without a host-word cap");
 }
 
 } // namespace fsim::tests::runtime

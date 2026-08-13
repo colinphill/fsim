@@ -178,8 +178,8 @@ Retained records use the `batch162-change18-direct-*` and
 The installed [producer-independent tutorial](uvm-tutorial.md), public UVM
 guide, architecture/language descriptions, diagnostic and evidence matrices,
 resource/provenance records, and release audits are checked as one 15-document
-contract. The synchronized release baseline contains 1,279 executable rows and
-5,116 evidence cells across 604 exact paths. The documentation, installed-
+contract. The synchronized Batch 165 release baseline contains 1,294 executable
+rows and 5,176 evidence cells across 617 exact paths. The documentation, installed-
 public, portability, inventory, and release slice passes 32/32; the staged
 Unicode install contains the guide, tutorial, and closure audit.
 

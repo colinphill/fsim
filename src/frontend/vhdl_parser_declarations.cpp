@@ -46,11 +46,12 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
         vhdl_named_types_.insert(canonical_name);
       }
       unit.type_aliases.push_back(
-          TypeAliasDeclaration{canonical_name,
-                               std::move(type),
-                               span_from(start, previous()),
-                               {},
-                               TypeDeclarationKind::VhdlIncomplete});
+          TypeAliasDeclaration { canonical_name,
+              std::move(type),
+              span_from(start, previous()),
+              { },
+              TypeDeclarationKind::VhdlIncomplete,
+              { } });
     }
     return;
   }
@@ -81,11 +82,12 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
         vhdl_named_types_.insert(canonical_name);
       }
       unit.type_aliases.push_back(
-          TypeAliasDeclaration{canonical_name,
-                               std::move(type),
-                               span_from(start, previous()),
-                               {},
-                               TypeDeclarationKind::VhdlFile});
+          TypeAliasDeclaration { canonical_name,
+              std::move(type),
+              span_from(start, previous()),
+              { },
+              TypeDeclarationKind::VhdlFile,
+              { } });
     }
     return;
   }
@@ -111,11 +113,12 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
         vhdl_named_types_.insert(canonical_name);
       }
       unit.type_aliases.push_back(
-          TypeAliasDeclaration{canonical_name,
-                               std::move(type),
-                               span_from(start, previous()),
-                               {},
-                               TypeDeclarationKind::VhdlAccess});
+          TypeAliasDeclaration { canonical_name,
+              std::move(type),
+              span_from(start, previous()),
+              { },
+              TypeDeclarationKind::VhdlAccess,
+              { } });
     }
     return;
   }
@@ -189,11 +192,12 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
         vhdl_named_types_.insert(canonical_name);
       }
       unit.type_aliases.push_back(
-          TypeAliasDeclaration{canonical_name,
-                               std::move(type),
-                               span_from(start, previous()),
-                               {},
-                               TypeDeclarationKind::VhdlPhysical});
+          TypeAliasDeclaration { canonical_name,
+              std::move(type),
+              span_from(start, previous()),
+              { },
+              TypeDeclarationKind::VhdlPhysical,
+              { } });
     }
     return;
   }
@@ -294,12 +298,13 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
         vhdl_named_types_.insert(canonical_name);
       }
       unit.type_aliases.push_back(
-          TypeAliasDeclaration{canonical_name,
-                               std::move(type),
-                               span_from(start, previous()),
-                               {},
-                               body ? TypeDeclarationKind::VhdlProtectedBody
-                                    : TypeDeclarationKind::VhdlProtected});
+          TypeAliasDeclaration { canonical_name,
+              std::move(type),
+              span_from(start, previous()),
+              { },
+              body ? TypeDeclarationKind::VhdlProtectedBody
+                   : TypeDeclarationKind::VhdlProtected,
+              { } });
     }
     return;
   }
@@ -416,11 +421,12 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
         vhdl_named_types_.insert(canonical_name);
       }
       unit.type_aliases.push_back(
-          TypeAliasDeclaration{canonical_name,
-                               std::move(type),
-                               span_from(start, previous()),
-                               {},
-                               TypeDeclarationKind::VhdlArray});
+          TypeAliasDeclaration { canonical_name,
+              std::move(type),
+              span_from(start, previous()),
+              { },
+              TypeDeclarationKind::VhdlArray,
+              { } });
     }
     return;
   }
@@ -504,9 +510,9 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
       if (!nested_scope) {
         vhdl_named_types_.insert(canonical_name);
       }
-      unit.type_aliases.push_back(TypeAliasDeclaration{
+      unit.type_aliases.push_back(TypeAliasDeclaration {
           canonical_name, std::move(type), span_from(start, previous()),
-          std::move(literals), TypeDeclarationKind::VhdlEnumeration});
+          std::move(literals), TypeDeclarationKind::VhdlEnumeration, { } });
     }
     return;
   }
@@ -618,11 +624,12 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
       vhdl_named_types_.insert(canonical_name);
     }
     unit.type_aliases.push_back(
-        TypeAliasDeclaration{canonical_name,
-                             std::move(type),
-                             span_from(start, previous()),
-                             {},
-                             TypeDeclarationKind::VhdlRecord});
+        TypeAliasDeclaration { canonical_name,
+            std::move(type),
+            span_from(start, previous()),
+            { },
+            TypeDeclarationKind::VhdlRecord,
+            { } });
   }
 }
 
@@ -1082,11 +1089,12 @@ void VhdlParser::parse_subtype_declaration(DesignUnit &unit, const Token &start,
     vhdl_named_types_.insert(canonical_name);
   }
   unit.type_aliases.push_back(
-      TypeAliasDeclaration{canonical_name,
-                           std::move(type),
-                           span_from(start, previous()),
-                           {},
-                           TypeDeclarationKind::VhdlSubtype});
+      TypeAliasDeclaration { canonical_name,
+          std::move(type),
+          span_from(start, previous()),
+          { },
+          TypeDeclarationKind::VhdlSubtype,
+          { } });
 }
 
 void VhdlParser::parse_signal_declaration(

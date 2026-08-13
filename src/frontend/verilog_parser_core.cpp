@@ -25,6 +25,38 @@ ParseResult VerilogParser::run() {
           || match_keyword("macromodule")) {
           compilation_unit_has_design_item_ = true;
           design.units.push_back(parse_module(previous()));
+      } else if (match_keyword("extern")) {
+          compilation_unit_has_design_item_ = true;
+          const auto extern_token = previous();
+          UnitKind kind { UnitKind::VerilogModule };
+          Token declaration;
+          if (match_keyword("module") || match_keyword("macromodule")) {
+              declaration = previous();
+          } else if (match_keyword("interface")) {
+              kind = UnitKind::SystemVerilogInterface;
+              declaration = previous();
+          } else if (match_keyword("program")) {
+              kind = UnitKind::SystemVerilogProgram;
+              declaration = previous();
+          } else {
+              error(
+                  extern_token,
+                  "FSIM-SV-PARSE-353",
+                  "extern must introduce a module, interface, or program declaration");
+              skip_to_semicolon();
+              continue;
+          }
+          auto unit = parse_module(declaration, kind, true);
+          unit.span = cover(extern_token.span, unit.span);
+          design.units.push_back(std::move(unit));
+      } else if (match_keyword("config")) {
+          compilation_unit_has_design_item_ = true;
+          design.units.push_back(
+              parse_systemverilog_configuration(previous()));
+      } else if (match_keyword("bind")) {
+          compilation_unit_has_design_item_ = true;
+          design.units.push_back(make_systemverilog_bind_unit(
+              parse_systemverilog_bind(previous())));
       } else if (match_keyword("interface")) {
           compilation_unit_has_design_item_ = true;
           const auto interface_token = previous();
@@ -364,6 +396,68 @@ std::string VerilogParser::decoded_string_literal_text(const Token& token) {
     case 't':
       result.push_back('\t');
       break;
+    case 'v':
+        if (language_ == Language::SystemVerilog2017) {
+            result.push_back('\v');
+        } else {
+            error(token, "FSIM-SV-SEM-040",
+                "unsupported Verilog string escape '\\v'");
+            result.push_back(escaped);
+        }
+        break;
+    case 'f':
+        if (language_ == Language::SystemVerilog2017) {
+            result.push_back('\f');
+        } else {
+            error(token, "FSIM-SV-SEM-040",
+                "unsupported Verilog string escape '\\f'");
+            result.push_back(escaped);
+        }
+        break;
+    case 'a':
+        if (language_ == Language::SystemVerilog2017) {
+            result.push_back('\a');
+        } else {
+            error(token, "FSIM-SV-SEM-040",
+                "unsupported Verilog string escape '\\a'");
+            result.push_back(escaped);
+        }
+        break;
+    case 'x':
+        if (language_ == Language::SystemVerilog2017) {
+            const auto hexadecimal_value = [](const char character)
+                -> std::optional<unsigned> {
+                if (character >= '0' && character <= '9') {
+                    return static_cast<unsigned>(character - '0');
+                }
+                if (character >= 'a' && character <= 'f') {
+                    return 10U + static_cast<unsigned>(character - 'a');
+                }
+                if (character >= 'A' && character <= 'F') {
+                    return 10U + static_cast<unsigned>(character - 'A');
+                }
+                return std::nullopt;
+            };
+            if (index + 2 >= spelling.size()) {
+                error(token, "FSIM-SV-SEM-040",
+                    "a SystemVerilog string hexadecimal escape requires two digits");
+                break;
+            }
+            const auto high = hexadecimal_value(spelling[index + 1]);
+            const auto low = hexadecimal_value(spelling[index + 2]);
+            if (!high || !low) {
+                error(token, "FSIM-SV-SEM-040",
+                    "a SystemVerilog string hexadecimal escape requires two digits");
+                break;
+            }
+            result.push_back(static_cast<char>((*high << 4U) | *low));
+            index += 2;
+            break;
+        }
+        error(token, "FSIM-SV-SEM-040",
+            "unsupported Verilog string escape '\\x'");
+        result.push_back(escaped);
+        break;
     case '\\':
       result.push_back('\\');
       break;
@@ -1026,439 +1120,453 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
 
 DesignUnit VerilogParser::parse_module(
     const Token& start,
-    const UnitKind kind) {
-  non_ansi_ports_.clear();
-  body_port_declarations_.clear();
-  port_type_refinements_.clear();
-  implicit_net_references_.clear();
-  container_iterator_names_.clear();
-  current_procedural_names_.clear();
-  current_procedural_types_.clear();
-  current_generate_names_.clear();
-  current_loop_names_.clear();
-  declared_genvars_.clear();
-  external_genvar_uses_.clear();
-  next_implicit_generate_scope_ = 1;
-  module_time_unit_magnitude_ =
-      compilation_time_unit_.empty()
-          ? current_time_unit_magnitude_
-          : compilation_time_unit_magnitude_;
-  module_time_unit_ =
-      compilation_time_unit_.empty()
-          ? current_time_unit_
-          : compilation_time_unit_;
-  module_time_precision_ =
-      compilation_time_precision_.empty()
-          ? current_time_precision_
-          : compilation_time_precision_;
-  module_time_unit_declared_ = false;
-  module_time_precision_declared_ = false;
-  module_has_non_time_item_ = false;
-  DesignUnit unit;
-  unit.kind = kind;
-  const bool interface_unit =
-      kind == UnitKind::SystemVerilogInterface;
-  const bool program_unit =
-      kind == UnitKind::SystemVerilogProgram;
-  const auto unit_kind = interface_unit
-      ? std::string_view{"interface"}
-      : program_unit ? std::string_view{"program"}
-                     : std::string_view{"module"};
-  unit.language = language_;
-  unit.systemverilog_imports =
-      compilation_unit_imports_;
-  active_package_imports_ =
-      unit.systemverilog_imports;
-  unit.default_nettype = current_default_nettype_;
-  unit.is_cell = current_cell_define_;
-  update_unit_time(unit);
-  const auto name = expect_identifier(
-      std::string{unit_kind} + " name");
-  unit.name = name.text;
+    const UnitKind kind,
+    const bool extern_declaration)
+{
+    non_ansi_ports_.clear();
+    body_port_declarations_.clear();
+    port_type_refinements_.clear();
+    implicit_net_references_.clear();
+    container_iterator_names_.clear();
+    current_procedural_names_.clear();
+    current_procedural_types_.clear();
+    current_generate_names_.clear();
+    current_loop_names_.clear();
+    declared_genvars_.clear();
+    external_genvar_uses_.clear();
+    next_implicit_generate_scope_ = 1;
+    module_time_unit_magnitude_ = compilation_time_unit_.empty()
+        ? current_time_unit_magnitude_
+        : compilation_time_unit_magnitude_;
+    module_time_unit_ = compilation_time_unit_.empty()
+        ? current_time_unit_
+        : compilation_time_unit_;
+    module_time_precision_ = compilation_time_precision_.empty()
+        ? current_time_precision_
+        : compilation_time_precision_;
+    module_time_unit_declared_ = false;
+    module_time_precision_declared_ = false;
+    module_has_non_time_item_ = false;
+    DesignUnit unit;
+    unit.kind = kind;
+    const bool interface_unit = kind == UnitKind::SystemVerilogInterface;
+    const bool program_unit = kind == UnitKind::SystemVerilogProgram;
+    const auto unit_kind = interface_unit
+        ? std::string_view { "interface" }
+        : program_unit ? std::string_view { "program" }
+                       : std::string_view { "module" };
+    unit.language = language_;
+    unit.systemverilog_imports = compilation_unit_imports_;
+    active_package_imports_ = unit.systemverilog_imports;
+    unit.default_nettype = current_default_nettype_;
+    unit.is_cell = current_cell_define_;
+    unit.systemverilog_extern = extern_declaration;
+    update_unit_time(unit);
+    const auto name = expect_identifier(
+        std::string { unit_kind } + " name");
+    unit.name = name.text;
 
-  if (match(TokenKind::Hash)) {
-    parse_parameter_port_list(unit, previous());
-  }
+    if (match(TokenKind::Hash)) {
+        parse_parameter_port_list(unit, previous());
+    }
 
-  if (match(TokenKind::LeftParen)) {
-    parse_module_ports(unit);
-    expect(TokenKind::RightParen, "')' after module ports",
-           "FSIM-SV-PARSE-002");
-  }
-  expect(TokenKind::Semicolon,
-         "';' after " + std::string{unit_kind} + " header",
-         "FSIM-SV-PARSE-003");
+    if (match(TokenKind::LeftParen)) {
+        parse_module_ports(unit);
+        expect(TokenKind::RightParen, "')' after module ports",
+            "FSIM-SV-PARSE-002");
+    }
+    expect(TokenKind::Semicolon,
+        "';' after " + std::string { unit_kind } + " header",
+        "FSIM-SV-PARSE-003");
 
-  const auto terminator = interface_unit
-      ? std::string_view{"endinterface"}
-      : program_unit ? std::string_view{"endprogram"}
-                     : std::string_view{"endmodule"};
-  while (!at_end() && !keyword(terminator)) {
-    const auto before = position();
-    if (verilog_attribute_instance_start()) {
-        parse_verilog_attribute_instances();
-    } else if (time_declaration_start()) {
-        const auto declaration = advance();
-        parse_time_declaration(&unit, declaration);
-    } else if (match_keyword("parameter")) {
-        module_has_non_time_item_ = true;
-        parse_parameter_group(unit, false, false, previous());
-    } else if (match_keyword("localparam")) {
-        module_has_non_time_item_ = true;
-        parse_parameter_group(unit, true, false, previous());
-    } else if (match_keyword("defparam")) {
-        module_has_non_time_item_ = true;
-        parse_defparam_declaration(
-            unit.verilog_defparams, previous());
-    } else if (dpi_declaration_start("import")) {
-        module_has_non_time_item_ = true;
-        const auto declaration = advance();
-        parse_dpi_declaration(
-            unit.systemverilog_dpi_declarations,
-            declaration,
-            SystemVerilogDpiDirection::Import,
-            SystemVerilogDpiOwnerKind::DesignUnit,
-            unit.name);
-    } else if (dpi_declaration_start("export")) {
-        module_has_non_time_item_ = true;
-        const auto declaration = advance();
-        parse_dpi_declaration(
-            unit.systemverilog_dpi_declarations,
-            declaration,
-            SystemVerilogDpiDirection::Export,
-            SystemVerilogDpiOwnerKind::DesignUnit,
-            unit.name);
-    } else if (match_keyword("import")) {
-        module_has_non_time_item_ = true;
-        parse_import_clause(
-            unit.systemverilog_imports, previous());
-        active_package_imports_ = unit.systemverilog_imports;
-    } else if (match_keyword("typedef")) {
-        module_has_non_time_item_ = true;
-        const auto declaration = previous();
-        if (keyword("class")) {
+    if (extern_declaration) {
+        unit.span = span_from(start, previous());
+        return unit;
+    }
+
+    const auto terminator = interface_unit
+        ? std::string_view { "endinterface" }
+        : program_unit ? std::string_view { "endprogram" }
+                       : std::string_view { "endmodule" };
+    while (!at_end() && !keyword(terminator)) {
+        const auto before = position();
+        if (verilog_attribute_instance_start()) {
+            parse_verilog_attribute_instances();
+        } else if (time_declaration_start()) {
+            const auto declaration = advance();
+            parse_time_declaration(&unit, declaration);
+        } else if (match_keyword("parameter")) {
+            module_has_non_time_item_ = true;
+            parse_parameter_group(unit, false, false, previous());
+        } else if (match_keyword("localparam")) {
+            module_has_non_time_item_ = true;
+            parse_parameter_group(unit, true, false, previous());
+        } else if (match_keyword("defparam")) {
+            module_has_non_time_item_ = true;
+            parse_defparam_declaration(
+                unit.verilog_defparams, previous());
+        } else if (match_keyword("bind")) {
+            module_has_non_time_item_ = true;
+            unit.systemverilog_binds.push_back(
+                parse_systemverilog_bind(previous()));
+        } else if (dpi_declaration_start("import")) {
+            module_has_non_time_item_ = true;
+            const auto declaration = advance();
+            parse_dpi_declaration(
+                unit.systemverilog_dpi_declarations,
+                declaration,
+                SystemVerilogDpiDirection::Import,
+                SystemVerilogDpiOwnerKind::DesignUnit,
+                unit.name);
+        } else if (dpi_declaration_start("export")) {
+            module_has_non_time_item_ = true;
+            const auto declaration = advance();
+            parse_dpi_declaration(
+                unit.systemverilog_dpi_declarations,
+                declaration,
+                SystemVerilogDpiDirection::Export,
+                SystemVerilogDpiOwnerKind::DesignUnit,
+                unit.name);
+        } else if (match_keyword("import")) {
+            module_has_non_time_item_ = true;
+            parse_import_clause(
+                unit.systemverilog_imports, previous());
+            active_package_imports_ = unit.systemverilog_imports;
+        } else if (match_keyword("nettype")) {
+            module_has_non_time_item_ = true;
+            parse_nettype(unit, previous());
+        } else if (match_keyword("alias")) {
+            module_has_non_time_item_ = true;
+            parse_alias_statement(unit, previous());
+        } else if (match_keyword("let")) {
+            module_has_non_time_item_ = true;
+            parse_let_declaration(unit, previous());
+        } else if (match_keyword("typedef")) {
+            module_has_non_time_item_ = true;
+            const auto declaration = previous();
+            if (keyword("class")) {
+                add_class_declaration(
+                    unit.systemverilog_classes,
+                    parse_class_forward_declaration(declaration, unit.name),
+                    declaration);
+            } else {
+                parse_typedef(unit, declaration);
+            }
+        } else if (match_keyword("virtual")) {
+            module_has_non_time_item_ = true;
+            const auto qualifier = previous();
+            if (match_keyword("class")) {
+                add_class_declaration(
+                    unit.systemverilog_classes,
+                    parse_class(previous(), unit.name, true),
+                    qualifier);
+            } else {
+                parse_virtual_interface_declaration(
+                    unit, qualifier);
+            }
+        } else if (match_keyword("interface")) {
+            module_has_non_time_item_ = true;
+            const auto qualifier = previous();
+            if (match_keyword("class")) {
+                add_class_declaration(
+                    unit.systemverilog_classes,
+                    parse_class(previous(), unit.name, false, true),
+                    qualifier);
+            } else {
+                error(
+                    qualifier,
+                    "FSIM-SV-PARSE-255",
+                    "a nested interface declaration must be an interface class");
+                skip_to_semicolon();
+            }
+        } else if (match_keyword("class")) {
+            module_has_non_time_item_ = true;
+            const auto declaration = previous();
             add_class_declaration(
                 unit.systemverilog_classes,
-                parse_class_forward_declaration(declaration, unit.name),
+                parse_class(declaration, unit.name),
                 declaration);
-        } else {
-            parse_typedef(unit, declaration);
-        }
-    } else if (match_keyword("virtual")) {
-        module_has_non_time_item_ = true;
-        const auto qualifier = previous();
-        if (match_keyword("class")) {
-            add_class_declaration(
-                unit.systemverilog_classes,
-                parse_class(previous(), unit.name, true),
-                qualifier);
-        } else {
-            parse_virtual_interface_declaration(
-                unit, qualifier);
-        }
-    } else if (match_keyword("interface")) {
-        module_has_non_time_item_ = true;
-        const auto qualifier = previous();
-        if (match_keyword("class")) {
-            add_class_declaration(
-                unit.systemverilog_classes,
-                parse_class(previous(), unit.name, false, true),
-                qualifier);
-        } else {
-            error(
-                qualifier,
-                "FSIM-SV-PARSE-255",
-                "a nested interface declaration must be an interface class");
-            skip_to_semicolon();
-        }
-    } else if (match_keyword("class")) {
-        module_has_non_time_item_ = true;
-        const auto declaration = previous();
-        add_class_declaration(
-            unit.systemverilog_classes,
-            parse_class(declaration, unit.name),
-            declaration);
-    } else if (match_keyword("modport")) {
-        module_has_non_time_item_ = true;
-        if (!interface_unit) {
-            error(
-                previous(),
-                "FSIM-SV-SEM-115",
-                "a modport declaration is only valid inside an interface");
-            skip_to_semicolon();
-        } else {
-            parse_modport(unit, previous());
-        }
-    } else if (match_keyword("clocking")) {
-        module_has_non_time_item_ = true;
-        parse_clocking_block(unit, previous());
-    } else if (match_keyword("default")) {
-        module_has_non_time_item_ = true;
-        const auto default_start = previous();
-        if (!match_keyword("clocking")) {
-            error(
-                default_start,
-                "FSIM-SV-SEM-187",
-                "a design-unit default declaration must select a clocking block");
-            skip_to_semicolon();
-        } else {
-            parse_default_clocking(unit, default_start);
-        }
-    } else if (
-        at(TokenKind::Identifier)
-        && current().text == "covergroup") {
-        module_has_non_time_item_ = true;
-        const auto declaration_start = advance();
-        add_covergroup_declaration(
-            unit.systemverilog_covergroups,
-            parse_covergroup_declaration(
-                declaration_start,
-                SystemVerilogCovergroupOwnerKind::DesignUnit),
-            declaration_start);
-    } else if (
-        at(TokenKind::Identifier)
-        && contains_word(
-            { "sequence", "property", "checker" },
-            current().text)) {
-        module_has_non_time_item_ = true;
-        const auto declaration_start = advance();
-        const auto assertion_kind = declaration_start.text == "sequence"
-            ? SystemVerilogAssertionDeclarationKind::Sequence
-            : declaration_start.text == "property"
-            ? SystemVerilogAssertionDeclarationKind::Property
-            : SystemVerilogAssertionDeclarationKind::Checker;
-        auto declaration = parse_assertion_declaration(declaration_start, assertion_kind);
-        const auto duplicate = std::ranges::any_of(
-            unit.systemverilog_assertion_declarations,
-            [&](const SystemVerilogAssertionDeclaration& existing) {
-                return !declaration.name.empty()
-                    && existing.name == declaration.name;
-            });
-        if (duplicate) {
-            error(
-                declaration_start,
-                "FSIM-SV-SEM-192",
-                "duplicate assertion declaration '" + declaration.name + "'");
-        } else {
-            unit.systemverilog_assertion_declarations.push_back(
-                std::move(declaration));
-        }
-    } else if (
-        (at(TokenKind::Identifier)
+        } else if (match_keyword("modport")) {
+            module_has_non_time_item_ = true;
+            if (!interface_unit) {
+                error(
+                    previous(),
+                    "FSIM-SV-SEM-115",
+                    "a modport declaration is only valid inside an interface");
+                skip_to_semicolon();
+            } else {
+                parse_modport(unit, previous());
+            }
+        } else if (match_keyword("clocking")) {
+            module_has_non_time_item_ = true;
+            parse_clocking_block(unit, previous());
+        } else if (match_keyword("default")) {
+            module_has_non_time_item_ = true;
+            const auto default_start = previous();
+            if (!match_keyword("clocking")) {
+                error(
+                    default_start,
+                    "FSIM-SV-SEM-187",
+                    "a design-unit default declaration must select a clocking block");
+                skip_to_semicolon();
+            } else {
+                parse_default_clocking(unit, default_start);
+            }
+        } else if (
+            at(TokenKind::Identifier)
+            && current().text == "covergroup") {
+            module_has_non_time_item_ = true;
+            const auto declaration_start = advance();
+            add_covergroup_declaration(
+                unit.systemverilog_covergroups,
+                parse_covergroup_declaration(
+                    declaration_start,
+                    SystemVerilogCovergroupOwnerKind::DesignUnit),
+                declaration_start);
+        } else if (
+            at(TokenKind::Identifier)
             && contains_word(
-                { "assert", "assume", "cover", "restrict" },
-                current().text))
-        || (at(TokenKind::Identifier)
-            && at(TokenKind::Colon, 1)
-            && at(TokenKind::Identifier, 2)
-            && contains_word(
-                { "assert", "assume", "cover", "restrict" },
-                current(2).text))) {
-        module_has_non_time_item_ = true;
-        std::optional<Token> label;
-        if (at(TokenKind::Colon, 1)) {
-            label = advance();
-            advance();
-        }
-        const auto directive = advance();
-        const auto assertion_kind = directive.text == "assert"
-            ? SystemVerilogConcurrentAssertionKind::Assert
-            : directive.text == "assume"
-            ? SystemVerilogConcurrentAssertionKind::Assume
-            : directive.text == "cover"
-            ? SystemVerilogConcurrentAssertionKind::Cover
-            : SystemVerilogConcurrentAssertionKind::Restrict;
-        unit.systemverilog_concurrent_assertions.push_back(
-            parse_concurrent_assertion(
-                directive, assertion_kind, std::move(label)));
-    } else if (match_keyword("function")) {
-        module_has_non_time_item_ = true;
-        auto function = parse_function(previous());
-        const bool duplicate = std::ranges::any_of(
-                                   unit.functions,
-                                   [&](const FunctionDeclaration& existing) {
-                                       return existing.name == function.name;
-                                   })
-            || std::ranges::any_of(
-                unit.tasks,
-                [&](const TaskDeclaration& existing) {
-                    return existing.name == function.name;
-                });
-        if (duplicate) {
-            error(
-                start,
-                "FSIM-SV-SEM-066",
-                "duplicate module function '" + function.name + "'");
-        } else {
-            unit.functions.push_back(std::move(function));
-        }
-    } else if (match_keyword("task")) {
-        module_has_non_time_item_ = true;
-        auto task = parse_task(previous());
-        const bool duplicate = std::ranges::any_of(
-                                   unit.tasks,
-                                   [&](const TaskDeclaration& existing) {
-                                       return existing.name == task.name;
-                                   })
-            || std::ranges::any_of(
-                unit.functions,
-                [&](const FunctionDeclaration& existing) {
-                    return existing.name == task.name;
-                });
-        if (duplicate) {
-            error(
-                start,
-                "FSIM-SV-SEM-073",
-                "duplicate module task '" + task.name + "'");
-        } else {
-            unit.tasks.push_back(std::move(task));
-        }
-    } else if (match_keyword("genvar")) {
-        module_has_non_time_item_ = true;
-        parse_genvar_declaration(unit);
-    } else if (match_keyword("event")) {
-        module_has_non_time_item_ = true;
-        parse_event_declaration(unit, previous());
-    } else if (match_keyword("specify")) {
-        module_has_non_time_item_ = true;
-        if (interface_unit || program_unit) {
-            error(
-                previous(),
-                "FSIM-SV-SEM-164",
-                "a specify block is legal only in a module");
-        }
-        auto block = parse_specify_block(previous());
-        for (const auto& declaration : block.specparams) {
-            const bool duplicate = std::ranges::any_of(
-                unit.verilog_specify_blocks,
-                [&](const VerilogSpecifyBlock& existing_block) {
-                    return std::ranges::any_of(
-                        existing_block.specparams,
-                        [&](const VerilogSpecparamDeclaration& existing) {
-                            return existing.name == declaration.name;
-                        });
+                { "sequence", "property", "checker" },
+                current().text)) {
+            module_has_non_time_item_ = true;
+            const auto declaration_start = advance();
+            const auto assertion_kind = declaration_start.text == "sequence"
+                ? SystemVerilogAssertionDeclarationKind::Sequence
+                : declaration_start.text == "property"
+                ? SystemVerilogAssertionDeclarationKind::Property
+                : SystemVerilogAssertionDeclarationKind::Checker;
+            auto declaration = parse_assertion_declaration(declaration_start, assertion_kind);
+            const auto duplicate = std::ranges::any_of(
+                unit.systemverilog_assertion_declarations,
+                [&](const SystemVerilogAssertionDeclaration& existing) {
+                    return !declaration.name.empty()
+                        && existing.name == declaration.name;
                 });
             if (duplicate) {
                 error(
-                    Token {
-                        TokenKind::Identifier,
-                        declaration.name,
-                        declaration.span,
-                        { } },
-                    "FSIM-SV-SEM-165",
-                    "duplicate specparam declaration '"
-                        + declaration.name + "'");
+                    declaration_start,
+                    "FSIM-SV-SEM-192",
+                    "duplicate assertion declaration '" + declaration.name + "'");
+            } else {
+                unit.systemverilog_assertion_declarations.push_back(
+                    std::move(declaration));
             }
+        } else if (
+            (at(TokenKind::Identifier)
+                && contains_word(
+                    { "assert", "assume", "cover", "restrict" },
+                    current().text))
+            || (at(TokenKind::Identifier)
+                && at(TokenKind::Colon, 1)
+                && at(TokenKind::Identifier, 2)
+                && contains_word(
+                    { "assert", "assume", "cover", "restrict" },
+                    current(2).text))) {
+            module_has_non_time_item_ = true;
+            std::optional<Token> label;
+            if (at(TokenKind::Colon, 1)) {
+                label = advance();
+                advance();
+            }
+            const auto directive = advance();
+            const auto assertion_kind = directive.text == "assert"
+                ? SystemVerilogConcurrentAssertionKind::Assert
+                : directive.text == "assume"
+                ? SystemVerilogConcurrentAssertionKind::Assume
+                : directive.text == "cover"
+                ? SystemVerilogConcurrentAssertionKind::Cover
+                : SystemVerilogConcurrentAssertionKind::Restrict;
+            unit.systemverilog_concurrent_assertions.push_back(
+                parse_concurrent_assertion(
+                    directive, assertion_kind, std::move(label)));
+        } else if (match_keyword("function")) {
+            module_has_non_time_item_ = true;
+            auto function = parse_function(previous());
+            const bool duplicate = std::ranges::any_of(
+                                       unit.functions,
+                                       [&](const FunctionDeclaration& existing) {
+                                           return existing.name == function.name;
+                                       })
+                || std::ranges::any_of(
+                    unit.tasks,
+                    [&](const TaskDeclaration& existing) {
+                        return existing.name == function.name;
+                    });
+            if (duplicate) {
+                error(
+                    start,
+                    "FSIM-SV-SEM-066",
+                    "duplicate module function '" + function.name + "'");
+            } else {
+                unit.functions.push_back(std::move(function));
+            }
+        } else if (match_keyword("task")) {
+            module_has_non_time_item_ = true;
+            auto task = parse_task(previous());
+            const bool duplicate = std::ranges::any_of(
+                                       unit.tasks,
+                                       [&](const TaskDeclaration& existing) {
+                                           return existing.name == task.name;
+                                       })
+                || std::ranges::any_of(
+                    unit.functions,
+                    [&](const FunctionDeclaration& existing) {
+                        return existing.name == task.name;
+                    });
+            if (duplicate) {
+                error(
+                    start,
+                    "FSIM-SV-SEM-073",
+                    "duplicate module task '" + task.name + "'");
+            } else {
+                unit.tasks.push_back(std::move(task));
+            }
+        } else if (match_keyword("genvar")) {
+            module_has_non_time_item_ = true;
+            parse_genvar_declaration(unit);
+        } else if (match_keyword("event")) {
+            module_has_non_time_item_ = true;
+            parse_event_declaration(unit, previous());
+        } else if (match_keyword("specify")) {
+            module_has_non_time_item_ = true;
+            if (interface_unit || program_unit) {
+                error(
+                    previous(),
+                    "FSIM-SV-SEM-164",
+                    "a specify block is legal only in a module");
+            }
+            auto block = parse_specify_block(previous());
+            for (const auto& declaration : block.specparams) {
+                const bool duplicate = std::ranges::any_of(
+                    unit.verilog_specify_blocks,
+                    [&](const VerilogSpecifyBlock& existing_block) {
+                        return std::ranges::any_of(
+                            existing_block.specparams,
+                            [&](const VerilogSpecparamDeclaration& existing) {
+                                return existing.name == declaration.name;
+                            });
+                    });
+                if (duplicate) {
+                    error(
+                        Token {
+                            TokenKind::Identifier,
+                            declaration.name,
+                            declaration.span,
+                            { } },
+                        "FSIM-SV-SEM-165",
+                        "duplicate specparam declaration '"
+                            + declaration.name + "'");
+                }
+            }
+            unit.verilog_specify_blocks.push_back(std::move(block));
+        } else if (
+            keyword("final")
+            || (language_ == Language::Verilog2005
+                && at(TokenKind::Identifier)
+                && current().text == "final")) {
+            module_has_non_time_item_ = true;
+            unit.processes.push_back(parse_final());
+        } else if (is_declaration_start() && !instance_start()) {
+            module_has_non_time_item_ = true;
+            parse_declaration(unit);
+        } else if (is_gate_primitive()) {
+            module_has_non_time_item_ = true;
+            parse_gate_primitive(
+                unit.concurrent_statements, unit.signals, unit.ports);
+        } else if (any_keyword({ "cmos", "rcmos", "nmos", "pmos", "rnmos",
+                       "rpmos", "tran", "rtran", "tranif0", "tranif1",
+                       "rtranif0", "rtranif1", "pullup", "pulldown" })) {
+            module_has_non_time_item_ = true;
+            parse_switch_primitive(
+                unit.concurrent_statements, unit.signals, unit.ports);
+        } else if (match_keyword("assign")) {
+            module_has_non_time_item_ = true;
+            auto assignments = parse_continuous_assignments(previous());
+            unit.concurrent_statements.insert(
+                unit.concurrent_statements.end(),
+                std::make_move_iterator(assignments.begin()),
+                std::make_move_iterator(assignments.end()));
+        } else if (
+            keyword("always") || keyword("always_ff")
+            || keyword("always_comb") || keyword("always_latch")
+            || (language_ == Language::Verilog2005
+                && at(TokenKind::Identifier)
+                && (current().text == "always_ff"
+                    || current().text == "always_comb"
+                    || current().text == "always_latch"))) {
+            module_has_non_time_item_ = true;
+            unit.processes.push_back(parse_always());
+        } else if (keyword("initial")) {
+            module_has_non_time_item_ = true;
+            unit.processes.push_back(parse_initial());
+        } else if (match_keyword("generate")) {
+            module_has_non_time_item_ = true;
+            parse_generate_region(unit, previous());
+        } else if (match_keyword("if")) {
+            module_has_non_time_item_ = true;
+            unit.generate_regions.push_back(
+                parse_conditional_generate(previous()));
+        } else if (match_keyword("for")) {
+            module_has_non_time_item_ = true;
+            unit.generate_regions.push_back(
+                parse_iterative_generate(previous()));
+        } else if (match_keyword("case")) {
+            module_has_non_time_item_ = true;
+            unit.generate_regions.push_back(
+                parse_selection_generate(previous()));
+        } else if (instance_start()) {
+            module_has_non_time_item_ = true;
+            auto instances = parse_instances();
+            unit.instances.insert(
+                unit.instances.end(),
+                std::make_move_iterator(instances.begin()),
+                std::make_move_iterator(instances.end()));
+        } else if (at(TokenKind::Backtick)) {
+            parse_directive();
+        } else {
+            module_has_non_time_item_ = true;
+            const auto unexpected = advance();
+            error(
+                unexpected,
+                "FSIM-SV-UNSUPPORTED-004",
+                "unsupported " + std::string { unit_kind }
+                    + " item starting with '" + unexpected.text + "'");
+            skip_to_semicolon();
         }
-        unit.verilog_specify_blocks.push_back(std::move(block));
-    } else if (
-        keyword("final")
-        || (language_ == Language::Verilog2005
-            && at(TokenKind::Identifier)
-            && current().text == "final")) {
-        module_has_non_time_item_ = true;
-        unit.processes.push_back(parse_final());
-    } else if (is_declaration_start() && !instance_start()) {
-        module_has_non_time_item_ = true;
-        parse_declaration(unit);
-    } else if (is_gate_primitive()) {
-        module_has_non_time_item_ = true;
-        parse_gate_primitive(
-            unit.concurrent_statements, unit.signals, unit.ports);
-    } else if (any_keyword({ "cmos", "rcmos", "nmos", "pmos", "rnmos",
-                   "rpmos", "tran", "rtran", "tranif0", "tranif1",
-                   "rtranif0", "rtranif1", "pullup", "pulldown" })) {
-        module_has_non_time_item_ = true;
-        parse_switch_primitive(
-            unit.concurrent_statements, unit.signals, unit.ports);
-    } else if (match_keyword("assign")) {
-        module_has_non_time_item_ = true;
-        auto assignments = parse_continuous_assignments(previous());
-        unit.concurrent_statements.insert(
-            unit.concurrent_statements.end(),
-            std::make_move_iterator(assignments.begin()),
-            std::make_move_iterator(assignments.end()));
-    } else if (
-        keyword("always") || keyword("always_ff")
-        || keyword("always_comb") || keyword("always_latch")
-        || (language_ == Language::Verilog2005
-            && at(TokenKind::Identifier)
-            && (current().text == "always_ff"
-                || current().text == "always_comb"
-                || current().text == "always_latch"))) {
-        module_has_non_time_item_ = true;
-        unit.processes.push_back(parse_always());
-    } else if (keyword("initial")) {
-        module_has_non_time_item_ = true;
-        unit.processes.push_back(parse_initial());
-    } else if (match_keyword("generate")) {
-        module_has_non_time_item_ = true;
-        parse_generate_region(unit, previous());
-    } else if (match_keyword("if")) {
-        module_has_non_time_item_ = true;
-        unit.generate_regions.push_back(
-            parse_conditional_generate(previous()));
-    } else if (match_keyword("for")) {
-        module_has_non_time_item_ = true;
-        unit.generate_regions.push_back(
-            parse_iterative_generate(previous()));
-    } else if (match_keyword("case")) {
-        module_has_non_time_item_ = true;
-        unit.generate_regions.push_back(
-            parse_selection_generate(previous()));
-    } else if (instance_start()) {
-        module_has_non_time_item_ = true;
-        auto instances = parse_instances();
-        unit.instances.insert(
-            unit.instances.end(),
-            std::make_move_iterator(instances.begin()),
-            std::make_move_iterator(instances.end()));
-    } else if (at(TokenKind::Backtick)) {
-        parse_directive();
-    } else {
-        module_has_non_time_item_ = true;
-        const auto unexpected = advance();
-        error(
-            unexpected,
-            "FSIM-SV-UNSUPPORTED-004",
-            "unsupported " + std::string { unit_kind }
-                + " item starting with '" + unexpected.text + "'");
-        skip_to_semicolon();
+        if (position() == before) {
+            advance();
+        }
     }
-    if (position() == before) {
-      advance();
+    expect_keyword(terminator, false, "FSIM-SV-PARSE-004");
+    if (match(TokenKind::Colon)) {
+        const auto end_name = expect_identifier(
+            std::string { unit_kind } + " name after "
+            + std::string { terminator });
+        if (end_name.text != unit.name) {
+            error(
+                end_name,
+                "FSIM-SV-SEM-129",
+                std::string { unit_kind }
+                    + " end name does not match '" + unit.name + "'");
+        }
     }
-  }
-  expect_keyword(terminator, false, "FSIM-SV-PARSE-004");
-  if (match(TokenKind::Colon)) {
-    const auto end_name = expect_identifier(
-        std::string{unit_kind} + " name after "
-            + std::string{terminator});
-    if (end_name.text != unit.name) {
-      error(
-          end_name,
-          "FSIM-SV-SEM-129",
-          std::string{unit_kind}
-              + " end name does not match '" + unit.name + "'");
+    for (const auto& use : external_genvar_uses_) {
+        if (!declared_genvars_.contains(use.text)) {
+            error(
+                use,
+                "FSIM-SV-PARSE-066",
+                "generate loop variable '" + use.text
+                    + "' is not declared by inline or module-scope genvar");
+        }
     }
-  }
-  for (const auto& use : external_genvar_uses_) {
-    if (!declared_genvars_.contains(use.text)) {
-      error(
-          use,
-          "FSIM-SV-PARSE-066",
-          "generate loop variable '" + use.text
-              + "' is not declared by inline or module-scope genvar");
-    }
-  }
-  resolve_implicit_nets(unit);
-  resolve_assertion_references(unit);
-  resolve_dpi_declarations(
-      unit.systemverilog_dpi_declarations,
-      unit.functions,
-      unit.tasks);
-  unit.span = span_from(start, previous());
-  return unit;
+    resolve_implicit_nets(unit);
+    resolve_assertion_references(unit);
+    resolve_dpi_declarations(
+        unit.systemverilog_dpi_declarations,
+        unit.functions,
+        unit.tasks);
+    unit.span = span_from(start, previous());
+    return unit;
 }
 
 bool VerilogParser::instance_start() const {

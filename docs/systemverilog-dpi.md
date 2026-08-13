@@ -7,13 +7,19 @@ module, interface, or program scope; validates callable profiles; marshals
 supported values without host-layout aliases; and loads portable C/C++ shared
 libraries through a versioned C ABI.
 
+The boundary participates in Batch 165's zero-active-row SystemVerilog release
+contract. Its bounded profile and configured materialization/work ceilings are
+explicit API/resource limits, not general SystemVerilog legality limits. See
+the [SystemVerilog release audit](v1-systemverilog-release-audit.md) for the
+governed clause, arbitrary-width, engine, artifact, and public-API evidence.
+
 ## Supported surface
 
 | Area | Supported behavior | Primary evidence |
 |---|---|---|
 | Declarations | `import`/`export "DPI-C"`, `pure`/`context`, functions/tasks, optional C aliases, exact owner/tokens/spans, typed export resolution | `frontend_dpi_tests.cpp` |
 | Scalars | Arbitrary bounded two-/four-state aval/bval planes, shortreal/real/realtime exact bits, strict UTF-8 strings, simulation-owned chandle identities | `runtime_dpi_tests.cpp` |
-| Composites | Recursive fixed arrays, structs, enums, canonical flattened leaves, checked layout and resource budgets | `runtime_dpi_tests.cpp` |
+| Composites | Recursive fixed arrays, structs, arbitrary-width two-/four-state enums with exact literal identity, canonical flattened leaves, checked layout and resource budgets | `runtime_dpi_tests.cpp` |
 | Open arrays | Declared range direction, multidimensional indices, contiguous and element pointers, direction-aware mutation, epoch lifetime | `runtime_dpi_tests.cpp` |
 | Scope and callbacks | Exact simulation-owned `svScope`, context-local set/restore, exported callbacks, disabled-state acknowledgement, exception rollback | `runtime_dpi_tests.cpp` |
 | Imported tasks | Deterministic timed suspension/resume, cancellation, nested callback re-entry, transactional publication, scheduler containment | `runtime_dpi_tests.cpp` |
@@ -32,6 +38,11 @@ libraries through a versioned C ABI.
 All mutable callback/task results remain private until success. Exceptions do
 not cross the scheduler boundary. A failed loader publishes neither a partial
 symbol table nor a loaded plug-in facade.
+
+Enum descriptors and values never pass through a 64-bit host projection.
+Marshalling compares the complete declared-width `aval`/`bval` planes, retains
+signed and `X`/`Z` literal identity, and rejects wrong-width, duplicate, or
+two-state-unknown profiles transactionally.
 
 ## Platform and engine matrix
 

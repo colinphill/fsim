@@ -1472,6 +1472,30 @@ void append_generated_body(
         body_names[local_name] = variable.name;
         unit.variables.push_back(std::move(variable));
     }
+    for (const auto& declaration : body.systemverilog_lets) {
+        body_names[declaration.name] = generated_scope(scope, declaration.name);
+    }
+    for (auto& declaration : body.systemverilog_lets) {
+        for (auto& port : declaration.ports) {
+            if (port.type) {
+                qualify_generated_type(*port.type, body_names);
+            }
+            if (port.default_value) {
+                qualify_generated_expression(
+                    *port.default_value, body_names);
+            }
+        }
+        qualify_generated_expression(
+            declaration.expression, body_names);
+        declaration.name = body_names.at(declaration.name);
+        unit.systemverilog_lets.push_back(std::move(declaration));
+    }
+    for (auto& alias : body.systemverilog_aliases) {
+        for (auto& terminal : alias.terminals) {
+            qualify_generated_expression(terminal, body_names);
+        }
+        unit.systemverilog_aliases.push_back(std::move(alias));
+    }
     for (auto& alias : body.signal_aliases) {
         const auto local_name = alias.name;
         qualify_generated_type(alias.type, body_names);

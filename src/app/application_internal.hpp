@@ -8,6 +8,7 @@
 #if defined(FSIM_HAS_LLVM)
 #include "fsim/compiler/llvm_jit.hpp"
 #endif
+#include "fsim/frontend/coverage_percentage.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/frontend/preprocessor.hpp"
 #include "fsim/runtime/class_randomize.hpp"
@@ -100,6 +101,7 @@ struct SystemVerilogVpiPublishedDesign {
         std::vector<SystemVerilogVpiDriverBinding>>
         drivers;
     std::map<runtime::simir::SignalId, std::vector<fsim_vpi_handle_v1>> events;
+    std::map<std::string, fsim_vpi_handle_v1, std::less<>> assertions;
     std::map<runtime::simir::SignalId, runtime::SystemVerilogScalarKind>
         scalar_kinds;
     std::map<runtime::simir::SignalId,
@@ -1089,6 +1091,62 @@ struct TraceState {
     std::uint64_t uvm_activity_observer { };
     SimulationTick tick_multiplier { 1 };
 };
+
+struct HdlVcdState {
+    ~HdlVcdState();
+    std::ofstream stream;
+    std::unique_ptr<runtime::VcdWriter> writer;
+    std::filesystem::path file_root;
+    std::filesystem::path path;
+    Simulation* simulation { };
+    std::vector<std::vector<runtime::VcdSignal>> handles;
+    std::vector<bool> selected;
+    std::vector<runtime::SystemVerilogScalarKind> scalar_kinds;
+    std::vector<std::pair<std::string, runtime::simir::SignalId>> objects;
+    std::vector<std::string> instances;
+    std::uint64_t observer { };
+    SimulationTick tick_multiplier { 1 };
+    std::optional<SimulationTick> dumpvars_time;
+    std::optional<std::uint64_t> byte_limit;
+    bool begun { };
+    bool enabled { true };
+    bool limit_reached { };
+
+    struct ExtendedPort {
+        std::string scope;
+        std::string reference;
+        runtime::simir::SignalId signal { };
+        semantic::design::Direction direction {
+            semantic::design::Direction::unknown
+        };
+        std::optional<std::pair<std::int64_t, std::int64_t>> range;
+    };
+
+    struct ExtendedFile {
+        std::filesystem::path path;
+        std::ofstream stream;
+        std::vector<std::size_t> ports;
+        SimulationTick tick_multiplier { 1 };
+        std::uint64_t bytes_written { };
+        std::optional<std::uint64_t> byte_limit;
+        std::optional<SimulationTick> last_time;
+        bool begun { };
+        bool enabled { true };
+        bool limit_reached { };
+        bool closed { };
+    };
+
+    std::vector<ExtendedPort> extended_ports;
+    std::vector<std::unique_ptr<ExtendedFile>> extended_files;
+    std::set<std::string, std::less<>> extended_scopes;
+    std::set<std::filesystem::path> extended_paths;
+    std::optional<SimulationTick> dumpports_time;
+};
+
+void attach_hdl_vcd_control(
+    Simulation& simulation,
+    HdlVcdState& state,
+    const std::filesystem::path& file_root);
 
 void write_trace_signal_value(
     TraceState& state,

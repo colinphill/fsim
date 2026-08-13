@@ -156,6 +156,7 @@ module process_handles;
   process handle;
   int status_value;
   bit completed;
+  string random_state;
   initial begin
     fork
       begin
@@ -168,6 +169,11 @@ module process_handles;
     completed = handle.completed();
     handle.await();
     handle.kill();
+    handle.suspend();
+    handle.resume();
+    random_state = handle.get_randstate();
+    handle.set_randstate(random_state);
+    handle.srandom(32'h1234);
   end
 endmodule
 )",
@@ -200,6 +206,11 @@ endmodule
     assert(has_operation(static_cast<ProcessCompleted*>(nullptr)));
     assert(has_operation(static_cast<ProcessAwait*>(nullptr)));
     assert(has_operation(static_cast<ProcessKill*>(nullptr)));
+    assert(has_operation(static_cast<ProcessSuspend*>(nullptr)));
+    assert(has_operation(static_cast<ProcessResume*>(nullptr)));
+    assert(has_operation(static_cast<ProcessGetRandState*>(nullptr)));
+    assert(has_operation(static_cast<ProcessSetRandState*>(nullptr)));
+    assert(has_operation(static_cast<ProcessSrandom*>(nullptr)));
 
     const auto callable = fsim::frontend::parse_text(
         "callable_fork.sv",

@@ -428,10 +428,10 @@ void VerilogParser::validate_function_body(
                   "function assignments must be blocking and time-free");
             }
           }
-          const bool forbidden =
-              statement.kind == StatementKind::Delay
+          const bool forbidden = statement.kind == StatementKind::Delay
               || statement.kind == StatementKind::WaitOn
               || statement.kind == StatementKind::WaitUntil
+              || statement.kind == StatementKind::WaitOrder
               || (statement.kind == StatementKind::EventTrigger
                   && (statement.delay
                       || statement.assignment_kind

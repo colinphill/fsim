@@ -23,12 +23,12 @@ namespace fsim::test {
 void ApplicationTestFixture::test_artifact_phase_semantics()
 {
     install_governed_process_address_space_ceiling();
-    static_assert(app::kRuntimeStateSchema == 24);
-    static_assert(app::kSemanticStateSchema == 2);
-    static_assert(app::kDesignIrStateSchema == 2);
-    static_assert(app::kClassStateSchema == 9);
-    static_assert(app::kSystemVerilogConstraintHirStateSchema == 4);
-    static_assert(app::kSystemVerilogCoverageStateSchema == 1);
+    static_assert(app::kRuntimeStateSchema == 47);
+    static_assert(app::kSemanticStateSchema == 3);
+    static_assert(app::kDesignIrStateSchema == 3);
+    static_assert(app::kClassStateSchema == 10);
+    static_assert(app::kSystemVerilogConstraintHirStateSchema == 6);
+    static_assert(app::kSystemVerilogCoverageStateSchema == 4);
     static_assert(app::kSystemVerilogUvmStateSchema == 2);
     static_assert(app::kVhdlHirStateSchema == 1);
     const auto copy_artifact_tree = [](
@@ -144,7 +144,7 @@ module scalar_artifact;
       option.goal = 75;
       type_option.merge_instances = 1;
       value_point: coverpoint sample_value {
-        bins low[] = {[0:3]};
+        bins low[] = {[0:3]} with (item <= 3);
         bins path = (1 => 2);
         illegal_bins rejected = {8};
       }
@@ -503,7 +503,24 @@ end architecture;
     assert(coverage_declaration.coverage_declarations.front().bins.size() == 6);
     auto& coverage_instance = coverage_state.instances.front();
     assert(coverage_instance.runtime_identity.find("0x") == std::string::npos);
-    const auto& first_bin = coverage_declaration.coverage_declarations.front().bins.front();
+    auto& first_bin
+        = coverage_state.declarations.front().coverage_declarations.front().bins.front();
+    assert(!first_bin.values.empty());
+    auto& wide_bin_value = first_bin.values.front();
+    wide_bin_value.width = 137;
+    wide_bin_value.exact_value.reset();
+    wide_bin_value.range_left.reset();
+    wide_bin_value.range_right.reset();
+    wide_bin_value.exact_bits = "1" + std::string(135, '0') + "1";
+    wide_bin_value.range_left_bits = std::string(136, '0') + "1";
+    wide_bin_value.range_right_bits = "1" + std::string(136, '0');
+    wide_bin_value.wildcard_value_bits
+        = "10" + std::string(133, '0') + "01";
+    wide_bin_value.wildcard_mask_bits
+        = "01" + std::string(133, '0') + "10";
+    wide_bin_value.exact_signed = true;
+    wide_bin_value.range_left_signed = true;
+    wide_bin_value.range_right_signed = false;
     frontend::SystemVerilogCoverageBinHit hit;
     hit.coverage_declaration_index = 0;
     hit.bin_declaration_index = first_bin.declaration_index;
@@ -512,13 +529,34 @@ end architecture;
     hit.at_least = first_bin.at_least;
     hit.covered = true;
     coverage_instance.bin_hits.push_back(hit);
+    auto automatic_hit = hit;
+    automatic_hit.identity = "automatic-wide";
+    automatic_hit.automatic_value = 1;
+    automatic_hit.automatic_value_bits = wide_bin_value.exact_bits;
+    automatic_hit.automatic_unknown_bits = std::string(137, '0');
+    automatic_hit.automatic_width = 137;
+    automatic_hit.automatic_signed = true;
+    coverage_instance.bin_hits.push_back(automatic_hit);
     coverage_instance.transition_progress.push_back({ 0, 4, 0, 1, 2, 3 });
-    coverage_instance.previous_samples.push_back({ 0, 2, 0, 64 });
+    frontend::SystemVerilogCoveragePreviousSample previous_sample;
+    previous_sample.coverage_declaration_index = 0;
+    previous_sample.width = 137;
+    previous_sample.value_bits = wide_bin_value.exact_bits;
+    previous_sample.unknown_bits = std::string(64, '0') + "1"
+        + std::string(72, '0');
+    previous_sample.signed_value = true;
+    coverage_instance.previous_samples.push_back(previous_sample);
     coverage_instance.cross_bin_state.push_back(
         { 0, std::nullopt, "tuple", { first_bin.name }, 4, 1, 1, 100, 1,
             true, false });
-    coverage_instance.illegal_bin_reports.push_back(
-        { "rejected", 8, first_bin.span });
+    frontend::SystemVerilogCoverageIllegalBinReport illegal_report;
+    illegal_report.bin_identity = "rejected";
+    illegal_report.sampled_width = 137;
+    illegal_report.sampled_value_bits = wide_bin_value.exact_bits;
+    illegal_report.sampled_unknown_bits = previous_sample.unknown_bits;
+    illegal_report.sampled_signed = true;
+    illegal_report.span = first_bin.span;
+    coverage_instance.illegal_bin_reports.push_back(illegal_report);
     frontend::SystemVerilogCoverageCallbackEvent callback;
     callback.sequence = 9;
     callback.kind = frontend::SystemVerilogCoverageCallbackKind::Hit;
@@ -543,11 +581,61 @@ end architecture;
     const auto restored_bytes = app::serialize_systemverilog_coverage_state(
         *restored_coverage, coverage_codec_diagnostics);
     assert(restored_bytes == coverage_bytes);
+    const auto& restored_wide_bin_value = restored_coverage->declarations.front()
+                                              .coverage_declarations.front()
+                                              .bins.front()
+                                              .values.front();
+    assert(restored_wide_bin_value.width == 137);
+    assert(
+        restored_coverage->declarations.front()
+                .coverage_declarations.front()
+                .bins.front()
+                .with_tokens.size()
+            == 3U
+        && restored_coverage->declarations.front()
+                .coverage_declarations.front()
+                .bins.front()
+                .with_tokens[1]
+                .text
+            == "<=");
+    assert(restored_wide_bin_value.exact_bits == wide_bin_value.exact_bits);
+    assert(restored_wide_bin_value.range_left_bits
+        == wide_bin_value.range_left_bits);
+    assert(restored_wide_bin_value.range_right_bits
+        == wide_bin_value.range_right_bits);
+    assert(restored_wide_bin_value.wildcard_value_bits
+        == wide_bin_value.wildcard_value_bits);
+    assert(restored_wide_bin_value.wildcard_mask_bits
+        == wide_bin_value.wildcard_mask_bits);
+    assert(restored_wide_bin_value.exact_signed);
+    assert(restored_wide_bin_value.range_left_signed);
+    assert(!restored_wide_bin_value.range_right_signed);
     assert(restored_coverage->instances.front().bin_hits.front().hit_count == 3);
+    assert(restored_coverage->instances.front().bin_hits.size() == 2);
+    assert(restored_coverage->instances.front().bin_hits[1].automatic_value_bits
+        == automatic_hit.automatic_value_bits);
+    assert(restored_coverage->instances.front().bin_hits[1].automatic_width
+        == 137);
     assert(restored_coverage->instances.front().transition_progress.size() == 1);
     assert(restored_coverage->instances.front().previous_samples.size() == 1);
+    assert(restored_coverage->instances.front()
+               .previous_samples.front()
+               .value_bits
+        == previous_sample.value_bits);
+    assert(restored_coverage->instances.front()
+               .previous_samples.front()
+               .unknown_bits
+        == previous_sample.unknown_bits);
     assert(restored_coverage->instances.front().cross_bin_state.size() == 1);
     assert(restored_coverage->instances.front().illegal_bin_reports.size() == 1);
+    assert(restored_coverage->instances.front()
+               .illegal_bin_reports.front()
+               .sampled_value_bits
+        == illegal_report.sampled_value_bits);
+    assert(restored_coverage->instances.front()
+               .illegal_bin_reports.front()
+               .sampled_unknown_bits
+        == illegal_report.sampled_unknown_bits);
     assert(restored_coverage->callback_events.front().runtime_identity
         == coverage_instance.runtime_identity);
     assert(restored_coverage->trace_events.front().time == 42);
@@ -556,6 +644,17 @@ end architecture;
                restored_coverage->reports.front())
         == frontend::render_systemverilog_coverage_report(
             coverage_state.reports.front()));
+    auto future_coverage = *coverage_bytes;
+    future_coverage[8]
+        = static_cast<char>(app::kSystemVerilogCoverageStateSchema + 1U);
+    diagnostic::Engine future_coverage_diagnostics;
+    assert(!app::deserialize_systemverilog_coverage_state(
+        future_coverage, "future-coverage-state.bin",
+        future_coverage_diagnostics));
+    diagnostic::Engine truncated_coverage_diagnostics;
+    assert(!app::deserialize_systemverilog_coverage_state(
+        coverage_bytes->substr(0, coverage_bytes->size() - 1U),
+        "truncated-coverage-state.bin", truncated_coverage_diagnostics));
 
     const auto missing_design = directory / "artifact-missing.fsimdesign";
     const auto missing_design_text = support::path_to_utf8(missing_design);
@@ -718,10 +817,13 @@ end architecture;
         "main.*", "--trace-filter", "observer.*", "--trace-filter",
         "scalar.*", "--trace-filter", "virtual.*"
     };
-    assert(cli::run(
-               static_cast<int>(simulate.size()), simulate.data(), services,
-               output, error)
-        == 0);
+    const auto simulate_result = cli::run(
+        static_cast<int>(simulate.size()), simulate.data(), services,
+        output, error);
+    if (simulate_result != 0) {
+        std::cerr << output.str() << error.str();
+    }
+    assert(simulate_result == 0);
     assert(error.str().empty());
     const auto trace_bytes = [&] {
         std::ifstream input(trace, std::ios::binary);
@@ -1193,6 +1295,10 @@ endmodule
         << "FSIM-VERILOG-2005-ARTIFACT-PASS "
            "stages=object/library/design/relocation/replay/checkpoint "
            "resources=as6g gaps=0 widths=exact-xz\n";
+    std::cout
+        << "FSIM-SYSTEMVERILOG-2017-ARTIFACT-PASS "
+           "stages=object/library/design/relocation/replay/checkpoint "
+           "resources=as6g gaps=0 widths=exact-xz-logic9\n";
 }
 
 } // namespace fsim::test

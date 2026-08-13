@@ -45,7 +45,11 @@ namespace {
       return semantic::UnitKind::verilog_module;
     case frontend::UnitKind::SystemVerilogProgram:
       return semantic::UnitKind::systemverilog_program;
-  }
+    case frontend::UnitKind::SystemVerilogConfiguration:
+        return semantic::UnitKind::systemverilog_configuration;
+    case frontend::UnitKind::SystemVerilogBind:
+        return semantic::UnitKind::systemverilog_bind;
+    }
   return semantic::UnitKind::verilog_module;
 }
 
@@ -57,6 +61,8 @@ namespace {
     case frontend::TypeDeclarationKind::Alias:
     case frontend::TypeDeclarationKind::SystemVerilogTypedef:
       return semantic::TypeKind::alias;
+    case frontend::TypeDeclarationKind::SystemVerilogNettype:
+        return semantic::TypeKind::declaration;
     default:
       return semantic::TypeKind::declaration;
   }

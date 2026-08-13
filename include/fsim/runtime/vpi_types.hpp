@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "fsim/runtime/packed_value.hpp"
+
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -82,7 +84,7 @@ struct SystemVerilogVpiRange {
 
 struct SystemVerilogVpiEnumLiteral {
     std::string name;
-    std::int64_t value { };
+    PackedLogic4 value;
 
     friend bool operator==(
         const SystemVerilogVpiEnumLiteral&,

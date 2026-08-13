@@ -47,6 +47,13 @@ struct Capture {
   std::string nba_caught;
   std::string zero_nba_caught;
   std::string triple_caught;
+  std::string order_success;
+  std::string order_failure;
+  std::string triggered_same_time;
+  std::string triggered_expired;
+  std::string procedural_alias_caught;
+  std::string declaration_alias_caught;
+  std::string null_triggered;
   std::string vcd;
   std::vector<Change> event_changes;
   std::vector<Change> observed_changes;
@@ -86,6 +93,13 @@ Capture execute(
       simulation.find_signal("named_event_test.zero_nba_caught");
   const auto triple_caught =
       simulation.find_signal("named_event_test.triple_caught");
+  const auto order_success = simulation.find_signal("named_event_test.order_success");
+  const auto order_failure = simulation.find_signal("named_event_test.order_failure");
+  const auto triggered_same_time = simulation.find_signal("named_event_test.triggered_same_time");
+  const auto triggered_expired = simulation.find_signal("named_event_test.triggered_expired");
+  const auto procedural_alias_caught = simulation.find_signal("named_event_test.procedural_alias_caught");
+  const auto declaration_alias_caught = simulation.find_signal("named_event_test.declaration_alias_caught");
+  const auto null_triggered = simulation.find_signal("named_event_test.null_triggered");
   assert(
       event && observed && repeated
       && function_observed && task_observed
@@ -93,7 +107,11 @@ Capture execute(
       && repeat_count_calls);
   assert(
       blocking_missed && blocking_caught
-      && nba_caught && zero_nba_caught && triple_caught);
+      && nba_caught && zero_nba_caught && triple_caught
+      && order_success && order_failure
+      && triggered_same_time && triggered_expired
+      && procedural_alias_caught && declaration_alias_caught
+      && null_triggered);
 
   Capture capture;
   capture.compiled_processes = simulation.compiled_process_count();
@@ -175,6 +193,13 @@ Capture execute(
       simulation.read_signal(*zero_nba_caught).to_msb_string();
   capture.triple_caught =
       simulation.read_signal(*triple_caught).to_msb_string();
+  capture.order_success = simulation.read_signal(*order_success).to_msb_string();
+  capture.order_failure = simulation.read_signal(*order_failure).to_msb_string();
+  capture.triggered_same_time = simulation.read_signal(*triggered_same_time).to_msb_string();
+  capture.triggered_expired = simulation.read_signal(*triggered_expired).to_msb_string();
+  capture.procedural_alias_caught = simulation.read_signal(*procedural_alias_caught).to_msb_string();
+  capture.declaration_alias_caught = simulation.read_signal(*declaration_alias_caught).to_msb_string();
+  capture.null_triggered = simulation.read_signal(*null_triggered).to_msb_string();
   vcd.flush();
   capture.vcd = vcd_text.str();
   return capture;
@@ -242,6 +267,13 @@ void test_named_events(
     assert(capture->nba_caught == "1");
     assert(capture->zero_nba_caught == "1");
     assert(capture->triple_caught == "1");
+    assert(capture->order_success == "1");
+    assert(capture->order_failure == "1");
+    assert(capture->triggered_same_time == "1");
+    assert(capture->triggered_expired == "1");
+    assert(capture->procedural_alias_caught == "1");
+    assert(capture->declaration_alias_caught == "1");
+    assert(capture->null_triggered == "0");
     assert(capture->event_changes.size() == 2);
     assert(capture->event_changes[0].time == 1);
     assert(capture->event_changes[0].value == "1");
@@ -268,7 +300,7 @@ void test_named_events(
   assert(reference.vcd == compiled.vcd);
   assert(reference.vcd.find("#4") != std::string::npos);
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 18);
+  assert(compiled.compiled_processes == 28);
 #else
   assert(compiled.compiled_processes == 0);
 #endif
@@ -309,6 +341,21 @@ module named_event_test;
   bit nba_caught;
   bit zero_nba_caught;
   bit triple_caught;
+  event order_a;
+  event order_b;
+  event order_c;
+  bit order_success;
+  bit order_failure;
+  event property_event;
+  bit triggered_same_time;
+  bit triggered_expired;
+  event alias_source;
+  event alias_target;
+  event alias_decl = alias_source;
+  bit procedural_alias_caught;
+  bit declaration_alias_caught;
+  event null_event;
+  bit null_triggered;
   function automatic logic read_a_leaf;
     return source_a;
   endfunction
@@ -356,6 +403,44 @@ module named_event_test;
   initial begin
     @(triple_event);
     triple_caught = 1'b1;
+  end
+  initial begin
+    wait_order (order_a, order_b, order_a)
+      order_success = 1'b1;
+    else
+      order_success = 1'b0;
+  end
+  initial begin
+    wait_order (order_a, order_b, order_c)
+      order_failure = 1'b0;
+    else
+      order_failure = 1'b1;
+  end
+  initial begin
+    #1 -> order_a;
+    #1 -> order_b;
+    #1 -> order_a;
+  end
+  initial #1 -> property_event;
+  initial begin
+    @(property_event);
+    #0 triggered_same_time = property_event.triggered;
+    #1 triggered_expired = !property_event.triggered;
+  end
+  initial begin
+    alias_target = alias_source;
+    @(alias_target);
+    procedural_alias_caught = 1'b1;
+  end
+  initial begin
+    @(alias_decl);
+    declaration_alias_caught = 1'b1;
+  end
+  initial #1 -> alias_source;
+  initial begin
+    null_event = null;
+    -> null_event;
+    #0 null_triggered = null_event.triggered;
   end
   initial begin
     #1 -> fired;

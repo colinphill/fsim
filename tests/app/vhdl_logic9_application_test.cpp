@@ -35,6 +35,7 @@ struct Capture {
     fsim::runtime::RunResult result;
     std::vector<std::string> values;
     std::string local_value;
+    std::string wide_local_value;
     std::vector<std::string> resolved_drivers;
     std::vector<std::string> reports;
     std::string vcd;
@@ -154,6 +155,10 @@ Capture run_once(
         fsim::runtime::simir::ProcessId,
         std::size_t>>
         exact_local;
+    std::optional<std::pair<
+        fsim::runtime::simir::ProcessId,
+        std::size_t>>
+        wide_exact_local;
     for (const auto& process : project->design.processes()) {
         for (std::size_t index = 0;
             index < process.debug_locals.size();
@@ -164,10 +169,18 @@ Capture run_once(
                     process.debug_locals[index].value_kind
                     == fsim::runtime::simir::ValueKind::logic9);
                 exact_local = std::pair { process.id, index };
+            } else if (process.debug_locals[index].name
+                == "wide_exact_local") {
+                assert(
+                    process.debug_locals[index].value_kind
+                    == fsim::runtime::simir::ValueKind::logic9);
+                assert(process.debug_locals[index].width == 129U);
+                wide_exact_local = std::pair { process.id, index };
             }
         }
     }
     assert(exact_local);
+    assert(wide_exact_local);
     fsim::app::Simulation simulation {
         std::move(*project), config.run.max_deltas, engine
     };
@@ -242,6 +255,10 @@ Capture run_once(
     capture.local_value = simulation.read_process_local(
                                         exact_local->first, exact_local->second)
                               .to_msb_string();
+    capture.wide_local_value = simulation.read_process_local(
+                                             wide_exact_local->first,
+                                             wide_exact_local->second)
+                                   .to_msb_string();
     for (const auto process : resolved_driver_processes) {
         capture.resolved_drivers.push_back(
             simulation.read_driver(
@@ -298,6 +315,7 @@ void verify_capture(const Capture& capture)
             "ULH-WZ01", "065", "AC", std::string(65, '1'),
             std::string(17, 'F') }));
     assert(capture.local_value == "ULH-WZ01");
+    assert(capture.wide_local_value == std::string(129, 'H'));
     assert((
         capture.resolved_drivers
         == std::vector<std::string> {
@@ -484,6 +502,7 @@ end entity;
 architecture rtl of vhdl_logic9 is
   signal attribute_source : std_logic_vector(7 downto 0);
   signal edge_clock : std_logic;
+  signal wide_source : std_logic_vector(128 downto 0);
 begin
   source <= "ULH-WZ01";
   inverted <= not source;
@@ -503,6 +522,15 @@ begin
       std_logic_vector(7 downto 0) := "ULH-WZ01";
   begin
     local_result <= exact_local;
+    wait;
+  end process;
+  wide_source <= (others => 'H');
+  wide_local_copy : process
+    variable wide_exact_local :
+      std_logic_vector(128 downto 0) := (others => 'U');
+  begin
+    wait for 1 ns;
+    wide_exact_local := wide_source;
     wait;
   end process;
   attribute_source <= transport
@@ -780,6 +808,7 @@ endmodule
         assert(reference.result.delta == compiled.result.delta);
         assert(reference.values == compiled.values);
         assert(reference.local_value == compiled.local_value);
+        assert(reference.wide_local_value == compiled.wide_local_value);
         assert(reference.reports == compiled.reports);
         assert(
             reference.resolved_drivers

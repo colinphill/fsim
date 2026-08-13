@@ -12,7 +12,9 @@ bool trigger_matches(
     const SystemVerilogCovergroupDeclaration& declaration,
     const SystemVerilogCoverageSampleTrigger trigger) {
   if (trigger == SystemVerilogCoverageSampleTrigger::Explicit) {
-    return !declaration.sampling;
+      return !declaration.sampling
+          || declaration.sampling->kind
+          == SystemVerilogCovergroupSamplingKind::Event;
   }
   if (!declaration.sampling) return false;
   if (trigger == SystemVerilogCoverageSampleTrigger::Event) {

@@ -318,10 +318,10 @@ mystery = true
           diagnostics.diagnostics(),
           [](const fsim::diagnostic::Diagnostic& diagnostic) {
             return diagnostic.code == "FSIM-PROJ-0005"
-                && diagnostic.message.find("fsim migrate --to 2")
-                    != std::string::npos;
+                && diagnostic.message
+                    == "unsupported project schema 1; this build supports schema 2";
           }),
-      "schema 1 rejection names the migration command");
+      "schema 1 rejection identifies only the accepted current schema");
 }
 
 void test_elaboration_search_library_validation() {
@@ -444,31 +444,6 @@ library = "missing_path"
                     != std::string::npos;
           }),
       "missing mapping paths use the stable required-value diagnostic");
-}
-
-void test_schema_migration() {
-  const auto workspace = make_workspace();
-  const auto manifest = workspace / "fsim.toml";
-  write_file(
-      manifest,
-      "# retained comment\n  schema = 1 # version\n[project]\n"
-      "top = \"top\"\n");
-  fsim::diagnostic::Engine diagnostics;
-  const auto migrated =
-      fsim::project::migrate_to_schema_2(manifest, diagnostics);
-  check(migrated.has_value(), "schema 1 migration succeeds");
-  check(!diagnostics.has_error(), "schema migration has no diagnostics");
-  if (migrated.has_value()) {
-    check(
-        migrated->find("  schema = 2 # version")
-            != std::string::npos,
-        "migration changes only the schema value");
-    check(
-        migrated->find("# retained comment") == 0,
-        "migration retains surrounding text");
-  }
-  std::error_code ignored;
-  std::filesystem::remove_all(workspace, ignored);
 }
 
 void test_json_diagnostics_are_escaped() {
@@ -648,7 +623,6 @@ int main() {
   test_schema_and_unknown_key_errors();
   test_elaboration_search_library_validation();
   test_library_mapping_validation();
-  test_schema_migration();
   test_json_diagnostics_are_escaped();
   test_zero_time_resolution_is_rejected();
   test_delay_mode_values();

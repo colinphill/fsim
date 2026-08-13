@@ -541,12 +541,21 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(lossy_assignment.ok());
-    const auto rejected_lossy_assignment =
-        fsim::elaboration::elaborate(
-            lossy_assignment.design, "lossy_assignment");
-    assert(!rejected_lossy_assignment.ok());
-    assert(has_diagnostic(
-        rejected_lossy_assignment, "FSIM-ELAB-050"));
+    const auto converted_lossy_assignment = fsim::elaboration::elaborate(
+        lossy_assignment.design, "lossy_assignment");
+    assert(converted_lossy_assignment.ok());
+    auto lossy_assignment_interpreter = converted_lossy_assignment.design->create_interpreter();
+    const auto lossy_assignment_target = converted_lossy_assignment.design->find_signal("target");
+    assert(lossy_assignment_target);
+    const auto lossy_assignment_run = lossy_assignment_interpreter->run();
+    assert(
+        lossy_assignment_run.status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        lossy_assignment_interpreter
+            ->signal_value(*lossy_assignment_target)
+            .to_msb_string()
+        == "0");
 
     const auto two_state_assignment = fsim::frontend::parse_text(
         "two_state_assignment.sv",

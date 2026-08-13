@@ -62,9 +62,11 @@ void test_simir_text_files()
     TestDirectory files { "simir-files" };
     Interpreter interpreter;
     interpreter.set_file_root(files.path);
+    interpreter.set_time_resolution_femtoseconds(2000);
     const auto first = interpreter.add_string_object({ "first", { } });
     const auto second = interpreter.add_string_object({ "second", { } });
     const auto third = interpreter.add_string_object({ "third", { } });
+    const auto fourth = interpreter.add_string_object({ "fourth", { } });
     const auto error_text = interpreter.add_string_object({ "error", "not-cleared" });
 
     Process process;
@@ -89,6 +91,23 @@ void test_simir_text_files()
         FileWriteFormatted {
             0, 1, 32, OutputFormat::decimal,
             "value=", "", true },
+        LoadConstant {
+            2,
+            PackedLogic4::from_aval_bval(
+                32, static_cast<std::uint32_t>(-9), 0) },
+        LoadConstant { 3, number(3) },
+        LoadConstant { 4, number(12) },
+        LoadStringConstant { 5, " ns" },
+        TimeFormatControl { 2, 3, 5, 4 },
+        LoadConstant {
+            1,
+            encode_systemverilog_scalar_payload(
+                SystemVerilogScalarValue::time(1250))
+                .value },
+        FileWriteFormatted {
+            0, 1, 64, OutputFormat::time,
+            "time=", "", true, false, false, 0, false, false,
+            SystemVerilogScalarKind::Time },
         LoadStringConstant { 3, "body" },
         FileWriteString { 0, 3, "<", ">", false },
         FileFlush { 0, false },
@@ -102,6 +121,8 @@ void test_simir_text_files()
         WriteStringObject { second, 4 },
         FileReadLine { 3, 2, 4, 0, FileReadKind::line },
         WriteStringObject { third, 4 },
+        FileReadLine { 3, 2, 4, 0, FileReadKind::line },
+        WriteStringObject { fourth, 4 },
         FileEndOfFile { 4, 2 },
         FileErrorStatus { 5, 2, 5 },
         WriteStringObject { error_text, 5 },
@@ -119,7 +140,10 @@ void test_simir_text_files()
         interpreter.string_object_value(second) == "value=42\n",
         "formatted line round trips");
     require(
-        interpreter.string_object_value(third) == "<body>",
+        interpreter.string_object_value(third) == "time=    2.500 ns\n",
+        "time-formatted line uses the simulation-global profile");
+    require(
+        interpreter.string_object_value(fourth) == "<body>",
         "final unterminated line round trips");
     require(
         interpreter.string_object_value(error_text).empty(),
@@ -140,7 +164,7 @@ void test_simir_text_files()
         std::istreambuf_iterator<char> { }
     };
     require(
-        contents == "head\nvalue=42\n<body>",
+        contents == "head\nvalue=42\ntime=    2.500 ns\n<body>",
         "file writes flush in deterministic operation order");
 
     Interpreter scanner;

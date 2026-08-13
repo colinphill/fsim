@@ -1141,6 +1141,36 @@ void test_simir_containers()
     associative_type.associative = true;
     associative_type.index_width = 8;
     associative_type.signed_indices = true;
+    auto wide_associative_type = associative_type;
+    wide_associative_type.index_width = 137;
+    wide_associative_type.signed_indices = false;
+    auto wide_low_key = PackedLogic4(137, Logic4::zero);
+    auto wide_high_key = PackedLogic4(137, Logic4::zero);
+    wide_low_key.set(96, Logic4::one);
+    wide_high_key.set(136, Logic4::one);
+    const ContainerValue wide_keys {
+        wide_associative_type,
+        { value(8, 0x11), value(8, 0x22) },
+        { wide_low_key, wide_high_key }
+    };
+    Interpreter wide_key_validator;
+    (void)wide_key_validator.add_container_object(
+        { "wide_keys", wide_keys, std::nullopt });
+    require(
+        wide_keys.keys[0].width() == 137
+            && wide_keys.keys[0].get(96) == Logic4::one
+            && wide_keys.keys[1].get(136) == Logic4::one,
+        "associative keys preserve and order bits above the host word");
+    auto unknown_wide_keys = wide_keys;
+    unknown_wide_keys.keys[0].set(96, Logic4::x);
+    try {
+        Interpreter invalid_wide_key_validator;
+        (void)invalid_wide_key_validator.add_container_object(
+            { "unknown_wide_keys", unknown_wide_keys, std::nullopt });
+        require(false,
+            "unknown associative key bits above the host word must reject");
+    } catch (const std::invalid_argument&) {
+    }
     Interpreter associative;
     const auto associative_object = associative.add_container_object(
         { "lookup",

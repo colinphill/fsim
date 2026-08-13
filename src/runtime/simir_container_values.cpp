@@ -71,15 +71,20 @@ namespace {
     const ContainerType& type,
     const PackedLogic4& left,
     const PackedLogic4& right) {
-  const auto lhs = left.low_word().aval;
-  const auto rhs = right.low_word().aval;
-  if (type.signed_indices) {
-    const auto sign = UINT64_C(1) << (type.index_width - 1U);
-    const auto lhs_negative = (lhs & sign) != 0;
-    const auto rhs_negative = (rhs & sign) != 0;
-    if (lhs_negative != rhs_negative) return lhs_negative;
-  }
-  return lhs < rhs;
+    if (type.signed_indices) {
+        const auto lhs_negative = left.get(type.index_width - 1U) == Logic4::one;
+        const auto rhs_negative = right.get(type.index_width - 1U) == Logic4::one;
+        if (lhs_negative != rhs_negative)
+            return lhs_negative;
+    }
+    const auto lhs = left.aval_words();
+    const auto rhs = right.aval_words();
+    for (auto index = lhs.size(); index != 0; --index) {
+        if (lhs[index - 1U] != rhs[index - 1U]) {
+            return lhs[index - 1U] < rhs[index - 1U];
+        }
+    }
+    return false;
 }
 
 [[nodiscard]] std::size_t checked_storage_add(
@@ -221,12 +226,11 @@ void validate_container_value(const ContainerValue& value) {
     }
   }
   if (value.type.associative) {
-    if (!value.type.string_indices
-        && (value.type.index_width == 0
-            || value.type.index_width > 64)) {
-      throw std::invalid_argument{
-          "SimIR associative-array index width must be in 1..64"};
-    }
+      if (!value.type.string_indices && value.type.index_width == 0) {
+          throw std::invalid_argument {
+              "SimIR integral associative-array index width must be positive"
+          };
+      }
     if ((value.type.string_indices
              ? value.string_keys.size() : value.keys.size()) != size) {
       throw std::invalid_argument{
@@ -257,12 +261,16 @@ void validate_container_value(const ContainerValue& value) {
             "integral-indexed SimIR associative array has string keys"};
       }
       for (std::size_t index = 0; index < value.keys.size(); ++index) {
-        const auto& key = value.keys[index];
-        if (key.width() != value.type.index_width
-            || key.is_logic9() || key.low_word().bval != 0) {
-          throw std::invalid_argument{
-              "SimIR associative-array key does not match its type"};
-        }
+          const auto& key = value.keys[index];
+          const bool unknown = std::ranges::any_of(
+              key.bval_words(),
+              [](const std::uint64_t word) { return word != 0; });
+          if (key.width() != value.type.index_width
+              || key.is_logic9() || unknown) {
+              throw std::invalid_argument {
+                  "SimIR associative-array key does not match its type"
+              };
+          }
         if (index != 0
             && !key_less(value.type, value.keys[index - 1], key)) {
           throw std::invalid_argument{

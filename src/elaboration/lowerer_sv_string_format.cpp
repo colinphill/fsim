@@ -50,12 +50,16 @@ std::optional<StringRegisterId> Lowerer::lower_string_format(
     const std::vector<Expression>& arguments,
     const std::size_t format_index,
     const std::string_view call_name,
-    const frontend::SourceSpan& span)
+    const frontend::SourceSpan& span,
+    const std::optional<frontend::OutputFormat> default_format)
 {
-    if (language_ != frontend::Language::SystemVerilog2017
+    if ((language_ != frontend::Language::SystemVerilog2017
+            && !(default_format
+                && language_ == frontend::Language::Verilog2005))
         || arguments.size() <= format_index
-        || arguments[format_index].kind != ExpressionKind::StringLiteral
-        || !arguments[format_index].decoded_string) {
+        || (!default_format
+            && (arguments[format_index].kind != ExpressionKind::StringLiteral
+                || !arguments[format_index].decoded_string))) {
         report(
             "FSIM-ELAB-SVSTRING-019",
             std::string { call_name }
@@ -63,10 +67,20 @@ std::optional<StringRegisterId> Lowerer::lower_string_format(
             span);
         return std::nullopt;
     }
-    const auto parsed = frontend::parse_output_format(
-        *arguments[format_index].decoded_string);
+    auto parsed = default_format
+        ? frontend::ParsedOutputFormat { }
+        : frontend::parse_output_format(
+              *arguments[format_index].decoded_string);
+    if (default_format) {
+        parsed.conversions.resize(arguments.size() - format_index);
+        for (auto& conversion : parsed.conversions) {
+            conversion.format = *default_format;
+        }
+    }
     if (!parsed.valid || parsed.conversions.size() > 64U
-        || arguments.size() - format_index - 1U > 64U) {
+        || arguments.size() - format_index
+                - static_cast<std::size_t>(!default_format)
+            > 64U) {
         report(
             "FSIM-ELAB-SVSTRING-019",
             std::string { call_name }
@@ -79,7 +93,8 @@ std::optional<StringRegisterId> Lowerer::lower_string_format(
         [](const auto& conversion) {
             return consumes_value(conversion.format);
         }));
-    const auto supplied = arguments.size() - format_index - 1U;
+    const auto supplied = arguments.size() - format_index
+        - static_cast<std::size_t>(!default_format);
     if (supplied < required) {
         report(
             "FSIM-ELAB-SVSTRING-019",
@@ -118,6 +133,8 @@ std::optional<StringRegisterId> Lowerer::lower_string_format(
         operation.suppress_leading_zero = conversion.suppress_leading_zero;
         if (conversion.format == frontend::OutputFormat::Time) {
             operation.operation = StringMethodOperator::format_time;
+            operation.use_timeformat_width = conversion.minimum_width == 0
+                && !conversion.suppress_leading_zero;
             process_.operations.emplace_back(operation);
             return true;
         }
@@ -183,7 +200,8 @@ std::optional<StringRegisterId> Lowerer::lower_string_format(
         return true;
     };
 
-    std::size_t value_index = format_index + 1U;
+    std::size_t value_index = format_index
+        + static_cast<std::size_t>(!default_format);
     for (const auto& conversion : parsed.conversions) {
         const Expression* value = consumes_value(conversion.format)
             ? &arguments[value_index++]
@@ -208,7 +226,10 @@ std::optional<StringRegisterId> Lowerer::lower_string_format(
 bool Lowerer::lower_string_format_task(const Statement& statement)
 {
     if (statement.task_name != "$swrite"
-        && statement.task_name != "$sformat") {
+        && statement.task_name != "$sformat"
+        && statement.task_name != "$swriteb"
+        && statement.task_name != "$swriteh"
+        && statement.task_name != "$swriteo") {
         return false;
     }
     const auto named = std::ranges::any_of(
@@ -243,9 +264,17 @@ bool Lowerer::lower_string_format_task(const Statement& statement)
             target.span);
         return true;
     }
+    std::optional<frontend::OutputFormat> default_format;
+    if (statement.task_name == "$swriteb") {
+        default_format = frontend::OutputFormat::Binary;
+    } else if (statement.task_name == "$swriteh") {
+        default_format = frontend::OutputFormat::Hexadecimal;
+    } else if (statement.task_name == "$swriteo") {
+        default_format = frontend::OutputFormat::Octal;
+    }
     const auto result = lower_string_format(
         statement.task_arguments, 1U,
-        statement.task_name, statement.span);
+        statement.task_name, statement.span, default_format);
     if (!result) {
         return true;
     }

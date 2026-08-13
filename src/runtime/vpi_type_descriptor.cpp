@@ -147,39 +147,39 @@ namespace {
             return SystemVerilogVpiDescriptorError::None;
 
         case SystemVerilogVpiDescriptorKind::Enum: {
-            if (!valid_scalar(
-                    descriptor.category, descriptor.width, descriptor.is_signed)
-                || descriptor.width > 64U || !descriptor.ranges.empty()
+            const bool two_state
+                = descriptor.category == SystemVerilogVpiValueCategory::Bit2
+                || descriptor.category
+                    == SystemVerilogVpiValueCategory::Integer2;
+            const bool four_state
+                = descriptor.category == SystemVerilogVpiValueCategory::Logic4
+                || descriptor.category
+                    == SystemVerilogVpiValueCategory::Integer4
+                || descriptor.category == SystemVerilogVpiValueCategory::Time;
+            if ((!two_state && !four_state) || descriptor.width == 0U
+                || (descriptor.category == SystemVerilogVpiValueCategory::Time
+                    && (descriptor.width != 64U || descriptor.is_signed))
+                || !descriptor.ranges.empty()
                 || descriptor.maximum_size || !descriptor.children.empty()
                 || !descriptor.member_names.empty()
                 || descriptor.enum_literals.empty()) {
                 return SystemVerilogVpiDescriptorError::InvalidEnum;
             }
             std::set<std::string> names;
-            std::set<std::int64_t> values;
-            std::int64_t minimum { };
-            std::int64_t maximum { };
-            if (descriptor.is_signed) {
-                if (descriptor.width == 64U) {
-                    minimum = std::numeric_limits<std::int64_t>::min();
-                    maximum = std::numeric_limits<std::int64_t>::max();
-                } else {
-                    const auto magnitude = std::int64_t { 1 } << (descriptor.width - 1U);
-                    minimum = -magnitude;
-                    maximum = magnitude - 1;
-                }
-            } else {
-                minimum = 0;
-                maximum = descriptor.width == 64U
-                    ? std::numeric_limits<std::int64_t>::max()
-                    : static_cast<std::int64_t>(
-                          (std::uint64_t { 1 } << descriptor.width) - 1U);
-            }
+            std::set<std::string> values;
             for (const auto& literal : descriptor.enum_literals) {
+                const auto value = literal.value.to_msb_string();
                 if (!valid_name(literal.name)
                     || !names.insert(literal.name).second
-                    || !values.insert(literal.value).second
-                    || literal.value < minimum || literal.value > maximum) {
+                    || literal.value.width() != descriptor.width
+                    || literal.value.is_logic9()
+                    || (two_state
+                        && std::ranges::any_of(
+                            literal.value.bval_words(),
+                            [](const std::uint64_t word) {
+                                return word != 0U;
+                            }))
+                    || !values.insert(value).second) {
                     return SystemVerilogVpiDescriptorError::InvalidEnum;
                 }
             }
@@ -328,7 +328,7 @@ namespace {
             if (descriptor.category != SystemVerilogVpiValueCategory::None
                 || descriptor.width != 0U || descriptor.is_signed
                 || !descriptor.ranges.empty() || descriptor.maximum_size
-                || descriptor.children.empty()
+                || (!class_type && descriptor.children.empty())
                 || descriptor.children.size() != descriptor.member_names.size()
                 || !descriptor.enum_literals.empty()
                 || (class_type

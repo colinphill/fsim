@@ -250,6 +250,8 @@ module dynamic_part_select;
   logic [3:0] up_plus;
   logic [3:0] up_minus;
   logic [3:0] bit_partial;
+  logic [136:0] wide_source;
+  logic [95:0] wide_result;
   initial begin
     down = 16'habcd;
     up = 16'habcd;
@@ -268,6 +270,9 @@ module dynamic_part_select;
     up_minus = up[base -: 4];
     base = 14;
     bit_partial = bits[base +: 4];
+    wide_source = '1;
+    base = 17;
+    wide_result = wide_source[base +: 96];
   end
 endmodule
 )",
@@ -285,30 +290,34 @@ endmodule
             part_process.operations.begin(),
             part_process.operations.end(),
             [](const auto& operation) {
-              return fsim::runtime::simir::operation_holds<
-                  fsim::runtime::simir::DynamicPartSelect>(operation);
+                return fsim::runtime::simir::operation_holds<
+                    fsim::runtime::simir::DynamicPartSelect>(operation);
             })
-        == 7);
+        == 8);
     auto part_interpreter =
         elaborated_dynamic_part_select.design->create_interpreter();
     assert(
         part_interpreter->run().status
         == fsim::runtime::RunStatus::completed);
     for (const auto& [name, expected] :
-         std::array{
-             std::pair{"down_plus", "1100"},
-             std::pair{"down_minus", "1100"},
-             std::pair{"partial", "XX10"},
-             std::pair{"unknown", "XXXX"},
-             std::pair{"up_plus", "1011"},
-             std::pair{"up_minus", "1011"},
-             std::pair{"bit_partial", "0010"}}) {
-      const auto signal =
-          elaborated_dynamic_part_select.design->find_signal(name);
-      assert(signal);
-      assert(
-          part_interpreter->signal_value(*signal).to_msb_string()
-          == expected);
+        std::array {
+            std::pair { "down_plus", "1100" },
+            std::pair { "down_minus", "1100" },
+            std::pair { "partial", "XX10" },
+            std::pair { "unknown", "XXXX" },
+            std::pair { "up_plus", "1011" },
+            std::pair { "up_minus", "1011" },
+            std::pair { "bit_partial", "0010" },
+            std::pair {
+                "wide_result",
+                "11111111111111111111111111111111"
+                "11111111111111111111111111111111"
+                "11111111111111111111111111111111" } }) {
+        const auto signal = elaborated_dynamic_part_select.design->find_signal(name);
+        assert(signal);
+        assert(
+            part_interpreter->signal_value(*signal).to_msb_string()
+            == expected);
     }
 
     const auto invalid_dynamic_parts = fsim::frontend::parse_text(
@@ -372,7 +381,11 @@ module wide_stream;
   logic [63:0] lhs;
   logic [63:0] rhs;
   logic [127:0] result;
-  initial result = {>>{lhs, rhs}};
+  initial begin
+    lhs = 64'h0123_4567_89ab_cdef;
+    rhs = 64'hfedc_ba98_7654_3210;
+    result = {>>{lhs, rhs}};
+  end
 endmodule
 module container_stream;
   logic [7:0] values[$];
@@ -389,13 +402,22 @@ endmodule
     assert(!rejected_dynamic_stream.ok());
     assert(has_diagnostic(
         rejected_dynamic_stream, "FSIM-ELAB-SVEXPR-002"));
-    const auto rejected_wide_stream =
-        fsim::elaboration::elaborate(
-            invalid_streams.design,
-            "sv:work.wide_stream");
-    assert(!rejected_wide_stream.ok());
-    assert(has_diagnostic(
-        rejected_wide_stream, "FSIM-ELAB-SVEXPR-003"));
+    const auto elaborated_wide_stream = fsim::elaboration::elaborate(
+        invalid_streams.design,
+        "sv:work.wide_stream");
+    assert(elaborated_wide_stream.ok());
+    const auto wide_stream_result = elaborated_wide_stream.design->find_signal("result");
+    assert(wide_stream_result);
+    auto wide_stream_interpreter = elaborated_wide_stream.design->create_interpreter();
+    assert(
+        wide_stream_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        wide_stream_interpreter
+            ->signal_value(*wide_stream_result)
+            .to_msb_string()
+        == "0000000100100011010001010110011110001001101010111100110111101111"
+           "1111111011011100101110101001100001110110010101000011001000010000");
     const auto rejected_container_stream =
         fsim::elaboration::elaborate(
             invalid_streams.design,
@@ -854,6 +876,44 @@ endmodule
     assert(has_diagnostic(
         rejected_malformed_repeated_event,
         "FSIM-ELAB-105"));
+
+    const auto invalid_event_alias_source = fsim::frontend::parse_text(
+        "invalid_event_alias_source.sv",
+        R"(
+module invalid_event_alias_source;
+  event target;
+  logic source;
+  initial target = source;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_event_alias_source.ok());
+    const auto rejected_event_alias_source = fsim::elaboration::elaborate(
+        invalid_event_alias_source.design,
+        "sv:work.invalid_event_alias_source");
+    assert(!rejected_event_alias_source.ok());
+    assert(has_diagnostic(
+        rejected_event_alias_source,
+        "FSIM-ELAB-SVEVENT-009"));
+
+    const auto invalid_event_alias_timing = fsim::frontend::parse_text(
+        "invalid_event_alias_timing.sv",
+        R"(
+module invalid_event_alias_timing;
+  event target;
+  event source;
+  initial target <= source;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_event_alias_timing.ok());
+    const auto rejected_event_alias_timing = fsim::elaboration::elaborate(
+        invalid_event_alias_timing.design,
+        "sv:work.invalid_event_alias_timing");
+    assert(!rejected_event_alias_timing.ok());
+    assert(has_diagnostic(
+        rejected_event_alias_timing,
+        "FSIM-ELAB-SVEVENT-010"));
 
     const auto dynamic_wildcard = fsim::frontend::parse_text(
         "dynamic_wildcard.sv",

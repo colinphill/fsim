@@ -24,7 +24,22 @@ namespace {
 
     bool is_one_shot(const SystemVerilogVpiCallbackKind kind)
     {
-        return kind != SystemVerilogVpiCallbackKind::ValueChange;
+        return kind != SystemVerilogVpiCallbackKind::ValueChange
+            && kind != SystemVerilogVpiCallbackKind::AssertionSuccess
+            && kind != SystemVerilogVpiCallbackKind::AssertionFailure
+            && kind != SystemVerilogVpiCallbackKind::AssertionVacuous
+            && kind != SystemVerilogVpiCallbackKind::AssertionDisabled
+            && kind != SystemVerilogVpiCallbackKind::AssertionAborted;
+    }
+
+    bool is_assertion(const SystemVerilogVpiCallbackKind kind)
+    {
+        return static_cast<unsigned>(kind)
+            >= static_cast<unsigned>(
+                SystemVerilogVpiCallbackKind::AssertionSuccess)
+            && static_cast<unsigned>(kind)
+            <= static_cast<unsigned>(
+                SystemVerilogVpiCallbackKind::AssertionAborted);
     }
 
     bool is_lifecycle(const SystemVerilogVpiCallbackKind kind)
@@ -76,6 +91,11 @@ namespace {
         case SystemVerilogVpiCallbackKind::StartOfRestart:
             return SchedulerPhase::active;
         case SystemVerilogVpiCallbackKind::ValueChange:
+        case SystemVerilogVpiCallbackKind::AssertionSuccess:
+        case SystemVerilogVpiCallbackKind::AssertionFailure:
+        case SystemVerilogVpiCallbackKind::AssertionVacuous:
+        case SystemVerilogVpiCallbackKind::AssertionDisabled:
+        case SystemVerilogVpiCallbackKind::AssertionAborted:
         case SystemVerilogVpiCallbackKind::ReadWrite:
             return SchedulerPhase::reactive;
         case SystemVerilogVpiCallbackKind::ReadOnly:
@@ -126,7 +146,8 @@ namespace {
         const std::uint64_t id,
         const SystemVerilogVpiCallbackManager::Impl::Record& record,
         std::optional<SystemVerilogVpiStoredValue> value,
-        std::optional<SystemVerilogVpiTimeQueryResult> supplied_time = std::nullopt)
+        std::optional<SystemVerilogVpiTimeQueryResult> supplied_time = std::nullopt,
+        std::optional<SystemVerilogVpiAssertionEvent> assertion = std::nullopt)
     {
         SystemVerilogVpiCallbackEvent event;
         event.registration = { state.owner, id };
@@ -135,6 +156,7 @@ namespace {
         event.time = supplied_time.value_or(state.time_service->query(
             SystemVerilogVpiTimeFormat::IntegerTicks));
         event.value = std::move(value);
+        event.assertion = std::move(assertion);
         event.user_data = record.user_data;
         event.registration_order = id;
         event.simulation_identity = state.registry->simulation_identity();
@@ -145,7 +167,8 @@ namespace {
         const std::shared_ptr<SystemVerilogVpiCallbackManager::Impl>& state,
         const std::uint64_t id,
         std::optional<SystemVerilogVpiStoredValue> value,
-        std::optional<SystemVerilogVpiTimeQueryResult> supplied_time = std::nullopt)
+        std::optional<SystemVerilogVpiTimeQueryResult> supplied_time = std::nullopt,
+        std::optional<SystemVerilogVpiAssertionEvent> assertion = std::nullopt)
     {
         SystemVerilogVpiCallback callback;
         SystemVerilogVpiCallbackEvent event;
@@ -160,7 +183,8 @@ namespace {
             }
             callback = found->second.callback;
             event = make_event(
-                *state, id, found->second, std::move(value), supplied_time);
+                *state, id, found->second, std::move(value), supplied_time,
+                std::move(assertion));
             one_shot = is_one_shot(found->second.kind);
         }
 
@@ -327,6 +351,11 @@ SystemVerilogVpiCallbackManager::register_callback(
         return registration_failure(
             SystemVerilogVpiCallbackError::InvalidRequest);
     }
+    if (is_assertion(registration.kind)
+        && (!registration.object || registration.delay)) {
+        return registration_failure(
+            SystemVerilogVpiCallbackError::InvalidRequest);
+    }
     if (registration.kind
             == SystemVerilogVpiCallbackKind::AfterDelay
         && !registration.delay) {
@@ -351,6 +380,13 @@ SystemVerilogVpiCallbackManager::register_callback(
             return registration_failure(
                 object_callback_error(object.error), object.error);
         }
+        if (is_assertion(registration.kind)
+            && object.value->kind
+                != SystemVerilogVpiObjectKind::Assertion) {
+            return registration_failure(
+                SystemVerilogVpiCallbackError::InvalidObject,
+                SystemVerilogVpiObjectError::InvalidKind);
+        }
     }
 
     SimulationTick scheduled_delay { };
@@ -358,6 +394,7 @@ SystemVerilogVpiCallbackManager::register_callback(
             != SystemVerilogVpiCallbackKind::ValueChange
         && registration.kind
             != SystemVerilogVpiCallbackKind::NextTime
+        && !is_assertion(registration.kind)
         && !is_lifecycle(registration.kind)) {
         if (registration.delay) {
             const auto converted = impl_->time_service->convert_delay(*registration.delay);
@@ -430,6 +467,7 @@ SystemVerilogVpiCallbackManager::register_callback(
             position->second.timed_handle = timed.value;
         } else if (registration.kind
                 != SystemVerilogVpiCallbackKind::ValueChange
+            && !is_assertion(registration.kind)
             && !is_lifecycle(registration.kind)) {
             position->second.scheduler_handle = impl_->scheduler->schedule_after_cancelable(
                 scheduled_delay,
@@ -574,6 +612,46 @@ SystemVerilogVpiCallbackManager::dispatch_named_event(
         return SystemVerilogVpiCallbackError::InvalidObject;
     }
     observe_value_change(impl_, object, std::nullopt);
+    return SystemVerilogVpiCallbackError::None;
+}
+
+SystemVerilogVpiCallbackError
+SystemVerilogVpiCallbackManager::dispatch_assertion(
+    const fsim_vpi_handle_v1 object,
+    SystemVerilogVpiAssertionEvent event)
+{
+    if (!valid()) {
+        return SystemVerilogVpiCallbackError::InvalidManager;
+    }
+    const auto info = impl_->registry->lookup(object);
+    if (!info || info.value->kind != SystemVerilogVpiObjectKind::Assertion) {
+        return SystemVerilogVpiCallbackError::InvalidObject;
+    }
+    const auto kind
+        = event.outcome == SystemVerilogVpiAssertionOutcome::Success
+        ? SystemVerilogVpiCallbackKind::AssertionSuccess
+        : event.outcome == SystemVerilogVpiAssertionOutcome::Failure
+        ? SystemVerilogVpiCallbackKind::AssertionFailure
+        : event.outcome == SystemVerilogVpiAssertionOutcome::Vacuous
+        ? SystemVerilogVpiCallbackKind::AssertionVacuous
+        : event.outcome == SystemVerilogVpiAssertionOutcome::Disabled
+        ? SystemVerilogVpiCallbackKind::AssertionDisabled
+        : SystemVerilogVpiCallbackKind::AssertionAborted;
+
+    std::vector<std::uint64_t> callbacks;
+    {
+        std::scoped_lock lock { impl_->mutex };
+        for (const auto& [id, record] : impl_->records) {
+            if (record.status == SystemVerilogVpiCallbackStatus::Active
+                && record.kind == kind && record.object == object) {
+                callbacks.push_back(id);
+            }
+        }
+    }
+    for (const auto id : callbacks) {
+        dispatch_callback(
+            impl_, id, std::nullopt, std::nullopt, event);
+    }
     return SystemVerilogVpiCallbackError::None;
 }
 

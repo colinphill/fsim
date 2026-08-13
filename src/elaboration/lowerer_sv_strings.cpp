@@ -3,6 +3,162 @@
 
 namespace fsim::elaboration {
 using namespace runtime::simir;
+namespace {
+
+    [[nodiscard]] std::string systemverilog_type_name(
+        const frontend::Type& type);
+
+    [[nodiscard]] std::string range_text(
+        const frontend::PackedRange& range)
+    {
+        return "[" + std::to_string(range.left) + ":"
+            + std::to_string(range.right) + "]";
+    }
+
+    [[nodiscard]] std::string expression_range_text(
+        const frontend::PackedRangeExpression& range)
+    {
+        return "[" + range.left.text + ":" + range.right.text + "]";
+    }
+
+    [[nodiscard]] std::string systemverilog_base_type_name(
+        const frontend::Type& type)
+    {
+        if (type.systemverilog_virtual_interface) {
+            auto result = std::string { "virtual " }
+                + type.systemverilog_interface_type;
+            if (!type.systemverilog_interface_modport.empty()) {
+                result += "." + type.systemverilog_interface_modport;
+            }
+            return result;
+        }
+        if (!type.systemverilog_class_name.empty()) {
+            return type.systemverilog_class_name;
+        }
+        if (!type.named_type.empty()) {
+            return type.named_type;
+        }
+        if (!type.enumeration_literals.empty()) {
+            return "enum";
+        }
+        switch (type.packed_aggregate) {
+        case frontend::PackedAggregateKind::Struct:
+            return "struct packed";
+        case frontend::PackedAggregateKind::Union:
+            return "union packed";
+        case frontend::PackedAggregateKind::UnpackedStruct:
+            return "struct";
+        case frontend::PackedAggregateKind::TaggedUnion:
+            return "union tagged";
+        case frontend::PackedAggregateKind::UnpackedUnion:
+            return "union";
+        case frontend::PackedAggregateKind::None:
+            break;
+        }
+        switch (type.systemverilog_scalar) {
+        case frontend::SystemVerilogScalarKind::ShortReal:
+            return "shortreal";
+        case frontend::SystemVerilogScalarKind::Real:
+            return "real";
+        case frontend::SystemVerilogScalarKind::Realtime:
+            return "realtime";
+        case frontend::SystemVerilogScalarKind::Time:
+            return "time";
+        case frontend::SystemVerilogScalarKind::Chandle:
+            return "chandle";
+        case frontend::SystemVerilogScalarKind::None:
+            break;
+        }
+        if (!type.spelling.empty() && type.spelling != "implicit") {
+            return type.spelling;
+        }
+        switch (type.domain) {
+        case frontend::ValueDomain::Bit2:
+            return "bit";
+        case frontend::ValueDomain::Logic4:
+        case frontend::ValueDomain::Logic9:
+            return "logic";
+        case frontend::ValueDomain::Integer:
+            return "int";
+        case frontend::ValueDomain::Boolean:
+            return "bit";
+        case frontend::ValueDomain::String:
+            return "string";
+        case frontend::ValueDomain::Unknown:
+            break;
+        }
+        return { };
+    }
+
+    [[nodiscard]] std::string systemverilog_type_name(
+        const frontend::Type& type)
+    {
+        auto result = systemverilog_base_type_name(type);
+        if (result.empty()) {
+            return result;
+        }
+        const bool named = !type.named_type.empty();
+        const bool atomic = result == "byte" || result == "shortint"
+            || result == "int" || result == "longint"
+            || result == "integer" || result == "time"
+            || result == "shortreal" || result == "real"
+            || result == "realtime" || result == "chandle"
+            || result == "process" || result == "string";
+        if (!named
+            && (result == "bit" || result == "logic" || result == "reg")
+            && type.is_signed) {
+            result += " signed";
+        }
+        if (!named && !atomic) {
+            if (!type.systemverilog_packed_dimensions.empty()) {
+                for (const auto& dimension :
+                    type.systemverilog_packed_dimensions) {
+                    result += expression_range_text(dimension);
+                }
+            } else if (type.packed_range) {
+                result += range_text(*type.packed_range);
+            }
+        }
+        if (!type.systemverilog_container) {
+            return result;
+        }
+        const auto& container = *type.systemverilog_container;
+        switch (container.kind) {
+        case frontend::SystemVerilogContainerKind::DynamicArray:
+            result += "[]";
+            break;
+        case frontend::SystemVerilogContainerKind::Queue:
+            result += "[$";
+            if (container.queue_maximum) {
+                result += ":" + container.queue_maximum->text;
+            }
+            result += "]";
+            break;
+        case frontend::SystemVerilogContainerKind::AssociativeArray:
+            result += "[";
+            if (container.associative_index_type) {
+                result += systemverilog_type_name(
+                    *container.associative_index_type);
+            } else {
+                result += "*";
+            }
+            result += "]";
+            break;
+        case frontend::SystemVerilogContainerKind::StaticArray:
+            if (!container.static_range_expressions.empty()) {
+                for (const auto& dimension :
+                    container.static_range_expressions) {
+                    result += expression_range_text(dimension);
+                }
+            } else if (container.static_range) {
+                result += range_text(*container.static_range);
+            }
+            break;
+        }
+        return result;
+    }
+
+} // namespace
 
 bool Lowerer::is_string_expression(
     const Expression& expression) const
@@ -37,6 +193,20 @@ bool Lowerer::is_string_expression(
                 });
     }
     if (expression.kind == ExpressionKind::Call) {
+        if (language_ == frontend::Language::SystemVerilog2017
+            && expression.text == "$typename") {
+            return true;
+        }
+        if (expression.text == ".get_randstate"
+            && expression.operands.size() == 1U
+            && expression.operands.front().kind == ExpressionKind::Identifier) {
+            const auto* receiver_type = object_type(
+                expression.operands.front().text);
+            if (receiver_type != nullptr
+                && receiver_type->spelling == "process") {
+                return true;
+            }
+        }
         if (language_ == frontend::Language::Vhdl2008) {
             const auto separator = expression.text.find_last_of('.');
             const auto name = std::string_view { expression.text }.substr(
@@ -213,6 +383,113 @@ Lowerer::lower_string_expression(
         return destination;
     }
     if (expression.kind == ExpressionKind::Call) {
+        if (expression.text == "$typename") {
+            if (language_ != frontend::Language::SystemVerilog2017
+                || expression.operands.size() != 1U) {
+                report(
+                    "FSIM-ELAB-SVTYPENAME-001",
+                    "$typename requires exactly one SystemVerilog expression or type",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto& operand = expression.operands.front();
+            const auto* type_mark = operand.kind == ExpressionKind::Identifier
+                ? visible_type_mark(operand.text)
+                : nullptr;
+            const auto* type = type_mark != nullptr
+                ? type_mark
+                : systemverilog_expression_type(operand);
+            std::string text;
+            if (type_mark != nullptr) {
+                text = operand.text;
+            } else if (type != nullptr && !type->nominal_type.empty()) {
+                const auto nominal = std::ranges::find_if(
+                    visible_type_marks_,
+                    [&](const auto& entry) {
+                        return entry.second != nullptr
+                            && entry.second->nominal_type
+                            == type->nominal_type;
+                    });
+                text = nominal != visible_type_marks_.end()
+                    ? nominal->first
+                    : systemverilog_type_name(*type);
+            } else if (type != nullptr) {
+                text = systemverilog_type_name(*type);
+            } else if (is_string_expression(operand)) {
+                text = "string";
+            } else {
+                switch (operand.systemverilog_scalar_kind) {
+                case frontend::SystemVerilogScalarKind::ShortReal:
+                    text = "shortreal";
+                    break;
+                case frontend::SystemVerilogScalarKind::Real:
+                    text = "real";
+                    break;
+                case frontend::SystemVerilogScalarKind::Realtime:
+                    text = "realtime";
+                    break;
+                case frontend::SystemVerilogScalarKind::Time:
+                    text = "time";
+                    break;
+                case frontend::SystemVerilogScalarKind::Chandle:
+                    text = "chandle";
+                    break;
+                case frontend::SystemVerilogScalarKind::None:
+                    break;
+                }
+                if (text.empty()
+                    && operand.kind == ExpressionKind::IntegerLiteral) {
+                    text = "int";
+                } else if (text.empty()
+                    && operand.kind == ExpressionKind::StringLiteral) {
+                    text = "string";
+                } else if (text.empty()) {
+                    const auto width = infer_width(operand);
+                    if (width && *width != 0U) {
+                        text = "logic";
+                        if (is_signed_expression(operand)) {
+                            text += " signed";
+                        }
+                        if (*width != 1U) {
+                            text += "[" + std::to_string(*width - 1U)
+                                + ":0]";
+                        }
+                    }
+                }
+            }
+            if (text.empty() || text.size() > maximum_string_bytes) {
+                report(
+                    "FSIM-ELAB-SVTYPENAME-001",
+                    "$typename argument has no bounded statically known SystemVerilog type name",
+                    operand.span);
+                return std::nullopt;
+            }
+            const auto destination = allocate_string_register();
+            process_.operations.emplace_back(
+                LoadStringConstant { destination, std::move(text) });
+            return destination;
+        }
+        if (expression.text == ".get_randstate"
+            && expression.operands.size() == 1U
+            && expression.operands.front().kind == ExpressionKind::Identifier
+            && object_type(expression.operands.front().text) != nullptr
+            && object_type(expression.operands.front().text)->spelling
+                == "process") {
+            const auto& receiver = expression.operands.front();
+            const auto source = lower_expression(
+                receiver, 64, object_type(receiver.text));
+            if (!source || register_width(*source) != 64U) {
+                report(
+                    "FSIM-ELAB-SVPROCESS-001",
+                    "process random-state receiver has no 64-bit handle value",
+                    receiver.span);
+                return std::nullopt;
+            }
+            const auto destination = allocate_string_register();
+            process_.operations.emplace_back(
+                ProcessGetRandState { destination, *source });
+            return destination;
+        }
         if (language_ == frontend::Language::Vhdl2008) {
             const auto separator = expression.text.find_last_of('.');
             const auto name = std::string_view { expression.text }.substr(

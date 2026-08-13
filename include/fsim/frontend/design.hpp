@@ -102,6 +102,17 @@ struct SystemVerilogCoverageBinValue {
     std::uint32_t width { };
     bool wildcard { };
     SourceSpan span;
+    // Canonical MSB-first planes for values wider than the legacy scalar
+    // projection. Empty planes select the scalar fields above.
+    std::string exact_bits;
+    std::string exact_unknown_bits;
+    std::string range_left_bits;
+    std::string range_right_bits;
+    std::string wildcard_value_bits;
+    std::string wildcard_mask_bits;
+    bool exact_signed { };
+    bool range_left_signed { };
+    bool range_right_signed { };
 };
 
 enum class SystemVerilogCoverageTransitionRepetitionKind {
@@ -153,6 +164,11 @@ struct SystemVerilogCoverageBin {
     std::vector<SystemVerilogCoverageBinValue> values;
     std::vector<SystemVerilogCoverageTransitionSequence> transitions;
     std::vector<Token> cross_selection_tokens;
+    // A coverpoint `with` clause filters candidate values through `item`.
+    // Cross bins retain their full select expression above because `with` and
+    // `matches` can be nested at multiple select-expression levels.
+    std::vector<Token> with_tokens;
+    SourceSpan with_span;
     std::vector<Token> iff_tokens;
     SourceSpan iff_span;
     std::uint32_t weight { 1U };
@@ -232,6 +248,10 @@ struct SystemVerilogCoverageBinHit {
     std::size_t bin_declaration_index { };
     std::string identity;
     std::optional<std::int64_t> automatic_value;
+    std::string automatic_value_bits;
+    std::string automatic_unknown_bits;
+    std::uint32_t automatic_width { 64U };
+    bool automatic_signed { };
     std::uint64_t hit_count { };
     std::uint64_t at_least { 1U };
     bool covered { };
@@ -251,6 +271,9 @@ struct SystemVerilogCoveragePreviousSample {
     std::int64_t value { };
     std::uint64_t unknown_mask { };
     std::uint32_t width { 64U };
+    std::string value_bits;
+    std::string unknown_bits;
+    bool signed_value { };
 };
 
 struct SystemVerilogCoverageCrossBinState {
@@ -270,6 +293,11 @@ struct SystemVerilogCoverageCrossBinState {
 struct SystemVerilogCoverageIllegalBinReport {
     std::string bin_identity;
     std::int64_t sampled_value { };
+    std::uint64_t sampled_unknown_mask { };
+    std::uint32_t sampled_width { 64U };
+    std::string sampled_value_bits;
+    std::string sampled_unknown_bits;
+    bool sampled_signed { };
     SourceSpan span;
 };
 
@@ -439,6 +467,8 @@ struct GenerateBody {
     std::vector<TypeAliasDeclaration> type_aliases;
     std::vector<SignalDeclaration> signals;
     std::vector<SignalAliasDeclaration> signal_aliases;
+    std::vector<SystemVerilogAliasDeclaration> systemverilog_aliases;
+    std::vector<SystemVerilogLetDeclaration> systemverilog_lets;
     std::vector<VariableDeclaration> variables;
     std::vector<FunctionDeclaration> functions;
     std::vector<TaskDeclaration> tasks;
@@ -1284,6 +1314,53 @@ struct VhdlPslVerificationUnit {
     bool comment_embedded { };
 };
 
+enum class SystemVerilogConfigurationRuleKind {
+    Instance,
+    Cell,
+};
+
+enum class SystemVerilogConfigurationSelectionKind {
+    Use,
+    Liblist,
+};
+
+struct SystemVerilogConfigurationRule {
+    SystemVerilogConfigurationRuleKind kind {
+        SystemVerilogConfigurationRuleKind::Instance
+    };
+    SystemVerilogConfigurationSelectionKind selection {
+        SystemVerilogConfigurationSelectionKind::Use
+    };
+    // Instance rules retain a complete hierarchy path. Cell rules retain the
+    // optionally library-qualified cell name.
+    std::string selector;
+    std::string use_library;
+    std::string use_cell;
+    bool use_configuration { };
+    std::vector<std::string> liblist;
+    SourceSpan span;
+};
+
+struct SystemVerilogConfigurationDeclaration {
+    struct Design {
+        std::string library;
+        std::string cell;
+        SourceSpan span;
+    };
+    std::vector<Design> designs;
+    std::vector<std::string> default_liblist;
+    std::vector<SystemVerilogConfigurationRule> rules;
+    SourceSpan span;
+};
+
+struct SystemVerilogBindDirective {
+    // A module/interface/checker type name applies to every matching
+    // occurrence. A hierarchical name applies only to that occurrence.
+    std::string target;
+    std::vector<Instance> instances;
+    SourceSpan span;
+};
+
 struct DesignUnit {
     UnitKind kind { UnitKind::VerilogModule };
     Language language { Language::SystemVerilog2017 };
@@ -1306,6 +1383,12 @@ struct DesignUnit {
     // Verilog/SystemVerilog compilation-directive state at unit declaration.
     std::string default_nettype;
     bool is_cell { };
+    // Extern module/interface/program declarations are prototypes and never
+    // participate in top or instance target selection until matched to a body.
+    bool systemverilog_extern { };
+    std::optional<SystemVerilogConfigurationDeclaration>
+        systemverilog_configuration;
+    std::vector<SystemVerilogBindDirective> systemverilog_binds;
     // VHDL context items immediately preceding this library unit, or the
     // reusable items contained by a bounded VHDL context declaration.
     std::vector<VhdlContextItem> vhdl_context;
@@ -1342,6 +1425,8 @@ struct DesignUnit {
     std::vector<SignalDeclaration> ports;
     std::vector<SignalDeclaration> signals;
     std::vector<SignalAliasDeclaration> signal_aliases;
+    std::vector<SystemVerilogAliasDeclaration> systemverilog_aliases;
+    std::vector<SystemVerilogLetDeclaration> systemverilog_lets;
     // SystemVerilog module-scope variable objects that do not have net/signal
     // semantics. Mutable strings live here so later DesignIR lowering can give
     // them stable object identities without pretending they are packed nets.

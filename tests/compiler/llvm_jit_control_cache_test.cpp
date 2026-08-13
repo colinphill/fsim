@@ -14,6 +14,7 @@ void test_process_control_cache_identity()
     std::filesystem::remove_all(root, error);
     assert(!error);
     const std::array<std::uint32_t, 2> widths { 1, 1 };
+    const std::array<std::uint32_t, 1> sampled_widths { 1 };
     const auto make_process = [](const InstructionIndex equal_target) {
         Process process;
         process.id = 0;
@@ -60,6 +61,143 @@ void test_process_control_cache_identity()
             changed.add_process("control_cache", make_process(0), widths);
             assert(changed.lookup("control_cache"));
             const auto statistics = changed.cache_statistics();
+            assert(statistics.misses == 1 && statistics.stores == 1);
+        }
+
+        const auto exit_directory = directory / "program-exit";
+        const auto exit_options = LlvmJitOptions {
+            optimization, exit_directory
+        };
+        const auto make_halt_process = [](const bool program_exit) {
+            Process process;
+            process.id = 0;
+            process.name = "program_exit_cache";
+            process.operations = { Halt { program_exit } };
+            return process;
+        };
+        {
+            LlvmJit cold { exit_options };
+            cold.add_process(
+                "program_exit_cache", make_halt_process(false), { });
+            assert(cold.lookup("program_exit_cache"));
+            const auto statistics = cold.cache_statistics();
+            assert(statistics.misses == 1 && statistics.stores == 1);
+        }
+        {
+            LlvmJit warm { exit_options };
+            warm.add_process(
+                "program_exit_cache", make_halt_process(false), { });
+            assert(warm.lookup("program_exit_cache"));
+            const auto statistics = warm.cache_statistics();
+            assert(statistics.hits == 1 && statistics.misses == 0);
+        }
+        {
+            LlvmJit changed { exit_options };
+            changed.add_process(
+                "program_exit_cache", make_halt_process(true), { });
+            assert(changed.lookup("program_exit_cache"));
+            const auto statistics = changed.cache_statistics();
+            assert(statistics.misses == 1 && statistics.stores == 1);
+        }
+
+        const auto sampled_directory = directory / "sampled-read";
+        const auto sampled_options = LlvmJitOptions {
+            optimization, sampled_directory
+        };
+        const auto make_sampled_process = [](
+                                              const SignalReadKind kind,
+                                              const std::uint32_t ticks,
+                                              const std::optional<SignalId> clock
+                                              = std::nullopt,
+                                              const SampledClockEdge edge
+                                              = SampledClockEdge::any,
+                                              const std::optional<SignalId> gate
+                                              = std::nullopt) {
+            Process process;
+            process.id = 0;
+            process.name = "sampled_read_cache";
+            process.register_count = 1;
+            process.register_value_kinds = { ValueKind::logic4 };
+            process.operations = {
+                ReadSignal { 0, 0, kind, ticks, clock, edge, gate },
+                Halt { }
+            };
+            return process;
+        };
+        {
+            LlvmJit cold { sampled_options };
+            cold.add_process(
+                "sampled_read_cache",
+                make_sampled_process(SignalReadKind::sampled, 1U),
+                sampled_widths);
+            assert(cold.lookup("sampled_read_cache"));
+            const auto statistics = cold.cache_statistics();
+            assert(statistics.misses == 1 && statistics.stores == 1);
+        }
+        {
+            LlvmJit warm { sampled_options };
+            warm.add_process(
+                "sampled_read_cache",
+                make_sampled_process(SignalReadKind::sampled, 1U),
+                sampled_widths);
+            assert(warm.lookup("sampled_read_cache"));
+            const auto statistics = warm.cache_statistics();
+            assert(statistics.hits == 1 && statistics.misses == 0);
+        }
+        {
+            LlvmJit changed_kind { sampled_options };
+            changed_kind.add_process(
+                "sampled_read_cache",
+                make_sampled_process(SignalReadKind::past, 1U),
+                sampled_widths);
+            assert(changed_kind.lookup("sampled_read_cache"));
+            const auto statistics = changed_kind.cache_statistics();
+            assert(statistics.misses == 1 && statistics.stores == 1);
+        }
+        {
+            LlvmJit changed_ticks { sampled_options };
+            changed_ticks.add_process(
+                "sampled_read_cache",
+                make_sampled_process(SignalReadKind::past, 2U),
+                sampled_widths);
+            assert(changed_ticks.lookup("sampled_read_cache"));
+            const auto statistics = changed_ticks.cache_statistics();
+            assert(statistics.misses == 1 && statistics.stores == 1);
+        }
+        {
+            LlvmJit changed_clock { sampled_options };
+            changed_clock.add_process(
+                "sampled_read_cache",
+                make_sampled_process(
+                    SignalReadKind::past, 2U, 0U,
+                    SampledClockEdge::positive),
+                sampled_widths);
+            assert(changed_clock.lookup("sampled_read_cache"));
+            const auto statistics = changed_clock.cache_statistics();
+            assert(statistics.misses == 1 && statistics.stores == 1);
+        }
+        {
+            LlvmJit changed_edge { sampled_options };
+            changed_edge.add_process(
+                "sampled_read_cache",
+                make_sampled_process(
+                    SignalReadKind::past, 2U, 0U,
+                    SampledClockEdge::negative),
+                sampled_widths);
+            assert(changed_edge.lookup("sampled_read_cache"));
+            const auto statistics = changed_edge.cache_statistics();
+            assert(statistics.misses == 1 && statistics.stores == 1);
+        }
+        {
+            LlvmJit changed_gate { sampled_options };
+            changed_gate.add_process(
+                "sampled_read_cache",
+                make_sampled_process(
+                    SignalReadKind::past, 2U, 0U,
+                    SampledClockEdge::negative, 0U),
+                sampled_widths);
+            assert(changed_gate.lookup("sampled_read_cache"));
+            const auto statistics = changed_gate.cache_statistics();
             assert(statistics.misses == 1 && statistics.stores == 1);
         }
 

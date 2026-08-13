@@ -20,47 +20,47 @@ class Module;
 namespace fsim::compiler::llvm_detail {
 
 struct ValidatedProcess {
-  std::vector<std::uint32_t> register_widths;
-  bool uses_logic9{};
-  bool requires_resume{};
-  bool uses_write_update{};
-  bool uses_write_after{};
-  bool uses_write_inertial{};
-  bool uses_write_projected{};
-  bool uses_write_projected_waveform{};
-  bool uses_write_blocking_slice{};
-  bool uses_write_update_slice{};
-  bool uses_write_after_slice{};
-  bool uses_write_inertial_slice{};
-  bool uses_write_projected_slice{};
-  bool uses_write_projected_waveform_slice{};
-  bool uses_force_signal_slice{};
-  bool uses_release_signal_slice{};
-  bool uses_force_driver_signal_slice{};
-  bool uses_release_driver_signal_slice{};
-  bool uses_debug_points{};
-  bool uses_signal_event{};
-  bool uses_signal_last_value{};
-  bool uses_signal_last_event{};
-  bool uses_simulation_time{};
-  bool uses_vital_timing{};
-  bool uses_vital_delay{};
-  bool uses_signal_active{};
-  bool uses_signal_last_active{};
-  bool uses_signal_driving{};
-  bool uses_signal_driving_value{};
-  bool uses_output{};
-  bool uses_postponed_output{};
-  bool uses_report{};
-  bool uses_formatted_output{};
-  bool uses_time_output{};
-  bool uses_monitor_install{};
-  bool uses_monitor_control{};
-  bool uses_random_value{};
-  bool uses_strings{};
-  bool uses_files{};
-  bool uses_containers{};
-  bool uses_exact_signal_operation { };
+    std::vector<std::uint32_t> register_widths;
+    bool uses_logic9 { };
+    bool requires_resume { };
+    bool uses_write_update { };
+    bool uses_write_after { };
+    bool uses_write_inertial { };
+    bool uses_write_projected { };
+    bool uses_write_projected_waveform { };
+    bool uses_write_blocking_slice { };
+    bool uses_write_update_slice { };
+    bool uses_write_after_slice { };
+    bool uses_write_inertial_slice { };
+    bool uses_write_projected_slice { };
+    bool uses_write_projected_waveform_slice { };
+    bool uses_force_signal_slice { };
+    bool uses_release_signal_slice { };
+    bool uses_force_driver_signal_slice { };
+    bool uses_release_driver_signal_slice { };
+    bool uses_debug_points { };
+    bool uses_signal_event { };
+    bool uses_signal_last_value { };
+    bool uses_signal_last_event { };
+    bool uses_simulation_time { };
+    bool uses_vital_timing { };
+    bool uses_vital_delay { };
+    bool uses_signal_active { };
+    bool uses_signal_last_active { };
+    bool uses_signal_driving { };
+    bool uses_signal_driving_value { };
+    bool uses_output { };
+    bool uses_postponed_output { };
+    bool uses_report { };
+    bool uses_formatted_output { };
+    bool uses_time_output { };
+    bool uses_monitor_install { };
+    bool uses_monitor_control { };
+    bool uses_random_value { };
+    bool uses_strings { };
+    bool uses_files { };
+    bool uses_containers { };
+    bool uses_exact_signal_operation { };
 };
 
 [[nodiscard]] bool valid_symbol(std::string_view symbol) noexcept;
@@ -129,14 +129,14 @@ validate_insert_bounds(
     std::uint32_t source_width);
 
 struct OperationValidationError {
-  std::size_t instruction{};
-  std::string message;
+    std::size_t instruction { };
+    std::string message;
 };
 
 struct PackedRegisterValidation {
-  runtime::simir::RegisterId id{};
-  std::uint32_t width{};
-  bool definition{};
+    runtime::simir::RegisterId id { };
+    std::uint32_t width { };
+    bool definition { };
 };
 [[nodiscard]] std::optional<std::string> validate_string_method_metadata(
     const runtime::simir::StringMethod& operation,
@@ -144,6 +144,9 @@ struct PackedRegisterValidation {
     std::vector<PackedRegisterValidation>& registers);
 [[nodiscard]] std::optional<std::string> validate_scalar_binary_metadata(
     const runtime::simir::SystemVerilogScalarBinary& operation,
+    std::vector<PackedRegisterValidation>& registers);
+[[nodiscard]] std::optional<std::string> validate_scalar_math_metadata(
+    const runtime::simir::SystemVerilogMath& operation,
     std::vector<PackedRegisterValidation>& registers);
 [[nodiscard]] std::optional<std::uint32_t> formatted_value_width(
     runtime::simir::OutputFormat format,
@@ -228,4 +231,4 @@ void optimize_module(
 
 [[nodiscard]] std::string verify_error(llvm::Module& module);
 
-}  // namespace fsim::compiler::llvm_detail
+} // namespace fsim::compiler::llvm_detail

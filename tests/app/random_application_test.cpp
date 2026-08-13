@@ -30,7 +30,7 @@ struct TemporaryDirectory {
 
 struct Capture {
     fsim::runtime::RunResult result;
-    std::array<fsim::runtime::Logic4Word, 13> values { };
+    std::array<fsim::runtime::Logic4Word, 33> values { };
     std::vector<std::string> output;
     std::size_t compiled_processes { };
 };
@@ -61,9 +61,16 @@ Capture execute(
     fsim::app::Simulation simulation {
         std::move(project), 1000, engine
     };
-    constexpr std::array<std::string_view, 13> names {
+    constexpr std::array<std::string_view, 33> names {
         "a", "b", "c", "d", "e", "f", "u", "p0", "p1",
-        "scope_result", "scope_value", "scope_mode", "wide_nonzero"
+        "scope_result", "scope_value", "scope_mode", "wide_nonzero",
+        "inline_result", "inline_value", "inline_mode", "srandom_a",
+        "srandom_b", "dist_uniform_value", "dist_uniform_seed",
+        "dist_normal_value", "dist_normal_seed", "dist_exponential_value",
+        "dist_exponential_seed", "dist_poisson_value", "dist_poisson_seed",
+        "dist_chi_square_value", "dist_chi_square_seed", "dist_t_value",
+        "dist_t_seed", "dist_erlang_value", "dist_erlang_seed",
+        "dist_invalid_value"
     };
     Capture capture;
     capture.compiled_processes = simulation.compiled_process_count();
@@ -171,6 +178,25 @@ void test_random(
     assert(reference.values[10].aval <= 7 && reference.values[10].bval == 0);
     assert(reference.values[11].aval <= 2 && reference.values[11].bval == 0);
     assert(reference.values[12].aval == 1 && reference.values[12].bval == 0);
+    assert(reference.values[13].aval == 1 && reference.values[13].bval == 0);
+    assert(reference.values[14].aval == 5 && reference.values[14].bval == 0);
+    assert(reference.values[15].aval == 2 && reference.values[15].bval == 0);
+    assert(reference.values[16] == reference.values[17]);
+    constexpr std::array<std::uint32_t, 15> distribution_values {
+        2U, 0x92c55619U,
+        104U, 0xcbe35dcfU,
+        34U, 0x2ea4a1c4U,
+        8U, 0x2d1914edU,
+        5U, 0x22fd7c09U,
+        0U, 0x07cdaa7bU,
+        33U, 0xfb315d4eU,
+        0U
+    };
+    for (std::size_t index = 0; index < distribution_values.size(); ++index) {
+        assert(reference.values[18U + index].aval
+            == distribution_values[index]);
+        assert(reference.values[18U + index].bval == 0U);
+    }
     assert(reference.compiled_processes == 0);
 #if defined(FSIM_HAS_LLVM)
     assert(compiled.compiled_processes == 2);
@@ -258,6 +284,8 @@ module invalid_scope_randomize;
     result = std::randomize();
     result = std::randomize(local_value + 1);
     result = std::randomize(module_value);
+    $srandom();
+    result = $dist_uniform(1, 0, 10);
   end
 endmodule
 )";
@@ -273,7 +301,9 @@ endmodule
     for (const auto code : {
              "FSIM-ELAB-SVRAND-001",
              "FSIM-ELAB-SVRAND-002",
-             "FSIM-ELAB-SVRAND-003" }) {
+             "FSIM-ELAB-SVRAND-003",
+             "FSIM-ELAB-SVRAND-007",
+             "FSIM-ELAB-SVRAND-008" }) {
         assert(std::ranges::any_of(
             diagnostics.diagnostics(), [&](const auto& diagnostic) {
                 return diagnostic.code == code;
@@ -298,10 +328,23 @@ int main()
 module random_test;
   typedef enum logic [1:0] {MODE_ZERO, MODE_ONE, MODE_TWO} mode_t;
   logic [31:0] a, b, c, d, e, f, u, p0, p1;
+  logic [31:0] srandom_a, srandom_b;
+  integer dist_seed;
+  integer dist_uniform_value, dist_uniform_seed;
+  integer dist_normal_value, dist_normal_seed;
+  integer dist_exponential_value, dist_exponential_seed;
+  integer dist_poisson_value, dist_poisson_seed;
+  integer dist_chi_square_value, dist_chi_square_seed;
+  integer dist_t_value, dist_t_seed;
+  integer dist_erlang_value, dist_erlang_seed;
+  integer dist_invalid_value;
   int scope_result;
   logic [2:0] scope_value;
   mode_t scope_mode;
   logic wide_nonzero;
+  int inline_result;
+  logic [2:0] inline_value;
+  mode_t inline_mode;
   initial begin
     logic [2:0] scoped;
     mode_t mode;
@@ -317,8 +360,37 @@ module random_test;
     scope_value = scoped;
     scope_mode = mode;
     wide_nonzero = |wide;
+    inline_result = std::randomize(scoped, mode) with {
+      solve mode before scoped;
+      mode dist {2 := 8};
+      mode == 2;
+      (mode == 2) -> scoped inside {[5:6]};
+      soft scoped == 5;
+    };
+    inline_value = scoped;
+    inline_mode = mode;
     $display("cli=%h", $urandom);
     $display("signed=%d", $random);
+    $srandom(32'h13579bdf);
+    srandom_a = $urandom;
+    $srandom(32'h13579bdf);
+    srandom_b = $urandom;
+    dist_seed = 32'h12345678;
+    dist_uniform_value = $dist_uniform(dist_seed, -10, 10);
+    dist_uniform_seed = dist_seed;
+    dist_normal_value = $dist_normal(dist_seed, 100, 15);
+    dist_normal_seed = dist_seed;
+    dist_exponential_value = $dist_exponential(dist_seed, 20);
+    dist_exponential_seed = dist_seed;
+    dist_poisson_value = $dist_poisson(dist_seed, 7);
+    dist_poisson_seed = dist_seed;
+    dist_chi_square_value = $dist_chi_square(dist_seed, 5);
+    dist_chi_square_seed = dist_seed;
+    dist_t_value = $dist_t(dist_seed, 8);
+    dist_t_seed = dist_seed;
+    dist_erlang_value = $dist_erlang(dist_seed, 3, 30);
+    dist_erlang_seed = dist_seed;
+    dist_invalid_value = $dist_exponential(dist_seed, 0);
   end
   initial p0 = $urandom;
   initial p1 = $urandom;

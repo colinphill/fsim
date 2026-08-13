@@ -2,13 +2,14 @@
 // Included inside namespace fsim::runtime::simir by simir.hpp.
 
 enum class ResolutionKind : std::uint8_t {
-  none,
-  sv_wire,
-  std_logic,
-  vhdl_user_or,
-  vhdl_user_and,
-  sv_wand,
-  sv_wor,
+    none,
+    sv_wire,
+    std_logic,
+    vhdl_user_or,
+    vhdl_user_and,
+    sv_wand,
+    sv_wor,
+    sv_user_first,
 };
 
 enum class ValueKind : std::uint8_t {
@@ -48,6 +49,7 @@ struct Signal {
   std::optional<SimulationTick> charge_decay;
   SystemVerilogScalarKind systemverilog_scalar{
       SystemVerilogScalarKind::None};
+  bool event_variable { };
 
   Signal() = default;
   Signal(

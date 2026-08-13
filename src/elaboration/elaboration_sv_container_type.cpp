@@ -138,20 +138,37 @@ materialize_systemverilog_container_type(
       result.signed_indices = false;
       result.string_indices = true;
     } else {
-    const auto width = index_type ? index_type->width() : std::nullopt;
-    if (!index_type || !width || *width == 0 || *width > 64
-        || index_type->domain == frontend::ValueDomain::Unknown
-        || !index_type->packed_members.empty() || index_type->vhdl_array) {
-      report(
-          "FSIM-ELAB-SVCONTAINER-013",
-          "associative-array indices require a resolved string or integral "
-          "scalar type with width in 1..64",
-          source.span);
-      return std::nullopt;
-    }
-    result.index_width = static_cast<std::uint32_t>(*width);
-    result.two_state_indices = two_state(index_type->domain);
-    result.signed_indices = index_type->is_signed;
+        const auto width = index_type ? index_type->width() : std::nullopt;
+        const auto scalar = index_type
+            ? index_type->systemverilog_scalar
+            : frontend::SystemVerilogScalarKind::None;
+        const bool nonintegral_scalar = scalar == frontend::SystemVerilogScalarKind::ShortReal
+            || scalar == frontend::SystemVerilogScalarKind::Real
+            || scalar == frontend::SystemVerilogScalarKind::Realtime
+            || scalar == frontend::SystemVerilogScalarKind::Chandle;
+        const auto aggregate = index_type
+            ? index_type->packed_aggregate
+            : frontend::PackedAggregateKind::None;
+        const bool unpacked_aggregate = aggregate == frontend::PackedAggregateKind::UnpackedStruct
+            || aggregate == frontend::PackedAggregateKind::TaggedUnion
+            || aggregate == frontend::PackedAggregateKind::UnpackedUnion;
+        if (!index_type || !width || *width == 0
+            || *width > std::numeric_limits<std::uint32_t>::max()
+            || index_type->domain == frontend::ValueDomain::Unknown
+            || nonintegral_scalar || unpacked_aggregate
+            || index_type->systemverilog_container
+            || !index_type->systemverilog_class_declaration.empty()
+            || index_type->vhdl_array) {
+            report(
+                "FSIM-ELAB-SVCONTAINER-013",
+                "associative-array indices require a resolved string or integral "
+                "type with an executable width",
+                source.span);
+            return std::nullopt;
+        }
+        result.index_width = static_cast<std::uint32_t>(*width);
+        result.two_state_indices = two_state(index_type->domain);
+        result.signed_indices = index_type->is_signed;
     }
   }
 

@@ -360,6 +360,9 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
         }
       }
       unit.compilation_unit_identity = unit_digest;
+      if (unit.kind == frontend::UnitKind::SystemVerilogBind) {
+          unit.name = "$bind$" + unit_digest + unit.name;
+      }
       for (auto& declaration : unit.systemverilog_classes) {
         assign_class_source_metadata(
             declaration, unit.library, unit_digest);
@@ -633,13 +636,26 @@ std::string unit_key(const frontend::DesignUnit& unit)  {
       return "systemverilog:" + unit.library + ":package:"
           + unit.name;
     case frontend::UnitKind::SystemVerilogInterface:
-      return "systemverilog:" + unit.library + ":interface:"
-          + unit.name;
+        return "systemverilog:" + unit.library
+            + (unit.systemverilog_extern ? ":extern-interface:"
+                                         : ":interface:")
+            + unit.name;
     case frontend::UnitKind::VerilogModule:
-      return "verilog:" + unit.library + ":module:" + unit.name;
+        return "verilog:" + unit.library
+            + (unit.systemverilog_extern ? ":extern-module:"
+                                         : ":module:")
+            + unit.name;
     case frontend::UnitKind::SystemVerilogProgram:
-      return "systemverilog:" + unit.library + ":program:" + unit.name;
-  }
+        return "systemverilog:" + unit.library
+            + (unit.systemverilog_extern ? ":extern-program:"
+                                         : ":program:")
+            + unit.name;
+    case frontend::UnitKind::SystemVerilogConfiguration:
+        return "systemverilog:" + unit.library + ":configuration:"
+            + unit.name;
+    case frontend::UnitKind::SystemVerilogBind:
+        return "systemverilog:" + unit.library + ":bind:" + unit.name;
+    }
   return {};
 }
 

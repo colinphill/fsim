@@ -27,14 +27,22 @@ values, traces, artifacts, relocation, and caches. The explicit VPI `uint32_t`
 descriptor width and governed memory/work/trace budgets are physical host or
 resource ceilings, not Verilog legality limits.
 
+Batch 165 is authoritative for the governed SystemVerilog-2017 boundary. Its
+30 supported clause/integration rows and 21 preserved width paths have zero
+active residual rows; five explicitly deferred extensions keep their later
+batch or post-v2 owners. The 6-GiB process, 1,000-delta, 64-trace-signal, and
+time ceilings govern release evidence only. They are not SystemVerilog
+legality or packed-width limits. Exact inventories and their digests are in the
+[SystemVerilog release audit](v1-systemverilog-release-audit.md).
+
 | Area | Parsed now | Executable now | Important limitations |
 |---|---|---|---|
 | VHDL units | `library`/`use`/context-reference clauses retained on their following unit; reusable context declarations containing bounded context items; package declarations containing bounded constants, subtypes, non-nested records, user-defined enumerations, bounded multidimensional arrays with scalar/vector/record/enumeration/nested-array elements, and scalar function/procedure declarations, plus matching bounded package subprogram bodies; bounded generic package declarations and entity/architecture-local package instantiations over existing scalar value/type/function/procedure generic families; bounded generic function/procedure templates and local or package-visible instantiations over those families; entities and architectures with package/entity/architecture type and subtype declarations over scalar logic/bit/Boolean, enumerations including ascending/descending constraints, constrained signed/unsigned or logic/bit vectors, constrained or `integer`/`natural`/`positive range <>` user arrays, portable integer ranges, and bounded records; scalar integer/Boolean/bit/enumeration or subtype-typed generics; VHDL-2008 unclassified interface type plus bounded interface function, procedure, and package generics; parameterized packed and enumeration ranges; record/subtype/enumeration/user-array or packed scalar/vector ports, signals, and bounded packed process variables; and `integer`/`natural`/`positive`/explicit integer-range ports, signals, and process variables; direct-entity and component-style instances with positional-then-named `generic map` actuals including `open` value-default selection, labeled `if`/`else`, integer-range `for`, scalar/inclusive-range-choice `case` generate regions, and labeled block statements with optional Boolean guards and implicit reactive `GUARD` signals containing bounded constants, local packed signals, concurrent assignments, processes, instances, and nested regions; block interfaces may bind bounded value/type/function/procedure/package generics and generic-dependent ports with positional-then-named maps, defaults, and `open` | Recursive acyclic `context library.name` expansion; explicit use visibility and direct `package.item`/`library.package.item` references for declaration-ordered scalar constants and bounded record/subtype/enumeration/array declarations and literals, including precise transitive context/package source provenance; directly visible package functions and procedures merged from matching bounded bodies; independently resolved entity and architecture type regions with entity subtype visibility in the associated architecture; chained subtype resolution, derived integer/enumeration-base containment, packed reconstraint legality, specialization-dependent packed/enumeration/array bounds, subtype-left defaults, checked enumeration constants/generics/stores, nominal user-array values, and directionally safe hierarchy aliases; declaration-order record layouts and minimum-width nominal enumeration ordinals, element-domain defaults, same-language nominal port aliases/copy/comparison, enum-typed constants/generics, contextual identifier/character literals and case choices, record/array subtype aliases, contextually typed positional/named/final-`others` record aggregates and recursive positional/discrete/range/choice-list/final-`others` multidimensional array aggregates, multidimensional member/index/slice access, persistent debug-visible record/subtype/enumeration/array locals, and explicit mixed-boundary rejection; recursively elaborated per-occurrence value/type/function/procedure/package generic specializations with named/positional whole-signal plus bounded static/dynamic expression and `open`/default `port map` associations, declaration-ordered local package and generic-subprogram specialization, selected package constants/types/functions/procedures, exact interface-package and instantiated-subprogram forwarding with transitive body provenance, declaration-ordered generated-constant and pure-function folding, interval-based selection with null-range handling, specialization-selected or always-selected scoped behavior with scope-qualified locals, delayed block-interface binding after enclosing local-package specialization, persistent process-variable registers, and signed 32-bit two-state integer-family objects with specialized constraints, subtype-left initialization, and range-safe aliases | Complete project package bodies and general package subprograms, general or nested generic package units, nested generic subprogram templates, unreviewed standard-library packages, and general visibility/overload resolution are not implemented; record types remain non-nested and packed and exclude integer/access/protected elements, nested aggregates, element-choice groups, and qualified aggregate expressions; user arrays support bounded multidimensional scalar/vector/record/enumeration/nested-array elements, recursive aggregates, null executable objects, and same-language callable/hierarchy boundaries but exclude qualified aggregate expressions, dynamically chosen aggregate associations, unbounded runtime-sized slices, and cross-language composite values; enumeration literal visibility is currently contextual rather than a complete overload candidate-set implementation; package/context visibility cycles are rejected; no configurations, mixed-language interface-package/subprogram actuals, VHDL-2019 classified interface types, process-local subtype declarations, nonintegral case-generate choices, generated variable/file/alias/attribute/use/group declarations, general qualified/function-call or dynamically composed aggregate port actuals, or process declarative items beyond bounded variables; scalar constraints outside the portable signed 32-bit interval are rejected |
 | VHDL statements | Concurrent assignments, labeled/unlabeled `with`/`select` selected signal assignments and concurrent assertions, process sensitivity lists, `if`/`elsif`/`else`, ordered packed `case`/`when`/`others`, locally static sequential `for`, Boolean `while`, unconditional and labeled loops, conditional/targeted `exit` and `next`, simple and chained VHDL-2008 conditional signal/variable assignments, signal/variable assignment including one-level record-element targets, `null`, ordered waveform elements, `unaffected` alternatives, exact integer `after`, implicit/explicit `inertial`, `transport`, and `reject TIME inertial`, bare/`on`/`until`/`for` wait clauses in every legal combination including nested procedure bodies, sequential `assert` with optional general string `report` and `severity_level` expressions, and sequential `report` statements | Whole-record and whole/constant-selected packed signal/local assignments, contextually typed record and recursive multidimensional/composite array aggregate initializers and whole-object values, constant or executable multidimensional record-member/index/slice writes, dynamic single-element and fixed-width runtime-slice signal/local writes with signed 32-bit `integer`-family bounds and execution-time target capture for delayed/projected waveforms, source-ordered Boolean conditional-assignment alternatives including record aggregates, selected concurrent assignments with grouped exact choices, final `others`, independent ordered waveform lists or `unaffected` on every conditional/selected alternative, and inferred reactive sensitivity; complete new signal waveforms atomically edit cancelable projected transactions per scalar subelement, with transport truncation and exact inertial mark/delete using an explicit rejection limit or the first delay by default; guarded simple/conditional/selected assignments in Boolean-guarded blocks retain one reactive driver identity each and route false-guard or explicit-`null` nine-state values through the same delayed projected-waveform path as resolution-neutral `Z`; nested Boolean-typed conditional branches, exact `|`-separated case choices with nested statement lists, ascending/descending/null `for` ranges with implicit-constant substitution and bounded unrolling, executable loop backedges with persistent locals, nested/named loop transfers, edge-guarded clock processes, waits nested through conditionals, loops, and exact overload-resolved procedure chains, first-suspending condition waits, event-or-timeout races with preserved absolute deadlines, Boolean assertions and sequential reports with runtime string concatenation and severity values, skipped passing-expression evaluation, exact source metadata, and nonfailure severities continuing, reactive concurrent-assertion sensitivity, integer/logic/vector/Boolean literals, and selected operations | Bounded selected assignments require a final `others` and do not support matching-select `?`; guarded/null disconnection is limited to nine-state signal targets and does not implement disconnection specifications or arbitrary resolution-function driver removal; case ranges, qualified aggregate expressions, unbounded runtime-sized slices or selection beyond the supported multidimensional/record chains, general nested/chained record selections or local scopes, configurable assertion stop levels, dynamic time-valued objects, or nonstandard physical-time units remain unsupported; standard physical time is normalized exactly and waveform times must be strictly ascending |
 | VHDL expressions | Identifiers and bounded multidimensional array/record selected names, decimal/logic/string/Boolean literals, identifier/character enumeration literals, record and array aggregates, calls, index/slice syntax, common unary/binary syntax | Identifiers/literals and objects resolved through bounded scalar/vector/record/enumeration/user-array subtype chains; local and rooted dot-separated VHDL-2008 external signal names resolve to the existing signal identity with exact subtype validation; contextual enumeration literals in initializers, assignments, conditional alternatives, comparisons, and case choices with nominal identity and ordinal relational ordering; enumeration type/subtype-mark `left`/`right`/`low`/`high`/`length`/`ascending` and checked `pos`/`val`/`succ`/`pred`/`leftof`/`rightof` over each resolved ascending or descending subtype range, including package/generic folding, base-declaration ordinals, and dynamic failures; contextually typed positional/named/final-`others` bounded record aggregates in initializers, whole-object assignments, equality/inequality, and conditional alternatives; whole nominal user-array copy/equality, recursive multidimensional/composite aggregates, null values, constant or executable multidimensional indexing/slicing and supported record/array chains, dynamic single-element indexing, and context-sized 1-through-64-bit runtime slices with signed 32-bit `integer`-family bounds, declared-range mapping, exact direction/length checks, and packed record-member chains; record-member reads with constant element bit/slice selection, unary plus/minus, checked integer-family and bounded packed signed `abs`, Boolean and packed `not`/`and`/`or`/`xor`, Boolean `nand`/`nor`/`xnor`, equal-width signed/unsigned packed arithmetic plus checked signed 32-bit integer-family `+`, `-`, `*`, `/`, `rem`, `mod`, and locally static nonnegative `**`, equality/inequality/relational comparisons including whole same-record-type equality, general branch-short-circuited conditional expressions including arbitrary-width static packed alternatives, bounded case expressions with choice lists, scalar ranges, exhaustive Boolean alternatives, and final `others`, packed `sll`/`srl`/`sla`/`sra` and `rol`/`ror` with locally static or dynamic integer counts and negative-count reversal, constant in-range indexed names/slices with declared-range mapping, and width-summing packed `&` concatenation | External variable/constant names, relative parent paths, generated-path indices, selected/qualified type marks in attribute prefixes, qualified expressions, dynamic/negative integer exponentiation, unbounded runtime-sized slices or selections beyond the supported chains, most calls/operators, dynamically chosen aggregate associations, and complete overload/self-determined sizing are not lowered; out-of-range or unknown dynamic indices and invalid runtime slice bounds fail deterministically; explicitly mixed signed/unsigned numeric operands require conversion |
-| Verilog/SV units | Modules; bounded packages containing integral parameters/localparams, packed integral typedef aliases, packed enums, non-nested packed structs, equal-width packed unions, imports, bounded functions, and bounded tasks; compilation-unit or unit-local wildcard/selected imports; ANSI and classic callable formals plus named/default actuals; ANSI and basic non-ANSI packed ports plus one-dimensional integral static-array, dynamic-array, queue, bounded-queue, and integral-key associative-array ports, nets/variables, packed constant or parameterized ranges, integral value parameters/localparams using implicit, `byte`, `shortint`, `longint`, `time`, `int`/`integer`, or packed `bit`/`logic`/`reg` types with explicit signedness, bounded same-language `parameter type`/`localparam type` declarations, module instances with named or positional value/type overrides, explicit or implicit conditional/inline-or-module-`genvar` iterative/constant-choice generates, and direct or named static contents in explicit generate regions containing bounded parameters/localparams, local packed signals, functions/tasks, continuous assignments, processes, instances, and nested regions | Recursive case-sensitive package imports, `package::constant` folding, imported/scoped/local typedef resolution, enum enumerator visibility, declaration-order packed-struct layout, and offset-zero packed-union overlay layout for parameters, ports, signals, generated signals, and procedural locals with precise source provenance; explicit/implicit enum values are checked for packed base fit/uniqueness; typed 1–64-bit parameter defaults, overrides, localparams, and non-iterative generated parameters preserve width, signedness, state domain, and the complete unsigned-64 range after specialization-dependent range folding; bounded type parameters resolve integral builtins, local/imported/package-selected typedef marks, dependent packed ports/signals/typedefs/value constants, and nested formal forwarding with `sv-type-v1` cache identity; bounded module/package/generated automatic functions and tasks admit integral, byte-string, dynamic/queue/associative-container, and one-dimensional locally constant static unpacked-array values, with module objects/automatic locals, whole or direct compatible slice value-copy actuals, nested nonrecursive calls, suspension-safe atomic copy-out, and transitive source provenance; bounded static/implicit callables preserve packed body-scope locals across sequential calls; packed function output/inout and direct-local automatic ref plus nonsuspending direct-local task ref use checked call-boundary transfer; direct same-language whole-container port actuals preserve exact specialized element, kind, queue-bound, associative-index, or static-range metadata, while compatible direct static-array colon or locally constant indexed-slice actuals use formal-typed recursive ordinal aliases with read-only input and atomic selected output/inout updates through nested/generated hierarchy; whole packed aggregates, constant member reads/writes, and one-level constant member bit/part-selects with specialization-folded parameter or package-constant bounds execute through common extract/insert/sliced-write SimIR operations; recursive hierarchy with per-instance integral constant/type specialization, declaration-ordered generated-parameter folding, specialization-selected or always-selected generated behavior with scope-qualified locals, loop-variable substitution, and named or positional whole-object or direct static-slice connections | Nested structs/aggregates, unequal-width or tagged unions, unpacked members, member initializers, anonymous structs/enums, interfaces, classes, unsupported task/function forms, and export package items are not implemented; dynamic or recursively chained member selects and nominal struct/union/enum assignment/cast legality are not yet enforced; bounded aliases ultimately resolve to `bit`, `logic`, `reg`, `int`, or `integer`, while enum bases and aggregate members use packed `bit`/`logic`/`reg`; module integer objects use executable signed 32-bit two-state storage; constant/type widths above 64 bits, complete LRM expression typing, genvar-dependent typed constants, and generated type declarations are not implemented; package names resolve within the owning manifest library; no standard descriptor aliases, multichannel descriptors, unrestricted host I/O, noncanonical generate-loop updates, general expression or runtime-variable/dynamic-container port actuals, cross-language containers, string associative indices, suspending/static ref callables, or unrestricted allocation |
+| Verilog/SV units | Modules; bounded packages containing integral parameters/localparams, packed integral typedef aliases, packed enums, recursive packed structs, equal-width ordinary packed unions, tagged unions, imports, bounded functions, and bounded tasks; compilation-unit or unit-local wildcard/selected imports; ANSI and classic callable formals plus named/default actuals; ANSI and basic non-ANSI packed ports plus integral static-array, dynamic-array, queue, bounded-queue, and integral-key associative-array ports, nets/variables, packed constant or parameterized ranges, integral value parameters/localparams using implicit, `byte`, `shortint`, `longint`, `time`, `int`/`integer`, or packed `bit`/`logic`/`reg` types with explicit signedness, same-language `parameter type`/`localparam type` declarations, module instances with named or positional value/type overrides, explicit or implicit conditional/inline-or-module-`genvar` iterative/constant-choice generates, and direct or named static contents in explicit generate regions containing bounded parameters/localparams, local packed signals, functions/tasks, continuous assignments, processes, instances, and nested regions | Recursive case-sensitive package imports, `package::constant` folding, imported/scoped/local typedef resolution, enum enumerator visibility, exact two-/four-state scalar defaults, arbitrary-width enum values, declaration-order packed-struct layout, offset-zero ordinary packed-union overlays, tagged-union payloads, nominal assignment compatibility and arbitrary-rank unpacked dimensions; typed arbitrary-width parameter defaults, overrides, localparams, and non-iterative generated parameters preserve width, signedness, state domain and X/Z planes after specialization-dependent range folding; type parameters resolve integral builtins, local/imported/package-selected typedef marks, dependent packed ports/signals/typedefs/value constants, nested formal forwarding and 137-bit actuals with `sv-type-v3` cache identity; bounded module/package/generated automatic functions and tasks admit integral, byte-string, dynamic/queue/associative-container, and locally constant static unpacked-array values, with module objects/automatic locals, whole or direct compatible slice value-copy actuals, nested nonrecursive calls, suspension-safe atomic copy-out, and transitive source provenance; direct same-language whole-container port actuals preserve exact specialized element, kind, queue-bound, associative-index, or static-range metadata; whole packed aggregates and constant or chained compatible member selections execute through common exact-width SimIR operations; arbitrary-width integral scalar, enum, packed-struct, and packed-union associative indices retain exact value planes and signed ordering | Complete LRM expression typing, genvar-dependent typed constants, generated type declarations, unrestricted task/function forms, general expression or runtime-variable/dynamic-container port actuals, cross-language containers, suspending/static ref callables, standard descriptor aliases, multichannel descriptors and unrestricted host I/O/allocation remain outside this row |
 | Verilog/SV statements | `assign`, bounded scalar and static-array built-in gate primitives, event-controlled or path-safe body-timed `always`, edge-controlled `always_ff`, and inferred `always @*`/`always_comb`/`always_latch`, `initial`, SystemVerilog `final`, blocks, leading packed procedural variables, `if`/`else`, `case`/`casez`/`casex`, bounded `case inside` with comma-separated choices, and bounded `case matches` with one constant or `.*` pattern per item, `default`, and optional SystemVerilog `unique`/`unique0`/`priority` qualifiers, bounded inline or external-variable procedural `for`, locally static or runtime integral `repeat`, runtime `while`/`do-while`, and path-safe suspending or exiting `forever`, nested `break`/`continue`, blocking/NBA assignments, SystemVerilog compound assignments and standalone prefix/postfix increment/decrement, procedural force/release, exact decimal/scientific and locally constant integral parameter/localparam delays, parenthesized `min:typ:max` delays, one/two/three-value continuous-assignment transition delays, one/two-value logic-gate and one/two/three-value tri-state-gate delays, direct any-change/`posedge`/`negedge`/wildcard controls, exact general packed any-change expressions, and repeated intra-assignment event controls, condition waits, `$stop`, `$finish`, standalone `$info`/`$warning`/`$error`/`$fatal`, immediate assertions with simple or lexical-block pass/failure actions, the nonsuspending statement subset inside bounded automatic/static functions, and the supported scheduler controls inside bounded automatic tasks plus nonsuspending static tasks, bounded SystemVerilog-2017 `$fopen`/`$fclose`/`$fdisplay`/`$fwrite`/`$fgets`/`$feof`/`$ferror` text-file forms, and `$readmemb`/`$readmemh` into bounded static memories | Whole, chained static packed, constant bit/part-selected, constant or runtime-base `+:`/`-:` indexed-selected, and dynamic single-bit packed signal/local assignments use one checked lvalue capture; partial runtime-base writes update only representable bits, while unknown or wholly out-of-range bases do nothing; dynamic delayed/NBA targets capture their selection at assignment execution. SystemVerilog compound assignments accept delay/event controls and evaluate the target once; expression and statement prefix/postfix `++`/`--` retain new/old result ordering. Whole, packed-member, static-bit, and static-part signal force/release masks only the selected region while underlying drivers continue. Bounded function bodies execute blocking local assignments, blocks, conditionals, exact case, canonical loops, break/continue, nested nonrecursive calls, function-name assignment, value return, typed named/default inputs, and packed output/inout/ref transfer; bounded task bodies add statement delays, named-event waits/triggers, and condition waits to the shared control subset with nested function/task calls, valueless early return, persistent formals/locals, named/default actuals, direct-local bounded ref, and deferred ordered input/output/inout copy-in/copy-out; `$stop` pauses before the following statement and resumes after the application clears the stop; severity tasks retain an optional bounded literal message, with note/warning/error continuing and `$fatal` accepting an optional ignored numeric finish control before terminating; final procedures execute exactly once after ordinary quiescence or `$finish` and may contain the supported nonsuspending blocking statement subset; comma-separated optionally named `buf`/`not`/`and`/`nand`/`or`/`nor`/`xor`/`xnor`/`bufif0`/`bufif1`/`notif0`/`notif1` primitives, plus resource-governed static arrays with direction-aware scalar/vector terminal mapping, lower to indexed common four-state continuous processes; inline `int`/`integer` or external-variable procedural loops with integral `<`/`<=`/`>`/`>=` bounds, positive constant steps, deterministic static unrolling or runtime backedges, null ranges, and update-point `continue`; locally static or single-evaluated runtime integral repeat counts with negative and unknown values producing zero iterations; executable pre/post-test loop backedges with nested control transfers; path-safe timed, event-controlled, terminating, or deterministic-break `forever`; body-timed `always` re-entry only after a proven suspension or termination; nested `if`/`else` with packed four-state truth conversion; transitive cycle-safe wildcard dependencies through visible function/task bodies; time-zero `always_comb`/`always_latch`; ordered exact, symmetric selector-or-choice wildcard, right-choice-wildcard value/range `case inside` matching, and exact constant or unconditional-wildcard `case matches` matching, plus source-aware alternative-level `unique`/`unique0`/`priority` checks; exact packed-expression value-change filtering, repeated event suspension, direct edge suspension, and immediate-test condition waits; packed-condition immediate assertions with implicit error and scoped pass/failure actions; delays inherit the active time context, select `min`/`typ`/`max`, then round to SystemVerilog precision; delayed continuous whole/slice writes and net-declaration propagation delays select rise/fall/turnoff from actual changed four-state elements, combine checked driver and net delays, use the shortest applicable packed transition, retain same-value transactions, and cancel superseded inertial updates; manifest-relative text and memory files use opaque process-owned services with deterministic byte/element bounds and interpreter/native lifecycle parity | SDF parsing and annotation are not implemented; `$stop` accepts but ignores its optional verbosity argument; final procedures reject timing controls, waits, `$stop`, `$finish`, and NBAs; nonprogressing `always`/`forever` paths are rejected; procedural `for` updates remain positive constant steps toward a direct comparison bound; edge-qualified general packed expressions and mixed general-expression event lists remain unsupported; runtime-selected targets followed by another selection, automatic process variables beyond the substituted loop index, nested or nonintegral static callable locals, suspending static tasks, nonlocal/suspending ref actuals, nonintegral writable function formals, binary/positioned/multichannel files and standard descriptor aliases, multidimensional or aggregate/string-element memories, unrestricted dynamic allocation, formatted/dynamic severity-task messages, or force/release of automatic locals and runtime-selected targets |
-| Verilog/SV expressions | Identifiers, sized literals, strings, unary and common binary syntax, conditional (`?:`), index/part-select/concatenation syntax, call syntax | Identifiers/literals, unary plus/minus, bitwise complement (`~`), vector-aware logical negation (`!`), mixed-width logical and/or, unary and/or/xor reductions and their `~&`/`~|`/`~^`/`^~` complements, bitwise and/or/xor plus binary `~^`/`^~` XNOR, logical and arithmetic left/right shifts with signedness-sensitive four-state sign fill, left-associative fixed-width `**`, bounded SystemVerilog sizing/conversion, equal-width signed/unsigned add/subtract/multiply/divide/remainder and relational comparisons, equality/inequality with unknown propagation, exact known-result case equality/inequality (`===`/`!==`), right-operand-masked SystemVerilog wildcard equality/inequality (`==?`/`!=?`), short-circuit logical operators, equal-width conditional alternatives under a scalar condition with four-state bit merging and skipped-branch behavior, constant in-range bit/part selects, dynamic single-bit selects using the common signed 32-bit index representation, constant and runtime-base `+:`/`-:` indexed part-select reads with declared-range mapping, packed concatenations, bounded fixed-width integral left/right streaming concatenations, direct locally constant colon or indexed static-array selections in supported contextual assignment, consumer, callable, ordering, and module-port forms, checked constant replication concatenations of statically sized operands, bounded nonnegative integral `$clog2` constant calls, width/bit-preserving `$signed`/`$unsigned` casts, packed `$isunknown`, `$onehot`, and `$onehot0`, signed 32-bit `$countones` and constant-control `$countbits`, 32-bit `$bits` results for statically sized packed expressions and direct one-dimensional integral unpacked containers, signed 32-bit `$left`/`$right`/`$low`/`$high`/`$size`/`$increment` results with an optional constant dimension `1` over packed objects and supported unpacked containers, packed/unpacked `$dimensions`/`$unpacked_dimensions` counts, direct contextual positional/keyed assignment patterns for supported whole containers including bounded static-array default/index-key patterns, exact-element-type `sum`/`product`/`and`/`or`/`xor` reductions with an optional bounded pure `item`/`item.index` conditional transformation, no-argument `min`/`max`/`unique`/`unique_index` queue locators, bounded pure-predicate `find`/`find_index`/`find_first`/`find_first_index`/`find_last`/`find_last_index` queue locators on supported direct unpacked containers, and bounded local/imported/package-selected function calls with supported lifetime, positional/named/default associations, and packed writable/reference formals in eligible constant or runtime expressions | Widths above 64 bits, general aggregate/container streaming, runtime stream slice sizes, dynamic `$countbits` controls, query type references, indirect or multidimensional container queries or reductions, named or arithmetic/function/side-effecting reduction transformations, no-argument locator `with` clauses, type-keyed or nested assignment patterns and defaults outside direct one-dimensional static arrays, predicate iterator calls/side effects/arithmetic, dimension arguments other than `1`, arbitrary vector-valued/negative `$clog2` arguments, unrestricted function profiles and recursion are not lowered; DPI profiles outside the bounded Batch 156 surface are rejected; out-of-range or unknown dynamic indices fail at runtime |
+| Verilog/SV expressions | Identifiers, sized literals, strings, unary and common binary syntax, conditional (`?:`), index/part-select/concatenation syntax, call syntax | Identifiers/literals, unary plus/minus, bitwise complement (`~`), vector-aware logical negation (`!`), mixed-width logical and/or, unary and/or/xor reductions and their `~&`/`~|`/`~^`/`^~` complements, bitwise and/or/xor plus binary `~^`/`^~` XNOR, logical and arithmetic left/right shifts with signedness-sensitive four-state sign fill, left-associative fixed-width `**`, bounded SystemVerilog sizing/conversion, equal-width signed/unsigned add/subtract/multiply/divide/remainder and relational comparisons, equality/inequality with unknown propagation, exact known-result case equality/inequality (`===`/`!==`), right-operand-masked SystemVerilog wildcard equality/inequality (`==?`/`!=?`), short-circuit logical operators, equal-width conditional alternatives under a scalar condition with four-state bit merging and skipped-branch behavior, constant in-range bit/part selects, dynamic single-bit selects using the common signed 32-bit index representation, constant and runtime-base `+:`/`-:` indexed part-select reads with declared-range mapping, packed concatenations, bounded fixed-width integral left/right streaming concatenations, direct locally constant colon or indexed static-array selections in supported contextual assignment, consumer, callable, ordering, and module-port forms, checked constant replication concatenations of statically sized operands, bounded nonnegative integral `$clog2` constant calls, width/bit-preserving `$signed`/`$unsigned` casts, packed `$isunknown`, `$onehot`, and `$onehot0`, ordered simulation-owned `$test$plusargs`/`$value$plusargs` prefix and first-match queries with signed, string, real/scalar and arbitrary-width four-state conversion, the complete IEEE 1800 scalar `$rtoi`/`$itor`/raw-bit and logarithmic/exponential/power/rounding/trigonometric/hyperbolic math family, signed 32-bit `$countones` and constant-control `$countbits`, 32-bit `$bits` results for statically sized packed expressions and direct one-dimensional integral unpacked containers, signed 32-bit `$left`/`$right`/`$low`/`$high`/`$size`/`$increment` results with an optional constant dimension `1` over packed objects and supported unpacked containers, packed/unpacked `$dimensions`/`$unpacked_dimensions` counts, direct contextual positional/keyed assignment patterns for supported whole containers including bounded static-array default/index-key patterns, exact-element-type `sum`/`product`/`and`/`or`/`xor` reductions with an optional bounded pure `item`/`item.index` conditional transformation, no-argument `min`/`max`/`unique`/`unique_index` queue locators, bounded pure-predicate `find`/`find_index`/`find_first`/`find_first_index`/`find_last`/`find_last_index` queue locators on supported direct unpacked containers, and bounded local/imported/package-selected function calls with supported lifetime, positional/named/default associations, and packed writable/reference formals in eligible constant or runtime expressions | General aggregate/container streaming, runtime stream slice sizes, dynamic `$countbits` controls, query type references, indirect or multidimensional container queries or reductions, named or arithmetic/function/side-effecting reduction transformations, no-argument locator `with` clauses, type-keyed or nested assignment patterns and defaults outside direct one-dimensional static arrays, predicate iterator calls/side effects/arithmetic, dimension arguments other than `1`, arbitrary vector-valued/negative `$clog2` arguments, unrestricted function profiles and recursion are not lowered; DPI profiles outside the bounded Batch 156 surface are rejected; out-of-range or unknown dynamic indices fail at runtime |
 | Preprocessing/directives | Quoted and angle includes, manifest/CLI definitions, object/function macros with default arguments, multiline replacement, argument substitution, token concatenation/stringification, `__FILE__`/`__LINE__`, `undef`, nested conditional compilation, logical `` `line`` source remapping, legal `` `timescale``, `` `default_nettype``, reset/cell/keyword-version/unconnected-drive state, and ordered `file`/`source-set`/`combined` policies | Included units and macro-selected executable source enter the normal frontend; active `` `line`` mappings reach parser diagnostics, macro ancestry, DesignIR/SimIR debug points, report callbacks, and LLVM objects while physical ownership remains in analysis/native cache provenance; mappings reset for includes and compilation-unit roots; source-set/combined roots otherwise share macro, conditional, and parser directive state while retaining library ownership; scalar implicit nets and default port net types honor `` `default_nettype``; cell metadata and omitted-input pulls reach DesignIR/runtime; time directives and declarations scale exact delays and contribute to `auto` resolution; ordered snapshots participate in cache identity; `wand`/`triand` and `wor`/`trior` use native per-driver four-state resolution | Standardized pragma payload behavior remains incomplete; unsupported directives receive targeted errors |
 | SystemC | C++ compatibility header, macro-exported typed factories, HDL-backed module proxies, append-only versioned plug-in ABI, and peer mixed-language hierarchy | Common signals/ports/exports/events/channels, native children, same-path HDL proxy modules with ordinary port binding, ordered lifecycle callbacks, statically and dynamically sensitive `SC_METHOD`, and Boost.Context-backed `SC_THREAD`/`SC_CTHREAD` time/event/list/timeout/static waits execute on the deterministic common kernel | Executable behavior or nested objects inside HDL proxies, arbitrary custom-interface values/binding/updates, dynamic processes, thread reset/kill, TLM/AMS/CCI, and Accellera ABI compatibility remain unsupported |
 
@@ -435,7 +443,8 @@ builtin casts preserve the target type, and distinct nominal aggregate
 assignments or equality comparisons require a matching explicit cast where
 supported.
 
-Static unpacked arrays retain one through four locally constant dimensions and
+Static unpacked arrays retain any declaration-ordered count of locally constant
+dimensions and
 materialize within a 256 MiB per-container owning-storage budget. Full-rank
 constant or runtime signed-32 indices
 use direction-aware row-major flattening with per-dimension checks. Dimension,
@@ -443,14 +452,16 @@ bound, size, increment, and bit queries, whole-value copies, generated
 declarations, same-language exact-rank ports, automatic function/task
 boundaries, debugger reads, callbacks, VCD, interpreter, and LLVM O0/O2 are
 covered. Native schema 61 and container semantic revision 25 preserve ordered
-dimensions and nominal identities. Unequal-width or tagged unions, unpacked
-unions, unpacked-array aggregate members, widths above 64 bits,
-multidimensional subarray slices, cross-language aggregate/container
-boundaries, and general aggregate streaming remain unsupported.
+dimensions and nominal identities. Packed structs, equal-width ordinary
+packed unions, unequal-payload tagged unions, recursive aggregate members and
+arbitrary-width packed values retain exact layouts. Multidimensional subarray
+slices, cross-language aggregate/container boundaries, and general aggregate
+streaming remain unsupported.
 
-SystemVerilog expression-sizing status update: the bounded 1–64-bit scalar
-path now retains source-spanned resolved width, signedness, self- versus
-context-determined sizing, and two-/four-state domain metadata. Sized,
+SystemVerilog expression-sizing status update: packed values retain
+source-spanned resolved width, signedness, self- versus context-determined
+sizing, and two-/four-state domain metadata without a language-level 64-bit
+cap. Sized,
 unsized, unbased-unsized, unary, arithmetic, bitwise, comparison, shift,
 power, conditional, concatenation, and replication values apply the supported
 SystemVerilog extension/truncation rules at assignments, arguments, returns,
@@ -459,18 +470,21 @@ branch-directed evaluation: definite controlling values skip unneeded
 time-free function calls, while an X/Z conditional evaluates both alternatives
 once and performs the required bit merge. Bounded functions may therefore
 write nonlocal variables for observable time-free side effects; input-formal,
-nonblocking, and timed writes remain rejected.
+nonblocking, and timed writes remain rejected. Constant conditionals likewise
+evaluate only the selected alternative while retaining the common alternative
+profile, so an unselected invalid operation cannot perturb the result.
 
 Runtime-base packed `base +: width` and `base -: width` reads now support a
 positive locally constant width, exact ascending/descending declared-range
 mapping, per-bit X filling for partial four-state out-of-range selections,
 zero filling for two-state values, and all-X/zero results for an unknown base.
-Dynamic procedural part-select targets remain deferred to the procedural-
-lvalue batch. Bounded integral streaming concatenation supports `{<<{...}}`,
+Dynamic procedural part-select targets share the same captured selection for
+blocking, delayed, event-controlled, and nonblocking updates. Fixed-width
+packed integral streaming concatenation supports `{<<{...}}`,
 `{>>{...}}`, positive constant slice sizes, nested ordinary concatenations,
-constant folding, and exact final partial chunks. Dynamic stream sizes,
-aggregate/container streams, results wider than 64 bits, and general
-aggregate streaming remain unsupported. This update supersedes the compact
+constant folding, exact final partial chunks, and arbitrary packed result
+widths. Dynamic stream sizes and aggregate/container streams remain deferred
+to their container closure. This update supersedes the compact
 table's older statements that all dynamic part-selects, streaming
 concatenations, vector conditional truth, observable expression side effects,
 and supported scalar context sizing were pending.
@@ -486,64 +500,105 @@ their captured target through delay, event, and NBA scheduling. Procedural
 force/release supports whole packed signals, packed members, and static
 bit/part selections with per-bit masks while underlying drivers continue.
 Force/release of automatic locals or runtime-selected targets, a further
-selection after a runtime target, and packed lvalues beyond the bounded
-one-dimensional 64-bit contract remain unsupported. This update supersedes
+selection after a runtime target, and non-integral container targets remain
+unsupported. Packed lvalues preserve every word within the explicit SimIR
+offset/width representation. This update supersedes
 the compact table and expression-sizing note where they defer dynamic
 procedural part targets, chained packed targets, timed compound assignments,
 expression updates, or all procedural force.
 
 SystemVerilog constant-expression status update: supported integral parameter
-expressions now use a typed 1–64-bit semantic value rather than host-C++
-promotion rules. It retains width, signedness, X/Z masks, unsized status, and
+expressions use an arbitrary-width typed semantic value rather than host-C++
+promotion rules. It retains every packed word, signedness, X/Z masks, unsized status, and
 source span for sized, unsized decimal, unsized based, and unbased unsized
 literals. The bounded operator set covers unary/reduction operators,
 arithmetic, bitwise/logical operators, equality and case equality, relations,
 shifts, power, conditional expressions, concatenation, replication,
-`$signed`, `$unsigned`, `$isunknown`, and `$clog2`. Defaults, localparams,
+`$signed`, `$unsigned`, `$isunknown`, `$clog2`, and nominal-aware `$typename`.
+Defaults, localparams,
 named/positional overrides, non-iterative generated constants, packed ranges,
 and conditional/case generate choices share this evaluator. Four-state
 values remain legal in four-state parameter types and are rejected when a
 two-state conversion would lose information. The canonical `svconst-v1`
 identity prevents equal display strings with different widths or signedness
-from sharing native objects. Widths above 64 bits, complete LRM typing, and
-genvar-dependent typed constants inside iterative generate bodies remain
-unsupported.
+from sharing native objects. Checked integer-only consumers diagnose values
+outside their explicit host representation; the constant evaluator itself is
+limited only by the governed work and storage policy.
 
-SystemVerilog membership-expression status update: bounded scalar integral
+SystemVerilog time-format status update: `$timeformat` installs one mutable
+simulation-global units, decimal precision, suffix, and minimum-field-width
+profile. Terminal, file, monitor, and mutable-string `%t` conversions use the
+same exact integer scaler, including project resolutions whose magnitude is
+not a power of ten. A bare `%t` uses the profile width; `%0t` suppresses that
+padding, and an explicit field width replaces it. Precision and suffix growth
+are bounded by the common output-string storage policy rather than by an HDL
+time or bit-width restriction.
+
+`$printtimescale` uses the elaborated DesignIR occurrence and retained
+SystemVerilog compilation context to report the current or explicitly selected
+instance's exact time unit and precision. Relative and `$root` hierarchy names
+resolve against stable instance paths, and interpreter plus compiled execution
+share the same application service rather than embedding hierarchy pointers in
+SimIR.
+
+`$time`, `$stime` and `$realtime` accept both bare and empty-parentheses
+forms. Each query carries the executing specialization's retained time unit
+and precision through portable SimIR, then converts the common scheduler tick
+with the same checked scalar-time service in interpreter and compiled modes.
+
+`$get_coverage()` returns a real percentage from 0 through 100 using the live,
+goal-adjusted coverage of every materialized covergroup type and each type's
+`type_option.weight`. `$get_inst_coverage()` instead contributes every
+materialized covergroup instance using the declaration's effective instance
+`option.weight`. Empty or zero-weight contributors are excluded from their
+respective denominators. Both queries use one typed portable SimIR service, so
+runtime-state round trips and interpreter or LLVM O0/O2 execution share the
+same simulation-owned coverage state.
+
+`$set_coverage_db_name(filename)` selects a project-root-confined database
+written when simulation finishes. `$load_coverage_db(filename)` reads the
+current fsim coverage schema and transactionally accumulates matching bin and
+cross counts by stable declaration, instance, and bin identity. A different
+model, malformed/current-schema mismatch, absolute path, or escaping path is
+rejected without partially changing live coverage. Sampling progress,
+callbacks, and trace history remain run-local rather than being imported.
+
+SystemVerilog membership-expression status update: packed integral
 `lhs inside {value, [low:high], ...}` expressions preserve one source-spanned
-left operand and an ordered nonempty value/range list. Every operand must have
-the same width and signedness. The left operand is evaluated once; exact values
+left operand and an ordered nonempty value/range list. Operands use the common
+SystemVerilog comparison width and signedness. The left operand is evaluated once; exact values
 and inclusive ascending closed ranges are tested in source order, reversed
 known ranges are empty, and a definite match skips all remaining members. X/Z
 bits in a value member act as wildcards. An unmasked unknown left bit or an
 unknown range comparison propagates X unless a later member definitely
 matches. Constant folding and interpreter/LLVM O0/O2 execution use the same
-bounded semantics. Variable-array sets, open ranges, type/class membership,
-distribution syntax and nested membership expressions remain unsupported;
-case-inside statements are described below.
+arbitrary-width semantics. Variable-array sets, open ranges, and type/class
+membership remain unsupported; case-inside statements are described below.
 
 SystemVerilog case-inside status update: bounded scalar integral
 `case (selector) inside` statements accept ordered alternatives containing
 exact values, inclusive ascending `[low:high]` ranges, mixed comma-separated
 choices, and one final `default`. Selector, values, and bounds require exact
-width and signedness. The selector executes once; X/Z bits in a value choice
+common comparison sizing and signedness. The selector executes once; X/Z bits in a value choice
 are wildcards, unknown comparisons fall through, a later definite match may
 select its alternative, and otherwise default executes. Known reversed ranges
 are empty, the first definite match skips all later choices and alternatives,
 and constant-function plus interpreter/LLVM O0/O2 selection agree. Variable-
 array/open/type/class sets remain unsupported.
 
-SystemVerilog case-pattern status update: bounded scalar integral
-`case (selector) matches` statements accept exactly one constant pattern or
-the unconditional `.*` pattern per nondefault item. Constant patterns require
-the selector's exact width and signedness and compare value plus X/Z planes by
-case equality. The selector executes once, the first matching body or final
+SystemVerilog case-pattern status update: packed integral
+`case (selector) matches` statements accept one constant, `.*`, `.binding`,
+tagged-union, or positional/named packed-structure pattern per nondefault item,
+with recursive nested patterns and optional `&&&` guards. Constant patterns
+use common comparison sizing; bindings are visible only to the matching guard
+and body. Guards execute only after their pattern matches. Tagged patterns
+check the retained tag and selected payload, while structured positional
+patterns cover every member and named patterns may select a subset without
+mixing forms. The selector executes once, the first matching body or final
 default executes in source order, and `unique`, `unique0`, and `priority`
 retain their established alternative-level warning rules. Constant-function
-selection, interpreter, LLVM O0/O2, debugger/VCD metadata, reports, and
-cold/warm/source-edit cache behavior agree. Guarded `&&&`, variable-binding,
-tagged, structured, member, type/class, and comma-list patterns remain
-explicitly unsupported.
+scalar bindings, interpreter, LLVM O0/O2, reports, and cold/warm cache behavior
+agree. Type/class patterns and comma-list patterns remain outside this slice.
 
 SystemVerilog case-qualifier status update: `unique`, `unique0`, and `priority`
 may qualify exact, `casez`, `casex`, bounded `case inside`, and bounded
@@ -560,7 +615,8 @@ source edits. Qualifiers outside SystemVerilog, repeated qualifiers, and a
 qualifier not followed by a case statement receive targeted diagnostics.
 
 SystemVerilog type-parameter status update: module and package parameter
-regions accept bounded `parameter type` and `localparam type` declarations.
+regions accept `parameter type` and `localparam type` declarations without a
+host-word width limit.
 Defaults and named/positional actuals may resolve supported integral builtins,
 local typedefs, wildcard-imported types, and directly package-selected marks.
 Identifier actuals remain tentative until matched to a type formal, while
@@ -568,10 +624,11 @@ unambiguous builtin data types retain explicit typed HIR. Per-specialization
 aliases flow into dependent packed ports, signals, typedefs, value parameters,
 localparams, and value-dependent default ranges; nested same-language
 forwarding preserves declaration order and source provenance. Versioned
-`sv-type-v1` identities participate in native-object cache keys.
-Unpacked/interface/class/anonymous composite actuals, widths above 64 bits,
-generated type declarations, and mixed-language type-parameter transfer
-remain unsupported.
+`sv-type-v3` identities include scalar family, enum values, packed dimensions,
+recursive container elements, virtual-interface identity and class actuals in
+native-object cache keys. Unpacked/interface/class/anonymous composite actuals,
+generated type declarations, and mixed-language type-parameter transfer remain
+unsupported.
 
 SystemVerilog string-parameter status update: module and package parameter
 regions accept immutable `parameter string` and `localparam string` values.
@@ -813,7 +870,7 @@ checked inverse of the supported memory-load path.
 
 The earlier integral-element-only container limits are superseded for bounded
 named packed aggregate elements. Exact
-one-through-64-bit packed struct, union, and enum identity now follows static,
+arbitrary-width packed struct, union, and enum identity now follows static,
 dynamic, queue, associative, and one-through-four-dimensional static
 containers through nested patterns, element mutation, initialized dynamic
 allocation, indexed queue insertion/deletion, full-rank indexing, generated
@@ -827,8 +884,7 @@ container semantic revision 29 retain exact aggregate identity and the
 representation-derived owning-storage policy,
 construction/mutation operands, string-port aliases, dimensions, source, and
 debug provenance. Unicode and real string conversions are now executable;
-standard or multichannel descriptors, `$fstrobe`/`$fmonitor`, string-element
-associative indices, and
+standard descriptor aliases, string-element associative indices, and
 multidimensional memory-file operands remain explicitly deferred by the v1
 matrix rather than silently accepted.
 
@@ -1040,8 +1096,9 @@ controls suspend before evaluating the RHS. Whole, constant packed-slice, and
 blocking local targets use the same rules. Same-slot, stable cross-process,
 overlapping whole/slice, `#0`, and equal-deadline NBA ordering is
 deterministic, with the last staged assignment winning. Repeated
-`repeat (N) @event` NBA controls, general event expressions, and
-parameterized/nonconstant controls remain deferred.
+`repeat (N) @event` controls are executable and evaluate their count once
+before waiting. General event expressions and parameterized/nonconstant
+controls remain deferred.
 
 Named-event status update: Verilog-2005/SystemVerilog module-level `event`
 declarations, comma groups, immediate `->` triggers, static `@event`, dynamic
@@ -1050,7 +1107,13 @@ through the common update phase and `->> #delay` publishes at a future
 timestamp. Same-delta source ordering deterministically distinguishes a missed
 blocking trigger before its waiter, a caught waiter before a blocking trigger,
 and nonblocking or zero-delay nonblocking triggers after waiters arm. Event
-arguments and general event expressions remain deferred. This update
+variables retain synchronization-object identity across blocking procedural
+assignment and declaration initialization, including chained aliases and
+`null`; rebinding one variable does not rebind prior copies. Triggering a null
+event is a no-op. `event.triggered` remains true for the complete simulation
+time step, and `wait_order` supports repeated event variables plus its ordered
+success/early-failure actions. Event arguments and general event expressions
+remain deferred. This update
 supersedes the older broad “named events” limitation in the compact table.
 
 SystemVerilog fork/process status update: named or anonymous bounded
@@ -1078,6 +1141,17 @@ supported direct packed-signal operands in the postponed region after NBA
 publication rather than retaining an active-region formatted snapshot.
 Compound or otherwise computed `$strobe` operands remain deferred with a
 checked diagnostic.
+
+SystemVerilog file-strobe status update: `$fstrobe`, `$fstrobeb`, `$fstrobeh`,
+and `$fstrobeo` accept a validated process-owned descriptor plus bounded direct
+packed-signal operands. The descriptor is captured when the task executes;
+signal values are sampled after same-slot NBA publication in the postponed
+phase and rendered with the selected default radix. Runtime-state replay,
+stop/resume, interpreter, and LLVM O0/O2 cold/warm execution share the same
+manifest-confined file service. Compound file-strobe operands remain a checked
+diagnostic. `$fmonitor`, `$fmonitorb`, `$fmonitorh`, and `$fmonitoro` use the
+same global registration and control semantics with a process-owned file
+descriptor.
 
 SystemVerilog function status update: module, package, and selected generated
 functions with automatic, static, or implicit lifetime, bounded integral, byte-string, supported
@@ -1165,8 +1239,9 @@ failure publishes once and then terminates before any following statement.
 General string expressions and a configurable stop threshold remain deferred.
 
 Literal `$monitor("text")` and empty `$monitor` forms publish once in the
-postponed phase. Value operands, formatting substitutions, monitor-list
-replacement, `$monitoron`, and `$monitoroff` remain deferred.
+postponed phase. Bounded direct packed-signal values, formatting substitutions,
+monitor-list replacement, `$monitoron`, and `$monitoroff` execute through one
+global runtime registration. Compound monitor operands remain diagnosed.
 
 A sole constant unsigned decimal, binary, octal, or hexadecimal output
 argument is width-truncated and emitted in default decimal form. A based
@@ -1187,9 +1262,9 @@ least-significant eight bits and renders an unknown byte as `x`.
 Packed-string output emits bytes most-significant first, omits leading zero
 padding, and renders an X/Z-containing byte as `x`. Additional arguments,
 other conversions, general width/precision modifiers, and dynamic
-`$monitor` remain targeted. `$strobe` accepts the same single
-conversion/value form, captures
-the formatted result when called, and publishes it in the postponed phase.
+`$monitor` remain targeted. `$strobe` accepts ordered bounded conversions over
+direct packed signals and samples their final committed values in the
+postponed phase.
 The `%0b`, `%0h`, and `%0o` forms suppress leading known-zero digits while
 retaining at least one digit.
 
@@ -1520,21 +1595,27 @@ aborts. Concurrent assert, assume, cover, and restrict directives retain region
 policy, stable names, action blocks, controls, semantic observer descriptors,
 and deterministic coverage slots.
 
-The executable slice is deliberately bounded to an inline scalar identifier,
-literal, negated identifier, or an argument-free/local-free named property with
-one direct design-unit clock object and an optional edge. It lowers to ordinary
-source-spanned assertion processes and shares the existing debugger and report
-path. Public per-instance coverage and pass/failure/disabled sample events feed
+The executable slice accepts inline packed predicates and named property or
+sequence value profiles with positional, named, and default actuals. Integral
+property/sequence locals are exact attempt-owned storage: initializers run once
+per forked attempt, and `first_match` match items execute ordered blocking,
+compound, increment/decrement, or subroutine-call actions only when the scalar
+or governed fixed/ranged two-element sequence completes. One direct
+design-unit clock object may carry an optional edge. The resulting ordinary
+source-spanned assertion processes share the existing debugger and report path.
+Public per-instance coverage and pass/failure/disabled sample events feed
 callbacks and trace backends identically across interpreter, LLVM O0/O2,
 multiple roots, standalone artifacts, relocation, and warm native caches.
 Assertion on/off/kill, pass/failure action, vacuity, and constant
 `$assertcontrol` policies execute through the same engine-neutral path.
 
-Property actuals/formals/locals, non-scalar predicates, compound clock events,
-and more than 256 executable directives in one design unit reject with stable
-diagnostics. The richer temporal forms above are source-owned semantic HIR for
-later executable expansion; they are not silently claimed by the bounded
-runtime slice.
+Invalid assertion value profiles, nonintegral local types or initializers,
+match-item targets outside attempt locals, predicates outside the executable
+packed-expression subset, and compound clock events reject with stable
+diagnostics. Directive and local packed widths have no language-count or
+host-word ceiling; governed work/storage boundaries remain explicit resource
+policy. Richer temporal forms outside the executable subset remain exact
+source-owned semantic HIR and are diagnosed rather than silently omitted.
 
 ### SystemVerilog functional coverage in v2
 
@@ -1545,7 +1626,10 @@ runtime identities. The bounded executable slice supports scalar, inclusive
 range, wildcard, sized/unsized array, automatic, default, ignored, illegal, and
 transition bins; deterministic guards and overlap handling; automatic cross
 products; and explicit cross bins using `binsof`, complement, Boolean
-composition, and scalar/ranged `intersect` selections.
+composition, scalar/ranged `intersect` selections, and `with` predicates with
+optional `matches(n)` or `matches($)` cardinality over governed exact candidate
+domains. Coverpoint-bin `with` filters are applied before array-bin
+distribution and retain arbitrary-width signed value and X/Z planes.
 
 Weights, goals, `at_least`, `per_instance`, and `merge_instances` use exact
 basis-point percentages with instance-over-type precedence. Explicit,
@@ -1562,8 +1646,8 @@ roots, and cold/warm LLVM O0/O2 reuse. Static declaration, aggregate-bin,
 cross-product, and transition-work limits plus transactional input and
 persistent-state limits reject before partial mutation. The supported formal
 and sampled value model is bounded integral data; real/string/chandle/event/
-void formals, `with`/`matches` bin selection, and unrestricted coverage-driven
-randomization remain outside this slice.
+void formals and unrestricted coverage-driven randomization remain outside
+this slice.
 
 ### SystemVerilog class foundation in v2
 
@@ -1589,7 +1673,11 @@ storage, not an arbitrary class/container element limit.
 Source-executable class expressions include `new`, `null`, assignment,
 equality, `$cast`, instance and static property selection, constructors,
 ordinary/static/nonvirtual/explicit-base/virtual functions, and suspending
-tasks. Class handles pass through module functions/tasks, generated recursive
+tasks. Instance and static class functions preserve packed and mutable-string
+input, output and inout actuals through the same ordered copy-in/copy-out
+contract; source-evaluated automatic and static string locals retain exact
+bytes without a fixed string-value width. Class handles pass through module
+functions/tasks, generated recursive
 hierarchy, multiple roots, and typed fixed/dynamic/queue/associative
 containers. Interpreter, LLVM O0/O2 service boundaries, debugger inspection,
 packed callbacks/VCD snapshots, portable artifacts, relocation, and cold/warm
@@ -1600,7 +1688,59 @@ property `rand_mode` and block `constraint_mode`, object `randomize` with an
 optional property list, scope `std::randomize`, pre/post callbacks, inheritance
 and constraint-block override composition, exact public/protected/local
 access, deterministic per-root/object/property/call streams, and transactional
-failure. The finite-domain solver supports integral, packed four-state, enum,
+failure. Source `randomize with { ... }` blocks retain portable expression
+templates rather than being discarded; class and scope calls bind their names
+to exact solver variables at execution and preserve arbitrary-width constants,
+solve ordering, implication, distributions, `inside`, soft preferences, and
+structured conditionals through design artifacts and native-cache identity.
+The standard 32-bit random-distribution functions `$dist_uniform`,
+`$dist_normal`, `$dist_exponential`, `$dist_poisson`, `$dist_chi_square`,
+`$dist_t`, and `$dist_erlang` are also executable. Their first argument is a
+writable packed integer seed of at least 32 bits; each call writes back the
+standard updated seed and returns the standard signed 32-bit result.
+The standard `$system` service accepts zero or one command string and can be
+used as either a task or a function. It executes as a serialized host boundary;
+function use receives the raw signed 32-bit return from C `system()`, task use
+discards that value, and the no-argument form preserves `system(NULL)` rather
+than substituting an empty command. `Simulation` installs the native C executor
+by default and exposes an overridable hook so an embedding can intercept or
+disable process invocation without changing HDL or compiled semantics.
+The legacy stochastic-analysis family `$q_initialize`, `$q_add`, `$q_remove`,
+`$q_full`, and `$q_exam` is also executable. Queue IDs name simulation-owned
+FIFO or LIFO state, capacity and duplicate checks return the standard status
+codes, and length/interarrival/occupancy/wait statistics use deterministic
+simulation ticks. All arguments and results retain the standard signed 32-bit
+integer profile across interpreter, LLVM, and runtime artifacts. Queue-object
+and stored-entry allocation shares the explicit simulation-owned container
+storage budget; exhaustion reports standard status 7 rather than imposing a
+language-level queue length limit.
+All sixteen programmable-logic-array tasks are executable: synchronous and
+asynchronous AND, NAND, OR, and NOR over both array and plane personality
+formats. The personality is an ascending one-dimensional fixed packed memory
+whose element width matches the input terms and whose depth matches the output
+terms. Packed inputs, outputs, and words are dynamically sized, including
+widths above 64 bits. Asynchronous forms update without delay whenever an input
+term or any personality word changes; synchronous forms update only when
+called. Interpreter and LLVM use the same evaluator and four-state rules.
+The IEEE four-state VCD control family is executable from Verilog-2005 and
+SystemVerilog: `$dumpfile`, `$dumpvars`, `$dumpoff`, `$dumpon`, `$dumpall`,
+`$dumplimit`, and `$dumpflush`. `$dumpvars` supports whole-design dumping or a
+level plus module/variable selection list, starts at the end of its simulation
+time unit, and requires all invocations to share that time. Suspension and
+resumption emit standard unknown/current checkpoints; `$dumpall` emits an
+unconditional current-value checkpoint, the default path is `dump.vcd`, and a
+byte limit terminates dumping with a VCD comment. Paths remain sandboxed below
+the project file root and packed values retain their complete declared width.
+The companion extended-VCD family is also executable: `$dumpports`,
+`$dumpportsoff`, `$dumpportson`, `$dumpportsall`, `$dumpportslimit`, and
+`$dumpportsflush`. Each `$dumpports` call owns one unique file and one or more
+unique module scopes, includes only ports declared directly by those scopes,
+and begins at the end of the common invocation time. Extended node declarations
+preserve packed indices; value records preserve complete arbitrary-width port
+states, input/output direction codes, and resolved zero/one strengths. Optional
+filenames address one file or all files as specified by the standard, and every
+closed file records its exact final simulation time with `$vcdclose`.
+The finite-domain solver supports integral, packed four-state, enum,
 handle, and materialized container-element variables; equality, relational,
 arithmetic, bitwise, logical, unary, and conditional expressions; `soft`,
 `inside`, `dist :=`, `dist :/`, implication, structured blocks, `foreach`, and
@@ -1610,14 +1750,17 @@ provenance, callbacks, debugger/trace state, portable objects, standalone
 designs, relocated mapped libraries, and native-cache identities share one
 checked representation.
 
-Randomization is intentionally finite and resource-governed: callers supply
+Randomization is intentionally resource-governed: callers supply
 variable, aggregate-domain, search-step, elapsed-work, heap, and cycle-storage
-budgets. Runtime-width values beyond the supported packed representation,
-nonintegral random variables, unmaterialized/unbounded containers, arbitrary
-user-defined solver functions, and coverage-driven solving are rejected or
-remain outside this slice. Scope randomization currently executes through the
-common validated interpreter service while its full operation participates in
-native-cache identity. This is executable class randomization, not full UVM
+budgets. Packed values and constraint constants have no host-word language
+limit; the public SimIR width field remains the explicit physical
+representation boundary, and finite exact-domain expansion may report governed
+resource exhaustion independently of declared width. Nonintegral random
+variables, unmaterialized/unbounded containers, arbitrary user-defined solver
+functions, and coverage-driven solving remain outside this slice. Scope
+randomization executes through the common validated solver service while its
+full portable operation participates in artifacts and native-cache identity.
+This is executable class randomization, not full UVM
 closure; UVM library/runtime behavior remains for subsequent v2 batches.
 Batches 156-158 close the governed DPI-C, VPI, and VHPI boundaries. Batch 155
 closes the bounded covergroup surface described above.
@@ -1654,7 +1797,7 @@ substring, integer-conversion, and real-conversion methods share bounded,
 transactional storage. Scalar text and binary file I/O covers the supported
 real/time/string/null-chandle values with descriptor and partial-conversion
 rollback. Cross-language strings, unrestricted host paths, standard descriptor
-aliases, `$fstrobe`, and `$fmonitor` remain deferred. Batch 152 adds strict-
+aliases remain deferred. Batch 152 adds strict-
 UTF-8 string associative indices and process-owned multichannel descriptor bits
 for the supported bounded operations.
 
@@ -1685,7 +1828,8 @@ bit targets preserve underlying drivers. Nonlocal and selected ref actuals are
 captured once across suspension; nested packed/string/container static locals
 initialize once, and static tasks may suspend sequentially. Re-entered fork
 sites own simultaneous children and generation-safe `process` handles with
-checked self/status/completed/await/kill operations.
+checked self/status/completed/await/kill/suspend/resume,
+`get_randstate`/`set_randstate`, and `srandom` operations.
 
 Contextual typed mailboxes and counting semaphores provide bounded FIFO
 blocking/nonblocking operations and fair wakeup. Named-event waiters retain
@@ -1708,18 +1852,21 @@ clauses on `shuffle()` remain outside this slice.
 
 Batch 153 makes `program` a distinct design-unit kind throughout parsing,
 semantic HIR, root selection, specialization, hierarchy, artifacts, and debug
-identity. Program processes execute in the append-only reactive scheduler
-phase after module updates and before postponed observation. Initial, timed,
-event, sensitivity, delta, fork, and zero-delay resumes retain that ownership;
-module and program final blocks execute exactly once in deterministic
-active/reactive order.
+identity. Program processes execute in the reactive scheduler region after
+active/inactive/update and observed work and before re-inactive, re-update,
+and postponed observation. Initial, timed, event, sensitivity, delta, and fork
+resumes retain that ownership. A program `#0` resume uses re-inactive in the
+same time slot and program nonblocking updates use re-update; module and
+program final blocks execute exactly once in deterministic active/reactive
+order.
 
 Clocking blocks retain their event, default and per-signal input/output skews,
 edge qualifiers, `#1step`, time delays, aliases, and declared directions on
 modules, interfaces, and programs. Input members sample into owned storage in
-the active region; output members project delayed requests to their driven
-signals. A declared default clock lowers procedural `##` controls to repeated
-clock-event occurrences. Modports may expose the clocking block while
+the observed region after ordinary updates; output members project checked
+delayed requests to their driven signals. A declared default clock lowers
+procedural `##` controls to repeated clock-event occurrences in the owning
+process region. Modports may expose the clocking block while
 preserving its event and sampled/driven member views through recursive module
 boundaries.
 

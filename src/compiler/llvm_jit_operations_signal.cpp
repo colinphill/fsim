@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstdint>
+#include <vector>
 
 namespace fsim::compiler::llvm_detail {
 
@@ -58,14 +59,44 @@ void SignalOperationLowerer::lower(
     const LoadConstant& operation) {
               EncodedValue value{};
               if (operation.value.is_logic9()) {
-                const auto word = operation.value.logic9_low_word();
-                value = {
-                    constant_i64(context, word.planes[0]),
-                    constant_i64(context, word.planes[1]),
-                    static_cast<std::uint32_t>(word.width),
-                    constant_i64(context, word.planes[2]),
-                    constant_i64(context, word.planes[3]),
-                    ValueKind::logic9};
+                const auto width = static_cast<std::uint32_t>(
+                    operation.value.width());
+                if (width <= 64) {
+                  const auto word = operation.value.logic9_low_word();
+                  value = {
+                      constant_i64(context, word.planes[0]),
+                      constant_i64(context, word.planes[1]),
+                      width,
+                      constant_i64(context, word.planes[2]),
+                      constant_i64(context, word.planes[3]),
+                      ValueKind::logic9};
+                } else {
+                  std::array<std::vector<std::uint64_t>, 4> planes;
+                  for (auto& plane : planes) {
+                    plane.resize((width + 63U) / 64U);
+                  }
+                  for (std::uint32_t bit = 0; bit < width; ++bit) {
+                    const auto encoded = static_cast<std::uint8_t>(
+                        operation.value.get_logic9(bit));
+                    for (std::size_t plane = 0; plane < planes.size(); ++plane) {
+                      if (((encoded >> plane) & 1U) != 0U) {
+                        planes[plane][bit / 64U]
+                            |= std::uint64_t { 1 } << (bit % 64U);
+                      }
+                    }
+                  }
+                  const auto constant_plane = [&](const std::size_t plane) {
+                    return llvm::ConstantInt::get(
+                        context, llvm::APInt(width, planes[plane]));
+                  };
+                  value = {
+                      constant_plane(0),
+                      constant_plane(1),
+                      width,
+                      constant_plane(2),
+                      constant_plane(3),
+                      ValueKind::logic9};
+                }
               } else {
                   const auto width = static_cast<std::uint32_t>(
                       operation.value.width());

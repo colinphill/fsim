@@ -56,7 +56,7 @@ fsim::library::Metadata example_metadata()
 
 int main()
 {
-    static_assert(fsim::library::kOwningUnitSchemaVersion == 18);
+    static_assert(fsim::library::kOwningUnitSchemaVersion == 25);
     static_assert(fsim::library::kPortableSchemaVersion == 9);
     const auto expected = example_metadata();
     const auto serialized = fsim::library::serialize_metadata(expected);
@@ -182,11 +182,14 @@ module stage #(parameter int WIDTH = 4) (
   time tick_value;
   chandle handle_value;
   virtual unit_if #(.WIDTH(4)).view interface_view;
-  covergroup portable_coverage with function sample(input logic value);
+  covergroup portable_coverage with function sample(
+      input logic [136:0] sampled);
     option.goal = 80;
-    point: coverpoint value {
-      bins zero = {0};
+    point: coverpoint sampled {
+      bins zero = {0} with (item == 0);
       bins one = {1};
+      bins exact_x = {137'bx};
+      bins exact_z = {137'bz};
     }
   endgroup : portable_coverage
   specify
@@ -199,6 +202,16 @@ module stage #(parameter int WIDTH = 4) (
       input logic [WIDTH-1:0] operand);
     invert = ~operand;
   endfunction
+  function automatic logic [7:0] resolve_byte(
+      input logic [7:0] drivers[]);
+    return drivers[0];
+  endfunction
+  nettype logic [7:0] byte_net with resolve_byte;
+  logic [7:0] alias_left;
+  logic [7:0] alias_right;
+  alias alias_left = alias_right;
+  let add_mask(logic [7:0] value,
+               logic [7:0] mask = 8'h0f) = value | mask;
   always_comb begin
     packet = '{default: '0};
     result = invert(value);
@@ -312,7 +325,11 @@ endmodule
     assert(restored_unit->parameters.size() == 3);
     assert(restored_unit->parameters.front().vhdl_deferred);
     assert(restored_unit->parameters.front().vhdl_completion_span);
-    assert(restored_unit->functions.size() == 1);
+    assert(restored_unit->functions.size() == 2);
+    assert(std::ranges::any_of(
+        restored_unit->functions, [](const auto& function) {
+            return function.name == "resolve_byte";
+        }));
     assert(restored_unit->systemverilog_covergroups.size() == 1);
     assert(
         restored_unit->verilog_defparams.size() == 1U
@@ -350,7 +367,22 @@ endmodule
     assert(restored_coverage.name == "portable_coverage");
     assert(restored_coverage.effective_instance_goal == 80);
     assert(restored_coverage.coverage_declarations.size() == 1);
-    assert(restored_coverage.coverage_declarations.front().bins.size() == 2);
+    const auto& restored_coverage_bins
+        = restored_coverage.coverage_declarations.front().bins;
+    assert(restored_coverage_bins.size() == 4);
+    assert(
+        restored_coverage_bins[0].with_tokens.size() == 3U
+        && restored_coverage_bins[0].with_tokens[0].text == "item"
+        && restored_coverage_bins[0].with_tokens[1].text == "=="
+        && restored_coverage_bins[0].with_tokens[2].text == "0"
+        && restored_coverage_bins[2].values.front().exact_bits
+            == std::string(137U, '1')
+        && restored_coverage_bins[2].values.front().exact_unknown_bits
+            == std::string(137U, '1')
+        && restored_coverage_bins[3].values.front().exact_bits
+            == std::string(137U, '0')
+        && restored_coverage_bins[3].values.front().exact_unknown_bits
+            == std::string(137U, '1'));
 
     const auto parsed_vhdl_psl = fsim::frontend::parse_text(
         "sources/portable_psl.vhd",
@@ -432,6 +464,10 @@ end architecture;
     const auto wide_enum = type_alias("wide_enum_t");
     const auto initialized_wide = type_alias("initialized_wide_t");
     const auto tagged_wide = type_alias("tagged_wide_t");
+    const auto byte_net = std::ranges::find_if(
+        restored_unit->type_aliases, [](const auto& alias) {
+            return alias.name == "byte_net";
+        });
     assert(
         wide_enum && wide_enum->width() == 137
         && wide_enum->enumeration_literals.size() == 2
@@ -447,6 +483,26 @@ end architecture;
         tagged_wide && tagged_wide->width() == 137
         && tagged_wide->packed_aggregate
             == fsim::frontend::PackedAggregateKind::TaggedUnion);
+    assert(
+        byte_net != restored_unit->type_aliases.end()
+        && byte_net->declaration_kind
+            == fsim::frontend::TypeDeclarationKind::SystemVerilogNettype
+        && byte_net->type.width() == 8
+        && byte_net->type.systemverilog_resolution_function
+            == "resolve_byte"
+        && byte_net->systemverilog_resolution_function == "resolve_byte");
+    assert(restored_unit->systemverilog_aliases.size() == 1);
+    assert(restored_unit->systemverilog_aliases.front().terminals.size() == 2);
+    assert(restored_unit->systemverilog_aliases.front().terminals[0].text
+        == "alias_left");
+    assert(restored_unit->systemverilog_aliases.front().terminals[1].text
+        == "alias_right");
+    assert(restored_unit->systemverilog_lets.size() == 1);
+    assert(restored_unit->systemverilog_lets.front().name == "add_mask");
+    assert(restored_unit->systemverilog_lets.front().ports.size() == 2);
+    assert(restored_unit->systemverilog_lets.front().ports[0].type);
+    assert(restored_unit->systemverilog_lets.front().ports[1].default_value);
+    assert(restored_unit->systemverilog_lets.front().expression.text == "|");
     auto malformed_type_unit = *restored_unit;
     const auto malformed_alias = std::ranges::find_if(
         malformed_type_unit.type_aliases, [](const auto& alias) {
@@ -571,6 +627,92 @@ end architecture;
     assert(fsim::library::serialize_portable_unit(
                *restored_unit, repeat_diagnostics)
         == unit_bytes);
+
+    const auto hierarchy_source = fsim::frontend::parse_text(
+        "sources/portable-hierarchy.sv",
+        R"(
+extern module portable_monitor #(
+  parameter logic [136:0] MAGIC = 137'h1
+) (
+  input logic [136:0] value
+);
+
+bind portable_target portable_monitor #(
+  .MAGIC(137'h1_0000_0000_0000_0000_0000_0000_0000_0001)
+) portable_bound(.value(value));
+
+config portable_configuration;
+  design vendor.portable_top;
+  default liblist fast slow;
+  instance portable_top.lanes[1].target use fast.portable_target;
+  cell portable_target liblist slow;
+endconfig : portable_configuration
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(hierarchy_source.ok());
+    assert(hierarchy_source.design.units.size() == 3U);
+    std::vector<fsim::frontend::DesignUnit> restored_hierarchy_units;
+    for (auto unit : hierarchy_source.design.units) {
+        unit.library = "vendor";
+        fsim::diagnostic::Engine write_diagnostics;
+        const auto bytes = fsim::library::serialize_portable_unit(
+            unit, write_diagnostics);
+        assert(bytes && !write_diagnostics.has_error());
+        fsim::diagnostic::Engine read_diagnostics;
+        auto restored = fsim::library::deserialize_portable_unit(
+            *bytes, "units/portable-hierarchy.fsimir", read_diagnostics);
+        assert(restored && !read_diagnostics.has_error());
+        fsim::diagnostic::Engine deterministic_diagnostics;
+        assert(
+            fsim::library::serialize_portable_unit(
+                *restored, deterministic_diagnostics)
+            == bytes);
+        restored_hierarchy_units.push_back(std::move(*restored));
+    }
+    const auto restored_extern = std::ranges::find_if(
+        restored_hierarchy_units,
+        [](const auto& unit) { return unit.systemverilog_extern; });
+    const auto restored_bind = std::ranges::find(
+        restored_hierarchy_units,
+        fsim::frontend::UnitKind::SystemVerilogBind,
+        &fsim::frontend::DesignUnit::kind);
+    const auto restored_configuration = std::ranges::find(
+        restored_hierarchy_units,
+        fsim::frontend::UnitKind::SystemVerilogConfiguration,
+        &fsim::frontend::DesignUnit::kind);
+    assert(
+        restored_extern != restored_hierarchy_units.end()
+        && restored_extern->ports.front().type.width() == 137U);
+    assert(
+        restored_bind != restored_hierarchy_units.end()
+        && restored_bind->systemverilog_binds.size() == 1U
+        && restored_bind->systemverilog_binds.front().target
+            == "portable_target"
+        && restored_bind->systemverilog_binds.front()
+                .instances.front()
+                .parameter_overrides.front()
+                .value.text
+            == "137'h1_0000_0000_0000_0000_0000_0000_0000_0001");
+    assert((
+        restored_configuration != restored_hierarchy_units.end()
+        && restored_configuration->systemverilog_configuration
+        && restored_configuration->systemverilog_configuration
+                ->default_liblist
+            == std::vector<std::string> { "fast", "slow" }
+        && restored_configuration->systemverilog_configuration->rules.size()
+            == 2U
+        && restored_configuration->systemverilog_configuration
+                ->rules.front()
+                .selector
+            == "portable_top.lanes[1].target"));
+    auto invalid_configuration = *restored_configuration;
+    invalid_configuration.systemverilog_configuration->rules.front().kind
+        = static_cast<
+            fsim::frontend::SystemVerilogConfigurationRuleKind>(255);
+    fsim::diagnostic::Engine invalid_configuration_diagnostics;
+    assert(!fsim::library::serialize_portable_unit(
+        invalid_configuration, invalid_configuration_diagnostics));
+
     auto invalid_scalar_unit = *restored_unit;
     fsim::frontend::Type* invalid_scalar_type = nullptr;
     const auto invalid_scalar_variable = std::ranges::find_if(

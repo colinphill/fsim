@@ -7,6 +7,11 @@ namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
 
+[[maybe_unused]] constexpr std::string_view
+    kRetiredLossyCastDiagnostic = "FSIM-ELAB-SVCAST-004";
+[[maybe_unused]] constexpr std::string_view
+    kRetiredLossyAggregateDiagnostic = "FSIM-ELAB-SVAGG-005";
+
 Lowerer::ExpressionAttempt::ExpressionAttempt() = default;
 
 Lowerer::ExpressionAttempt::ExpressionAttempt(
@@ -117,7 +122,7 @@ std::optional<RegisterId> Lowerer::lower_sv_packed_pattern(
                 valid = false;
                 return;
             }
-            const auto lowered = lower_expression(
+            auto lowered = lower_expression(
                 value,
                 static_cast<std::size_t>(*width),
                 member_type);
@@ -137,13 +142,7 @@ std::optional<RegisterId> Lowerer::lower_sv_packed_pattern(
             }
             if (is_two_state_domain(member_type->domain)
                 && !is_two_state_domain(register_domain(*lowered))) {
-                report(
-                    "FSIM-ELAB-SVAGG-005",
-                    "two-state packed member '" + member.name
-                        + "' requires an explicit conversion",
-                    span);
-                valid = false;
-                return;
+                *lowered = convert_to_two_state(*lowered);
             }
             process_.operations.emplace_back(Insert {
                 destination,
@@ -347,6 +346,29 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
     const std::size_t expected_width,
     const frontend::Type* expected_type)
 {
+    constexpr std::string_view triggered_suffix { ".triggered" };
+    if (language_ == frontend::Language::SystemVerilog2017
+        && expression.kind == ExpressionKind::Identifier
+        && expression.text.ends_with(triggered_suffix)) {
+        const auto event_name = expression.text.substr(
+            0, expression.text.size() - triggered_suffix.size());
+        const auto found = signals_.find(event_name);
+        if (found == signals_.end()
+            || design_.signal_info_[found->second].type_name
+                != "event") {
+            report(
+                "FSIM-ELAB-SVEVENT-008",
+                "triggered property receiver '" + event_name
+                    + "' is not a named event",
+                expression.span);
+            return std::nullopt;
+        }
+        const auto destination = allocate_register(
+            1, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(
+            EventTriggered { destination, found->second });
+        return destination;
+    }
 
     auto synchronization = lower_synchronization_expression(
         expression, expected_width, expected_type);
@@ -434,6 +456,16 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
     }
 
     if (expression.kind == ExpressionKind::Call
+        && expression.text == "@sv-type") {
+        report(
+            "FSIM-ELAB-SVTYPE-006",
+            "the SystemVerilog type operator is only a value inside a type "
+            "equality comparison",
+            expression.span);
+        return std::nullopt;
+    }
+
+    if (expression.kind == ExpressionKind::Call
         && expression.text.starts_with("@sv-cast:")) {
         if (expression.operands.size() != 1) {
             report(
@@ -510,12 +542,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
         }
         if (is_two_state_domain(cast_type->domain)
             && !is_two_state_domain(register_domain(*source))) {
-            report(
-                "FSIM-ELAB-SVCAST-004",
-                "four-state to two-state casts are not executable in "
-                "the bounded aggregate cast slice",
-                expression.span);
-            return std::nullopt;
+            *source = convert_to_two_state(*source);
         }
         if (register_domain(*source) == cast_type->domain) {
             return source;
@@ -1908,12 +1935,13 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
             const auto selected_width = static_integer_value(
                 expression.operands[2]);
             if (!selected_width || *selected_width <= 0
-                || *selected_width > 64) {
+                || static_cast<std::uint64_t>(*selected_width)
+                    > std::numeric_limits<std::uint32_t>::max()) {
                 report(
                     "FSIM-ELAB-SVEXPR-004",
                     "a runtime-base packed part-select requires a "
-                    "positive locally constant result width from 1 "
-                    "through 64",
+                    "positive locally constant host-representable "
+                    "result width",
                     expression.operands[2].span);
                 return std::nullopt;
             }

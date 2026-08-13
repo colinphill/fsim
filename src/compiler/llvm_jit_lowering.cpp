@@ -34,9 +34,13 @@ using runtime::simir::CallableFramePush;
 using runtime::simir::ClassOperationGroup;
 using runtime::simir::Concatenate;
 using runtime::simir::ConditionalSelect;
+using runtime::simir::ConvertToTwoState;
 using runtime::simir::CopyRegister;
 using runtime::simir::CountBits;
 using runtime::simir::CountOnes;
+using runtime::simir::CoverageDatabaseControl;
+using runtime::simir::CoverageQuery;
+using runtime::simir::CoverageSample;
 using runtime::simir::DebugPoint;
 using runtime::simir::DisableBlock;
 using runtime::simir::DisableFork;
@@ -48,6 +52,8 @@ using runtime::simir::DynamicPartIndex;
 using runtime::simir::DynamicPartInsert;
 using runtime::simir::DynamicPartSelect;
 using runtime::simir::EdgeKind;
+using runtime::simir::EventAlias;
+using runtime::simir::EventTriggered;
 using runtime::simir::Extract;
 using runtime::simir::ForceSignalSlice;
 using runtime::simir::Fork;
@@ -76,12 +82,20 @@ using runtime::simir::MonitorValueKind;
 using runtime::simir::Operation;
 using runtime::simir::operation_group_contains_v;
 using runtime::simir::Pause;
+using runtime::simir::PlaEvaluate;
+using runtime::simir::PlusArgSelect;
 using runtime::simir::Process;
 using runtime::simir::ProcessAwait;
 using runtime::simir::ProcessCompleted;
+using runtime::simir::ProcessGetRandState;
 using runtime::simir::ProcessKill;
+using runtime::simir::ProcessResume;
 using runtime::simir::ProcessSelf;
+using runtime::simir::ProcessSetRandState;
+using runtime::simir::ProcessSrandom;
 using runtime::simir::ProcessStatusQuery;
+using runtime::simir::ProcessSuspend;
+using runtime::simir::RandomDistribution;
 using runtime::simir::RandomValue;
 using runtime::simir::ReadSignal;
 using runtime::simir::ReadSimulationTime;
@@ -103,18 +117,25 @@ using runtime::simir::SignalEvent;
 using runtime::simir::SignalLastActive;
 using runtime::simir::SignalLastEvent;
 using runtime::simir::SignalLastValue;
+using runtime::simir::StochasticQueueOperation;
 using runtime::simir::Stop;
 using runtime::simir::StringReport;
+using runtime::simir::SystemCommand;
 using runtime::simir::TimeDisplay;
+using runtime::simir::TimeFormatControl;
 using runtime::simir::UnaryNot;
 using runtime::simir::UnknownBranchPolicy;
 using runtime::simir::ValueKind;
+using runtime::simir::VcdControl;
 using runtime::simir::VitalDelay;
 using runtime::simir::VitalTimingCheck;
 using runtime::simir::WaitFor;
 using runtime::simir::WaitForever;
 using runtime::simir::WaitFork;
 using runtime::simir::WaitOn;
+using runtime::simir::WaitOrder;
+using runtime::simir::WaitPla;
+using runtime::simir::WaitRegion;
 using runtime::simir::WaitSensitivity;
 using runtime::simir::WriteAfter;
 using runtime::simir::WriteAfterDynamicPartSlice;
@@ -1302,7 +1323,15 @@ void lower_process(llvm::Module& module, const std::string& symbol,
                         signal_lowerer.lower(operation);
                     }
                 } else if constexpr (std::is_same_v<OperationType, ReadSignal>) {
-                    if (signal_widths[operation.signal] > 64) {
+                    if (operation.kind
+                        != runtime::simir::SignalReadKind::current) {
+                        return_result(
+                            FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                            instruction,
+                            0,
+                            FSIM_JIT_FRAME_STATE_READY,
+                            next_instruction);
+                    } else if (signal_widths[operation.signal] > 64) {
                         execute_exact_signal();
                     } else {
                         signal_lowerer.lower(operation);
@@ -1333,6 +1362,9 @@ void lower_process(llvm::Module& module, const std::string& symbol,
                     std::is_same_v<OperationType, SignalDrivingValue>) {
                     signal_lowerer.lower(operation);
                 } else if constexpr (std::is_same_v<OperationType, CopyRegister>) {
+                    value_lowerer.lower(operation);
+                } else if constexpr (
+                    std::is_same_v<OperationType, ConvertToTwoState>) {
                     value_lowerer.lower(operation);
                 } else if constexpr (std::is_same_v<OperationType, UnaryNot>) {
                     value_lowerer.lower(operation);
@@ -1966,6 +1998,73 @@ void lower_process(llvm::Module& module, const std::string& symbol,
                     output_lowerer.lower(operation);
                 } else if constexpr (std::is_same_v<OperationType, MonitorControl>) {
                     output_lowerer.lower(operation);
+                } else if constexpr (
+                    std::is_same_v<OperationType, TimeFormatControl>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
+                } else if constexpr (std::is_same_v<OperationType, PlusArgSelect>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
+                } else if constexpr (std::is_same_v<OperationType, SystemCommand>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
+                } else if constexpr (std::is_same_v<OperationType, VcdControl>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
+                } else if constexpr (
+                    std::is_same_v<OperationType,
+                        CoverageDatabaseControl>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
+                } else if constexpr (
+                    std::is_same_v<OperationType, StochasticQueueOperation>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
+                } else if constexpr (std::is_same_v<OperationType, PlaEvaluate>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
+                } else if constexpr (std::is_same_v<OperationType, CoverageSample>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
+                } else if constexpr (std::is_same_v<OperationType, CoverageQuery>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, RandomValue>) {
                     const auto zero = constant_i64(context, 0);
                     const auto maximum = operation.maximum
@@ -1998,6 +2097,14 @@ void lower_process(llvm::Module& module, const std::string& symbol,
                         operation.destination,
                         EncodedValue { aval, bval, 32 });
                     branch_to_next();
+                } else if constexpr (
+                    std::is_same_v<OperationType, RandomDistribution>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, Report>) {
                     output_lowerer.lower(operation);
                 } else if constexpr (std::is_same_v<OperationType, StringReport>) {
@@ -2016,10 +2123,45 @@ void lower_process(llvm::Module& module, const std::string& symbol,
                     control_lowerer.lower(operation);
                 } else if constexpr (std::is_same_v<OperationType, Branch>) {
                     control_lowerer.lower(operation);
+                } else if constexpr (std::is_same_v<OperationType, WaitRegion>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, WaitFor>) {
                     output_lowerer.lower(operation);
                 } else if constexpr (std::is_same_v<OperationType, WaitOn>) {
                     output_lowerer.lower(operation);
+                } else if constexpr (std::is_same_v<OperationType, WaitPla>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
+                } else if constexpr (std::is_same_v<OperationType, WaitOrder>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
+                } else if constexpr (std::is_same_v<OperationType, EventTriggered>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
+                } else if constexpr (std::is_same_v<OperationType, EventAlias>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
                 } else if constexpr (
                     operation_group_contains_v<OperationType, ClassOperationGroup>) {
                     return_result(
@@ -2066,6 +2208,11 @@ void lower_process(llvm::Module& module, const std::string& symbol,
                     || std::is_same_v<OperationType, ProcessCompleted>
                     || std::is_same_v<OperationType, ProcessAwait>
                     || std::is_same_v<OperationType, ProcessKill>
+                    || std::is_same_v<OperationType, ProcessSuspend>
+                    || std::is_same_v<OperationType, ProcessResume>
+                    || std::is_same_v<OperationType, ProcessGetRandState>
+                    || std::is_same_v<OperationType, ProcessSetRandState>
+                    || std::is_same_v<OperationType, ProcessSrandom>
                     || std::is_same_v<OperationType, MailboxCreate>
                     || std::is_same_v<OperationType, MailboxPut>
                     || std::is_same_v<OperationType, MailboxGet>

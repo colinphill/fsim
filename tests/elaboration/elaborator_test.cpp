@@ -8,8 +8,10 @@ int main() {
   test_specialization_and_packages();
   test_verilog_specify_specialization();
   test_systemverilog_typed_constants();
+  test_systemverilog_aliases();
   test_systemverilog_string_constants();
   test_systemverilog_type_parameters();
+  test_systemverilog_hierarchy_configuration();
   test_generate_elaboration();
   test_verilog_defparam_elaboration();
   test_mixed_language_and_systemc();

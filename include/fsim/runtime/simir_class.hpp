@@ -33,6 +33,7 @@ struct ClassMethodCall {
   std::uint32_t result_width{};
   bool virtual_dispatch{true};
   std::vector<std::uint8_t> actual_kinds{};
+  std::vector<SystemVerilogConstraintTemplate> inline_constraints { };
 };
 
 struct ClassStaticPropertyRead {

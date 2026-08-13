@@ -35,6 +35,7 @@ Process Lowerer::lower_concurrent(
   local_scope_.clear();
   loop_controls_.clear();
   process_.id = static_cast<ProcessId>(design_.processes_.size());
+  process_.program_owner = systemverilog_program_owner_;
   process_.postponed = statement.vhdl_postponed;
   process_.name = name + "."
       + (statement.label.empty()
@@ -201,7 +202,42 @@ Process Lowerer::lower_concurrent(
   process_.driver_regions = collect_driver_regions(
       process_, register_widths_);
   if (process_.switch_source && process_.driver_regions.size() == 1) {
-    process_.switch_target = process_.driver_regions.front().signal;
+      const auto& target = process_.driver_regions.front();
+      process_.switch_target = target.signal;
+      const auto source_width = design_.signals_.at(*process_.switch_source)
+                                    .initial_value.width();
+      std::uint64_t source_offset { };
+      std::uint64_t selected_source_width = source_width;
+      bool source_selected = false;
+      const auto& source = statement.verilog_switch_source;
+      if (source.kind == frontend::ExpressionKind::Index
+          && source.operands.size() == 2) {
+          const auto index = static_integer_value(source.operands[1]);
+          const auto offset = index
+              ? select_offset(source.operands[0], *index, source_width)
+              : std::optional<std::size_t> { };
+          if (offset) {
+              source_offset = *offset;
+              selected_source_width = 1;
+              source_selected = true;
+          }
+      } else if (source.kind == frontend::ExpressionKind::Slice) {
+          const auto selection = constant_slice_selection(source, source_width);
+          if (selection) {
+              source_offset = selection->offset;
+              selected_source_width = selection->width;
+              source_selected = true;
+          }
+      }
+      const auto target_width = target.whole
+          ? design_.signals_.at(target.signal).initial_value.width()
+          : static_cast<std::size_t>(target.width);
+      if ((source_selected || !target.whole)
+          && selected_source_width == target_width) {
+          process_.switch_source_offset = source_offset;
+          process_.switch_target_offset = target.whole ? 0 : target.offset;
+          process_.switch_width = selected_source_width;
+      }
   }
   validate_vhdl_driver_attributes(statement.span);
   next_register_ = 0;

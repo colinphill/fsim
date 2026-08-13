@@ -89,6 +89,11 @@ module typed_constant_top #(
   parameter logic MEMBER_WILDCARD = 8'ha5 inside {8'b10xz_0101},
   parameter logic MEMBER_UNKNOWN = 8'bx001_0001 inside {8'b0001_0001},
   parameter logic MEMBER_REVERSED = 8'h15 inside {[8'h1f:8'h10]},
+  parameter logic MEMBER_SIZED = 8'h05 inside {4'h5},
+  parameter logic MEMBER_SIGNEDNESS = $signed(8'hfb) inside {8'hfb},
+  parameter logic MEMBER_SIZED_RANGE = 8'h15 inside {[4'h0:5'h1f]},
+  parameter logic MEMBER_WIDE_SIZED = 137'h15 inside {8'h15},
+  parameter logic MEMBER_CONCAT = {4'h1, 4'h5} inside {8'h15},
   parameter IMPLICIT_EIGHT = 8'hff,
   parameter IMPLICIT_SIXTEEN = 16'h00ff,
   parameter logic [127:0] WIDE_VALUE =
@@ -383,6 +388,11 @@ endmodule
     assert(parameter_value(*top, "MEMBER_WILDCARD") == "1");
     assert(parameter_value(*top, "MEMBER_UNKNOWN") == "1'bx");
     assert(parameter_value(*top, "MEMBER_REVERSED") == "0");
+    assert(parameter_value(*top, "MEMBER_SIZED") == "1");
+    assert(parameter_value(*top, "MEMBER_SIGNEDNESS") == "1");
+    assert(parameter_value(*top, "MEMBER_SIZED_RANGE") == "1");
+    assert(parameter_value(*top, "MEMBER_WIDE_SIZED") == "1");
+    assert(parameter_value(*top, "MEMBER_CONCAT") == "1");
     assert(parameter_value(*top, "IMPLICIT_EIGHT") == "255");
     assert(parameter_value(*top, "IMPLICIT_SIXTEEN") == "255");
     const auto wide_expected =
@@ -543,13 +553,13 @@ endmodule
         parameter_identity(*top, "IMPLICIT_EIGHT");
     const auto sixteen_identity =
         parameter_identity(*top, "IMPLICIT_SIXTEEN");
-    assert(eight_identity.starts_with("svconst-v2:w=8:s=0:"));
-    assert(sixteen_identity.starts_with("svconst-v2:w=16:s=0:"));
+    assert(eight_identity.starts_with("svconst-v3:b=0:w=8:s=0:"));
+    assert(sixteen_identity.starts_with("svconst-v3:b=0:w=16:s=0:"));
     assert(eight_identity != sixteen_identity);
     const auto wide_identity = parameter_identity(*top, "WIDE_VALUE");
     const auto wide_two_state_identity =
         parameter_identity(*top, "WIDE_TWO_STATE");
-    assert(wide_identity.starts_with("svconst-v2:w=128:s=0:"));
+    assert(wide_identity.starts_with("svconst-v3:b=0:w=128:s=0:"));
     assert(wide_identity != wide_two_state_identity);
     assert(
         parameter_identity(*wide_child, "VALUE")
@@ -560,7 +570,7 @@ endmodule
             return value.first == "@specparam:WIDE_PATH";
         });
     assert(wide_specparam != top->parameter_identity_values.end());
-    assert(wide_specparam->second.starts_with("svconst-v2:w=128:"));
+    assert(wide_specparam->second.starts_with("svconst-v3:b=0:w=128:"));
     assert(
         wide_specparam->second.ends_with(
             ":v=" + wide_expected.substr(5U)));
@@ -675,6 +685,9 @@ module arbitrary_width_literals #(
   parameter logic [256:0] DECIMAL =
       257'd18_446_744_073_709_551_616,
   parameter logic [256:0] HEX = 257'h1_0000000000000000,
+  parameter logic [256:0] DECIMAL_X = 257'dx,
+  parameter logic [256:0] DECIMAL_Z = 257'dz,
+  parameter logic [256:0] DECIMAL_QUESTION = 257'd?,
   parameter logic signed [64:0] SIGNED = 65'sh1_0000000000000000,
   parameter logic [4096:0] BOUNDARY = 4097'h1
 ) ();
@@ -699,12 +712,21 @@ endmodule
     assert(parameter_value(*arbitrary_width_top, "DECIMAL") == exact_257);
     assert(parameter_value(*arbitrary_width_top, "HEX") == exact_257);
     assert(
+        parameter_value(*arbitrary_width_top, "DECIMAL_X")
+        == std::string { "257'b" } + std::string(257, 'x'));
+    assert(
+        parameter_value(*arbitrary_width_top, "DECIMAL_Z")
+        == std::string { "257'b" } + std::string(257, 'z'));
+    assert(
+        parameter_value(*arbitrary_width_top, "DECIMAL_QUESTION")
+        == std::string { "257'b" } + std::string(257, 'z'));
+    assert(
         parameter_value(*arbitrary_width_top, "SIGNED")
         == std::string { "65'sb1" } + std::string(64, '0'));
     assert(parameter_value(*arbitrary_width_top, "BOUNDARY") == "1");
     assert(
         parameter_identity(*arbitrary_width_top, "BOUNDARY")
-            .starts_with("svconst-v2:w=4097:"));
+            .starts_with("svconst-v3:b=0:w=4097:"));
     const auto exact_4097_bits = std::string(4096, '0') + "1";
     const auto arbitrary_width_q = arbitrary_width_elaborated.design->find_signal(
         "arbitrary_width_literals.q");
@@ -717,35 +739,55 @@ endmodule
             .to_msb_string()
         == exact_4097_bits);
 
-    const auto lossy = fsim::frontend::parse_text(
-        "lossy-two-state-constant.sv",
+    const auto malformed_decimal_unknown = fsim::frontend::parse_text(
+        "malformed-decimal-unknown.sv",
         R"(
-module lossy_two_state_constant #(
+module malformed_decimal_unknown #(
+  parameter logic [256:0] BAD = 257'd1x
+) ();
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(malformed_decimal_unknown.ok());
+    const auto rejected_decimal_unknown = fsim::elaboration::elaborate(
+        malformed_decimal_unknown.design,
+        "sv:work.malformed_decimal_unknown");
+    assert(!rejected_decimal_unknown.ok());
+    assert(std::ranges::any_of(
+        rejected_decimal_unknown.diagnostics,
+        [](const auto& diagnostic) {
+            return diagnostic.message.find(
+                       "may use only one x, z, or ? digit")
+                != std::string::npos;
+        }));
+
+    const auto converted = fsim::frontend::parse_text(
+        "two-state-constant-conversion.sv",
+        R"(
+module two_state_constant_conversion #(
   parameter bit [3:0] BAD = 4'b10x1
 ) ();
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
-    assert(lossy.ok());
-    const auto rejected = fsim::elaboration::elaborate(
-        lossy.design, "sv:work.lossy_two_state_constant");
-    assert(!rejected.ok());
-    assert(has_diagnostic(rejected, "FSIM-ELAB-SVCONST-001"));
+    assert(converted.ok());
+    const auto converted_result = fsim::elaboration::elaborate(
+        converted.design, "sv:work.two_state_constant_conversion");
+    assert(converted_result.ok());
 
-    const auto lossy_cast = fsim::frontend::parse_text(
-        "lossy-two-state-cast.sv",
+    const auto converted_cast = fsim::frontend::parse_text(
+        "two-state-cast-conversion.sv",
         R"(
-module lossy_two_state_cast #(
+module two_state_cast_conversion #(
   parameter bit BAD = bit'(1'bx)
 ) ();
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
-    assert(lossy_cast.ok());
-    const auto rejected_cast = fsim::elaboration::elaborate(
-        lossy_cast.design, "sv:work.lossy_two_state_cast");
-    assert(!rejected_cast.ok());
-    assert(has_diagnostic(rejected_cast, "FSIM-ELAB-PARAM-005"));
+    assert(converted_cast.ok());
+    const auto converted_cast_result = fsim::elaboration::elaborate(
+        converted_cast.design, "sv:work.two_state_cast_conversion");
+    assert(converted_cast_result.ok());
 
     const auto negative_clog2 = fsim::frontend::parse_text(
         "negative-wide-clog2.sv",

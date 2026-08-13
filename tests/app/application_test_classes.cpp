@@ -1418,12 +1418,37 @@ void ApplicationTestFixture::test_class_simulation_integration()
         assert(std::ranges::any_of(static_changes, [&](const auto& change) {
             return std::get<0>(change) == base->specialization_identity && std::get<1>(change) == "shared" && std::get<2>(change) == fsim::runtime::PackedLogic4::from_aval_bval(64, 10, 0).to_msb_string();
         }));
+        const auto& string_objects = simulation.design().string_objects();
+        const auto assert_string_object = [&](const std::string_view path,
+                                              const std::string_view expected) {
+            const auto object = std::ranges::find_if(
+                string_objects,
+                [&](const auto& candidate) { return candidate.name == path; });
+            assert(object != string_objects.end());
+            assert(simulation.read_string_object(object->id) == expected);
+        };
+        assert_string_object(
+            "class_top.source_text_output", "instance-output");
+        assert_string_object(
+            "class_top.source_text_inout", "instance-inout");
+        assert_string_object(
+            "class_top.source_retained_text_output", "retained-next");
+        assert_string_object(
+            "class_top.source_static_text_output", "static-output");
+        assert_string_object(
+            "class_top.source_static_text_inout", "static-inout");
         for (const auto& [path, expected] :
             std::vector<std::pair<std::string, std::uint64_t>> {
                 { "class_top.source_prior", 3 },
                 { "class_top.source_accumulator", 6 },
                 { "class_top.source_alias", 6 },
                 { "class_top.source_result", 12 },
+                { "class_top.source_text_result", 1 },
+                { "class_top.source_retained_text_result", 1 },
+                { "class_top.source_static_text_result", 1 },
+                { "class_top.source_text_copyout_ok", 1 },
+                { "class_top.source_retained_text_copyout_ok", 1 },
+                { "class_top.source_static_text_copyout_ok", 1 },
                 { "class_top.source_recursive", 12 },
                 { "class_top.source_static_first", 1 },
                 { "class_top.source_static_second", 2 },
@@ -1451,8 +1476,8 @@ void ApplicationTestFixture::test_class_simulation_integration()
                 { "class_top.source_module_task_handle_alias", 1 },
                 { "class_top.source_final_seen", 1 },
                 { "class_top.source_randomize_result", 1 },
-                { "class_top.source_randomize_pre", 30 },
-                { "class_top.source_randomize_post", 30 },
+                { "class_top.source_randomize_pre", 40 },
+                { "class_top.source_randomize_post", 40 },
                 { "class_top.source_rand_mode_initial", 1 },
                 { "class_top.source_rand_mode_disabled", 0 },
                 { "class_top.source_rand_mode_enabled", 1 },
@@ -1470,6 +1495,8 @@ void ApplicationTestFixture::test_class_simulation_integration()
                 { "class_top.source_broken_post_count", 0 },
                 { "class_top.source_selected_randomize_result", 1 },
                 { "class_top.source_selected_randomize_value", 77 },
+                { "class_top.source_inline_randomize_result", 1 },
+                { "class_top.source_inline_randomize_generated", 2 },
                 { "class_top.source_property", 18 } }) {
             const auto signal = simulation.find_signal(path);
             assert(signal);
@@ -1498,7 +1525,7 @@ void ApplicationTestFixture::test_class_simulation_integration()
                    .random_state(randomized_handle,
                        derived_identity + "::generated_value")
                    .revision
-            == 3);
+            == 4);
         std::vector<std::tuple<std::uint64_t, std::uint64_t, std::uint64_t>>
             randomized_callback_states;
         for (const auto& [changed_handle, revision, cycle, used] :
@@ -1507,13 +1534,24 @@ void ApplicationTestFixture::test_class_simulation_integration()
                 randomized_callback_states.emplace_back(revision, cycle, used);
             }
         }
+        const std::vector<std::tuple<std::uint64_t, std::uint64_t, std::uint64_t>>
+            expected_randomized_callback_states {
+                { 1, 0, 1 }, { 2, 0, 2 }, { 3, 0, 3 }
+            };
         assert(
-            (randomized_callback_states == std::vector<std::tuple<std::uint64_t, std::uint64_t, std::uint64_t>> { { 1, 0, 1 }, { 2, 0, 2 }, { 3, 0, 3 } }));
+            randomized_callback_states == expected_randomized_callback_states
+            || (randomized_callback_states.size() == 4
+                && std::ranges::equal(
+                    randomized_callback_states | std::views::take(3),
+                    expected_randomized_callback_states)
+                && randomized_callback_states.back()
+                    == std::tuple<std::uint64_t, std::uint64_t, std::uint64_t> {
+                        4, 1, 1 }));
         const auto randomization_trace = simulation.class_randomization_trace_states();
         const auto generated_trace = std::ranges::find_if(randomization_trace, [&](const auto& state) {
             return state.object == randomized_handle && state.kind == fsim::app::ClassRandomizationTraceKind::property && state.path.ends_with("::generated_value.$random-state");
         });
-        assert(generated_trace != randomization_trace.end() && generated_trace->enabled && generated_trace->revision == 3 && generated_trace->stream_seed != 0 && generated_trace->domain_signature != 0 && generated_trace->cycle == 0 && generated_trace->used_values == 3);
+        assert(generated_trace != randomization_trace.end() && generated_trace->enabled && generated_trace->revision == 4 && generated_trace->stream_seed != 0 && generated_trace->domain_signature != 0 && generated_trace->cycle == 1 && generated_trace->used_values == 1);
         assert(std::ranges::any_of(randomization_trace, [&](const auto& state) {
             return state.object == randomized_handle && state.kind == fsim::app::ClassRandomizationTraceKind::constraint && state.enabled && state.path.ends_with("::generated_small.$constraint-mode");
         }));
@@ -1524,7 +1562,7 @@ void ApplicationTestFixture::test_class_simulation_integration()
                 simulation, random_debug_output, random_debug_error);
             random_debugger.execute({ "class", std::to_string(randomized_handle) });
             assert(random_debug_error.str().empty());
-            assert(random_debug_output.str().find("randc enabled 1 revision 3") != std::string::npos && random_debug_output.str().find("cycle 0 used 3") != std::string::npos && random_debug_output.str().find("constraint " + derived_identity + "::generated_small enabled 1") != std::string::npos);
+            assert(random_debug_output.str().find("randc enabled 1 revision 4") != std::string::npos && random_debug_output.str().find("cycle 1 used 1") != std::string::npos && random_debug_output.str().find("constraint " + derived_identity + "::generated_small enabled 1") != std::string::npos);
         }
         for (const auto name :
             { "class_top.broken_pre_object", "class_top.broken_post_object" }) {
@@ -1799,6 +1837,14 @@ void ApplicationTestFixture::test_class_simulation_integration()
                     fsim::runtime::simir::Call>(op);
             });
             return has_class_call && has_continuation;
+        }));
+    assert(std::ranges::any_of(
+        standalone->design.processes(), [](const auto& process) {
+            return std::ranges::any_of(process.operations, [](const auto& op) {
+                const auto* call = fsim::runtime::simir::operation_get_if<
+                    fsim::runtime::simir::ClassMethodCall>(&op);
+                return call != nullptr && !call->inline_constraints.empty();
+            });
         }));
     fsim::app::Simulation standalone_simulation(
         std::move(*standalone), config.run.max_deltas,

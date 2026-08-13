@@ -18,6 +18,16 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
   warnings-as-errors builds and targeted tests.
 - Change 20 owns the full exact-LLVM Debug and Release regressions,
   documentation, one commit, and one push.
+- Until fsim has external users and a separately declared stable-format
+  release boundary, every manifest, library, object, design, checkpoint,
+  runtime-state, HIR/IR and native-cache schema is development-only. A schema
+  change advances or replaces the current format directly: readers must reject
+  stale versions deterministically, but implementation batches must not add or
+  retain compatibility readers, migrations, fallbacks or dual-write paths for
+  superseded versions. Historical completed migration work remains part of the
+  record; this policy governs subsequent changes. Any future compatibility
+  promise requires an explicit plan amendment that names its supported release
+  range and evidence owner.
 - Local builds use at least eight workers.
 - The LLVM-disabled sanitizer suite runs locally only, immediately before
   committing every tenth batch. Ordinary batches do not configure, build, or
@@ -31,8 +41,10 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
    v2 plan/resume records and 20-change cadence.
 2. **Complete.** Advance manifests to schema 2 and make binding targets
    optional in the project and elaboration APIs.
-3. **Complete.** Add schema-1-to-schema-2 migration support, an actionable
-   schema rejection, and the `fsim migrate --to 2` command surface.
+3. **Complete.** Initially add schema-1-to-schema-2 migration support and an
+   actionable schema rejection. Batch 165 later removed the compatibility API
+   and `fsim migrate` command under the development-schema policy; current
+   readers deterministically reject every superseded schema.
 4. **Complete.** Introduce the central immutable unit-candidate lookup and
    resolution-result model instead of first-match selection.
 5. **Complete.** Define canonical identities and target-language case rules
@@ -3334,10 +3346,11 @@ carry an explicit evidence-backed scope disposition approved by the user.
   process. Stable `FSIM-SV-SEM-199` rejects property actual/formal/local use,
   `FSIM-SV-SEM-200` rejects non-packed or non-scalar predicates,
   `FSIM-SV-SEM-201` rejects clocks other than one direct design-unit object
-  with an optional edge, and `FSIM-SV-SEM-202` rejects the 257th executable
-  concurrent assertion in one unit. Focused negatives prove one exact cataloged
-  diagnostic for each boundary, and malformed empty property ownership no
-  longer reaches executable diagnostics. The complete exact-LLVM Debug tree
+  with an optional edge. The former 256-directive implementation ceiling and
+  `FSIM-SV-SEM-202` diagnostic were removed in Batch 165 Change 12; focused
+  evidence now publishes all 257 directives without treating their count as a
+  language error. Malformed empty property ownership no longer reaches
+  executable diagnostics. The complete exact-LLVM Debug tree
   rebuilds warning-clean with eight workers; frontend, executable-assertion,
   catalog, and source-policy gates pass 4/4, and `git diff --check` is clean.
 - **Change 18: Complete.** Run one shared capture contract across direct
@@ -7619,82 +7632,513 @@ carry an explicit evidence-backed scope disposition approved by the user.
   or governed resource ceilings, diagnose those physical boundaries distinctly
   from language legality, and prove the behavior across parsing, constant
   folding, execution, serialization, caching, and mixed-language conversion.
-- **Change 1:** freeze an authoritative IEEE 1800-2017 clause-indexed residual
+- **Change 1 - Complete.** Freeze an authoritative IEEE 1800-2017 clause-indexed residual
   inventory against the completed SystemVerilog batches, plus a separate
   arbitrary-bit-string-limit ledger. Assign every active row one owner in
   Changes 2-16, every supported row exact executable evidence, and every true
   deferral its locked later-batch or post-v2 owner; make drift, duplication and
   unowned scope fail a registered contract.
-- **Change 2:** close preprocessing, lexical, attribute, keyword, number,
-  string, time, unbased-unsized and compiler-directive residuals. Remove every
-  language-level bit-string/based-number width cap and preserve exact
-  signedness and X/Z planes through source provenance and diagnostics.
-- **Change 3:** close declaration and namespace residuals: parameters,
-  localparams, specparams, genvars, nets/variables, user-defined nettypes,
-  aliases, lets, packages, imports/exports, forward/extern declarations and
-  lifetime rules.
-- **Change 4:** close the type system: two-/four-state scalar families,
-  arbitrary-width enums, packed structs/unions, tagged unions, packed and
-  unpacked dimensions, typedef/typeof/type parameters, virtual interfaces and
-  assignment compatibility without host-word narrowing.
-- **Change 5:** complete expression sizing/signing, casts, assignment patterns,
-  streaming/concatenation/replication, selections, inside/dist/matches,
-  wildcard equality and short-circuit semantics across constant, interpreter
-  and LLVM paths.
-- **Change 6:** complete aggregate and data-container behavior for strings,
+  The new 35-row clause inventory covers every normative clause 3-40. Fifteen
+  reviewed supported families retain exact parser, analyzer, elaboration,
+  runtime, positive, negative, execution, diagnostic and resource owners;
+  fifteen active residual rows map Changes 2-16 one-to-one; and five explicit
+  deferrals retain Batch 170 SDF, Batch 171 FST, Batches 172-173 Accellera
+  SystemC/TLM/SCV, encrypted protected-envelope and deprecated TF/ACC
+  ownership. Configuration clause 33 remains active under Change 9, and the
+  DPI/PLI/VPI/assertion/coverage API clauses 35-40 remain active under Change
+  14 rather than disappearing into integration-only scope.
+
+  The separate 25-row width ledger freezes sixteen preserved arbitrary-width
+  paths, five active removal obligations and four explicit physical resource
+  or host boundaries. The active obligations are exact integral associative-
+  array indices above 64 bits in Change 6, coverage literals/bins above 64 bits
+  in Change 12, arbitrary-width VPI enum values in Change 14, and wide exact-
+  Logic9 compiled execution plus debugger locals at the mixed-language
+  boundary in Change 16. Governed constant materialization, scalar host
+  conversion, caller-bounded DPI transfer and configured UVM payload budgets
+  are recorded as physical evidence boundaries, never language-width limits.
+
+  `fsim.systemverilog-gap-inventory` rejects duplicate IDs or anchors,
+  missing/misplaced owners, missing or repeated Change 2-16 ownership, clause,
+  deferral or disposition drift, lost source anchors, failure escapes and lost
+  CTest/plan registration. The contract passes directly and through the
+  regenerated exact-LLVM Debug tree; the eight-worker build is warning-free
+  with no compilation work required, and the focused CTest passes 1/1 in 0.03
+  seconds. Repository whitespace is clean. The clause and width SHA-256
+  identities are respectively
+  `1778ecdf10191a65e4400f6b0d353c301ba74f0e41bc68561553c3e7a4ff64f5`
+  and
+  `e7d242e15706352d4de9844eb203c59f6d5b5cf88714a34e9bc274df75674efe`.
+  Preserve Change 1 in the intentionally dirty Batch 165 worktree and proceed
+  to Change 2 without committing, pushing, sanitizer or hosted-CI inspection.
+- **Change 2 - Complete.** Close preprocessing, lexical, attribute, keyword,
+  number, string, time, unbased-unsized and compiler-directive residuals. The
+  normative directive, keyword, attribute and provenance inventory was already
+  complete; Annex D legacy delay-mode directives remain informative rather
+  than SystemVerilog requirements. Correct decimal based-number handling so a
+  single `x` fills X, `z` or `?` fills Z, mixed decimal unknown spellings are
+  rejected, and unbased-unsized syntax admits only `'0`, `'1`, `'x` and `'z`.
+  Add SystemVerilog-only `\v`, `\f`, `\a` and exact two-digit `\xhh` string
+  escapes with stable malformed/Verilog-2005 diagnostics. Frontend and
+  elaboration evidence preserves exact 257-bit signedness and X/Z planes; the
+  focused expression application proves decimal X/Z/? plus context-sized
+  unbased one/X values through interpreter and compiled O0/O2 execution. The
+  eight-worker focused builds and frontend/elaboration/application tests pass,
+  and the closure contract now reports 16 supported, 14 active and 5 deferred
+  rows. Its clause SHA-256 identity is
+  `a6a83611f3235e915303a17f425acba0052927f33bf71242b36bc57ac6db09cd`;
+  the unchanged width identity remains
+  `e7d242e15706352d4de9844eb203c59f6d5b5cf88714a34e9bc274df75674efe`.
+  Preserve Changes 1-2 in the intentionally dirty Batch 165 worktree and
+  proceed to Change 3 without committing, pushing, sanitizer or hosted-CI
+  inspection.
+- **Change 3 - Complete.** Close declaration and namespace residuals:
+  parameters, localparams, specparams, genvars, nets/variables, user-defined
+  nettypes, aliases, lets, packages, imports/exports, forward/extern
+  declarations and lifetime rules. The frontend, semantic HIR and portable
+  artifacts now retain nettype declarations/resolvers and alias/let syntax;
+  package imports and qualified/local/generated lets support positional,
+  named and default arguments with governed recursive expansion. Executable
+  user nettypes validate and run the retained deterministic first-driver
+  resolver without host-word narrowing.
+
+  Alias statements now accept only locally static packed-net lvalues. Exact
+  whole-net aliases with identical metadata share one runtime signal; partial
+  selects, different declared ranges and concatenations lower to compact
+  bidirectional switch regions with explicit source/target offsets and width,
+  including ordinary selected `tran` primitives. Variable terminals, dynamic
+  or invalid selections, incompatible types and unequal total widths retain
+  stable negative diagnostics. Runtime state schema 26 and native cache schema
+  91 preserve and distinguish the new topology. Focused frontend,
+  elaboration, runtime, library-artifact and application evidence passes 7/7,
+  including interpreter and compiled O0/O2 parity plus runtime-artifact
+  round-trip identity. The registered inventory reports 17 supported, 13
+  active and 5 deferred rows, with clause SHA-256
+  `ff38eceef81ff64b53b0df2bcb752ae493440a6e693b42ed59f89e5108ad59fe`;
+  the unchanged width identity is
+  `e7d242e15706352d4de9844eb203c59f6d5b5cf88714a34e9bc274df75674efe`.
+  The diagnostic catalog and whitespace gates pass. The declaration parser
+  was coherently split to 1,585 and 1,071 lines, and the source-budget gate
+  passes across 846 authored sources. Preserve Changes 1-3 in the
+  intentionally dirty Batch 165 worktree and proceed to Change 4 without
+  committing, pushing, sanitizer or hosted-CI inspection.
+- **Change 4 - Complete.** Close the type system: two-/four-state scalar
+  families now retain their exact default domains; arbitrary-width enums,
+  packed structs/unions and tagged unions preserve exact layout and nominal
+  compatibility; packed and unpacked dimensions have no language-level count
+  cap; and typedefs, the `type` operator, type parameters and virtual-interface
+  profiles remain exact without host-word narrowing. Ordinary packed unions
+  reject unequal member widths both before and after named-type/parameter
+  resolution. Versioned `sv-type-v3` specialization identities include scalar,
+  enum, dimension, recursive container, virtual-interface and class-actual
+  shape. Exact 137-bit type actuals pass interpreter and compiled O0/O2
+  cold/warm execution; unknown 64-bit `time` values retain X/Z planes through
+  the public VPI view. Focused frontend, elaboration, runtime, HIR, interface,
+  container and aggregate application evidence passes. The registered
+  inventory advances to 18 supported, 12 active and 5 deferred rows with
+  clause SHA-256
+  `8f6186d96036140228abfed79282b707193692e2697f5d7c3e115570a2128ffc`;
+  the width ledger remains unchanged. Preserve Changes 1-4 in the intentionally
+  dirty Batch 165 worktree and proceed to Change 5 without committing, pushing,
+  sanitizer or hosted-CI inspection.
+- **Change 5 - Complete.** Close expression sizing and signing without a
+  host-word legality boundary. Self- and context-determined constants,
+  concatenation/replication/streaming, static and dynamic selections, casts and
+  assignment patterns retain arbitrary packed widths and exact X/Z planes.
+  The new `ConvertToTwoState` SimIR operation gives explicit common
+  interpreter/LLVM semantics to two-state casts and stores. Constant and
+  runtime logical/conditional expressions short-circuit lazily while retaining
+  their common result profile; `inside` and `case inside` use common-width
+  comparison, and wildcard equality remains exact.
+  `case matches` now executes wildcard, scalar-binding, guarded, tagged-union
+  and packed-structure patterns with deterministic binding scope and rejects
+  mixed or incomplete positional structure patterns. Known arbitrary-width
+  `dist` weights are accepted when their magnitude fits the governed sampler;
+  the 137-bit application witness removes the former declared-width rejection.
+  Runtime-base selections and streaming no longer impose the retired 64-bit
+  cap. Native schema 92 distinguishes the new operation and semantics.
+  Eight-worker focused builds are warning-free and the frontend, elaboration,
+  runtime, LLVM, SystemVerilog-HIR and expression application plus diagnostic,
+  inventory and source-budget gates pass 9/9. The catalog covers 2,175 codes;
+  the assignment/control split is 1,848/1,785 lines and all 846 authored
+  sources satisfy the budget. The inventory advances to 19 supported, 11
+  active and 5 deferred rows with clause SHA-256
+  `4d58d35a49d6e55f5192e074603270228246d7ace06fc31389b07c13667b92da`;
+  the unchanged width identity is
+  `e7d242e15706352d4de9844eb203c59f6d5b5cf88714a34e9bc274df75674efe`.
+  Preserve Changes 1-5 in the intentionally dirty worktree and proceed to
+  Change 6 without commit, push, sanitizer or hosted-CI inspection.
+- **Change 6 - Complete.** Complete aggregate and data-container behavior for strings,
   fixed/dynamic arrays, queues, associative arrays, methods, slicing,
   iteration, files and memories, including arbitrary-width elements and
   deterministic governed capacity diagnostics.
-- **Change 7:** complete class/interface/program/checker/callable semantics:
-  inheritance, virtual/pure methods, constructors, static/automatic storage,
-  ref/const-ref/default arguments, recursion, nested scopes, modports and
-  interface/class handles.
-- **Change 8:** complete constraints and randomization, rand/randc state,
+  The existing recursive container, string, slice, iterator, file and memory
+  services retain their governed owning-storage and input-work ceilings.
+  Integral associative indices no longer narrow to one host word: elaboration
+  admits exact executable widths through the `uint32_t` runtime metadata
+  boundary, assignment-pattern duplicate checks retain every value/state word,
+  runtime validation checks every unknown plane, and signed/unsigned ordering
+  compares all limbs. Packed scalar, enum, struct and union index profiles are
+  integral; real-family, handle, unpacked and unresolved profiles remain
+  checked type errors. A 137-bit signed scalar key exercises keyed patterns,
+  lookup, delete, `exists` and ordered `first`/`next`/`last`/`prev`, while a
+  137-bit packed-struct key exercises mutation and lookup through interpreter
+  and LLVM execution. No state or native schema bump is required because the
+  owning representation and cache identity were already word-vectorized and
+  no formerly rejected wide design could have produced a valid artifact.
+  Eight-worker focused builds are warning-free. Frontend, elaboration,
+  container elaboration, runtime, mutable-string, container, governed-capacity,
+  file/memory and multidimensional-aggregate applications plus diagnostic,
+  inventory and source-budget contracts pass 12/12 in 118.87 seconds. The
+  catalog remains 2,175 codes and all 846 authored sources satisfy the budget.
+  The inventory advances to 20 supported, 10 active and 5 deferred rows with
+  clause SHA-256
+  `92ae4cdf43fa3ca8ba6183d76fbc02e2a9c2f6fd2df7f40053e33559d48fee52`;
+  the width ledger advances to 17 preserved, 4 active and 4 physical rows at
+  SHA-256
+  `52a85d7c02aa6ef5b47bbebc54edd88b01f8b48862f1af2ed628b4c00daeac25`.
+  Preserve Changes 1-6 in the intentionally dirty worktree and proceed to
+  Change 7 without commit, push, sanitizer or hosted-CI inspection.
+- **Change 7: Complete.** Complete class/interface/program/checker/callable
+  semantics: inheritance, virtual/pure methods, constructors,
+  static/automatic storage, ref/const-ref/default arguments, recursion,
+  nested scopes, modports and interface/class handles. The retained frontend,
+  HIR, heap, method-frame, interface/program/checker and callable services
+  already covered the reviewed clause surface. The residual executable gap was
+  string `output`/`inout` copy-out from instance and static class functions:
+  lowering now routes string registers through the common ordered callable
+  copy-out path, and the source-method evaluator binds exact string formals,
+  automatic locals and explicitly static-lifetime locals instead of treating
+  them as placeholder packed values. Object-free static methods retain
+  automatic local lifetime unless the callable declares static lifetime.
+  Existing packed arguments, virtual dispatch, recursion, task suspension,
+  modport callables, virtual-interface identities and class handles are
+  unchanged. No SimIR, runtime-state or native-object schema bump is required:
+  class operations already encoded per-actual kinds and mutable string vectors,
+  while the formerly rejected lowering could not produce a valid artifact.
+  Eight-worker owning builds are warning-free. Frontend, diagnostics,
+  source-budget, inventory, elaboration, runtime, class, interface, callable-
+  closure, suspending-task and mutable-string gates pass 11/11 in 20.07
+  seconds, including interpreter, compiled and debug class execution. The
+  catalog remains 2,175 codes and all 846 authored sources satisfy the budget.
+  The inventory advances to 21 supported, 9 active and 5 deferred rows with
+  clause SHA-256
+  `0343b2cace6bf829855aa6ffcc4613bbda453c54c59bac0d97d93f73d7ebf1eb`;
+  the unchanged width ledger remains 17 preserved, 4 active and 4 physical at
+  SHA-256
+  `52a85d7c02aa6ef5b47bbebc54edd88b01f8b48862f1af2ed628b4c00daeac25`.
+  Preserve Changes 1-7 in the intentionally dirty worktree and proceed to
+  Change 8 without commit, push, sanitizer or hosted-CI inspection.
+- **Change 8 - Complete.** Complete constraints and randomization, rand/randc state,
   solve-before, implication, distribution, inline constraints, object graphs,
   seeding and deterministic cross-engine replay without fixed bit-width caps.
-- **Change 9:** complete hierarchy and elaboration residuals for bind,
-  configurations, packages, interfaces, programs, checkers, extern modules,
-  generate/defparam interactions and stable specialization identity.
-- **Change 10:** complete processes, continuous/procedural assignments,
-  force/release, event variables, fork/join/process control, disable/wait and
-  scheduler-region ordering with deterministic driver and delta semantics.
-- **Change 11:** complete delay/event controls, clocking blocks, program/reactive
-  regions, cycle delays, timing checks and remaining specify integration while
-  preserving exact time/delta/region identity.
-- **Change 12:** complete immediate/concurrent assertions, sequences,
-  properties, checkers, covergroups, coverpoints, crosses, bins, transitions,
-  sampling and coverage-control behavior with actionable diagnostics.
+  `randomize with { ... }` now retains the same structured constraint grammar
+  as class blocks, including solve-before, implication, conditional blocks,
+  distributions, `inside`, soft preferences and arbitrary-width constants.
+  Reusable source templates are lowered into portable SimIR, validated before
+  compilation and artifact publication, bound to exact class or scope solver
+  variables at execution, serialized by runtime-state schema 27 and owning
+  design schema 21, and included recursively in native-cache schema 93.
+  Object randomization, exact `randc` state, materialized object/container
+  graph constraints, callback ordering and deterministic seed derivation remain
+  transactional. Packed values and constants have no host-word legality cap;
+  the explicit SimIR metadata width and caller-governed finite-domain/search
+  budgets remain physical representation and resource boundaries.
+
+  Frontend evidence proves retained nonempty and empty inline blocks plus
+  `std::randomize` qualification. Runtime evidence binds a 137-bit equality
+  template exactly. Application fixtures exercise solve ordering,
+  distribution, implication, `inside`, soft preference, object callbacks,
+  `randc`, identical interpreter/LLVM O0/O2 replay and changed-seed divergence.
+  Standalone and relocated class artifacts retain the inline operation, and a
+  dedicated LLVM test proves distinct 137-bit inline constants cannot collide
+  in the native cache. The eight-worker owning rebuild is warning-free. The
+  composed frontend, elaboration, runtime, LLVM, core/class/random application,
+  diagnostic, source, inventory and resource gate passes 11/11 in 42.84
+  seconds, and repository whitespace is clean. The catalog contains 2,177
+  codes and all 846 authored sources satisfy the budget. The inventory advances
+  to 22 supported, 8 active and 5 deferred rows with clause SHA-256
+  `19af6260db7e11d148fc685df3f5a0ed9b8d137de0e4d3a7422f9d1c8c64042a`;
+  the unchanged width ledger remains 17 preserved, 4 active and 4 physical at
+  `52a85d7c02aa6ef5b47bbebc54edd88b01f8b48862f1af2ed628b4c00daeac25`.
+  Preserve Changes 1-8 in the intentionally dirty worktree and proceed to
+  Change 9 without commit, push, sanitizer or hosted-CI inspection.
+- **Change 9 - Complete.** Close hierarchy and elaboration residuals with
+  module-type and indexed-instance `bind`, declaration-library-owned bound
+  lookup, ordered SystemVerilog configuration design/default/instance/cell/
+  use/liblist/nested-config selection, exact extern module/interface/program
+  header validation, and existing package/interface/program/checker/generate/
+  defparam behavior. Stable `sv-config-v1` and expanded `sv-type-v3`
+  specialization identities, semantic units and portable owning schema 22
+  survive library artifacts without imposing a packed-width limit. Focused
+  frontend, library, elaboration and interpreter/LLVM O0/O2 application
+  evidence covers 137-bit overrides, multiple libraries, generated targets,
+  malformed declarations and deterministic replay. The eight-worker build is
+  warning-free; the composed gate passes 8/8 in 1.84 seconds with 2,199
+  cataloged diagnostics and 851 bounded authored sources. The inventory
+  advances to 23 supported, 7 active and 5 deferred rows at SHA-256
+  `ecf6ab5b320cb98a831e910e522b53153f47f599969da4598f3a167973ef75da`;
+  the width ledger remains unchanged at
+  `52a85d7c02aa6ef5b47bbebc54edd88b01f8b48862f1af2ed628b4c00daeac25`.
+- **Change 10 - Complete.** Complete processes, continuous/procedural
+  assignments, force/release, event variables, fork/join/process control,
+  disable/wait and scheduler-region ordering with deterministic driver and
+  delta semantics. Process handles now execute `suspend`, `resume`,
+  `get_randstate`, `set_randstate` and `srandom` through common interpreter and
+  LLVM boundaries with generation-safe identity and deterministic per-process
+  state. `wait_order` retains source order and repeated event identities and
+  selects its success/failure branch without host-width assumptions.
+  SystemVerilog event variables now carry synchronization-object identities:
+  blocking assignment and declaration initialization alias that identity,
+  `null` is a non-triggerable handle, armed waits capture the referenced
+  object, delayed notification retains its scheduled object across rebinding,
+  and `.triggered` remains true throughout the triggering time slot. Runtime
+  state schema 28 and native object schema 94 preserve the new operations and
+  metadata. Focused positive and cataloged-negative evidence covers event
+  alias typing/timing, declaration and procedural aliases, null, repeated
+  `wait_order`, process control, fork/disable, cold/warm interpreter and LLVM
+  O0/O2 execution. The warning-free eight-worker owning rebuild and composed
+  frontend, elaboration, runtime, LLVM, named-event, fork, diagnostic, source,
+  inventory and resource gate pass 10/10 in 39.97 seconds. The catalog covers
+  2,211 codes and 852 authored sources satisfy policy after splitting the
+  1,994-line execution owner from its 552-line boundary implementation. The
+  inventory advances to 24 supported, 6 active and 5 deferred rows at SHA-256
+  `a086f5fd7d8ee13dcfe8432966eaf11679325cf1583f0797c94ac97a98986a1c`;
+  the unchanged width ledger remains
+  `52a85d7c02aa6ef5b47bbebc54edd88b01f8b48862f1af2ed628b4c00daeac25`.
+  Preserve Changes 1-10 in the intentionally dirty worktree and proceed to
+  Change 11 without commit, push, sanitizer or hosted-CI inspection.
+- **Change 11 - Complete.** Close delay/event controls, clocking blocks,
+  program/reactive regions, cycle delays, timing checks and remaining specify
+  integration with the explicit active, inactive, update, observed, reactive,
+  re-inactive, re-update and postponed order. Clocking input samplers are
+  observed processes and therefore see ordinary nonblocking updates before a
+  reactive program consumes the sample. Program `#0` work remains in the same
+  time slot through re-inactive, and program nonblocking commits route through
+  re-update. Runtime and DesignIR processes retain explicit observed ownership;
+  invalid multiple-region ownership rejects deterministically. Runtime-state
+  schema 29, DesignIR schema 3 and native-object schema 95 preserve the new
+  metadata, while append-only public C phase values expose observed,
+  re-inactive and re-update without renumbering the existing ABI. Focused
+  application evidence combines a default clocking block, `##1`/`##2`, input
+  sampling after NBA, output skew, a program `#0`, `$period`/`$width` specify
+  checks, runtime artifact round trip and interpreter versus cold/warm LLVM
+  O0/O2 equality. The warning-free eight-worker owning rebuild and composed
+  frontend, elaboration, LLVM, runtime, specify, timing, API/C-header,
+  diagnostic, source, inventory and resource gate pass 12/12 in 37.11 seconds.
+  The catalog remains 2,211 codes and 852 authored sources satisfy policy. The
+  inventory advances to 25 supported, 5 active and 5 deferred rows at SHA-256
+  `d2738ab7369ef64cef6cd7c8f6237e10b48d8629fad9a8e08a05ca331420f522`;
+  the unchanged width ledger remains
+  `52a85d7c02aa6ef5b47bbebc54edd88b01f8b48862f1af2ed628b4c00daeac25`.
+  Preserve Changes 1-11 in the intentionally dirty worktree and proceed to
+  Change 12 without commit, push, sanitizer or hosted-CI inspection.
+- **Change 12 - Complete.** Complete assertion and functional-coverage
+  residuals without host-word narrowing. Property and sequence value formals
+  accept positional, named and default actuals; integral locals become exact
+  per-attempt process storage, execute ordered initializers in every forked
+  attempt and support simple or fixed/ranged two-element `first_match` match
+  assignments, compound updates, increment/decrement and subroutine calls at
+  the completed match point. Focused interpreter and compiled evidence proves
+  repeated 137-bit local initialization, fork isolation, ordered match-item
+  effects and exact coverage/event parity.
+
+  Coverpoint `with` filters retain exact tokens/spans through owning-unit
+  schema 24 and standalone coverage-state schema 4, filter candidates before
+  sized/unsized array distribution and evaluate arbitrary-width signed values.
+  Cross `with` and optional `matches(n)`/`matches($)` count exact candidate
+  tuples across arbitrary-width exact/range/wildcard, automatic and governed
+  default-bin complement domains. Candidate growth beyond the published work
+  budget returns `FSIM-SV-COV-005` transactionally with complete state and
+  diagnostic rollback. The obsolete `FSIM-SV-SEM-220` unsupported boundary and
+  every coverage host-word limit are removed.
+
+  The warning-free eight-worker owning rebuild and composed HIR, frontend,
+  library/object/design artifact, elaboration, runtime, assertion, diagnostic,
+  source, inventory and resource slice pass 11/11 in 30.03 seconds. The catalog
+  covers 2,209 production codes and 875 authored sources satisfy policy. The
+  SystemVerilog inventory advances to 26 supported, 4 active and 5 deferred
+  rows; the width ledger advances to 18 preserved, 3 active and 4 physical
+  rows. Their SHA-256 identities are
+  `0b5e39272948d01499d4d965336bb98e222baec6bd340757ba69d50f7c4906c7`
+  and
+  `9dbead239396bba2bc98adc97f0e5a0c156cddc87de8e7a08a437c222ad25e44`.
+  Preserve Changes 1-12 and proceed to Change 13 without commit, push,
+  sanitizer or hosted-CI inspection.
 - **Change 13:** complete standard system tasks/functions, command-line and
   plusarg services, file/memory I/O, formatting/scanning, severity/reporting,
   process/random/coverage services and source/runtime introspection.
-- **Change 14:** close DPI and VPI residuals for exact type/range/value/strength,
-  hierarchy, memories, classes, packages, interfaces, assertions, callbacks,
-  control, checkpoint identity and arbitrary-width public values.
-- **Change 15:** integrate every new construct with UVM 1.2/2020-3.1 factory,
-  configuration/resource/reporting, phases, objections, TLM, sequence,
-  register-model and reflection behavior without semantic forks.
-- **Change 16:** integrate multiple roots, VHDL/SystemC boundaries, debugger,
+  The completed random-distribution slice implements the seven standard
+  `$dist_*` functions through one shared reference evaluator, exact inout seed
+  publication, interpreter/LLVM parity and native-cache identity. Runtime-state
+  schema 40 and native-object schema v106 replace their predecessors without
+  migration support. The completed `$system` slice preserves zero/one-command,
+  `system(NULL)`, task/function and raw C `int` semantics through an overridable
+  serialized host boundary. The IEEE stochastic queue family uses one
+  simulation-owned FIFO/LIFO operation with exact status and timing-statistic
+  semantics. All sixteen synchronous/asynchronous AND/NAND/OR/NOR array/plane
+  PLA tasks share one arbitrary-width evaluator; asynchronous instances rearm
+  on either packed inputs or personality-memory writes. The four-state VCD
+  and extended VCD system-task families add typed hierarchy/direct-port dump
+  selection, postponed startup, checkpoints, suspension/resumption, explicit
+  flush, sandboxed per-file ownership, byte-limit termination, exact
+  arbitrary-width values, resolved direction/strength records, and final-time
+  `$vcdclose`. The functional-coverage database slice implements
+  `$set_coverage_db_name` final save and transactional `$load_coverage_db`
+  accumulation through stable declaration/instance/bin/cross identities,
+  current-schema-only decoding and project-root-confined paths.
+  `$isunbounded` now retains standalone `$` as a compile-time symbolic value
+  through implicit parameter defaults, overrides, specialization identities
+  and generate conditions. The common constant evaluator returns a one-bit
+  two-state result and rejects arithmetic, typed-parameter and ordinary value
+  use. Versioned `svconst-v3` identities distinguish symbolic from bounded
+  values without adding a serialized expression kind or runtime operation.
+  Direct/default/override/generate/negative evidence passes interpreter and
+  LLVM O0/O2 cold/warm execution plus runtime-artifact and cache identity
+  checks. The warning-clean eight-worker owning build and focused frontend,
+  elaboration, application, artifact, cache, diagnostic, source and inventory
+  gate pass 12/12; the split constant-service ownership remains within source
+  policy.
+  `$exit` now retains stable program-instance ownership on static and spawned
+  processes, terminates only its current program and background forks, and
+  requests simulation termination only after every program has explicitly or
+  implicitly exited. Pending module work is then discarded and final
+  procedures execute. The existing `Halt` boundary distinguishes ordinary and
+  program exit, keeping interpreter and LLVM lifecycle behavior common.
+  Focused two-program evidence covers explicit/implicit exit, fork cancellation,
+  final execution, module-context and arity negatives, runtime-state round trip,
+  O0/O2 cold/warm execution and native-cache identity.
+  Owning-unit schema 25, semantic-state schema 3, runtime-state schema 46 and
+  native-object schema v112 replace their predecessors without migration
+  support. The warning-clean eight-worker owning build and focused frontend,
+  LLVM, application, artifact, diagnostic and source-policy gate pass 9/9.
+  The sampled-value closure implements `$sampled`, `$rose`, `$fell`, `$stable`,
+  `$changed` and governed-depth `$past` for exact packed signals, including
+  direct scalar explicit clocking events and scalar `$past` gating. One
+  scheduler slot-start snapshot supplies preponed values; clock/gate-qualified
+  history keys retain independent sample streams. `$past_gclk`, `$rose_gclk`,
+  `$fell_gclk`, `$stable_gclk` and `$changed_gclk` use beginning-of-slot
+  history, while `$future_gclk`, `$rising_gclk`, `$falling_gclk`,
+  `$steady_gclk` and `$changing_gclk` compare that snapshot with the settled
+  live value. Interpreter and compiled execution share one host-boundary
+  evaluator. Runtime-state schema 47 and native-object schema v114 replace
+  their predecessors; cache identity includes kind, depth, clock, edge and
+  gate. Focused artifact, interpreter, LLVM O0/O2 cold/warm, invalid-depth,
+  explicit-clock, gated-history and all-ten-global-function evidence passes.
+  The registered residual inventory advances Change 13 to supported.
+- **Change 14: Complete.** Close DPI and VPI residuals for exact type/range/
+  value/strength, hierarchy, memories, classes, packages, interfaces,
+  assertions, callbacks, control, checkpoint identity and arbitrary-width
+  public values. DPI and VPI enum literals now retain exact arbitrary-width
+  `PackedLogic4` identity, including signed and four-state values, without a
+  host-word projection. Live VPI publication distinguishes module, interface,
+  and program instances; publishes top-level packages, owned classes and exact
+  recursive class properties; and exposes persistent assertion outcome
+  callbacks with copied kind/name/process/instance/slot/source/action metadata.
+  The VPI checkpoint schema advances to 2 and exact 129-bit X/Z enum identity
+  survives portable remapping. Focused runtime and application evidence covers
+  descriptor and marshalling negatives, hierarchy/type identity, callback
+  lifecycle, interpreter execution, and checkpoint restore. The residual and
+  width inventories advance `SV17-C14-GAP` to supported and `SVW-VPI-ENUM` to
+  preserved. The warning-clean eight-worker focused build and frontend,
+  runtime, VPI application, diagnostic-catalog, source-line-budget and
+  inventory gates pass 6/6; `git diff --check` is clean.
+- **Change 15: Complete.** Integrate every new construct with UVM 1.2/2020-3.1
+  factory, configuration/resource/reporting, phases, objections, TLM,
+  sequence, register-model and reflection behavior without semantic forks.
+  The retained release-selected application owns one common frontend/HIR/
+  DesignIR/SimIR route and exercises exact factory wrappers, configuration and
+  resource precedence, reporting, the complete standard phase schedule,
+  objections/drain, TLM1/TLM2, sequences/roles/callbacks, register frontdoor/
+  backdoor/predictor flows, reflection, multiple roots, checkpoint/replay,
+  artifact/cache and DPI/VPI/VHPI register paths for both governed source
+  profiles. The warning-clean eight-worker application build and phase/TLM,
+  source-harness, platform, conformance-inventory and documentation contracts
+  pass 5/5. The composed closure audit reaches only the intentionally stale
+  release diagnostic-count assertion assigned to Change 19; its UVM-specific
+  component gates pass. `SV17-C15-GAP` advances to supported.
+- **Change 16: Complete.** Integrate multiple roots, VHDL/SystemC boundaries, debugger,
   activity/callbacks, VCD, public C/Tcl/CLI services and stable source/object/
   timing identity; keep later FST, SDF and Accellera-SystemC work in their
-  already assigned batches.
-- **Change 17:** preserve exact frontend/HIR/DesignIR/SimIR and runtime state
+  already assigned batches. LLVM now materializes arbitrary-width exact
+  Logic9 constants into four native integer planes and routes wide signal
+  reads and writes through the existing immutable-SimIR exact-signal callback.
+  Compiled debugger register reads and writes reconstruct and store every word
+  of all four frame planes without a host-word projection. A 129-bit repeating
+  `UX01ZWLH-` compiler differential proves O0/O2 constant and register-plane
+  identity; a 129-bit VHDL `std_logic_vector` differential proves compiled wide
+  signal transfer into a debugger-visible local with interpreter parity. The
+  warning-clean eight-worker owning builds succeed. LLVM plus the application,
+  SystemC, multiple-root, mixed conversion, typed-boundary, VCD, Tcl and C API
+  slice pass 13/13. `SV17-C16-GAP` advances to supported and both remaining
+  active width rows advance to preserved.
+- **Change 17: Complete.** Preserve exact frontend/HIR/DesignIR/SimIR and runtime state
   through libraries, object/design artifacts, checkpoints, cold/warm caches,
   relocation, replay and schema rejection, including wide X/Z constants and
-  deterministic invalidation.
-- **Change 18:** publish and run the complete zero-gap IEEE 1800-2017 closure
+  deterministic invalidation. The existing Batch 164 artifact route already
+  retains exact 257/137-bit source/object/design/library/checkpoint values,
+  complete executable HIR and runtime state through standalone, relocated,
+  replayed and cold/warm execution with deterministic malformed/future-schema
+  rejection. Change 17 extends its native-cache differential to arbitrary-
+  width Logic9: upper-word `U` and `W` constants now prove distinct objects and
+  an exact warm hit alongside the existing upper-word Logic4 X/Z cases. Native
+  object schema 115 invalidates every object generated before wide Logic9
+  lowering became executable. The warning-clean eight-worker LLVM owning build
+  succeeds. LLVM, portable-library, object/design artifact, application
+  artifact-phase and runtime checkpoint gates pass 6/6.
+- **Change 18: Complete.** Publish and run the complete zero-gap IEEE 1800-2017 closure
   matrix: positive/negative, interpreter, LLVM O0/O2, cold/warm cache, debug,
   trace, artifact, relocation, replay, multiple-root, UVM and mixed-language
-  witnesses under explicit memory/work/time/trace ceilings.
-- **Change 19:** synchronize diagnostics, support tables, feature/evidence and
+  witnesses under explicit memory/work/time/trace ceilings. The authoritative
+  51-row matrix freezes 30 supported language/integration rows and 21 preserved
+  width paths with 153 positive/negative/execution witness cells. Its 14 unique
+  registered CTests span 17 direct/interpreter/LLVM/cache/debug/VCD/artifact/
+  relocation/replay/checkpoint/multiple-root/UVM/mixed/public stages beneath a
+  6-GiB process address-space, 1,000-delta, 64-trace-signal and 7,200-second
+  matrix boundary. The serial runner retains one verbose log per witness plus a
+  result ledger. The static audit passes, and the complete retained-log matrix
+  passes 14/14 in 165.34 seconds. During the first matrix execution, the
+  container witness exposed two stale expectations after packed nominal typing
+  became exact: its 137-bit aggregate initialization now uses an explicit
+  nominal cast, and debugger key checks use arbitrary-width signed extraction
+  instead of `low_word()`. The corrected witness independently passes in 75.61
+  seconds before the successful full rerun.
+- **Change 19: Complete.** Synchronize diagnostics, support tables, feature/evidence and
   closure inventories, public guides/tutorials, architecture/API documents,
   counts, digests, installed/platform/resource/release contracts and the
   restart handoff. Physical host/resource ceilings must never be documented as
-  SystemVerilog legality limits.
-- **Change 20:** run fresh clean-first exact-LLVM Debug/Release eight-worker
-  builds, complete regressions and all release gates with retained timing/RSS/
-  swap evidence, then commit and push the one accumulated implementation. This
-  is not a sanitizer or hosted-CI monitoring boundary. Save and push the Batch
-  166 restart plan and clear context before implementation.
+  SystemVerilog legality limits. The live baseline is 2,228 production
+  diagnostics, 885 bounded C/C++ sources, 1,021 SPDX-owned files, 330 authored
+  test/control files, 1,294 executable feature rows, 5,176 evidence cells, 617
+  exact evidence paths and 144 runtime owners. The SystemVerilog clause,
+  literal-width and release-closure SHA-256 identities are respectively
+  `a2f19c56e715ea0f8198a672d96d08d0d9accd8eb7569f16bc6e542fc294ff40`,
+  `f661b219e251e6369750ab406b19adf9c193cfb9570baaa0fdeab4f7984bad93`
+  and `f4e8dcdfb60362544e6958449fa2a1e852cedcbba2ef6e929d5fb0a3aee1d124`.
+  Public language, feature, architecture, VPI, DPI and UVM/tutorial material is
+  bound into the static closure checker. The complete 34-test diagnostic,
+  source, inventory, documentation, installed, platform, portability and
+  composed release-contract slice passes in 21.37 seconds.
+- **Change 20: Complete.** Fresh clean-first exact-LLVM 22.1.8 Debug and
+  Release eight-worker builds complete 779 steps warning-free in 11:05.59 and
+  9:10.78 at 4,997,832 and 2,250,920 KiB peak RSS with zero swaps. Complete
+  Debug and Release regressions pass 142/142 in 7:51.79 and 6:30.42 wall time,
+  with CTest totals of 471.79 and 390.42 seconds, peak RSS of 3,788,408 and
+  3,793,688 KiB, and zero swaps.
+
+  The first Debug regression passed the new SystemVerilog closure matrix 14/14
+  before catching two stale or over-broad contracts. A program instance that
+  deliberately executes `$finish` now expects the correct `stopped` status
+  while retaining its exact `1010` result. Runtime-state validation no longer
+  rejects every active-region process carrying a program owner: program
+  clocking support and sampler processes legitimately retain that ownership
+  outside the reactive region. Direct live-state reconstruction, artifact
+  round-trip, focused application/elaboration gates, both closure matrices and
+  both complete regressions pass after the repair. The exact Change 20
+  correction ranges pass the WebKit formatting gate and repository whitespace
+  is clean. No sanitizer or hosted-CI inspection ran. Commit and push the sole
+  accumulated Batch 165 implementation, then save and push the documentation-
+  only Batch 166 restart plan and clear context before implementation.
 
 ### Batch 166 - Older VHDL standard modes
 

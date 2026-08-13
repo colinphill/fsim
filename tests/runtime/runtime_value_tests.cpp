@@ -546,8 +546,17 @@ void test_scheduler_phase_order() {
             events.emplace_back("next-delta");
           });
         });
-        runtime.schedule(SchedulerPhase::reactive, 2, [&](Scheduler &) {
-          events.emplace_back("reactive");
+        runtime.schedule(SchedulerPhase::observed, 2, [&](Scheduler&) {
+            events.emplace_back("observed");
+        });
+        runtime.schedule(SchedulerPhase::reactive, 2, [&](Scheduler& reactive) {
+            events.emplace_back("reactive");
+            reactive.schedule(SchedulerPhase::inactive, 2, [&](Scheduler&) {
+                events.emplace_back("re-inactive");
+            });
+            reactive.schedule(SchedulerPhase::update, 2, [&](Scheduler&) {
+                events.emplace_back("re-update");
+            });
         });
         runtime.schedule(SchedulerPhase::postponed, 2, [&](Scheduler &) {
           events.emplace_back("postponed");
@@ -565,7 +574,9 @@ void test_scheduler_phase_order() {
   require(result.time == 4, "scheduler must advance to future event");
   const std::vector<std::string> expected = {
       "active-1", "active-2", "inactive", "update",
-      "reactive", "postponed", "next-delta", "time-4"};
+      "observed", "reactive", "re-inactive", "re-update",
+      "postponed", "next-delta", "time-4"
+  };
   require(events == expected, "scheduler phase ordering");
 }
 
@@ -1111,6 +1122,19 @@ void test_resolved_driver_slots() {
   require(
       rejects_process(std::move(incompatible_switch)),
       "runtime construction rejects incompatible transmission widths");
+  Process invalid_switch_region;
+  invalid_switch_region.id = 4;
+  invalid_switch_region.name = "invalid_switch_region";
+  invalid_switch_region.switch_source = switch_pair;
+  invalid_switch_region.switch_target = switch_triplet;
+  invalid_switch_region.switch_source_offset = 1;
+  invalid_switch_region.switch_target_offset = 0;
+  invalid_switch_region.switch_width = 2;
+  invalid_switch_region.switch_bidirectional = true;
+  invalid_switch_region.operations = { Halt { } };
+  require(
+      rejects_process(std::move(invalid_switch_region)),
+      "runtime construction rejects an out-of-range transmission region");
 
   struct Change {
     SignalId signal{};
@@ -1208,6 +1232,86 @@ void test_resolved_driver_slots() {
   require(
       forced.signal_value(forced_signal).to_msb_string() == "0",
       "force release publishes the latest resolved underlying value");
+
+  Interpreter regional;
+  const auto regional_source = regional.add_signal(
+      { "top.regional_source",
+          PackedLogic4::from_msb_string("ZZZZZZZZ"),
+          ResolutionKind::sv_wire });
+  const auto regional_target = regional.add_signal(
+      { "top.regional_target",
+          PackedLogic4::from_msb_string("ZZZZZZZZ"),
+          ResolutionKind::sv_wire });
+  const auto regional_self = regional.add_signal(
+      { "top.regional_self",
+          PackedLogic4::from_msb_string("ZZZZZZZZ"),
+          ResolutionKind::sv_wire });
+  Process regional_source_driver;
+  regional_source_driver.id = 0;
+  regional_source_driver.name = "regional_source_driver";
+  regional_source_driver.register_count = 1;
+  regional_source_driver.operations = {
+      LoadConstant { 0, PackedLogic4::from_msb_string("ZZZZ0011") },
+      WriteUpdate { regional_source, 0 },
+      Halt { }
+  };
+  (void)regional.add_process(std::move(regional_source_driver));
+  Process regional_target_driver;
+  regional_target_driver.id = 1;
+  regional_target_driver.name = "regional_target_driver";
+  regional_target_driver.register_count = 1;
+  regional_target_driver.operations = {
+      LoadConstant { 0, PackedLogic4::from_msb_string("ZZZZ1010") },
+      WriteUpdate { regional_target, 0 },
+      Halt { }
+  };
+  (void)regional.add_process(std::move(regional_target_driver));
+  Process regional_connection;
+  regional_connection.id = 2;
+  regional_connection.name = "regional_connection";
+  regional_connection.switch_source = regional_source;
+  regional_connection.switch_target = regional_target;
+  regional_connection.switch_source_offset = 4;
+  regional_connection.switch_target_offset = 0;
+  regional_connection.switch_width = 4;
+  regional_connection.switch_bidirectional = true;
+  regional_connection.initialize = false;
+  regional_connection.operations = { Halt { } };
+  (void)regional.add_process(std::move(regional_connection));
+  Process regional_self_driver;
+  regional_self_driver.id = 3;
+  regional_self_driver.name = "regional_self_driver";
+  regional_self_driver.register_count = 1;
+  regional_self_driver.operations = {
+      LoadConstant { 0, PackedLogic4::from_msb_string("1100ZZZZ") },
+      WriteUpdate { regional_self, 0 },
+      Halt { }
+  };
+  (void)regional.add_process(std::move(regional_self_driver));
+  Process regional_self_connection;
+  regional_self_connection.id = 4;
+  regional_self_connection.name = "regional_self_connection";
+  regional_self_connection.switch_source = regional_self;
+  regional_self_connection.switch_target = regional_self;
+  regional_self_connection.switch_source_offset = 0;
+  regional_self_connection.switch_target_offset = 4;
+  regional_self_connection.switch_width = 4;
+  regional_self_connection.switch_bidirectional = true;
+  regional_self_connection.initialize = false;
+  regional_self_connection.operations = { Halt { } };
+  (void)regional.add_process(std::move(regional_self_connection));
+  const auto regional_result = regional.run();
+  require(
+      regional_result.status == RunStatus::completed
+          && regional.signal_value(regional_source).to_msb_string()
+              == "10100011"
+          && regional.signal_value(regional_target).to_msb_string()
+              == "ZZZZ1010",
+      "a selected transmission region propagates resolved drivers in both directions");
+  require(
+      regional.signal_value(regional_self).to_msb_string()
+          == "11001100",
+      "disjoint selected regions of one net form a bidirectional physical alias");
 }
 
 void test_simir_expressions_and_edges() {

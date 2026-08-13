@@ -349,6 +349,10 @@ std::optional<ElaboratedDesign> ElaboratedDesign::from_state(
             || (process.switch_control
                 && *process.switch_control
                     >= state.signals.size())
+            || ((process.switch_source_offset != 0
+                    || process.switch_target_offset != 0
+                    || process.switch_width != 0)
+                && (!process.switch_source || !process.switch_target))
             || (process.switch_bidirectional
                 && (!process.switch_source || !process.switch_target))) {
             return std::nullopt;
@@ -358,15 +362,29 @@ std::optional<ElaboratedDesign> ElaboratedDesign::from_state(
                                           .initial_value.width();
             const auto target_width = state.signals[*process.switch_target]
                                           .initial_value.width();
-            if ((source_width != target_width
-                    && source_width != 1 && target_width != 1)
+            const auto selected_width = process.switch_width;
+            const bool invalid_selected_region = selected_width != 0
+                && (process.switch_source_offset > source_width
+                    || selected_width
+                        > source_width - process.switch_source_offset
+                    || process.switch_target_offset > target_width
+                    || selected_width
+                        > target_width - process.switch_target_offset);
+            if (invalid_selected_region
+                || (selected_width == 0
+                    && (process.switch_source_offset != 0
+                        || process.switch_target_offset != 0
+                        || (source_width != target_width
+                            && source_width != 1 && target_width != 1)))
                 || (process.switch_control
                     && state.signals[*process.switch_control]
                             .initial_value.width()
                         != 1
                     && state.signals[*process.switch_control]
                             .initial_value.width()
-                        != std::max(source_width, target_width))) {
+                        != (selected_width == 0
+                                ? std::max(source_width, target_width)
+                                : selected_width))) {
                 return std::nullopt;
             }
         }

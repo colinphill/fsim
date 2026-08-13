@@ -2,6 +2,7 @@
 #include "fsim/runtime/constraint_solver.hpp"
 
 #include <algorithm>
+#include <ranges>
 #include <set>
 #include <utility>
 
@@ -654,4 +655,435 @@ SystemVerilogConstraintClause systemverilog_constraint_expression_clause(
   return clause;
 }
 
-}  // namespace fsim::runtime
+namespace {
+
+    using Template = SystemVerilogConstraintTemplate;
+    using TemplateKind = SystemVerilogConstraintTemplateKind;
+
+    [[nodiscard]] std::optional<Operator> template_unary_operator(
+        const std::string_view spelling) noexcept
+    {
+        if (spelling == "+")
+            return Operator::UnaryPlus;
+        if (spelling == "-")
+            return Operator::UnaryMinus;
+        if (spelling == "~")
+            return Operator::BitwiseNot;
+        if (spelling == "!")
+            return Operator::LogicalNot;
+        return std::nullopt;
+    }
+
+    [[nodiscard]] std::optional<Operator> template_binary_operator(
+        const std::string_view spelling) noexcept
+    {
+        if (spelling == "+")
+            return Operator::Add;
+        if (spelling == "-")
+            return Operator::Subtract;
+        if (spelling == "*")
+            return Operator::Multiply;
+        if (spelling == "**")
+            return Operator::Power;
+        if (spelling == "/")
+            return Operator::Divide;
+        if (spelling == "%")
+            return Operator::Modulo;
+        if (spelling == "&")
+            return Operator::BitwiseAnd;
+        if (spelling == "|")
+            return Operator::BitwiseOr;
+        if (spelling == "^")
+            return Operator::BitwiseXor;
+        if (spelling == "==")
+            return Operator::Equal;
+        if (spelling == "!=")
+            return Operator::NotEqual;
+        if (spelling == "===")
+            return Operator::CaseEqual;
+        if (spelling == "!==")
+            return Operator::CaseNotEqual;
+        if (spelling == "<")
+            return Operator::Less;
+        if (spelling == "<=")
+            return Operator::LessEqual;
+        if (spelling == ">")
+            return Operator::Greater;
+        if (spelling == ">=")
+            return Operator::GreaterEqual;
+        if (spelling == "&&")
+            return Operator::LogicalAnd;
+        if (spelling == "||")
+            return Operator::LogicalOr;
+        return std::nullopt;
+    }
+
+    [[nodiscard]] bool variable_suffix(
+        const std::string_view canonical,
+        const std::string_view name) noexcept
+    {
+        if (canonical == name)
+            return true;
+        if (canonical.size() <= name.size())
+            return false;
+        const auto prefix = canonical.substr(0, canonical.size() - name.size());
+        return (prefix.ends_with("::") || prefix.ends_with('.'))
+            && canonical.ends_with(name);
+    }
+
+    [[nodiscard]] SystemVerilogConstraintVariableId find_template_variable(
+        const SystemVerilogConstraintVariables& variables,
+        std::string_view name)
+    {
+        if (name.starts_with("this."))
+            name.remove_prefix(5U);
+        if (const auto exact = variables.find(std::string { name });
+            exact != variables.end()) {
+            return exact->second;
+        }
+        std::optional<SystemVerilogConstraintVariableId> result;
+        for (const auto& [canonical, variable] : variables) {
+            if (!variable_suffix(canonical, name))
+                continue;
+            if (result && *result != variable) {
+                throw std::invalid_argument {
+                    "inline constraint name '" + std::string { name }
+                    + "' is ambiguous"
+                };
+            }
+            result = variable;
+        }
+        if (!result) {
+            throw std::invalid_argument {
+                "inline constraint name '" + std::string { name }
+                + "' has no solver variable"
+            };
+        }
+        return *result;
+    }
+
+    [[nodiscard]] std::uint64_t template_unsigned_word(
+        const Template& expression,
+        const std::string_view role)
+    {
+        if (expression.kind != TemplateKind::Constant
+            || expression.constant.empty()
+            || expression.constant.is_logic9()) {
+            throw std::invalid_argument {
+                std::string { role } + " must be a known packed constant"
+            };
+        }
+        if (expression.profile.signed_value
+            && expression.constant.get(expression.constant.width() - 1U)
+                == Logic4::one) {
+            throw std::invalid_argument {
+                std::string { role } + " cannot be negative"
+            };
+        }
+        std::uint64_t result { };
+        for (std::size_t bit = 0; bit < expression.constant.width(); ++bit) {
+            const auto value = expression.constant.get(bit);
+            if (value == Logic4::x || value == Logic4::z) {
+                throw std::invalid_argument {
+                    std::string { role } + " cannot contain X or Z"
+                };
+            }
+            if (value == Logic4::zero)
+                continue;
+            if (bit >= 64U) {
+                throw std::overflow_error {
+                    std::string { role } + " exceeds the distribution-weight ABI"
+                };
+            }
+            result |= std::uint64_t { 1 } << bit;
+        }
+        return result;
+    }
+
+    class InlineTemplateLowerer final {
+    public:
+        InlineTemplateLowerer(
+            const SystemVerilogConstraintSolver& solver,
+            const SystemVerilogConstraintVariables& variables)
+            : solver_(solver)
+            , variables_(variables)
+        {
+        }
+
+        [[nodiscard]] std::optional<SystemVerilogConstraintExpressionId> lower(
+            const Template& expression)
+        {
+            if (expression.kind == TemplateKind::Name) {
+                const auto variable = find_template_variable(
+                    variables_, expression.text);
+                if (variable >= solver_.variables().size()) {
+                    throw std::invalid_argument {
+                        "inline constraint variable id is outside the solver"
+                    };
+                }
+                if (std::ranges::find(dependencies_, variable)
+                    == dependencies_.end()) {
+                    dependencies_.push_back(variable);
+                }
+                return builder_.variable(
+                    variable, solver_.variables()[variable].profile);
+            }
+            if (expression.kind == TemplateKind::Constant) {
+                if (expression.constant.empty()
+                    || expression.profile.width != expression.constant.width()) {
+                    throw std::invalid_argument {
+                        "inline constraint constant has inconsistent metadata"
+                    };
+                }
+                return builder_.constant(expression.constant, expression.profile);
+            }
+            if (expression.kind == TemplateKind::Soft
+                && expression.operands.size() == 1U) {
+                return lower(expression.operands.front());
+            }
+            if (expression.kind == TemplateKind::InsideSet
+                && expression.operands.size() >= 2U) {
+                const auto subject = lower(expression.operands.front());
+                if (!subject)
+                    return std::nullopt;
+                std::optional<SystemVerilogConstraintExpressionId> membership;
+                for (std::size_t index = 1; index < expression.operands.size(); ++index) {
+                    const auto& item = expression.operands[index];
+                    std::optional<SystemVerilogConstraintExpressionId> selected;
+                    if (item.kind == TemplateKind::InsideRange
+                        && item.operands.size() == 2U) {
+                        const auto low = lower(item.operands[0]);
+                        const auto high = lower(item.operands[1]);
+                        if (!low || !high)
+                            return std::nullopt;
+                        const auto above_low = builder_.binary(
+                            Operator::GreaterEqual, *subject, *low);
+                        const auto below_high = builder_.binary(
+                            Operator::LessEqual, *subject, *high);
+                        selected = builder_.binary(
+                            Operator::LogicalAnd, above_low, below_high);
+                    } else {
+                        const auto choice = lower(item);
+                        if (!choice)
+                            return std::nullopt;
+                        selected = builder_.binary(
+                            Operator::Equal, *subject, *choice);
+                    }
+                    membership = membership
+                        ? std::optional { builder_.binary(
+                              Operator::LogicalOr, *membership, *selected) }
+                        : selected;
+                }
+                return membership;
+            }
+
+            std::vector<SystemVerilogConstraintExpressionId> operands;
+            operands.reserve(expression.operands.size());
+            for (const auto& operand : expression.operands) {
+                const auto retained = lower(operand);
+                if (!retained)
+                    return std::nullopt;
+                operands.push_back(*retained);
+            }
+            if (expression.kind == TemplateKind::Unary
+                && operands.size() == 1U) {
+                const auto operation = template_unary_operator(expression.text);
+                if (operation)
+                    return builder_.unary(*operation, operands.front());
+            }
+            if (expression.kind == TemplateKind::Binary
+                && operands.size() == 2U) {
+                const auto operation = template_binary_operator(expression.text);
+                if (operation) {
+                    return builder_.binary(*operation, operands[0], operands[1]);
+                }
+            }
+            if (expression.kind == TemplateKind::Conditional
+                && operands.size() == 3U) {
+                return builder_.conditional(operands[0], operands[1], operands[2]);
+            }
+            if (expression.kind == TemplateKind::Block) {
+                return builder_.conjunction(operands);
+            }
+            if (expression.kind == TemplateKind::Implication
+                && operands.size() == 2U) {
+                return builder_.implication(operands[0], operands[1]);
+            }
+            if (expression.kind == TemplateKind::ConditionalConstraint
+                && (operands.size() == 2U || operands.size() == 3U)) {
+                return builder_.conditional_constraint(
+                    operands[0], operands[1],
+                    operands.size() == 3U
+                        ? std::optional { operands[2] }
+                        : std::nullopt);
+            }
+            throw std::invalid_argument {
+                "unsupported inline constraint operator '" + expression.text + "'"
+            };
+        }
+
+        [[nodiscard]] SystemVerilogConstraintExpression finish(
+            const SystemVerilogConstraintExpressionId root) &&
+        {
+            return std::move(builder_).finish(root);
+        }
+
+        [[nodiscard]] std::vector<SystemVerilogConstraintVariableId>
+        dependencies() &&
+        {
+            return std::move(dependencies_);
+        }
+
+    private:
+        const SystemVerilogConstraintSolver& solver_;
+        const SystemVerilogConstraintVariables& variables_;
+        SystemVerilogConstraintExpressionBuilder builder_;
+        std::vector<SystemVerilogConstraintVariableId> dependencies_;
+    };
+
+    [[nodiscard]] SystemVerilogConstraintDistribution
+    template_distribution(
+        const Template& expression,
+        const SystemVerilogConstraintSolver& solver,
+        const SystemVerilogConstraintVariables& variables,
+        const std::string_view identity)
+    {
+        if (expression.kind != TemplateKind::Distribution
+            || expression.operands.size() < 2U
+            || expression.operands.front().kind != TemplateKind::Name) {
+            throw std::invalid_argument {
+                "inline distribution requires a named variable and entries"
+            };
+        }
+        SystemVerilogConstraintDistribution result;
+        result.canonical_identity = std::string { identity };
+        result.variable = find_template_variable(
+            variables, expression.operands.front().text);
+        if (result.variable >= solver.variables().size()) {
+            throw std::invalid_argument {
+                "inline distribution variable id is outside the solver"
+            };
+        }
+        const auto& profile = solver.variables()[result.variable].profile;
+        const auto normalize_choice = [&](const Template& choice) {
+            if (choice.kind != TemplateKind::Constant || choice.constant.empty()) {
+                throw std::invalid_argument {
+                    "inline distribution choice is not a packed constant"
+                };
+            }
+            return resized(
+                choice.constant, profile.width, choice.profile.signed_value);
+        };
+        for (const auto& item : expression.operands | std::views::drop(1)) {
+            if (item.kind != TemplateKind::DistributionItem
+                || item.operands.size() != 2U) {
+                throw std::invalid_argument {
+                    "inline distribution has an invalid weighted item"
+                };
+            }
+            const auto& choice = item.operands[0];
+            const auto& weight = item.operands[1];
+            SystemVerilogConstraintDistributionEntry entry;
+            if (choice.kind == TemplateKind::InsideRange
+                && choice.operands.size() == 2U
+                && choice.operands[0].kind == TemplateKind::Constant
+                && choice.operands[1].kind == TemplateKind::Constant) {
+                entry.low = normalize_choice(choice.operands[0]);
+                entry.high = normalize_choice(choice.operands[1]);
+            } else if (choice.kind == TemplateKind::Constant) {
+                entry.low = normalize_choice(choice);
+                entry.high = entry.low;
+            } else {
+                throw std::invalid_argument {
+                    "inline distribution choices must be constant values or ranges"
+                };
+            }
+            entry.weight = template_unsigned_word(weight, "distribution weight");
+            entry.weight_kind = item.text == "@dist-:/"
+                ? SystemVerilogConstraintDistributionWeight::AcrossRange
+                : SystemVerilogConstraintDistributionWeight::PerValue;
+            result.entries.push_back(std::move(entry));
+        }
+        return result;
+    }
+
+    [[nodiscard]] std::vector<SystemVerilogConstraintVariableId>
+    template_solve_list(
+        const Template& expression,
+        const SystemVerilogConstraintVariables& variables)
+    {
+        if (expression.kind != TemplateKind::SolveList) {
+            throw std::invalid_argument {
+                "inline solve-before operand is not a solve list"
+            };
+        }
+        std::vector<SystemVerilogConstraintVariableId> result;
+        result.reserve(expression.operands.size());
+        for (const auto& operand : expression.operands) {
+            if (operand.kind != TemplateKind::Name) {
+                throw std::invalid_argument {
+                    "inline solve-before list requires named variables"
+                };
+            }
+            result.push_back(find_template_variable(variables, operand.text));
+        }
+        return result;
+    }
+
+} // namespace
+
+void configure_systemverilog_inline_constraints(
+    SystemVerilogConstraintSolver& solver,
+    const SystemVerilogConstraintVariables& variables,
+    const std::span<const SystemVerilogConstraintTemplate> expressions,
+    const std::string_view identity_prefix)
+{
+    if (identity_prefix.empty()) {
+        throw std::invalid_argument {
+            "inline constraint identity prefix must not be empty"
+        };
+    }
+    for (std::size_t index = 0; index < expressions.size(); ++index) {
+        const auto& expression = expressions[index];
+        const auto identity = std::string { identity_prefix } + "::"
+            + std::to_string(index);
+        if (expression.kind == TemplateKind::Distribution) {
+            solver.add_distribution(template_distribution(
+                expression, solver, variables, identity));
+            continue;
+        }
+        if (expression.kind == TemplateKind::SolveBefore) {
+            if (expression.operands.size() != 2U) {
+                throw std::invalid_argument {
+                    "inline solve-before requires two variable lists"
+                };
+            }
+            const auto earlier = template_solve_list(
+                expression.operands[0], variables);
+            const auto later = template_solve_list(
+                expression.operands[1], variables);
+            for (const auto left : earlier) {
+                for (const auto right : later) {
+                    solver.add_solve_before(left, right);
+                }
+            }
+            continue;
+        }
+        const auto soft = expression.kind == TemplateKind::Soft;
+        InlineTemplateLowerer lowerer { solver, variables };
+        const auto root = lowerer.lower(expression);
+        if (!root) {
+            throw std::invalid_argument {
+                "inline constraint could not be lowered"
+            };
+        }
+        auto retained_expression = std::move(lowerer).finish(*root);
+        auto dependencies = std::move(lowerer).dependencies();
+        auto clause = systemverilog_constraint_expression_clause(
+            identity, std::move(dependencies), std::move(retained_expression));
+        clause.soft = soft;
+        solver.add_clause(std::move(clause));
+    }
+}
+
+} // namespace fsim::runtime

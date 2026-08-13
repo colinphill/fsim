@@ -288,7 +288,10 @@ module case_statement;
     [2'b00:2'b10]: result = 2'b10;
   endcase
   initial unique case (selector) matches
-    2'b00: result = 2'b01;
+    2'b00 &&& selector == 2'b00: result = 2'b01;
+    .captured &&& captured == selector: result = captured;
+    tagged Some .payload &&& payload == selector: result = payload;
+    '{left: .lhs, right: 1'b1}: result = {lhs, 1'b1};
     .*: result = 2'b10;
     default: result = 2'b11;
   endcase
@@ -354,17 +357,44 @@ endmodule
         "case qualifier kind and source span remain distinct from matching mode");
     const auto& matches = result.design.units.front().processes[7].statements.front();
     require(
-        matches.case_alternatives.size() == 3
+        matches.case_alternatives.size() == 6
             && matches.case_alternatives[0].choices.size() == 1
-            && matches.case_alternatives[0].choices.front().text == "2'b00"
+            && matches.case_alternatives[0].choices.front().kind
+                == ExpressionKind::Call
+            && matches.case_alternatives[0].choices.front().text
+                == "@match-guard"
+            && matches.case_alternatives[0].choices.front().operands.size()
+                == 2
+            && matches.case_alternatives[0].choices.front().operands[0].text
+                == "2'b00"
+            && matches.case_alternatives[0].choices.front().operands[1].text
+                == "=="
             && matches.case_alternatives[1].choices.size() == 1
             && matches.case_alternatives[1].choices.front().kind
                 == ExpressionKind::Call
             && matches.case_alternatives[1].choices.front().text
+                == "@match-guard"
+            && matches.case_alternatives[1].choices.front().operands[0].text
+                == "@match-bind:captured"
+            && matches.case_alternatives[2].choices.front().text
+                == "@match-guard"
+            && matches.case_alternatives[2].choices.front().operands[0].text
+                == "@match-tagged:Some"
+            && matches.case_alternatives[2].choices.front().operands[0].operands.front().text
+                == "@match-bind:payload"
+            && matches.case_alternatives[3].choices.front().kind
+                == ExpressionKind::Aggregate
+            && matches.case_alternatives[3].choices.front().text
+                == "@match-structure"
+            && matches.case_alternatives[3].choices.front().operands.size()
+                == 2
+            && matches.case_alternatives[4].choices.front().kind
+                == ExpressionKind::Call
+            && matches.case_alternatives[4].choices.front().text
                 == "@match-wildcard"
-            && matches.case_alternatives[2].is_default
+            && matches.case_alternatives[5].is_default
             && !matches.span.empty(),
-        "case matches retains one constant or wildcard pattern per item");
+        "case matches retains guarded constant and wildcard patterns");
 
     const auto invalid = parse_text(
         "bad_case.sv",
@@ -490,10 +520,8 @@ module bad_case_matches;
     2'b00: result = 1'b0;
   endcase
   initial case (selector) matches
-    .captured: result = 1'b0;
     tagged Some: result = 1'b0;
     '{2'b00}: result = 1'b0;
-    2'b00 &&& selector: result = 1'b0;
     2'b00, 2'b01: result = 1'b0;
     .: result = 1'b0;
   endcase
@@ -504,9 +532,7 @@ endmodule
     for (const auto code : {
              std::string_view { "FSIM-SV-PARSE-188" },
              std::string_view { "FSIM-SV-PARSE-189" },
-             std::string_view { "FSIM-SV-PARSE-190" },
-             std::string_view { "FSIM-SV-UNSUPPORTED-042" },
-             std::string_view { "FSIM-SV-UNSUPPORTED-043" } }) {
+             std::string_view { "FSIM-SV-PARSE-190" } }) {
         require(
             std::ranges::any_of(
                 invalid_matches.diagnostics,
@@ -634,6 +660,16 @@ class selected_foreach;
 endclass
 )",
         Language::SystemVerilog2017);
+    const auto& inline_randomize = selected_foreach.design
+                                       .systemverilog_classes.front()
+                                       .methods.back()
+                                       .statements[2]
+                                       .condition.operands.front();
+    const auto& empty_inline_randomize = selected_foreach.design
+                                             .systemverilog_classes.front()
+                                             .methods.back()
+                                             .statements[3]
+                                             .condition.operands.front();
     require(
         selected_foreach.ok()
             && selected_foreach.design.systemverilog_classes.size() == 1
@@ -720,12 +756,22 @@ endclass
                     .condition.operands.front()
                     .aggregate_choices
                 == std::vector<std::string> { "@sv-inline-constraint" }
+            && inline_randomize.aggregate_choice_expressions.size() == 1
+            && inline_randomize.aggregate_choice_expressions.front().size() == 1
+            && inline_randomize.aggregate_choice_expressions.front().front().kind
+                == ExpressionKind::Binary
+            && inline_randomize.aggregate_choice_expressions.front().front().text
+                == "!="
+            && inline_randomize.aggregate_choice_expressions.front().front().operands.front().text
+                == "found"
             && selected_foreach.design.systemverilog_classes.front()
                     .methods.back()
                     .statements[3]
                     .condition.operands.front()
                     .aggregate_choices
-                == std::vector<std::string> { "@sv-inline-constraint" },
+                == std::vector<std::string> { "@sv-inline-constraint" }
+            && empty_inline_randomize.aggregate_choice_expressions.size() == 1
+            && empty_inline_randomize.aggregate_choice_expressions.front().empty(),
         "foreach, indexed calls, parameterized statics, class find, and "
         "inline constraints parse without source rewriting");
 
@@ -1330,6 +1376,7 @@ void test_fork_process_statements()
 module fork_processes;
   logic result;
   process handle;
+  string random_state;
   initial begin
     fork : workers
       logic local_value = 1'b0;
@@ -1353,6 +1400,11 @@ module fork_processes;
     result = handle.completed();
     handle.await();
     handle.kill();
+    handle.suspend();
+    handle.resume();
+    random_state = handle.get_randstate();
+    handle.set_randstate(random_state);
+    handle.srandom(32'h1234);
   end
 endmodule
 )",
@@ -1363,7 +1415,7 @@ endmodule
         parsed.design.units.front().signals.size() == 2
             && parsed.design.units.front().signals[1].type.spelling
                 == "process"
-            && statements.size() == 10
+            && statements.size() == 15
             && statements[0].kind == StatementKind::Fork
             && statements[0].label == "workers"
             && statements[0].declarations.size() == 1
@@ -1379,7 +1431,12 @@ endmodule
             && statements[6].kind == StatementKind::Assignment
             && statements[7].kind == StatementKind::Assignment
             && statements[8].kind == StatementKind::TaskCall
-            && statements[9].kind == StatementKind::TaskCall,
+            && statements[9].kind == StatementKind::TaskCall
+            && statements[10].kind == StatementKind::TaskCall
+            && statements[11].kind == StatementKind::TaskCall
+            && statements[12].kind == StatementKind::Assignment
+            && statements[13].kind == StatementKind::TaskCall
+            && statements[14].kind == StatementKind::TaskCall,
         "fork and process-handle HIR retains typed controls and calls");
 
     const auto verilog_join_any = parse_text(

@@ -131,11 +131,11 @@ void test_vhdl_vhpi_time() {
     }
   }
   require_vhpi_time(
-      phase_counts[0] == 3
+      phase_counts[0] == 5
           && phase_counts[1] == 2
           && phase_counts[2] == 2
           && phase_counts[3] == 1 && announced == 5
-          && time.callback(update.value.identity).value.invocations == 2
+          && time.callback(update.value.identity).value.invocations == 4
           && time.callback(one_shot.value.identity).value.invocations == 1
           && !time.callback(one_shot.value.identity).value.active,
       "VHPI scheduler phase or next-time callback counts are incorrect");

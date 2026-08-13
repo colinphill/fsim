@@ -25,7 +25,6 @@ enum class Command {
   simulate,
   systemc_compile,
   systemc_link,
-  migrate,
 };
 
 enum class DiagnosticFormat {
@@ -78,8 +77,6 @@ struct Invocation {
   std::optional<std::filesystem::path> tcl_script;
   std::vector<std::string> tcl_arguments;
   std::vector<std::string> tcl_commands;
-  std::optional<std::uint32_t> migration_schema;
-  bool migration_in_place{false};
   DiagnosticFormat diagnostic_format{DiagnosticFormat::text};
   bool help{false};
   bool version{false};

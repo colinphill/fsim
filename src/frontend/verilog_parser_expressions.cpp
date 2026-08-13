@@ -648,6 +648,10 @@ Expression VerilogParser::parse_primary()
         if (match(TokenKind::LeftParen)) {
             std::vector<Expression> arguments;
             std::vector<std::string> argument_names;
+            const auto sampled_value_call = canonical == "$sampled"
+                || canonical == "$rose" || canonical == "$fell"
+                || canonical == "$stable" || canonical == "$changed"
+                || canonical == "$past";
             if (!at(TokenKind::RightParen)) {
                 do {
                     if (at(TokenKind::Comma)
@@ -670,6 +674,34 @@ Expression VerilogParser::parse_primary()
                             TokenKind::RightParen,
                             "')' after named function argument",
                             "FSIM-SV-PARSE-200");
+                    } else if (sampled_value_call && match(TokenKind::At)) {
+                        const auto event_start = previous();
+                        const auto sensitivities = parse_sensitivity();
+                        Expression event {
+                            ExpressionKind::Call,
+                            "@sv-clocking-event",
+                            { },
+                            event_start.span
+                        };
+                        if (sensitivities.size() == 1U
+                            && !sensitivities.front().signal.empty()) {
+                            event.operands.emplace_back(
+                                ExpressionKind::Identifier,
+                                sensitivities.front().signal,
+                                std::vector<Expression> { },
+                                sensitivities.front().span);
+                            event.call_result_width = static_cast<std::uint64_t>(
+                                sensitivities.front().edge);
+                            event.span = cover(
+                                event_start.span, sensitivities.front().span);
+                        } else {
+                            error(
+                                event_start,
+                                "FSIM-SV-SEM-075",
+                                "a sampled-value clocking event currently requires one direct signal");
+                        }
+                        argument_names.emplace_back();
+                        arguments.push_back(std::move(event));
                     } else {
                         argument_names.emplace_back();
                         arguments.push_back(parse_expression());
@@ -686,6 +718,15 @@ Expression VerilogParser::parse_primary()
                 expression.text = "@sv-new";
             } else if (canonical == "$cast") {
                 expression.text = "@sv-dollar-cast";
+            } else if (canonical == "type"
+                && language_ == Language::SystemVerilog2017) {
+                expression.text = "@sv-type";
+                if (expression.operands.size() != 1U) {
+                    error(
+                        name,
+                        "FSIM-SV-SEM-241",
+                        "the type operator requires exactly one expression");
+                }
             }
             const auto require_file_call =
                 [&](const std::size_t arity,
@@ -736,6 +777,160 @@ Expression VerilogParser::parse_primary()
                 require_file_call(1, "one file handle");
             } else if (canonical == "$rewind") {
                 require_file_call(1, "one file handle");
+            } else if (canonical == "$test$plusargs") {
+                require_file_call(1, "one string expression");
+            } else if (canonical == "$value$plusargs") {
+                require_file_call(
+                    2, "a format string and writable target");
+            } else if (canonical == "$system") {
+                if (expression.operands.size() > 1U) {
+                    error(
+                        name,
+                        "FSIM-SV-SEM-075",
+                        "$system accepts zero or one command string");
+                }
+                expression.call_result_width = 32;
+                expression.call_result_domain = ValueDomain::Integer;
+                expression.call_result_signed = true;
+            } else if (canonical == "$q_full") {
+                require_file_call(2, "a queue ID and writable status");
+                expression.call_result_width = 32;
+                expression.call_result_domain = ValueDomain::Integer;
+                expression.call_result_signed = true;
+            } else if (canonical == "$typename") {
+                require_file_call(1, "one expression or data type");
+            } else if (canonical == "$isunbounded") {
+                require_file_call(1, "one parameter or constant expression");
+                expression.call_result_width = 1;
+                expression.call_result_domain = ValueDomain::Bit2;
+                expression.call_result_signed = false;
+            } else if (canonical == "$sampled"
+                || canonical == "$rose"
+                || canonical == "$fell"
+                || canonical == "$stable"
+                || canonical == "$changed"
+                || canonical == "$past"
+                || canonical == "$past_gclk"
+                || canonical == "$rose_gclk"
+                || canonical == "$fell_gclk"
+                || canonical == "$stable_gclk"
+                || canonical == "$changed_gclk"
+                || canonical == "$future_gclk"
+                || canonical == "$rising_gclk"
+                || canonical == "$falling_gclk"
+                || canonical == "$steady_gclk"
+                || canonical == "$changing_gclk") {
+                const auto global = canonical.ends_with("_gclk");
+                if (expression.operands.empty()
+                    || expression.operands.size()
+                        > (global ? 1U : canonical == "$past" ? 4U
+                                                              : 2U)) {
+                    error(
+                        name,
+                        "FSIM-SV-SEM-075",
+                        canonical
+                            + " requires one expression"
+                            + (global
+                                    ? ""
+                                    : canonical == "$past"
+                                    ? ", optional constant tick count, gating expression, and clocking event"
+                                    : " and an optional clocking event"));
+                }
+                if (canonical != "$sampled" && canonical != "$past"
+                    && canonical != "$past_gclk"
+                    && canonical != "$future_gclk") {
+                    expression.call_result_width = 1;
+                    expression.call_result_domain = ValueDomain::Bit2;
+                    expression.call_result_signed = false;
+                }
+            } else if (canonical == "$get_coverage"
+                || canonical == "$get_inst_coverage") {
+                require_file_call(0, "no arguments");
+                expression.call_result_width = 64;
+                expression.call_result_domain = ValueDomain::Bit2;
+                expression.call_result_signed = false;
+                expression.systemverilog_scalar_kind
+                    = SystemVerilogScalarKind::Real;
+            } else if (canonical == "$dist_uniform"
+                || canonical == "$dist_normal"
+                || canonical == "$dist_erlang") {
+                require_file_call(3, "an inout seed and two integer arguments");
+                expression.call_result_width = 32;
+                expression.call_result_domain = ValueDomain::Integer;
+                expression.call_result_signed = true;
+            } else if (canonical == "$dist_exponential"
+                || canonical == "$dist_poisson"
+                || canonical == "$dist_chi_square"
+                || canonical == "$dist_t") {
+                require_file_call(2, "an inout seed and one integer argument");
+                expression.call_result_width = 32;
+                expression.call_result_domain = ValueDomain::Integer;
+                expression.call_result_signed = true;
+            } else if (canonical == "$time"
+                || canonical == "$stime"
+                || canonical == "$realtime") {
+                require_file_call(0, "no arguments");
+                expression.call_result_width
+                    = canonical == "$stime" ? 32 : 64;
+                expression.call_result_domain = ValueDomain::Bit2;
+                expression.call_result_signed = false;
+                expression.systemverilog_scalar_kind
+                    = canonical == "$realtime"
+                    ? SystemVerilogScalarKind::Realtime
+                    : canonical == "$time"
+                    ? SystemVerilogScalarKind::Time
+                    : SystemVerilogScalarKind::None;
+            } else if (canonical == "$pow"
+                || canonical == "$atan2"
+                || canonical == "$hypot") {
+                require_file_call(2, "two numeric expressions");
+                expression.call_result_width = 64;
+                expression.call_result_domain = ValueDomain::Bit2;
+                expression.systemverilog_scalar_kind
+                    = SystemVerilogScalarKind::Real;
+            } else if (canonical == "$rtoi"
+                || canonical == "$itor"
+                || canonical == "$bitstoreal"
+                || canonical == "$realtobits"
+                || canonical == "$bitstoshortreal"
+                || canonical == "$shortrealtobits"
+                || canonical == "$ln"
+                || canonical == "$log10"
+                || canonical == "$exp"
+                || canonical == "$sqrt"
+                || canonical == "$floor"
+                || canonical == "$ceil"
+                || canonical == "$sin"
+                || canonical == "$cos"
+                || canonical == "$tan"
+                || canonical == "$asin"
+                || canonical == "$acos"
+                || canonical == "$atan"
+                || canonical == "$sinh"
+                || canonical == "$cosh"
+                || canonical == "$tanh"
+                || canonical == "$asinh"
+                || canonical == "$acosh"
+                || canonical == "$atanh") {
+                require_file_call(1, "one numeric expression");
+                const bool result32 = canonical == "$rtoi"
+                    || canonical == "$bitstoshortreal"
+                    || canonical == "$shortrealtobits";
+                expression.call_result_width = result32 ? 32 : 64;
+                expression.call_result_domain = ValueDomain::Bit2;
+                expression.call_result_signed = canonical == "$rtoi";
+                if (canonical == "$itor"
+                    || canonical == "$bitstoreal"
+                    || (canonical != "$rtoi"
+                        && canonical != "$realtobits"
+                        && canonical != "$bitstoshortreal"
+                        && canonical != "$shortrealtobits")) {
+                    expression.systemverilog_scalar_kind
+                        = SystemVerilogScalarKind::Real;
+                } else if (canonical == "$bitstoshortreal") {
+                    expression.systemverilog_scalar_kind
+                        = SystemVerilogScalarKind::ShortReal;
+                }
             }
             return parse_postfix(std::move(expression));
         }
@@ -749,8 +944,23 @@ Expression VerilogParser::parse_primary()
                 ExpressionKind::Call, "@sv-new", { }, name.span
             };
         }
-        if (canonical == "$urandom" || canonical == "$random") {
+        if (canonical == "$urandom" || canonical == "$random"
+            || canonical == "$time" || canonical == "$stime"
+            || canonical == "$realtime") {
             expression.kind = ExpressionKind::Call;
+            if (canonical == "$time" || canonical == "$stime"
+                || canonical == "$realtime") {
+                expression.call_result_width
+                    = canonical == "$stime" ? 32 : 64;
+                expression.call_result_domain = ValueDomain::Bit2;
+                expression.call_result_signed = false;
+                expression.systemverilog_scalar_kind
+                    = canonical == "$realtime"
+                    ? SystemVerilogScalarKind::Realtime
+                    : canonical == "$time"
+                    ? SystemVerilogScalarKind::Time
+                    : SystemVerilogScalarKind::None;
+            }
             return parse_postfix(std::move(expression));
         }
         expression = parse_postfix(std::move(expression));
@@ -1018,53 +1228,24 @@ Expression VerilogParser::parse_postfix(Expression expression)
     for (;;) {
         if (expression.kind == ExpressionKind::Call
             && (expression.text == "randomize"
-                || expression.text == ".randomize")
+                || expression.text == ".randomize"
+                || expression.text.ends_with("::randomize"))
             && current().text == "with") {
-            const auto with = advance();
+            advance();
             if (!match(TokenKind::LeftBrace)) {
                 error(
                     current(),
                     "FSIM-SV-PARSE-334",
                     "expected '{' after randomize with");
             } else {
-                const auto constraint_start = previous();
-                std::size_t depth = 1U;
-                std::string raw_constraint;
-                while (!at_end() && depth != 0U) {
-                    const auto token = advance();
-                    if (token.kind == TokenKind::LeftBrace) {
-                        ++depth;
-                    } else if (token.kind == TokenKind::RightBrace) {
-                        --depth;
-                        if (depth == 0U) {
-                            expression.aggregate_choices.push_back(
-                                "@sv-inline-constraint");
-                            Expression raw {
-                                ExpressionKind::StringLiteral,
-                                raw_constraint,
-                                { },
-                                cover(constraint_start.span, token.span)
-                            };
-                            raw.decoded_string = raw_constraint;
-                            expression.aggregate_choice_expressions.push_back(
-                                { std::move(raw) });
-                            expression.span = cover(expression.span, token.span);
-                            break;
-                        }
-                    }
-                    if (depth != 0U) {
-                        if (!raw_constraint.empty()) {
-                            raw_constraint += ' ';
-                        }
-                        raw_constraint += token.text;
-                    }
-                }
-                if (depth != 0U) {
-                    error(
-                        with,
-                        "FSIM-SV-PARSE-335",
-                        "unterminated randomize with constraint block");
-                }
+                auto constraints = parse_constraint_block_expressions(
+                    "'}' after randomize with constraint block",
+                    "FSIM-SV-PARSE-335");
+                expression.aggregate_choices.push_back(
+                    "@sv-inline-constraint");
+                expression.aggregate_choice_expressions.push_back(
+                    std::move(constraints));
+                expression.span = cover(expression.span, previous().span);
             }
             continue;
         }

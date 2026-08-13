@@ -19,9 +19,68 @@ void Interpreter::set_file_root(std::filesystem::path root)
     impl_->set_file_root(std::move(root));
 }
 
+void Interpreter::set_plusargs(const std::span<const std::string> plusargs)
+{
+    if (impl_->started) {
+        throw std::logic_error {
+            "cannot set SimIR plusargs after start"
+        };
+    }
+    impl_->plusargs.assign(plusargs.begin(), plusargs.end());
+}
+
+void Interpreter::set_time_resolution_femtoseconds(
+    const std::uint64_t femtoseconds)
+{
+    if (impl_->started) {
+        throw std::logic_error {
+            "cannot set SimIR time resolution after start"
+        };
+    }
+    if (femtoseconds == 0) {
+        throw std::invalid_argument {
+            "SimIR time resolution must be positive"
+        };
+    }
+    impl_->time_format.resolution_femtoseconds = femtoseconds;
+    auto magnitude = femtoseconds;
+    auto exponent = std::int32_t { -15 };
+    while (magnitude >= 10 && exponent < 0) {
+        magnitude /= 10;
+        ++exponent;
+    }
+    impl_->time_format.units = exponent;
+}
+
 void Interpreter::set_class_allocate_hook(ClassAllocateHook hook)
 {
     impl_->class_allocate_hook = std::move(hook);
+}
+
+void Interpreter::set_coverage_sample_hook(CoverageSampleHook hook)
+{
+    impl_->coverage_sample_hook = std::move(hook);
+}
+
+void Interpreter::set_coverage_query_hook(CoverageQueryHook hook)
+{
+    impl_->coverage_query_hook = std::move(hook);
+}
+
+void Interpreter::set_system_command_hook(SystemCommandHook hook)
+{
+    impl_->system_command_hook = std::move(hook);
+}
+
+void Interpreter::set_vcd_control_hook(VcdControlHook hook)
+{
+    impl_->vcd_control_hook = std::move(hook);
+}
+
+void Interpreter::set_coverage_database_control_hook(
+    CoverageDatabaseControlHook hook)
+{
+    impl_->coverage_database_control_hook = std::move(hook);
 }
 
 void Interpreter::set_class_property_read_hook(ClassPropertyReadHook hook)
@@ -85,9 +144,14 @@ SignalId Interpreter::add_signal(Signal signal)
             : SystemVerilogScalarClassification {
                   .error = SystemVerilogScalarError::InvalidKind
               };
-        const bool valid_value = scalar
-            && (signal.systemverilog_scalar == SystemVerilogScalarKind::Chandle
-                || (classification && classification.finite));
+        const bool valid_value = signal.systemverilog_scalar
+                == SystemVerilogScalarKind::Time
+            ? signal.initial_value.width() == 64U
+                && !signal.initial_value.is_logic9()
+            : scalar
+                && (signal.systemverilog_scalar
+                        == SystemVerilogScalarKind::Chandle
+                    || (classification && classification.finite));
         if (!valid_value
             || signal.resolution != ResolutionKind::none
             || signal.implicit_driver || signal.charge_strength
@@ -109,10 +173,13 @@ SignalId Interpreter::add_signal(Signal signal)
             ? std::optional<PackedLogic4> { signal.initial_value }
             : std::nullopt);
     impl_->signal_last_values.push_back(signal.initial_value);
+    impl_->sampled_values.push_back(signal.initial_value);
+    impl_->sampled_defaults.push_back(signal.initial_value);
     impl_->forced_values.emplace_back();
     impl_->forced_masks.emplace_back(
         signal.initial_value.width(), Logic4::zero);
     impl_->signals.push_back(std::move(signal));
+    impl_->event_identities.push_back(id);
     impl_->static_fanout.emplace_back();
     impl_->dynamic_fanout.emplace_back();
     impl_->event_states.emplace_back();
@@ -200,6 +267,7 @@ ContainerObjectId Interpreter::add_container_object(
     }
     impl_->container_objects.push_back(std::move(object));
     impl_->container_signal_aliases.push_back(std::nullopt);
+    impl_->container_dynamic_fanout.emplace_back();
     return id;
 }
 
@@ -268,9 +336,12 @@ ProcessId Interpreter::add_process(Process process)
     const bool has_switch_metadata = process.switch_source.has_value()
         || process.switch_target.has_value()
         || process.switch_control.has_value();
+    const bool has_switch_region = process.switch_source_offset != 0
+        || process.switch_target_offset != 0 || process.switch_width != 0;
     const bool switch_connection = process.switch_bidirectional;
     if ((switch_connection
             && (!process.switch_source || !process.switch_target))
+        || (has_switch_region && !has_switch_metadata)
         || (has_switch_metadata
             && (!process.switch_source || !process.switch_target
                 || *process.switch_source >= impl_->signals.size()
@@ -286,15 +357,29 @@ ProcessId Interpreter::add_process(Process process)
                                       .initial_value.width();
         const auto target_width = impl_->signals[*process.switch_target]
                                       .initial_value.width();
-        if ((source_width != target_width
-                && source_width != 1 && target_width != 1)
+        const auto selected_width = process.switch_width;
+        const bool invalid_selected_region = selected_width != 0
+            && (process.switch_source_offset > source_width
+                || selected_width
+                    > source_width - process.switch_source_offset
+                || process.switch_target_offset > target_width
+                || selected_width
+                    > target_width - process.switch_target_offset);
+        if (invalid_selected_region
+            || (selected_width == 0
+                && (process.switch_source_offset != 0
+                    || process.switch_target_offset != 0
+                    || (source_width != target_width
+                        && source_width != 1 && target_width != 1)))
             || (process.switch_control
                 && impl_->signals[*process.switch_control]
                         .initial_value.width()
                     != 1
                 && impl_->signals[*process.switch_control]
                         .initial_value.width()
-                    != std::max(source_width, target_width))) {
+                    != (selected_width == 0
+                            ? std::max(source_width, target_width)
+                            : selected_width))) {
             throw std::invalid_argument {
                 "SimIR transmission connection has incompatible endpoint widths"
             };
@@ -304,9 +389,12 @@ ProcessId Interpreter::add_process(Process process)
         throw std::invalid_argument(
             "a SimIR final process cannot initialize at time zero");
     }
-    if (process.reactive && process.postponed) {
+    const auto scheduling_regions = static_cast<unsigned>(process.observed)
+        + static_cast<unsigned>(process.reactive)
+        + static_cast<unsigned>(process.postponed);
+    if (scheduling_regions > 1) {
         throw std::invalid_argument(
-            "a SimIR process cannot be both reactive and postponed");
+            "a SimIR process cannot occupy multiple scheduling regions");
     }
     if (!process.register_value_kinds.empty()
         && process.register_value_kinds.size()
@@ -441,6 +529,9 @@ ProcessId Interpreter::add_process(Process process)
     state.status = process.initialize
         ? ProcessStatus::running
         : ProcessStatus::waiting;
+    if (process.program_owner) {
+        impl_->program_owners.insert(*process.program_owner);
+    }
     state.program = std::move(process);
     impl_->processes.push_back(std::move(state));
     return id;
@@ -947,6 +1038,29 @@ PackedLogic4 Interpreter::driver_value(
     return impl_->underlying_driver_value(process, signal);
 }
 
+ProcessId Interpreter::design_process(const ProcessId process) const
+{
+    return impl_->get_process(process).design_process;
+}
+
+ProcessId Interpreter::dynamic_process_root(const ProcessId process) const
+{
+    auto root = process;
+    while (const auto parent = impl_->get_process(root).fork_parent) {
+        if (!impl_->get_process(*parent).fork_parent) {
+            return root;
+        }
+        root = *parent;
+    }
+    return root;
+}
+
+void Interpreter::kill_dynamic_processes(
+    const std::span<const ProcessId> design_processes)
+{
+    impl_->kill_dynamic_processes(design_processes);
+}
+
 PackedLogic4 Interpreter::read_debug_local(
     const ProcessId process,
     const std::size_t local_index) const
@@ -1096,6 +1210,11 @@ void Interpreter::set_output_hook(OutputHook hook)
 void Interpreter::set_report_hook(ReportHook hook)
 {
     impl_->report_hook = std::move(hook);
+}
+
+void Interpreter::set_fork_spawn_filter(ForkSpawnFilter filter)
+{
+    impl_->fork_spawn_filter = std::move(filter);
 }
 
 } // namespace fsim::runtime::simir

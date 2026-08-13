@@ -1088,13 +1088,10 @@ class Parser {
       diagnostics_.error(
           std::string(kSchemaCode), "missing required top-level key 'schema = 2'", document_span);
     } else if (config_.schema != kSchemaVersion) {
-      const auto migration = config_.schema == 1
-          ? "; migrate it with 'fsim migrate --to 2 <manifest>'"
-          : "";
       diagnostics_.error(
           std::string(kSchemaCode),
           "unsupported project schema " + std::to_string(config_.schema) +
-              "; this build supports schema 2" + migration,
+              "; this build supports schema 2",
           document_span);
     }
     if (!config_.project.top.empty() && !config_.project.tops.empty()) {

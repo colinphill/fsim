@@ -14,6 +14,7 @@ using namespace elaboration_detail;
         const DesignUnit& root,
         std::string path) {
         active_root_ = std::move(path);
+        active_systemverilog_root_name_ = root.name;
         if (auto prepared =
                 prepared_systemverilog_roots_.find(active_root_);
             prepared != prepared_systemverilog_roots_.end()) {
@@ -64,6 +65,29 @@ using namespace elaboration_detail;
             selected = &*configured_root;
             configuration_identity =
                 vhdl_configuration_identity(root);
+        } else if (root.kind
+            == frontend::UnitKind::SystemVerilogConfiguration) {
+            selected = select_systemverilog_configuration_root(root);
+            if (selected == nullptr) {
+                return;
+            }
+            active_systemverilog_configuration_ = &root;
+            systemverilog_configurations_by_path_[active_root_] = &root;
+            active_systemverilog_root_name_ = selected->name;
+            configured_root = *selected;
+            const auto configuration_source = std::string {
+                frontend::physical_source(root.span)
+            };
+            if (!configuration_source.empty()
+                && std::ranges::find(
+                       configured_root->source_dependencies,
+                       configuration_source)
+                    == configured_root->source_dependencies.end()) {
+                configured_root->source_dependencies.push_back(
+                    configuration_source);
+            }
+            selected = &*configured_root;
+            configuration_identity = systemverilog_configuration_identity(root);
         }
         auto specialized = specialize_selected_unit(
             *selected, {}, {}, {}, {}, {}, {}, {}, {},
@@ -88,6 +112,8 @@ using namespace elaboration_detail;
             std::move(specialized.packages));
         active_vhdl_configuration_ = nullptr;
         vhdl_configurations_by_path_.clear();
+        active_systemverilog_configuration_ = nullptr;
+        systemverilog_configurations_by_path_.clear();
     }
     void HierarchyBuilder::build(const SystemCInstanceDescription& root) {
         add_root(root, root.path);
@@ -1119,12 +1145,13 @@ using namespace elaboration_detail;
                 continue;
             }
             effective_package.type_aliases.push_back(
-                frontend::TypeAliasDeclaration{
+                frontend::TypeAliasDeclaration {
                     name,
                     binding.type,
                     effective_package.span,
-                    {},
-                    frontend::TypeDeclarationKind::Alias});
+                    { },
+                    frontend::TypeDeclarationKind::Alias,
+                    { } });
         }
         auto type_specialized =
             specialize_vhdl_interface_types(
@@ -1771,6 +1798,7 @@ using namespace elaboration_detail;
             function_imports;
         std::vector<frontend::TaskDeclaration> task_imports;
         std::vector<frontend::TypeAliasDeclaration> type_imports;
+        std::vector<frontend::SystemVerilogLetDeclaration> let_imports;
         std::unordered_map<std::string, std::string> owners;
         for (const auto& import_item :
              unit.systemverilog_imports) {
@@ -1981,6 +2009,38 @@ using namespace elaboration_detail;
                 }
                 found_selected = true;
             }
+            for (const auto& declaration :
+                specialized_package->unit.systemverilog_lets) {
+                const bool public_item = directly_declared(
+                                             declaration, package->systemverilog_lets)
+                    || explicitly_exported(declaration.name);
+                if (!public_item) {
+                    continue;
+                }
+                if (!wildcard
+                    && declaration.name != import_item.name) {
+                    continue;
+                }
+                found_selected = true;
+                const auto [owner, inserted] = owners.emplace(
+                    declaration.name, package->name);
+                if (!inserted && owner->second != package->name) {
+                    report(
+                        "FSIM-ELAB-SVLET-006",
+                        "SystemVerilog let declaration '"
+                            + declaration.name
+                            + "' is imported from multiple packages",
+                        import_item.span);
+                    continue;
+                }
+                if (std::ranges::none_of(
+                        let_imports,
+                        [&](const auto& existing) {
+                            return existing.name == declaration.name;
+                        })) {
+                    let_imports.push_back(declaration);
+                }
+            }
             for (const auto& function :
                  specialized_package->unit.functions) {
                 const bool public_item = directly_declared(
@@ -2071,6 +2131,11 @@ using namespace elaboration_detail;
             std::make_move_iterator(unit.type_aliases.begin()),
             std::make_move_iterator(unit.type_aliases.end()));
         unit.type_aliases = std::move(type_imports);
+        let_imports.insert(
+            let_imports.end(),
+            std::make_move_iterator(unit.systemverilog_lets.begin()),
+            std::make_move_iterator(unit.systemverilog_lets.end()));
+        unit.systemverilog_lets = std::move(let_imports);
         function_imports.insert(
             function_imports.end(),
             std::make_move_iterator(unit.functions.begin()),

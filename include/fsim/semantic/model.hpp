@@ -143,6 +143,8 @@ enum class UnitKind : std::uint8_t {
     systemc_factory,
     systemverilog_program,
     vhdl_psl_verification_unit,
+    systemverilog_configuration,
+    systemverilog_bind,
 };
 
 enum class TypeKind : std::uint8_t {

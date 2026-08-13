@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/design_artifact.hpp"
 #include "fsim/frontend/class_resolution.hpp"
 
 #include "../../src/app/application_internal.hpp"
@@ -51,12 +52,19 @@ package values;
   } initialized_t;
   typedef union packed {
     logic [15:0] wide;
-    logic [7:0] narrow;
-  } unequal_t;
+    logic [15:0] mirror;
+  } ordinary_t;
   typedef union tagged packed {
     logic [15:0] wide;
     logic [7:0] narrow;
   } tagged_t;
+  function automatic logic [7:0] resolve_byte(
+      input logic [7:0] drivers[]);
+    return drivers[0];
+  endfunction
+  nettype logic [7:0] byte_net with resolve_byte;
+  let merge_mask(logic [7:0] value,
+                 logic [7:0] mask = 8'h0f) = value | mask;
   localparam int VALUE = 3;
 endpackage
 
@@ -96,6 +104,10 @@ module semantic_hir_top;
   int values[];
   logic [7:0] memory[3:0];
   logic ready_signal;
+  logic [7:0] alias_left;
+  logic [7:0] alias_right;
+  alias alias_left = alias_right;
+  let local_bias(value = 8'h01) = value + 1;
   property ready;
     ready_signal;
   endproperty
@@ -228,9 +240,9 @@ endmodule
         checked->systemverilog_hir.types(), [](const auto& type) {
             return type.name == "packet_t";
         });
-    const auto unequal_type = std::ranges::find_if(
+    const auto ordinary_type = std::ranges::find_if(
         checked->systemverilog_hir.types(), [](const auto& type) {
-            return type.name == "unequal_t";
+            return type.name == "ordinary_t";
         });
     const auto tagged_type = std::ranges::find_if(
         checked->systemverilog_hir.types(), [](const auto& type) {
@@ -240,25 +252,63 @@ endmodule
         checked->systemverilog_hir.types(), [](const auto& type) {
             return type.name == "initialized_t";
         });
+    const auto byte_net_type = std::ranges::find_if(
+        checked->systemverilog_hir.types(), [](const auto& type) {
+            return type.name == "byte_net";
+        });
     assert(state_type != checked->systemverilog_hir.types().end());
     assert(packet_type != checked->systemverilog_hir.types().end());
-    assert(unequal_type != checked->systemverilog_hir.types().end());
+    assert(ordinary_type != checked->systemverilog_hir.types().end());
     assert(tagged_type != checked->systemverilog_hir.types().end());
     assert(initialized_type != checked->systemverilog_hir.types().end());
+    assert(byte_net_type != checked->systemverilog_hir.types().end());
     assert(state_type->form == fsim::semantic::sv::TypeForm::enumeration);
     assert(state_type->enumeration_literals.size() == 2);
     assert(packet_type->form
         == fsim::semantic::sv::TypeForm::packed_structure);
     assert(packet_type->members.size() == 2);
-    assert(unequal_type->form
+    assert(ordinary_type->form
         == fsim::semantic::sv::TypeForm::packed_union);
-    assert(unequal_type->members.size() == 2);
+    assert(ordinary_type->members.size() == 2);
     assert(tagged_type->form
         == fsim::semantic::sv::TypeForm::tagged_union);
     assert(tagged_type->members.size() == 2);
     assert(initialized_type->members.size() == 2);
     assert(initialized_type->members[0].initializer);
     assert(initialized_type->members[1].initializer);
+    assert(byte_net_type->form
+        == fsim::semantic::sv::TypeForm::packed_integral);
+    assert(byte_net_type->base.executable_width == 8);
+    assert(byte_net_type->base.four_state);
+    assert(byte_net_type->resolution_function == "values::resolve_byte");
+    const auto byte_net_declaration = std::ranges::find_if(
+        checked->systemverilog_hir.declarations(),
+        [&](const auto& declaration) {
+            return declaration.id == byte_net_type->declaration;
+        });
+    assert(byte_net_declaration
+        != checked->systemverilog_hir.declarations().end());
+    assert(byte_net_declaration->form
+        == fsim::semantic::sv::DeclarationForm::nettype_declaration);
+
+    const auto values_package = std::ranges::find_if(
+        checked->systemverilog_hir.units(), [](const auto& unit) {
+            return unit.name == "values";
+        });
+    assert(values_package != checked->systemverilog_hir.units().end());
+    assert(values_package->lets.size() == 1);
+    const auto& package_let = values_package->lets.front();
+    assert(package_let.name == "merge_mask");
+    assert(package_let.ports.size() == 2);
+    assert(package_let.ports[0].type);
+    assert(package_let.ports[0].type->target.spelling == "logic");
+    assert(package_let.ports[0].type->packed_range);
+    assert(package_let.ports[0].type->packed_range->left == 7);
+    assert(package_let.ports[0].type->packed_range->right == 0);
+    assert(package_let.ports[1].default_value);
+    assert(package_let.expression.valid());
+    assert(package_let.source.valid());
+    assert(package_let.origin.valid());
 
     const auto top = std::ranges::find_if(
         checked->systemverilog_hir.units(), [](const auto& unit) {
@@ -266,6 +316,15 @@ endmodule
         });
     assert(top != checked->systemverilog_hir.units().end());
     assert(top->imports.size() == 1);
+    assert(top->aliases.size() == 1);
+    assert(top->aliases.front().terminals.size() == 2);
+    assert(top->aliases.front().source.valid());
+    assert(top->aliases.front().origin.valid());
+    assert(top->lets.size() == 1);
+    assert(top->lets.front().name == "local_bias");
+    assert(top->lets.front().ports.size() == 1);
+    assert(top->lets.front().ports.front().default_value);
+    assert(top->lets.front().expression.valid());
     assert(top->instances.size() == 1);
     assert(top->generates.size() == 1);
     assert(top->concurrent_assertions.size() == 4);
@@ -405,10 +464,38 @@ endmodule
     const auto retained_type = state_type->id;
     const auto retained_process = process.id;
     const auto retained_expression_count = checked->systemverilog_hir.expressions().size();
+    const auto retained_alias_terminals = top->aliases.front().terminals;
+    const auto retained_package_let_expression = package_let.expression;
+    fsim::diagnostic::Engine hir_state_diagnostics;
+    const auto hir_state = fsim::app::serialize_systemverilog_constraint_hir_state(
+        checked->systemverilog_hir, checked->semantics,
+        hir_state_diagnostics);
+    assert(hir_state && !hir_state_diagnostics.has_error());
+    const auto restored_hir = fsim::app::deserialize_systemverilog_constraint_hir_state(
+        *hir_state, "systemverilog-hir-state",
+        checked->semantics, hir_state_diagnostics);
+    assert(restored_hir && !hir_state_diagnostics.has_error());
+    const auto restored_top = std::ranges::find_if(
+        restored_hir->units(), [](const auto& unit) {
+            return unit.name == "semantic_hir_top";
+        });
+    const auto restored_values = std::ranges::find_if(
+        restored_hir->units(), [](const auto& unit) {
+            return unit.name == "values";
+        });
+    assert(restored_top != restored_hir->units().end());
+    assert(restored_values != restored_hir->units().end());
+    assert(restored_top->aliases.front().terminals
+        == retained_alias_terminals);
+    assert(restored_top->lets.front().name == "local_bias");
+    assert(restored_values->lets.front().expression
+        == retained_package_let_expression);
     checked->parsed.units.clear();
     assert(interface_unit->id == retained_unit);
     assert(state_type->id == retained_type);
     assert(process.id == retained_process);
+    assert(top->aliases.front().terminals == retained_alias_terminals);
+    assert(package_let.expression == retained_package_let_expression);
     assert(checked->systemverilog_hir.expressions().size()
         == retained_expression_count);
 
@@ -438,7 +525,7 @@ class HirObject #(parameter int MAX = 3) extends HirBase;
   }
   constraint weighted_choice {
     soft choice inside {0, 1};
-    choice dist {0 := 1, [1:3] :/ 6};
+    choice dist {0 := 137'd1, [1:3] :/ 137'd6};
   }
   constraint structured_choice {
     (choice == 0) -> { payload == 0; }
@@ -658,8 +745,10 @@ endmodule
     assert(payload_binding != payload_reference.bindings.end());
     assert(base_binding != base_reference.bindings.end());
     assert(payload_binding->type.executable_width == 32
-        && payload_binding->type.four_state
+        && !payload_binding->type.four_state
+        && payload_binding->type.signed_value
         && base_binding->type.executable_width == 32
+        && !base_binding->type.four_state
         && base_binding->type.signed_value);
     fsim::runtime::SystemVerilogConstraintSolver source_solver;
     const auto add_source_variable = [&](
@@ -1055,4 +1144,208 @@ endmodule
                 == "110");
         }
     }
+
+    const auto nettype_source = directory.path / "nettype_execution.sv";
+    {
+        std::ofstream output { nettype_source, std::ios::binary };
+        output << R"(
+package resolver_pkg;
+  function automatic logic [7:0] first_driver(
+      input logic [7:0] drivers[]);
+    return drivers[0];
+  endfunction
+  nettype logic [7:0] first_net with first_driver;
+  let with_mask(value, mask = 8'h0f) = value | mask;
+endpackage
+
+module nettype_execution;
+  import resolver_pkg::*;
+  first_net resolved;
+  logic [7:0] observed;
+  logic [7:0] let_observed;
+  logic [7:0] qualified_let_observed;
+  wire [7:0] alias_source;
+  wire [7:0] alias_view;
+  wire [7:0] reverse_source;
+  wire [7:0] reverse_view;
+  wire [7:0] partial_source;
+  wire [7:0] partial_view;
+  wire [3:0] shuffled_view;
+  logic [7:0] alias_observed;
+  logic [7:0] alias_roundtrip;
+  logic [3:0] partial_alias_observed;
+  logic [3:0] shuffled_alias_observed;
+  logic [7:0] generated_alias_observed;
+  logic [7:0] generated_let_observed;
+  let local_bias = 8'h80;
+  alias alias_source = alias_view;
+  alias reverse_source = reverse_view;
+  alias partial_source[7:4] = partial_view[3:0];
+  alias {partial_source[1:0], partial_source[3:2]} = shuffled_view;
+  generate
+    if (1) begin : declarations
+      wire [7:0] generated_source;
+      wire [7:0] generated_view;
+      alias generated_source = generated_view;
+      let generated_mask(value, mask = 8'h20) = value | mask;
+      assign generated_source = 8'hc3;
+      initial begin
+        #1 begin
+          generated_alias_observed = generated_view;
+          generated_let_observed = generated_mask(generated_view);
+        end
+      end
+    end
+  endgenerate
+  assign resolved = 8'h12;
+  assign resolved = 8'h34;
+  assign alias_source = 8'h5a;
+  assign reverse_view = 8'ha5;
+  assign partial_source = 8'ha6;
+  initial begin
+    #1 begin
+      observed = resolved;
+      let_observed = with_mask(resolved) | local_bias;
+      qualified_let_observed = resolver_pkg::with_mask(resolved, 8'h30);
+      alias_observed = alias_view;
+      alias_roundtrip = reverse_source;
+      partial_alias_observed = partial_view[3:0];
+      shuffled_alias_observed = shuffled_view;
+    end
+    #1 begin
+      $finish;
+    end
+  end
+endmodule
+)";
+        assert(output.good());
+    }
+    fsim::project::Config nettype_config;
+    nettype_config.base_directory = directory.path;
+    nettype_config.project.name = "systemverilog-nettype";
+    nettype_config.project.top = "sv:work.nettype_execution";
+    nettype_config.project.time_resolution = "1ns";
+    fsim::project::SourceSet nettype_sources;
+    nettype_sources.language = fsim::project::Language::system_verilog;
+    nettype_sources.standard = "2017";
+    nettype_sources.library = "work";
+    nettype_sources.files.push_back(nettype_source);
+    nettype_config.source_sets.push_back(std::move(nettype_sources));
+    const auto execute_nettype = [&](const fsim::app::SimulationEngine engine,
+                                     const fsim::project::Optimization optimization) {
+        auto execution_config = nettype_config;
+        execution_config.build.optimization = optimization;
+        execution_config.build.cache_path = directory.path
+            / (optimization == fsim::project::Optimization::o0
+                    ? "nettype-o0-cache"
+                    : "nettype-o2-cache");
+        fsim::diagnostic::Engine execution_diagnostics;
+        auto execution_project = fsim::app::build_project(
+            execution_config, execution_diagnostics);
+        if (!execution_project) {
+            fsim::diagnostic::print_text(
+                std::cerr, execution_diagnostics);
+        }
+        assert(execution_project);
+        const auto resolved = execution_project->design.find_signal(
+            "nettype_execution.resolved");
+        const auto alias_source = execution_project->design.find_signal(
+            "nettype_execution.alias_source");
+        const auto alias_view = execution_project->design.find_signal(
+            "nettype_execution.alias_view");
+        const auto reverse_source = execution_project->design.find_signal(
+            "nettype_execution.reverse_source");
+        const auto reverse_view = execution_project->design.find_signal(
+            "nettype_execution.reverse_view");
+        const auto partial_source = execution_project->design.find_signal(
+            "nettype_execution.partial_source");
+        const auto partial_view = execution_project->design.find_signal(
+            "nettype_execution.partial_view");
+        assert(
+            resolved && alias_source && alias_view
+            && reverse_source && reverse_view
+            && partial_source && partial_view);
+        assert(alias_source == alias_view);
+        assert(reverse_source == reverse_view);
+        assert(partial_source != partial_view);
+        assert(execution_project->design.signals().at(*resolved).resolution
+            == fsim::runtime::simir::ResolutionKind::sv_user_first);
+        fsim::diagnostic::Engine artifact_diagnostics;
+        const auto runtime_state = fsim::app::serialize_runtime_state(
+            execution_project->design, artifact_diagnostics);
+        assert(runtime_state && !artifact_diagnostics.has_error());
+        auto restored = fsim::app::deserialize_runtime_state(
+            *runtime_state, "nettype-runtime", artifact_diagnostics);
+        assert(restored && !artifact_diagnostics.has_error());
+        assert(std::ranges::any_of(
+            restored->processes(), [](const auto& runtime_process) {
+                return runtime_process.name.find(".$alias_")
+                    != std::string::npos
+                    && runtime_process.switch_source_offset == 4
+                    && runtime_process.switch_target_offset == 0
+                    && runtime_process.switch_width == 4;
+            }));
+        assert(fsim::app::serialize_runtime_state(
+                   *restored, artifact_diagnostics)
+            == runtime_state);
+        execution_project->design = std::move(*restored);
+        fsim::app::Simulation execution {
+            std::move(*execution_project),
+            execution_config.run.max_deltas,
+            engine
+        };
+        const auto nettype_observed = execution.find_signal(
+            "nettype_execution.observed");
+        const auto let_observed = execution.find_signal(
+            "nettype_execution.let_observed");
+        const auto qualified_let_observed = execution.find_signal(
+            "nettype_execution.qualified_let_observed");
+        const auto alias_observed = execution.find_signal(
+            "nettype_execution.alias_observed");
+        const auto alias_roundtrip = execution.find_signal(
+            "nettype_execution.alias_roundtrip");
+        const auto partial_alias_observed = execution.find_signal(
+            "nettype_execution.partial_alias_observed");
+        const auto shuffled_alias_observed = execution.find_signal(
+            "nettype_execution.shuffled_alias_observed");
+        const auto generated_alias_observed = execution.find_signal(
+            "nettype_execution.generated_alias_observed");
+        const auto generated_let_observed = execution.find_signal(
+            "nettype_execution.generated_let_observed");
+        assert(
+            nettype_observed && let_observed && qualified_let_observed
+            && alias_observed && alias_roundtrip
+            && partial_alias_observed && shuffled_alias_observed
+            && generated_alias_observed && generated_let_observed);
+        const auto result = execution.run();
+        assert(result.status == fsim::runtime::RunStatus::stopped);
+        assert(result.time == 2);
+        return execution.read_signal(*nettype_observed).to_msb_string()
+            + ":" + execution.read_signal(*let_observed).to_msb_string()
+            + ":"
+            + execution.read_signal(*qualified_let_observed).to_msb_string()
+            + ":" + execution.read_signal(*alias_observed).to_msb_string()
+            + ":" + execution.read_signal(*alias_roundtrip).to_msb_string()
+            + ":"
+            + execution.read_signal(*partial_alias_observed).to_msb_string()
+            + ":"
+            + execution.read_signal(*shuffled_alias_observed).to_msb_string()
+            + ":"
+            + execution.read_signal(*generated_alias_observed).to_msb_string()
+            + ":"
+            + execution.read_signal(*generated_let_observed).to_msb_string();
+    };
+    const auto nettype_reference = execute_nettype(
+        fsim::app::SimulationEngine::interpreter,
+        fsim::project::Optimization::o0);
+    assert(nettype_reference
+        == "00010010:10011111:00110010:01011010:10100101:1010:1001:11000011:11100011");
+    assert(execute_nettype(
+               fsim::app::SimulationEngine::compiled,
+               fsim::project::Optimization::o0)
+        == nettype_reference);
+    assert(execute_nettype(
+               fsim::app::SimulationEngine::compiled,
+               fsim::project::Optimization::o2)
+        == nettype_reference);
 }

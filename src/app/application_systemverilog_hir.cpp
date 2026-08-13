@@ -830,36 +830,40 @@ class SystemVerilogHirBuilder final {
       const frontend::TypeAliasDeclaration& input,
       const semantic::ScopeId scope,
       const semantic::OriginId parent) {
-    const auto id = add_declaration_record(
-        scope,
-        sv::DeclarationForm::typedef_declaration,
-        semantic::DeclarationKind::type,
-        input.name,
-        input.span,
-        parent);
-    const auto declaration_origin = declaration(id).origin;
-    const auto base = type_reference(
-        input.type, input.span, scope, declaration_origin);
-    const auto type_id = ensure_type(
-        input.name,
-        scope,
-        semantic::TypeKind::alias,
-        base,
-        declaration(id).source,
-        declaration_origin);
-    declaration(id).declared_type = type_id;
-    declaration(id).type = base;
-    sv::TypeDefinition output;
-    output.id = type_id;
-    output.declaration = id;
-    output.form = type_form(input.type);
-    output.name = input.name;
-    output.base = base;
-    output.source = declaration(id).source;
-    output.origin = declaration_origin;
-    add_type_payload(input, output, scope, declaration_origin);
-    hir_.mutable_types().push_back(std::move(output));
-    return id;
+      const auto id = add_declaration_record(
+          scope,
+          input.declaration_kind
+                  == frontend::TypeDeclarationKind::SystemVerilogNettype
+              ? sv::DeclarationForm::nettype_declaration
+              : sv::DeclarationForm::typedef_declaration,
+          semantic::DeclarationKind::type,
+          input.name,
+          input.span,
+          parent);
+      const auto declaration_origin = declaration(id).origin;
+      const auto base = type_reference(
+          input.type, input.span, scope, declaration_origin);
+      const auto type_id = ensure_type(
+          input.name,
+          scope,
+          semantic::TypeKind::alias,
+          base,
+          declaration(id).source,
+          declaration_origin);
+      declaration(id).declared_type = type_id;
+      declaration(id).type = base;
+      sv::TypeDefinition output;
+      output.id = type_id;
+      output.declaration = id;
+      output.form = type_form(input.type);
+      output.name = input.name;
+      output.base = base;
+      output.resolution_function = input.systemverilog_resolution_function;
+      output.source = declaration(id).source;
+      output.origin = declaration_origin;
+      add_type_payload(input, output, scope, declaration_origin);
+      hir_.mutable_types().push_back(std::move(output));
+      return id;
   }
 
   void add_type_payload(
@@ -1481,6 +1485,49 @@ class SystemVerilogHirBuilder final {
                     input_export.name, input_export.span, output.scope)},
           input_export.name.empty(),
           source(input_export.span)});
+    }
+    for (std::size_t index = 0;
+        index < input.systemverilog_aliases.size(); ++index) {
+        const auto& input_alias = input.systemverilog_aliases[index];
+        sv::Alias alias;
+        alias.source = source(input_alias.span);
+        alias.origin = origin(
+            alias.source, output.origin,
+            "$alias$" + std::to_string(index + 1U));
+        for (const auto& terminal : input_alias.terminals) {
+            const auto terminal_expression = expression(
+                terminal, output.scope, alias.origin);
+            if (terminal_expression) {
+                alias.terminals.push_back(*terminal_expression);
+            }
+        }
+        output.aliases.push_back(std::move(alias));
+    }
+    for (const auto& input_let : input.systemverilog_lets) {
+        sv::LetDeclaration let;
+        let.name = input_let.name;
+        let.source = source(input_let.span);
+        let.origin = origin(let.source, output.origin, let.name);
+        for (const auto& input_port : input_let.ports) {
+            sv::LetPort port;
+            port.name = input_port.name;
+            port.source = source(input_port.span);
+            if (input_port.type) {
+                port.type = type_reference(
+                    *input_port.type, input_port.span, output.scope, let.origin);
+            }
+            if (input_port.default_value) {
+                port.default_value = expression(
+                    *input_port.default_value, output.scope, let.origin);
+            }
+            let.ports.push_back(std::move(port));
+        }
+        const auto let_expression = expression(
+            input_let.expression, output.scope, let.origin);
+        if (let_expression) {
+            let.expression = *let_expression;
+        }
+        output.lets.push_back(std::move(let));
     }
 
     std::vector<Pending> pending;

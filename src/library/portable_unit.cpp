@@ -42,24 +42,38 @@ template <typename T>
 struct IsSharedPtr<std::shared_ptr<T>> : std::true_type {};
 
 template <typename T>
-constexpr bool valid_archive_enum(const T value) noexcept {
-  if constexpr (std::same_as<T, frontend::SystemVerilogScalarKind>) {
-    return value >= frontend::SystemVerilogScalarKind::None
-        && value <= frontend::SystemVerilogScalarKind::Chandle;
-  } else if constexpr (
-      std::same_as<T, frontend::SystemVerilogDecimalLiteralKind>) {
-    return value >= frontend::SystemVerilogDecimalLiteralKind::Real
-        && value <= frontend::SystemVerilogDecimalLiteralKind::Time;
-  } else if constexpr (std::same_as<T, frontend::PackedAggregateKind>) {
-    return value >= frontend::PackedAggregateKind::None
-        && value <= frontend::PackedAggregateKind::TaggedUnion;
-  } else if constexpr (
-      std::same_as<T, frontend::SystemVerilogModportMemberKind>) {
-    return value >= frontend::SystemVerilogModportMemberKind::Signal
-        && value <= frontend::SystemVerilogModportMemberKind::Clocking;
-  } else {
-    return true;
-  }
+constexpr bool valid_archive_enum(const T value) noexcept
+{
+    if constexpr (std::same_as<T, frontend::UnitKind>) {
+        return value >= frontend::UnitKind::VhdlEntity
+            && value <= frontend::UnitKind::SystemVerilogBind;
+    } else if constexpr (
+        std::same_as<T, frontend::SystemVerilogConfigurationRuleKind>) {
+        return value >= frontend::SystemVerilogConfigurationRuleKind::Instance
+            && value <= frontend::SystemVerilogConfigurationRuleKind::Cell;
+    } else if constexpr (
+        std::same_as<T, frontend::SystemVerilogConfigurationSelectionKind>) {
+        return value
+            >= frontend::SystemVerilogConfigurationSelectionKind::Use
+            && value
+            <= frontend::SystemVerilogConfigurationSelectionKind::Liblist;
+    } else if constexpr (std::same_as<T, frontend::SystemVerilogScalarKind>) {
+        return value >= frontend::SystemVerilogScalarKind::None
+            && value <= frontend::SystemVerilogScalarKind::Chandle;
+    } else if constexpr (
+        std::same_as<T, frontend::SystemVerilogDecimalLiteralKind>) {
+        return value >= frontend::SystemVerilogDecimalLiteralKind::Real
+            && value <= frontend::SystemVerilogDecimalLiteralKind::Time;
+    } else if constexpr (std::same_as<T, frontend::PackedAggregateKind>) {
+        return value >= frontend::PackedAggregateKind::None
+            && value <= frontend::PackedAggregateKind::TaggedUnion;
+    } else if constexpr (
+        std::same_as<T, frontend::SystemVerilogModportMemberKind>) {
+        return value >= frontend::SystemVerilogModportMemberKind::Signal
+            && value <= frontend::SystemVerilogModportMemberKind::Clocking;
+    } else {
+        return true;
+    }
 }
 
 template <typename T>
@@ -78,29 +92,31 @@ auto archive_fields(T& value) {
 template <typename T>
   requires std::same_as<std::remove_cv_t<T>, frontend::Type>
 auto archive_fields(T& value) {
-  return std::tie(
-      value.domain, value.spelling, value.systemverilog_scalar,
-      value.systemverilog_net_type, value.packed_range, value.is_signed,
-      value.packed_range_expression,
-      value.systemverilog_packed_dimensions,
-      value.named_type, value.named_type_span,
-      value.nominal_type, value.vhdl_type_declaration,
-      value.vhdl_resolution_function, value.enumeration_literals,
-      value.systemverilog_enumeration_values,
-      value.enumeration_range, value.enumeration_range_expression,
-      value.enumeration_base_range, value.enumeration_base_range_expression,
-      value.packed_members, value.packed_aggregate, value.integer_range,
-      value.integer_range_expression, value.integer_base_range,
-      value.integer_base_range_expression, value.discrete_range_expression,
-      value.vhdl_array, value.vhdl_access, value.vhdl_file,
-      value.vhdl_physical, value.vhdl_protected,
-      value.vhdl_array_constraints, value.systemverilog_container,
-      value.systemverilog_class_name,
-      value.systemverilog_class_declaration,
-      value.systemverilog_virtual_interface,
-      value.systemverilog_interface_type,
-      value.systemverilog_interface_modport,
-      value.systemverilog_class_parameter_actuals);
+    return std::tie(
+        value.domain, value.spelling, value.systemverilog_scalar,
+        value.systemverilog_net_type,
+        value.systemverilog_resolution_function,
+        value.packed_range, value.is_signed,
+        value.packed_range_expression,
+        value.systemverilog_packed_dimensions,
+        value.named_type, value.named_type_span,
+        value.nominal_type, value.vhdl_type_declaration,
+        value.vhdl_resolution_function, value.enumeration_literals,
+        value.systemverilog_enumeration_values,
+        value.enumeration_range, value.enumeration_range_expression,
+        value.enumeration_base_range, value.enumeration_base_range_expression,
+        value.packed_members, value.packed_aggregate, value.integer_range,
+        value.integer_range_expression, value.integer_base_range,
+        value.integer_base_range_expression, value.discrete_range_expression,
+        value.vhdl_array, value.vhdl_access, value.vhdl_file,
+        value.vhdl_physical, value.vhdl_protected,
+        value.vhdl_array_constraints, value.systemverilog_container,
+        value.systemverilog_class_name,
+        value.systemverilog_class_declaration,
+        value.systemverilog_virtual_interface,
+        value.systemverilog_interface_type,
+        value.systemverilog_interface_modport,
+        value.systemverilog_class_parameter_actuals);
 }
 
 template <typename T>
@@ -592,64 +608,119 @@ bool valid_generate_strengths(const frontend::GenerateBody& body) {
           body.generate_regions, valid_region_strengths);
 }
 
-bool valid_unit_strengths(const frontend::DesignUnit& unit) {
-  return std::ranges::all_of(unit.ports, valid_signal_strength)
-      && std::ranges::all_of(unit.signals, valid_signal_strength)
-      && std::ranges::all_of(
-          unit.concurrent_statements, valid_statement_strength)
-      && std::ranges::all_of(unit.instances, [](const auto& instance) {
-           return valid_drive_strength(instance.drive_strength);
-         })
-      && std::ranges::all_of(
-          unit.generate_regions, valid_region_strengths);
+bool valid_unit_strengths(const frontend::DesignUnit& unit)
+{
+    return std::ranges::all_of(unit.ports, valid_signal_strength)
+        && std::ranges::all_of(unit.signals, valid_signal_strength)
+        && std::ranges::all_of(
+            unit.concurrent_statements, valid_statement_strength)
+        && std::ranges::all_of(unit.instances, [](const auto& instance) {
+               return valid_drive_strength(instance.drive_strength);
+           })
+        && std::ranges::all_of(unit.systemverilog_binds, [](const auto& directive) {
+               return std::ranges::all_of(
+                   directive.instances, [](const auto& instance) {
+                       return valid_drive_strength(instance.drive_strength);
+                   });
+           })
+        && std::ranges::all_of(unit.generate_regions, valid_region_strengths);
 }
 
-bool valid_unit_specify(const frontend::DesignUnit& unit) {
-  const auto valid_edge = [](const frontend::VerilogSpecifyEdge edge) {
-    return edge <= frontend::VerilogSpecifyEdge::Edge;
-  };
-  for (const auto& block : unit.verilog_specify_blocks) {
-    for (const auto& path : block.module_paths) {
-      const auto delay_count = path.delays.size();
-      if (path.kind > frontend::VerilogModulePathKind::Full
-          || !valid_edge(path.source_edge)
-          || path.polarity > frontend::VerilogPathPolarity::Negative
-          || path.sources.empty() || path.destinations.empty()
-          || (delay_count != 1 && delay_count != 2 && delay_count != 3
-              && delay_count != 6 && delay_count != 12)) {
+bool valid_unit_hierarchy(const frontend::DesignUnit& unit)
+{
+    const bool extern_kind
+        = unit.kind == frontend::UnitKind::VerilogModule
+        || unit.kind == frontend::UnitKind::SystemVerilogInterface
+        || unit.kind == frontend::UnitKind::SystemVerilogProgram;
+    if (unit.systemverilog_extern && !extern_kind) {
         return false;
-      }
     }
-    for (const auto& pulse : block.pulse_declarations) {
-      if (pulse.terminals.empty()
-          || pulse.style > frontend::VerilogPulseStyle::Ondetect) {
+    if (unit.kind == frontend::UnitKind::SystemVerilogConfiguration) {
+        if (!unit.systemverilog_configuration
+            || unit.systemverilog_configuration->designs.empty()) {
+            return false;
+        }
+    } else if (unit.systemverilog_configuration) {
         return false;
-      }
     }
-    for (const auto& check : block.timing_checks) {
-      if (check.kind > frontend::VerilogTimingCheckKind::NoChange
-          || !valid_edge(check.reference_event.edge)
-          || !valid_edge(check.data_event.edge)
-          || !check.reference_event.expression.valid()) {
+    if (unit.kind == frontend::UnitKind::SystemVerilogBind
+        && unit.systemverilog_binds.empty()) {
         return false;
-      }
-      const bool one_event =
-          check.kind == frontend::VerilogTimingCheckKind::Period
-          || check.kind == frontend::VerilogTimingCheckKind::Width;
-      const bool two_limits =
-          check.kind == frontend::VerilogTimingCheckKind::SetupHold
-          || check.kind == frontend::VerilogTimingCheckKind::RecRem
-          || check.kind == frontend::VerilogTimingCheckKind::FullSkew
-          || check.kind == frontend::VerilogTimingCheckKind::NoChange;
-      const auto expected_limits = two_limits ? 2U : 1U;
-      if (one_event == check.data_event.expression.valid()
-          || check.limits.size() != expected_limits
-          || check.normalized_limits.size() != expected_limits) {
-        return false;
-      }
     }
-  }
-  return true;
+    if (unit.systemverilog_configuration) {
+        const auto& configuration = *unit.systemverilog_configuration;
+        if (!std::ranges::all_of(configuration.designs, [](const auto& design) {
+                return !design.cell.empty();
+            })) {
+            return false;
+        }
+        if (!std::ranges::all_of(configuration.rules, [](const auto& rule) {
+                if (rule.selector.empty()) {
+                    return false;
+                }
+                return rule.selection
+                        == frontend::SystemVerilogConfigurationSelectionKind::Use
+                    ? !rule.use_cell.empty()
+                    : !rule.liblist.empty();
+            })) {
+            return false;
+        }
+    }
+    return std::ranges::all_of(
+        unit.systemverilog_binds, [](const auto& directive) {
+            return !directive.target.empty() && !directive.instances.empty()
+                && std::ranges::all_of(
+                    directive.instances, [](const auto& instance) {
+                        return !instance.unit_name.empty() && !instance.name.empty();
+                    });
+        });
+}
+
+bool valid_unit_specify(const frontend::DesignUnit& unit)
+{
+    const auto valid_edge = [](const frontend::VerilogSpecifyEdge edge) {
+        return edge <= frontend::VerilogSpecifyEdge::Edge;
+    };
+    for (const auto& block : unit.verilog_specify_blocks) {
+        for (const auto& path : block.module_paths) {
+            const auto delay_count = path.delays.size();
+            if (path.kind > frontend::VerilogModulePathKind::Full
+                || !valid_edge(path.source_edge)
+                || path.polarity > frontend::VerilogPathPolarity::Negative
+                || path.sources.empty() || path.destinations.empty()
+                || (delay_count != 1 && delay_count != 2 && delay_count != 3
+                    && delay_count != 6 && delay_count != 12)) {
+                return false;
+            }
+        }
+        for (const auto& pulse : block.pulse_declarations) {
+            if (pulse.terminals.empty()
+                || pulse.style > frontend::VerilogPulseStyle::Ondetect) {
+                return false;
+            }
+        }
+        for (const auto& check : block.timing_checks) {
+            if (check.kind > frontend::VerilogTimingCheckKind::NoChange
+                || !valid_edge(check.reference_event.edge)
+                || !valid_edge(check.data_event.edge)
+                || !check.reference_event.expression.valid()) {
+                return false;
+            }
+            const bool one_event = check.kind == frontend::VerilogTimingCheckKind::Period
+                || check.kind == frontend::VerilogTimingCheckKind::Width;
+            const bool two_limits = check.kind == frontend::VerilogTimingCheckKind::SetupHold
+                || check.kind == frontend::VerilogTimingCheckKind::RecRem
+                || check.kind == frontend::VerilogTimingCheckKind::FullSkew
+                || check.kind == frontend::VerilogTimingCheckKind::NoChange;
+            const auto expected_limits = two_limits ? 2U : 1U;
+            if (one_event == check.data_event.expression.valid()
+                || check.limits.size() != expected_limits
+                || check.normalized_limits.size() != expected_limits) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 }  // namespace
@@ -728,11 +799,12 @@ std::optional<std::string> serialize_portable_unit(
     const frontend::DesignUnit& unit,
     diagnostic::Engine& diagnostics) {
   std::unordered_set<const void*> visited;
-  if (!valid_unit_strengths(unit) || !valid_unit_specify(unit)) {
-    diagnostics.error(
-        std::string{kCode},
-        "portable unit contains invalid strength or specify metadata");
-    return std::nullopt;
+  if (!valid_unit_strengths(unit) || !valid_unit_specify(unit)
+      || !valid_unit_hierarchy(unit)) {
+      diagnostics.error(
+          std::string { kCode },
+          "portable unit contains invalid strength or specify metadata");
+      return std::nullopt;
   }
   if (has_absolute_span(unit, visited)) {
     diagnostics.error(
@@ -824,20 +896,20 @@ std::optional<frontend::DesignUnit> deserialize_portable_unit(
   if (!reader.raw(kMagic) || !reader.read(schema)
       || schema != kOwningUnitSchemaVersion || !reader.read(unit)
       || reader.remaining() != 0 || !valid_unit_strengths(unit)
-      || !valid_unit_specify(unit)) {
-    auto message = reader.failure();
-    if (message.empty() && schema != kOwningUnitSchemaVersion) {
-      message = "unsupported portable owning-unit schema "
-          + std::to_string(schema);
-    } else if (message.empty() && reader.remaining() != 0) {
-      message = "portable unit contains trailing bytes";
-    } else if (message.empty()) {
-      message = "portable unit contains invalid strength or specify metadata";
-    }
-    diagnostics.error(
-        std::string{kCode}, std::move(message),
-        {std::move(source_name), {1, 1, 0}, {1, 1, 0}});
-    return std::nullopt;
+      || !valid_unit_specify(unit) || !valid_unit_hierarchy(unit)) {
+      auto message = reader.failure();
+      if (message.empty() && schema != kOwningUnitSchemaVersion) {
+          message = "unsupported portable owning-unit schema "
+              + std::to_string(schema);
+      } else if (message.empty() && reader.remaining() != 0) {
+          message = "portable unit contains trailing bytes";
+      } else if (message.empty()) {
+          message = "portable unit contains invalid strength or specify metadata";
+      }
+      diagnostics.error(
+          std::string { kCode }, std::move(message),
+          { std::move(source_name), { 1, 1, 0 }, { 1, 1, 0 } });
+      return std::nullopt;
   }
   return unit;
 }

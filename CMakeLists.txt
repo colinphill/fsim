@@ -378,7 +378,6 @@ fsim_configure_library(fsim_diagnostic)
 add_library(
   fsim_project STATIC
   src/project/project.cpp
-  src/project/project_migration.cpp
 )
 add_library(fsim::project ALIAS fsim_project)
 fsim_configure_library(fsim_project)
@@ -412,11 +411,13 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_preprocessor.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_core.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_hierarchy.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_classes.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_assertions.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_coverage.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_dpi.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_declarations.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_types.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_switch.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_specify.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_strength.cpp"
@@ -550,6 +551,7 @@ add_library(
     src/runtime/simir_containers.cpp
     src/runtime/simir_container_values.cpp
     src/runtime/simir_execution.cpp
+    src/runtime/simir_sampled_values.cpp
     src/runtime/simir_file_binary.cpp
     src/runtime/simir_file_scanning.cpp
     src/runtime/simir_fork.cpp
@@ -557,6 +559,7 @@ add_library(
     src/runtime/simir_format.cpp
     src/runtime/simir_interpreter.cpp
     src/runtime/simir_logic.cpp
+      src/runtime/simir_random_distribution.cpp
       src/runtime/simir_module_path.cpp
     src/runtime/simir_scheduling.cpp
     src/runtime/simir_synchronization.cpp
@@ -589,6 +592,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/elaboration_vhdl_local.cpp
   src/elaboration/elaboration_sv_constants.cpp
   src/elaboration/elaboration_sv_constant_services.cpp
+  src/elaboration/elaboration_sv_lets.cpp
   src/elaboration/elaboration_sv_scalars.cpp
       src/elaboration/elaboration_sv_functions.cpp
       src/elaboration/elaboration_sv_generate.cpp
@@ -612,7 +616,9 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/hierarchy_resolution.cpp
       src/elaboration/hierarchy_specify.cpp
       src/elaboration/hierarchy_specify_expression.cpp
-      src/elaboration/hierarchy_sv_container_bridge.cpp
+  src/elaboration/hierarchy_sv_container_bridge.cpp
+  src/elaboration/hierarchy_sv_aliases.cpp
+  src/elaboration/hierarchy_sv_configuration.cpp
       src/elaboration/hierarchy_sv_ports.cpp
       src/elaboration/hierarchy_instantiate.cpp
       src/elaboration/hierarchy_systemc.cpp
@@ -656,6 +662,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_concurrent.cpp
       src/elaboration/lowerer_process.cpp
       src/elaboration/lowerer_fork.cpp
+      src/elaboration/lowerer_pla.cpp
       src/elaboration/lowerer_sv_synchronization.cpp
       src/elaboration/lowerer_events.cpp
       src/elaboration/lowerer_tasks.cpp
@@ -903,6 +910,22 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_uvm_inspection.cpp
       src/app/application_design_ir.cpp
       src/app/application_design_artifact_codec.cpp
+      src/app/application_design_artifact_codec_class.cpp
+      src/app/application_design_artifact_codec_sv_hir.cpp
+      src/app/application_design_artifact_codec_coverage_uvm.cpp
+      src/app/application_design_artifact_codec_vhdl_hir.cpp
+      src/app/application_design_artifact_codec_semantic.cpp
+      src/app/application_design_artifact_codec_design_ir.cpp
+      src/app/application_design_artifact_codec_operations.cpp
+      src/app/application_design_artifact_codec_operation_value.cpp
+      src/app/application_design_artifact_codec_operation_signal.cpp
+      src/app/application_design_artifact_codec_operation_string.cpp
+      src/app/application_design_artifact_codec_operation_container.cpp
+      src/app/application_design_artifact_codec_operation_file.cpp
+      src/app/application_design_artifact_codec_operation_scheduling.cpp
+      src/app/application_design_artifact_codec_operation_control.cpp
+      src/app/application_design_artifact_codec_operation_output.cpp
+      src/app/application_design_artifact_codec_operation_class.cpp
       src/app/application_executor_frame.cpp
       src/app/application_executors.cpp
       src/app/application_executor_vital.cpp

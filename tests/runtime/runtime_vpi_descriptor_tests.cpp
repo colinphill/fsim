@@ -63,9 +63,12 @@ namespace {
             2, SystemVerilogVpiValueCategory::Integer2, false);
         descriptor.kind = SystemVerilogVpiDescriptorKind::Enum;
         descriptor.enum_literals = {
-            SystemVerilogVpiEnumLiteral { "Idle", 0 },
-            SystemVerilogVpiEnumLiteral { "Busy", 1 },
-            SystemVerilogVpiEnumLiteral { "Done", 2 },
+            SystemVerilogVpiEnumLiteral {
+                "Idle", fsim::runtime::PackedLogic4::from_msb_string("00") },
+            SystemVerilogVpiEnumLiteral {
+                "Busy", fsim::runtime::PackedLogic4::from_msb_string("01") },
+            SystemVerilogVpiEnumLiteral {
+                "Done", fsim::runtime::PackedLogic4::from_msb_string("10") },
         };
         return descriptor;
     }
@@ -129,6 +132,30 @@ void test_systemverilog_vpi_recursive_type_descriptors()
             && wide_packed_layout
             && wide_packed_layout.value.fixed_bits == 9'600'008,
         "VPI packed descriptors preserve the host width domain without arbitrary bit limits");
+
+    auto wide_enum = scalar(
+        129, SystemVerilogVpiValueCategory::Logic4, true);
+    wide_enum.kind = SystemVerilogVpiDescriptorKind::Enum;
+    wide_enum.enum_literals = {
+        { "Minimum",
+            fsim::runtime::PackedLogic4::from_msb_string(
+                "1" + std::string(128, '0')) },
+        { "Unknown",
+            fsim::runtime::PackedLogic4::from_msb_string(
+                "X" + std::string(127, '0') + "Z") },
+        { "Maximum",
+            fsim::runtime::PackedLogic4::from_msb_string(
+                "0" + std::string(128, '1')) },
+    };
+    const auto wide_enum_layout
+        = validate_systemverilog_vpi_descriptor(wide_enum);
+    require_vpi_descriptor(
+        wide_enum_layout && wide_enum_layout.value.fixed_bits == 129
+            && wide_enum.enum_literals[0].value.to_msb_string()
+                == "1" + std::string(128, '0')
+            && wide_enum.enum_literals[1].value.to_msb_string()
+                == "X" + std::string(127, '0') + "Z",
+        "VPI enum descriptors preserve arbitrary-width value and unknown-plane identity");
 
     auto record = aggregate(
         SystemVerilogVpiDescriptorKind::Struct,
@@ -276,7 +303,15 @@ void test_systemverilog_vpi_recursive_type_descriptors()
     auto duplicate_member = record;
     duplicate_member.member_names = { "field", "field", "other" };
     auto duplicate_enum = enum_descriptor();
-    duplicate_enum.enum_literals.back().value = 1;
+    duplicate_enum.enum_literals.back().value
+        = fsim::runtime::PackedLogic4::from_msb_string("01");
+    auto wrong_width_enum = wide_enum;
+    wrong_width_enum.enum_literals.back().value
+        = fsim::runtime::PackedLogic4::from_msb_string("1");
+    auto unknown_two_state_enum = wide_enum;
+    unknown_two_state_enum.category = SystemVerilogVpiValueCategory::Bit2;
+    auto real_enum = wide_enum;
+    real_enum.category = SystemVerilogVpiValueCategory::Real;
     auto invalid_associative = associative;
     invalid_associative.children.front() = record;
     auto invalid_packed = packed;
@@ -292,13 +327,19 @@ void test_systemverilog_vpi_recursive_type_descriptors()
                 == SystemVerilogVpiDescriptorError::InvalidName
             && validate_systemverilog_vpi_descriptor(duplicate_enum).error
                 == SystemVerilogVpiDescriptorError::InvalidEnum
+            && validate_systemverilog_vpi_descriptor(wrong_width_enum).error
+                == SystemVerilogVpiDescriptorError::InvalidEnum
+            && validate_systemverilog_vpi_descriptor(unknown_two_state_enum).error
+                == SystemVerilogVpiDescriptorError::InvalidEnum
+            && validate_systemverilog_vpi_descriptor(real_enum).error
+                == SystemVerilogVpiDescriptorError::InvalidEnum
             && validate_systemverilog_vpi_descriptor(invalid_associative).error
                 == SystemVerilogVpiDescriptorError::InvalidShape
             && validate_systemverilog_vpi_descriptor(invalid_packed).error
                 == SystemVerilogVpiDescriptorError::InvalidShape
             && validate_systemverilog_vpi_descriptor(invalid_range).error
                 == SystemVerilogVpiDescriptorError::ArithmeticOverflow,
-        "VPI descriptors reject duplicate identity, composite keys, dynamic packed elements, and overflowing ranges");
+        "VPI descriptors reject duplicate or ill-typed enum identity, composite keys, dynamic packed elements, and overflowing ranges");
 
     auto too_deep = scalar();
     for (std::size_t depth = 0; depth < 65; ++depth) {

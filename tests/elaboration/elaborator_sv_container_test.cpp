@@ -1356,6 +1356,7 @@ module container_invalid_lowering;
     logic [3:0] value;
   } pair_t;
   byte composite_key[pair_t];
+  byte nonintegral_key[real];
   pair_t composite_element[int];
   logic [64:0] too_wide_elements[];
   byte lookup[int];

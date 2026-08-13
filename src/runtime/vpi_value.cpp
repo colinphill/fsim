@@ -127,9 +127,13 @@ bool validate_systemverilog_vpi_stored_value(
       return string && string->size() <= maximum_string_bytes
           && type.width == 0U && !value.strength;
     }
-    case SystemVerilogVpiValueCategory::Time:
-      return std::holds_alternative<std::uint64_t>(value.payload)
-          && type.width == 64U && !value.strength;
+    case SystemVerilogVpiValueCategory::Time: {
+        const auto* logic = std::get_if<PackedLogic4>(&value.payload);
+        return type.width == 64U && !value.strength
+            && (std::holds_alternative<std::uint64_t>(value.payload)
+                || (logic && !logic->is_logic9()
+                    && logic->width() == 64U));
+    }
     case SystemVerilogVpiValueCategory::None:
     case SystemVerilogVpiValueCategory::Event:
       return false;
@@ -198,12 +202,12 @@ SystemVerilogVpiValueReadResult read_systemverilog_vpi_value(
     }
 
     case SystemVerilogVpiValueFormat::Time: {
-      const auto* time = std::get_if<std::uint64_t>(&value.payload);
-      if (!time) {
-        return failure(SystemVerilogVpiValueError::UnsupportedFormat);
-      }
-      result.time = *time;
-      return result;
+        if (const auto* time = std::get_if<std::uint64_t>(&value.payload)) {
+            result.time = *time;
+            return result;
+        }
+        result.error = read_integer(value, 64U, result.time);
+        return result;
     }
 
     case SystemVerilogVpiValueFormat::Strength: {
@@ -474,11 +478,12 @@ make_systemverilog_vpi_stored_value(
     }
 
     case SystemVerilogVpiValueFormat::Logic4Vector: {
-      if (type.category != SystemVerilogVpiValueCategory::Logic4
-          && type.category != SystemVerilogVpiValueCategory::Integer4) {
-        return conversion_failure(
-            SystemVerilogVpiValueError::UnsupportedFormat);
-      }
+        if (type.category != SystemVerilogVpiValueCategory::Logic4
+            && type.category != SystemVerilogVpiValueCategory::Integer4
+            && type.category != SystemVerilogVpiValueCategory::Time) {
+            return conversion_failure(
+                SystemVerilogVpiValueError::UnsupportedFormat);
+        }
       const auto required = word_count * 2U;
       if (input.words.size() < required) {
         return conversion_failure(

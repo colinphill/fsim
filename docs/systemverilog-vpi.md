@@ -6,6 +6,13 @@ Verilog-2005 and SystemVerilog-2017. The implementation uses stable integer
 identities and owning C++ services; neither a plug-in nor an artifact receives
 addresses of simulator objects.
 
+This API is part of the governed SystemVerilog-2017 closure surface. Vector
+descriptors preserve every host-addressable word and state plane; their
+explicit `uint32_t` width representation is a host ABI boundary, not a
+SystemVerilog packed-width limit. The exact cross-engine, artifact, relocation,
+checkpoint, and public-API witnesses are indexed by the
+[SystemVerilog release audit](v1-systemverilog-release-audit.md).
+
 ## ABI and plug-in lifecycle
 
 The public C header is
@@ -74,6 +81,12 @@ and strengths. Deposits update the underlying value; force is a separate
 visible layer; deposits continue beneath force; release reveals the latest
 underlying value. Delayed deposit/force/release use the common scheduler.
 
+Enum literal identity uses the same owning arbitrary-width `PackedLogic4`
+representation as live packed values. Descriptor validation requires every
+literal to match the declared width exactly, preserves signedness and four-state
+`X`/`Z` planes, rejects unknown bits for two-state enums, and detects duplicate
+names or exact values without projecting through a host integer.
+
 ## Time, callbacks, control, and system callables
 
 Time queries preserve 64-bit ticks, scaled-real conversion, time unit,
@@ -81,6 +94,13 @@ precision, and delta. Value-change, delay, read-write, read-only, next-time,
 synchronization, simulation, reset, save, and restart callbacks use common
 scheduler regions and copied event data. Removal, self-removal, nested
 registration, re-entry, user exceptions, and teardown are contained.
+
+SystemVerilog assertion objects are children of their stable process owners.
+Persistent success, failure, vacuous, disabled, and aborted callbacks carry the
+assert/assume/cover/restrict kind, assertion and process identities, instance,
+coverage slot, source span, action-suppression state, time, and delta. Modules,
+interfaces, programs, top-level packages, classes, and class properties are
+published with exact parentage and recursive type/range metadata.
 
 Stop, interactive, reset, finish, force, and release operations execute at
 defined safe points. System tasks/functions have validated profiles,

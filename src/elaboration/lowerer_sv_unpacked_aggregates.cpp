@@ -565,7 +565,7 @@ Lowerer::lower_unpacked_aggregate_pattern(
         return destination;
     }
 
-    std::set<std::uint64_t> keys;
+    std::vector<PackedLogic4> keys;
     for (std::size_t item = 0;
         item < expression.operands.size(); ++item) {
         const auto& choices = expression.aggregate_choice_expressions[item];
@@ -577,29 +577,37 @@ Lowerer::lower_unpacked_aggregate_pattern(
                 expression.operands[item].span);
             return std::nullopt;
         }
-        const auto key_value = static_integer_value(choices.front());
-        if (!key_value) {
+        const auto* index_type = source_type.systemverilog_container
+                                     ->associative_index_type.get();
+        std::string error;
+        const auto key_value = index_type
+            ? evaluate_systemverilog_packed_constant(
+                  choices.front(), *index_type, { }, { }, error)
+            : std::nullopt;
+        const bool unknown = key_value
+            && (key_value->is_logic9()
+                || std::ranges::any_of(
+                    key_value->bval_words(),
+                    [](const std::uint64_t word) { return word != 0; }));
+        if (!key_value || unknown) {
             report(
                 "FSIM-ELAB-SVPATTERN-003",
-                "associative aggregate pattern keys must be locally constant",
+                "associative aggregate pattern keys must be locally constant "
+                "known integral values",
                 choices.front().span);
             return std::nullopt;
         }
-        const auto mask = runtime_type.index_width == 64
-            ? std::numeric_limits<std::uint64_t>::max()
-            : (UINT64_C(1) << runtime_type.index_width) - 1U;
-        const auto converted = static_cast<std::uint64_t>(*key_value) & mask;
-        if (!keys.insert(converted).second) {
+        if (std::ranges::find(keys, *key_value) != keys.end()) {
             report(
                 "FSIM-ELAB-SVPATTERN-003",
                 "associative aggregate pattern keys must be unique after conversion",
                 choices.front().span);
             return std::nullopt;
         }
+        keys.push_back(*key_value);
         auto key = lower_expression(
             choices.front(), runtime_type.index_width,
-            source_type.systemverilog_container
-                ->associative_index_type.get());
+            index_type);
         if (!key)
             return std::nullopt;
         if (register_width(*key) != runtime_type.index_width) {

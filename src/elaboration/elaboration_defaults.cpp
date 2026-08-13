@@ -220,21 +220,11 @@ PackedLogic4 default_packed_value(
     return unsigned_value(0, width);
   }
   if (!type.enumeration_literals.empty()
-      && type.enumeration_range) {
-    if (!type.systemverilog_enumeration_values.empty()) {
-      std::string error;
-      if (const auto value = evaluate_systemverilog_packed_constant(
-              type.systemverilog_enumeration_values.front(),
-              type,
-              {},
-              {},
-              error)) {
-        return *value;
-      }
-    }
-    return unsigned_value(
-        static_cast<std::uint64_t>(type.enumeration_range->left),
-        width);
+      && type.enumeration_range
+      && type.systemverilog_enumeration_values.empty()) {
+      return unsigned_value(
+          static_cast<std::uint64_t>(type.enumeration_range->left),
+          width);
   }
   auto result = PackedLogic4(
       width,
@@ -259,13 +249,15 @@ PackedLogic4 default_packed_value(
     }
     return result;
   }
-  if (type.domain == frontend::ValueDomain::Integer && width != 0) {
-    return unsigned_value(
-        static_cast<std::uint64_t>(
-            type.integer_range
-                ? type.integer_range->left
-                : std::numeric_limits<std::int32_t>::min()),
-        width);
+  if (type.domain == frontend::ValueDomain::Integer
+      && type.systemverilog_enumeration_values.empty()
+      && width != 0) {
+      return unsigned_value(
+          static_cast<std::uint64_t>(
+              type.integer_range
+                  ? type.integer_range->left
+                  : std::numeric_limits<std::int32_t>::min()),
+          width);
   }
   if (type.packed_aggregate
       == frontend::PackedAggregateKind::Union) {

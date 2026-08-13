@@ -33,6 +33,7 @@ struct TemporaryDirectory {
 struct Capture {
     fsim::runtime::RunResult result;
     std::string output_file;
+    std::string monitor_file;
     std::string multichannel_first;
     std::string multichannel_second;
     std::string saved_line;
@@ -163,6 +164,7 @@ Capture run_once(
         capture.packet_memory.push_back(element.to_msb_string());
     }
     capture.output_file = read_text(config.base_directory / "output.txt");
+    capture.monitor_file = read_text(config.base_directory / "monitor.txt");
     capture.multichannel_first = read_text(config.base_directory / "multichannel-first.txt");
     capture.multichannel_second = read_text(config.base_directory / "multichannel-second.txt");
     capture.memory_hex_dump = read_text(config.base_directory / "dump.hex");
@@ -233,7 +235,9 @@ void verify_suspension(
     assert(resumed.status == fsim::runtime::RunStatus::completed);
     assert(
         read_text(config.base_directory / "output.txt")
-        == "value=7\ntail|chars=97/81/81/90/0/-1/1\n"
+        == "value=7\ntail0111\na5\n245\n0111a5245\n"
+           "strobe=file_top/0/a5\n1010\na5\n245\n"
+           "|chars=97/81/81/90/0/-1/1\n"
            "scan=2/13/alpha/2/42/done\n"
            "scalar=1.25/17/0/3\n"
            "formatted=1.25/17/0\n"
@@ -271,6 +275,32 @@ endmodule
                 "manifest root")
             != std::string::npos);
     }
+}
+
+void verify_fstrobe_expression_diagnostic(
+    const fsim::project::Config& config,
+    const std::filesystem::path& source)
+{
+    write_text(
+        source,
+        R"(
+module file_top;
+  integer handle;
+  logic [7:0] value;
+  initial begin
+    handle = $fopen("invalid-fstrobe.txt", "w");
+    $fstrobe(handle, "%0h", value + 1'b1);
+  end
+endmodule
+)");
+    fsim::diagnostic::Engine diagnostics;
+    const auto project = fsim::app::build_project(config, diagnostics);
+    assert(!project);
+    assert(std::ranges::any_of(
+        diagnostics.diagnostics(),
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ELAB-SVFILE-007";
+        }));
 }
 
 fsim::project::Config make_vhdl_config(
@@ -505,6 +535,7 @@ end architecture;
                 << "module file_top;\n"
                 << "  stable_child stable();\n"
                 << "  integer writer;\n"
+                << "  integer monitor_writer;\n"
                 << "  integer multichannel_first;\n"
                 << "  integer multichannel_second;\n"
                 << "  integer multichannel;\n"
@@ -558,6 +589,9 @@ end architecture;
                 << "  time binary_time_value;\n"
                 << "  chandle binary_handle_value;\n"
                 << "  logic [128:0] wide_scan_value;\n"
+                << "  logic [7:0] strobe_value;\n"
+                << "  logic [3:0] strobe_binary;\n"
+                << "  logic [7:0] monitor_value;\n"
                 << "  string line;\n"
                 << "  string saved;\n"
                 << "  string error;\n"
@@ -577,6 +611,21 @@ end architecture;
                 << "    $fdisplay(writer, \"" << label
                 << "=%0d\", 7);\n"
                 << "    $fwrite(writer, \"%s\", \"tail\");\n"
+                << "    $fdisplayb(writer, 4'b0111);\n"
+                << "    $fdisplayh(writer, 8'ha5);\n"
+                << "    $fdisplayo(writer, 8'ha5);\n"
+                << "    $fwriteb(writer, 4'b0111);\n"
+                << "    $fwriteh(writer, 8'ha5);\n"
+                << "    $fwriteo(writer, 8'ha5);\n"
+                << "    $fdisplay(writer, \"\");\n"
+                << "    strobe_value = 8'h11;\n"
+                << "    strobe_binary = 4'b0011;\n"
+                << "    $fstrobe(writer, \"strobe=%m/%0t/%0h\", $time, strobe_value);\n"
+                << "    $fstrobeb(writer, strobe_binary);\n"
+                << "    $fstrobeh(writer, strobe_value);\n"
+                << "    $fstrobeo(writer, strobe_value);\n"
+                << "    strobe_value <= 8'ha5;\n"
+                << "    strobe_binary <= 4'b1010;\n"
                 << "    multichannel_first = $fopen(\"multichannel-first.txt\");\n"
                 << "    multichannel_second = $fopen(\"multichannel-second.txt\");\n"
                 << "    multichannel = multichannel_first | multichannel_second;\n"
@@ -654,7 +703,7 @@ end architecture;
                 << "    $fwrite(writer, \"/%0d\", scan_hex);\n"
                 << "    $fdisplay(writer, \"/%s\", string_word);\n"
                 << "    $fwrite(writer, \"scalar=%g\", scan_real_value);\n"
-                << "    $fwrite(writer, \"/%t\", scan_time_value);\n"
+                << "    $fwrite(writer, \"/%0t\", scan_time_value);\n"
                 << "    $fwrite(writer, \"/%0h\", scan_handle_value);\n"
                 << "    $fdisplay(writer, \"/%0d\", scalar_scan_count);\n"
                 << "    $fdisplay(writer, \"%s\", scalar_formatted);\n"
@@ -671,7 +720,7 @@ end architecture;
                 << "    $fwrite(writer, \"/%0d\", binary_memory[2]);\n"
                 << "    $fdisplay(writer, \"/%0d\", binary_memory[1]);\n"
                 << "    $fwrite(writer, \"binary_scalar=%g\", binary_real_value);\n"
-                << "    $fwrite(writer, \"/%t\", binary_time_value);\n"
+                << "    $fwrite(writer, \"/%0t\", binary_time_value);\n"
                 << "    $fwrite(writer, \"/%0h\", binary_handle_value);\n"
                 << "    $fwrite(writer, \"/%0d\", binary_real_count);\n"
                 << "    $fwrite(writer, \"/%0d\", binary_time_count);\n"
@@ -679,6 +728,23 @@ end architecture;
                 << "    $fflush(writer);\n"
                 << "    $fflush();\n"
                 << "    $fclose(writer);\n"
+                << "  end\n"
+                << "  initial begin : file_monitor\n"
+                << "    monitor_writer = $fopen(\"monitor.txt\", \"w\");\n"
+                << "    monitor_value = 8'h11;\n"
+                << "    $fmonitorb(monitor_writer, monitor_value);\n"
+                << "    monitor_value <= 8'ha5;\n"
+                << "    #1;\n"
+                << "    $fmonitorh(monitor_writer, monitor_value);\n"
+                << "    monitor_value <= 8'h3c;\n"
+                << "    #1;\n"
+                << "    $fmonitoro(monitor_writer, monitor_value);\n"
+                << "    monitor_value <= 8'h17;\n"
+                << "    #1;\n"
+                << "    $fmonitor(monitor_writer, \"decimal=%0d\", monitor_value);\n"
+                << "    monitor_value <= 8'h09;\n"
+                << "    #1;\n"
+                << "    $fclose(monitor_writer);\n"
                 << "  end\n"
                 << "endmodule\n";
             assert(output.good());
@@ -714,9 +780,11 @@ end architecture;
         const auto warm = run_once(config, fsim::app::SimulationEngine::compiled);
         assert(reference.result.status
             == fsim::runtime::RunStatus::completed);
-        assert(reference.result.time == 1);
+        assert(reference.result.time == 4);
         assert(reference.output_file
-            == "value=7\ntail|chars=97/81/81/90/0/-1/1\n"
+            == "value=7\ntail0111\na5\n245\n0111a5245\n"
+               "strobe=file_top/0/a5\n1010\na5\n245\n"
+               "|chars=97/81/81/90/0/-1/1\n"
                "scan=2/13/alpha/2/42/done\n"
                "scalar=1.25/17/0/3\n"
                "formatted=1.25/17/0\n"
@@ -724,6 +792,8 @@ end architecture;
                "wide-direct=10x23456789abcdefz123456789abcdef\n"
                "binary=4/305419896/4/0/2/22136/0/2/18/52\n"
                "binary_scalar=1.25/23/0/8/8/8\n");
+        assert(reference.monitor_file
+            == "10100101\n3c\n027\ndecimal=9\n");
         assert(reference.saved_line == "Zlpha\n");
         assert(reference.multichannel_first == "shared=9\n");
         assert(reference.multichannel_second == "shared=9\n");
@@ -753,6 +823,7 @@ end architecture;
         assert((reference.packet_memory
             == std::vector<std::string> { "10110010", "10100001" }));
         assert(reference.output_file == cold.output_file);
+        assert(reference.monitor_file == cold.monitor_file);
         assert(reference.multichannel_first == cold.multichannel_first);
         assert(reference.multichannel_second == cold.multichannel_second);
         assert(reference.saved_line == cold.saved_line);
@@ -774,6 +845,7 @@ end architecture;
         assert(reference.aggregate_fread_dump == cold.aggregate_fread_dump);
         assert(reference.packet_memory == cold.packet_memory);
         assert(cold.output_file == warm.output_file);
+        assert(cold.monitor_file == warm.monitor_file);
         assert(cold.multichannel_first == warm.multichannel_first);
         assert(cold.multichannel_second == warm.multichannel_second);
         assert(cold.saved_line == warm.saved_line);
@@ -805,7 +877,7 @@ end architecture;
                 })
             >= 7);
 #if defined(FSIM_HAS_LLVM)
-        assert(cold.compiled_processes == 2);
+        assert(cold.compiled_processes == 3);
         assert(cold.cache.misses == 2 && cold.cache.stores == 2);
         assert(warm.cache.hits == 2);
 #endif
@@ -821,7 +893,9 @@ end architecture;
         const auto changed_input = run_once(config, fsim::app::SimulationEngine::compiled);
         assert(changed_input.saved_line == "Zeta\n");
         assert(changed_input.output_file
-            == "value=7\ntail|chars=98/81/81/90/0/-1/1\n"
+            == "value=7\ntail0111\na5\n245\n0111a5245\n"
+               "strobe=file_top/0/a5\n1010\na5\n245\n"
+               "|chars=98/81/81/90/0/-1/1\n"
                "scan=2/21/beta/2/42/done\n"
                "scalar=1.25/17/0/3\n"
                "formatted=1.25/17/0\n"
@@ -829,6 +903,7 @@ end architecture;
                "wide-direct=10x23456789abcdefz123456789abcdef\n"
                "binary=4/558065031/4/0/2/25991/0/2/33/67\n"
                "binary_scalar=1.25/23/0/8/8/8\n");
+        assert(changed_input.monitor_file == reference.monitor_file);
         assert(changed_input.binary_word
             == "00100001010000110110010110000111");
         assert(changed_input.positioned_word == "0110010110000111");
@@ -851,7 +926,9 @@ end architecture;
         write_source("changed");
         const auto changed_source = run_once(config, fsim::app::SimulationEngine::compiled);
         assert(changed_source.output_file
-            == "changed=7\ntail|chars=98/81/81/90/0/-1/1\n"
+            == "changed=7\ntail0111\na5\n245\n0111a5245\n"
+               "strobe=file_top/0/a5\n1010\na5\n245\n"
+               "|chars=98/81/81/90/0/-1/1\n"
                "scan=2/21/beta/2/42/done\n"
                "scalar=1.25/17/0/3\n"
                "formatted=1.25/17/0\n"
@@ -865,6 +942,7 @@ end architecture;
         assert(changed_source.cache.misses == 1);
         assert(changed_source.cache.stores == 1);
 #endif
+        verify_fstrobe_expression_diagnostic(config, source);
         verify_bad_path(
             config, source, fsim::app::SimulationEngine::interpreter);
         verify_bad_path(

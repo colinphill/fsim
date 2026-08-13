@@ -102,17 +102,24 @@ private:
                     const auto kind = expression.operands[index].kind;
                     const auto domain =
                         function.arguments[formal_index].type.domain;
-                    obvious_match =
-                        kind == ExpressionKind::IntegerLiteral
+                    obvious_match = kind == ExpressionKind::IntegerLiteral
+                        ? function.language
+                                == frontend::Language::Vhdl2008
                             ? domain
                                 == frontend::ValueDomain::Integer
+                            : domain
+                                    == frontend::ValueDomain::Bit2
+                                || domain
+                                    == frontend::ValueDomain::Logic4
+                                || domain
+                                    == frontend::ValueDomain::Integer
                         : kind == ExpressionKind::BooleanLiteral
-                            ? domain
-                                == frontend::ValueDomain::Boolean
+                        ? domain
+                            == frontend::ValueDomain::Boolean
                         : kind == ExpressionKind::StringLiteral
-                            ? domain
-                                == frontend::ValueDomain::String
-                            : true;
+                        ? domain
+                            == frontend::ValueDomain::String
+                        : true;
                 }
                 if (!obvious_match) {
                     continue;
@@ -207,6 +214,80 @@ private:
                 return unknown ? unknown : no_match;
             }
         }
+        if (expression.kind == ExpressionKind::Binary
+            && expression.operands.size() == 2U
+            && (expression.text == "&&" || expression.text == "||")) {
+            const auto left = evaluate_expression(
+                expression.operands[0], environment, error);
+            if (!left) {
+                return std::nullopt;
+            }
+            const auto left_truth = left->truth_value();
+            if (expression.text == "&&" && left_truth && !*left_truth) {
+                return Value {
+                    runtime::PackedLogic4(1, runtime::Logic4::zero),
+                    false,
+                    false,
+                    frontend::ValueDomain::Bit2,
+                    { },
+                    expression.span
+                };
+            }
+            if (expression.text == "||" && left_truth && *left_truth) {
+                return Value {
+                    runtime::PackedLogic4(1, runtime::Logic4::one),
+                    false,
+                    false,
+                    frontend::ValueDomain::Bit2,
+                    { },
+                    expression.span
+                };
+            }
+            const auto right = evaluate_expression(
+                expression.operands[1], environment, error);
+            if (!right) {
+                return std::nullopt;
+            }
+            Expression folded {
+                ExpressionKind::Binary,
+                expression.text,
+                { left->expression(expression.operands[0].span),
+                    right->expression(expression.operands[1].span) },
+                expression.span
+            };
+            return evaluate_systemverilog_constant_expression(
+                folded, environment, fallback_, error);
+        }
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "?:"
+            && expression.operands.size() == 3U) {
+            const auto condition = evaluate_expression(
+                expression.operands[0], environment, error);
+            if (!condition) {
+                return std::nullopt;
+            }
+            const auto condition_truth = condition->truth_value();
+            if (condition_truth) {
+                const auto selected_index = *condition_truth
+                    ? std::size_t { 1 }
+                    : std::size_t { 2 };
+                const auto selected = evaluate_expression(
+                    expression.operands[selected_index],
+                    environment,
+                    error,
+                    expected_type);
+                if (!selected) {
+                    return std::nullopt;
+                }
+                auto folded = expression;
+                folded.operands[0] = condition->expression(
+                    expression.operands[0].span);
+                folded.operands[selected_index] = selected->expression(
+                    expression.operands[selected_index].span);
+                return evaluate_systemverilog_constant_expression(
+                    folded, environment, fallback_, error);
+            }
+        }
         auto folded = expression;
         for (auto& operand : folded.operands) {
             const auto value =
@@ -233,6 +314,270 @@ private:
         }
         return evaluate_systemverilog_constant_expression(
             folded, environment, fallback_, error);
+    }
+
+    struct ConstantPatternMatch {
+        bool matched { };
+        std::unordered_map<std::string, Value> bindings;
+    };
+
+    std::optional<ConstantPatternMatch> evaluate_case_pattern(
+        const Expression& pattern,
+        const Value& selector,
+        const frontend::Type* type,
+        const SystemVerilogConstantEnvironment& environment,
+        std::string& error)
+    {
+        if (pattern.kind == ExpressionKind::Call
+            && pattern.text == "@match-wildcard") {
+            return ConstantPatternMatch { true, { } };
+        }
+        constexpr std::string_view bind_prefix { "@match-bind:" };
+        if (pattern.kind == ExpressionKind::Call
+            && pattern.text.starts_with(bind_prefix)) {
+            const auto name = pattern.text.substr(bind_prefix.size());
+            if (name.empty()) {
+                error = "constant function case pattern binding has no name";
+                return std::nullopt;
+            }
+            return ConstantPatternMatch {
+                true, { { name, selector } }
+            };
+        }
+        const auto extract = [&](const std::uint64_t offset,
+                                 const std::uint64_t width,
+                                 const bool is_signed,
+                                 const frontend::ValueDomain domain)
+            -> std::optional<Value> {
+            if (width == 0U
+                || width > std::numeric_limits<std::uint32_t>::max()
+                || offset > selector.width
+                || width > selector.width - offset) {
+                return std::nullopt;
+            }
+            auto packed = runtime::PackedLogic4(
+                static_cast<std::size_t>(width), runtime::Logic4::zero);
+            if (selector.packed.is_logic9()) {
+                packed = packed.promoted_to_logic9();
+            }
+            for (std::uint32_t bit = 0;
+                bit < static_cast<std::uint32_t>(width);
+                ++bit) {
+                if (packed.is_logic9()) {
+                    packed.set_logic9(
+                        bit,
+                        selector.packed.get_logic9(
+                            static_cast<std::size_t>(offset) + bit));
+                } else {
+                    packed.set(
+                        bit,
+                        selector.packed.get(
+                            static_cast<std::size_t>(offset) + bit));
+                }
+            }
+            return Value {
+                std::move(packed),
+                is_signed,
+                false,
+                domain,
+                { },
+                pattern.span
+            };
+        };
+        constexpr std::string_view tagged_prefix { "@match-tagged:" };
+        if (pattern.kind == ExpressionKind::Call
+            && pattern.text.starts_with(tagged_prefix)) {
+            if (type == nullptr
+                || type->packed_aggregate
+                    != frontend::PackedAggregateKind::TaggedUnion
+                || type->packed_members.empty()
+                || pattern.operands.size() > 1U) {
+                error = "constant function tagged pattern requires a "
+                        "tagged-union selector";
+                return std::nullopt;
+            }
+            const auto member_name = pattern.text.substr(
+                tagged_prefix.size());
+            const auto member = std::ranges::find_if(
+                type->packed_members,
+                [&](const frontend::PackedMember& candidate) {
+                    return candidate.name == member_name;
+                });
+            if (member == type->packed_members.end()) {
+                error = "constant function tagged pattern names unknown "
+                        "member '"
+                    + member_name + "'";
+                return std::nullopt;
+            }
+            const auto member_index = static_cast<std::size_t>(
+                std::distance(type->packed_members.begin(), member));
+            const auto tag_width = std::max<std::size_t>(
+                1U, std::bit_width(type->packed_members.size() - 1U));
+            if (selector.width < tag_width) {
+                error = "constant function tagged selector has no tag bits";
+                return std::nullopt;
+            }
+            const auto tag = extract(
+                selector.width - tag_width,
+                tag_width,
+                false,
+                frontend::ValueDomain::Bit2);
+            const auto tag_value = tag ? tag->integer_value() : std::nullopt;
+            if (!tag_value
+                || *tag_value != static_cast<std::int64_t>(member_index)) {
+                return ConstantPatternMatch { false, { } };
+            }
+            if (pattern.operands.empty()) {
+                return ConstantPatternMatch { true, { } };
+            }
+            const auto member_width = member->width();
+            const auto member_value = member_width
+                ? extract(
+                      member->lsb_offset,
+                      *member_width,
+                      member->is_signed,
+                      member->domain)
+                : std::nullopt;
+            if (!member_value) {
+                error = "constant function tagged member has no packed layout";
+                return std::nullopt;
+            }
+            return evaluate_case_pattern(
+                pattern.operands.front(),
+                *member_value,
+                member->nested_types.empty()
+                    ? nullptr
+                    : &member->nested_types.front(),
+                environment,
+                error);
+        }
+        if (pattern.kind == ExpressionKind::Aggregate
+            && pattern.text == "@match-structure") {
+            if (type == nullptr
+                || (type->packed_aggregate
+                        != frontend::PackedAggregateKind::Struct
+                    && type->packed_aggregate
+                        != frontend::PackedAggregateKind::Union)
+                || pattern.aggregate_choices.size()
+                    != pattern.operands.size()
+                || pattern.aggregate_choice_expressions.size()
+                    != pattern.operands.size()) {
+                error = "constant function structured pattern requires "
+                        "compatible packed aggregate metadata";
+                return std::nullopt;
+            }
+            ConstantPatternMatch result { true, { } };
+            std::vector<bool> selected(type->packed_members.size());
+            const auto named = pattern.aggregate_choices.front() == "@key";
+            if (std::ranges::any_of(
+                    pattern.aggregate_choices,
+                    [named](const std::string& choice) {
+                        return (choice == "@key") != named;
+                    })
+                || (!named
+                    && pattern.operands.size()
+                        != type->packed_members.size())) {
+                error = "constant function structured patterns cannot mix "
+                        "positional and named members, and positional patterns "
+                        "must cover every member";
+                return std::nullopt;
+            }
+            std::size_t positional = 0;
+            for (std::size_t index = 0;
+                index < pattern.operands.size(); ++index) {
+                std::size_t member_index = positional++;
+                if (pattern.aggregate_choices[index] == "@key") {
+                    const auto& choices = pattern.aggregate_choice_expressions[index];
+                    if (choices.size() != 1U
+                        || choices.front().kind
+                            != ExpressionKind::Identifier) {
+                        error = "constant function named structured pattern "
+                                "requires a direct member";
+                        return std::nullopt;
+                    }
+                    const auto member = std::ranges::find_if(
+                        type->packed_members,
+                        [&](const frontend::PackedMember& candidate) {
+                            return candidate.name == choices.front().text;
+                        });
+                    if (member == type->packed_members.end()) {
+                        error = "constant function structured pattern names "
+                                "unknown member '"
+                            + choices.front().text + "'";
+                        return std::nullopt;
+                    }
+                    member_index = static_cast<std::size_t>(
+                        std::distance(type->packed_members.begin(), member));
+                } else if (!pattern.aggregate_choices[index].empty()) {
+                    error = "constant function structured pattern has an "
+                            "invalid member key";
+                    return std::nullopt;
+                }
+                if (member_index >= type->packed_members.size()
+                    || selected[member_index]) {
+                    error = "constant function structured pattern has too "
+                            "many or duplicate members";
+                    return std::nullopt;
+                }
+                selected[member_index] = true;
+                const auto& member = type->packed_members[member_index];
+                const auto member_width = member.width();
+                const auto member_value = member_width
+                    ? extract(
+                          member.lsb_offset,
+                          *member_width,
+                          member.is_signed,
+                          member.domain)
+                    : std::nullopt;
+                if (!member_value) {
+                    error = "constant function structured member has no "
+                            "packed layout";
+                    return std::nullopt;
+                }
+                auto nested = evaluate_case_pattern(
+                    pattern.operands[index],
+                    *member_value,
+                    member.nested_types.empty()
+                        ? nullptr
+                        : &member.nested_types.front(),
+                    environment,
+                    error);
+                if (!nested) {
+                    return std::nullopt;
+                }
+                if (!nested->matched) {
+                    return ConstantPatternMatch { false, { } };
+                }
+                for (auto& [name, bound] : nested->bindings) {
+                    if (!result.bindings.emplace(name, std::move(bound)).second) {
+                        error = "constant function case pattern binds '"
+                            + name + "' more than once";
+                        return std::nullopt;
+                    }
+                }
+            }
+            return result;
+        }
+        const auto value = evaluate_expression(
+            pattern, environment, error);
+        if (!value) {
+            return std::nullopt;
+        }
+        Expression equality {
+            ExpressionKind::Binary,
+            "===",
+            { selector.expression(pattern.span),
+                value->expression(pattern.span) },
+            pattern.span
+        };
+        const auto matched = evaluate_systemverilog_constant_expression(
+            equality, environment, fallback_, error);
+        if (!matched) {
+            return std::nullopt;
+        }
+        return ConstantPatternMatch {
+            matched->truth_value().value_or(false), { }
+        };
     }
 
     std::optional<Value> converted(
@@ -727,8 +1072,20 @@ private:
             if (!selector) {
                 return Flow::failed;
             }
+            const frontend::Type* selector_type = nullptr;
+            if (statement.condition.kind == ExpressionKind::Identifier) {
+                const auto found = types.find(statement.condition.text);
+                if (found != types.end()) {
+                    selector_type = found->second;
+                }
+            }
             const frontend::CaseAlternative* selected = nullptr;
             const frontend::CaseAlternative* fallback = nullptr;
+            struct ShadowedBinding {
+                std::string name;
+                std::optional<Value> previous;
+            };
+            std::vector<ShadowedBinding> selected_bindings;
             for (const auto& alternative :
                  statement.case_alternatives) {
                 if (alternative.is_default) {
@@ -743,21 +1100,62 @@ private:
                             "exactly one pattern";
                         return Flow::failed;
                     }
-                    const auto& pattern = alternative.choices.front();
-                    if (pattern.kind == ExpressionKind::Call
-                        && pattern.text == "@match-wildcard") {
-                        selected = &alternative;
-                        break;
+                    const auto& choice = alternative.choices.front();
+                    const Expression* pattern = &choice;
+                    const Expression* guard = nullptr;
+                    if (choice.kind == ExpressionKind::Call
+                        && choice.text == "@match-guard") {
+                        if (choice.operands.size() != 2U) {
+                            error = "constant function guarded case matches "
+                                    "requires one pattern and one guard";
+                            return Flow::failed;
+                        }
+                        pattern = &choice.operands[0];
+                        guard = &choice.operands[1];
                     }
-                    const auto value = evaluate_expression(
-                        pattern, environment, error);
-                    if (!value) {
+                    const auto matched = evaluate_case_pattern(
+                        *pattern,
+                        *selector,
+                        selector_type,
+                        environment,
+                        error);
+                    if (!matched) {
                         return Flow::failed;
                     }
-                    if (value->width == selector->width
-                        && value->packed == selector->packed) {
+                    if (!matched->matched) {
+                        continue;
+                    }
+                    std::vector<ShadowedBinding> bindings;
+                    for (const auto& [name, value] : matched->bindings) {
+                        const auto previous = environment.find(name);
+                        bindings.push_back(ShadowedBinding {
+                            name,
+                            previous != environment.end()
+                                ? std::optional<Value> { previous->second }
+                                : std::nullopt });
+                        environment.insert_or_assign(name, value);
+                    }
+                    bool pattern_matched = true;
+                    if (guard != nullptr) {
+                        const auto guarded = evaluate_expression(
+                            *guard, environment, error);
+                        if (!guarded) {
+                            return Flow::failed;
+                        }
+                        pattern_matched = guarded->truth_value().value_or(false);
+                    }
+                    if (pattern_matched) {
                         selected = &alternative;
+                        selected_bindings = std::move(bindings);
                         break;
+                    }
+                    for (const auto& binding : bindings) {
+                        if (binding.previous) {
+                            environment.insert_or_assign(
+                                binding.name, *binding.previous);
+                        } else {
+                            environment.erase(binding.name);
+                        }
                     }
                     continue;
                 }
@@ -800,14 +1198,24 @@ private:
                 }
             }
             selected = selected != nullptr ? selected : fallback;
-            return selected == nullptr
-                ? Flow::normal
-                : execute_statements(
-                      selected->statements,
-                      environment,
-                      types,
-                      result,
-                      error);
+            if (selected == nullptr) {
+                return Flow::normal;
+            }
+            const auto flow = execute_statements(
+                selected->statements,
+                environment,
+                types,
+                result,
+                error);
+            for (const auto& binding : selected_bindings) {
+                if (binding.previous) {
+                    environment.insert_or_assign(
+                        binding.name, *binding.previous);
+                } else {
+                    environment.erase(binding.name);
+                }
+            }
+            return flow;
         }
         if (statement.kind == StatementKind::Loop) {
             constexpr std::size_t maximum_iterations = 1'000'000;

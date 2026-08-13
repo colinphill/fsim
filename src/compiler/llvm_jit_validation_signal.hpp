@@ -67,6 +67,10 @@ template <typename OperationType, typename ExactSignalWidth,
     } else if constexpr (std::is_same_v<OperationType, TimeDisplay>) {
         result.uses_time_output = true;
     } else if constexpr (std::is_same_v<OperationType, MonitorInstall>) {
+        if (operation.file_handle) {
+            record_use(*operation.file_handle, index);
+            constrain_width(*operation.file_handle, 32U, index);
+        }
         for (const auto& value : operation.values) {
             if (value.kind == MonitorValueKind::signal) {
                 const auto signal_value_width = signal_width(value.signal, index);
@@ -90,6 +94,29 @@ template <typename OperationType, typename ExactSignalWidth,
             reject(process, index, "random minimum requires a maximum");
         }
         result.uses_random_value = true;
+    } else if constexpr (
+        std::is_same_v<OperationType, RandomDistribution>) {
+        record_definition(operation.destination, index);
+        constrain_width(operation.destination, 32U, index);
+        record_use(operation.seed, index);
+        record_definition(operation.seed, index);
+        constrain_width(operation.seed, 32U, index);
+        record_use(operation.first, index);
+        constrain_width(operation.first, 32U, index);
+        if (operation.second) {
+            record_use(*operation.second, index);
+            constrain_width(*operation.second, 32U, index);
+        }
+        const bool requires_second
+            = operation.kind == RandomDistributionKind::uniform
+            || operation.kind == RandomDistributionKind::normal
+            || operation.kind == RandomDistributionKind::erlang;
+        if (operation.kind < RandomDistributionKind::uniform
+            || operation.kind > RandomDistributionKind::erlang
+            || requires_second != operation.second.has_value()) {
+            reject(process, index,
+                "random distribution kind and operand profile disagree");
+        }
     } else if constexpr (std::is_same_v<OperationType, ScopeRandomize>) {
         record_definition(operation.destination, index);
         constrain_width(operation.destination, 32U, index);
@@ -101,7 +128,16 @@ template <typename OperationType, typename ExactSignalWidth,
             constrain_width(target.target, target.width, index);
             if (target.canonical_identity.empty() || target.width == 0 || target.nominal_type.empty())
                 reject(process, index, "scope randomize target is incomplete");
+            if (target.domain_kind < ScopeRandomizeDomainKind::bit_vector
+                || target.domain_kind > ScopeRandomizeDomainKind::enumeration)
+                reject(process, index, "scope randomize domain kind is invalid");
+            for (const auto& value : target.domain) {
+                if (value.width() != target.width || value.is_logic9())
+                    reject(process, index, "scope randomize domain value is invalid");
+            }
         }
+        validate_constraint_templates(
+            process, index, operation.inline_constraints);
         record_unsupported(index, "scope randomize uses the interpreter solver service");
     } else if constexpr (std::is_same_v<OperationType, Report>) {
         result.uses_report = true;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/runtime/vpi_type_descriptor.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -27,6 +28,184 @@ namespace {
         return language == semantic::Language::verilog
             ? runtime::SystemVerilogVpiLanguage::Verilog2005
             : runtime::SystemVerilogVpiLanguage::SystemVerilog2017;
+    }
+
+    [[nodiscard]] runtime::SystemVerilogVpiObjectKind vpi_instance_kind(
+        const BuiltProject& project,
+        const semantic::design::Specialization& specialization,
+        const bool configured_root)
+    {
+        if (configured_root) {
+            return runtime::SystemVerilogVpiObjectKind::Root;
+        }
+        if (specialization.language != semantic::Language::system_verilog) {
+            return runtime::SystemVerilogVpiObjectKind::Module;
+        }
+        if (specialization.name.find(".interface(")
+            != std::string::npos) {
+            return runtime::SystemVerilogVpiObjectKind::Interface;
+        }
+        if (specialization.name.find(".program(") != std::string::npos) {
+            return runtime::SystemVerilogVpiObjectKind::Program;
+        }
+        const auto unit = std::ranges::find(
+            project.systemverilog_hir.units(), specialization.unit,
+            &semantic::sv::Unit::id);
+        if (unit == project.systemverilog_hir.units().end()) {
+            return runtime::SystemVerilogVpiObjectKind::Module;
+        }
+        switch (unit->kind) {
+        case semantic::sv::UnitKind::interface:
+            return runtime::SystemVerilogVpiObjectKind::Interface;
+        case semantic::sv::UnitKind::program:
+            return runtime::SystemVerilogVpiObjectKind::Program;
+        case semantic::sv::UnitKind::package:
+            return runtime::SystemVerilogVpiObjectKind::Package;
+        case semantic::sv::UnitKind::module:
+            return runtime::SystemVerilogVpiObjectKind::Module;
+        }
+        return runtime::SystemVerilogVpiObjectKind::Module;
+    }
+
+    [[nodiscard]] runtime::SystemVerilogVpiTypeDescriptor
+    vpi_hir_type_descriptor(const semantic::sv::TypeReference& source)
+    {
+        runtime::SystemVerilogVpiTypeDescriptor descriptor;
+        if (!source.class_identity.empty()) {
+            descriptor.kind
+                = runtime::SystemVerilogVpiDescriptorKind::ClassHandle;
+            descriptor.category
+                = runtime::SystemVerilogVpiValueCategory::None;
+            descriptor.width = 64U;
+            descriptor.nominal_name = source.class_identity;
+            return descriptor;
+        }
+        if (source.value_form == semantic::sv::TypeForm::string) {
+            descriptor.kind = runtime::SystemVerilogVpiDescriptorKind::String;
+            descriptor.category
+                = runtime::SystemVerilogVpiValueCategory::String;
+            descriptor.width = 0U;
+            return descriptor;
+        }
+
+        const auto integral_category = [&] {
+            const auto& spelling = source.target.spelling;
+            const bool integer_atom = spelling == "byte"
+                || spelling == "shortint" || spelling == "int"
+                || spelling == "longint" || spelling == "integer";
+            if (integer_atom) {
+                return source.four_state
+                    ? runtime::SystemVerilogVpiValueCategory::Integer4
+                    : runtime::SystemVerilogVpiValueCategory::Integer2;
+            }
+            return source.four_state
+                ? runtime::SystemVerilogVpiValueCategory::Logic4
+                : runtime::SystemVerilogVpiValueCategory::Bit2;
+        }();
+        const auto width = source.executable_width.value_or(1U);
+        if (width == 0U
+            || width > std::numeric_limits<std::uint32_t>::max()) {
+            throw std::length_error {
+                "VPI class property width exceeds the governed host descriptor range"
+            };
+        }
+        descriptor.category = integral_category;
+        descriptor.width = static_cast<std::uint32_t>(width);
+        descriptor.is_signed = source.signed_value;
+        if (source.packed_range && source.packed_range->left
+            && source.packed_range->right) {
+            runtime::SystemVerilogVpiTypeDescriptor element;
+            element.category = integral_category;
+            element.width = 1U;
+            element.is_signed = source.signed_value;
+            descriptor.kind
+                = runtime::SystemVerilogVpiDescriptorKind::PackedArray;
+            descriptor.category
+                = runtime::SystemVerilogVpiValueCategory::None;
+            descriptor.width = 0U;
+            descriptor.is_signed = false;
+            descriptor.ranges.push_back(
+                { *source.packed_range->left,
+                    *source.packed_range->right });
+            descriptor.children.push_back(std::move(element));
+        }
+
+        if (source.container_form) {
+            runtime::SystemVerilogVpiTypeDescriptor container;
+            container.category
+                = runtime::SystemVerilogVpiValueCategory::None;
+            container.width = 0U;
+            container.kind
+                = *source.container_form
+                    == semantic::sv::TypeForm::dynamic_array
+                ? runtime::SystemVerilogVpiDescriptorKind::DynamicArray
+                : *source.container_form == semantic::sv::TypeForm::queue
+                ? runtime::SystemVerilogVpiDescriptorKind::Queue
+                : *source.container_form
+                    == semantic::sv::TypeForm::associative_array
+                ? runtime::SystemVerilogVpiDescriptorKind::AssociativeArray
+                : runtime::SystemVerilogVpiDescriptorKind::UnpackedArray;
+            if (container.kind
+                == runtime::SystemVerilogVpiDescriptorKind::UnpackedArray) {
+                for (const auto& range : source.unpacked_dimensions) {
+                    if (range.left && range.right) {
+                        container.ranges.push_back(
+                            { *range.left, *range.right });
+                    }
+                }
+            }
+            if (container.kind
+                == runtime::SystemVerilogVpiDescriptorKind::AssociativeArray) {
+                runtime::SystemVerilogVpiTypeDescriptor index;
+                index.category
+                    = runtime::SystemVerilogVpiValueCategory::Integer4;
+                index.width = 32U;
+                index.is_signed = true;
+                container.children.push_back(std::move(index));
+            }
+            container.children.push_back(std::move(descriptor));
+            descriptor = std::move(container);
+        }
+        return descriptor;
+    }
+
+    [[nodiscard]] runtime::SystemVerilogVpiTypeInfo
+    vpi_descriptor_type(runtime::SystemVerilogVpiTypeDescriptor descriptor)
+    {
+        runtime::SystemVerilogVpiTypeInfo result;
+        result.language
+            = runtime::SystemVerilogVpiLanguage::SystemVerilog2017;
+        if (descriptor.kind
+                == runtime::SystemVerilogVpiDescriptorKind::Scalar
+            || descriptor.kind
+                == runtime::SystemVerilogVpiDescriptorKind::Enum) {
+            result.category = descriptor.category;
+            result.width = descriptor.width;
+            result.is_signed = descriptor.is_signed;
+        } else if (descriptor.kind
+            == runtime::SystemVerilogVpiDescriptorKind::String) {
+            result.category
+                = runtime::SystemVerilogVpiValueCategory::String;
+        } else if (descriptor.kind
+            == runtime::SystemVerilogVpiDescriptorKind::PackedArray) {
+            const auto layout
+                = runtime::validate_systemverilog_vpi_descriptor(descriptor);
+            if (!layout
+                || layout.value.fixed_bits
+                    > std::numeric_limits<std::uint32_t>::max()) {
+                throw std::length_error {
+                    "VPI class packed property exceeds the governed host descriptor range"
+                };
+            }
+            result.category = descriptor.children.front().category;
+            result.width
+                = static_cast<std::uint32_t>(layout.value.fixed_bits);
+            result.is_signed = descriptor.children.front().is_signed;
+        }
+        result.descriptor
+            = std::make_shared<runtime::SystemVerilogVpiTypeDescriptor>(
+                std::move(descriptor));
+        return result;
     }
 
     [[nodiscard]] std::string occurrence_path(
@@ -125,7 +304,7 @@ namespace {
         const semantic::sv::Declaration& declaration,
         const semantic::Language language)
     {
-        constexpr std::string_view prefix { "svconst-v2:w=" };
+        constexpr std::string_view prefix { "svconst-v3:b=" };
         auto canonical = std::string_view { parameter.identity };
         if (!canonical.starts_with(prefix)) {
             return std::nullopt;
@@ -142,6 +321,7 @@ namespace {
             return field;
         };
 
+        const auto unbounded_field = take_field(":w=");
         const auto width_field = take_field(":s=");
         const auto signed_field = take_field(":u=");
         const auto unsized_field = take_field(":d=");
@@ -150,8 +330,10 @@ namespace {
         std::uint64_t width { };
         std::uint64_t domain_value { };
         std::uint64_t nominal_size { };
-        if (!width_field || !signed_field || !unsized_field || !domain_field
+        if (!unbounded_field || !width_field || !signed_field
+            || !unsized_field || !domain_field
             || !nominal_size_field || !parse_decimal(*width_field, width)
+            || *unbounded_field != "0"
             || width == 0U
             || width > std::numeric_limits<std::uint32_t>::max()
             || (*signed_field != "0" && *signed_field != "1")
@@ -645,6 +827,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         if (language == instance_languages.end()) {
             return { };
         }
+        const auto& specialization = project.design_ir.specializations().at(
+            instance.specialization.value());
         if (!visiting_instances.insert(instance.id.value()).second) {
             throw std::logic_error { "VPI hierarchy contains an instance cycle" };
         }
@@ -729,9 +913,11 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                     offset = separator + 1U;
                 }
             }
-            descriptor.kind = runtime::SystemVerilogVpiObjectKind::Module;
+            descriptor.kind
+                = vpi_instance_kind(project, specialization, false);
         } else {
-            descriptor.kind = runtime::SystemVerilogVpiObjectKind::Root;
+            descriptor.kind
+                = vpi_instance_kind(project, specialization, true);
         }
         descriptor.name = instance.name.empty() ? instance.path : instance.name;
         if (!configured_root && !descriptor.parent) {
@@ -751,6 +937,65 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
     for (const auto& instance : project.design_ir.instances()) {
         if (instance_languages.contains(instance.id.value())) {
             (void)publish_instance(publish_instance, instance);
+        }
+    }
+
+    std::map<std::string, fsim_vpi_handle_v1, std::less<>> packages;
+    for (const auto& unit : project.systemverilog_hir.units()) {
+        if (unit.kind != semantic::sv::UnitKind::package) {
+            continue;
+        }
+        runtime::SystemVerilogVpiObjectDescriptor descriptor;
+        descriptor.kind = runtime::SystemVerilogVpiObjectKind::Package;
+        descriptor.name = unit.name;
+        runtime::SystemVerilogVpiTypeInfo type;
+        type.language
+            = runtime::SystemVerilogVpiLanguage::SystemVerilog2017;
+        descriptor.type = type;
+        const auto package = create_checked(
+            *result.registry, std::move(descriptor), unit.name);
+        packages.emplace(unit.name, package);
+        packages.emplace(unit.library + "::" + unit.name, package);
+    }
+
+    for (const auto& source : project.systemverilog_hir.classes()) {
+        runtime::SystemVerilogVpiTypeDescriptor class_descriptor;
+        class_descriptor.kind
+            = runtime::SystemVerilogVpiDescriptorKind::Class;
+        class_descriptor.category
+            = runtime::SystemVerilogVpiValueCategory::None;
+        class_descriptor.width = 0U;
+        class_descriptor.nominal_name = source.canonical_identity.empty()
+            ? source.name
+            : source.canonical_identity;
+        for (const auto& property : source.properties) {
+            class_descriptor.children.push_back(
+                vpi_hir_type_descriptor(property.type));
+            class_descriptor.member_names.push_back(property.name);
+        }
+
+        runtime::SystemVerilogVpiObjectDescriptor descriptor;
+        descriptor.kind = runtime::SystemVerilogVpiObjectKind::Class;
+        descriptor.name = source.name;
+        if (const auto package = packages.find(source.enclosing_identity);
+            package != packages.end()) {
+            descriptor.parent = package->second;
+        }
+        descriptor.type = vpi_descriptor_type(class_descriptor);
+        const auto class_handle = create_checked(*result.registry,
+            std::move(descriptor), class_descriptor.nominal_name);
+        for (std::size_t index = 0;
+            index < source.properties.size(); ++index) {
+            runtime::SystemVerilogVpiObjectDescriptor property;
+            property.kind
+                = runtime::SystemVerilogVpiObjectKind::ClassProperty;
+            property.parent = class_handle;
+            property.name = source.properties[index].name;
+            property.type = vpi_descriptor_type(
+                class_descriptor.children[index]);
+            (void)create_checked(*result.registry, std::move(property),
+                class_descriptor.nominal_name + "::"
+                    + source.properties[index].name);
         }
     }
     for (const auto& specialization : project.design_ir.specializations()) {
@@ -1197,6 +1442,24 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         const auto& instance = project.design_ir.instances().at(
             specialization.instance.value());
         const auto path = occurrence_path(instance.path, process.name);
+        const semantic::sv::ConcurrentAssertion* assertion_source { };
+        if (specialization.language
+                == semantic::Language::system_verilog
+            && specialization.unit.value()
+                < project.systemverilog_hir.units().size()) {
+            const auto& unit = project.systemverilog_hir.units().at(
+                specialization.unit.value());
+            const auto process_leaf = process.name.find_last_of('.');
+            const auto local_name = process_leaf == std::string::npos
+                ? std::string_view { process.name }
+                : std::string_view { process.name }.substr(process_leaf + 1U);
+            const auto found = std::ranges::find(
+                unit.concurrent_assertions, local_name,
+                &semantic::sv::ConcurrentAssertion::name);
+            if (found != unit.concurrent_assertions.end()) {
+                assertion_source = &*found;
+            }
+        }
         runtime::SystemVerilogVpiObjectDescriptor descriptor;
         descriptor.kind = runtime::SystemVerilogVpiObjectKind::Process;
         descriptor.parent = instances.at(specialization.instance.value());
@@ -1252,8 +1515,33 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             }
         }
         descriptor.name = std::move(published_name);
-        (void)create_checked(
+        const auto process_handle = create_checked(
             *result.registry, std::move(descriptor), path);
+        if (specialization.language
+                == semantic::Language::system_verilog
+            && (process.observed || assertion_source != nullptr)) {
+            runtime::SystemVerilogVpiObjectDescriptor assertion;
+            assertion.kind
+                = runtime::SystemVerilogVpiObjectKind::Assertion;
+            assertion.parent = process_handle;
+            assertion.name = assertion_source == nullptr
+                ? "$assertion"
+                : assertion_source->name;
+            runtime::SystemVerilogVpiTypeInfo assertion_type;
+            assertion_type.language
+                = runtime::SystemVerilogVpiLanguage::SystemVerilog2017;
+            assertion.type = assertion_type;
+            const auto assertion_handle = create_checked(
+                *result.registry, std::move(assertion),
+                path + ".$assertion");
+            result.assertions.insert_or_assign(
+                process.name, assertion_handle);
+            result.assertions.insert_or_assign(path, assertion_handle);
+            if (assertion_source != nullptr) {
+                result.assertions.insert_or_assign(
+                    assertion_source->name, assertion_handle);
+            }
+        }
     }
 
     for (const auto& driver : project.design_ir.drivers()) {
@@ -1346,6 +1634,10 @@ runtime::SystemVerilogVpiStoredValue systemverilog_vpi_signal_value(
     const auto scalar
         = runtime::decode_systemverilog_scalar_payload(value, scalar_kind);
     if (!scalar) {
+        if (scalar_kind == runtime::SystemVerilogScalarKind::Time
+            && value.width() == 64U && !value.is_logic9()) {
+            return packed_value(std::move(value));
+        }
         throw std::logic_error { "invalid packed VPI scalar payload" };
     }
     runtime::SystemVerilogVpiStoredValue result;
@@ -1418,6 +1710,10 @@ runtime::PackedLogic4 systemverilog_vpi_packed_value(
         break;
     }
     case runtime::SystemVerilogScalarKind::Time: {
+        if (const auto* packed
+            = std::get_if<runtime::PackedLogic4>(&value.payload)) {
+            return *packed;
+        }
         const auto* payload = std::get_if<std::uint64_t>(&value.payload);
         if (payload == nullptr) {
             throw std::logic_error { "VPI value is not time" };

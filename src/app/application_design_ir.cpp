@@ -1066,6 +1066,7 @@ class DesignIrBuilder final {
       output.name = input.name;
       output.runtime_index = input.id;
       output.initialize = input.initialize;
+      output.observed = input.observed;
       output.reactive = input.reactive;
       output.final = input.final;
       if (source_id) {
@@ -1345,11 +1346,15 @@ bool valid_runtime_projection(
         &semantic::design::ProcessOccurrence::runtime_index);
     if (projected == design.processes().end()
         || projected->name != runtime.processes()[index].name
+        || projected->initialize != runtime.processes()[index].initialize
+        || projected->observed != runtime.processes()[index].observed
+        || projected->reactive != runtime.processes()[index].reactive
+        || projected->final != runtime.processes()[index].final
         || std::ranges::count(
                design.processes(), index,
                &semantic::design::ProcessOccurrence::runtime_index)
             != 1) {
-      return false;
+        return false;
     }
     if (runtime.processes()[index].switch_bidirectional
         && (!projected->drivers.empty()

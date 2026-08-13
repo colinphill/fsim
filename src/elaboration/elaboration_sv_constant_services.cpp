@@ -7,6 +7,9 @@
 namespace fsim::elaboration::elaboration_detail {
 
 std::string SystemVerilogConstantValue::display() const {
+    if (unbounded) {
+        return "$";
+    }
     if (known()) {
         if (const auto integer = integer_value()) {
             return std::to_string(*integer);
@@ -20,7 +23,8 @@ std::string SystemVerilogConstantValue::display() const {
 
 std::string SystemVerilogConstantValue::canonical() const {
     std::ostringstream stream;
-    stream << "svconst-v2:w=" << width
+    stream << "svconst-v3:b=" << (unbounded ? 1 : 0)
+           << ":w=" << width
            << ":s=" << (is_signed ? 1 : 0)
            << ":u=" << (unsized ? 1 : 0)
            << ":d=" << static_cast<unsigned>(domain)
@@ -29,8 +33,95 @@ std::string SystemVerilogConstantValue::canonical() const {
     return stream.str();
 }
 
+bool SystemVerilogConstantValue::known() const noexcept {
+    if (unbounded) {
+        return false;
+    }
+    for (std::uint32_t bit = 0; bit < width; ++bit) {
+        const auto state = runtime::to_logic4(packed.get_logic9(bit));
+        if (state == runtime::Logic4::x || state == runtime::Logic4::z) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::optional<bool>
+SystemVerilogConstantValue::truth_value() const noexcept {
+    if (unbounded) {
+        return std::nullopt;
+    }
+    bool unknown = false;
+    for (std::uint32_t bit = 0; bit < width; ++bit) {
+        const auto state = runtime::to_logic4(packed.get_logic9(bit));
+        if (state == runtime::Logic4::one) {
+            return true;
+        }
+        if (state == runtime::Logic4::x || state == runtime::Logic4::z) {
+            unknown = true;
+        }
+    }
+    return unknown ? std::nullopt : std::optional<bool> { false };
+}
+
+std::optional<std::int64_t>
+SystemVerilogConstantValue::integer_value() const noexcept {
+    if (unbounded || !known()) {
+        return std::nullopt;
+    }
+    const auto value = bits & mask();
+    if (width > 64U) {
+        const auto sign_state = runtime::to_logic4(
+            packed.get_logic9(width - 1U));
+        const bool negative = is_signed
+            && sign_state == runtime::Logic4::one;
+        for (std::uint32_t bit = 64U; bit < width; ++bit) {
+            const auto state = runtime::to_logic4(packed.get_logic9(bit));
+            if (state != (negative ? runtime::Logic4::one
+                                   : runtime::Logic4::zero)) {
+                return std::nullopt;
+            }
+        }
+        if (!negative) {
+            if (value > static_cast<std::uint64_t>(
+                            std::numeric_limits<std::int64_t>::max())) {
+                return std::nullopt;
+            }
+            return static_cast<std::int64_t>(value);
+        }
+        if ((value & (std::uint64_t { 1 } << 63U)) == 0U) {
+            return std::nullopt;
+        }
+        const auto magnitude = (~value) + 1U;
+        if (magnitude == (std::uint64_t { 1 } << 63U)) {
+            return std::numeric_limits<std::int64_t>::min();
+        }
+        return -static_cast<std::int64_t>(magnitude);
+    }
+    if (!is_signed) {
+        if (value > static_cast<std::uint64_t>(
+                        std::numeric_limits<std::int64_t>::max())) {
+            return std::nullopt;
+        }
+        return static_cast<std::int64_t>(value);
+    }
+    const auto sign = std::uint64_t { 1 } << (width - 1U);
+    if ((value & sign) == 0U) {
+        return static_cast<std::int64_t>(value);
+    }
+    const auto extended = value | ~mask();
+    const auto magnitude = (~extended) + 1U;
+    if (magnitude == (std::uint64_t { 1 } << 63U)) {
+        return std::numeric_limits<std::int64_t>::min();
+    }
+    return -static_cast<std::int64_t>(magnitude);
+}
+
 Expression SystemVerilogConstantValue::expression(
     const frontend::SourceSpan& use_span) const {
+    if (unbounded) {
+        return { ExpressionKind::Identifier, "$", {}, use_span };
+    }
     if (unsized && known() && is_signed) {
         if (const auto value = integer_value()) {
             return constant_expression(

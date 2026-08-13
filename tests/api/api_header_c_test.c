@@ -37,6 +37,9 @@ int main(void) {
   assert(FSIM_SCHEDULER_PHASE_UPDATE == 3);
   assert(FSIM_SCHEDULER_PHASE_POSTPONED == 4);
   assert(FSIM_SCHEDULER_PHASE_REACTIVE == 5);
+  assert(FSIM_SCHEDULER_PHASE_OBSERVED == 6);
+  assert(FSIM_SCHEDULER_PHASE_RE_INACTIVE == 7);
+  assert(FSIM_SCHEDULER_PHASE_RE_UPDATE == 8);
 
   assert(fsim_get_api_version() == FSIM_API_VERSION);
   assert(fsim_session_create(&options, &session) == FSIM_STATUS_OK);

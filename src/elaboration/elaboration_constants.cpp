@@ -1524,6 +1524,8 @@ void substitute_parameters(
         const bool tagged_union =
             type.packed_aggregate
             == frontend::PackedAggregateKind::TaggedUnion;
+        const bool ordinary_packed_union = type.packed_aggregate
+            == frontend::PackedAggregateKind::Union;
         const bool vhdl_record =
             language == frontend::Language::Vhdl2008
             && type.packed_aggregate
@@ -1650,6 +1652,16 @@ void substitute_parameters(
                 continue;
             }
             if (is_union) {
+                if (ordinary_packed_union && union_width
+                    && *union_width != *width) {
+                    diagnostics.push_back({ "FSIM-ELAB-SVTYPE-007",
+                        "ordinary packed union member '"
+                            + member.name
+                            + "' has a different width after type and "
+                              "parameter resolution",
+                        member.span });
+                    valid = false;
+                }
                 union_width = std::max(
                     union_width.value_or(0), *width);
                 total_width = *union_width;

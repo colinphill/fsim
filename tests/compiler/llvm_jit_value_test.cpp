@@ -154,7 +154,7 @@ void test_wide_value_operations_at_level(
     Process process;
     process.id = 92;
     process.name = "wide_value_operations";
-    process.register_count = 49;
+    process.register_count = 50;
     process.operations = {
         LoadConstant { 0, wide },
         LoadConstant { 1, one },
@@ -209,6 +209,7 @@ void test_wide_value_operations_at_level(
             DynamicPartIndex { 46, 256, 0, 0, 129, true, true } },
         DynamicPartSelect {
             48, 47, 46, 256, 0, 129, true, true, false, 0 },
+        ConvertToTwoState { 49, 45 },
         Pause { },
         Stop { },
     };
@@ -326,6 +327,9 @@ void test_wide_value_operations_at_level(
     }
     expect_wide(47, expected_wide_part_insert);
     expect_wide(48, wide_part);
+    auto expected_two_state = PackedLogic4(129, Logic4::zero);
+    expected_two_state.set(0, Logic4::one);
+    expect_wide(49, expected_two_state);
 }
 
 void test_scalar_truth_tables_and_64_bits() {

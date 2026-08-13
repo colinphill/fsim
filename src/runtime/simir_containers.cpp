@@ -391,6 +391,12 @@ void Interpreter::Impl::write_container_object_value(
                 alias->signal,
                 pack_container_signal_value(value, logic9));
         }
+        if (changed) {
+            const auto waiters = container_dynamic_fanout.at(id);
+            for (const auto process : waiters) {
+                queue_next_delta(process);
+            }
+        }
         if (changed && container_object_change_hook) {
             container_object_change_hook(id, scheduler.now());
         }

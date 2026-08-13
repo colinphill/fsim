@@ -361,7 +361,7 @@ const auto run_defparam_specializations =
                 assert(specialization.parameter_identity_values.front().first
                     == "VALUE");
                 assert(specialization.parameter_identity_values.front().second.starts_with(
-                    "svconst-v2:w=257:"));
+                    "svconst-v3:b=0:w=257:"));
             }
         }
         assert(defparam_key_for_instance(result, "defparam_top.low_leaf")

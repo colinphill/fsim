@@ -351,12 +351,13 @@ class Resolver final {
       for (const auto& parameter : owner->second->parameters) {
         if (parameter.kind == ParameterKind::Type
             && parameter.default_type) {
-          statement.type_aliases.push_back(TypeAliasDeclaration{
-              parameter.name,
-              *parameter.default_type,
-              parameter.span,
-              {},
-              TypeDeclarationKind::SystemVerilogTypedef});
+            statement.type_aliases.push_back(TypeAliasDeclaration {
+                parameter.name,
+                *parameter.default_type,
+                parameter.span,
+                { },
+                TypeDeclarationKind::SystemVerilogTypedef,
+                { } });
         }
       }
       statement.type_aliases.insert(
@@ -1340,12 +1341,13 @@ class Resolver final {
         if (formal.kind != ParameterKind::Type) {
           continue;
         }
-        statement.type_aliases.push_back(TypeAliasDeclaration{
+        statement.type_aliases.push_back(TypeAliasDeclaration {
             formal.name,
             *actual.type_actual,
             actual.span,
-            {},
-            TypeDeclarationKind::SystemVerilogTypedef});
+            { },
+            TypeDeclarationKind::SystemVerilogTypedef,
+            { } });
       }
     }
     statement.declarations.clear();

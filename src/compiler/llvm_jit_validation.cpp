@@ -67,11 +67,6 @@ using namespace runtime::simir;
         if (!signal_value_kinds.empty()
             && signal_value_kinds[signal] == ValueKind::logic9) {
             result.uses_logic9 = true;
-            if (width > 64) {
-                record_unsupported(
-                    instruction,
-                    "wide exact-Logic9 signals are not yet supported");
-            }
         }
         return width;
     };
@@ -263,11 +258,6 @@ using namespace runtime::simir;
                         reject(process, index,
                             "LoadConstant width must be greater than zero");
                     }
-                    if (operation.value.width() > 64
-                        && operation.value.is_logic9()) {
-                        record_unsupported(
-                            index, "wide exact-Logic9 constants are not yet supported");
-                    }
                     result.uses_logic9 = result.uses_logic9
                         || operation.value.is_logic9();
                     record_definition(operation.destination, index);
@@ -275,9 +265,44 @@ using namespace runtime::simir;
                         index);
                 } else if constexpr (std::is_same_v<OperationType, ReadSignal>) {
                     const auto width = exact_signal_width(operation.signal, index);
+                    if (operation.kind != SignalReadKind::current
+                        && operation.ticks == 0U) {
+                        reject(process, index,
+                            "sampled signal history depth must be positive");
+                    }
+                    if (operation.clock
+                        && referenced_signal_width(*operation.clock, index)
+                            != 1U) {
+                        reject(process, index,
+                            "sampled clock signal must be scalar");
+                    }
+                    if (operation.gate
+                        && referenced_signal_width(*operation.gate, index)
+                            != 1U) {
+                        reject(process, index,
+                            "sampled gating signal must be scalar");
+                    }
+                    if (operation.clock_edge > SampledClockEdge::negative) {
+                        reject(process, index,
+                            "sampled clock edge is invalid");
+                    }
                     record_definition(operation.destination, index);
-                    constrain_width(operation.destination, width, index);
-                    result.uses_exact_signal_operation = result.uses_exact_signal_operation || width > 64;
+                    const auto result_width
+                        = operation.kind == SignalReadKind::rose
+                            || operation.kind == SignalReadKind::fell
+                            || operation.kind == SignalReadKind::stable
+                            || operation.kind == SignalReadKind::changed
+                            || operation.kind == SignalReadKind::rising
+                            || operation.kind == SignalReadKind::falling
+                            || operation.kind == SignalReadKind::steady
+                            || operation.kind == SignalReadKind::changing
+                        ? 1U
+                        : width;
+                    constrain_width(operation.destination, result_width, index);
+                    result.uses_exact_signal_operation
+                        = result.uses_exact_signal_operation
+                        || (width > 64
+                            && operation.kind == SignalReadKind::current);
                 } else if constexpr (std::is_same_v<OperationType, SignalEvent>) {
                     result.uses_signal_event = true;
                     (void)signal_width(operation.signal, index);
@@ -389,7 +414,51 @@ using namespace runtime::simir;
                     validate_class_operation(
                         process, index, operation, record_use, record_definition,
                         constrain_width, validate_string_register);
+                } else if constexpr (
+                    std::is_same_v<OperationType, CoverageSample>) {
+                    if (operation.instance_identity.empty()
+                        || operation.actual_widths.size()
+                            != operation.actuals.size()
+                        || operation.signed_actuals.size()
+                            != operation.actuals.size()
+                        || operation.trigger
+                            > CoverageSampleTrigger::event) {
+                        reject(
+                            process, index,
+                            "CoverageSample requires aligned actual metadata");
+                    }
+                    for (std::size_t actual = 0;
+                        actual < operation.actuals.size(); ++actual) {
+                        if (operation.actual_widths[actual] == 0U
+                            || operation.signed_actuals[actual] > 1U) {
+                            reject(
+                                process, index,
+                                "CoverageSample actual metadata is invalid");
+                        }
+                        record_use(operation.actuals[actual], index);
+                        constrain_width(
+                            operation.actuals[actual],
+                            operation.actual_widths[actual], index);
+                    }
+                } else if constexpr (
+                    std::is_same_v<OperationType, CoverageQuery>) {
+                    if (operation.kind
+                            != CoverageQueryKind::overall_type
+                        && operation.kind
+                            != CoverageQueryKind::overall_instance) {
+                        reject(
+                            process, index,
+                            "CoverageQuery kind is invalid");
+                    }
+                    record_definition(operation.destination, index);
+                    constrain_width(operation.destination, 64U, index);
                 } else if constexpr (std::is_same_v<OperationType, CopyRegister>) {
+                    record_definition(operation.destination, index);
+                    record_use(operation.source, index);
+                    unify_registers(
+                        operation.destination, operation.source, index);
+                } else if constexpr (
+                    std::is_same_v<OperationType, ConvertToTwoState>) {
                     record_definition(operation.destination, index);
                     record_use(operation.source, index);
                     unify_registers(
@@ -463,11 +532,152 @@ using namespace runtime::simir;
                         if (value.width != 0)
                             constrain_width(value.id, value.width, index);
                     }
+                } else if constexpr (std::is_same_v<OperationType, PlusArgSelect>) {
+                    result.uses_strings = true;
+                    validate_string_register(
+                        operation.query, index, "query");
+                    if (operation.selected) {
+                        validate_string_register(
+                            *operation.selected, index, "selected");
+                    }
+                    record_definition(operation.destination, index);
+                    constrain_width(operation.destination, 32U, index);
+                } else if constexpr (std::is_same_v<OperationType, SystemCommand>) {
+                    result.uses_strings = true;
+                    if (operation.command) {
+                        validate_string_register(
+                            *operation.command, index, "command");
+                    }
+                    if (operation.destination) {
+                        record_definition(*operation.destination, index);
+                        constrain_width(*operation.destination, 32U, index);
+                    }
+                } else if constexpr (std::is_same_v<OperationType, VcdControl>) {
+                    if (static_cast<std::underlying_type_t<VcdControlKind>>(
+                            operation.kind)
+                        > static_cast<std::underlying_type_t<VcdControlKind>>(
+                            VcdControlKind::ports_flush)) {
+                        reject(process, index, "VcdControl kind is invalid");
+                    }
+                    result.uses_strings = result.uses_strings
+                        || operation.filename.has_value();
+                    if (operation.filename) {
+                        validate_string_register(
+                            *operation.filename, index, "filename");
+                    }
+                    if (operation.value) {
+                        record_use(*operation.value, index);
+                        constrain_width(*operation.value, 64U, index);
+                    }
+                } else if constexpr (
+                    std::is_same_v<OperationType,
+                        CoverageDatabaseControl>) {
+                    if (static_cast<std::underlying_type_t<
+                            CoverageDatabaseControlKind>>(operation.kind)
+                        > static_cast<std::underlying_type_t<
+                            CoverageDatabaseControlKind>>(
+                            CoverageDatabaseControlKind::load)) {
+                        reject(process, index,
+                            "CoverageDatabaseControl kind is invalid");
+                    }
+                    result.uses_strings = true;
+                    validate_string_register(
+                        operation.filename, index, "filename");
+                } else if constexpr (
+                    std::is_same_v<OperationType, StochasticQueueOperation>) {
+                    const auto input = [&](const RegisterId id) {
+                        record_use(id, index);
+                        constrain_width(id, 32U, index);
+                    };
+                    const auto output = [&](const RegisterId id) {
+                        record_definition(id, index);
+                        constrain_width(id, 32U, index);
+                    };
+                    input(operation.queue_id);
+                    output(operation.status);
+                    const bool initialize
+                        = operation.kind == StochasticQueueKind::initialize;
+                    const bool add
+                        = operation.kind == StochasticQueueKind::add;
+                    const bool remove
+                        = operation.kind == StochasticQueueKind::remove;
+                    const bool full
+                        = operation.kind == StochasticQueueKind::full;
+                    const bool examine
+                        = operation.kind == StochasticQueueKind::examine;
+                    if ((!initialize && !add && !remove && !full && !examine)
+                        || operation.queue_type.has_value() != initialize
+                        || operation.maximum_length.has_value() != initialize
+                        || operation.job_id.has_value() != (add || remove)
+                        || operation.information_id.has_value() != (add || remove)
+                        || operation.statistic_code.has_value() != examine
+                        || operation.statistic_value.has_value() != examine
+                        || operation.result.has_value() != full) {
+                        reject(
+                            process, index,
+                            "stochastic queue operation metadata is inconsistent");
+                    }
+                    if (initialize) {
+                        input(*operation.queue_type);
+                        input(*operation.maximum_length);
+                    } else if (add) {
+                        input(*operation.job_id);
+                        input(*operation.information_id);
+                    } else if (remove) {
+                        output(*operation.job_id);
+                        output(*operation.information_id);
+                    } else if (full) {
+                        output(*operation.result);
+                    } else {
+                        input(*operation.statistic_code);
+                        output(*operation.statistic_value);
+                    }
+                } else if constexpr (std::is_same_v<OperationType, PlaEvaluate>) {
+                    result.uses_containers = true;
+                    if (operation.input_width == 0U
+                        || operation.output_width == 0U
+                        || (operation.logic != PlaLogicKind::and_logic
+                            && operation.logic != PlaLogicKind::nand_logic
+                            && operation.logic != PlaLogicKind::or_logic
+                            && operation.logic != PlaLogicKind::nor_logic)) {
+                        reject(process, index, "PLA operation metadata is invalid");
+                    }
+                    record_use(operation.input, index);
+                    constrain_width(
+                        operation.input, operation.input_width, index);
+                    record_definition(operation.output, index);
+                    constrain_width(
+                        operation.output, operation.output_width, index);
+                } else if constexpr (
+                    std::is_same_v<OperationType, TimeFormatControl>) {
+                    result.uses_strings = true;
+                    validate_string_register(
+                        operation.suffix, index, "suffix");
+                    record_use(operation.units, index);
+                    record_use(operation.precision, index);
+                    record_use(operation.minimum_width, index);
+                    constrain_width(operation.units, 32U, index);
+                    constrain_width(operation.precision, 32U, index);
+                    constrain_width(operation.minimum_width, 32U, index);
                 } else if constexpr (std::is_same_v<OperationType,
                                          SystemVerilogScalarBinary>) {
                     result.uses_containers = true;
                     std::vector<PackedRegisterValidation> registers;
                     if (const auto error = validate_scalar_binary_metadata(operation, registers))
+                        reject(process, index, *error);
+                    for (const auto& value : registers) {
+                        if (value.definition)
+                            record_definition(value.id, index);
+                        else
+                            record_use(value.id, index);
+                        constrain_width(value.id, value.width, index);
+                    }
+                } else if constexpr (
+                    std::is_same_v<OperationType, SystemVerilogMath>) {
+                    result.uses_containers = true;
+                    std::vector<PackedRegisterValidation> registers;
+                    if (const auto error = validate_scalar_math_metadata(
+                            operation, registers))
                         reject(process, index, *error);
                     for (const auto& value : registers) {
                         if (value.definition)
@@ -1467,6 +1677,13 @@ using namespace runtime::simir;
                         operation.when_true, operation.when_false, index);
                     unify_registers(
                         operation.destination, operation.when_true, index);
+                } else if constexpr (std::is_same_v<OperationType, WaitRegion>) {
+                    if (operation.phase < runtime::SchedulerPhase::reactive
+                        || operation.phase > runtime::SchedulerPhase::postponed) {
+                        reject(
+                            process, index,
+                            "WaitRegion target must be reactive or later");
+                    }
                 } else if constexpr (std::is_same_v<OperationType, WaitFor>) {
                     if (operation.rounding_quantum == 0) {
                         reject(
@@ -1602,6 +1819,43 @@ using namespace runtime::simir;
                                 "WaitOn has an invalid edge kind");
                         }
                     }
+                } else if constexpr (std::is_same_v<OperationType, WaitPla>) {
+                    result.uses_containers = true;
+                    for (const auto signal : operation.signals) {
+                        (void)referenced_signal_width(signal, index);
+                    }
+                } else if constexpr (std::is_same_v<OperationType, WaitOrder>) {
+                    if (operation.events.empty()) {
+                        reject(
+                            process, index,
+                            "WaitOrder requires at least one event");
+                    }
+                    record_definition(operation.result, index);
+                    constrain_width(operation.result, 1U, index);
+                    for (const auto event : operation.events) {
+                        if (referenced_signal_width(event, index) != 1U) {
+                            reject(
+                                process, index,
+                                "WaitOrder events must be scalar");
+                        }
+                    }
+                } else if constexpr (std::is_same_v<OperationType, EventTriggered>) {
+                    if (referenced_signal_width(operation.event, index) != 1U) {
+                        reject(
+                            process, index,
+                            "EventTriggered requires a scalar event");
+                    }
+                    record_definition(operation.destination, index);
+                    constrain_width(operation.destination, 1U, index);
+                } else if constexpr (std::is_same_v<OperationType, EventAlias>) {
+                    if (referenced_signal_width(operation.target, index) != 1U
+                        || (operation.has_source
+                            && referenced_signal_width(operation.source, index)
+                                != 1U)) {
+                        reject(
+                            process, index,
+                            "EventAlias requires scalar named events");
+                    }
                 } else if constexpr (std::is_same_v<OperationType, WaitSensitivity>) {
                     if (process.static_sensitivity.empty()) {
                         reject(process, index,
@@ -1646,9 +1900,30 @@ using namespace runtime::simir;
                     constrain_width(operation.destination, 1U, index);
                 } else if constexpr (
                     std::is_same_v<OperationType, ProcessAwait>
-                    || std::is_same_v<OperationType, ProcessKill>) {
+                    || std::is_same_v<OperationType, ProcessKill>
+                    || std::is_same_v<OperationType, ProcessSuspend>
+                    || std::is_same_v<OperationType, ProcessResume>) {
                     record_use(operation.source, index);
                     constrain_width(operation.source, 64U, index);
+                } else if constexpr (
+                    std::is_same_v<OperationType, ProcessGetRandState>) {
+                    result.uses_strings = true;
+                    validate_string_register(
+                        operation.destination, index, "destination");
+                    record_use(operation.source, index);
+                    constrain_width(operation.source, 64U, index);
+                } else if constexpr (
+                    std::is_same_v<OperationType, ProcessSetRandState>) {
+                    result.uses_strings = true;
+                    record_use(operation.source, index);
+                    constrain_width(operation.source, 64U, index);
+                    validate_string_register(operation.state, index, "state");
+                } else if constexpr (
+                    std::is_same_v<OperationType, ProcessSrandom>) {
+                    record_use(operation.source, index);
+                    constrain_width(operation.source, 64U, index);
+                    record_use(operation.seed, index);
+                    constrain_width(operation.seed, 32U, index);
                 } else if constexpr (
                     std::is_same_v<OperationType, MailboxCreate>) {
                     if (operation.element_width == 0) {

@@ -863,10 +863,9 @@ endmodule
     }
     assert(hydrated_class_type_scope_result.ok());
 
-    const auto invalid_systemverilog_packages =
-        fsim::frontend::parse_text(
-            "invalid_systemverilog_packages.sv",
-            R"(
+    const auto invalid_systemverilog_packages = fsim::frontend::parse_text(
+        "invalid_systemverilog_packages.sv",
+        R"(
 package first_values;
   import second_values::*;
   localparam int VALUE = OTHER + 1;
@@ -908,9 +907,11 @@ package invalid_struct_layout;
   } invalid_packet_t;
 endpackage
 package invalid_union_layout;
+  typedef logic [3:0] wide_t;
+  typedef logic [2:0] narrow_t;
   typedef union packed {
-    logic [3:0] wide;
-    logic [2:0] narrow;
+    wide_t wide;
+    narrow_t narrow;
   } invalid_union_t;
 endpackage
 import duplicate_values::MISSING;
@@ -946,7 +947,7 @@ module invalid_systemverilog_package_user;
   assign value = invalid_packet.payload;
 endmodule
 )",
-            fsim::frontend::Language::SystemVerilog2017);
+        fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_systemverilog_packages.ok());
     const auto invalid_systemverilog_package_result =
         fsim::elaboration::elaborate(
@@ -965,12 +966,13 @@ endmodule
              "FSIM-ELAB-SVTYPE-001",
              "FSIM-ELAB-SVTYPE-002",
              "FSIM-ELAB-SVTYPE-003",
+             "FSIM-ELAB-SVTYPE-007",
              "FSIM-ELAB-SVENUM-001",
              "FSIM-ELAB-SVENUM-002",
              "FSIM-ELAB-SVSTRUCT-001",
              "FSIM-ELAB-SVSTRUCT-002",
              "FSIM-ELAB-SVREPL-001",
-             "FSIM-ELAB-068"}) {
+             "FSIM-ELAB-068" }) {
         assert(has_diagnostic(
             invalid_systemverilog_package_result, code));
     }

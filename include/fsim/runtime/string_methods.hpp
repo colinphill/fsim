@@ -12,10 +12,11 @@ namespace fsim::runtime::simir {
 
 enum class StringMethodOperator : std::uint8_t;
 struct StringMethod;
+struct SystemVerilogTimeFormat;
 struct StringMethodResult {
-  std::optional<std::uint32_t> integer;
-  std::optional<std::uint64_t> scalar_bits;
-  std::optional<std::string> string;
+    std::optional<std::uint32_t> integer;
+    std::optional<std::uint64_t> scalar_bits;
+    std::optional<std::string> string;
 };
 
 [[nodiscard]] std::uint32_t string_getc(
@@ -49,6 +50,7 @@ void execute_string_format(
     std::string& destination,
     const PackedLogic4& packed_value,
     std::string_view string_value,
-    std::uint64_t tick);
+    std::uint64_t tick,
+    const SystemVerilogTimeFormat& time_format);
 
-}  // namespace fsim::runtime::simir
+} // namespace fsim::runtime::simir

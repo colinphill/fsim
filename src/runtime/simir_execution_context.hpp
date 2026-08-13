@@ -82,6 +82,30 @@ struct Interpreter::Impl::ExecutionContext final
         const bool zero_pad,
         const SystemVerilogScalarKind scalar_kind) override
     {
+        if (format == OutputFormat::time) {
+            const auto decoded = decode_systemverilog_scalar_payload(
+                value, scalar_kind);
+            const auto tick = decoded ? decoded.value.as_time() : std::nullopt;
+            if (!tick) {
+                throw std::runtime_error {
+                    "invalid time payload for formatted file output"
+                };
+            }
+            owner.write_file(
+                process,
+                handle,
+                make_time_output(
+                    prefix,
+                    suffix,
+                    *tick,
+                    owner.time_format,
+                    minimum_width == 0 && !suppress_leading_zero,
+                    minimum_width,
+                    left_justify,
+                    zero_pad),
+                false);
+            return;
+        }
         owner.write_file(
             process,
             handle,
@@ -551,6 +575,11 @@ struct Interpreter::Impl::ExecutionContext final
     {
         return owner.scheduler.now();
     }
+    [[nodiscard]] SystemVerilogTimeFormat
+    systemverilog_time_format() const override
+    {
+        return owner.time_format;
+    }
 
     void display_formatted(
         const std::string_view prefix,
@@ -611,12 +640,15 @@ struct Interpreter::Impl::ExecutionContext final
         const bool postponed,
         const std::uint32_t minimum_width,
         const bool left_justify,
-        const bool zero_pad) override
+        const bool zero_pad,
+        const bool use_timeformat_width) override
     {
         auto text = make_time_output(
             prefix,
             suffix,
             owner.scheduler.now(),
+            owner.time_format,
+            use_timeformat_width,
             minimum_width,
             left_justify,
             zero_pad);

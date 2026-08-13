@@ -9,13 +9,13 @@ remains the final Task 10 boundary.
 
 ## Matrix baseline
 
-The current matrix contains exactly 1,279 required rows. Every row is classified
+The current matrix contains exactly 1,294 required rows. Every row is classified
 `execute`, has nonempty positive parse, negative diagnostic, elaboration, and
 runtime evidence, and names evidence paths that exist in the checkout.
 
 | Surface | Prefix | Required rows | Final review owner |
 |---|---|---:|---:|
-| SystemVerilog language | `SV` | 839 | Task 2 plus v2 Batches 144-157 and 159-162 |
+| SystemVerilog language | `SV` | 854 | Task 2 plus v2 Batches 144-157, 159-162, and 165 |
 | SystemVerilog release contract | `V1-SV` | 9 | Task 2 |
 | VHDL language | `VH` | 279 | Task 3 plus v2 Batches 140-143 and 158 |
 | VHDL release contract | `V1-VH` | 8 | Task 3 |
@@ -98,10 +98,10 @@ two-release zero-unresolved-supported-gap closure audit.
 
 The composed local gates currently establish:
 
-- 2,152 production diagnostics are cataloged;
-- 842 authored C/C++ sources remain within the 2,500-line hard limit; any file
+- 2,228 production diagnostics are cataloged;
+- 885 authored C/C++ sources remain within the 2,500-line hard limit; any file
   that exceeds it must be refactored below the 2,000-line target;
-- all 1,279 required matrix rows are executable with no explicit evidence gap;
+- all 1,294 required matrix rows are executable with no explicit evidence gap;
 - 105 independently authored conformance expectations in 28 fixtures are
   owned by 27 CTests;
 - 20 exact portability rows cover Debug/Release, interpreter/LLVM O0/O2,
@@ -115,13 +115,13 @@ through 9 must re-read the owning rows and tests, repair any mismatch found,
 and retain focused executable evidence. Task 10 owns the accumulated local
 release gates and hosted proof.
 
-The synchronized Batch 164 Change 19 candidate corpus freezes 1,279 executable rows,
-5,116 linked evidence cells, and 604 exact paths split across 265 test, 312
-production, and 27 release/build owners. It retains 138 runtime files and 36
+The synchronized Batch 165 Change 19 candidate corpus freezes 1,294 executable rows,
+5,176 linked evidence cells, and 617 exact paths split across 272 test, 318
+production, and 27 release/build owners. It retains 144 runtime files and 36
 corpus CTests with matrix digest
-`7f879238bfcdbc544e688c710038c97063a8464f9817c758b87c1a2f89e0472d`
+`b2c59a958173da718dacc8b02b4480e1a02efd4fcfed87f64a234ec4622d2e11`
 and evidence digest
-`2d9a2bf8fdc360b6b484087848eeb00def2a61cff5fecfacf9400fadcec2010b`.
+`e4076a40c31945c3385495a1c3076b85518143712c89ea1fa3f629fffaac6120`.
 
 Batch 162 Change 20 completes fresh exact-LLVM Debug and Release builds and
 122/122 regressions, then passes both governed ten-stage UVM release matrices

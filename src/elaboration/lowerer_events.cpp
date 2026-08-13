@@ -405,4 +405,74 @@ bool Lowerer::emit_single_event_control_wait(
     return true;
 }
 
+void Lowerer::lower_wait_order(const Statement& statement)
+{
+    std::vector<SignalId> events;
+    events.reserve(statement.sensitivities.size());
+    for (const auto& sensitivity : statement.sensitivities) {
+        if (sensitivity.signal.empty()
+            || sensitivity.expression.valid()) {
+            report(
+                "FSIM-ELAB-SVEVENT-005",
+                "wait_order operands must be named-event identifiers",
+                sensitivity.span);
+            continue;
+        }
+        const auto found = signals_.find(sensitivity.signal);
+        if (found == signals_.end()) {
+            report(
+                "FSIM-ELAB-SVEVENT-006",
+                "unknown wait_order event '" + sensitivity.signal + "'",
+                sensitivity.span);
+            continue;
+        }
+        const auto& info = design_.signal_info_.at(found->second);
+        if (info.type_name != "event") {
+            report(
+                "FSIM-ELAB-SVEVENT-007",
+                "wait_order operand '" + sensitivity.signal
+                    + "' is not declared as an event",
+                sensitivity.span);
+            continue;
+        }
+        events.push_back(found->second);
+    }
+    if (events.size() != statement.sensitivities.size()
+        || events.empty()) {
+        if (events.empty() && statement.sensitivities.empty()) {
+            report(
+                "FSIM-ELAB-SVEVENT-005",
+                "wait_order requires at least one named event",
+                statement.span);
+        }
+        return;
+    }
+
+    const auto result = allocate_register(
+        1, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(
+        WaitOrder { std::move(events), result });
+    const auto branch = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Branch {
+        result, 0, 0, UnknownBranchPolicy::error });
+
+    const auto success = static_cast<InstructionIndex>(
+        process_.operations.size());
+    lower_statements(statement.statements);
+    const auto success_jump = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Jump { 0 });
+
+    const auto failure = static_cast<InstructionIndex>(
+        process_.operations.size());
+    lower_statements(statement.else_statements);
+    const auto end = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations[branch] = Branch {
+        result, success, failure, UnknownBranchPolicy::error
+    };
+    process_.operations[success_jump] = Jump { end };
+}
+
 }  // namespace fsim::elaboration

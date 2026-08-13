@@ -1082,7 +1082,7 @@ Lowerer::lower_container_pattern(
         process_.operations.emplace_back(
             ResizeContainer { destination, size, std::nullopt, true });
     }
-    std::set<std::uint64_t> keys;
+    std::vector<PackedLogic4> keys;
     for (std::size_t element = 0; element < count; ++element) {
         if (runtime_type.queue && !string_elements) {
             const auto value = lower_expression(
@@ -1108,15 +1108,19 @@ Lowerer::lower_container_pattern(
                     expression.span);
                 return std::nullopt;
             }
-            auto key = constant_index(choices.front());
-            if (!key) {
-                std::string error;
-                if (const auto value = evaluate_systemverilog_constant_expression(
-                        choices.front(), { }, { }, error)) {
-                    key = value->integer_value();
-                }
-            }
-            if (!key) {
+            const auto* index_type = source_type.systemverilog_container
+                                         ->associative_index_type.get();
+            std::string error;
+            const auto key = index_type
+                ? evaluate_systemverilog_packed_constant(
+                      choices.front(), *index_type, { }, { }, error)
+                : std::nullopt;
+            const bool unknown = key
+                && (key->is_logic9()
+                    || std::ranges::any_of(
+                        key->bval_words(),
+                        [](const std::uint64_t word) { return word != 0; }));
+            if (!key || unknown) {
                 report(
                     "FSIM-ELAB-SVPATTERN-003",
                     "associative assignment-pattern keys must be locally "
@@ -1124,12 +1128,7 @@ Lowerer::lower_container_pattern(
                     choices.front().span);
                 return std::nullopt;
             }
-            const auto mask = runtime_type.index_width == 64
-                ? std::numeric_limits<std::uint64_t>::max()
-                : (UINT64_C(1) << runtime_type.index_width) - 1U;
-            if (!keys.insert(
-                         static_cast<std::uint64_t>(*key) & mask)
-                    .second) {
+            if (std::ranges::find(keys, *key) != keys.end()) {
                 report(
                     "FSIM-ELAB-SVPATTERN-003",
                     "associative assignment-pattern keys must be unique "
@@ -1137,8 +1136,7 @@ Lowerer::lower_container_pattern(
                     choices.front().span);
                 return std::nullopt;
             }
-            const auto* index_type = source_type.systemverilog_container
-                                         ->associative_index_type.get();
+            keys.push_back(*key);
             const auto lowered = lower_expression(
                 choices.front(), runtime_type.index_width, index_type);
             if (!lowered) {

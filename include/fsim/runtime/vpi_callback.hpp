@@ -14,6 +14,11 @@ namespace fsim::runtime {
 
 enum class SystemVerilogVpiCallbackKind {
     ValueChange,
+    AssertionSuccess,
+    AssertionFailure,
+    AssertionVacuous,
+    AssertionDisabled,
+    AssertionAborted,
     AfterDelay,
     ReadWrite,
     ReadOnly,
@@ -27,6 +32,36 @@ enum class SystemVerilogVpiCallbackKind {
     EndOfSave,
     StartOfRestart,
     EndOfRestart,
+};
+
+enum class SystemVerilogVpiAssertionKind {
+    Assertion,
+    Assumption,
+    Cover,
+    Restriction,
+};
+
+enum class SystemVerilogVpiAssertionOutcome {
+    Success,
+    Failure,
+    Vacuous,
+    Disabled,
+    Aborted,
+};
+
+struct SystemVerilogVpiAssertionEvent {
+    SystemVerilogVpiAssertionKind kind {
+        SystemVerilogVpiAssertionKind::Assertion
+    };
+    SystemVerilogVpiAssertionOutcome outcome {
+        SystemVerilogVpiAssertionOutcome::Success
+    };
+    std::string name;
+    std::string process;
+    std::string instance_identity;
+    std::uint32_t slot { };
+    std::uint32_t source_span { };
+    bool action_suppressed { };
 };
 
 enum class SystemVerilogVpiCallbackError {
@@ -74,6 +109,7 @@ struct SystemVerilogVpiCallbackEvent {
     std::optional<fsim_vpi_handle_v1> object;
     SystemVerilogVpiTimeQueryResult time;
     std::optional<SystemVerilogVpiStoredValue> value;
+    std::optional<SystemVerilogVpiAssertionEvent> assertion;
     std::uint64_t user_data { };
     std::uint64_t registration_order { };
     std::uint64_t simulation_identity { };
@@ -160,6 +196,11 @@ public:
     /// callback event intentionally has no stored value payload.
     [[nodiscard]] SystemVerilogVpiCallbackError dispatch_named_event(
         fsim_vpi_handle_v1 object);
+    /// Publish one completed assertion attempt to the matching persistent
+    /// assertion registration at the current scheduler coordinate.
+    [[nodiscard]] SystemVerilogVpiCallbackError dispatch_assertion(
+        fsim_vpi_handle_v1 object,
+        SystemVerilogVpiAssertionEvent event);
     [[nodiscard]] std::size_t registrations() const;
 
     // Public only so translation-unit helpers can name the opaque state type.

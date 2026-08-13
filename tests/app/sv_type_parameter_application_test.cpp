@@ -27,7 +27,7 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 3> values;
+  std::array<std::string, 4> values;
   std::vector<std::string> keys;
   std::size_t compiled_processes{};
   std::size_t compiled_modules{};
@@ -84,10 +84,12 @@ Capture run_once(
   capture.compiled_modules =
       simulation.compiled_module_count();
   capture.cache = simulation.native_cache_statistics();
-  constexpr std::array<std::string_view, 3> paths{
+  constexpr std::array<std::string_view, 4> paths {
       "type_parameter_top.default_value",
       "type_parameter_top.selected_value",
-      "type_parameter_top.unrelated_value"};
+      "type_parameter_top.unrelated_value",
+      "type_parameter_top.type_results"
+  };
   std::array<fsim::runtime::simir::SignalId, paths.size()> signals{};
   for (std::size_t index = 0; index < paths.size(); ++index) {
     const auto signal = simulation.find_signal(paths[index]);
@@ -110,6 +112,7 @@ void verify(
   assert(capture.values[0] == "0011");
   assert(capture.values[1] == selected);
   assert(capture.values[2] == "1");
+  assert(capture.values[3] == "1111111111111");
 }
 
 } // namespace
@@ -147,19 +150,58 @@ endmodule
         std::ofstream output(
             top_source, std::ios::binary | std::ios::trunc);
         output << "module type_parameter_top;\n"
+               << "  typedef enum logic [136:0] { WIDE_FOUR = 137'h1 } "
+                  "wide_four_t;\n"
+               << "  typedef enum logic [136:0] { OTHER_FOUR = 137'h2 } "
+                  "other_four_t;\n"
+               << "  typedef enum bit [136:0] { WIDE_TWO = 137'h1 } "
+                  "wide_two_t;\n"
+               << "  typedef struct packed { logic [136:0] payload; bit "
+                  "valid; } wide_record_t;\n"
                << "  logic [3:0] default_value;\n"
                << "  logic " << range << " selected_value;\n"
                << "  logic unrelated_value;\n"
+               << "  logic [7:0] logic_value;\n"
+               << "  reg [7:0] reg_value;\n"
+               << "  bit [7:0] bit_value;\n"
+               << "  bit bit_default;\n"
+               << "  int int_default;\n"
+               << "  integer integer_default;\n"
+               << "  time time_default;\n"
+               << "  wide_four_t wide_four_value;\n"
+               << "  other_four_t other_four_value;\n"
+               << "  wide_two_t wide_two_value;\n"
+               << "  wide_record_t wide_record_value;\n"
+               << "  logic [12:0] type_results;\n"
                << "  typed_value defaults(default_value);\n"
                << "  typed_value #(.T(logic " << range
                << "), .INIT(" << initializer
                << ")) selected(selected_value);\n"
                << "  unrelated_value stable(unrelated_value);\n"
-               << "  initial begin #1; $finish; end\n"
+               << "  initial begin\n"
+               << "    type_results = {\n"
+               << "      type(logic_value) == type(reg_value),\n"
+               << "      type(logic_value) != type(bit_value),\n"
+               << "      type(wide_four_value) == type(wide_four_value),\n"
+               << "      type(wide_four_value) != type(other_four_value),\n"
+               << "      type(wide_record_value) === type(wide_record_value),\n"
+               << "      type(default_value) != type(selected_value),\n"
+               << "      type(bit_value) !== type(logic_value),\n"
+               << "      !$isunknown(bit_default),\n"
+               << "      !$isunknown(int_default),\n"
+               << "      $isunknown(integer_default),\n"
+               << "      $isunknown(time_default),\n"
+               << "      $isunknown(wide_four_value),\n"
+               << "      !$isunknown(wide_two_value)\n"
+               << "    };\n"
+               << "    #1; $finish;\n"
+               << "  end\n"
                << "endmodule\n";
         assert(output.good());
       };
-  write_top("[7:0]", "8'ha5");
+  write_top(
+      "[136:0]",
+      "137'h1ffffffffffffffffffffffffffffffffff");
 
   std::vector<std::string> baseline_o2_keys;
   for (const auto optimization :
@@ -173,9 +215,10 @@ endmodule
         run_once(config, fsim::app::SimulationEngine::compiled);
     const auto warm =
         run_once(config, fsim::app::SimulationEngine::compiled);
-    verify(reference, "10100101");
-    verify(cold, "10100101");
-    verify(warm, "10100101");
+    const std::string wide_expected(137, '1');
+    verify(reference, wide_expected);
+    verify(cold, wide_expected);
+    verify(warm, wide_expected);
     assert(reference.values == cold.values);
     assert(cold.values == warm.values);
     assert(reference.keys == cold.keys);

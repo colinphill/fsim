@@ -69,6 +69,7 @@ bool supports_wide_register_operation(
             if constexpr (
                 std::is_same_v<OperationType, LoadConstant>
                 || std::is_same_v<OperationType, CopyRegister>
+                || std::is_same_v<OperationType, ConvertToTwoState>
                 || std::is_same_v<OperationType, UnaryNot>
                 || std::is_same_v<OperationType, LogicalNot>
                 || std::is_same_v<OperationType, LogicalBinary>
@@ -86,10 +87,16 @@ bool supports_wide_register_operation(
                 || std::is_same_v<OperationType, DynamicInsert>
                 || std::is_same_v<OperationType, DynamicPartInsert>
                 || std::is_same_v<OperationType, StringMethod>
+                || std::is_same_v<OperationType, PlusArgSelect>
+                || std::is_same_v<OperationType, SystemCommand>
+                || std::is_same_v<OperationType, VcdControl>
+                || std::is_same_v<OperationType, SystemVerilogMath>
                 || std::is_same_v<OperationType, FileScan>
                 || std::is_same_v<OperationType, FileWriteFormatted>
                 || std::is_same_v<OperationType, CallableFramePush>
                 || std::is_same_v<OperationType, CallableFramePop>
+                || std::is_same_v<OperationType, CoverageSample>
+                || std::is_same_v<OperationType, CoverageQuery>
                 || std::is_same_v<OperationType, ReadSignal>
                 || std::is_same_v<OperationType, WriteBlocking>
                 || std::is_same_v<OperationType, WriteBlockingSlice>
@@ -183,7 +190,20 @@ void validate_fork_operation(
 {
     using namespace runtime::simir;
     return fsim::runtime::simir::operation_holds<WaitFor>(operation)
+        || fsim::runtime::simir::operation_holds<CoverageSample>(operation)
+        || fsim::runtime::simir::operation_holds<CoverageQuery>(operation)
+        || fsim::runtime::simir::operation_holds<SystemCommand>(operation)
+        || fsim::runtime::simir::operation_holds<VcdControl>(operation)
+        || fsim::runtime::simir::operation_holds<StochasticQueueOperation>(
+            operation)
+        || fsim::runtime::simir::operation_holds<PlaEvaluate>(operation)
+        || fsim::runtime::simir::operation_holds<TimeFormatControl>(operation)
+        || fsim::runtime::simir::operation_holds<WaitRegion>(operation)
         || fsim::runtime::simir::operation_holds<WaitOn>(operation)
+        || fsim::runtime::simir::operation_holds<WaitPla>(operation)
+        || fsim::runtime::simir::operation_holds<WaitOrder>(operation)
+        || fsim::runtime::simir::operation_holds<EventTriggered>(operation)
+        || fsim::runtime::simir::operation_holds<EventAlias>(operation)
         || fsim::runtime::simir::operation_holds<WaitSensitivity>(operation)
         || fsim::runtime::simir::operation_holds<WaitForever>(operation)
         || fsim::runtime::simir::operation_holds<Yield>(operation)
@@ -199,6 +219,11 @@ void validate_fork_operation(
             operation)
         || fsim::runtime::simir::operation_holds<ProcessAwait>(operation)
         || fsim::runtime::simir::operation_holds<ProcessKill>(operation)
+        || fsim::runtime::simir::operation_holds<ProcessSuspend>(operation)
+        || fsim::runtime::simir::operation_holds<ProcessResume>(operation)
+        || fsim::runtime::simir::operation_holds<ProcessGetRandState>(operation)
+        || fsim::runtime::simir::operation_holds<ProcessSetRandState>(operation)
+        || fsim::runtime::simir::operation_holds<ProcessSrandom>(operation)
         || fsim::runtime::simir::operation_holds<MailboxCreate>(operation)
         || fsim::runtime::simir::operation_holds<MailboxPut>(operation)
         || fsim::runtime::simir::operation_holds<MailboxGet>(operation)
@@ -321,6 +346,108 @@ std::optional<std::string> validate_scalar_binary_metadata(
     registers.push_back({ operation.destination,
         comparison ? 1U : width(operation.result_kind),
         true });
+    return std::nullopt;
+}
+
+std::optional<std::string> validate_scalar_math_metadata(
+    const runtime::simir::SystemVerilogMath& operation,
+    std::vector<PackedRegisterValidation>& registers)
+{
+    using runtime::SystemVerilogMathFunction;
+    using runtime::SystemVerilogScalarKind;
+    if (operation.function > SystemVerilogMathFunction::Realtime) {
+        return "SystemVerilogMath metadata is invalid";
+    }
+    const bool time_query
+        = operation.function >= SystemVerilogMathFunction::Time;
+    if (time_query) {
+        if (operation.first_width != 0 || operation.second_width != 0
+            || operation.first_kind != SystemVerilogScalarKind::None
+            || operation.second_kind != SystemVerilogScalarKind::None
+            || operation.time_unit_femtoseconds == 0
+            || operation.time_precision_femtoseconds == 0
+            || operation.time_unit_femtoseconds
+                    % operation.time_precision_femtoseconds
+                != 0) {
+            return "SystemVerilog time-query metadata is invalid";
+        }
+        const auto result_width
+            = operation.function == SystemVerilogMathFunction::Stime
+            ? 32U
+            : 64U;
+        registers.push_back(
+            { operation.destination, result_width, true });
+        return std::nullopt;
+    }
+    if (operation.first_width == 0) {
+        return "SystemVerilogMath metadata is invalid";
+    }
+    const auto valid_operand = [](const auto kind, const auto width) {
+        if (kind == SystemVerilogScalarKind::None)
+            return width != 0;
+        if (kind == SystemVerilogScalarKind::ShortReal)
+            return width == 32U;
+        return (kind == SystemVerilogScalarKind::Real
+                   || kind == SystemVerilogScalarKind::Realtime
+                   || kind == SystemVerilogScalarKind::Time)
+            && width == 64U;
+    };
+    const bool binary = operation.function == SystemVerilogMathFunction::Pow
+        || operation.function == SystemVerilogMathFunction::Atan2
+        || operation.function == SystemVerilogMathFunction::Hypot;
+    if (!valid_operand(operation.first_kind, operation.first_width)
+        || binary != (operation.second_width != 0)
+        || (binary
+            && !valid_operand(operation.second_kind, operation.second_width))) {
+        return "SystemVerilogMath operand metadata is invalid";
+    }
+    const bool real_first = operation.first_kind == SystemVerilogScalarKind::Real
+        || operation.first_kind == SystemVerilogScalarKind::Realtime;
+    switch (operation.function) {
+    case SystemVerilogMathFunction::Rtoi:
+        if (!real_first
+            && operation.first_kind != SystemVerilogScalarKind::ShortReal)
+            return "$rtoi requires a real operand";
+        break;
+    case SystemVerilogMathFunction::Itor:
+        if (operation.first_kind != SystemVerilogScalarKind::None
+            || operation.first_width != 32U)
+            return "$itor requires a 32-bit integral operand";
+        break;
+    case SystemVerilogMathFunction::BitsToReal:
+        if (operation.first_kind != SystemVerilogScalarKind::None
+            || operation.first_width != 64U)
+            return "$bitstoreal requires a 64-bit packed operand";
+        break;
+    case SystemVerilogMathFunction::RealToBits:
+        if (!real_first)
+            return "$realtobits requires a real operand";
+        break;
+    case SystemVerilogMathFunction::BitsToShortReal:
+        if (operation.first_kind != SystemVerilogScalarKind::None
+            || operation.first_width != 32U)
+            return "$bitstoshortreal requires a 32-bit packed operand";
+        break;
+    case SystemVerilogMathFunction::ShortRealToBits:
+        if (operation.first_kind != SystemVerilogScalarKind::ShortReal)
+            return "$shortrealtobits requires a shortreal operand";
+        break;
+    default:
+        break;
+    }
+    const auto result_width = operation.function == SystemVerilogMathFunction::Rtoi
+            || operation.function == SystemVerilogMathFunction::BitsToShortReal
+            || operation.function == SystemVerilogMathFunction::ShortRealToBits
+        ? 32U
+        : 64U;
+    registers.push_back(
+        { operation.first, operation.first_width, false });
+    if (binary) {
+        registers.push_back(
+            { operation.second, operation.second_width, false });
+    }
+    registers.push_back(
+        { operation.destination, result_width, true });
     return std::nullopt;
 }
 

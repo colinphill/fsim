@@ -30,7 +30,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_process_expression(
             return std::nullopt;
         }
         const auto destination = allocate_register(
-            64, frontend::ValueDomain::Logic4);
+            64, frontend::ValueDomain::Bit2);
         process_.operations.emplace_back(ProcessSelf { destination });
         return destination;
     }
@@ -83,18 +83,21 @@ bool Lowerer::lower_process_method_statement(
         const auto method = separator == std::string::npos
             ? std::string_view { }
             : std::string_view { statement.task_name }.substr(separator);
-        if (method != ".await" && method != ".kill") {
+        const bool no_argument = method == ".await" || method == ".kill"
+            || method == ".suspend" || method == ".resume";
+        const bool one_argument = method == ".set_randstate"
+            || method == ".srandom";
+        if (!no_argument && !one_argument) {
             return false;
         }
         const auto receiver_name = statement.task_name.substr(0, separator);
-        if (!statement.task_arguments.empty()
+        if (statement.task_arguments.size() != (one_argument ? 1U : 0U)
             || receiver_name.find('.') != std::string::npos
             || receiver_name.find("::") != std::string::npos
             || !is_process_type(object_type(receiver_name))) {
             report(
                 "FSIM-ELAB-SVPROCESS-002",
-                "process await/kill methods require a direct process receiver "
-                "and no arguments",
+                "process control method has an invalid receiver or argument count",
                 statement.span);
             return true;
         }
@@ -115,25 +118,51 @@ bool Lowerer::lower_process_method_statement(
         }
         if (method == ".await") {
             process_.operations.emplace_back(ProcessAwait { *source });
-        } else {
+        } else if (method == ".kill") {
             process_.operations.emplace_back(ProcessKill { *source });
+        } else if (method == ".suspend") {
+            process_.operations.emplace_back(ProcessSuspend { *source });
+        } else if (method == ".resume") {
+            process_.operations.emplace_back(ProcessResume { *source });
+        } else if (method == ".set_randstate") {
+            const auto state = lower_string_expression(
+                statement.task_arguments.front());
+            if (state) {
+                process_.operations.emplace_back(
+                    ProcessSetRandState { *source, *state });
+            }
+        } else {
+            auto seed = lower_expression(statement.task_arguments.front(), 32U);
+            if (seed) {
+                if (register_width(*seed) != 32U) {
+                    *seed = resize_register(
+                        *seed, 32U,
+                        is_signed_expression(statement.task_arguments.front()));
+                }
+                process_.operations.emplace_back(
+                    ProcessSrandom { *source, *seed });
+            }
         }
         return true;
     }
     const auto& call = statement.value;
     if (language_ != frontend::Language::SystemVerilog2017
         || call.kind != ExpressionKind::Call
-        || (call.text != ".await" && call.text != ".kill")) {
+        || (call.text != ".await" && call.text != ".kill"
+            && call.text != ".suspend" && call.text != ".resume"
+            && call.text != ".set_randstate"
+            && call.text != ".srandom")) {
         return false;
     }
-    if (call.operands.size() != 1U
+    const bool one_argument = call.text == ".set_randstate"
+        || call.text == ".srandom";
+    if (call.operands.size() != (one_argument ? 2U : 1U)
         || call.operands.front().kind != ExpressionKind::Identifier
         || !is_process_type(
             object_type(call.operands.front().text))) {
         report(
             "FSIM-ELAB-SVPROCESS-002",
-            "process await/kill methods require a direct process receiver "
-            "and no arguments",
+            "process control method has an invalid receiver or argument count",
             call.span);
         return true;
     }
@@ -149,8 +178,28 @@ bool Lowerer::lower_process_method_statement(
     }
     if (call.text == ".await") {
         process_.operations.emplace_back(ProcessAwait { *source });
-    } else {
+    } else if (call.text == ".kill") {
         process_.operations.emplace_back(ProcessKill { *source });
+    } else if (call.text == ".suspend") {
+        process_.operations.emplace_back(ProcessSuspend { *source });
+    } else if (call.text == ".resume") {
+        process_.operations.emplace_back(ProcessResume { *source });
+    } else if (call.text == ".set_randstate") {
+        const auto state = lower_string_expression(call.operands[1]);
+        if (state) {
+            process_.operations.emplace_back(
+                ProcessSetRandState { *source, *state });
+        }
+    } else {
+        auto seed = lower_expression(call.operands[1], 32U);
+        if (seed) {
+            if (register_width(*seed) != 32U) {
+                *seed = resize_register(
+                    *seed, 32U, is_signed_expression(call.operands[1]));
+            }
+            process_.operations.emplace_back(
+                ProcessSrandom { *source, *seed });
+        }
     }
     return true;
 }

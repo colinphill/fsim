@@ -362,7 +362,12 @@ namespace fsim::app::application_detail {
             runtime::simir::Call>(&operation);
         const auto* return_operation = fsim::runtime::simir::operation_get_if<
             runtime::simir::Return>(&operation);
-        const auto host_boundary = fsim::runtime::simir::operation_holds<
+        const auto* read_signal = fsim::runtime::simir::operation_get_if<
+            runtime::simir::ReadSignal>(&operation);
+        const auto host_boundary = (read_signal != nullptr
+                                       && read_signal->kind
+                                           != runtime::simir::SignalReadKind::current)
+            || fsim::runtime::simir::operation_holds<
                                        runtime::simir::ClassAllocate>(operation)
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::ClassPropertyRead>(operation)
@@ -386,6 +391,46 @@ namespace fsim::app::application_detail {
                 runtime::simir::ProcessAwait>(operation)
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::ProcessKill>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::ProcessSuspend>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::ProcessResume>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::ProcessGetRandState>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::ProcessSetRandState>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::ProcessSrandom>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::WaitOrder>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::EventTriggered>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::EventAlias>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::WaitRegion>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::CoverageSample>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::CoverageQuery>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::RandomDistribution>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::PlusArgSelect>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::SystemCommand>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::VcdControl>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::CoverageDatabaseControl>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::StochasticQueueOperation>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::PlaEvaluate>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::WaitPla>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::TimeFormatControl>(operation)
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::DisableBlock>(operation)
             || fsim::runtime::simir::operation_holds<
@@ -477,17 +522,22 @@ namespace fsim::app::application_detail {
     const auto offset = layout.register_word_offsets[id];
     const auto words = (resolved_width + 63U) / 64U;
     if (kind == runtime::simir::ValueKind::logic9) {
-        if (resolved_width > 64) {
-            throw compiler::LlvmJitError {
-                "compiled wide exact-Logic9 register is unsupported"
-            };
+        PackedLogic4 result { resolved_width, runtime::Logic4::x };
+        for (std::size_t bit = 0; bit < resolved_width; ++bit) {
+            const auto word = bit / 64U;
+            const auto mask = std::uint64_t { 1 } << (bit % 64U);
+            const auto encoded = static_cast<std::uint8_t>(
+                ((register_aval_[offset + word] & mask) != 0U ? 1U : 0U)
+                | ((register_bval_[offset + word] & mask) != 0U ? 2U : 0U)
+                | ((register_logic9_plane2_[offset + word] & mask) != 0U
+                        ? 4U
+                        : 0U)
+                | ((register_logic9_plane3_[offset + word] & mask) != 0U
+                        ? 8U
+                        : 0U));
+            result.set_logic9(bit, static_cast<runtime::Logic9>(encoded));
         }
-        return PackedLogic4::from_logic9_word(
-            { resolved_width,
-                { register_aval_[offset],
-                    register_bval_[offset],
-                    register_logic9_plane2_[offset],
-                    register_logic9_plane3_[offset] } });
+        return result;
     }
     return PackedLogic4::from_word_planes(
         resolved_width,
@@ -533,16 +583,28 @@ void LlvmProcessExecutor::write_register(
         : process_.register_value_kinds[id];
     const auto offset = layout.register_word_offsets[id];
     if (kind == runtime::simir::ValueKind::logic9) {
-        if (value.width() > 64) {
-            throw compiler::LlvmJitError {
-                "compiled wide exact-Logic9 register is unsupported"
-            };
+        const auto words = (value.width() + 63U) / 64U;
+        std::ranges::fill_n(register_aval_.begin() + offset, words, 0U);
+        std::ranges::fill_n(register_bval_.begin() + offset, words, 0U);
+        std::ranges::fill_n(register_logic9_plane2_.begin() + offset, words, 0U);
+        std::ranges::fill_n(register_logic9_plane3_.begin() + offset, words, 0U);
+        for (std::size_t bit = 0; bit < value.width(); ++bit) {
+            const auto encoded = static_cast<std::uint8_t>(value.get_logic9(bit));
+            const auto word = bit / 64U;
+            const auto mask = std::uint64_t { 1 } << (bit % 64U);
+            if ((encoded & 1U) != 0U) {
+                register_aval_[offset + word] |= mask;
+            }
+            if ((encoded & 2U) != 0U) {
+                register_bval_[offset + word] |= mask;
+            }
+            if ((encoded & 4U) != 0U) {
+                register_logic9_plane2_[offset + word] |= mask;
+            }
+            if ((encoded & 8U) != 0U) {
+                register_logic9_plane3_[offset + word] |= mask;
+            }
         }
-        const auto word = value.logic9_low_word();
-        register_aval_[offset] = word.planes[0];
-        register_bval_[offset] = word.planes[1];
-        register_logic9_plane2_[offset] = word.planes[2];
-        register_logic9_plane3_[offset] = word.planes[3];
     } else {
         std::ranges::copy(
             value.aval_words(), register_aval_.begin() + offset);
@@ -2248,7 +2310,8 @@ void LlvmProcessExecutor::write_time(
             operation->postponed,
             operation->minimum_width,
             operation->left_justify,
-            operation->zero_pad);
+            operation->zero_pad,
+            operation->use_timeformat_width);
     } catch (...) {
         capture_failure(state);
     }

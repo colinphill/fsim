@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include "fsim/runtime/constraint_solver.hpp"
 #include "fsim/runtime/file_operations.hpp"
 #include "fsim/runtime/packed_value.hpp"
 #include "fsim/runtime/scheduler.hpp"
@@ -44,10 +45,23 @@ struct CopyRegister {
     RegisterId source { };
 };
 
+struct ConvertToTwoState {
+    RegisterId destination { };
+    RegisterId source { };
+};
+
 inline constexpr std::size_t maximum_string_bytes = 4096;
 inline constexpr std::size_t maximum_container_predicate_nodes = 64;
 inline constexpr std::size_t maximum_memory_file_bytes = 1024U * 1024U;
 inline constexpr std::size_t maximum_open_file_handles = 4'096;
+
+struct SystemVerilogTimeFormat {
+    std::int32_t units { -15 };
+    std::uint32_t precision { };
+    std::string suffix;
+    std::uint32_t minimum_width { 20 };
+    std::uint64_t resolution_femtoseconds { 1 };
+};
 
 struct LoadStringConstant {
     StringRegisterId destination { };
@@ -87,6 +101,21 @@ struct SystemVerilogScalarBinary {
     SystemVerilogScalarKind lhs_kind { SystemVerilogScalarKind::None };
     SystemVerilogScalarKind rhs_kind { SystemVerilogScalarKind::None };
     SystemVerilogScalarKind result_kind { SystemVerilogScalarKind::None };
+};
+
+struct SystemVerilogMath {
+    SystemVerilogMathFunction function { SystemVerilogMathFunction::Rtoi };
+    RegisterId destination { };
+    RegisterId first { };
+    RegisterId second { };
+    std::uint32_t first_width { };
+    std::uint32_t second_width { };
+    SystemVerilogScalarKind first_kind { SystemVerilogScalarKind::None };
+    SystemVerilogScalarKind second_kind { SystemVerilogScalarKind::None };
+    bool first_signed { };
+    bool second_signed { };
+    std::uint64_t time_unit_femtoseconds { 1 };
+    std::uint64_t time_precision_femtoseconds { 1 };
 };
 
 struct StringLength {
@@ -137,6 +166,7 @@ struct StringMethod {
     std::uint32_t minimum_width { };
     bool signed_decimal { }, suppress_leading_zero { }, left_justify { }, zero_pad { };
     SystemVerilogScalarKind scalar_kind { SystemVerilogScalarKind::None };
+    bool use_timeformat_width { };
 };
 struct ResizeContainer {
     ContainerRegisterId target { };
@@ -965,6 +995,12 @@ struct WaitFor {
     SimulationTick rounding_quantum { 1 };
 };
 
+/// Suspend and resume later in the current time slot. This is used when one
+/// language construct has distinct evaluation and action regions.
+struct WaitRegion {
+    SchedulerPhase phase { SchedulerPhase::reactive };
+};
+
 enum class EdgeKind : std::uint8_t {
     any,
     posedge,
@@ -998,6 +1034,37 @@ struct WaitOn {
     std::optional<SimulationTick> timeout;
     std::optional<RegisterId> timeout_result;
     std::optional<InstructionIndex> timeout_origin;
+};
+
+/// Suspend until either a packed input term changes or the selected fixed
+/// personality memory is written. This is the asynchronous PLA rearm point.
+struct WaitPla {
+    ContainerObjectId memory { };
+    std::vector<SignalId> signals;
+};
+
+/// Suspend until named events occur in the specified order. The result is one
+/// when the complete sequence is observed and zero when another listed event
+/// occurs before the next expected event.
+struct WaitOrder {
+    std::vector<SignalId> events;
+    RegisterId result { };
+};
+
+/// Query whether a named event has triggered anywhere in the current time
+/// step. Unlike SignalEvent, this remains true across subsequent deltas at the
+/// same simulation time.
+struct EventTriggered {
+    RegisterId destination { };
+    SignalId event { };
+};
+
+/// Assign one named-event variable handle to another. The target subsequently
+/// observes the same synchronization object without itself triggering it.
+struct EventAlias {
+    SignalId target { };
+    SignalId source { };
+    bool has_source { };
 };
 
 /// Suspend until this process's static sensitivity condition is met.
@@ -1060,6 +1127,31 @@ struct ProcessAwait {
 /// Recursively terminate the target process and its dynamic descendants.
 struct ProcessKill {
     RegisterId source { };
+};
+/// Suspend a live process until a matching resume request. A suspended wait
+/// remains armed and records a wakeup without running the process.
+struct ProcessSuspend {
+    RegisterId source { };
+};
+/// Resume a suspended process, preserving an untriggered wait or making a
+/// process runnable when it was suspended while active or subsequently woke.
+struct ProcessResume {
+    RegisterId source { };
+};
+/// Return the target process's opaque deterministic random-state token.
+struct ProcessGetRandState {
+    StringRegisterId destination { };
+    RegisterId source { };
+};
+/// Restore a random-state token previously returned for any process.
+struct ProcessSetRandState {
+    RegisterId source { };
+    StringRegisterId state { };
+};
+/// Seed the target process's deterministic random stream from a 32-bit value.
+struct ProcessSrandom {
+    RegisterId source { };
+    RegisterId seed { };
 };
 
 /// Construct a typed mailbox. A zero capacity selects the bounded unbounded
@@ -1307,6 +1399,7 @@ struct TimeDisplay {
     std::uint32_t minimum_width { };
     bool left_justify { };
     bool zero_pad { };
+    bool use_timeformat_width { };
 };
 
 enum class MonitorValueKind : std::uint8_t {
@@ -1325,6 +1418,7 @@ struct MonitorValue {
     bool left_justify { };
     bool zero_pad { };
     SystemVerilogScalarKind scalar_kind { SystemVerilogScalarKind::None };
+    bool use_timeformat_width { };
 };
 
 /// Replace the global Verilog/SystemVerilog monitor registration and publish
@@ -1334,12 +1428,174 @@ struct MonitorInstall {
     std::string trailing_text;
     bool newline { true };
     bool one_shot { };
+    std::optional<RegisterId> file_handle;
 };
 
 /// Enable or disable the current monitor without discarding its registration.
 struct MonitorControl {
     bool enabled { };
 };
+
+/// Replace the simulation-wide SystemVerilog %t formatting profile. Units is
+/// the decimal exponent relative to seconds (-15 through 0), precision is the
+/// number of fractional digits, and minimum_width includes the suffix.
+struct TimeFormatControl {
+    RegisterId units { };
+    RegisterId precision { };
+    StringRegisterId suffix { };
+    RegisterId minimum_width { };
+};
+
+/// Query the ordered simulation command line for a plusarg. The query is a
+/// byte string without the leading '+'. When selected is present, the first
+/// matching complete plusarg is copied there for a following formatted scan.
+struct PlusArgSelect {
+    RegisterId destination { };
+    StringRegisterId query { };
+    std::optional<StringRegisterId> selected;
+};
+
+/// Execute the standard SystemVerilog $system host boundary. An absent command
+/// preserves the C system(NULL) query, while an absent destination represents
+/// task use where the raw C int return value is discarded.
+struct SystemCommand {
+    std::optional<StringRegisterId> command;
+    std::optional<RegisterId> destination;
+};
+
+enum class VcdControlKind : std::uint8_t {
+    file,
+    variables,
+    begin_variables,
+    off,
+    on,
+    all,
+    limit,
+    flush,
+    ports,
+    begin_ports,
+    ports_off,
+    ports_on,
+    ports_all,
+    ports_limit,
+    ports_flush,
+};
+
+/// Control the IEEE four-state value-change dump owned by the HDL model.
+/// Hierarchy selections retain their source spelling and are resolved by the
+/// application against DesignIR when all same-time $dumpvars calls have run.
+struct VcdControl {
+    VcdControlKind kind { VcdControlKind::variables };
+    std::optional<StringRegisterId> filename;
+    std::optional<RegisterId> value;
+    std::vector<std::string> selections;
+    std::string scope;
+};
+
+struct VcdControlEvent {
+    VcdControlKind kind { VcdControlKind::variables };
+    std::string filename;
+    std::uint64_t value { };
+    std::vector<std::string> selections;
+    std::string scope;
+    SimulationTick time { };
+    std::uint64_t delta { };
+};
+
+enum class CoverageDatabaseControlKind : std::uint8_t {
+    set_name,
+    load,
+};
+
+/// Select the final functional-coverage database or merge a previously saved
+/// database into the live elaborated coverage state.
+struct CoverageDatabaseControl {
+    CoverageDatabaseControlKind kind {
+        CoverageDatabaseControlKind::set_name
+    };
+    StringRegisterId filename { };
+};
+
+struct CoverageDatabaseControlEvent {
+    CoverageDatabaseControlKind kind {
+        CoverageDatabaseControlKind::set_name
+    };
+    std::string filename;
+};
+
+enum class StochasticQueueKind : std::uint8_t {
+    initialize,
+    add,
+    remove,
+    full,
+    examine,
+};
+
+/// Execute one IEEE stochastic queue operation. All operands use the standard
+/// 32-bit signed integer profile. Optional fields are present only for the
+/// operation kinds which consume or produce them.
+struct StochasticQueueOperation {
+    StochasticQueueKind kind { StochasticQueueKind::initialize };
+    RegisterId queue_id { };
+    std::optional<RegisterId> queue_type;
+    std::optional<RegisterId> maximum_length;
+    std::optional<RegisterId> job_id;
+    std::optional<RegisterId> information_id;
+    std::optional<RegisterId> statistic_code;
+    std::optional<RegisterId> statistic_value;
+    RegisterId status { };
+    std::optional<RegisterId> result;
+};
+
+enum class PlaLogicKind : std::uint8_t {
+    and_logic,
+    nand_logic,
+    or_logic,
+    nor_logic,
+};
+
+/// Evaluate one IEEE programmable-logic-array personality. The fixed memory
+/// contains one input-width word per output bit in declared array order.
+struct PlaEvaluate {
+    ContainerObjectId memory { };
+    RegisterId input { };
+    RegisterId output { };
+    std::uint32_t input_width { };
+    std::uint32_t output_width { };
+    PlaLogicKind logic { PlaLogicKind::and_logic };
+    bool plane { };
+};
+
+/// Sample one resolved SystemVerilog covergroup instance through the host
+/// coverage service. Packed actuals retain their complete four/nine-state
+/// register values; signed_actuals carries only source sizing semantics.
+enum class CoverageSampleTrigger : std::uint8_t {
+    explicit_sample,
+    procedural,
+    event
+};
+
+struct CoverageSample {
+    std::string instance_identity;
+    std::vector<RegisterId> actuals;
+    std::vector<std::uint32_t> actual_widths;
+    std::vector<std::uint8_t> signed_actuals;
+    CoverageSampleTrigger trigger { CoverageSampleTrigger::explicit_sample };
+};
+
+enum class CoverageQueryKind : std::uint8_t {
+    overall_type,
+    overall_instance,
+};
+
+/// Query the simulation-owned aggregate functional coverage. The destination
+/// receives the exact 64-bit SystemVerilog real payload for a percentage in
+/// the inclusive range 0 through 100.
+struct CoverageQuery {
+    RegisterId destination { };
+    CoverageQueryKind kind { CoverageQueryKind::overall_type };
+};
+
 enum class RandomKind : std::uint8_t {
     urandom,
     random,
@@ -1353,6 +1609,27 @@ struct RandomValue {
     RandomKind kind { RandomKind::urandom };
     std::optional<RegisterId> maximum;
     std::optional<RegisterId> minimum;
+};
+
+enum class RandomDistributionKind : std::uint8_t {
+    uniform,
+    normal,
+    exponential,
+    poisson,
+    chi_square,
+    student_t,
+    erlang,
+};
+
+/// Evaluate one IEEE random-distribution system function. Seed is an inout
+/// 32-bit signed integer; first and optional second are the distribution
+/// parameters after the seed argument.
+struct RandomDistribution {
+    RegisterId destination { };
+    RegisterId seed { };
+    RandomDistributionKind kind { RandomDistributionKind::uniform };
+    RegisterId first { };
+    std::optional<RegisterId> second;
 };
 #include "fsim/runtime/simir_randomize.hpp"
 /// Emit a nonfatal VHDL report with retained severity and source metadata.
@@ -1378,7 +1655,9 @@ struct Stop { };
 /// Pause simulation at a resumable boundary, as requested by `$stop`.
 struct Pause { };
 
-struct Halt { };
+struct Halt {
+    bool program_exit { };
+};
 
 #include "fsim/runtime/simir_class.hpp"
 #include "fsim/runtime/simir_operation_storage.hpp"
@@ -1452,14 +1731,26 @@ struct Process {
     std::optional<SignalId> switch_source;
     std::optional<SignalId> switch_target;
     std::optional<SignalId> switch_control;
+    /// A zero width retains the ordinary whole-terminal switch rules,
+    /// including scalar-to-vector broadcast. A nonzero width connects the
+    /// two statically selected packed regions lane-for-lane.
+    std::uint64_t switch_source_offset { };
+    std::uint64_t switch_target_offset { };
+    std::uint64_t switch_width { };
     bool switch_active_high { true };
     bool switch_bidirectional { };
     bool switch_resistive { };
     std::vector<ValueKind> register_value_kinds;
     bool initialize { true };
+    // Clocking input samplers execute after ordinary updates and before
+    // program/reactive code observes the sampled values.
+    bool observed { };
     // Program-owned processes execute in the SystemVerilog reactive region
     // after active/inactive updates and before postponed observation.
     bool reactive { };
+    // Stable elaborated-program instance identity. All static and dynamically
+    // spawned processes owned by one SystemVerilog program share this value.
+    std::optional<std::uint32_t> program_owner;
     // VHDL postponed processes execute after all ordinary update/reactive work
     // for the current simulation cycle.
     bool postponed { };
@@ -1483,540 +1774,7 @@ enum class EventNotificationKind : std::uint8_t {
     delayed,
 };
 
-class ProcessExecutionContext {
-public:
-    virtual ~ProcessExecutionContext() = default;
-
-    [[nodiscard]] virtual PackedLogic4 read_signal(SignalId signal) const = 0;
-    virtual void write_blocking(SignalId signal, PackedLogic4 value) = 0;
-
-    [[nodiscard]] virtual std::string
-    read_string_object(StringObjectId) const
-    {
-        throw std::logic_error {
-            "alternate process executor cannot read string objects"
-        };
-    }
-    virtual void write_string_object(StringObjectId, std::string_view)
-    {
-        throw std::logic_error {
-            "alternate process executor cannot write string objects"
-        };
-    }
-    [[nodiscard]] virtual ContainerValue
-    read_container_object(ContainerObjectId) const
-    {
-        throw std::logic_error {
-            "alternate process executor does not support container objects"
-        };
-    }
-    virtual void write_container_object(
-        ContainerObjectId, const ContainerValue&)
-    {
-        throw std::logic_error {
-            "alternate process executor does not support container objects"
-        };
-    }
-
-    [[nodiscard]] virtual FileHandle open_file(
-        std::string_view, std::string_view)
-    {
-        throw std::logic_error {
-            "alternate process executor does not support file open"
-        };
-    }
-    virtual void close_file(FileHandle)
-    {
-        throw std::logic_error {
-            "alternate process executor does not support file close"
-        };
-    }
-    virtual void write_file(
-        FileHandle, std::string_view, bool)
-    {
-        throw std::logic_error {
-            "alternate process executor does not support file writes"
-        };
-    }
-    virtual void write_file_formatted(
-        FileHandle,
-        std::string_view,
-        std::string_view,
-        OutputFormat,
-        const PackedLogic4&,
-        bool,
-        bool,
-        std::uint32_t,
-        bool,
-        bool,
-        SystemVerilogScalarKind = SystemVerilogScalarKind::None)
-    {
-        throw std::logic_error {
-            "alternate process executor does not support formatted file writes"
-        };
-    }
-    [[nodiscard]] virtual std::string read_file_line(
-        FileHandle, std::uint32_t&)
-    {
-        throw std::logic_error { "alternate process executor does not support file reads" };
-    }
-    [[nodiscard]] virtual std::int32_t read_file_character(FileHandle)
-    {
-        throw std::logic_error { "alternate process executor does not support character reads" };
-    }
-    [[nodiscard]] virtual std::int32_t unread_file_character(
-        FileHandle, std::int32_t)
-    {
-        throw std::logic_error { "alternate process executor does not support character pushback" };
-    }
-    [[nodiscard]] virtual bool file_end_of_file(FileHandle)
-    {
-        throw std::logic_error { "alternate process executor does not support file status" };
-    }
-    [[nodiscard]] virtual std::string file_error(
-        FileHandle, bool&)
-    {
-        throw std::logic_error {
-            "alternate process executor does not support file errors"
-        };
-    }
-    [[nodiscard]] virtual std::int32_t position_file(
-        FileHandle, FilePositionKind, std::int32_t, std::int32_t)
-    {
-        throw std::logic_error {
-            "alternate process executor does not support file positioning"
-        };
-    }
-    virtual void flush_file(std::optional<FileHandle>)
-    {
-        throw std::logic_error {
-            "alternate process executor does not support file flushing"
-        };
-    }
-
-    /// Allocation-free single-word access used by generated scalar/vector code.
-    ///
-    /// The default implementations preserve compatibility for alternate
-    /// executors that only implement the object interface. The kernel overrides
-    /// these methods to access its signal storage directly.
-    [[nodiscard]] virtual Logic4Word
-    read_signal_word(SignalId signal) const
-    {
-        return read_signal(signal).low_word();
-    }
-    [[nodiscard]] virtual Logic9Word
-    read_signal_logic9_word(SignalId signal) const
-    {
-        return read_signal(signal).logic9_low_word();
-    }
-    virtual void write_blocking_word(
-        SignalId signal, const Logic4Word value)
-    {
-        write_blocking(
-            signal,
-            PackedLogic4::from_aval_bval(
-                value.width, value.aval, value.bval));
-    }
-    virtual void write_blocking_slice(
-        SignalId signal,
-        PackedLogic4 value,
-        std::size_t offset) = 0;
-    virtual void write_blocking_slice_word(
-        SignalId signal,
-        const Logic4Word value,
-        std::uint32_t offset)
-    {
-        write_blocking_slice(
-            signal,
-            PackedLogic4::from_aval_bval(
-                value.width, value.aval, value.bval),
-            offset);
-    }
-
-    virtual void force_signal_slice(
-        SignalId,
-        PackedLogic4,
-        std::size_t)
-    {
-        throw std::logic_error {
-            "alternate process executor does not support procedural force"
-        };
-    }
-    virtual void release_signal_slice(
-        SignalId,
-        std::size_t,
-        std::size_t)
-    {
-        throw std::logic_error {
-            "alternate process executor does not support procedural release"
-        };
-    }
-    virtual void force_driver_signal_slice(
-        SignalId,
-        PackedLogic4,
-        std::size_t)
-    {
-        throw std::logic_error {
-            "alternate process executor does not support driver-value force"
-        };
-    }
-    virtual void release_driver_signal_slice(
-        SignalId,
-        std::size_t,
-        std::size_t)
-    {
-        throw std::logic_error {
-            "alternate process executor does not support driver-value release"
-        };
-    }
-
-    virtual void write_update(SignalId signal, PackedLogic4 value) = 0;
-    virtual void write_update_word(
-        SignalId signal, const Logic4Word value)
-    {
-        write_update(
-            signal,
-            PackedLogic4::from_aval_bval(
-                value.width, value.aval, value.bval));
-    }
-    virtual void write_update_slice(
-        SignalId signal,
-        PackedLogic4 value,
-        std::size_t offset) = 0;
-    virtual void write_update_slice_word(
-        SignalId signal,
-        const Logic4Word value,
-        std::uint32_t offset)
-    {
-        write_update_slice(
-            signal,
-            PackedLogic4::from_aval_bval(
-                value.width, value.aval, value.bval),
-            offset);
-    }
-
-    virtual void write_after(SignalId signal, PackedLogic4 value,
-        SimulationTick delay) = 0;
-    virtual void write_after_word(
-        SignalId signal, const Logic4Word value,
-        SimulationTick delay)
-    {
-        write_after(
-            signal,
-            PackedLogic4::from_aval_bval(
-                value.width, value.aval, value.bval),
-            delay);
-    }
-    virtual void write_after_slice(
-        SignalId signal,
-        PackedLogic4 value,
-        std::size_t offset,
-        SimulationTick delay) = 0;
-    virtual void write_after_slice_word(
-        SignalId signal,
-        const Logic4Word value,
-        std::uint32_t offset,
-        SimulationTick delay)
-    {
-        write_after_slice(
-            signal,
-            PackedLogic4::from_aval_bval(
-                value.width, value.aval, value.bval),
-            offset,
-            delay);
-    }
-    virtual void write_inertial(
-        SignalId signal,
-        PackedLogic4 value,
-        const TransitionDelays& delays) = 0;
-    virtual void write_inertial_word(
-        SignalId signal,
-        const Logic4Word value,
-        const TransitionDelays& delays)
-    {
-        write_inertial(
-            signal,
-            PackedLogic4::from_aval_bval(
-                value.width, value.aval, value.bval),
-            delays);
-    }
-    virtual void write_inertial_slice(
-        SignalId signal,
-        PackedLogic4 value,
-        std::size_t offset,
-        const TransitionDelays& delays) = 0;
-    virtual void write_inertial_slice_word(
-        SignalId signal,
-        const Logic4Word value,
-        std::uint32_t offset,
-        const TransitionDelays& delays)
-    {
-        write_inertial_slice(
-            signal,
-            PackedLogic4::from_aval_bval(
-                value.width, value.aval, value.bval),
-            offset,
-            delays);
-    }
-    virtual void write_projected(
-        SignalId signal,
-        PackedLogic4 value,
-        SimulationTick delay,
-        SimulationTick rejection,
-        ProjectedDelayMode mode)
-    {
-        (void)signal;
-        (void)value;
-        (void)delay;
-        (void)rejection;
-        (void)mode;
-        throw std::logic_error {
-            "alternate process executor does not support projected writes"
-        };
-    }
-    virtual void write_projected_word(
-        SignalId signal,
-        const Logic4Word value,
-        SimulationTick delay,
-        SimulationTick rejection,
-        ProjectedDelayMode mode)
-    {
-        write_projected(
-            signal,
-            PackedLogic4::from_aval_bval(
-                value.width, value.aval, value.bval),
-            delay,
-            rejection,
-            mode);
-    }
-    virtual void write_projected_slice(
-        SignalId signal,
-        PackedLogic4 value,
-        std::size_t offset,
-        SimulationTick delay,
-        SimulationTick rejection,
-        ProjectedDelayMode mode)
-    {
-        (void)signal;
-        (void)value;
-        (void)offset;
-        (void)delay;
-        (void)rejection;
-        (void)mode;
-        throw std::logic_error {
-            "alternate process executor does not support projected slice writes"
-        };
-    }
-    virtual void write_projected_slice_word(
-        SignalId signal,
-        const Logic4Word value,
-        std::uint32_t offset,
-        SimulationTick delay,
-        SimulationTick rejection,
-        ProjectedDelayMode mode)
-    {
-        write_projected_slice(
-            signal,
-            PackedLogic4::from_aval_bval(
-                value.width, value.aval, value.bval),
-            offset,
-            delay,
-            rejection,
-            mode);
-    }
-    virtual void write_projected_waveform(
-        SignalId signal,
-        std::vector<ProjectedWaveformValue> elements,
-        SimulationTick rejection,
-        ProjectedDelayMode mode)
-    {
-        (void)signal;
-        (void)elements;
-        (void)rejection;
-        (void)mode;
-        throw std::logic_error {
-            "alternate process executor does not support projected waveforms"
-        };
-    }
-    virtual void write_projected_waveform_slice(
-        SignalId signal,
-        std::vector<ProjectedWaveformValue> elements,
-        std::size_t offset,
-        SimulationTick rejection,
-        ProjectedDelayMode mode)
-    {
-        (void)signal;
-        (void)elements;
-        (void)offset;
-        (void)rejection;
-        (void)mode;
-        throw std::logic_error {
-            "alternate process executor does not support projected slice "
-            "waveforms"
-        };
-    }
-
-    /// Notify a kernel-owned event identity from an alternate language
-    /// executor. Immediate notifications re-enter the active worklist at the
-    /// current timestamp. Delta notifications enter the next delta; non-zero
-    /// delays enter the active worklist at the requested future timestamp.
-    virtual void notify_event(
-        SignalId,
-        SimulationTick,
-        EventNotificationKind)
-    {
-        throw std::logic_error {
-            "alternate process executor does not support event notification"
-        };
-    }
-    virtual void cancel_event(SignalId)
-    {
-        throw std::logic_error {
-            "alternate process executor does not support event cancellation"
-        };
-    }
-
-    /// True only in the evaluation delta caused by the signal's most recent
-    /// committed value change.
-    [[nodiscard]] virtual bool signal_event(SignalId) const
-    {
-        return false;
-    }
-
-    /// Return the effective value immediately before the signal's latest
-    /// committed value change.
-    [[nodiscard]] virtual Logic4Word signal_last_value_word(SignalId) const
-    {
-        throw std::logic_error {
-            "alternate process executor does not support signal last-value reads"
-        };
-    }
-    [[nodiscard]] virtual Logic9Word
-    signal_last_value_logic9_word(SignalId) const
-    {
-        throw std::logic_error {
-            "alternate process executor does not support exact signal "
-            "last-value reads"
-        };
-    }
-
-    /// Elapsed global-resolution ticks since the latest effective-value event,
-    /// or the maximum tick value if the signal has never changed.
-    [[nodiscard]] virtual SimulationTick signal_last_event(SignalId) const
-    {
-        return std::numeric_limits<SimulationTick>::max();
-    }
-
-    /// True in the evaluation delta caused by the signal's most recent
-    /// committed transaction, including a transaction that did not change its
-    /// effective value.
-    [[nodiscard]] virtual bool signal_active(SignalId) const
-    {
-        return false;
-    }
-
-    /// Elapsed global-resolution ticks since the latest committed transaction,
-    /// or the maximum tick value if the signal has never been active.
-    [[nodiscard]] virtual SimulationTick signal_last_active(SignalId) const
-    {
-        return std::numeric_limits<SimulationTick>::max();
-    }
-
-    [[nodiscard]] virtual bool signal_driving(SignalId) const
-    {
-        return false;
-    }
-
-    [[nodiscard]] virtual Logic4Word signal_driving_value_word(SignalId) const
-    {
-        throw std::logic_error {
-            "alternate process executor does not support signal driving-value reads"
-        };
-    }
-    [[nodiscard]] virtual Logic9Word
-    signal_driving_value_logic9_word(SignalId) const
-    {
-        throw std::logic_error {
-            "alternate process executor does not support exact signal "
-            "driving-value reads"
-        };
-    }
-
-    /// Request one alternate-language primitive-channel update. `channel` is a
-    /// stable executor-owned identity. The kernel deduplicates it until the
-    /// corresponding update callback finishes and invokes that callback in the
-    /// common update phase.
-    virtual void request_channel_update(std::uint64_t)
-    {
-        throw std::logic_error {
-            "alternate process executor does not support channel updates"
-        };
-    }
-
-    virtual void display(std::string_view, bool) { }
-    virtual void postpone_display(std::string_view, bool) { }
-    [[nodiscard]] virtual SimulationTick current_time() const noexcept { return 0; }
-    virtual void display_formatted(
-        std::string_view,
-        std::string_view,
-        OutputFormat,
-        const PackedLogic4&,
-        bool,
-        bool,
-        bool,
-        bool,
-        std::uint32_t,
-        bool,
-        bool,
-        SystemVerilogScalarKind = SystemVerilogScalarKind::None) { }
-    virtual void display_time(
-        std::string_view,
-        std::string_view,
-        bool,
-        bool,
-        std::uint32_t,
-        bool,
-        bool) { }
-    virtual void install_monitor(const MonitorInstall&) { }
-    virtual void set_monitor_enabled(bool) { }
-    [[nodiscard]] virtual PackedLogic4 random_value(
-        RandomKind,
-        const std::optional<PackedLogic4>&,
-        const std::optional<PackedLogic4>&)
-    {
-        throw std::logic_error {
-            "alternate process executor does not support random values"
-        };
-    }
-    virtual void report(
-        std::string_view,
-        AssertionSeverity,
-        const SourceLocation&) { }
-
-    [[nodiscard]] virtual Logic9 evaluate_vital_timing_check(
-        InstructionIndex,
-        const VitalTimingCheck&)
-    {
-        throw std::logic_error {
-            "alternate process executor does not support VITAL timing checks"
-        };
-    }
-    virtual void execute_vital_delay(
-        InstructionIndex,
-        const VitalDelay&,
-        const VitalDelayRuntimeValues&)
-    {
-        throw std::logic_error {
-            "alternate process executor does not support VITAL delays"
-        };
-    }
-
-    /// True when an embedding debugger currently requests source boundaries.
-    [[nodiscard]] virtual bool execution_points_enabled() const noexcept
-    {
-        return false;
-    }
-};
+#include "fsim/runtime/simir_process_execution_context.hpp"
 
 enum class ExternalSuspendKind : std::uint8_t {
     simir_boundary,
@@ -2255,6 +2013,21 @@ public:
         const SourceLocation&,
         SimulationTick,
         std::uint64_t)>;
+    using CoverageSampleHook = std::function<void(
+        std::string_view,
+        std::span<const PackedLogic4>,
+        std::span<const std::uint8_t>,
+        CoverageSampleTrigger)>;
+    using CoverageQueryHook = std::function<PackedLogic4(CoverageQueryKind)>;
+    using SystemCommandHook = std::function<std::int32_t(
+        std::optional<std::string_view>)>;
+    using VcdControlHook = std::function<void(const VcdControlEvent&)>;
+    using CoverageDatabaseControlHook
+        = std::function<void(const CoverageDatabaseControlEvent&)>;
+    /// Decide whether one dynamic fork operation may create its children.
+    /// The identity is the static design process that owns the fork, including
+    /// when a dynamic child creates a nested fork.
+    using ForkSpawnFilter = std::function<bool(ProcessId)>;
     using ClassAllocateHook = std::function<std::uint64_t(
         std::string_view, std::string_view,
         std::string_view,
@@ -2272,6 +2045,7 @@ public:
         std::vector<std::string>&,
         std::span<const std::string>,
         std::span<const std::uint8_t>,
+        std::span<const SystemVerilogConstraintTemplate>,
         bool)>;
     using ClassStaticPropertyReadHook = std::function<PackedLogic4(std::string_view)>;
     using ClassStaticPropertyWriteHook = std::function<void(
@@ -2305,6 +2079,15 @@ public:
     /// Restrict all HDL file operations to paths below this root. Must be set
     /// before start; an empty root leaves file operations disabled.
     void set_file_root(std::filesystem::path root);
+
+    /// Replace the ordered, simulation-owned Verilog/SystemVerilog plusargs.
+    /// Arguments may include their conventional leading '+'. Must be set
+    /// before start.
+    void set_plusargs(std::span<const std::string> plusargs);
+
+    /// Set the duration represented by one scheduler tick. Must be set before
+    /// start and is used by SystemVerilog $timeformat/%t services.
+    void set_time_resolution_femtoseconds(std::uint64_t femtoseconds);
 
     /// Replace one process's reference evaluator with an alternate executor.
     ///
@@ -2359,6 +2142,21 @@ public:
     /// the single underlying driven value.
     [[nodiscard]] PackedLogic4 driver_value(
         ProcessId process, SignalId signal) const;
+    /// Return the strongest currently active zero and one contributions used
+    /// by resolved-port observers such as extended VCD.
+    [[nodiscard]] DriveStrength signal_strength(SignalId signal) const;
+    /// Return the static design process that owns a dynamic fork child. Static
+    /// processes map to themselves.
+    [[nodiscard]] ProcessId design_process(ProcessId process) const;
+    /// Return the top-level dynamic child that owns an execution descendant.
+    /// Static processes map to themselves. This is the stable identity of one
+    /// overlapping temporal attempt across nested lowering forks.
+    [[nodiscard]] ProcessId dynamic_process_root(ProcessId process) const;
+    /// Kill every live dynamic fork attempt owned by one of the selected
+    /// static design processes. Static processes remain available for later
+    /// assertion re-enablement.
+    void kill_dynamic_processes(
+        std::span<const ProcessId> design_processes);
     [[nodiscard]] PackedLogic4 read_debug_local(
         ProcessId process, std::size_t local_index) const;
     [[nodiscard]] std::string read_debug_string_local(
@@ -2379,6 +2177,13 @@ public:
     void set_execution_point_hook(ExecutionPointHook hook);
     void set_output_hook(OutputHook hook);
     void set_report_hook(ReportHook hook);
+    void set_coverage_sample_hook(CoverageSampleHook hook);
+    void set_coverage_query_hook(CoverageQueryHook hook);
+    void set_system_command_hook(SystemCommandHook hook);
+    void set_vcd_control_hook(VcdControlHook hook);
+    void set_coverage_database_control_hook(
+        CoverageDatabaseControlHook hook);
+    void set_fork_spawn_filter(ForkSpawnFilter filter);
     void set_class_allocate_hook(ClassAllocateHook hook);
     void set_class_property_read_hook(ClassPropertyReadHook hook);
     void set_class_property_write_hook(ClassPropertyWriteHook hook);

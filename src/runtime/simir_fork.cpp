@@ -3,6 +3,48 @@
 
 namespace fsim::runtime::simir {
 
+namespace {
+
+    constexpr std::string_view random_state_prefix { "fsim-randstate-v1:" };
+
+    [[nodiscard]] std::string encode_random_state(const std::uint64_t state)
+    {
+        constexpr std::string_view digits { "0123456789abcdef" };
+        std::string result { random_state_prefix };
+        result.resize(result.size() + 16U);
+        for (std::size_t index = 0; index < 16U; ++index) {
+            const auto shift = 4U * (15U - index);
+            result[random_state_prefix.size() + index]
+                = digits[(state >> shift) & 0xfU];
+        }
+        return result;
+    }
+
+    [[nodiscard]] std::optional<std::uint64_t> decode_random_state(
+        const std::string_view text)
+    {
+        if (!text.starts_with(random_state_prefix)
+            || text.size() != random_state_prefix.size() + 16U) {
+            return std::nullopt;
+        }
+        std::uint64_t result { };
+        for (const auto character : text.substr(random_state_prefix.size())) {
+            const auto digit = character >= '0' && character <= '9'
+                ? static_cast<unsigned>(character - '0')
+                : character >= 'a' && character <= 'f'
+                ? static_cast<unsigned>(character - 'a') + 10U
+                : character >= 'A' && character <= 'F'
+                ? static_cast<unsigned>(character - 'A') + 10U
+                : 16U;
+            if (digit >= 16U)
+                return std::nullopt;
+            result = (result << 4U) | digit;
+        }
+        return result;
+    }
+
+} // namespace
+
 [[nodiscard]] bool Interpreter::Impl::handle_fork_boundary(
     ProcessState& process,
     const InstructionIndex instruction,
@@ -177,6 +219,8 @@ void Interpreter::Impl::complete_process(
     process.halted = true;
     process.killed = terminal_status == ProcessStatus::killed;
     process.status = terminal_status;
+    process.suspended = false;
+    process.suspended_wake = false;
     process.waiting_on_static = false;
     process.waiting_on_signal = false;
     process.waiting_for_children = false;
@@ -245,6 +289,51 @@ void Interpreter::Impl::complete_process(
         process.status = ProcessStatus::running;
         return true;
     }
+    if (const auto* alias = fsim::runtime::simir::operation_get_if<EventAlias>(
+            &operation)) {
+        const auto& target = get_signal(alias->target);
+        const auto* source = alias->has_source
+            ? &get_signal(alias->source)
+            : nullptr;
+        if (!target.event_variable
+            || (source != nullptr && !source->event_variable)) {
+            fail(process, "EventAlias requires named-event variables");
+        }
+        event_identities.at(alias->target) = alias->has_source
+            ? event_identities.at(alias->source)
+            : std::nullopt;
+        if (source != nullptr) {
+            driven_values.at(alias->target) = driven_values.at(alias->source);
+            signals.at(alias->target).initial_value = source->initial_value;
+            signal_last_values.at(alias->target)
+                = signal_last_values.at(alias->source);
+            signal_events.at(alias->target) = signal_events.at(alias->source);
+            signal_transactions.at(alias->target)
+                = signal_transactions.at(alias->source);
+        }
+        process.status = ProcessStatus::running;
+        return true;
+    }
+    if (const auto* query = fsim::runtime::simir::operation_get_if<EventTriggered>(
+            &operation)) {
+        (void)get_signal(query->event);
+        const auto& signal = get_signal(query->event);
+        const auto identity = signal.event_variable
+            ? event_identities.at(query->event)
+            : query->event;
+        const auto& event = identity
+            ? signal_events[*identity]
+            : std::optional<std::pair<SimulationTick, std::uint64_t>> { };
+        const bool triggered = event
+            && event->first == scheduler.now();
+        write_process_register(
+            process,
+            query->destination,
+            PackedLogic4::from_aval_bval(
+                1, triggered ? 1U : 0U, 0));
+        process.status = ProcessStatus::running;
+        return true;
+    }
     if (const auto* await = fsim::runtime::simir::operation_get_if<ProcessAwait>(
             &operation)) {
         auto& target = process_from_handle(process, await->source);
@@ -267,22 +356,82 @@ void Interpreter::Impl::complete_process(
             process.current_source);
         return true;
     }
-    const auto* kill = fsim::runtime::simir::operation_get_if<ProcessKill>(
-        &operation);
-    if (kill == nullptr) {
-        return false;
+    if (const auto* get = fsim::runtime::simir::operation_get_if<ProcessGetRandState>(
+            &operation)) {
+        auto& target = process_from_handle(process, get->source);
+        const auto state = encode_random_state(target.random_state);
+        if (process.executor) {
+            process.executor->write_string_register(get->destination, state);
+        } else {
+            get_string_register(process, get->destination) = state;
+        }
+        process.status = ProcessStatus::running;
+        return true;
     }
-    auto& target = process_from_handle(process, kill->source);
+    if (const auto* set = fsim::runtime::simir::operation_get_if<ProcessSetRandState>(
+            &operation)) {
+        auto& target = process_from_handle(process, set->source);
+        const auto& text = process.executor
+            ? process.executor->read_string_register(set->state)
+            : get_string_register(process, set->state);
+        const auto state = decode_random_state(text);
+        if (!state) {
+            process.pc = instruction;
+            fail(process, "process random-state token is malformed");
+        }
+        target.random_state = *state;
+        process.status = ProcessStatus::running;
+        return true;
+    }
+    if (const auto* seed = fsim::runtime::simir::operation_get_if<ProcessSrandom>(
+            &operation)) {
+        auto& target = process_from_handle(process, seed->source);
+        const auto payload = process.executor
+            ? process.executor->read_register(seed->seed, 32U)
+            : get_register(process, seed->seed);
+        const auto word = payload.low_word();
+        if (payload.width() != 32U || word.bval != 0) {
+            process.pc = instruction;
+            fail(process, "process srandom seed must be a known 32-bit value");
+        }
+        target.random_state = static_cast<std::uint32_t>(word.aval);
+        process.status = ProcessStatus::running;
+        return true;
+    }
+    const auto* kill = fsim::runtime::simir::operation_get_if<ProcessKill>(&operation);
+    const auto* suspend = fsim::runtime::simir::operation_get_if<ProcessSuspend>(&operation);
+    const auto* resume = fsim::runtime::simir::operation_get_if<ProcessResume>(&operation);
+    if (kill == nullptr && suspend == nullptr && resume == nullptr)
+        return false;
+    const auto source = kill != nullptr ? kill->source
+        : suspend != nullptr            ? suspend->source
+                                        : resume->source;
+    auto& target = process_from_handle(process, source);
     clear_wait_timeout(process);
-    if (!target.halted) {
+    if (kill != nullptr && !target.halted) {
         cancel_fork_descendants(target);
         if (target.fork_parent) {
             complete_fork_child(target, ProcessStatus::killed);
         } else {
             complete_process(target, ProcessStatus::killed);
         }
+    } else if (suspend != nullptr && !target.halted && !target.suspended) {
+        target.suspended_status = target.status;
+        target.suspended = true;
+        target.status = ProcessStatus::suspended;
+    } else if (resume != nullptr && target.suspended) {
+        target.suspended = false;
+        const bool make_runnable = target.suspended_wake
+            || target.suspended_status == ProcessStatus::running;
+        target.suspended_wake = false;
+        target.status = make_runnable
+            ? ProcessStatus::running
+            : target.suspended_status;
+        if (make_runnable && !target.queued) {
+            queue_active_current(target.program.id);
+        }
     }
-    if (!process.halted) {
+    if (!process.halted && !process.suspended) {
         process.status = ProcessStatus::running;
         queue_current(process.program.id);
     }
@@ -325,6 +474,11 @@ void Interpreter::Impl::spawn_fork(
             .size()
         != operation.branches.size()) {
         fail(parent, "fork branch entry is duplicated");
+    }
+    if (fork_spawn_filter && !fork_spawn_filter(parent.design_process)) {
+        parent.status = ProcessStatus::running;
+        queue_current(parent_id);
+        return;
     }
     if (next_fork_group == 0) {
         throw std::overflow_error { "SimIR fork-group identity overflow" };
@@ -477,6 +631,85 @@ void Interpreter::Impl::cancel_fork_descendants(ProcessState& parent)
     parent.active_fork_sites.clear();
     parent.waiting_for_children = false;
     parent.waiting_fork_group.reset();
+}
+
+void Interpreter::Impl::kill_dynamic_processes(
+    const std::span<const ProcessId> design_processes)
+{
+    std::vector<ProcessId> roots;
+    roots.reserve(processes.size());
+    for (const auto& candidate : processes) {
+        if (candidate.halted || !candidate.fork_parent
+            || std::ranges::find(
+                   design_processes, candidate.design_process)
+                == design_processes.end()) {
+            continue;
+        }
+        const auto& parent = get_process(*candidate.fork_parent);
+        if (!parent.fork_parent || parent.halted) {
+            roots.push_back(candidate.program.id);
+        }
+    }
+    for (const auto root : roots) {
+        auto& process = get_process(root);
+        if (process.halted) {
+            continue;
+        }
+        cancel_fork_descendants(process);
+        complete_fork_child(process, ProcessStatus::killed);
+    }
+}
+
+void Interpreter::Impl::exit_program(ProcessState& process)
+{
+    if (!process.program.program_owner) {
+        fail(process, "$exit requires a SystemVerilog program owner");
+    }
+    const auto owner = *process.program.program_owner;
+    if (exited_programs.contains(owner)) {
+        return;
+    }
+
+    std::vector<ProcessId> roots;
+    for (const auto& candidate : processes) {
+        if (!candidate.halted && !candidate.fork_parent
+            && candidate.program.program_owner == owner
+            && !candidate.program.final) {
+            roots.push_back(candidate.program.id);
+        }
+    }
+    for (const auto root : roots) {
+        auto& owned = get_process(root);
+        cancel_fork_descendants(owned);
+        if (!owned.halted) {
+            complete_process(owned, ProcessStatus::killed);
+        }
+    }
+    exited_programs.insert(owner);
+    if (!program_owners.empty()
+        && exited_programs.size() == program_owners.size()) {
+        stopped_by_design = true;
+        scheduler.request_stop();
+    }
+}
+
+void Interpreter::Impl::complete_program_process(ProcessState& process)
+{
+    if (!process.program.program_owner || process.program.final
+        || process.fork_parent) {
+        return;
+    }
+    const auto owner = *process.program.program_owner;
+    const bool live_initial = std::ranges::any_of(
+        processes,
+        [&](const ProcessState& candidate) {
+            return !candidate.halted && !candidate.fork_parent
+                && !candidate.program.final
+                && candidate.program.program_owner == owner;
+        });
+    if (!live_initial) {
+        exit_program(process);
+    }
 }
 
 } // namespace fsim::runtime::simir

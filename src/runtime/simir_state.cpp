@@ -38,6 +38,13 @@ Interpreter::Impl::Impl(
     : scheduler(options)
     , root_seed(seed)
 {
+    scheduler.set_slot_start_hook([this](Scheduler&) {
+        sampled_values.clear();
+        sampled_values.reserve(signals.size());
+        for (const auto& signal : signals) {
+            sampled_values.push_back(signal.initial_value);
+        }
+    });
 }
 
 [[nodiscard]] Signal& Interpreter::Impl::get_signal(SignalId id)
@@ -189,7 +196,7 @@ Interpreter::Impl::get_container_object(
 
 void Interpreter::Impl::remove_dynamic_wait(ProcessState& process)
 {
-    if (!process.waiting_on_signal) {
+    if (!process.waiting_on_signal && !process.waiting_on_container) {
         return;
     }
     for (const auto sensitivity : process.dynamic_sensitivity) {
@@ -206,6 +213,14 @@ void Interpreter::Impl::remove_dynamic_wait(ProcessState& process)
     process.dynamic_triggered.clear();
     process.waiting_on_signal = false;
     process.dynamic_wait_all = false;
+    process.wait_order_events.clear();
+    process.wait_order_index = 0;
+    process.wait_order_result.reset();
+    if (process.waiting_on_container) {
+        auto& fanout = container_dynamic_fanout[*process.waiting_on_container];
+        std::erase(fanout, process.program.id);
+        process.waiting_on_container.reset();
+    }
 }
 
 void Interpreter::Impl::write_process_register(
@@ -357,6 +372,32 @@ void Interpreter::Impl::mark_dynamic_event_resume(
     const SignalId signal,
     const EdgeKind edge)
 {
+    if (process.wait_order_result) {
+        if (process.wait_order_index
+            >= process.wait_order_events.size()) {
+            throw std::logic_error {
+                "wait_order state has no expected event"
+            };
+        }
+        if (signal
+            == process.wait_order_events[process.wait_order_index]) {
+            ++process.wait_order_index;
+            if (process.wait_order_index
+                != process.wait_order_events.size()) {
+                return false;
+            }
+            write_process_register(
+                process,
+                *process.wait_order_result,
+                PackedLogic4::from_aval_bval(1, 1, 0));
+            return true;
+        }
+        write_process_register(
+            process,
+            *process.wait_order_result,
+            PackedLogic4::from_aval_bval(1, 0, 0));
+        return true;
+    }
     if (!process.dynamic_wait_all) {
         return true;
     }
@@ -385,6 +426,8 @@ void Interpreter::Impl::queue_at(ProcessId id, SimulationTick time)
         ? SchedulerPhase::postponed
         : process.program.reactive
         ? SchedulerPhase::reactive
+        : process.program.observed
+        ? SchedulerPhase::observed
         : SchedulerPhase::active;
     scheduler.schedule_at(
         time, phase, id,
@@ -408,6 +451,8 @@ void Interpreter::Impl::queue_next_delta(ProcessId id)
         ? SchedulerPhase::postponed
         : process.program.reactive
         ? SchedulerPhase::reactive
+        : process.program.observed
+        ? SchedulerPhase::observed
         : SchedulerPhase::active;
     scheduler.schedule_next_delta(
         phase, id,
@@ -448,6 +493,8 @@ void Interpreter::Impl::queue_active_current(ProcessId id)
         ? SchedulerPhase::postponed
         : process.program.reactive
         ? SchedulerPhase::reactive
+        : process.program.observed
+        ? SchedulerPhase::observed
         : SchedulerPhase::active;
     scheduler.schedule(
         phase, id,
@@ -462,14 +509,31 @@ void Interpreter::Impl::queue_active_current(ProcessId id)
 
 void Interpreter::Impl::trigger_event(const SignalId event)
 {
-    (void)get_signal(event);
+    const auto& source = get_signal(event);
+    std::vector<SignalId> members;
+    if (source.event_variable) {
+        for (std::size_t index = 0; index < signals.size(); ++index) {
+            if (signals[index].event_variable
+                && event_identities[index]
+                    == std::optional<SignalId> { event }) {
+                members.push_back(static_cast<SignalId>(index));
+            }
+        }
+    } else {
+        members.push_back(event);
+    }
     if (event_trigger_hook) {
         event_trigger_hook(event, scheduler.now());
     }
-    for (const auto& sensitivity : static_fanout[event]) {
-        auto& process = get_process(sensitivity.process);
-        if (process.waiting_on_static) {
-            queue_active_current(sensitivity.process);
+    for (const auto member : members) {
+        signal_events[member] = std::pair {
+            scheduler.now(), scheduler.delta()
+        };
+        for (const auto& sensitivity : static_fanout[member]) {
+            auto& process = get_process(sensitivity.process);
+            if (process.waiting_on_static) {
+                queue_active_current(sensitivity.process);
+            }
         }
     }
     // Copy because queue_active_current removes dynamic registrations.
@@ -502,7 +566,13 @@ void Interpreter::Impl::trigger_event(const SignalId event)
 
 void Interpreter::Impl::cancel_event(const SignalId event)
 {
-    (void)invalidate_event(event);
+    const auto& signal = get_signal(event);
+    const auto identity = signal.event_variable
+        ? event_identities.at(event)
+        : std::optional<SignalId> { event };
+    if (identity) {
+        (void)invalidate_event(*identity);
+    }
 }
 
 void Interpreter::Impl::notify_event(
@@ -511,8 +581,15 @@ void Interpreter::Impl::notify_event(
     const EventNotificationKind kind,
     const StableOrder order)
 {
-    (void)get_signal(event);
-    auto& state = event_states[event];
+    const auto& signal = get_signal(event);
+    const auto identity = signal.event_variable
+        ? event_identities.at(event)
+        : std::optional<SignalId> { event };
+    if (!identity) {
+        return;
+    }
+    const auto notified_event = *identity;
+    auto& state = event_states[notified_event];
     auto effective_kind = kind;
 
     if (kind == EventNotificationKind::delayed) {
@@ -532,8 +609,8 @@ void Interpreter::Impl::notify_event(
                 "immediate event notification cannot have a delay"
             };
         }
-        (void)invalidate_event(event);
-        trigger_event(event);
+        (void)invalidate_event(notified_event);
+        trigger_event(notified_event);
         return;
     }
 
@@ -546,21 +623,21 @@ void Interpreter::Impl::notify_event(
         if (state.kind == PendingEventKind::delta) {
             return;
         }
-        const auto generation = invalidate_event(event);
+        const auto generation = invalidate_event(notified_event);
         state.kind = PendingEventKind::delta;
         state.due = scheduler.now();
         scheduler.schedule_next_delta(
             SchedulerPhase::active,
             order,
-            [this, event, generation](Scheduler&) {
-                auto& pending = event_states[event];
+            [this, notified_event, generation](Scheduler&) {
+                auto& pending = event_states[notified_event];
                 if (pending.generation != generation
                     || pending.kind != PendingEventKind::delta) {
                     return;
                 }
                 pending.kind = PendingEventKind::none;
                 pending.due = 0;
-                trigger_event(event);
+                trigger_event(notified_event);
             });
         return;
     }
@@ -583,15 +660,15 @@ void Interpreter::Impl::notify_event(
             && state.due <= due)) {
         return;
     }
-    const auto generation = invalidate_event(event);
+    const auto generation = invalidate_event(notified_event);
     state.kind = PendingEventKind::timed;
     state.due = due;
     scheduler.schedule_at(
         due,
         SchedulerPhase::active,
         order,
-        [this, event, generation, due](Scheduler&) {
-            auto& pending = event_states[event];
+        [this, notified_event, generation, due](Scheduler&) {
+            auto& pending = event_states[notified_event];
             if (pending.generation != generation
                 || pending.kind != PendingEventKind::timed
                 || pending.due != due) {
@@ -599,7 +676,7 @@ void Interpreter::Impl::notify_event(
             }
             pending.kind = PendingEventKind::none;
             pending.due = 0;
-            trigger_event(event);
+            trigger_event(notified_event);
         });
 }
 
@@ -644,6 +721,8 @@ void Interpreter::Impl::notify_execution_point(
                 value.prefix,
                 { },
                 scheduler.now(),
+                time_format,
+                value.use_timeformat_width,
                 value.minimum_width,
                 value.left_justify,
                 value.zero_pad);
@@ -686,7 +765,13 @@ void Interpreter::Impl::schedule_monitor_publication()
                 return;
             }
             monitor_publication.reset();
-            if (output_hook) {
+            if (monitor_file_handle) {
+                write_file(
+                    process,
+                    *monitor_file_handle,
+                    render_monitor(*monitor),
+                    monitor->newline);
+            } else if (output_hook) {
                 output_hook(
                     process,
                     render_monitor(*monitor),
@@ -701,12 +786,22 @@ void Interpreter::Impl::install_monitor(
     const ProcessId process,
     const MonitorInstall& registration)
 {
+    const auto file_handle = registration.file_handle
+        ? std::optional<FileHandle> { known_file_handle(
+              get_process(process), *registration.file_handle) }
+        : std::nullopt;
     if (registration.one_shot) {
         scheduler.schedule(
             SchedulerPhase::postponed,
             process,
-            [this, process, registration](Scheduler& runtime) {
-                if (output_hook) {
+            [this, process, registration, file_handle](Scheduler& runtime) {
+                if (file_handle) {
+                    write_file(
+                        process,
+                        *file_handle,
+                        render_monitor(registration),
+                        registration.newline);
+                } else if (output_hook) {
                     output_hook(
                         process,
                         render_monitor(registration),
@@ -724,6 +819,7 @@ void Interpreter::Impl::install_monitor(
     ++monitor_generation;
     monitor = registration;
     monitor_process = process;
+    monitor_file_handle = file_handle;
     monitor_enabled = true;
     monitor_publication.reset();
     schedule_monitor_publication();
@@ -741,6 +837,41 @@ void Interpreter::Impl::set_monitor_enabled(const bool enabled)
     if (enabled) {
         schedule_monitor_publication();
     }
+}
+
+void Interpreter::Impl::set_time_format(
+    ProcessState& process,
+    const TimeFormatControl& operation)
+{
+    const auto decode = [&](const RegisterId id, const char* name) {
+        const auto& value = get_register(process, id);
+        const auto word = value.low_word();
+        if (value.width() != 32 || word.bval != 0) {
+            fail(
+                process,
+                std::string { "$timeformat " } + name
+                    + " must be a known 32-bit value");
+        }
+        return static_cast<std::uint32_t>(word.aval);
+    };
+    const auto units = static_cast<std::int32_t>(
+        decode(operation.units, "units"));
+    const auto precision = decode(operation.precision, "precision");
+    const auto minimum_width = decode(
+        operation.minimum_width, "minimum width");
+    const auto& suffix = get_string_register(process, operation.suffix);
+    if (units < -15 || units > 0
+        || precision > maximum_string_bytes
+        || minimum_width > maximum_string_bytes
+        || suffix.size() > maximum_string_bytes) {
+        fail(
+            process,
+            "$timeformat arguments exceed their supported IEEE profile");
+    }
+    time_format.units = units;
+    time_format.precision = precision;
+    time_format.suffix = suffix;
+    time_format.minimum_width = minimum_width;
 }
 
 [[nodiscard]] std::uint64_t Interpreter::Impl::initial_random_state(
@@ -835,7 +966,9 @@ Interpreter::Impl::known_random_bound(const PackedLogic4& value)
     return PackedLogic4::from_aval_bval(32, sample, 0);
 }
 
-void Interpreter::Impl::publish(SignalId signal_id, PackedLogic4 value)
+void Interpreter::Impl::publish(
+    SignalId signal_id, PackedLogic4 value,
+    const bool notify_fanout)
 {
     auto& signal = get_signal(signal_id);
     if (signal.initial_value.width() != value.width()) {
@@ -843,13 +976,15 @@ void Interpreter::Impl::publish(SignalId signal_id, PackedLogic4 value)
     }
     value = normalize_signal_value(signal_id, std::move(value));
     signal_transactions[signal_id] = std::pair { scheduler.now(), scheduler.delta() + 1 };
-    for (const auto& sensitivity : static_fanout[signal_id]) {
-        if (sensitivity.edge != EdgeKind::transaction) {
-            continue;
-        }
-        auto& process = get_process(sensitivity.process);
-        if (process.waiting_on_static) {
-            queue_next_delta(sensitivity.process);
+    if (notify_fanout) {
+        for (const auto& sensitivity : static_fanout[signal_id]) {
+            if (sensitivity.edge != EdgeKind::transaction) {
+                continue;
+            }
+            auto& process = get_process(sensitivity.process);
+            if (process.waiting_on_static) {
+                queue_next_delta(sensitivity.process);
+            }
         }
     }
     if (signal.initial_value == value) {
@@ -879,34 +1014,36 @@ void Interpreter::Impl::publish(SignalId signal_id, PackedLogic4 value)
         schedule_monitor_publication();
     }
 
-    for (const auto& sensitivity : static_fanout[signal_id]) {
-        if (sensitivity.edge == EdgeKind::transaction) {
-            continue;
-        }
-        auto& process = get_process(sensitivity.process);
-        if (!process.waiting_on_static) {
-            continue;
-        }
-        if (sensitivity.edge != EdgeKind::any && (old_value.width() != 1 || !edge_matches(sensitivity.edge, old_value.get(0), signal.initial_value.get(0)))) {
-            continue;
-        }
-        queue_next_delta(sensitivity.process);
-    }
-    // Copy because queue_next_delta removes a process from every dynamic list.
-    const auto dynamic = dynamic_fanout[signal_id];
-    for (const auto sensitivity : dynamic) {
-        if (sensitivity.edge != EdgeKind::any
-            && (old_value.width() != 1
-                || !edge_matches(
-                    sensitivity.edge, old_value.get(0),
-                    signal.initial_value.get(0)))) {
-            continue;
-        }
-        auto& process = get_process(sensitivity.process);
-        if (dynamic_wait_satisfied(
-                process, signal_id, sensitivity.edge)) {
-            mark_dynamic_event_resume(process);
+    if (notify_fanout) {
+        for (const auto& sensitivity : static_fanout[signal_id]) {
+            if (sensitivity.edge == EdgeKind::transaction) {
+                continue;
+            }
+            auto& process = get_process(sensitivity.process);
+            if (!process.waiting_on_static) {
+                continue;
+            }
+            if (sensitivity.edge != EdgeKind::any && (old_value.width() != 1 || !edge_matches(sensitivity.edge, old_value.get(0), signal.initial_value.get(0)))) {
+                continue;
+            }
             queue_next_delta(sensitivity.process);
+        }
+        // Copy because queue_next_delta removes a process from every dynamic list.
+        const auto dynamic = dynamic_fanout[signal_id];
+        for (const auto sensitivity : dynamic) {
+            if (sensitivity.edge != EdgeKind::any
+                && (old_value.width() != 1
+                    || !edge_matches(
+                        sensitivity.edge, old_value.get(0),
+                        signal.initial_value.get(0)))) {
+                continue;
+            }
+            auto& process = get_process(sensitivity.process);
+            if (dynamic_wait_satisfied(
+                    process, signal_id, sensitivity.edge)) {
+                mark_dynamic_event_resume(process);
+                queue_next_delta(sensitivity.process);
+            }
         }
     }
 }

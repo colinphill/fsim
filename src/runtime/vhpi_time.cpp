@@ -211,8 +211,9 @@ void VhdlVhpiTimeSystem::dispatch(
 void VhdlVhpiTimeSystem::safe_point(const SchedulerPhase phase) {
   switch (phase) {
   case SchedulerPhase::update:
-    dispatch(VhdlVhpiPhase::Update);
-    break;
+  case SchedulerPhase::re_update:
+      dispatch(VhdlVhpiPhase::Update);
+      break;
   case SchedulerPhase::reactive:
     dispatch(VhdlVhpiPhase::Synchronization);
     break;
@@ -221,7 +222,9 @@ void VhdlVhpiTimeSystem::safe_point(const SchedulerPhase phase) {
     break;
   case SchedulerPhase::active:
   case SchedulerPhase::inactive:
-    break;
+  case SchedulerPhase::observed:
+  case SchedulerPhase::re_inactive:
+      break;
   }
   const auto next = scheduler_->next_pending_time();
   if (next && *next > scheduler_->now()

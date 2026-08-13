@@ -47,6 +47,7 @@ void test_strings_at_level(
         .switch_resistive = false,
         .register_value_kinds = { },
         .initialize = true,
+        .program_owner = std::nullopt,
         .final = false,
         .expression_profiles = { }
     };

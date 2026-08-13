@@ -13,12 +13,12 @@
 
 namespace fsim::app {
 
-inline constexpr std::uint32_t kRuntimeStateSchema = 24;
-inline constexpr std::uint32_t kSemanticStateSchema = 2;
-inline constexpr std::uint32_t kDesignIrStateSchema = 2;
-inline constexpr std::uint32_t kClassStateSchema = 9;
-inline constexpr std::uint32_t kSystemVerilogConstraintHirStateSchema = 4;
-inline constexpr std::uint32_t kSystemVerilogCoverageStateSchema = 1;
+inline constexpr std::uint32_t kRuntimeStateSchema = 47;
+inline constexpr std::uint32_t kSemanticStateSchema = 3;
+inline constexpr std::uint32_t kDesignIrStateSchema = 3;
+inline constexpr std::uint32_t kClassStateSchema = 10;
+inline constexpr std::uint32_t kSystemVerilogConstraintHirStateSchema = 6;
+inline constexpr std::uint32_t kSystemVerilogCoverageStateSchema = 4;
 inline constexpr std::uint32_t kSystemVerilogUvmStateSchema = 2;
 inline constexpr std::uint32_t kVhdlHirStateSchema = 1;
 

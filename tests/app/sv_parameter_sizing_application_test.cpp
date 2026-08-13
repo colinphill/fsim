@@ -29,7 +29,7 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 58> values;
+  std::array<std::string, 79> values;
   std::vector<std::string> specialization_keys;
   std::size_t compiled_processes{};
   std::size_t compiled_modules{};
@@ -93,7 +93,7 @@ Capture run_once(
       simulation.compiled_module_count();
   capture.cache = simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 58> paths{
+  constexpr std::array<std::string_view, 79> paths {
       "sized_parameter_top.default_signed_byte",
       "sized_parameter_top.default_unsigned_byte",
       "sized_parameter_top.default_short",
@@ -151,7 +151,29 @@ Capture run_once(
       "sized_parameter_top.wide_logic_cast",
       "sized_parameter_top.wide_bit_cast",
       "sized_parameter_top.wide_unknown_is_unknown",
-      "sized_parameter_top.wide_integer_unknown_cast"};
+      "sized_parameter_top.wide_integer_unknown_cast",
+      "sized_parameter_top.wide_parameter_two_state",
+      "sized_parameter_top.wide_direct_two_state",
+      "sized_parameter_top.wide_cast_two_state",
+      "sized_parameter_top.stream_wide_right",
+      "sized_parameter_top.stream_wide_slice",
+      "sized_parameter_top.membership_sized",
+      "sized_parameter_top.membership_signedness",
+      "sized_parameter_top.membership_wide",
+      "sized_parameter_top.case_inside_sized",
+      "sized_parameter_top.case_inside_qualified",
+      "sized_parameter_top.case_matches_sized",
+      "sized_parameter_top.case_matches_qualified",
+      "sized_parameter_top.wildcard_wide",
+      "sized_parameter_top.constant_short_and",
+      "sized_parameter_top.constant_short_or",
+      "sized_parameter_top.case_matches_guarded",
+      "sized_parameter_top.case_matches_guard_count",
+      "sized_parameter_top.constant_conditional",
+      "sized_parameter_top.constant_conditional_bits",
+      "sized_parameter_top.case_matches_tagged",
+      "sized_parameter_top.case_matches_structured"
+  };
   std::array<fsim::runtime::simir::SignalId, paths.size()> signals{};
   for (std::size_t index = 0; index < paths.size(); ++index) {
     const auto signal = simulation.find_signal(paths[index]);
@@ -239,7 +261,7 @@ void verify_capture(const Capture& capture) {
           != std::string::npos);
   assert((
       capture.values
-      == std::array<std::string, 58>{
+      == std::array<std::string, 79> {
           "11111111111111111111111111111111",
           "00000000000000000000000011111111",
           "11111111111111111000000000000000",
@@ -297,7 +319,28 @@ void verify_capture(const Capture& capture) {
           "1",
           "1",
           "1",
-          "0000000000000000000000000000XXXX"}));
+          "0000000000000000000000000000XXXX",
+          "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000",
+          "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000",
+          "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+          "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+          "1",
+          "1",
+          "1",
+          "0001",
+          "0010",
+          "0011",
+          "0100",
+          "1",
+          "0",
+          "1",
+          "0101",
+          "00000000000000000000000000000010",
+          "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001011010",
+          "00000000000000000000000010001001",
+          "101",
+          "110" }));
 }
 
 } // namespace
@@ -368,6 +411,14 @@ endmodule
 module sized_parameter_top #(
   parameter longint unsigned TYPED_MAX = 64'hffffffffffffffff
 );
+  typedef struct packed {
+    logic [2:0] code;
+    logic valid;
+  } match_payload_t;
+  typedef union tagged packed {
+    match_payload_t packet;
+    logic [3:0] raw;
+  } match_tagged_t;
   localparam logic [7:0] STREAM_CONSTANT = {<<2{8'hd2}};
   localparam logic [63:0] STREAM_WIDE =
       {>>{64'h0123456789abcdef}};
@@ -375,6 +426,8 @@ module sized_parameter_top #(
       128'h80000000000000000000000000000001;
   localparam logic [127:0] WIDE_UNKNOWN =
       128'h0000000000000000000000000000000x;
+  typedef bit [127:0] wide_bit_t;
+  localparam wide_bit_t WIDE_TWO_STATE = WIDE_UNKNOWN;
   localparam int WIDE_BITS = $bits(WIDE_VALUE);
   localparam int WIDE_LEFT = $left(WIDE_VALUE);
   localparam int WIDE_RIGHT = $right(WIDE_VALUE);
@@ -393,6 +446,12 @@ module sized_parameter_top #(
   localparam bit WIDE_UNKNOWN_IS_UNKNOWN = $isunknown(WIDE_UNKNOWN);
   localparam logic [31:0] WIDE_INTEGER_UNKNOWN_CAST =
       integer'(WIDE_UNKNOWN);
+  localparam logic SHORT_AND_CONSTANT = 1'b0 && (1 / 0);
+  localparam logic SHORT_OR_CONSTANT = 1'b1 || (1 / 0);
+  localparam CONDITIONAL_CONSTANT =
+      1'b1 ? 8'h5a : (137'h1 / 0);
+  localparam logic [31:0] CONDITIONAL_CONSTANT_BITS =
+      $bits(CONDITIONAL_CONSTANT);
   logic [31:0] default_signed_byte;
   logic [31:0] default_unsigned_byte;
   logic [31:0] default_short;
@@ -455,6 +514,29 @@ module sized_parameter_top #(
   logic wide_bit_cast;
   logic wide_unknown_is_unknown;
   logic [31:0] wide_integer_unknown_cast;
+  logic [127:0] wide_parameter_two_state;
+  bit [127:0] wide_direct_two_state;
+  wide_bit_t wide_cast_two_state;
+  logic [127:0] stream_wide_right;
+  logic [127:0] stream_wide_slice;
+  logic membership_sized;
+  logic membership_signedness;
+  logic membership_wide;
+  logic [3:0] case_inside_sized;
+  logic [3:0] case_inside_qualified;
+  logic [3:0] case_matches_sized;
+  logic [3:0] case_matches_qualified;
+  logic wildcard_wide;
+  logic constant_short_and;
+  logic constant_short_or;
+  logic [3:0] case_matches_guarded;
+  logic [31:0] case_matches_guard_count;
+  logic [136:0] constant_conditional;
+  logic [31:0] constant_conditional_bits;
+  match_tagged_t match_tagged_value;
+  match_payload_t match_structured_value;
+  logic [2:0] case_matches_tagged;
+  logic [2:0] case_matches_structured;
 
   function automatic logic counted(input logic value);
     begin
@@ -558,6 +640,56 @@ module sized_parameter_top #(
     wide_bit_cast = WIDE_BIT_CAST;
     wide_unknown_is_unknown = WIDE_UNKNOWN_IS_UNKNOWN;
     wide_integer_unknown_cast = WIDE_INTEGER_UNKNOWN_CAST;
+    wide_parameter_two_state = WIDE_TWO_STATE;
+    wide_direct_two_state = {124'b0, 4'b1xz0};
+    wide_cast_two_state = wide_bit_t'({124'b0, 4'b1xz0});
+    stream_wide_right = {>>{WIDE_VALUE}};
+    stream_wide_slice = {<<128{WIDE_VALUE}};
+    membership_sized = 8'h05 inside {4'h5};
+    membership_signedness = $signed(8'hfb) inside {8'hfb};
+    membership_wide = 137'h15 inside {8'h15};
+    case (8'h05) inside
+      4'h5: case_inside_sized = 4'h1;
+      default: case_inside_sized = 4'hf;
+    endcase
+    unique case (8'h05) inside
+      4'h5: case_inside_qualified = 4'h2;
+      default: case_inside_qualified = 4'hf;
+    endcase
+    case (3'b001) matches
+      4'b0001: case_matches_sized = 4'h3;
+      default: case_matches_sized = 4'hf;
+    endcase
+    unique case (3'b001) matches
+      4'b0001: case_matches_qualified = 4'h4;
+      default: case_matches_qualified = 4'hf;
+    endcase
+    wildcard_wide = 137'ha5 ==? 8'b10xz_0101;
+    constant_short_and = SHORT_AND_CONSTANT;
+    constant_short_or = SHORT_OR_CONSTANT;
+    call_count = 0;
+    case (3'b001) matches
+      3'b000 &&& counted(1'b1): case_matches_guarded = 4'h3;
+      3'b001 &&& counted(1'b0): case_matches_guarded = 4'h4;
+      .* &&& counted(1'b1): case_matches_guarded = 4'h5;
+      default: case_matches_guarded = 4'hf;
+    endcase
+    case_matches_guard_count = call_count;
+    constant_conditional = CONDITIONAL_CONSTANT;
+    constant_conditional_bits = CONDITIONAL_CONSTANT_BITS;
+    match_tagged_value =
+        tagged packet '{code: 3'b101, valid: 1'b1};
+    match_structured_value = '{code: 3'b110, valid: 1'b1};
+    case (match_tagged_value) matches
+      tagged packet '{valid: 1'b1, code: .code}:
+        case_matches_tagged = code;
+      default: case_matches_tagged = 3'b111;
+    endcase
+    case (match_structured_value) matches
+      '{valid: 1'b1, code: .code}:
+        case_matches_structured = code;
+      default: case_matches_structured = 3'b111;
+    endcase
     #1;
     $finish;
   end
@@ -636,7 +768,7 @@ endmodule
   assert(changed.result.status == fsim::runtime::RunStatus::stopped);
   assert((
       changed.values
-      == std::array<std::string, 58>{
+      == std::array<std::string, 79> {
           "11111111111111111111111111111111",
           "00000000000000000000000011111111",
           "11111111111111111000000000000000",
@@ -694,7 +826,28 @@ endmodule
           "1",
           "1",
           "1",
-          "0000000000000000000000000000XXXX"}));
+          "0000000000000000000000000000XXXX",
+          "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000",
+          "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000",
+          "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+          "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+          "1",
+          "1",
+          "1",
+          "0001",
+          "0010",
+          "0011",
+          "0100",
+          "1",
+          "0",
+          "1",
+          "0101",
+          "00000000000000000000000000000010",
+          "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001011010",
+          "00000000000000000000000010001001",
+          "101",
+          "110" }));
   assert(baseline_o2_keys.size() == 4);
   assert(changed.specialization_keys.size() == 4);
   assert(changed.specialization_keys[0] != baseline_o2_keys[0]);

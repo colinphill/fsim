@@ -195,7 +195,8 @@ namespace {
             || kind == SystemVerilogVpiObjectKind::Program
             || kind == SystemVerilogVpiObjectKind::Package
             || kind == SystemVerilogVpiObjectKind::Class
-            || kind == SystemVerilogVpiObjectKind::ClassProperty;
+            || kind == SystemVerilogVpiObjectKind::ClassProperty
+            || kind == SystemVerilogVpiObjectKind::Assertion;
         if (systemverilog_only
             && type.language != SystemVerilogVpiLanguage::SystemVerilog2017) {
             return false;
@@ -246,7 +247,8 @@ namespace {
             || kind == SystemVerilogVpiObjectKind::Package
             || kind == SystemVerilogVpiObjectKind::GenerateScope
             || kind == SystemVerilogVpiObjectKind::Class
-            || kind == SystemVerilogVpiObjectKind::Process;
+            || kind == SystemVerilogVpiObjectKind::Process
+            || kind == SystemVerilogVpiObjectKind::Assertion;
         if (scope && type.category != SystemVerilogVpiValueCategory::None) {
             return false;
         }
@@ -585,8 +587,14 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
     }
 
     std::uint32_t parent_slot { };
-    if (descriptor.kind == SystemVerilogVpiObjectKind::Root) {
-        if (descriptor.parent != 0U) {
+    const bool top_level
+        = descriptor.kind == SystemVerilogVpiObjectKind::Root
+        || ((descriptor.kind == SystemVerilogVpiObjectKind::Package
+                || descriptor.kind == SystemVerilogVpiObjectKind::Class)
+            && descriptor.parent == 0U);
+    if (top_level) {
+        if (descriptor.kind == SystemVerilogVpiObjectKind::Root
+            && descriptor.parent != 0U) {
             return { { }, SystemVerilogVpiObjectError::InvalidParent };
         }
     } else {
@@ -601,7 +609,7 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
         return { { }, SystemVerilogVpiObjectError::DuplicateName };
     }
     std::string full_name;
-    if (descriptor.kind == SystemVerilogVpiObjectKind::Root) {
+    if (top_level) {
         full_name = hierarchy_segment;
     } else {
         full_name = records_[parent_slot].full_name;
@@ -672,7 +680,7 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
     const auto handle = encode_object(slot, records_[slot].epoch);
     siblings_.emplace(std::move(key), handle);
     full_names_.emplace(records_[slot].full_name, handle);
-    if (descriptor.kind != SystemVerilogVpiObjectKind::Root) {
+    if (!top_level) {
         ++records_[parent_slot].live_children;
     }
     return { handle, { } };

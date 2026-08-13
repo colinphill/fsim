@@ -6,6 +6,12 @@ namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
 
+void Lowerer::set_systemverilog_program_owner(
+    const std::optional<std::uint32_t> owner) noexcept
+{
+    systemverilog_program_owner_ = owner;
+}
+
 namespace {
 
     [[nodiscard]] runtime::simir::OutputFormat runtime_output_format(
@@ -108,6 +114,7 @@ Lowerer::Lowerer(
     const std::vector<frontend::FunctionDeclaration>& functions,
     const std::vector<frontend::TaskDeclaration>& tasks,
     const std::vector<frontend::ProcedureDeclaration>& procedures,
+    const frontend::SystemVerilogScalarEvaluationContext scalar_context,
     std::vector<Diagnostic>& diagnostics)
     : design_(design)
     , signals_(signals)
@@ -122,6 +129,7 @@ Lowerer::Lowerer(
     , functions_(functions)
     , tasks_(tasks)
     , procedures_(procedures)
+    , scalar_context_(scalar_context)
     , diagnostics_(diagnostics)
 {
 }
@@ -197,6 +205,7 @@ Process Lowerer::lower_process(
     procedural_continuous_assignment_by_statement_.clear();
     procedural_continuous_assignments_by_target_.clear();
     process_.id = static_cast<ProcessId>(design_.processes_.size());
+    process_.program_owner = systemverilog_program_owner_;
     process_.name = std::string(hierarchy) + "."
         + (source.name.empty()
                 ? "process_" + std::to_string(process_.id)
@@ -793,6 +802,7 @@ bool Lowerer::contains_explicit_wait(
             return statement.kind == StatementKind::Delay
                 || statement.kind == StatementKind::WaitOn
                 || statement.kind == StatementKind::WaitUntil
+                || statement.kind == StatementKind::WaitOrder
                 || contains_explicit_wait(statement.statements)
                 || contains_explicit_wait(statement.else_statements)
                 || case_wait;
@@ -1073,7 +1083,8 @@ void Lowerer::lower_statement(const Statement& statement)
         } else if (
             statement.kind == StatementKind::Delay
             || statement.kind == StatementKind::WaitOn
-            || statement.kind == StatementKind::WaitUntil) {
+            || statement.kind == StatementKind::WaitUntil
+            || statement.kind == StatementKind::WaitOrder) {
             kind = DebugPointKind::wait;
         }
         emit_debug_point(kind, statement.span);
@@ -1146,6 +1157,9 @@ void Lowerer::lower_statement(const Statement& statement)
     case StatementKind::WaitUntil:
         lower_wait_until(statement);
         break;
+    case StatementKind::WaitOrder:
+        lower_wait_order(statement);
+        break;
     case StatementKind::EventTrigger:
         lower_event_trigger(statement);
         break;
@@ -1154,13 +1168,7 @@ void Lowerer::lower_statement(const Statement& statement)
             MonitorControl { statement.monitor_enabled });
         break;
     case StatementKind::FileClose: {
-        const auto* type = statement.file_handle.kind
-                == ExpressionKind::Identifier
-            ? object_type(statement.file_handle.text)
-            : nullptr;
-        if (type == nullptr
-            || type->domain
-                != frontend::ValueDomain::Integer) {
+        if (!is_file_handle_expression(statement.file_handle)) {
             report(
                 "FSIM-ELAB-SVFILE-001",
                 "$fclose handle must be a 32-bit integer expression",
@@ -1185,15 +1193,7 @@ void Lowerer::lower_statement(const Statement& statement)
             process_.operations.emplace_back(FileFlush { 0, true });
             break;
         }
-        const auto* type = statement.file_handle.kind
-                == ExpressionKind::Identifier
-            ? object_type(statement.file_handle.text)
-            : nullptr;
-        if (!(statement.file_handle.kind
-                    == ExpressionKind::IntegerLiteral
-                || (type != nullptr
-                    && type->domain == frontend::ValueDomain::Integer)
-                || is_integer_expression(statement.file_handle))) {
+        if (!is_file_handle_expression(statement.file_handle)) {
             report(
                 "FSIM-ELAB-SVFILE-016",
                 "$fflush handle must be a 32-bit integer expression",
@@ -1212,13 +1212,7 @@ void Lowerer::lower_statement(const Statement& statement)
         break;
     }
     case StatementKind::FileDisplay: {
-        const auto* type = statement.file_handle.kind
-                == ExpressionKind::Identifier
-            ? object_type(statement.file_handle.text)
-            : nullptr;
-        if (type == nullptr
-            || type->domain
-                != frontend::ValueDomain::Integer) {
+        if (!is_file_handle_expression(statement.file_handle)) {
             report(
                 "FSIM-ELAB-SVFILE-001",
                 "file output handle must be a 32-bit integer "
@@ -1277,6 +1271,110 @@ void Lowerer::lower_statement(const Statement& statement)
                         && output_format
                             != frontend::OutputFormat::Time;
             };
+        if (statement.output_postponed) {
+            MonitorInstall monitor;
+            monitor.file_handle = *handle;
+            monitor.newline = statement.output_newline;
+            monitor.one_shot = !statement.output_monitor;
+            const auto task_name = statement.output_monitor
+                ? "$fmonitor"
+                : "$fstrobe";
+            if (statement.output_values.empty()
+                && !statement.output_format) {
+                monitor.trailing_text = statement.output_text;
+                process_.operations.emplace_back(std::move(monitor));
+                break;
+            }
+            std::string pending_prefix;
+            const auto append_value
+                = [&](const frontend::OutputValue& output) {
+                      auto prefix = std::move(pending_prefix)
+                          + output.prefix;
+                      if (output.format
+                          == frontend::OutputFormat::Hierarchy) {
+                          pending_prefix = std::move(prefix) + hierarchy_;
+                          return;
+                      }
+                      MonitorValue value;
+                      value.prefix = std::move(prefix);
+                      value.minimum_width = output.minimum_width;
+                      value.left_justify = output.left_justify;
+                      value.zero_pad = output.zero_pad;
+                      value.suppress_leading_zero
+                          = output.suppress_leading_zero;
+                      if (output.format
+                          == frontend::OutputFormat::Time) {
+                          value.kind = MonitorValueKind::time;
+                          value.use_timeformat_width
+                              = output.minimum_width == 0
+                              && !output.suppress_leading_zero;
+                      } else {
+                          if (!scalar_format_matches(
+                                  output.value, output.format)) {
+                              report(
+                                  "FSIM-ELAB-SVFILE-007",
+                                  std::string { task_name }
+                                      + " conversion is incompatible with the value type",
+                                  output.value.span);
+                              return;
+                          }
+                          if (output.value.kind
+                              != frontend::ExpressionKind::Identifier) {
+                              report(
+                                  "FSIM-ELAB-SVFILE-007",
+                                  std::string { task_name }
+                                      + " requires direct packed-signal value expressions",
+                                  output.value.span);
+                              return;
+                          }
+                          const auto signal = signals_.find(
+                              output.value.text);
+                          if (signal == signals_.end()) {
+                              report(
+                                  "FSIM-ELAB-020",
+                                  "unknown file-strobe signal '"
+                                      + output.value.text + "'",
+                                  output.value.span);
+                              return;
+                          }
+                          value.kind = MonitorValueKind::signal;
+                          value.signal = signal->second;
+                          value.format = runtime_output_format(
+                              output.format);
+                          value.scalar_kind = scalar_kind_of(
+                              output.value);
+                          value.signed_decimal
+                              = value.format
+                                  == runtime::simir::OutputFormat::decimal
+                              && is_signed_expression(output.value);
+                      }
+                      monitor.values.push_back(std::move(value));
+                  };
+            if (!statement.output_values.empty()) {
+                for (const auto& output : statement.output_values) {
+                    append_value(output);
+                }
+                monitor.trailing_text = std::move(pending_prefix)
+                    + statement.output_trailing_text;
+            } else {
+                append_value(
+                    frontend::OutputValue {
+                        statement.value,
+                        *statement.output_format,
+                        statement.output_prefix,
+                        statement.output_suppress_leading_zero,
+                        statement.output_minimum_width,
+                        statement.output_left_justify,
+                        statement.output_zero_pad });
+                monitor.trailing_text = std::move(pending_prefix)
+                    + statement.output_suffix;
+            }
+            if (!monitor.values.empty()
+                || !monitor.trailing_text.empty()) {
+                process_.operations.emplace_back(std::move(monitor));
+            }
+            break;
+        }
         const auto lower_output =
             [&](const frontend::OutputValue& output,
                 const std::string& suffix,
@@ -1510,7 +1608,8 @@ void Lowerer::lower_statement(const Statement& statement)
                         statement.output_text,
                         statement.output_newline,
                         statement.output_postponed
-                            && !statement.output_monitor });
+                            && !statement.output_monitor,
+                        std::nullopt });
                 break;
             }
             MonitorInstall monitor;
@@ -1535,6 +1634,8 @@ void Lowerer::lower_statement(const Statement& statement)
                     if (output.format
                         == frontend::OutputFormat::Time) {
                         value.kind = MonitorValueKind::time;
+                        value.use_timeformat_width = output.minimum_width == 0
+                            && !output.suppress_leading_zero;
                     } else {
                         if (!scalar_format_matches(
                                 output.value, output.format)) {
@@ -1633,7 +1734,9 @@ void Lowerer::lower_statement(const Statement& statement)
                             statement.output_postponed,
                             output.minimum_width,
                             output.left_justify,
-                            output.zero_pad });
+                            output.zero_pad,
+                            output.minimum_width == 0
+                                && !output.suppress_leading_zero });
                     continue;
                 }
                 if (output.format
@@ -1762,6 +1865,15 @@ void Lowerer::lower_statement(const Statement& statement)
         break;
     case StatementKind::Finish:
         process_.operations.emplace_back(Stop { });
+        break;
+    case StatementKind::Exit:
+        if (!systemverilog_program_owner_) {
+            report(
+                "FSIM-ELAB-SVEXIT-001",
+                "$exit is legal only in a SystemVerilog program",
+                statement.span);
+        }
+        process_.operations.emplace_back(Halt { true });
         break;
     case StatementKind::Fork:
         lower_fork(statement);

@@ -145,138 +145,147 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
       module_has_non_time_item_ = true;
       parse_export_clause(
           unit.systemverilog_exports, previous());
+    } else if (match_keyword("nettype")) {
+        module_has_non_time_item_ = true;
+        parse_nettype(unit, previous());
+    } else if (match_keyword("alias")) {
+        module_has_non_time_item_ = true;
+        parse_alias_statement(unit, previous());
+    } else if (match_keyword("let")) {
+        module_has_non_time_item_ = true;
+        parse_let_declaration(unit, previous());
     } else if (match_keyword("typedef")) {
-      module_has_non_time_item_ = true;
-      const auto declaration = previous();
-      if (keyword("class")) {
-        add_class_declaration(
-            unit.systemverilog_classes,
-            parse_class_forward_declaration(declaration, unit.name),
-            declaration);
-      } else {
-        parse_typedef(unit, declaration);
-      }
+        module_has_non_time_item_ = true;
+        const auto declaration = previous();
+        if (keyword("class")) {
+            add_class_declaration(
+                unit.systemverilog_classes,
+                parse_class_forward_declaration(declaration, unit.name),
+                declaration);
+        } else {
+            parse_typedef(unit, declaration);
+        }
     } else if (match_keyword("virtual")) {
-      module_has_non_time_item_ = true;
-      const auto qualifier = previous();
-      if (match_keyword("class")) {
-        add_class_declaration(
-            unit.systemverilog_classes,
-            parse_class(previous(), unit.name, true),
-            qualifier);
-      } else {
-        error(
-            qualifier,
-            "FSIM-SV-PARSE-254",
-            "package 'virtual' must introduce a class");
-        skip_to_semicolon();
-      }
+        module_has_non_time_item_ = true;
+        const auto qualifier = previous();
+        if (match_keyword("class")) {
+            add_class_declaration(
+                unit.systemverilog_classes,
+                parse_class(previous(), unit.name, true),
+                qualifier);
+        } else {
+            error(
+                qualifier,
+                "FSIM-SV-PARSE-254",
+                "package 'virtual' must introduce a class");
+            skip_to_semicolon();
+        }
     } else if (match_keyword("interface")) {
-      module_has_non_time_item_ = true;
-      const auto qualifier = previous();
-      if (match_keyword("class")) {
+        module_has_non_time_item_ = true;
+        const auto qualifier = previous();
+        if (match_keyword("class")) {
+            add_class_declaration(
+                unit.systemverilog_classes,
+                parse_class(previous(), unit.name, false, true),
+                qualifier);
+        } else {
+            error(
+                qualifier,
+                "FSIM-SV-PARSE-255",
+                "package 'interface' must introduce a class");
+            skip_to_semicolon();
+        }
+    } else if (match_keyword("class")) {
+        module_has_non_time_item_ = true;
+        const auto declaration = previous();
         add_class_declaration(
             unit.systemverilog_classes,
-            parse_class(previous(), unit.name, false, true),
-            qualifier);
-      } else {
-        error(
-            qualifier,
-            "FSIM-SV-PARSE-255",
-            "package 'interface' must introduce a class");
-        skip_to_semicolon();
-      }
-    } else if (match_keyword("class")) {
-      module_has_non_time_item_ = true;
-      const auto declaration = previous();
-      add_class_declaration(
-          unit.systemverilog_classes,
-          parse_class(declaration, unit.name),
-          declaration);
+            parse_class(declaration, unit.name),
+            declaration);
     } else if (
         at(TokenKind::Identifier)
         && current().text == "covergroup") {
-      module_has_non_time_item_ = true;
-      const auto declaration = advance();
-      add_covergroup_declaration(
-          unit.systemverilog_covergroups,
-          parse_covergroup_declaration(
-              declaration,
-              SystemVerilogCovergroupOwnerKind::DesignUnit),
-          declaration);
+        module_has_non_time_item_ = true;
+        const auto declaration = advance();
+        add_covergroup_declaration(
+            unit.systemverilog_covergroups,
+            parse_covergroup_declaration(
+                declaration,
+                SystemVerilogCovergroupOwnerKind::DesignUnit),
+            declaration);
     } else if (match_keyword("function")) {
-      module_has_non_time_item_ = true;
-      const auto declaration = previous();
-      if (compilation_unit_class_method_definition_start()) {
-        unit.systemverilog_class_method_definitions.push_back(
-            parse_class_out_of_block_method(
-                declaration,
-                SystemVerilogClassMethodKind::Function));
-      } else {
-        auto function = parse_function(declaration);
-        const bool duplicate = std::ranges::any_of(
-            unit.functions,
-            [&](const FunctionDeclaration& existing) {
-              return existing.name == function.name;
-            })
-            || std::ranges::any_of(
-                unit.tasks,
-                [&](const TaskDeclaration& existing) {
-              return existing.name == function.name;
-            });
-        if (duplicate) {
-          error(
-              start,
-              "FSIM-SV-SEM-066",
-              "duplicate package function '" + function.name + "'");
+        module_has_non_time_item_ = true;
+        const auto declaration = previous();
+        if (compilation_unit_class_method_definition_start()) {
+            unit.systemverilog_class_method_definitions.push_back(
+                parse_class_out_of_block_method(
+                    declaration,
+                    SystemVerilogClassMethodKind::Function));
         } else {
-          unit.functions.push_back(std::move(function));
+            auto function = parse_function(declaration);
+            const bool duplicate = std::ranges::any_of(
+                                       unit.functions,
+                                       [&](const FunctionDeclaration& existing) {
+                                           return existing.name == function.name;
+                                       })
+                || std::ranges::any_of(
+                    unit.tasks,
+                    [&](const TaskDeclaration& existing) {
+                        return existing.name == function.name;
+                    });
+            if (duplicate) {
+                error(
+                    start,
+                    "FSIM-SV-SEM-066",
+                    "duplicate package function '" + function.name + "'");
+            } else {
+                unit.functions.push_back(std::move(function));
+            }
         }
-      }
     } else if (match_keyword("task")) {
-      module_has_non_time_item_ = true;
-      const auto declaration = previous();
-      if (compilation_unit_class_method_definition_start()) {
-        unit.systemverilog_class_method_definitions.push_back(
-            parse_class_out_of_block_method(
-                declaration,
-                SystemVerilogClassMethodKind::Task));
-      } else {
-        auto task = parse_task(declaration);
-        const bool duplicate = std::ranges::any_of(
-            unit.tasks,
-            [&](const TaskDeclaration& existing) {
-              return existing.name == task.name;
-            })
-            || std::ranges::any_of(
-                unit.functions,
-                [&](const FunctionDeclaration& existing) {
-              return existing.name == task.name;
-            });
-        if (duplicate) {
-          error(
-              start,
-              "FSIM-SV-SEM-073",
-              "duplicate package task '" + task.name + "'");
+        module_has_non_time_item_ = true;
+        const auto declaration = previous();
+        if (compilation_unit_class_method_definition_start()) {
+            unit.systemverilog_class_method_definitions.push_back(
+                parse_class_out_of_block_method(
+                    declaration,
+                    SystemVerilogClassMethodKind::Task));
         } else {
-          unit.tasks.push_back(std::move(task));
+            auto task = parse_task(declaration);
+            const bool duplicate = std::ranges::any_of(
+                                       unit.tasks,
+                                       [&](const TaskDeclaration& existing) {
+                                           return existing.name == task.name;
+                                       })
+                || std::ranges::any_of(
+                    unit.functions,
+                    [&](const FunctionDeclaration& existing) {
+                        return existing.name == task.name;
+                    });
+            if (duplicate) {
+                error(
+                    start,
+                    "FSIM-SV-SEM-073",
+                    "duplicate package task '" + task.name + "'");
+            } else {
+                unit.tasks.push_back(std::move(task));
+            }
         }
-      }
     } else if (keyword("const")) {
-      module_has_non_time_item_ = true;
-      parse_declaration(unit);
+        module_has_non_time_item_ = true;
+        parse_declaration(unit);
     } else if (is_declaration_start()) {
-      module_has_non_time_item_ = true;
-      parse_declaration(unit);
+        module_has_non_time_item_ = true;
+        parse_declaration(unit);
     } else {
-      module_has_non_time_item_ = true;
-      const auto unsupported = advance();
-      error(
-          unsupported,
-          "FSIM-SV-UNSUPPORTED-023",
-          "unsupported package item starting with '"
-              + unsupported.text + "'");
-      skip_to_semicolon();
+        module_has_non_time_item_ = true;
+        const auto unsupported = advance();
+        error(
+            unsupported,
+            "FSIM-SV-UNSUPPORTED-023",
+            "unsupported package item starting with '"
+                + unsupported.text + "'");
+        skip_to_semicolon();
     }
     if (position() == before) {
       advance();
@@ -750,6 +759,22 @@ void VerilogParser::parse_generate_branch(
         body.tasks.push_back(parse_task(previous()));
     } else if (match_keyword("typedef")) {
         parse_generate_typedef(body, local_names, previous());
+    } else if (match_keyword("alias")) {
+        DesignUnit generated;
+        parse_alias_statement(generated, previous());
+        body.systemverilog_aliases.insert(
+            body.systemverilog_aliases.end(),
+            std::make_move_iterator(
+                generated.systemverilog_aliases.begin()),
+            std::make_move_iterator(
+                generated.systemverilog_aliases.end()));
+    } else if (match_keyword("let")) {
+        DesignUnit generated;
+        parse_let_declaration(generated, previous());
+        body.systemverilog_lets.insert(
+            body.systemverilog_lets.end(),
+            std::make_move_iterator(generated.systemverilog_lets.begin()),
+            std::make_move_iterator(generated.systemverilog_lets.end()));
     } else if (match_keyword("assign")) {
         auto assignments = parse_continuous_assignments(previous());
         body.concurrent_statements.insert(
@@ -1091,7 +1116,7 @@ Type VerilogParser::parse_parameter_type() {
   if (keyword("chandle") || keyword("process")) {
     const auto token = advance();
     type.spelling = token.text;
-    type.domain = ValueDomain::Unknown;
+    type.domain = ValueDomain::Bit2;
     type.is_signed = false;
     type.systemverilog_scalar = SystemVerilogScalarKind::Chandle;
     return type;
@@ -1107,7 +1132,7 @@ Type VerilogParser::parse_parameter_type() {
       || keyword("realtime")) {
     const auto token = advance();
     type.spelling = token.text;
-    type.domain = ValueDomain::Unknown;
+    type.domain = ValueDomain::Bit2;
     type.is_signed = true;
     type.systemverilog_scalar =
         token.text == "shortreal"
@@ -1140,8 +1165,11 @@ Type VerilogParser::parse_parameter_type() {
   } else if (keyword("integer") || keyword("int")) {
     const auto token = advance();
     type.spelling = token.text;
-    type.domain = ValueDomain::Integer;
+    type.domain = token.text == "int"
+        ? ValueDomain::Bit2
+        : ValueDomain::Logic4;
     type.is_signed = true;
+    type.packed_range = PackedRange { 31, 0, true };
   } else if (
       keyword("logic") || keyword("reg") || keyword("bit")) {
     const auto token = advance();

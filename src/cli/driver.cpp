@@ -10,7 +10,6 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -62,8 +61,6 @@ std::string_view command_name(const Command command) {
       return "systemc compile";
     case Command::systemc_link:
       return "systemc link";
-    case Command::migrate:
-      return "migrate";
   }
   return "check";
 }
@@ -92,9 +89,6 @@ std::optional<Command> parse_command(const std::string_view spelling) {
   }
   if (spelling == "simulate") {
     return Command::simulate;
-  }
-  if (spelling == "migrate") {
-    return Command::migrate;
   }
   return std::nullopt;
 }
@@ -503,7 +497,7 @@ void apply_overrides(const Invocation& invocation, project::Config& config) {
 void print_help(std::ostream& output, const std::string_view program) {
   output
       << "Usage: " << program
-      << " <check|build|run|debug|tcl|compile|elaborate|simulate|migrate>"
+      << " <check|build|run|debug|tcl|compile|elaborate|simulate>"
          " [options] [files...]\n"
       << "\n"
       << "Commands:\n"
@@ -517,7 +511,6 @@ void print_help(std::ostream& output, const std::string_view program) {
       << "  simulate Simulate an explicit .fsimdesign artifact\n"
       << "  systemc compile Compile one SystemC C++ translation unit into .fsimscobj\n"
       << "  systemc link Link .fsimscobj inputs into one .fsimscplugin\n"
-      << "  migrate Upgrade a project manifest schema\n"
       << "\n"
       << "Project and source options:\n"
       << "  -p, --project PATH       Project manifest (default: fsim.toml)\n"
@@ -560,8 +553,6 @@ void print_help(std::ostream& output, const std::string_view program) {
       << "      --engine interpreter|compiled|debug\n"
       << "      --seed COUNT|random\n"
       << "      --diagnostics text|json\n"
-      << "      --to 2               Migration target schema\n"
-      << "      --in-place           Replace the migrated manifest\n"
       << "\n"
       << "Tcl options:\n"
       << "  -c, --command SCRIPT    Evaluate Tcl text (repeatable)\n"
@@ -604,8 +595,6 @@ const Handler* select_handler(const Services& services, const Command command) {
       return &services.systemc_compile;
     case Command::systemc_link:
       return &services.systemc_link;
-    case Command::migrate:
-      return nullptr;
   }
   return nullptr;
 }
@@ -1037,18 +1026,6 @@ std::optional<Invocation> parse_arguments(
           return std::nullopt;
         }
         invocation.tcl_commands.emplace_back(*value);
-      } else if (is_option(argument, "", "--to")) {
-        const auto value =
-            take_value(index, argc, argv, argument, "--to", diagnostics);
-        std::uint64_t schema = 0;
-        if (!value.has_value() || !parse_unsigned(*value, schema)
-            || schema > std::numeric_limits<std::uint32_t>::max()) {
-          argument_error(diagnostics, "--to requires a schema version");
-          return std::nullopt;
-        }
-        invocation.migration_schema = static_cast<std::uint32_t>(schema);
-      } else if (argument == "--in-place") {
-        invocation.migration_in_place = true;
       } else {
         argument_error(diagnostics, "unknown option '" + std::string(argument) + "'");
         return std::nullopt;
@@ -1089,7 +1066,7 @@ std::optional<Invocation> parse_arguments(
             diagnostics,
             "unknown command '" + std::string(argument) +
                 "'; expected check, build, run, debug, tcl, compile, "
-                "elaborate, simulate, or migrate");
+                "elaborate, or simulate");
         return std::nullopt;
       }
       invocation.command = *command;
@@ -1392,43 +1369,6 @@ std::optional<Invocation> parse_arguments(
         "available only with systemc compile or systemc link");
     return std::nullopt;
   }
-  if (invocation.command == Command::migrate) {
-    if (invocation.files.size() != 1) {
-      argument_error(diagnostics, "migrate requires exactly one manifest path");
-      return std::nullopt;
-    }
-    if (invocation.migration_schema != std::uint32_t{2}) {
-      argument_error(diagnostics, "migrate currently requires '--to 2'");
-      return std::nullopt;
-    }
-    if (!invocation.search_libraries.empty()) {
-      argument_error(
-          diagnostics,
-          "--search-library is not available with migrate");
-      return std::nullopt;
-    }
-    if (!invocation.library_mappings.empty()) {
-      argument_error(
-          diagnostics,
-          "--map-library is not available with migrate");
-      return std::nullopt;
-    }
-    if (!invocation.library_exports.empty()) {
-      argument_error(
-          diagnostics,
-          "--export-library is not available with migrate");
-      return std::nullopt;
-    }
-    if (!invocation.tops.empty()) {
-      argument_error(diagnostics, "--top is not available with migrate");
-      return std::nullopt;
-    }
-  } else if (invocation.migration_schema.has_value()
-             || invocation.migration_in_place) {
-    argument_error(
-        diagnostics, "--to and --in-place are available only with migrate");
-    return std::nullopt;
-  }
   return invocation;
 }
 
@@ -1455,32 +1395,6 @@ int run(
       print_help(output, invocation->program_name);
       return kSuccess;
     }
-    if (invocation->command == Command::migrate) {
-      auto migrated = project::migrate_to_schema_2(
-          invocation->files.front(), diagnostics);
-      if (!migrated.has_value() || diagnostics.has_error()) {
-        print_diagnostics(error, diagnostics, invocation->diagnostic_format);
-        return kUserError;
-      }
-      if (!invocation->migration_in_place) {
-        output << *migrated;
-        return kSuccess;
-      }
-      std::ofstream destination(
-          invocation->files.front(), std::ios::binary | std::ios::trunc);
-      destination.write(
-          migrated->data(), static_cast<std::streamsize>(migrated->size()));
-      if (!destination) {
-        diagnostics.error(
-            "FSIM-PROJ-0010",
-            "cannot write migrated project manifest: "
-                + fsim::support::path_to_utf8(invocation->files.front()));
-        print_diagnostics(error, diagnostics, invocation->diagnostic_format);
-        return kUserError;
-      }
-      return kSuccess;
-    }
-
     std::optional<project::Config> config;
     if (invocation->command == Command::tcl
         && !invocation->manifest_explicit) {

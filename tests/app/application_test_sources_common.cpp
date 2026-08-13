@@ -95,6 +95,26 @@ class AppBase;
     shared = shared + amount;
     return shared;
   endfunction
+  function int transfer_text(output string produced, inout string transformed);
+    string local_text;
+    local_text = "instance-output";
+    produced = local_text;
+    transformed = "instance-inout";
+    return 1;
+  endfunction
+  function static int transfer_retained_text(output string produced);
+    string retained = "retained-first";
+    produced = retained;
+    retained = "retained-next";
+    return 1;
+  endfunction
+  static function int transfer_static_text(
+      output string produced, inout string transformed);
+    string local_text = "static-output";
+    produced = local_text;
+    transformed = "static-inout";
+    return 1;
+  endfunction
   static task bump_shared(input int amount, output int observed);
     #1;
     shared = shared + amount;
@@ -518,6 +538,9 @@ module class_top;
   int source_accumulator;
   int source_alias;
   int source_result;
+  int source_text_result;
+  int source_retained_text_result;
+  int source_static_text_result;
   int source_recursive;
   int source_static_first;
   int source_static_second;
@@ -545,6 +568,14 @@ module class_top;
   int source_static_result;
   int source_static_task_observed;
   int source_static_property;
+  string source_text_output;
+  string source_text_inout;
+  string source_retained_text_output;
+  string source_static_text_output;
+  string source_static_text_inout;
+  logic source_text_copyout_ok;
+  logic source_retained_text_copyout_ok;
+  logic source_static_text_copyout_ok;
   logic source_handle_alias;
   logic source_handle_property_alias;
   logic source_task_handle_alias;
@@ -565,6 +596,8 @@ module class_top;
   int source_selected_randomize_result;
   logic [7:0] source_selected_randomize_value;
   logic [3:0] source_selected_randomize_generated;
+  int source_inline_randomize_result;
+  logic [3:0] source_inline_randomize_generated;
   logic [3:0] source_randomize_generated;
   logic [3:0] source_randc_third;
   int source_randomize_pre;
@@ -631,6 +664,34 @@ module class_top;
     source_alias = 5;
     source_object = new(3, WIDE_SEED);
     source_other = new(9);
+    source_text_inout = "instance-before";
+    source_text_result = source_object.transfer_text(
+        source_text_output, source_text_inout);
+    source_text_copyout_ok = source_text_result == 1
+        && source_text_output == "instance-output"
+        && source_text_inout == "instance-inout";
+    source_retained_text_result = source_object.transfer_retained_text(
+        source_retained_text_output);
+    source_retained_text_copyout_ok = source_retained_text_result == 1
+        && source_retained_text_output == "retained-first";
+    source_retained_text_result = source_object.transfer_retained_text(
+        source_retained_text_output);
+    source_retained_text_copyout_ok = source_retained_text_copyout_ok
+        && source_retained_text_result == 1
+        && source_retained_text_output == "retained-next";
+    source_static_text_inout = "static-before";
+    source_static_text_result = AppBase::transfer_static_text(
+        source_static_text_output, source_static_text_inout);
+    source_static_text_copyout_ok = source_static_text_result == 1
+        && source_static_text_output == "static-output"
+        && source_static_text_inout == "static-inout";
+    source_static_text_inout = "static-before-again";
+    source_static_text_result = AppBase::transfer_static_text(
+        source_static_text_output, source_static_text_inout);
+    source_static_text_copyout_ok = source_static_text_copyout_ok
+        && source_static_text_result == 1
+        && source_static_text_output == "static-output"
+        && source_static_text_inout == "static-inout";
     source_wide_accumulator = '1;
     wide_alias_local = '0;
     source_wide_result = source_object.wide_transfer(
@@ -719,6 +780,11 @@ module class_top;
     source_randomize_result =
         randomized_object.randomize(generated_value);
     source_randc_third = randomized_object.generated_value;
+    source_inline_randomize_result =
+        randomized_object.randomize(generated_value) with {
+          generated_value == 2;
+        };
+    source_inline_randomize_generated = randomized_object.generated_value;
     source_rand_mode_enabled = randomized_object.value.rand_mode(1);
     source_randomize_pre = randomized_object.hook_pre;
     source_randomize_post = randomized_object.hook_post;

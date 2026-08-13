@@ -608,7 +608,20 @@ class VerilogParser final : private detail::ParserBase {
 
   DesignUnit parse_module(
       const Token& start,
-      UnitKind kind = UnitKind::VerilogModule);
+      UnitKind kind = UnitKind::VerilogModule,
+      bool extern_declaration = false);
+
+  DesignUnit parse_systemverilog_configuration(const Token& start);
+
+  SystemVerilogBindDirective parse_systemverilog_bind(
+      const Token& start);
+
+  DesignUnit make_systemverilog_bind_unit(
+      SystemVerilogBindDirective directive);
+
+  std::string parse_systemverilog_hierarchical_name(
+      std::string_view description,
+      bool allow_indices);
 
   void parse_modport(DesignUnit& unit, const Token& start);
 
@@ -762,6 +775,10 @@ class VerilogParser final : private detail::ParserBase {
       bool is_pure,
       bool is_extern);
 
+  std::vector<Expression> parse_constraint_block_expressions(
+      std::string_view close_message,
+      std::string close_code);
+
   VerilogUdpDeclaration parse_udp_declaration(const Token& start);
 
   VerilogSpecifyBlock parse_specify_block(const Token& start);
@@ -914,6 +931,18 @@ class VerilogParser final : private detail::ParserBase {
       std::vector<EnumLiteralDeclaration>* literals = nullptr);
 
   void parse_typedef(
+      DesignUnit& unit,
+      const Token& start);
+
+  void parse_nettype(
+      DesignUnit& unit,
+      const Token& start);
+
+  void parse_alias_statement(
+      DesignUnit& unit,
+      const Token& start);
+
+  void parse_let_declaration(
       DesignUnit& unit,
       const Token& start);
 
@@ -1096,6 +1125,7 @@ class VerilogParser final : private detail::ParserBase {
   std::string module_time_precision_;
   bool module_time_unit_declared_{};
   bool module_time_precision_declared_{};
+  std::size_t next_bind_unit_ { };
   bool module_has_non_time_item_{};
   bool in_verilog_attribute_ { };
 };

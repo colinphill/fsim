@@ -115,6 +115,13 @@ void ContainerOperationLowerer::lower(
     invoke(value.lhs, value.rhs, value.destination, "scalar.binary");
 }
 void ContainerOperationLowerer::lower(
+    const runtime::simir::SystemVerilogMath& value)
+{
+    invoke(
+        std::nullopt, std::nullopt, value.destination,
+        "systemverilog.math");
+}
+void ContainerOperationLowerer::lower(
     const runtime::simir::CopyContainerRegister&)
 {
     invoke(std::nullopt, std::nullopt, std::nullopt, "container.copy");

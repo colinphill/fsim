@@ -30,6 +30,7 @@ enum class DeclarationForm : std::uint8_t {
     modport,
     enumeration_literal,
     generated,
+    nettype_declaration,
 };
 
 enum class Direction : std::uint8_t {
@@ -142,10 +143,12 @@ enum class StatementKind : std::uint8_t {
     monitor_control,
     pause,
     finish,
+    exit_program,
     block,
     null_statement,
     procedural_assign,
     deassign,
+    wait_order,
 };
 
 enum class ProcessKind : std::uint8_t {
@@ -538,6 +541,7 @@ struct TypeDefinition {
     std::vector<PackedMember> members;
     std::vector<EnumerationLiteral> enumeration_literals;
     std::optional<ContainerType> container;
+    std::string resolution_function;
     SourceSpanId source;
     OriginId origin;
 };
@@ -584,6 +588,27 @@ struct Export {
     std::optional<Name> member;
     bool wildcard { };
     SourceSpanId source;
+};
+
+struct Alias {
+    std::vector<ExpressionId> terminals;
+    SourceSpanId source;
+    OriginId origin;
+};
+
+struct LetPort {
+    std::string name;
+    std::optional<TypeReference> type;
+    std::optional<ExpressionId> default_value;
+    SourceSpanId source;
+};
+
+struct LetDeclaration {
+    std::string name;
+    std::vector<LetPort> ports;
+    ExpressionId expression;
+    SourceSpanId source;
+    OriginId origin;
 };
 
 struct ModportMember {
@@ -695,6 +720,8 @@ struct Unit {
     CompilationContext compilation;
     std::vector<Import> imports;
     std::vector<Export> exports;
+    std::vector<Alias> aliases;
+    std::vector<LetDeclaration> lets;
     std::vector<DeclarationId> declarations;
     std::vector<Modport> modports;
     std::vector<InstanceId> instances;

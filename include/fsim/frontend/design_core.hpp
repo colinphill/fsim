@@ -26,6 +26,8 @@ enum class UnitKind {
     VerilogModule,
     SystemVerilogProgram,
     VhdlPslVerificationUnit,
+    SystemVerilogConfiguration,
+    SystemVerilogBind,
 };
 enum class PortDirection {
     Unknown,
@@ -441,6 +443,9 @@ struct Type {
     std::string spelling;
     SystemVerilogScalarKind systemverilog_scalar { SystemVerilogScalarKind::None };
     std::string systemverilog_net_type;
+    // Canonical selected function name from a SystemVerilog user-defined
+    // nettype. Empty selects the ordinary net resolution for the base type.
+    std::string systemverilog_resolution_function;
     std::optional<PackedRange> packed_range;
     bool is_signed { };
     // Retained until elaboration even when packed_range is already known, so a
@@ -577,6 +582,7 @@ enum class TypeDeclarationKind {
     VhdlSubtype,
     SystemVerilogTypedef,
     VhdlIncomplete,
+    SystemVerilogNettype,
 };
 
 struct TypeAliasDeclaration {
@@ -589,6 +595,7 @@ struct TypeAliasDeclaration {
     // literals remain contextual and use declaration-order ordinals.
     std::vector<EnumLiteralDeclaration> enum_literals;
     TypeDeclarationKind declaration_kind { TypeDeclarationKind::Alias };
+    std::string systemverilog_resolution_function;
 };
 
 struct VhdlAttributeDeclaration {
@@ -732,6 +739,28 @@ struct SignalAliasDeclaration {
     std::string actual;
     Type type;
     PortDirection direction { PortDirection::Unknown };
+    SourceSpan span;
+};
+
+// An IEEE 1800 alias statement joins already-declared lvalues. Unlike a VHDL
+// object alias, every terminal remains an independently named declaration and
+// the connection is bidirectional.
+struct SystemVerilogAliasDeclaration {
+    std::vector<Expression> terminals;
+    SourceSpan span;
+};
+
+struct SystemVerilogLetPort {
+    std::string name;
+    std::optional<Type> type;
+    std::optional<Expression> default_value;
+    SourceSpan span;
+};
+
+struct SystemVerilogLetDeclaration {
+    std::string name;
+    std::vector<SystemVerilogLetPort> ports;
+    Expression expression;
     SourceSpan span;
 };
 
@@ -1113,10 +1142,12 @@ enum class StatementKind {
     Report,
     Pause,
     Finish,
+    Exit,
     Block,
     Null,
     ProceduralAssign,
     Deassign,
+    WaitOrder,
 };
 
 enum class ForkJoinKind {

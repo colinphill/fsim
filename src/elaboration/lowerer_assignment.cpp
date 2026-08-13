@@ -124,6 +124,54 @@ Lowerer::static_integer_value(const Expression& expression)
 
 void Lowerer::lower_assignment(const Statement& statement)
 {
+    if (statement.target.kind == ExpressionKind::Identifier) {
+        const auto* target_type = object_type(statement.target.text);
+        const bool null_event = statement.value.kind == ExpressionKind::Call
+            && statement.value.text == "@sv-null";
+        const auto* source_type = statement.value.kind
+                == ExpressionKind::Identifier
+            ? object_type(statement.value.text)
+            : nullptr;
+        if (target_type != nullptr && target_type->spelling == "event") {
+            const auto target = signals_.find(statement.target.text);
+            const auto source = source_type != nullptr
+                ? signals_.find(statement.value.text)
+                : signals_.end();
+            if (target == signals_.end()
+                || (!null_event
+                    && (source_type == nullptr
+                        || source_type->spelling != "event"
+                        || source == signals_.end()))) {
+                report(
+                    "FSIM-ELAB-SVEVENT-009",
+                    "named-event assignment requires an event variable or null source",
+                    statement.span);
+                return;
+            }
+            if (statement.assignment_kind != AssignmentKind::Blocking
+                || statement.procedural_assignment_control
+                    != frontend::ProceduralAssignmentControl::None) {
+                report(
+                    "FSIM-ELAB-SVEVENT-010",
+                    "named-event alias assignment must be blocking and time-free",
+                    statement.span);
+                return;
+            }
+            process_.operations.emplace_back(
+                EventAlias {
+                    target->second,
+                    null_event ? SignalId { } : source->second,
+                    !null_event });
+            return;
+        } else if (source_type != nullptr
+            && source_type->spelling == "event") {
+            report(
+                "FSIM-ELAB-SVEVENT-009",
+                "named-event assignment requires an event-variable target",
+                statement.span);
+            return;
+        }
+    }
     if (statement.target.kind == ExpressionKind::Concatenation) {
         lower_concatenated_assignment(statement);
         return;
@@ -1142,18 +1190,18 @@ void Lowerer::lower_assignment(const Statement& statement)
         const auto target_domain = selected_domain.value_or(
             register_domain(local->second));
         if (is_two_state_domain(target_domain)
-            && !is_two_state_domain(
-                register_domain(*value))
-            && (contextual_target_type == nullptr
-                || contextual_target_type->systemverilog_scalar
-                    == frontend::SystemVerilogScalarKind::None)) {
-            report(
-                "FSIM-ELAB-058",
-                "assignment to two-state local variable '"
-                    + target_name
-                    + "' requires an explicit conversion",
-                statement.span);
-            return;
+            && !is_two_state_domain(register_domain(*value))) {
+            if (language_ == frontend::Language::SystemVerilog2017) {
+                *value = convert_to_two_state(*value);
+            } else {
+                report(
+                    "FSIM-ELAB-058",
+                    "assignment to two-state local variable '"
+                        + target_name
+                        + "' requires an explicit conversion",
+                    statement.span);
+                return;
+            }
         }
         if (language_ == frontend::Language::Vhdl2008
             && target_domain
@@ -1543,15 +1591,21 @@ void Lowerer::lower_assignment(const Statement& statement)
             : design_.signal_info_[signal->second]
                   .source_domain);
     if (is_two_state_domain(target_domain)
-        && !is_two_state_domain(register_domain(*value))) {
-        report(
-            "FSIM-ELAB-050",
-            "assignment to two-state target '"
-                + target_name
-                + "' requires an explicit conversion from a "
-                  "four-/nine-state expression",
-            statement.span);
-        return;
+        && !is_two_state_domain(register_domain(*value))
+        && !(statement.value.kind == ExpressionKind::Call
+            && statement.value.text == "@sv-null")) {
+        if (language_ == frontend::Language::SystemVerilog2017) {
+            *value = convert_to_two_state(*value);
+        } else {
+            report(
+                "FSIM-ELAB-050",
+                "assignment to two-state target '"
+                    + target_name
+                    + "' requires an explicit conversion from a "
+                      "four-/nine-state expression",
+                statement.span);
+            return;
+        }
     }
     if (!disconnect
         && language_ == frontend::Language::Vhdl2008
@@ -1836,598 +1890,6 @@ void Lowerer::lower_assignment(const Statement& statement)
                     static_cast<std::uint32_t>(context.tag_offset));
             }
         }
-    }
-}
-
-void Lowerer::lower_concatenated_assignment(const Statement& statement)
-{
-    if (statement.target.operands.empty()) {
-        report(
-            "FSIM-ELAB-SVCONCAT-001",
-            "a concatenated assignment target requires at least one packed "
-            "operand",
-            statement.target.span);
-        return;
-    }
-    if (statement.procedural_update_kind
-        != frontend::ProceduralUpdateKind::None) {
-        report(
-            "FSIM-ELAB-SVCONCAT-001",
-            "compound and increment/decrement updates do not accept a "
-            "concatenated assignment target",
-            statement.target.span);
-        return;
-    }
-    std::vector<std::size_t> widths;
-    widths.reserve(statement.target.operands.size());
-    std::size_t total_width { };
-    for (const auto& target : statement.target.operands) {
-        const auto width = infer_width(target);
-        if (!width || *width == 0
-            || *width > std::numeric_limits<std::uint32_t>::max()
-            || total_width > std::numeric_limits<std::uint32_t>::max() - *width) {
-            report(
-                "FSIM-ELAB-SVCONCAT-001",
-                "every concatenated assignment target must have a static nonzero "
-                "packed width and the total width must fit SimIR",
-                target.span);
-            return;
-        }
-        widths.push_back(*width);
-        total_width += *width;
-    }
-
-    auto targets = statement.target.operands;
-    std::vector<std::string> captured_target_names;
-    const auto capture_target = [&](const auto& self,
-                                    Expression& target) -> bool {
-        if (target.kind == ExpressionKind::Concatenation) {
-            for (auto& operand : target.operands) {
-                if (!self(self, operand)) {
-                    return false;
-                }
-            }
-            return true;
-        }
-        if ((target.kind != ExpressionKind::Index
-                && target.kind != ExpressionKind::Slice)
-            || target.operands.empty()) {
-            return true;
-        }
-        if (!self(self, target.operands.front())) {
-            return false;
-        }
-        const bool dynamic_index = target.kind == ExpressionKind::Index
-            && target.operands.size() == 2
-            && !static_integer_value(target.operands[1]);
-        const bool dynamic_part_base = target.kind == ExpressionKind::Slice
-            && target.operands.size() == 3
-            && (target.text == "+:" || target.text == "-:")
-            && !static_integer_value(target.operands[1]);
-        if (!dynamic_index && !dynamic_part_base) {
-            return true;
-        }
-        auto value = lower_expression(target.operands[1], 32);
-        if (!value) {
-            return false;
-        }
-        if (register_width(*value) != 32) {
-            *value = resize_register(*value, 32, true);
-        }
-        const auto name = "$fsim_concat_target_"
-            + std::to_string(process_.operations.size()) + "_"
-            + std::to_string(captured_target_names.size());
-        locals_.emplace(name, *value);
-        captured_target_names.push_back(name);
-        target.operands[1] = Expression {
-            ExpressionKind::Identifier, name, { },
-            target.operands[1].span
-        };
-        return true;
-    };
-    for (auto& target : targets) {
-        if (!capture_target(capture_target, target)) {
-            for (const auto& name : captured_target_names) {
-                locals_.erase(name);
-            }
-            return;
-        }
-    }
-    const auto release_captured_targets = [&]() {
-        for (const auto& name : captured_target_names) {
-            locals_.erase(name);
-        }
-    };
-    auto value = lower_expression(statement.value, total_width);
-    if (!value) {
-        release_captured_targets();
-        return;
-    }
-    if (register_width(*value) != total_width) {
-        *value = resize_register(
-            *value, total_width, is_signed_expression(statement.value));
-    }
-
-    Statement child = statement;
-    child.procedural_assignment_control = frontend::ProceduralAssignmentControl::None;
-    child.procedural_assignment_repeat = false;
-    child.sensitivities.clear();
-    if (statement.procedural_assignment_control
-        == frontend::ProceduralAssignmentControl::Event) {
-        emit_debug_point(DebugPointKind::wait, statement.span);
-        if (!emit_event_control_wait(statement)) {
-            release_captured_targets();
-            return;
-        }
-        child.delay.reset();
-    } else if (statement.procedural_assignment_control
-        == frontend::ProceduralAssignmentControl::Delay) {
-        if (!statement.delay) {
-            report(
-                "FSIM-ELAB-105",
-                "concatenated procedural delay assignment has no delay",
-                statement.span);
-            release_captured_targets();
-            return;
-        }
-        if (statement.assignment_kind == AssignmentKind::Blocking) {
-            emit_debug_point(DebugPointKind::wait, statement.span);
-            if (!lower_delay_wait(*statement.delay, statement.span)) {
-                release_captured_targets();
-                return;
-            }
-            child.delay.reset();
-        }
-    }
-
-    std::vector<RegisterId> values(targets.size());
-    std::uint32_t offset { };
-    for (std::size_t reverse = targets.size();
-        reverse != 0; --reverse) {
-        const auto index = reverse - 1;
-        values[index] = allocate_register(
-            widths[index], register_domain(*value));
-        process_.operations.emplace_back(Extract {
-            values[index], *value, offset,
-            static_cast<std::uint32_t>(widths[index]) });
-        offset += static_cast<std::uint32_t>(widths[index]);
-    }
-    for (std::size_t index = 0;
-        index < targets.size(); ++index) {
-        const auto temporary = "$fsim_concat_value_"
-            + std::to_string(process_.operations.size()) + "_"
-            + std::to_string(index);
-        locals_.emplace(temporary, values[index]);
-        child.target = targets[index];
-        child.value = Expression {
-            ExpressionKind::Identifier, temporary, { }, statement.value.span
-        };
-        lower_assignment(child);
-        locals_.erase(temporary);
-    }
-    release_captured_targets();
-}
-
-void Lowerer::lower_if(const Statement& statement)
-{
-    const auto condition = lower_condition(
-        statement.condition,
-        statement.vhdl_conditional_assignment
-            ? "FSIM-ELAB-092"
-            : "FSIM-ELAB-048",
-        statement.vhdl_conditional_assignment
-            ? "conditional-assignment"
-            : "if");
-    if (!condition) {
-        return;
-    }
-    const auto branch_index = static_cast<InstructionIndex>(process_.operations.size());
-    const auto unknown_policy = language_ == frontend::Language::Vhdl2008
-        ? UnknownBranchPolicy::error
-        : UnknownBranchPolicy::when_false;
-    process_.operations.emplace_back(
-        Branch { *condition, 0, 0, unknown_policy });
-    const auto true_start = static_cast<InstructionIndex>(process_.operations.size());
-    lower_statements(statement.statements);
-    const auto jump_index = static_cast<InstructionIndex>(process_.operations.size());
-    process_.operations.emplace_back(Jump { 0 });
-    const auto false_start = static_cast<InstructionIndex>(process_.operations.size());
-    lower_statements(statement.else_statements);
-    const auto end = static_cast<InstructionIndex>(process_.operations.size());
-    process_.operations[branch_index] = Branch {
-        *condition, true_start, false_start, unknown_policy
-    };
-    process_.operations[jump_index] = Jump { end };
-}
-
-bool Lowerer::is_bounded_case_pattern_constant(
-    const Expression& expression) const
-{
-    switch (expression.kind) {
-    case ExpressionKind::IntegerLiteral:
-    case ExpressionKind::BooleanLiteral:
-    case ExpressionKind::LogicLiteral:
-        return true;
-    case ExpressionKind::Unary:
-    case ExpressionKind::Update:
-    case ExpressionKind::Binary:
-    case ExpressionKind::Concatenation:
-    case ExpressionKind::Replication:
-        return std::ranges::all_of(
-            expression.operands,
-            [this](const Expression& operand) {
-                return is_bounded_case_pattern_constant(operand);
-            });
-    case ExpressionKind::Call:
-        return (expression.text == "?:"
-                   || expression.text == "$signed"
-                   || expression.text == "$unsigned"
-                   || expression.text == "$clog2")
-            && std::ranges::all_of(
-                expression.operands,
-                [this](const Expression& operand) {
-                    return is_bounded_case_pattern_constant(operand);
-                });
-    default:
-        return false;
-    }
-}
-
-void Lowerer::lower_case(const Statement& statement)
-{
-    if (statement.case_qualifier
-        != frontend::CaseQualifier::None) {
-        lower_qualified_case(statement);
-        return;
-    }
-    BinaryOperator match_operation = BinaryOperator::case_equal;
-    bool inside_matching = false;
-    bool pattern_matching = false;
-    bool vhdl_matching = false;
-    switch (statement.case_match_kind) {
-    case frontend::CaseMatchKind::Exact:
-        break;
-    case frontend::CaseMatchKind::WildcardZ:
-        match_operation = BinaryOperator::casez_equal;
-        break;
-    case frontend::CaseMatchKind::WildcardXZ:
-        match_operation = BinaryOperator::casex_equal;
-        break;
-    case frontend::CaseMatchKind::Inside:
-        inside_matching = true;
-        match_operation = BinaryOperator::wildcard_equal;
-        break;
-    case frontend::CaseMatchKind::Matches:
-        pattern_matching = true;
-        break;
-    case frontend::CaseMatchKind::VhdlMatching:
-        vhdl_matching = true;
-        match_operation = BinaryOperator::vhdl_match_equal;
-        break;
-    default:
-        report(
-            "FSIM-ELAB-081",
-            "case statement has an invalid matching mode",
-            statement.span);
-        return;
-    }
-    if (inside_matching
-        && language_ != frontend::Language::SystemVerilog2017) {
-        report(
-            "FSIM-ELAB-SVCASEINSIDE-001",
-            "case inside matching requires SystemVerilog",
-            statement.span);
-        return;
-    }
-    if (pattern_matching
-        && language_ != frontend::Language::SystemVerilog2017) {
-        report(
-            "FSIM-ELAB-SVMATCH-001",
-            "case matches pattern matching requires SystemVerilog",
-            statement.span);
-        return;
-    }
-    if ((inside_matching || pattern_matching)
-        && (is_container_expression(statement.condition)
-            || is_string_expression(statement.condition)
-            || statement.condition.kind == ExpressionKind::Aggregate
-            || statement.condition.kind
-                == ExpressionKind::Concatenation)) {
-        report(
-            pattern_matching
-                ? "FSIM-ELAB-SVMATCH-002"
-                : "FSIM-ELAB-SVCASEINSIDE-002",
-            pattern_matching
-                ? "bounded case matches requires a scalar integral "
-                  "selector"
-                : "bounded case inside requires a scalar integral "
-                  "selector",
-            statement.condition.span);
-        return;
-    }
-    const auto inferred_selector_width = infer_width(statement.condition);
-    if ((inside_matching || pattern_matching)
-        && (!inferred_selector_width
-            || *inferred_selector_width == 0)) {
-        report(
-            pattern_matching
-                ? "FSIM-ELAB-SVMATCH-002"
-                : "FSIM-ELAB-SVCASEINSIDE-002",
-            pattern_matching
-                ? "the case matches selector width is not statically "
-                  "inferable"
-                : "the case inside selector width is not statically "
-                  "inferable",
-            statement.condition.span);
-        return;
-    }
-    const auto selector_width = inferred_selector_width.value_or(
-        std::size_t { 1 });
-    const bool selector_signed = is_signed_expression(statement.condition);
-    const auto* selector_type = statement.condition.kind
-            == ExpressionKind::Identifier
-        ? object_type(statement.condition.text)
-        : nullptr;
-    const auto selector = lower_expression(
-        statement.condition,
-        selector_width,
-        selector_type != nullptr
-                && !selector_type
-                    ->enumeration_literals.empty()
-            ? selector_type
-            : nullptr);
-    if (!selector) {
-        return;
-    }
-    if (vhdl_matching
-        && !validate_vhdl_matching_case(
-            statement,
-            selector_type,
-            selector_width,
-            register_domain(*selector))) {
-        return;
-    }
-    if (!vhdl_matching
-        && language_ == frontend::Language::Vhdl2008
-        && !validate_vhdl_case_choices(
-            statement,
-            selector_type,
-            selector_width,
-            register_domain(*selector))) {
-        return;
-    }
-
-    const auto lower_inside_operand =
-        [&](const Expression& operand)
-        -> std::optional<RegisterId> {
-        if (is_container_expression(operand)
-            || is_string_expression(operand)
-            || operand.kind == ExpressionKind::Aggregate
-            || operand.kind == ExpressionKind::Concatenation
-            || (operand.kind == ExpressionKind::Call
-                && (operand.text == "inside"
-                    || operand.text == "@inside-range"))) {
-            report(
-                "FSIM-ELAB-SVCASEINSIDE-003",
-                "case inside choices must be nonnested scalar integral "
-                "values",
-                operand.span);
-            return std::nullopt;
-        }
-        const auto width = infer_width(operand);
-        if (!width || *width != selector_width
-            || is_signed_expression(operand) != selector_signed) {
-            report(
-                "FSIM-ELAB-SVCASEINSIDE-004",
-                "case inside choices and range bounds must exactly match "
-                "the selector width and signedness",
-                operand.span);
-            return std::nullopt;
-        }
-        return lower_expression(operand, selector_width);
-    };
-
-    std::vector<InstructionIndex> exit_jumps;
-    const frontend::CaseAlternative* default_alternative = nullptr;
-    for (const auto& alternative : statement.case_alternatives) {
-        if (alternative.is_default) {
-            default_alternative = &alternative;
-            continue;
-        }
-
-        if (inside_matching && alternative.choices.empty()) {
-            report(
-                "FSIM-ELAB-SVCASEINSIDE-005",
-                "a case inside alternative requires at least one choice",
-                alternative.span);
-            continue;
-        }
-        if (pattern_matching && alternative.choices.size() != 1) {
-            report(
-                "FSIM-ELAB-SVMATCH-005",
-                "a case matches item requires exactly one pattern",
-                alternative.span);
-            continue;
-        }
-
-        std::vector<InstructionIndex> branches;
-        for (const auto& choice : alternative.choices) {
-            std::optional<RegisterId> condition;
-            if (language_ == frontend::Language::Vhdl2008
-                && choice.kind == ExpressionKind::Call
-                && (choice.text == "@vhdl-case-range-to"
-                    || choice.text
-                        == "@vhdl-case-range-downto")) {
-                condition = lower_vhdl_case_range_condition(
-                    choice,
-                    *selector,
-                    selector_type,
-                    selector_signed);
-            } else if (pattern_matching
-                && choice.kind == ExpressionKind::Call
-                && choice.text == "@match-wildcard") {
-                condition = allocate_register(
-                    1, frontend::ValueDomain::Bit2);
-                process_.operations.emplace_back(LoadConstant {
-                    *condition, PackedLogic4(1, Logic4::one) });
-            } else if (pattern_matching) {
-                if (!is_bounded_case_pattern_constant(choice)) {
-                    report(
-                        "FSIM-ELAB-SVMATCH-003",
-                        "bounded case matches patterns must be scalar "
-                        "integral constants or '.*'",
-                        choice.span);
-                    continue;
-                }
-                const auto width = infer_width(choice);
-                if (!width || *width != selector_width
-                    || is_signed_expression(choice)
-                        != selector_signed) {
-                    report(
-                        "FSIM-ELAB-SVMATCH-004",
-                        "case matches constants must exactly match the "
-                        "selector width and signedness",
-                        choice.span);
-                    continue;
-                }
-                const auto pattern = lower_expression(
-                    choice, selector_width);
-                if (!pattern) {
-                    continue;
-                }
-                condition = allocate_register(
-                    1, frontend::ValueDomain::Bit2);
-                process_.operations.emplace_back(Binary {
-                    BinaryOperator::case_equal,
-                    *condition,
-                    *selector,
-                    *pattern });
-            } else if (inside_matching
-                && choice.kind == ExpressionKind::Call
-                && choice.text == "@inside-range") {
-                if (choice.operands.size() != 2) {
-                    report(
-                        "FSIM-ELAB-SVCASEINSIDE-006",
-                        "a case inside range requires exactly one low "
-                        "and high bound",
-                        choice.span);
-                    continue;
-                }
-                const auto low = lower_inside_operand(choice.operands[0]);
-                const auto high = lower_inside_operand(choice.operands[1]);
-                if (!low || !high) {
-                    continue;
-                }
-                const auto domain = frontend::ValueDomain::Logic4;
-                const auto valid = allocate_register(1, domain);
-                const auto above_low = allocate_register(1, domain);
-                const auto below_high = allocate_register(1, domain);
-                const auto within_lower = allocate_register(1, domain);
-                condition = allocate_register(1, domain);
-                process_.operations.emplace_back(Binary {
-                    selector_signed
-                        ? BinaryOperator::less_equal_signed
-                        : BinaryOperator::less_equal_unsigned,
-                    valid, *low, *high });
-                process_.operations.emplace_back(Binary {
-                    selector_signed
-                        ? BinaryOperator::greater_equal_signed
-                        : BinaryOperator::greater_equal_unsigned,
-                    above_low, *selector, *low });
-                process_.operations.emplace_back(Binary {
-                    selector_signed
-                        ? BinaryOperator::less_equal_signed
-                        : BinaryOperator::less_equal_unsigned,
-                    below_high, *selector, *high });
-                process_.operations.emplace_back(LogicalBinary {
-                    LogicalBinaryOperator::logical_and,
-                    within_lower, valid, above_low });
-                process_.operations.emplace_back(LogicalBinary {
-                    LogicalBinaryOperator::logical_and,
-                    *condition, within_lower, below_high });
-            } else {
-                const auto choice_register = inside_matching
-                    ? lower_inside_operand(choice)
-                    : lower_expression(
-                          choice,
-                          register_width(*selector),
-                          selector_type != nullptr
-                                  && !selector_type
-                                      ->enumeration_literals.empty()
-                              ? selector_type
-                              : nullptr);
-                if (!choice_register) {
-                    continue;
-                }
-                if (!inside_matching
-                    && register_width(*choice_register)
-                        != register_width(*selector)) {
-                    report(
-                        "FSIM-ELAB-063",
-                        "case item width "
-                            + std::to_string(
-                                register_width(*choice_register))
-                            + " does not match selector width "
-                            + std::to_string(register_width(*selector)),
-                        choice.span);
-                    continue;
-                }
-                condition = allocate_register(
-                    1,
-                    inside_matching
-                        ? frontend::ValueDomain::Logic4
-                        : frontend::ValueDomain::Bit2);
-                process_.operations.emplace_back(Binary {
-                    match_operation,
-                    *condition,
-                    *selector,
-                    *choice_register });
-            }
-            if (!condition) {
-                continue;
-            }
-            branches.push_back(
-                static_cast<InstructionIndex>(
-                    process_.operations.size()));
-            process_.operations.emplace_back(Branch {
-                *condition,
-                0,
-                0,
-                UnknownBranchPolicy::when_false });
-        }
-
-        const auto skip_body = static_cast<InstructionIndex>(process_.operations.size());
-        process_.operations.emplace_back(Jump { 0 });
-        const auto body_start = static_cast<InstructionIndex>(process_.operations.size());
-        lower_case_alternative(alternative);
-        exit_jumps.push_back(
-            static_cast<InstructionIndex>(
-                process_.operations.size()));
-        process_.operations.emplace_back(Jump { 0 });
-        const auto next_alternative = static_cast<InstructionIndex>(process_.operations.size());
-
-        for (std::size_t index = 0; index < branches.size(); ++index) {
-            const auto false_target = index + 1 < branches.size()
-                ? static_cast<InstructionIndex>(
-                      branches[index] + 1)
-                : skip_body;
-            const auto& operation = fsim::runtime::simir::operation_get<Branch>(process_.operations[branches[index]]);
-            process_.operations[branches[index]] = Branch {
-                operation.condition,
-                body_start,
-                false_target,
-                UnknownBranchPolicy::when_false
-            };
-        }
-        process_.operations[skip_body] = Jump { next_alternative };
-    }
-
-    if (default_alternative != nullptr) {
-        lower_case_alternative(*default_alternative);
-    }
-    const auto end = static_cast<InstructionIndex>(process_.operations.size());
-    for (const auto jump : exit_jumps) {
-        process_.operations[jump] = Jump { end };
     }
 }
 

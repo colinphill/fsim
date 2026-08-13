@@ -18,11 +18,14 @@ using StableOrder = std::uint64_t;
 using RuntimeSignalId = std::uint32_t;
 
 enum class SchedulerPhase : std::uint8_t {
-  active = 0,
-  inactive = 1,
-  update = 2,
-  reactive = 3,
-  postponed = 4,
+    active = 0,
+    inactive = 1,
+    update = 2,
+    observed = 3,
+    reactive = 4,
+    re_inactive = 5,
+    re_update = 6,
+    postponed = 7,
 };
 
 [[nodiscard]] const char *phase_name(SchedulerPhase phase) noexcept;
@@ -98,6 +101,7 @@ private:
 class Scheduler {
 public:
   using Task = std::function<void(Scheduler &)>;
+  using SlotStartHook = std::function<void(Scheduler &)>;
   using SafePointHook = std::function<void(Scheduler &, SchedulerPhase)>;
 
   explicit Scheduler(SchedulerOptions options = {});
@@ -145,6 +149,8 @@ public:
   [[nodiscard]] std::uint64_t delta() const noexcept;
   [[nodiscard]] std::optional<SchedulerPhase> current_phase() const noexcept;
 
+  /// Observe a newly loaded simulation time slot before any phase executes.
+  void set_slot_start_hook(SlotStartHook hook);
   void set_safe_point_hook(SafePointHook hook);
 
 private:

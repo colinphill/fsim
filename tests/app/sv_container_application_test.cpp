@@ -29,6 +29,7 @@ struct Capture {
   fsim::runtime::simir::ContainerValue values;
   fsim::runtime::simir::ContainerValue pending;
   fsim::runtime::simir::ContainerValue lookup;
+  fsim::runtime::simir::ContainerValue packed_lookup;
   fsim::runtime::simir::ContainerValue memory;
   fsim::runtime::simir::ContainerValue binary;
   fsim::runtime::simir::ContainerValue port_result;
@@ -76,6 +77,11 @@ Capture run_once(
     const fsim::app::SimulationEngine engine) {
   fsim::diagnostic::Engine diagnostics;
   auto project = fsim::app::build_project(config, diagnostics);
+  if (!project) {
+    for (const auto& diagnostic : diagnostics.diagnostics()) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
   assert(project);
   assert(project->design_ir.valid(project->semantics));
   for (const auto& [path, runtime_object] :
@@ -129,13 +135,17 @@ Capture run_once(
   vcd.flush();
   capture.vcd = vcd_output.str();
   const auto& objects = simulation.design().container_objects();
-  assert(objects.size() == 19);
+  assert(objects.size() == 20);
   capture.values =
       simulation.read_container_object(objects[0].id);
   capture.pending =
       simulation.read_container_object(objects[1].id);
   capture.lookup =
       simulation.read_container_object(objects[2].id);
+  const auto packed_lookup = simulation.design().find_container(
+      "container_top.packed_lookup");
+  assert(packed_lookup);
+  capture.packed_lookup = simulation.read_container_object(*packed_lookup);
   capture.memory =
       simulation.read_container_object(objects[3].id);
   capture.binary =
@@ -244,9 +254,8 @@ void inspect_suspended(
       *process_id, *target_index);
   assert(
       local.keys.size() == 2
-      && local.keys[0].low_word().aval
-          == UINT64_C(0xffffffff)
-      && local.keys[1].low_word().aval == 3
+      && local.keys[0].known_signed_value() == -1
+      && local.keys[1].known_signed_value() == 3
       && local.elements[0].low_word().aval == 9
       && local.elements[1].low_word().aval == 30);
   debugger.execute({"show", "lookup"});
@@ -987,13 +996,18 @@ module slice_port_mid(
 endmodule
 
 module container_top;
-  typedef logic signed [31:0] key_t;
+  typedef logic signed [136:0] key_t;
+  typedef struct packed {
+    logic [68:0] high;
+    logic [67:0] low;
+  } packed_key_t;
   typedef logic signed [3:0] dynamic_key_t;
   int values[];
   byte pending[$:2];
   byte lookup[key_t];
   logic [7:0] memory[3:0];
   logic [7:0] binary[-1:1];
+  byte packed_lookup[packed_key_t];
   logic [7:0] port_source[3:0];
   logic [7:0] port_result[3:0];
   bit [3:0] port_shared[-1:1];
@@ -1441,6 +1455,14 @@ module container_top;
     assert (lookup.prev(key) == 1);
     assert (key == -1);
     mutate_lookup(lookup);
+    begin
+      packed_key_t packed_key;
+      packed_key = packed_key_t'('0);
+      packed_key.high[68] = 1'b1;
+      packed_lookup[packed_key] = 8'h5a;
+      assert (packed_lookup.exists(packed_key) == 1);
+      assert (packed_lookup[packed_key] == 8'h5a);
+    end
     pending = '{};
     assert (pending.size() == 0);
     assert (pending.sum() == 0);
@@ -1577,6 +1599,7 @@ endmodule
     assert(reference.values == compiled.values);
     assert(reference.pending == compiled.pending);
     assert(reference.lookup == compiled.lookup);
+    assert(reference.packed_lookup == compiled.packed_lookup);
     assert(reference.memory == compiled.memory);
     assert(reference.binary == compiled.binary);
     assert(reference.port_result == compiled.port_result);
@@ -1596,9 +1619,17 @@ endmodule
         && compiled.pending.elements[1].low_word().aval == 4);
     assert(
         compiled.lookup.keys.size() == 1
-        && compiled.lookup.keys[0].low_word().aval
-            == UINT64_C(0xffffffff)
+        && compiled.lookup.keys[0].width() == 137
+        && compiled.lookup.keys[0].to_msb_string()
+            == std::string(137, '1')
         && compiled.lookup.elements[0].low_word().aval == 9);
+    assert(
+        compiled.packed_lookup.keys.size() == 1
+        && compiled.packed_lookup.keys[0].width() == 137
+        && compiled.packed_lookup.keys[0].get(136)
+            == fsim::runtime::Logic4::one
+        && compiled.packed_lookup.elements[0].low_word().aval
+            == UINT64_C(0x5a));
     assert(
         compiled.memory.type.fixed
         && compiled.memory.type.index_left == 3
@@ -1687,7 +1718,7 @@ endmodule
         && compiled.vcd.find("b0000z010")
             != std::string::npos);
 #if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled == 4);
+    assert(compiled.compiled == 3);
 #endif
     inspect_suspended(
         config, fsim::app::SimulationEngine::interpreter);

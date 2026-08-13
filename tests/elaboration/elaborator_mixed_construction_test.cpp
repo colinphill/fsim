@@ -304,7 +304,7 @@ endmodule
     assert(std::ranges::all_of(
         specialization->parameter_identity_values,
         [](const auto& value) {
-          return value.second.starts_with("svconst-v2:")
+          return value.second.starts_with("svconst-v3:b=0:")
               || value.second.starts_with("svstring-v1;");
         }));
   }

@@ -151,3 +151,9 @@ separate retained closure matrix binds 34 Verilog-2005 clauses and 12 exact
 literal-width paths to 23 registered witnesses across 17 execution and
 artifact stages, including interpreter, LLVM O0/O2, cold/warm cache,
 debug/VCD, relocation/replay, multiple roots, and mixed VHDL/SystemC.
+
+Batch 165 advances the synchronized differential inventory to 1,294 required
+rows and 144 distinct runtime owners. The executable-row classifications now
+cover 508 interpreter, 423 LLVM/native, 282 cache, 113 debugger, 138 VCD/trace,
+502 scheduling, and 115 failure/diagnostic rows; the governed corpus union
+remains 36 registered CTests.

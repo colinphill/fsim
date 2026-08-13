@@ -7,12 +7,62 @@ namespace fsim::runtime::simir {
 
 void Interpreter::Impl::commit(SignalId signal_id, PackedLogic4 value)
 {
-    (void)get_signal(signal_id);
+    const auto& signal = get_signal(signal_id);
     if (driven_values[signal_id].width() != value.width()) {
         throw std::invalid_argument("SimIR signal assignment width mismatch");
     }
     value = normalize_signal_value(
         signal_id, std::move(value));
+    if (signal.event_variable) {
+        const auto identity = event_identities.at(signal_id);
+        if (!identity) {
+            return;
+        }
+        const auto old_value = signals[signal_id].initial_value;
+        std::vector<SignalId> members;
+        for (std::size_t index = 0; index < signals.size(); ++index) {
+            if (signals[index].event_variable
+                && event_identities[index] == identity) {
+                members.push_back(static_cast<SignalId>(index));
+            }
+        }
+        for (const auto member : members) {
+            const bool stored_changed = driven_values[member] != value;
+            driven_values[member] = value;
+            if (stored_changed && stored_signal_change_hook) {
+                stored_signal_change_hook(member, scheduler.now());
+            }
+            publish(member, apply_force(member, value), false);
+        }
+        for (const auto member : members) {
+            for (const auto& sensitivity : static_fanout[member]) {
+                auto& process = get_process(sensitivity.process);
+                if (!process.waiting_on_static) {
+                    continue;
+                }
+                if (sensitivity.edge != EdgeKind::any
+                    && sensitivity.edge != EdgeKind::transaction
+                    && (old_value.width() != 1
+                        || !edge_matches(
+                            sensitivity.edge, old_value.get(0),
+                            value.get(0)))) {
+                    continue;
+                }
+                queue_next_delta(sensitivity.process);
+            }
+        }
+        const auto dynamic = dynamic_fanout.at(*identity);
+        for (const auto sensitivity : dynamic) {
+            auto& process = get_process(sensitivity.process);
+            if (dynamic_wait_satisfied(
+                    process, *identity, sensitivity.edge)) {
+                mark_dynamic_event_resume(process);
+                queue_next_delta(sensitivity.process);
+            }
+        }
+        refresh_switch_network();
+        return;
+    }
     const bool stored_changed = driven_values[signal_id] != value;
     driven_values[signal_id] = value;
     if (stored_changed && stored_signal_change_hook) {
@@ -280,6 +330,7 @@ void Interpreter::Impl::release_driver_slice(
     const auto initial = signal.resolution == ResolutionKind::sv_wire
             || signal.resolution == ResolutionKind::sv_wand
             || signal.resolution == ResolutionKind::sv_wor
+            || signal.resolution == ResolutionKind::sv_user_first
         ? Logic4::z
         : signal.resolution == ResolutionKind::vhdl_user_or
         ? Logic4::zero
@@ -337,6 +388,9 @@ PackedLogic4& Interpreter::Impl::driver_slot(
         strength_drivers.push_back({ &*external_driver_values.at(signal_id), { } });
     }
     const auto resolution = get_signal(signal_id).resolution;
+    if (resolution == ResolutionKind::sv_user_first) {
+        return drivers.front();
+    }
     if (resolution == ResolutionKind::sv_wire) {
         const auto& signal = get_signal(signal_id);
         auto result = PackedLogic4 {
@@ -572,7 +626,34 @@ PackedLogic4 Interpreter::Impl::resolved_driver_value(
                     || !edge.switch_source || !edge.switch_target)
                     continue;
                 SignalId other { };
-                if (*edge.switch_source == node.signal) {
+                std::vector<std::pair<std::size_t, std::size_t>>
+                    selected_bits;
+                if (edge.switch_width != 0) {
+                    const auto width = static_cast<std::size_t>(
+                        edge.switch_width);
+                    const auto source_offset = static_cast<std::size_t>(
+                        edge.switch_source_offset);
+                    const auto target_offset = static_cast<std::size_t>(
+                        edge.switch_target_offset);
+                    if (*edge.switch_source == node.signal
+                        && node.bit >= source_offset
+                        && node.bit - source_offset < width) {
+                        const auto lane = node.bit - source_offset;
+                        other = *edge.switch_target;
+                        selected_bits.emplace_back(
+                            target_offset + lane, lane);
+                    }
+                    if (*edge.switch_target == node.signal
+                        && node.bit >= target_offset
+                        && node.bit - target_offset < width) {
+                        const auto lane = node.bit - target_offset;
+                        other = *edge.switch_source;
+                        selected_bits.emplace_back(
+                            source_offset + lane, lane);
+                    }
+                    if (selected_bits.empty())
+                        continue;
+                } else if (*edge.switch_source == node.signal) {
                     other = *edge.switch_target;
                 } else if (*edge.switch_target == node.signal) {
                     other = *edge.switch_source;
@@ -583,12 +664,15 @@ PackedLogic4 Interpreter::Impl::resolved_driver_value(
                 const auto next_resistance = static_cast<std::uint8_t>(
                     std::min<unsigned>(
                         8, node.resistance + (edge.switch_resistive ? 1 : 0)));
-                const auto enqueue = [&](const std::size_t other_bit) {
+                const auto enqueue = [&](const std::size_t other_bit,
+                                         const std::size_t selected_lane) {
                     auto uncertain = node.uncertain;
                     if (edge.switch_control) {
                         const auto& control_signal = get_signal(*edge.switch_control);
                         const auto control_width = control_signal.initial_value.width();
-                        const auto lane = std::max(node.bit, other_bit);
+                        const auto lane = edge.switch_width == 0
+                            ? std::max(node.bit, other_bit)
+                            : selected_lane;
                         const auto control_bit = control_width == 1 ? 0 : lane;
                         if (control_bit >= control_width)
                             return;
@@ -606,12 +690,18 @@ PackedLogic4 Interpreter::Impl::resolved_driver_value(
                     pending.push_back(
                         { other, other_bit, next_resistance, uncertain });
                 };
-                if (local.width() == 1 && other_width > 1) {
+                if (!selected_bits.empty()) {
+                    for (const auto& [other_bit, lane] : selected_bits) {
+                        enqueue(other_bit, lane);
+                    }
+                } else if (local.width() == 1 && other_width > 1) {
                     for (std::size_t bit = 0; bit < other_width; ++bit) {
-                        enqueue(bit);
+                        enqueue(bit, bit);
                     }
                 } else if (other_width == 1 || node.bit < other_width) {
-                    enqueue(other_width == 1 ? 0 : node.bit);
+                    enqueue(
+                        other_width == 1 ? 0 : node.bit,
+                        std::max(node.bit, other_width == 1 ? 0 : node.bit));
                 }
             }
         }
@@ -682,6 +772,11 @@ DriveStrength Interpreter::Impl::resolved_signal_strength(
         }
     }
     return result;
+}
+
+DriveStrength Interpreter::signal_strength(const SignalId signal) const
+{
+    return impl_->resolved_signal_strength(signal);
 }
 
 bool Interpreter::Impl::switch_process(const ProcessId process) const

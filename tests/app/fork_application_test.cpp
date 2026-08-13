@@ -178,9 +178,9 @@ void test_optimization(
     for (const auto* capture : { &reference, &cold, &warm }) {
         assert(
             capture->result.status == fsim::runtime::RunStatus::stopped
-            && capture->result.time == 12
+            && capture->result.time == 15
             && capture->value == "10111111"
-            && capture->lifecycle == "1100011111110010000011"
+            && capture->lifecycle == "01111100011111110010000011"
             && capture->local == "10111111"
             && capture->child_debug_safe);
         assert(std::any_of(
@@ -214,9 +214,11 @@ int main()
         output << R"(
 module fork_processes;
   logic [7:0] result;
-  logic [21:0] lifecycle;
+  logic [25:0] lifecycle;
   process handle;
   process killed_handle;
+  process suspended_handle;
+  string random_state;
   initial begin : root
     logic [7:0] shared = 0;
     result = 0;
@@ -298,6 +300,21 @@ module fork_processes;
     lifecycle[20] = 1;
     disable concurrent_escape;
     lifecycle[21] = 1;
+    fork
+      begin
+        suspended_handle = process::self();
+        #2 lifecycle[22] = 1;
+      end
+    join_none
+    #0;
+    suspended_handle.suspend();
+    lifecycle[25:23] = suspended_handle.status();
+    #3;
+    suspended_handle.resume();
+    suspended_handle.await();
+    random_state = suspended_handle.get_randstate();
+    suspended_handle.srandom(32'h1234);
+    suspended_handle.set_randstate(random_state);
     begin : escaped
       lifecycle[13] = 1;
       begin : nested

@@ -72,7 +72,7 @@ endmodule
     };
 
     const auto high_identity = identity("defparam_top.middle.child");
-    assert(high_identity.starts_with("svconst-v2:w=257:s=0:"));
+    assert(high_identity.starts_with("svconst-v3:b=0:w=257:s=0:"));
     assert(identity("defparam_top.lanes[1]") == high_identity);
     assert(identity("defparam_top.active.generated") == high_identity);
     assert(identity("defparam_top.lanes[0]") != high_identity);

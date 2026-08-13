@@ -277,8 +277,8 @@ endmodule
 package union_shapes;
   typedef union packed {
     logic [15:0] wide;
-    logic [7:0] narrow;
-  } unequal_t;
+    logic [15:0] mirror;
+  } ordinary_t;
   typedef union tagged packed {
     logic [15:0] wide;
     logic [7:0] narrow;
@@ -300,18 +300,17 @@ endmodule
           && union_forms.design.units.size() == 2
           && union_forms.design.units[0].type_aliases.size() == 3,
       "packed, tagged, and unpacked unions parse");
-  const auto& unequal_type =
-      union_forms.design.units[0].type_aliases[0].type;
+  const auto& ordinary_type = union_forms.design.units[0].type_aliases[0].type;
   const auto& tagged_type =
       union_forms.design.units[0].type_aliases[1].type;
   const auto& unpacked_type =
       union_forms.design.units[0].type_aliases[2].type;
   require(
-      unequal_type.packed_aggregate == PackedAggregateKind::Union
-          && unequal_type.width() == 16
-          && unequal_type.packed_members.size() == 2
-          && unequal_type.packed_members[0].lsb_offset == 0
-          && unequal_type.packed_members[1].lsb_offset == 0
+      ordinary_type.packed_aggregate == PackedAggregateKind::Union
+          && ordinary_type.width() == 16
+          && ordinary_type.packed_members.size() == 2
+          && ordinary_type.packed_members[0].lsb_offset == 0
+          && ordinary_type.packed_members[1].lsb_offset == 0
           && tagged_type.packed_aggregate
               == PackedAggregateKind::TaggedUnion
           && tagged_type.width() == 17
@@ -495,11 +494,18 @@ package invalid_values;
   typedef struct packed {} empty_struct_t;
   typedef struct packed logic open_member; } missing_struct_open_t;
   typedef struct packed { logic missing_semicolon } missing_member_semicolon_t;
+  typedef union packed {
+    logic [15:0] wide;
+    logic [7:0] narrow;
+  } unequal_union_t;
 endpackage : wrong_name
 import invalid_values;
 module recovered;
   logic value;
-  initial value = {2{}};
+  initial begin
+    value = {2{}};
+    value = type();
+  end
 endmodule
 )",
       Language::SystemVerilog2017);
@@ -528,6 +534,8 @@ endmodule
           && has_code("FSIM-SV-SEM-023")
           && has_code("FSIM-SV-SEM-024")
           && has_code("FSIM-SV-SEM-025")
+          && has_code("FSIM-SV-SEM-241")
+          && has_code("FSIM-SV-SEM-242")
           && has_code("FSIM-SV-PARSE-078"),
       "invalid package items, end names, and imports are targeted");
 

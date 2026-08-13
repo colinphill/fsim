@@ -26,7 +26,7 @@ or suppression path.
 The exact SHA-256 identities are:
 
 - clause inventory: `338b64ba883f6243d9f799d31c22f873e871a5977bbb9fc9c45ae3b5ea738c84`;
-- literal-width inventory: `4d0924571f33e54f8d77d66979e290fe223c183eb0bc963fdbffb841429a424e`;
+- literal-width inventory: `a1cef90f58dc984e69e1f6c35247090498553d4f8d10c57b1a1bcd2fc06aee05`;
 - release closure: `a80eea635da93dff681c7118cd3339e7b4bb679c83a2cf7137cc3eeccef6f39e`.
 
 ## Runtime and resource evidence
@@ -64,8 +64,8 @@ signedness, X/Z state, timing identity, and source-independent execution.
 ## Synchronized release baseline
 
 After adding this public documentation contract, the live static inventory is
-2,152 production diagnostics, 842 bounded C/C++ sources, 972 SPDX-owned files,
-and 320 authored test/control files. The closure audit composes diagnostic,
+2,228 production diagnostics, 885 bounded C/C++ sources, 1,021 SPDX-owned files,
+and 330 authored test/control files. The closure audit composes diagnostic,
 source-line, SPDX, v1 conformance, and resource-portability gates without
 waivers.
 

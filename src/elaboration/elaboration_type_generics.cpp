@@ -419,6 +419,8 @@ namespace {
                     == frontend::StatementKind::WaitOn
                 || statement.kind
                     == frontend::StatementKind::WaitUntil
+                || statement.kind
+                    == frontend::StatementKind::WaitOrder
                 || (statement.kind
                         == frontend::StatementKind::Assignment
                     && statement.assignment_kind
@@ -1454,7 +1456,8 @@ InterfaceTypeSpecialization specialize_vhdl_interface_types(
                 *actual_type,
                 formal.span,
                 { },
-                frontend::TypeDeclarationKind::Alias });
+                frontend::TypeDeclarationKind::Alias,
+                { } });
         result.values.emplace_back(
             formal.name,
             canonical_type_identity(*actual_type));

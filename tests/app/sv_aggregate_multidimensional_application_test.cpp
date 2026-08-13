@@ -75,8 +75,8 @@ package aggregate_types;
   } packet_t;
   typedef union packed {
     logic [15:0] wide;
-    logic [7:0] narrow;
-  } unequal_t;
+    logic [15:0] mirror;
+  } ordinary_t;
   typedef union tagged packed {
     logic [15:0] wide;
     logic [7:0] narrow;
@@ -194,15 +194,15 @@ module aggregate_multidimensional_top #(
   logic [136:0] anonymous_pattern_observed;
   logic [136:0] anonymous_update_observed;
   logic [40:0] anonymous_selected_observed;
-  unequal_t unequal;
+  ordinary_t ordinary;
   tagged_t tagged_default;
   tagged_t tagged_narrow;
   tagged_t tagged_same;
   tagged_t tagged_wide;
   tagged_t tagged_casted;
-  logic [15:0] unequal_narrow_observed;
-  logic [15:0] unequal_wide_observed;
-  logic [15:0] unequal_selected_observed;
+  logic [15:0] ordinary_mirror_observed;
+  logic [15:0] ordinary_wide_observed;
+  logic [15:0] ordinary_selected_observed;
   logic [16:0] tagged_default_observed;
   logic [16:0] tagged_narrow_observed;
   logic [16:0] tagged_wide_constructor_observed;
@@ -308,7 +308,8 @@ module aggregate_multidimensional_top #(
 
   task automatic replace(
       inout logic [3:0] value[1:0][0:2]);
-    value[1][1] = 4'h)" << replacement << R"(;
+    value[1][1] = 4'h)"
+         << replacement << R"(;
   endtask
 
   task automatic replace_packet(
@@ -516,12 +517,12 @@ module aggregate_multidimensional_top #(
       anonymous_update.body.valid,
       anonymous_update.tail
     };
-    unequal = '{narrow: 8'hab};
-    unequal_narrow_observed = unequal;
-    unequal = '{wide: 16'hcdef};
-    unequal_wide_observed = unequal;
-    unequal.narrow = 8'h5e;
-    unequal_selected_observed = unequal;
+    ordinary = '{mirror: 16'h00ab};
+    ordinary_mirror_observed = ordinary;
+    ordinary = '{wide: 16'hcdef};
+    ordinary_wide_observed = ordinary;
+    ordinary.mirror = 16'h005e;
+    ordinary_selected_observed = ordinary;
     tagged_default_observed = tagged_default;
     tagged_narrow = tagged narrow 8'h5a;
     tagged_same = tagged narrow 8'h5a;
@@ -740,7 +741,7 @@ Capture execute(
   Capture capture;
   capture.compiled = simulation.compiled_process_count();
   capture.cache = simulation.native_cache_statistics();
-  constexpr std::array<std::string_view, 50> names{
+  constexpr std::array<std::string_view, 50> names {
       "aggregate_multidimensional_top.aggregate_observed",
       "aggregate_multidimensional_top.matrix_observed",
       "aggregate_multidimensional_top.dynamic_observed",
@@ -753,9 +754,9 @@ Capture execute(
       "aggregate_multidimensional_top.anonymous_pattern_observed",
       "aggregate_multidimensional_top.anonymous_update_observed",
       "aggregate_multidimensional_top.anonymous_selected_observed",
-      "aggregate_multidimensional_top.unequal_narrow_observed",
-      "aggregate_multidimensional_top.unequal_wide_observed",
-      "aggregate_multidimensional_top.unequal_selected_observed",
+      "aggregate_multidimensional_top.ordinary_mirror_observed",
+      "aggregate_multidimensional_top.ordinary_wide_observed",
+      "aggregate_multidimensional_top.ordinary_selected_observed",
       "aggregate_multidimensional_top.tagged_default_observed",
       "aggregate_multidimensional_top.tagged_narrow_observed",
       "aggregate_multidimensional_top.tagged_wide_constructor_observed",
@@ -790,7 +791,8 @@ Capture execute(
       "aggregate_multidimensional_top.aggregate_compare_matrix_observed",
       "aggregate_multidimensional_top.unpacked_union_pattern_observed",
       "aggregate_multidimensional_top.string_index_observed",
-      "aggregate_multidimensional_top.control_child_observed"};
+      "aggregate_multidimensional_top.control_child_observed"
+  };
   std::array<fsim::runtime::simir::SignalId, names.size()> signals{};
   std::array<fsim::runtime::VcdSignal, names.size()> traces{};
   std::ostringstream vcd_text;
@@ -910,7 +912,7 @@ void verify(
   assert(capture.values[22] == "1111");
   assert(capture.values[23] == "10100101101");
   assert(capture.values[24] == "110110");
-  assert(capture.values[25] == "00000000000000000000000000000101");
+  assert(capture.values[25] == "00000000000000000000000000000000");
   assert(capture.values[26] == "00000000000000000000000000001011");
   assert(capture.values[27] == "00000000000000000000000000001010");
   assert(capture.values[28] == "00000000000000000000000000000000");

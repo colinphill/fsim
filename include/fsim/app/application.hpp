@@ -514,6 +514,8 @@ public:
     using ExecutionPointHook = runtime::simir::Interpreter::ExecutionPointHook;
     using OutputHook = runtime::simir::Interpreter::OutputHook;
     using ReportHook = runtime::simir::Interpreter::ReportHook;
+    using SystemCommandHook = runtime::simir::Interpreter::SystemCommandHook;
+    using VcdControlHook = runtime::simir::Interpreter::VcdControlHook;
     using ConcurrentAssertionHook = std::function<void(const ConcurrentAssertionEvent&)>;
     using VhdlPslAttemptHook = runtime::VhdlPslCompletionHook;
     using UvmActivityHook = runtime::SystemVerilogUvmActivityService::Observer;
@@ -566,6 +568,8 @@ public:
     scalar_signal_snapshots() const;
     [[nodiscard]] runtime::PackedLogic4 read_driver(
         runtime::simir::ProcessId process,
+        runtime::simir::SignalId signal) const;
+    [[nodiscard]] runtime::simir::DriveStrength read_signal_strength(
         runtime::simir::SignalId signal) const;
     [[nodiscard]] runtime::PackedLogic4 read_process_local(
         runtime::simir::ProcessId process, std::size_t local_index) const;
@@ -707,6 +711,10 @@ public:
     uvm_command_line() noexcept;
     [[nodiscard]] const runtime::SystemVerilogUvmCommandLineService&
     uvm_command_line() const noexcept;
+    /// Publish the ordered simulation command line to HDL plusarg queries.
+    /// Must be called before simulation execution begins.
+    void set_systemverilog_plusargs(
+        std::span<const std::string> plusargs);
     [[nodiscard]] runtime::SystemVerilogUvmTestRunnerService&
     uvm_test_runner() noexcept;
     [[nodiscard]] const runtime::SystemVerilogUvmTestRunnerService&
@@ -734,6 +742,10 @@ public:
     /// backends. Disabled samples are retained but do not increment coverage.
     [[nodiscard]] const std::vector<ConcurrentAssertionEvent>&
     concurrent_assertion_events() const noexcept;
+    /// Mutable simulation-owned functional coverage state, including exact
+    /// arbitrary-width hits, callbacks, trace events, and derived reports.
+    [[nodiscard]] const frontend::SystemVerilogCoverageState&
+    systemverilog_coverage() const noexcept;
     [[nodiscard]] const std::vector<runtime::VhdlPslAttemptSnapshot>&
     vhdl_psl_attempts() const noexcept;
     [[nodiscard]] std::vector<ConcurrentAssertionCoverage>
@@ -839,6 +851,10 @@ public:
     [[nodiscard]] std::uint64_t add_safe_point_hook(SafePointHook hook);
     void remove_safe_point_hook(std::uint64_t token) noexcept;
     void set_execution_point_hook(ExecutionPointHook hook);
+    /// Replace the host executor for IEEE $system calls. The default invokes
+    /// C system(); an empty hook makes the service unavailable at execution.
+    void set_system_command_hook(SystemCommandHook hook);
+    void set_vcd_control_hook(VcdControlHook hook);
     void set_output_hook(OutputHook hook);
     void set_report_hook(ReportHook hook);
     void set_concurrent_assertion_hook(ConcurrentAssertionHook hook);

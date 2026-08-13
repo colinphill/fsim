@@ -1,22 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
 # Batch 130 Task 9 final release-candidate corpus.
 # Every required row is classified execute and owns nonempty P+/P-/E/R links.
-# matrix-rows: 1279
-# matrix-sha256: 7f879238bfcdbc544e688c710038c97063a8464f9817c758b87c1a2f89e0472d
-# evidence-slots: 5116
-# evidence-paths: 604
-# evidence-sha256: 2d9a2bf8fdc360b6b484087848eeb00def2a61cff5fecfacf9400fadcec2010b
+# matrix-rows: 1294
+# matrix-sha256: b2c59a958173da718dacc8b02b4480e1a02efd4fcfed87f64a234ec4622d2e11
+# evidence-slots: 5176
+# evidence-paths: 617
+# evidence-sha256: e4076a40c31945c3385495a1c3076b85518143712c89ea1fa3f629fffaac6120
 # verilog-gap-sha256: 338b64ba883f6243d9f799d31c22f873e871a5977bbb9fc9c45ae3b5ea738c84
-# verilog-width-sha256: 4d0924571f33e54f8d77d66979e290fe223c183eb0bc963fdbffb841429a424e
+# verilog-width-sha256: a1cef90f58dc984e69e1f6c35247090498553d4f8d10c57b1a1bcd2fc06aee05
 # verilog-closure-sha256: a80eea635da93dff681c7118cd3339e7b4bb679c83a2cf7137cc3eeccef6f39e
-# test-evidence-paths: 265
-# production-evidence-paths: 312
+# test-evidence-paths: 272
+# production-evidence-paths: 318
 # release-evidence-paths: 27
-# runtime-evidence-paths: 138
+# runtime-evidence-paths: 144
 # corpus-ctests: 36
 # required-status: execute
 #
-# B130-T9-ROWS: all 1279 required IDs are unique and in one of the eight
+# B130-T9-ROWS: all 1294 required IDs are unique and in one of the eight
 # reviewed SV/VHDL/mixed/SystemC/common release surfaces.
 # B130-T9-CLASSIFICATION: no required row remains parse, v1-target, deferred,
 # or an evidence gap; every row is reclassified only through its exact matrix
@@ -123,3 +123,9 @@
 # IEEE API differences, project core/flow/register smoke environments,
 # platform limits, executable conformance inventory, and the two-release zero-
 # gap closure audit. Change 20 owns the fresh complete local release gates.
+#
+# Batch 165 advances the synchronized matrix to 1294 rows and 5176 evidence
+# cells across 617 exact paths (272 test, 318 production, 27 release), with 144
+# runtime owners. SV-840 through SV-854 close the residual SystemVerilog-2017
+# language and integration rows; the separate 51-row closure matrix owns the
+# exact clause and arbitrary-width release witnesses.

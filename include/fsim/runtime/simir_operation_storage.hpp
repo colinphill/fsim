@@ -22,12 +22,13 @@ struct OperationGroup {
     }
 };
 
-using ValueOperationGroup = OperationGroup<LoadConstant, CopyRegister, UnaryNot, LogicalNot,
+using ValueOperationGroup = OperationGroup<LoadConstant, CopyRegister, ConvertToTwoState, UnaryNot, LogicalNot,
     LogicalBinary, Reduction, CountOnes, CountBits, Shift,
     Extract, DynamicExtract, DynamicPartSelect, Concatenate,
     Binary, Insert, DynamicInsert, DynamicPartInsert,
     IntegerUnary, IntegerBinary, IntegerCheck,
-    ConditionalSelect, RandomValue, ScopeRandomize>;
+    ConditionalSelect, RandomValue, RandomDistribution, ScopeRandomize,
+    StochasticQueueOperation>;
 
 using SignalOperationGroup = OperationGroup<ReadSignal, SignalEvent, SignalLastValue, SignalLastEvent,
     SignalActive,
@@ -50,9 +51,10 @@ using SignalOperationGroup = OperationGroup<ReadSignal, SignalEvent, SignalLastV
 using StringOperationGroup = OperationGroup<LoadStringConstant, CopyStringRegister, ReadStringObject,
     WriteStringObject, ConcatenateStrings, CompareStrings,
     StringLength, StringIndex, StringReplaceCodePoint,
-    StringMethod>;
+    StringMethod, PlusArgSelect, SystemCommand, VcdControl,
+    CoverageDatabaseControl>;
 
-using ContainerOperationGroup = OperationGroup<SystemVerilogScalarBinary, ResizeContainer,
+using ContainerOperationGroup = OperationGroup<SystemVerilogScalarBinary, SystemVerilogMath, ResizeContainer,
     CopyContainerRegister,
     ConditionalContainerSelect, CompareContainers,
     ReadContainerObject, WriteContainerObject, ContainerSize,
@@ -64,17 +66,19 @@ using ContainerOperationGroup = OperationGroup<SystemVerilogScalarBinary, Resize
     VitalMemoryDeclare,
     PushContainer, PopContainer,
     ContainerStringRead, ContainerStringWrite,
-    ContainerElementRead, ContainerElementWrite>;
+    ContainerElementRead, ContainerElementWrite, PlaEvaluate>;
 
 using FileOperationGroup = OperationGroup<FileOpen, FileClose, FileWriteLiteral, FileWriteFormatted,
     FileWriteString, FileReadLine, FileEndOfFile,
     FileErrorStatus, FileScan, FileBinaryRead, FilePosition,
     FileFlush>;
 
-using SchedulingOperationGroup = OperationGroup<WaitFor, WaitOn, WaitSensitivity, WaitForever, Yield, Fork,
+using SchedulingOperationGroup = OperationGroup<WaitFor, WaitRegion, WaitOn, WaitPla, WaitOrder, EventTriggered, EventAlias, WaitSensitivity, WaitForever, Yield, Fork,
     ForkEnd, WaitFork, DisableFork, DisableBlock, ProcessSelf,
     ProcessStatusQuery, ProcessCompleted, ProcessAwait,
-    ProcessKill, MailboxCreate, MailboxPut, MailboxGet,
+    ProcessKill, ProcessSuspend, ProcessResume,
+    ProcessGetRandState, ProcessSetRandState, ProcessSrandom,
+    MailboxCreate, MailboxPut, MailboxGet,
     MailboxNum, SemaphoreCreate, SemaphoreGet, SemaphorePut>;
 
 using ControlOperationGroup = OperationGroup<Jump, Call, Return,
@@ -82,7 +86,8 @@ using ControlOperationGroup = OperationGroup<Jump, Call, Return,
     Pause, Stop, Halt>;
 
 using OutputOperationGroup = OperationGroup<Display, FormatDisplay, StringDisplay, StringReport,
-    TimeDisplay, MonitorInstall, MonitorControl>;
+    TimeDisplay, MonitorInstall, MonitorControl, TimeFormatControl,
+    CoverageSample, CoverageQuery>;
 
 using ClassOperationGroup = OperationGroup<
     ClassAllocate, ClassPropertyRead, ClassPropertyWrite, ClassMethodCall,
@@ -202,7 +207,7 @@ static_assert(
         + std::variant_size_v<ControlOperationGroup::Storage>
         + std::variant_size_v<OutputOperationGroup::Storage>
         + std::variant_size_v<ClassOperationGroup::Storage>
-    == 155);
+    == 177);
 
 template <typename Alternative>
 [[nodiscard]] Alternative* operation_get_if(Operation* operation) noexcept

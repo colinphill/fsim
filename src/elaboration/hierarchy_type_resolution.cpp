@@ -778,6 +778,17 @@ using namespace elaboration_detail;
                 }
             }
             if (!base) {
+                if (!vhdl
+                    && std::ranges::any_of(
+                        unit.systemverilog_covergroups,
+                        [&](const frontend::SystemVerilogCovergroupDeclaration&
+                                covergroup) {
+                            return covergroup.name == name;
+                        })) {
+                    // Covergroups are host-owned coverage objects, not packed,
+                    // string, container, or class storage types.
+                    return true;
+                }
                 const auto imported =
                     imported_types.find(name);
                 if (imported == imported_types.end()) {

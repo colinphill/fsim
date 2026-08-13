@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 #include "application_uvm_registry.hpp"
+#include "fsim/app/design_artifact.hpp"
+#include "fsim/support/path.hpp"
 
+#include <cstdlib>
 #include <ranges>
 #include <set>
 
@@ -14,6 +17,198 @@ struct Simulation::Impl {
         finished,
         poisoned,
     };
+
+    struct PendingConcurrentAssertionAction {
+        bool report { };
+        bool newline { };
+        runtime::simir::AssertionSeverity severity {
+            runtime::simir::AssertionSeverity::error
+        };
+        std::string text;
+        runtime::simir::SourceLocation source;
+    };
+
+    struct PendingConcurrentAssertion {
+        runtime::simir::ProcessId process { };
+        runtime::simir::ProcessId design_process { };
+        std::uint32_t slot { };
+        std::string kind;
+        std::string name;
+        bool vacuous { };
+        std::vector<PendingConcurrentAssertionAction> actions;
+    };
+
+    [[nodiscard]] std::filesystem::path coverage_database_file(
+        const std::string_view filename) const
+    {
+        std::filesystem::path relative;
+        try {
+            relative = support::path_from_utf8(filename).lexically_normal();
+        } catch (const std::exception&) {
+            throw std::runtime_error {
+                "coverage database filename is not a valid UTF-8 path"
+            };
+        }
+        if (relative.empty() || relative.is_absolute()
+            || relative.has_root_name()
+            || std::ranges::any_of(relative, [](const auto& component) {
+                   return component == "..";
+               })) {
+            throw std::runtime_error {
+                "coverage database filename must remain beneath the project file root"
+            };
+        }
+        return (built.file_root / relative).lexically_normal();
+    }
+
+    void load_coverage_database(const std::filesystem::path& path)
+    {
+        std::error_code error;
+        const auto bytes = std::filesystem::file_size(path, error);
+        if (error) {
+            throw std::runtime_error {
+                "cannot inspect coverage database: " + error.message()
+            };
+        }
+        if (bytes > runtime::simir::maximum_memory_file_bytes) {
+            throw std::runtime_error {
+                "coverage database exceeds the governed file-size budget"
+            };
+        }
+        std::ifstream input(path, std::ios::binary);
+        if (!input) {
+            throw std::runtime_error { "cannot open coverage database" };
+        }
+        std::string contents(
+            std::istreambuf_iterator<char> { input },
+            std::istreambuf_iterator<char> { });
+        if (!input.good() && !input.eof()) {
+            throw std::runtime_error { "cannot read coverage database" };
+        }
+        diagnostic::Engine diagnostics;
+        auto loaded = deserialize_systemverilog_coverage_state(
+            contents, support::path_to_utf8(path), diagnostics);
+        if (!loaded) {
+            const auto& entries = diagnostics.diagnostics();
+            throw std::runtime_error {
+                entries.empty()
+                    ? "coverage database is malformed"
+                    : entries.front().message
+            };
+        }
+        std::string merge_error;
+        if (!frontend::merge_systemverilog_coverage_state(
+                built.systemverilog_coverage, *loaded, merge_error)) {
+            throw std::runtime_error { std::move(merge_error) };
+        }
+    }
+
+    void save_coverage_database()
+    {
+        if (!coverage_database_path) {
+            return;
+        }
+        diagnostic::Engine diagnostics;
+        auto contents = serialize_systemverilog_coverage_state(
+            built.systemverilog_coverage, diagnostics);
+        if (!contents) {
+            const auto& entries = diagnostics.diagnostics();
+            throw std::runtime_error {
+                entries.empty()
+                    ? "cannot serialize coverage database"
+                    : entries.front().message
+            };
+        }
+        std::error_code error;
+        std::filesystem::create_directories(
+            coverage_database_path->parent_path(), error);
+        if (error) {
+            throw std::runtime_error {
+                "cannot create coverage database directory: "
+                + error.message()
+            };
+        }
+        auto temporary = *coverage_database_path;
+        temporary += ".fsim-tmp";
+        {
+            std::ofstream output(
+                temporary, std::ios::binary | std::ios::trunc);
+            output.write(contents->data(),
+                static_cast<std::streamsize>(contents->size()));
+            if (!output) {
+                std::filesystem::remove(temporary, error);
+                throw std::runtime_error {
+                    "cannot write coverage database"
+                };
+            }
+        }
+        auto backup = *coverage_database_path;
+        backup += ".fsim-old";
+        std::filesystem::remove(backup, error);
+        if (error) {
+            std::filesystem::remove(temporary, error);
+            throw std::runtime_error {
+                "cannot prepare coverage database replacement: "
+                + error.message()
+            };
+        }
+        const auto had_existing = std::filesystem::exists(
+            *coverage_database_path, error);
+        if (error) {
+            std::filesystem::remove(temporary, error);
+            throw std::runtime_error {
+                "cannot inspect coverage database destination: "
+                + error.message()
+            };
+        }
+        if (had_existing) {
+            std::filesystem::rename(
+                *coverage_database_path, backup, error);
+            if (error) {
+                std::filesystem::remove(temporary, error);
+                throw std::runtime_error {
+                    "cannot preserve the previous coverage database: "
+                    + error.message()
+                };
+            }
+        }
+        std::filesystem::rename(
+            temporary, *coverage_database_path, error);
+        if (error) {
+            const auto publish_error = error.message();
+            if (had_existing) {
+                std::error_code restore_error;
+                std::filesystem::rename(
+                    backup, *coverage_database_path, restore_error);
+            }
+            std::filesystem::remove(temporary, error);
+            throw std::runtime_error {
+                "cannot publish coverage database: " + publish_error
+            };
+        }
+        if (had_existing) {
+            std::filesystem::remove(backup, error);
+        }
+    }
+
+    void control_coverage_database(
+        const runtime::simir::CoverageDatabaseControlEvent& event)
+    {
+        const auto path = coverage_database_file(event.filename);
+        if (event.kind
+            == runtime::simir::CoverageDatabaseControlKind::set_name) {
+            coverage_database_path = path;
+            return;
+        }
+        if (event.kind
+            == runtime::simir::CoverageDatabaseControlKind::load) {
+            load_coverage_database(path);
+            return;
+        }
+        throw std::runtime_error {
+            "unknown coverage database control kind"
+        };
+    }
 
 #include "application_simulation_setup.tpp"
 
@@ -135,7 +330,9 @@ struct Simulation::Impl {
 
     [[nodiscard]] runtime::PackedLogic4 invoke_source_randomize(
         const runtime::SystemVerilogClassHandle handle,
-        const std::span<const std::string> selected_names)
+        const std::span<const std::string> selected_names,
+        const std::span<const runtime::SystemVerilogConstraintTemplate>
+            inline_constraints)
     {
         auto& object = class_heap.object(handle);
         const auto prior_properties = object.properties;
@@ -178,6 +375,17 @@ struct Simulation::Impl {
                     return class_heap.constraint_mode(handle, identity);
                 });
         };
+        if (!inline_constraints.empty()) {
+            request.inline_constraints = [inline_constraints,
+                                             identity = object.specialization_identity](
+                                             auto& solver, const auto& variables) {
+                runtime::configure_systemverilog_inline_constraints(
+                    solver,
+                    variables,
+                    inline_constraints,
+                    identity + "::randomize@inline");
+            };
+        }
         const auto result = runtime::randomize_systemverilog_class_object(
             class_heap, handle, request);
         if (result.language_result() != 0) {
@@ -202,6 +410,7 @@ struct Simulation::Impl {
     }
 
     using ConstructorEnvironment = std::map<std::string, runtime::PackedLogic4, std::less<>>;
+    using SourceStringEnvironment = std::map<std::string, std::string, std::less<>>;
 
     [[nodiscard]] static runtime::PackedLogic4 resize_packed(
         const runtime::PackedLogic4& value,
@@ -1086,6 +1295,12 @@ struct Simulation::Impl {
 
     ~Impl()
     {
+        if (coverage_database_path && lifecycle != Lifecycle::finished) {
+            try {
+                save_coverage_database();
+            } catch (...) {
+            }
+        }
         if (vpi_started && !vpi_ended) {
             try {
                 end_vpi();
@@ -1347,6 +1562,48 @@ struct Simulation::Impl {
         }
     }
 
+    void publish_vpi_assertion(
+        const ConcurrentAssertionEvent& event)
+    {
+        const auto object = vpi_assertion_handles.find(event.process);
+        if (object == vpi_assertion_handles.end() || !vpi_callbacks) {
+            return;
+        }
+        runtime::SystemVerilogVpiAssertionEvent published;
+        published.kind
+            = event.kind == ConcurrentAssertionCoverageKind::assumption
+            ? runtime::SystemVerilogVpiAssertionKind::Assumption
+            : event.kind == ConcurrentAssertionCoverageKind::cover
+            ? runtime::SystemVerilogVpiAssertionKind::Cover
+            : event.kind == ConcurrentAssertionCoverageKind::restriction
+            ? runtime::SystemVerilogVpiAssertionKind::Restriction
+            : runtime::SystemVerilogVpiAssertionKind::Assertion;
+        published.outcome
+            = event.outcome == ConcurrentAssertionOutcome::pass
+            ? runtime::SystemVerilogVpiAssertionOutcome::Success
+            : event.outcome == ConcurrentAssertionOutcome::failure
+            ? runtime::SystemVerilogVpiAssertionOutcome::Failure
+            : event.outcome == ConcurrentAssertionOutcome::disabled
+            ? runtime::SystemVerilogVpiAssertionOutcome::Disabled
+            : event.outcome == ConcurrentAssertionOutcome::vacuous
+            ? runtime::SystemVerilogVpiAssertionOutcome::Vacuous
+            : runtime::SystemVerilogVpiAssertionOutcome::Aborted;
+        published.name = event.name;
+        published.process = event.process;
+        published.instance_identity = event.instance_identity;
+        published.slot = event.slot;
+        published.source_span = event.source_span;
+        published.action_suppressed = event.action_suppressed;
+        const auto error = vpi_callbacks->dispatch_assertion(
+            object->second, std::move(published));
+        if (error != runtime::SystemVerilogVpiCallbackError::None) {
+            throw std::logic_error {
+                "live VPI assertion callback dispatch failed with error "
+                + std::to_string(static_cast<unsigned>(error))
+            };
+        }
+    }
+
     void start_vpi()
     {
         if (vpi_started) {
@@ -1471,6 +1728,8 @@ struct Simulation::Impl {
     std::map<SignalId, std::vector<SystemVerilogVpiDriverBinding>>
         vpi_driver_bindings;
     std::map<SignalId, std::vector<fsim_vpi_handle_v1>> vpi_event_handles;
+    std::map<std::string, fsim_vpi_handle_v1, std::less<>>
+        vpi_assertion_handles;
     std::map<SignalId, runtime::SystemVerilogScalarKind> vpi_scalar_kinds;
     std::map<SignalId, runtime::SystemVerilogVpiValueCategory> vpi_categories;
     std::map<runtime::simir::ContainerObjectId,
@@ -1505,22 +1764,37 @@ struct Simulation::Impl {
     std::uint64_t next_safe_point_observer { 1 };
     OutputHook output_hook;
     ReportHook report_hook;
+    application_detail::HdlVcdState hdl_vcd;
     std::vector<ConcurrentAssertionCoverage>
         concurrent_assertion_coverage;
     std::vector<ConcurrentAssertionEvent>
         concurrent_assertion_events;
+    frontend::SystemVerilogCoverageExecutionState coverage_execution_state;
+    frontend::SystemVerilogCoverageExecutionMode coverage_execution_mode {
+        frontend::SystemVerilogCoverageExecutionMode::Interpreter
+    };
+    std::unordered_set<std::string> stopped_covergroups;
+    std::vector<frontend::Diagnostic> coverage_diagnostics;
+    std::optional<std::filesystem::path> coverage_database_path;
     ConcurrentAssertionHook concurrent_assertion_hook;
     VhdlPslAttemptHook vhdl_psl_attempt_hook;
     std::map<std::uint32_t, std::size_t>
         concurrent_assertion_indices;
+    std::set<runtime::simir::ProcessId>
+        concurrent_assertion_design_processes;
     std::map<std::uint32_t, bool>
         concurrent_assertion_actions_suppressed;
+    std::map<runtime::simir::ProcessId, PendingConcurrentAssertion>
+        pending_concurrent_assertions;
     bool concurrent_assertions_enabled { true };
     bool concurrent_assertion_pass_actions_enabled { true };
+    bool concurrent_assertion_vacuous_actions_enabled { true };
     bool concurrent_assertion_failure_actions_enabled { true };
     ClassPropertyChangeHook class_property_change_hook;
     ClassStaticPropertyChangeHook class_static_property_change_hook;
     std::map<std::string, ConstructorEnvironment> source_static_locals_;
+    std::map<std::string, SourceStringEnvironment>
+        source_static_string_locals_;
     std::size_t source_method_depth_ { };
     Lifecycle lifecycle { Lifecycle::ready };
     bool systemc_start_attempted { };
@@ -1535,6 +1809,8 @@ Simulation::Simulation(
           std::make_unique<Impl>(
               std::move(project), max_deltas, engine))
 {
+    application_detail::attach_hdl_vcd_control(
+        *this, impl_->hdl_vcd, impl_->built.file_root);
 }
 Simulation::~Simulation() = default;
 Simulation::Simulation(Simulation&&) noexcept = default;
@@ -1723,7 +1999,9 @@ runtime::RunResult Simulation::run(
             || impl_->interpreter->stopped_by_design()
             || impl_->vpi_control->state()
                 == runtime::SystemVerilogVpiControlState::Finished) {
+            impl_->finish_concurrent_assertions(result.time, result.delta);
             impl_->vhdl_psl->finish(result.time, result.delta);
+            impl_->save_coverage_database();
             impl_->end_vpi();
             impl_->end_systemc();
             impl_->lifecycle = Impl::Lifecycle::finished;
@@ -1816,6 +2094,12 @@ const std::vector<ConcurrentAssertionEvent>&
 Simulation::concurrent_assertion_events() const noexcept
 {
     return impl_->concurrent_assertion_events;
+}
+
+const frontend::SystemVerilogCoverageState&
+Simulation::systemverilog_coverage() const noexcept
+{
+    return impl_->built.systemverilog_coverage;
 }
 
 const std::vector<runtime::VhdlPslAttemptSnapshot>&
@@ -1940,6 +2224,22 @@ void Simulation::remove_safe_point_hook(const std::uint64_t token) noexcept
 void Simulation::set_execution_point_hook(ExecutionPointHook hook)
 {
     impl_->interpreter->set_execution_point_hook(std::move(hook));
+}
+
+void Simulation::set_systemverilog_plusargs(
+    const std::span<const std::string> plusargs)
+{
+    impl_->interpreter->set_plusargs(plusargs);
+}
+
+void Simulation::set_system_command_hook(SystemCommandHook hook)
+{
+    impl_->interpreter->set_system_command_hook(std::move(hook));
+}
+
+void Simulation::set_vcd_control_hook(VcdControlHook hook)
+{
+    impl_->interpreter->set_vcd_control_hook(std::move(hook));
 }
 
 void Simulation::set_output_hook(OutputHook hook)

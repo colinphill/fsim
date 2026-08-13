@@ -1573,6 +1573,32 @@ endmodule
                                            "FSIM-SV-PARSE-113";
                                   }),
           "a missing $stop semicolon must be targeted");
+
+  const auto program_exit = parse_text(
+      "program_exit.sv",
+      "program program_exit; initial begin $exit; $exit(); end endprogram",
+      Language::SystemVerilog2017);
+  require(program_exit.ok(), "$exit and $exit() must parse in a program");
+  const auto& exit_statements =
+      program_exit.design.units.front().processes.front().statements;
+  require(
+      exit_statements.size() == 2
+          && exit_statements[0].kind == StatementKind::Exit
+          && exit_statements[1].kind == StatementKind::Exit,
+      "$exit spellings must retain program-exit HIR");
+
+  const auto exit_argument = parse_text(
+      "invalid_exit_argument.sv",
+      "program invalid_exit_argument; initial $exit(1); endprogram",
+      Language::SystemVerilog2017);
+  require(
+      !exit_argument.ok()
+          && std::ranges::any_of(
+              exit_argument.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-075";
+              }),
+      "$exit arguments must be rejected by the system-task arity diagnostic");
 }
 
 void test_vhdl_conditional_assignments() {

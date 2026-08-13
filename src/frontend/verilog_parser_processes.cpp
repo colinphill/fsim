@@ -1,7 +1,30 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
 
+#include <functional>
+
 namespace fsim::frontend {
+
+[[maybe_unused]] constexpr std::string_view
+    kRetiredCaseMatchPatternDiagnostic = "FSIM-SV-UNSUPPORTED-042";
+[[maybe_unused]] constexpr std::string_view
+    kRetiredCaseMatchGuardDiagnostic = "FSIM-SV-UNSUPPORTED-043";
+
+namespace {
+
+    [[nodiscard]] OutputFormat default_output_format(
+        const std::string_view task) noexcept
+    {
+        if (task.ends_with('b'))
+            return OutputFormat::Binary;
+        if (task.ends_with('h'))
+            return OutputFormat::Hexadecimal;
+        if (task.ends_with('o'))
+            return OutputFormat::Octal;
+        return OutputFormat::Decimal;
+    }
+
+} // namespace
 
 Process VerilogParser::parse_initial()
 {
@@ -65,8 +88,10 @@ Process VerilogParser::parse_final()
                 || statement.kind == StatementKind::Delay
                 || statement.kind == StatementKind::WaitOn
                 || statement.kind == StatementKind::WaitUntil
+                || statement.kind == StatementKind::WaitOrder
                 || statement.kind == StatementKind::Pause
                 || statement.kind == StatementKind::Finish
+                || statement.kind == StatementKind::Exit
                 || (statement.kind == StatementKind::Assignment
                     && statement.procedural_assignment_control
                         != ProceduralAssignmentControl::None);
@@ -98,7 +123,7 @@ Process VerilogParser::parse_final()
             start,
             "FSIM-SV-SEM-032",
             "a final procedure cannot contain a timing control, wait, "
-            "or $finish");
+            "or a simulation/program termination task");
     }
     if (has_nonblocking) {
         error(
@@ -191,6 +216,95 @@ Statement VerilogParser::parse_case_statement(
             advance();
         }
     };
+    std::function<Expression()> parse_match_pattern;
+    parse_match_pattern = [&]() -> Expression {
+        if (match(TokenKind::Dot)) {
+            const auto pattern_start = previous();
+            if (match(TokenKind::Star)) {
+                return Expression {
+                    ExpressionKind::Call,
+                    "@match-wildcard",
+                    { },
+                    cover(pattern_start.span, previous().span)
+                };
+            }
+            if (at(TokenKind::Identifier)) {
+                const auto variable = advance();
+                return Expression {
+                    ExpressionKind::Call,
+                    "@match-bind:" + variable.text,
+                    { },
+                    cover(pattern_start.span, variable.span)
+                };
+            }
+            error(pattern_start, "FSIM-SV-PARSE-190",
+                "expected '*' or a pattern variable after '.'");
+            return Expression {
+                ExpressionKind::Call,
+                "@match-unsupported",
+                { },
+                pattern_start.span
+            };
+        }
+        if (match_keyword("tagged")) {
+            const auto tagged = previous();
+            const auto member = expect_identifier(
+                "a tagged-union member in a case pattern");
+            std::vector<Expression> nested;
+            if (!at(TokenKind::Colon)
+                && !at(TokenKind::AndAndAnd)) {
+                nested.push_back(parse_match_pattern());
+            }
+            return Expression {
+                ExpressionKind::Call,
+                "@match-tagged:" + member.text,
+                std::move(nested),
+                cover(tagged.span, previous().span)
+            };
+        }
+        if (match(TokenKind::Apostrophe)) {
+            const auto apostrophe = previous();
+            expect(TokenKind::LeftBrace,
+                "'{' to begin a structured case pattern",
+                "FSIM-SV-PARSE-191");
+            Expression result {
+                ExpressionKind::Aggregate,
+                "@match-structure",
+                { },
+                apostrophe.span
+            };
+            if (!at(TokenKind::RightBrace)) {
+                for (;;) {
+                    std::string choice;
+                    std::vector<Expression> choice_expressions;
+                    if (at(TokenKind::Identifier)
+                        && at(TokenKind::Colon, 1)) {
+                        const auto member = advance();
+                        advance();
+                        choice = "@key";
+                        choice_expressions.push_back(Expression {
+                            ExpressionKind::Identifier,
+                            member.text,
+                            { },
+                            member.span });
+                    }
+                    result.operands.push_back(parse_match_pattern());
+                    result.aggregate_choices.push_back(std::move(choice));
+                    result.aggregate_choice_expressions.push_back(
+                        std::move(choice_expressions));
+                    if (!match(TokenKind::Comma)) {
+                        break;
+                    }
+                }
+            }
+            expect(TokenKind::RightBrace,
+                "'}' after a structured case pattern",
+                "FSIM-SV-PARSE-192");
+            result.span = cover(apostrophe.span, previous().span);
+            return result;
+        }
+        return parse_expression();
+    };
     while (!at_end() && !keyword("endcase")) {
         const auto item_start = current();
         CaseAlternative alternative;
@@ -204,50 +318,8 @@ Statement VerilogParser::parse_case_statement(
         } else {
             const auto parse_choice = [&]() {
                 if (statement.case_match_kind == CaseMatchKind::Matches) {
-                    if (match(TokenKind::Dot)) {
-                        const auto pattern_start = previous();
-                        if (match(TokenKind::Star)) {
-                            alternative.choices.push_back(Expression {
-                                ExpressionKind::Call,
-                                "@match-wildcard",
-                                { },
-                                cover(pattern_start.span, previous().span) });
-                            return;
-                        }
-                        if (at(TokenKind::Identifier)) {
-                            const auto variable = advance();
-                            error(pattern_start, "FSIM-SV-UNSUPPORTED-042",
-                                "case matches variable-binding patterns are not yet "
-                                "implemented");
-                            alternative.choices.push_back(Expression {
-                                ExpressionKind::Call,
-                                "@match-unsupported",
-                                { },
-                                cover(pattern_start.span, variable.span) });
-                            return;
-                        }
-                        error(pattern_start, "FSIM-SV-PARSE-190",
-                            "expected '*' or a pattern variable after '.'");
-                        alternative.choices.push_back(Expression {
-                            ExpressionKind::Call,
-                            "@match-unsupported",
-                            { },
-                            pattern_start.span });
-                        return;
-                    }
-                    if (keyword("tagged") || at(TokenKind::Apostrophe)) {
-                        const auto unsupported = advance();
-                        error(unsupported, "FSIM-SV-UNSUPPORTED-042",
-                            "tagged and structured case matches patterns are not yet "
-                            "implemented");
-                        skip_pattern_tail();
-                        alternative.choices.push_back(Expression {
-                            ExpressionKind::Call,
-                            "@match-unsupported",
-                            { },
-                            unsupported.span });
-                        return;
-                    }
+                    alternative.choices.push_back(parse_match_pattern());
+                    return;
                 }
                 if (statement.case_match_kind == CaseMatchKind::Inside
                     && match(TokenKind::LeftBracket)) {
@@ -276,9 +348,21 @@ Statement VerilogParser::parse_case_statement(
             }
             if (statement.case_match_kind == CaseMatchKind::Matches
                 && match(TokenKind::AndAndAnd)) {
-                error(previous(), "FSIM-SV-UNSUPPORTED-043",
-                    "guarded case matches patterns are not yet implemented");
-                skip_pattern_tail();
+                const auto guard_start = previous();
+                auto guard = parse_expression();
+                if (alternative.choices.size() == 1U) {
+                    auto pattern = std::move(alternative.choices.front());
+                    alternative.choices.front() = Expression {
+                        ExpressionKind::Call,
+                        "@match-guard",
+                        { std::move(pattern), std::move(guard) },
+                        cover(item_start.span, previous().span)
+                    };
+                } else {
+                    error(guard_start, "FSIM-SV-PARSE-189",
+                        "a guarded case matches item requires exactly one "
+                        "pattern");
+                }
             }
             if (statement.case_match_kind == CaseMatchKind::Matches
                 && match(TokenKind::Comma)) {
@@ -933,6 +1017,64 @@ std::optional<Statement> VerilogParser::parse_statement()
         statement.span = span_from(start, previous());
         return statement;
     }
+    if (language_ == Language::SystemVerilog2017
+        && match_keyword("wait_order")) {
+        const auto start = previous();
+        Statement statement;
+        statement.kind = StatementKind::WaitOrder;
+        expect(
+            TokenKind::LeftParen,
+            "'(' after wait_order",
+            "FSIM-SV-PARSE-364");
+        if (at(TokenKind::RightParen)) {
+            error(
+                current(),
+                "FSIM-SV-PARSE-365",
+                "wait_order requires at least one named event");
+        } else {
+            do {
+                auto event = parse_expression();
+                Sensitivity sensitivity;
+                sensitivity.span = event.span;
+                if (event.kind == ExpressionKind::Identifier) {
+                    sensitivity.signal = std::move(event.text);
+                } else {
+                    sensitivity.expression = std::move(event);
+                    error(
+                        current(),
+                        "FSIM-SV-SEM-243",
+                        "wait_order operands must be named-event identifiers");
+                }
+                statement.sensitivities.push_back(
+                    std::move(sensitivity));
+            } while (match(TokenKind::Comma));
+        }
+        expect(
+            TokenKind::RightParen,
+            "')' after wait_order event list",
+            "FSIM-SV-PARSE-366");
+        if (auto success = parse_statement()) {
+            statement.statements.push_back(std::move(*success));
+        } else {
+            error(
+                current(),
+                "FSIM-SV-PARSE-367",
+                "wait_order requires a success action statement");
+        }
+        if (match_keyword("else")) {
+            if (auto failure = parse_statement()) {
+                statement.else_statements.push_back(
+                    std::move(*failure));
+            } else {
+                error(
+                    current(),
+                    "FSIM-SV-PARSE-367",
+                    "wait_order else requires an action statement");
+            }
+        }
+        statement.span = span_from(start, previous());
+        return statement;
+    }
     if (match_keyword("wait")) {
         const auto start = previous();
         Statement statement;
@@ -1329,13 +1471,27 @@ std::optional<Statement> VerilogParser::parse_statement()
         return statement;
     }
 
-    if (keyword("$fdisplay") || keyword("$fwrite")) {
-        const bool newline = keyword("$fdisplay");
+    if (keyword("$fdisplay") || keyword("$fdisplayb")
+        || keyword("$fdisplayh") || keyword("$fdisplayo")
+        || keyword("$fwrite") || keyword("$fwriteb")
+        || keyword("$fwriteh") || keyword("$fwriteo")
+        || keyword("$fstrobe") || keyword("$fstrobeb")
+        || keyword("$fstrobeh") || keyword("$fstrobeo")
+        || keyword("$fmonitor") || keyword("$fmonitorb")
+        || keyword("$fmonitorh") || keyword("$fmonitoro")) {
+        const bool monitor = current().text.starts_with("$fmonitor");
+        const bool postponed = current().text.starts_with("$fstrobe")
+            || monitor;
+        const bool newline = current().text.starts_with("$fdisplay")
+            || postponed;
         const auto start = advance();
         const std::string task_name = start.text;
+        const auto default_format = default_output_format(task_name);
         Statement statement;
         statement.kind = StatementKind::FileDisplay;
         statement.output_newline = newline;
+        statement.output_postponed = postponed;
+        statement.output_monitor = monitor;
         expect(
             TokenKind::LeftParen,
             "'(' after " + task_name,
@@ -1349,7 +1505,7 @@ std::optional<Statement> VerilogParser::parse_statement()
             do {
                 statement.output_values.push_back(
                     OutputValue {
-                        parse_expression(), OutputFormat::Decimal, { } });
+                        parse_expression(), default_format, { } });
             } while (match(TokenKind::Comma));
         } else {
             const auto format_token = advance();
@@ -1423,7 +1579,7 @@ std::optional<Statement> VerilogParser::parse_statement()
                     statement.output_values.push_back(
                         OutputValue {
                             std::move(values[index]),
-                            OutputFormat::Decimal,
+                            default_format,
                             index == value_index
                                 ? std::move(parsed_format.trailing_text)
                                 : std::string { } });
@@ -1465,15 +1621,19 @@ std::optional<Statement> VerilogParser::parse_statement()
         return statement;
     }
 
-    if (keyword("$display") || keyword("$write")
-        || keyword("$strobe") || keyword("$monitor")) {
-        const bool monitor = keyword("$monitor");
-        const bool postponed = keyword("$strobe") || monitor;
-        const bool newline = !keyword("$write");
-        const std::string_view task_name = monitor ? "$monitor"
-            : postponed                            ? "$strobe"
-            : newline                              ? "$display"
-                                                   : "$write";
+    if (keyword("$display") || keyword("$displayb")
+        || keyword("$displayh") || keyword("$displayo")
+        || keyword("$write") || keyword("$writeb")
+        || keyword("$writeh") || keyword("$writeo")
+        || keyword("$strobe") || keyword("$strobeb")
+        || keyword("$strobeh") || keyword("$strobeo")
+        || keyword("$monitor") || keyword("$monitorb")
+        || keyword("$monitorh") || keyword("$monitoro")) {
+        const auto task_name = std::string_view { current().text };
+        const bool monitor = task_name.starts_with("$monitor");
+        const bool postponed = task_name.starts_with("$strobe") || monitor;
+        const bool newline = !task_name.starts_with("$write");
+        const auto default_format = default_output_format(task_name);
         const std::string semantic_code = monitor ? "FSIM-SV-SEM-041"
             : postponed                           ? "FSIM-SV-SEM-039"
             : newline                             ? "FSIM-SV-SEM-037"
@@ -1571,7 +1731,7 @@ std::optional<Statement> VerilogParser::parse_statement()
                             statement.output_values.push_back(
                                 OutputValue {
                                     std::move(values[index]),
-                                    OutputFormat::Decimal,
+                                    default_format,
                                     index == value_index
                                         ? std::move(parsed_format.trailing_text)
                                         : std::string { } });
@@ -1585,7 +1745,8 @@ std::optional<Statement> VerilogParser::parse_statement()
                     do {
                         values.push_back(parse_expression());
                     } while (match(TokenKind::Comma));
-                    if (values.size() == 1
+                    if (default_format == OutputFormat::Decimal
+                        && values.size() == 1
                         && (values.front().kind
                                 == ExpressionKind::IntegerLiteral
                             || values.front().kind
@@ -1606,7 +1767,7 @@ std::optional<Statement> VerilogParser::parse_statement()
                             statement.output_values.push_back(
                                 OutputValue {
                                     std::move(value),
-                                    OutputFormat::Decimal,
+                                    default_format,
                                     std::string { } });
                         }
                     }
@@ -1625,6 +1786,30 @@ std::optional<Statement> VerilogParser::parse_statement()
         return statement;
     }
 
+    if (keyword("$exit")) {
+        const auto start = advance();
+        if (match(TokenKind::LeftParen)) {
+            if (!at(TokenKind::RightParen)) {
+                (void)parse_expression();
+                error(
+                    start,
+                    "FSIM-SV-SEM-075",
+                    "$exit does not accept arguments");
+            }
+            expect(
+                TokenKind::RightParen,
+                "')' after $exit",
+                "FSIM-SV-PARSE-112");
+        }
+        expect(
+            TokenKind::Semicolon,
+            "';' after $exit",
+            "FSIM-SV-PARSE-113");
+        Statement statement;
+        statement.kind = StatementKind::Exit;
+        statement.span = span_from(start, previous());
+        return statement;
+    }
     if (keyword("$finish")) {
         const auto start = advance();
         if (match(TokenKind::LeftParen)) {

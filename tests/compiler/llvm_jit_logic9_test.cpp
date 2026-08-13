@@ -139,10 +139,14 @@ void test_logic9_at_level(
     wide.register_value_kinds = {
         ValueKind::logic9, ValueKind::logic9, ValueKind::logic9
     };
-    const auto wide_high = PackedLogic4::from_msb_string(
-        std::string(129, '1'));
-    const auto wide_low = PackedLogic4::from_msb_string(
-        std::string(129, '0'));
+    std::string wide_digits;
+    while (wide_digits.size() < 129U) {
+        wide_digits += "UX01ZWLH-";
+    }
+    wide_digits.resize(129U);
+    const auto wide_high = PackedLogic4::from_logic9_msb_string(wide_digits);
+    const auto wide_low = PackedLogic4::from_logic9_msb_string(
+        std::string(129, 'H'));
     wide.operations = {
         LoadConstant { 0, wide_high },
         LoadConstant { 1, wide_low },
@@ -186,6 +190,26 @@ void test_logic9_at_level(
                wide_handle, wide_descriptor, wide_frame, wide_result)
         == JitResumeStatus::paused);
     assert((wide_initialized == std::array<std::uint8_t, 3> { 1, 1, 1 }));
+    const auto expect_wide_planes = [&](const std::size_t register_id,
+                                        const PackedLogic4& expected) {
+        const auto offset = 1U + wide_layout.register_word_offsets[register_id];
+        const std::array<const std::uint64_t*, 4> storage {
+            wide_aval.data(), wide_bval.data(),
+            wide_plane2.data(), wide_plane3.data()
+        };
+        for (std::size_t bit = 0; bit < expected.width(); ++bit) {
+            const auto encoded = static_cast<std::uint8_t>(
+                expected.get_logic9(bit));
+            for (std::size_t plane = 0; plane < storage.size(); ++plane) {
+                assert(((storage[plane][offset + bit / 64U]
+                            >> (bit % 64U))
+                           & 1U)
+                    == ((encoded >> plane) & 1U));
+            }
+        }
+    };
+    expect_wide_planes(0, wide_high);
+    expect_wide_planes(1, wide_low);
     assert(jit.resume(
                wide_handle, wide_descriptor, wide_frame, wide_result)
         == JitResumeStatus::completed);

@@ -969,6 +969,50 @@ LLVM service paths, artifacts, relocation, and cache reuse observe the same
 result. Scope randomization currently uses the validated interpreter service;
 its complete operation shape is nevertheless part of native-cache identity.
 
+The legacy Verilog distribution functions retain a separate standard 32-bit
+inout-seed contract. `$dist_uniform`, `$dist_normal`, `$dist_exponential`,
+`$dist_poisson`, `$dist_chi_square`, `$dist_t`, and `$dist_erlang` lower to one
+typed portable operation. The interpreter and compiled host boundary both run
+the same unsigned-overflow-defined reference generator and distribution
+transforms, then publish the signed result and updated seed atomically to the
+process frame. Function kind and every operand register participate in native
+cache identity.
+
+`$system` is a separate serialized string-operation boundary. Its portable
+operation independently records optional command and destination identities,
+so task/function use and the standard C `system(NULL)` query survive runtime
+artifacts and native-cache keys. Interpreter and LLVM execution both call the
+same simulation-owned hook; the application default invokes C `system()` and
+returns its raw `int`, while embeddings may replace the hook before execution.
+
+The stochastic queue family is represented by one typed SimIR operation whose
+kind determines exact input/output register roles. Queue objects and their
+FIFO/LIFO entries, capacity, arrival history, occupancy, and wait accumulators
+belong to the simulation kernel; LLVM returns at the operation boundary so the
+same evaluator owns interpreter and compiled behavior. The complete optional
+operand shape is validated and included in native-cache identity.
+
+PLA evaluation uses one typed container operation for every synchronous and
+asynchronous AND/NAND/OR/NOR array/plane form. Personality words remain in the
+ordinary fixed-container store, so input/output terms retain arbitrary packed
+widths. Asynchronous registrations are detached child processes whose `WaitPla`
+boundary participates in both ordinary signal fanout and a container-object
+fanout; changing any personality word therefore schedules the same shared
+evaluator on the next delta. LLVM returns at both PLA boundaries and resumes
+from the host-mutated frame, preserving one kernel implementation.
+
+HDL four-state and extended VCD control use a typed SimIR boundary rather than
+textual debugger commands. The operation retains dynamic filename/limit registers,
+static hierarchy selections, and the invoking scope; interpreter and LLVM
+publish one time/delta-stamped event to a simulation-owned trace controller.
+That controller resolves selections against DesignIR, defers `$dumpvars`
+and `$dumpports` startup to the postponed phase, and drives explicit checkpoint
+state for both task families. Four-state VCD uses the shared writer; extended
+VCD owns independent per-file direct-port inventories, direction/strength
+encoding, limits, flushing, and final-time `$vcdclose` records. File-root
+confinement stays outside the language kernel while exact arbitrary-width
+signal and port values use the common runtime representation.
+
 The debugger and trace API expose stable random property/constraint paths,
 enable state, revision, stream seed, `randc` domain signature, cycle, and used
 count without exposing an RNG object. A checksummed `sv-constraint-hir`
@@ -1347,6 +1391,14 @@ budgets are physical boundaries. They reject transactionally with resource or
 host-representation diagnostics and must not be reported as illegal Verilog or
 silently narrowed.
 
+The Batch 165 SystemVerilog closure ledger applies that rule through parser,
+semantic HIR, specialization, SimIR, interpreter, LLVM O0/O2, debugger, VCD,
+VPI/DPI, UVM, mixed-language, artifact, checkpoint, relocation, replay, and
+native-cache ownership. The release matrix binds all 30 supported language and
+integration rows plus 21 preserved width paths to independent positive,
+negative, and execution witnesses; configured address-space, work, trace, and
+time bounds govern those witnesses rather than the source language.
+
 Concrete VHDL user-array layout retains a source-ordered dimension vector in
 addition to the packed runtime view. Each dimension stores its exact evaluated
 left/right bounds, `to`/`downto` direction, null state, and packed-bit stride;
@@ -1579,6 +1631,37 @@ the current timestamp's postponed phase through a second append-only callback.
 Multiple conversion/value pairs lower in source order. Additional operands
 use typed default-decimal formatting, while `%m` is folded from the elaborated
 scope and `%t` reads the current global simulation tick.
+`$timeformat` mutates one interpreter-owned profile shared by terminal, file,
+monitor, and mutable-string formatting. The common formatter scales the
+global tick and project resolution with arbitrary-precision integer arithmetic
+before decimal rounding, so non-power-of-ten resolution magnitudes do not
+pass through floating point. Bare `%t` selects the profile minimum width;
+`%0t` and explicit widths retain their source-level override distinction.
+`$printtimescale` is an application service: a portable SimIR marker carries
+only an optional hierarchy name, while the simulation resolves the executing
+process or requested instance through DesignIR and reads the unit's retained
+SystemVerilog HIR compilation context. This keeps hierarchy pointers out of
+artifacts and gives interpreter and LLVM one reporting path.
+The scalar `$time`, `$stime` and `$realtime` queries retain the owning
+specialization's time-unit and precision magnitudes in their portable SimIR
+operation. Interpreter and LLVM callback execution combine that metadata with
+the simulation's project-resolution tick and call the shared checked runtime
+conversion, preserving per-instance semantics without scheduler duplication.
+`$get_coverage()` and `$get_inst_coverage()` similarly lower to one
+value-producing portable boundary with an explicit aggregate kind. The
+simulation-owned hook reads the current persisted covergroup declarations and
+instances. The first applies each type's goal-adjusted percentage and
+`type_option.weight`; the second contributes every materialized instance
+independently using its effective instance `option.weight`. Empty or
+zero-weight contributors do not enter either denominator. Both return one
+canonical 64-bit real payload, so interpreter and LLVM observe the same live
+coverage state without copying frontend coverage ownership into native code.
+The coverage database tasks use a separate string-bearing portable boundary.
+The application confines filenames to the project root, deserializes only the
+current coverage schema, and merges into a copy of the live model before
+committing matching stable bin and cross counts. Final save serializes the
+same simulation-owned state through a temporary file, so no host path or file
+handle enters SimIR or native-cache identity.
 Output-task literal spelling is decoded once in the frontend for newline, tab,
 quote, backslash, and one-byte octal escapes; SimIR and generated code retain
 the exact byte string, including embedded NUL bytes.
@@ -1624,6 +1707,23 @@ aliases a stale handle to a later stream. Every operation validates a nonzero
 known handle, its owning process, open state, and mode; interpreter destruction
 closes any remaining host stream. Error text is SimIR-generic because VHDL and
 SystemVerilog intentionally share this service.
+
+SystemVerilog `$fstrobe`, `$fstrobeb`, `$fstrobeh`, and `$fstrobeo` reuse that
+one-shot postponed-monitor path. The operation captures the validated opaque
+file handle when it executes but retains direct signal identities until the
+postponed phase, so final same-timestep values and radix formatting match
+terminal `$strobe`. Interpreter and compiled execution both read the handle
+from the active process frame and call the same manifest-confined file writer;
+the portable runtime-state and native-cache schemas include the optional file
+handle register. Compound file-strobe expressions remain a checked bounded
+exclusion rather than being sampled early.
+
+`$fmonitor`, `$fmonitorb`, `$fmonitorh`, and `$fmonitoro` use the persistent
+form of the same operation. Each new terminal or file monitor replaces the
+single simulation-wide registration, and `$monitoroff`/`$monitoron` suppress
+and resume either destination without discarding it. Watched changes coalesce
+to one final-value publication per time/delta slot; file ownership and closed-
+descriptor checks remain those of the common file service.
 
 Each concrete VHDL access type lowers to two process-local associative
 containers: a live object map keyed by the opaque 32-bit handle, and a one-bit
@@ -1706,10 +1806,12 @@ only leading known-zero digits, always leaving at least one digit.
 Decimal formatting uses an arbitrary-width binary-to-decimal kernel, derives
 two's-complement interpretation from the typed expression, and renders any
 four-state unknown value as `x`.
-`FormatDisplay` also carries postponed policy. For `$strobe`, the common
-runtime formats and owns the complete text when the operation executes, then
-schedules that immutable text in the timestamp's postponed worklist. Later
-active/update changes therefore cannot alter the captured result.
+Immediate formatted output uses `FormatDisplay`. Postponed `$strobe` instead
+lowers supported direct packed-signal operands to a one-shot `MonitorInstall`.
+The common runtime retains signal identity and formatting metadata, then reads
+and renders the final committed values in the timestamp's postponed phase.
+Consequently same-slot blocking, inactive, update, and NBA work is visible to
+the strobe without duplicating sampling rules in generated code.
 
 For bounded `always @*`, `always_comb`, `always_latch`, and dynamic `@*`,
 elaboration walks executable statement expressions, excludes assignment

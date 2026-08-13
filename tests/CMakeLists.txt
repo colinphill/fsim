@@ -47,6 +47,7 @@ add_executable(
   frontend/frontend_coverage_tests.cpp
   frontend/frontend_dpi_tests.cpp
   frontend/frontend_interface_tests.cpp
+  frontend/frontend_hierarchy_tests.cpp
   frontend/frontend_package_tests.cpp
   frontend/frontend_callable_tests.cpp
   frontend/frontend_class_tests.cpp
@@ -166,6 +167,29 @@ add_test(
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckVerilogGapInventory.cmake"
+)
+add_test(
+  NAME fsim.systemverilog-gap-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSystemVerilogGapInventory.cmake"
+)
+add_test(
+  NAME fsim.systemverilog-closure-audit
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSystemVerilogClosureAudit.cmake"
+)
+add_test(
+  NAME fsim.systemverilog-closure-matrix
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    "-DFSIM_BINARY_DIR=${CMAKE_BINARY_DIR}"
+    "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/systemverilog-closure-evidence"
+    -P "${PROJECT_SOURCE_DIR}/cmake/RunSystemVerilogClosureMatrix.cmake"
 )
 add_test(
   NAME fsim.verilog-closure-audit
@@ -427,6 +451,21 @@ set_tests_properties(
   PROPERTIES LABELS "fast;verilog;conformance;inventory;positive;negative;width;resources;cmake"
 )
 set_tests_properties(
+  fsim.systemverilog-gap-inventory
+  PROPERTIES LABELS "fast;systemverilog;conformance;inventory;positive;negative;width;resources;cmake"
+)
+set_tests_properties(
+  fsim.systemverilog-closure-audit
+  PROPERTIES LABELS "fast;systemverilog;closure;release;inventory;width;artifact;cache;debug;trace;mixed;uvm;portability;resources;cmake"
+)
+set_tests_properties(
+  fsim.systemverilog-closure-matrix
+  PROPERTIES
+    LABELS "slow;systemverilog;closure;release;positive;negative;llvm;artifact;cache;debug;trace;mixed;uvm;portability;resources"
+    RUN_SERIAL TRUE
+    TIMEOUT 7200
+)
+set_tests_properties(
   fsim.verilog-closure-audit
   PROPERTIES LABELS "fast;verilog;closure;release;inventory;width;artifact;cache;debug;trace;mixed;portability;resources;cmake"
 )
@@ -595,8 +634,10 @@ add_executable(
   elaboration/elaborator_specialization_test.cpp
   elaboration/elaborator_specify_test.cpp
   elaboration/elaborator_sv_constant_test.cpp
+  elaboration/elaborator_sv_alias_test.cpp
   elaboration/elaborator_sv_string_test.cpp
   elaboration/elaborator_sv_type_parameter_test.cpp
+  elaboration/elaborator_sv_hierarchy_test.cpp
   elaboration/elaborator_generate_test.cpp
   elaboration/elaborator_defparam_test.cpp
   elaboration/elaborator_mixed_test.cpp
@@ -1116,6 +1157,9 @@ if(TARGET fsim_application)
       0 expressions app/expression_application_test.cpp
       fsim.application.expressions fast expressions)
     fsim_add_application_case(
+      0 sv_hierarchy app/sv_hierarchy_application_test.cpp
+      fsim.application.sv_hierarchy fast systemverilog hierarchy)
+    fsim_add_application_case(
       0 scoped_locals app/scoped_local_application_test.cpp
       fsim.application.scoped_locals fast scoped-locals)
     fsim_add_application_case(
@@ -1137,6 +1181,24 @@ if(TARGET fsim_application)
     fsim_add_application_case(
       0 random app/random_application_test.cpp
       fsim.application.random fast random)
+    fsim_add_application_case(
+      0 plusargs app/plusarg_application_test.cpp
+      fsim.application.plusargs fast plusargs)
+    fsim_add_application_case(
+      0 system_command app/system_command_application_test.cpp
+      fsim.application.system_command fast system-command)
+    fsim_add_application_case(
+      0 stochastic_queues app/stochastic_queue_application_test.cpp
+      fsim.application.stochastic_queues fast stochastic-queues)
+    fsim_add_application_case(
+      0 pla app/pla_application_test.cpp
+      fsim.application.pla fast pla)
+    fsim_add_application_case(
+      0 vcd_control app/vcd_control_application_test.cpp
+      fsim.application.vcd_control fast vcd systemverilog)
+    fsim_add_application_case(
+      0 coverage app/coverage_application_test.cpp
+      fsim.application.coverage fast coverage)
     fsim_add_application_case(
       0 assertions app/assertion_application_test.cpp
       fsim.application.assertions fast assertions)
@@ -1430,6 +1492,24 @@ if(TARGET fsim_application)
   set_tests_properties(
     fsim.application.expressions
     PROPERTIES LABELS "fast;expressions"
+  )
+
+  add_executable(
+    fsim_sv_hierarchy_application_tests
+    app/sv_hierarchy_application_test.cpp
+  )
+  fsim_configure_test(fsim_sv_hierarchy_application_tests)
+  target_link_libraries(
+    fsim_sv_hierarchy_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.sv_hierarchy
+    COMMAND fsim_sv_hierarchy_application_tests
+  )
+  set_tests_properties(
+    fsim.application.sv_hierarchy
+    PROPERTIES LABELS "fast;systemverilog;hierarchy"
   )
 
   add_executable(
@@ -1992,6 +2072,114 @@ set_tests_properties(
   set_tests_properties(
     fsim.application.random
     PROPERTIES LABELS "fast;random"
+  )
+
+  add_executable(
+    fsim_plusarg_application_tests
+    app/plusarg_application_test.cpp
+  )
+  fsim_configure_test(fsim_plusarg_application_tests)
+  target_link_libraries(
+    fsim_plusarg_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.plusargs
+    COMMAND fsim_plusarg_application_tests
+  )
+  set_tests_properties(
+    fsim.application.plusargs
+    PROPERTIES LABELS "fast;plusargs"
+  )
+
+  add_executable(
+    fsim_system_command_application_tests
+    app/system_command_application_test.cpp
+  )
+  fsim_configure_test(fsim_system_command_application_tests)
+  target_link_libraries(
+    fsim_system_command_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.system_command
+    COMMAND fsim_system_command_application_tests
+  )
+  set_tests_properties(
+    fsim.application.system_command
+    PROPERTIES LABELS "fast;system-command"
+  )
+
+  add_executable(
+    fsim_stochastic_queue_application_tests
+    app/stochastic_queue_application_test.cpp
+  )
+  fsim_configure_test(fsim_stochastic_queue_application_tests)
+  target_link_libraries(
+    fsim_stochastic_queue_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.stochastic_queues
+    COMMAND fsim_stochastic_queue_application_tests
+  )
+  set_tests_properties(
+    fsim.application.stochastic_queues
+    PROPERTIES LABELS "fast;stochastic-queues"
+  )
+
+  add_executable(
+    fsim_pla_application_tests
+    app/pla_application_test.cpp
+  )
+  fsim_configure_test(fsim_pla_application_tests)
+  target_link_libraries(
+    fsim_pla_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.pla
+    COMMAND fsim_pla_application_tests
+  )
+  set_tests_properties(
+    fsim.application.pla
+    PROPERTIES LABELS "fast;pla"
+  )
+
+  add_executable(
+    fsim_vcd_control_application_tests
+    app/vcd_control_application_test.cpp
+  )
+  fsim_configure_test(fsim_vcd_control_application_tests)
+  target_link_libraries(
+    fsim_vcd_control_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.vcd_control
+    COMMAND fsim_vcd_control_application_tests
+  )
+  set_tests_properties(
+    fsim.application.vcd_control
+    PROPERTIES LABELS "fast;vcd;systemverilog"
+  )
+
+  add_executable(
+    fsim_coverage_application_tests
+    app/coverage_application_test.cpp
+  )
+  fsim_configure_test(fsim_coverage_application_tests)
+  target_link_libraries(
+    fsim_coverage_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.coverage
+    COMMAND fsim_coverage_application_tests
+  )
+  set_tests_properties(
+    fsim.application.coverage
+    PROPERTIES LABELS "fast;coverage"
   )
 
   add_executable(

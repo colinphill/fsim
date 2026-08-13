@@ -11,11 +11,12 @@
 namespace fsim::runtime {
 namespace {
 
-constexpr std::size_t phase_count = 5;
+    constexpr std::size_t phase_count = 8;
 
-[[nodiscard]] constexpr std::size_t phase_index(SchedulerPhase phase) {
-  return static_cast<std::size_t>(phase);
-}
+    [[nodiscard]] constexpr std::size_t phase_index(SchedulerPhase phase)
+    {
+        return static_cast<std::size_t>(phase);
+    }
 
 struct Entry {
   StableOrder order{};
@@ -127,8 +128,14 @@ const char *phase_name(SchedulerPhase phase) noexcept {
     return "inactive";
   case SchedulerPhase::update:
     return "update";
+  case SchedulerPhase::observed:
+      return "observed";
   case SchedulerPhase::reactive:
     return "reactive";
+  case SchedulerPhase::re_inactive:
+      return "re-inactive";
+  case SchedulerPhase::re_update:
+      return "re-update";
   case SchedulerPhase::postponed:
     return "postponed";
   }
@@ -161,6 +168,7 @@ struct Scheduler::Impl {
   bool in_callback{};
   std::atomic_bool stop{false};
   std::shared_ptr<const void> owner = std::make_shared<const bool>(true);
+  SlotStartHook slot_start_hook;
   SafePointHook safe_point_hook;
   std::vector<RuntimeSignalId> recent_signals;
   std::size_t recent_signal_cursor{};
@@ -217,6 +225,19 @@ void Scheduler::schedule_at(SimulationTick time, SchedulerPhase phase,
     throw std::invalid_argument("cannot schedule an event in the past");
   }
   auto entry = impl_->make_entry(stable_order, std::move(task));
+  if (impl_->current && time == impl_->current->time
+      && impl_->current->phase < phase_count) {
+      const auto current = static_cast<SchedulerPhase>(impl_->current->phase);
+      if (phase == SchedulerPhase::inactive
+          && current >= SchedulerPhase::reactive
+          && current <= SchedulerPhase::re_update) {
+          phase = SchedulerPhase::re_inactive;
+      } else if (phase == SchedulerPhase::update
+          && current >= SchedulerPhase::reactive
+          && current <= SchedulerPhase::re_update) {
+          phase = SchedulerPhase::re_update;
+      }
+  }
   const auto index = phase_index(phase);
   if (index >= phase_count) {
     throw std::invalid_argument("invalid scheduler phase");
@@ -356,6 +377,9 @@ RunResult Scheduler::run(std::optional<SimulationTick> until) {
         return result(RunStatus::time_limit);
       }
       impl_->load_next_slot();
+      if (impl_->slot_start_hook) {
+        impl_->slot_start_hook(*this);
+      }
     }
 
     auto &slot = *impl_->current;
@@ -480,6 +504,10 @@ std::optional<SchedulerPhase> Scheduler::current_phase() const noexcept {
 
 void Scheduler::set_safe_point_hook(SafePointHook hook) {
   impl_->safe_point_hook = std::move(hook);
+}
+
+void Scheduler::set_slot_start_hook(SlotStartHook hook) {
+  impl_->slot_start_hook = std::move(hook);
 }
 
 } // namespace fsim::runtime

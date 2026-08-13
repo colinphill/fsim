@@ -52,6 +52,18 @@ HierarchyBuilder::HierarchyBuilder(
                 {});
         }
     }
+    for (const auto& unit : parsed_.units) {
+        if (unit.kind == frontend::UnitKind::SystemVerilogPackage) {
+            register_systemverilog_resolution_functions(unit);
+        }
+        for (const auto& directive : unit.systemverilog_binds) {
+            compilation_unit_systemverilog_binds_.push_back(&directive);
+            systemverilog_bind_libraries_.insert_or_assign(
+                &directive,
+                unit.library.empty() ? std::string { "work" } : unit.library);
+        }
+    }
+    validate_systemverilog_extern_declarations();
 }
 
 const frontend::DesignUnit* HierarchyBuilder::systemc_foreign_target(

@@ -229,3 +229,10 @@ the [closure audit](uvm-closure-audit.md) maps every supported family to
 evidence, and the [diagnostic catalog](diagnostics.md) defines stable failure
 codes. Unsupported behavior should fail explicitly; it must not be converted
 to a waiver or assumed supported from parser acceptance alone.
+
+This producer-independent flow is also one of the 14 witnesses in the
+[SystemVerilog-2017 release audit](v1-systemverilog-release-audit.md). That
+larger matrix composes UVM with direct/interpreter/LLVM/cache/debug/trace,
+artifact, relocation, replay, checkpoint, multiple-root, mixed-language, and
+public-API stages. Its process-memory, delta, trace, and timeout values govern
+the retained evidence run; they are not SystemVerilog or UVM legality limits.

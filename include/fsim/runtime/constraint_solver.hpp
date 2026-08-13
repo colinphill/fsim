@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <map>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -39,6 +40,10 @@ struct SystemVerilogConstraintVariable {
   SystemVerilogConstraintVariableProfile profile;
   std::vector<PackedLogic4> domain;
 };
+
+using SystemVerilogConstraintVariables = std::map<
+    std::string,
+    SystemVerilogConstraintVariableId>;
 
 /// Read-only partial assignment presented to one solver clause. Accessing an
 /// unassigned value is an error; clauses use assigned() to return Undetermined
@@ -181,6 +186,37 @@ enum class SystemVerilogConstraintExpressionOperator : std::uint8_t {
   Conditional,
 };
 
+/// Frontend-neutral, owning constraint syntax retained by SimIR randomize
+/// operations. Names are bound to exact solver variables when the call runs;
+/// constants retain arbitrary-width packed payloads and their source profiles.
+enum class SystemVerilogConstraintTemplateKind : std::uint8_t {
+    Name,
+    Constant,
+    Unary,
+    Binary,
+    Conditional,
+    InsideSet,
+    InsideRange,
+    Distribution,
+    DistributionItem,
+    Soft,
+    Block,
+    Implication,
+    ConditionalConstraint,
+    SolveBefore,
+    SolveList,
+};
+
+struct SystemVerilogConstraintTemplate {
+    SystemVerilogConstraintTemplateKind kind {
+        SystemVerilogConstraintTemplateKind::Constant
+    };
+    std::string text;
+    PackedLogic4 constant;
+    SystemVerilogConstraintVariableProfile profile;
+    std::vector<SystemVerilogConstraintTemplate> operands;
+};
+
 struct SystemVerilogConstraintExpressionNode {
   SystemVerilogConstraintExpressionOperator operation{
       SystemVerilogConstraintExpressionOperator::Constant};
@@ -306,5 +342,13 @@ class SystemVerilogConstraintSolver final {
                         SystemVerilogConstraintVariableId>> solve_before_;
   std::size_t domain_values_{};
 };
+
+/// Bind and register one source-ordered inline constraint block. The identity
+/// prefix is diagnostic/cache provenance, not a language-width limit.
+void configure_systemverilog_inline_constraints(
+    SystemVerilogConstraintSolver& solver,
+    const SystemVerilogConstraintVariables& variables,
+    std::span<const SystemVerilogConstraintTemplate> expressions,
+    std::string_view identity_prefix);
 
 }  // namespace fsim::runtime

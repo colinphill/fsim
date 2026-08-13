@@ -131,13 +131,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_file_binary_read(
     }
 
     const auto& handle_expression = expression.operands[1];
-    const auto* handle_type = handle_expression.kind == ExpressionKind::Identifier
-        ? object_type(handle_expression.text)
-        : nullptr;
-    if (!(handle_expression.kind == ExpressionKind::IntegerLiteral
-            || (handle_type != nullptr
-                && handle_type->domain == frontend::ValueDomain::Integer)
-            || is_integer_expression(handle_expression))) {
+    if (!is_file_handle_expression(handle_expression)) {
         report(
             "FSIM-ELAB-SVFILE-013",
             "$fread handle must be a 32-bit integer expression",

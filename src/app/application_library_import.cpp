@@ -117,7 +117,11 @@ bool metadata_identity_matches(
         return "module";
       case frontend::UnitKind::SystemVerilogProgram:
         return "program";
-    }
+      case frontend::UnitKind::SystemVerilogConfiguration:
+          return "configuration";
+      case frontend::UnitKind::SystemVerilogBind:
+          return "bind";
+      }
     return "unit";
   }();
   const auto architecture =

@@ -47,6 +47,19 @@ void normalize(Value& value) noexcept {
         value.width, aval, value.unknown_bits);
 }
 
+void convert_to_two_state(Value& value)
+{
+    auto converted = PackedLogic4(value.width, Logic4::zero);
+    for (std::uint32_t bit = 0; bit < value.width; ++bit) {
+        if (runtime::to_logic4(value.packed.get_logic9(bit))
+            == Logic4::one) {
+            converted.set(bit, Logic4::one);
+        }
+    }
+    value.packed = std::move(converted);
+    value.refresh_low_word_mirrors();
+}
+
 void append_packed(Value& destination, const Value& operand) {
     const bool logic9 =
         destination.packed.is_logic9() || operand.packed.is_logic9();
@@ -259,15 +272,16 @@ struct ParsedDecimal {
         const auto digit = static_cast<char>(
             std::tolower(static_cast<unsigned char>(suffix.front())));
         if (digit == '0' || digit == '1'
-            || digit == 'x' || digit == 'z' || digit == '?') {
-            Value result{
+            || digit == 'x' || digit == 'z') {
+            Value result {
                 digit == '1' ? 1U : 0U,
-                digit == 'x' || digit == 'z' || digit == '?' ? 1U : 0U,
-                digit == 'z' || digit == '?' ? 1U : 0U,
+                digit == 'x' || digit == 'z' ? 1U : 0U,
+                digit == 'z' ? 1U : 0U,
                 1,
                 false,
                 true,
-                expression.span};
+                expression.span
+            };
             normalize(result);
             return result;
         }
@@ -320,20 +334,37 @@ struct ParsedDecimal {
     }
 
     if (numeric_base == 10) {
-        if (std::ranges::any_of(
-                digits,
-                [](const char character) {
-                    const auto folded = static_cast<char>(
-                        std::tolower(
-                            static_cast<unsigned char>(character)));
-                    return folded == 'x' || folded == 'z'
-                        || folded == '?';
-                })) {
+        const auto decimal_state = [](const char character) {
+            return static_cast<char>(
+                std::tolower(static_cast<unsigned char>(character)));
+        };
+        const bool has_unknown_digit = std::ranges::any_of(
+            digits,
+            [&](const char character) {
+                const auto folded = decimal_state(character);
+                return folded == 'x' || folded == 'z'
+                    || folded == '?';
+            });
+        if (has_unknown_digit) {
+            if (digits.size() != 1U) {
+                error = "a decimal SystemVerilog based literal may use only one "
+                        "x, z, or ? digit";
+                return std::nullopt;
+            }
             const auto width = explicit_width
                 ? static_cast<std::uint32_t>(*explicit_width)
                 : 32U;
-            return make_unknown(
-                width, explicitly_signed, expression.span);
+            const auto fill = decimal_state(digits.front()) == 'x'
+                ? Logic4::x
+                : Logic4::z;
+            return Value {
+                PackedLogic4 { width, fill },
+                explicitly_signed,
+                !explicit_width.has_value(),
+                frontend::ValueDomain::Logic4,
+                { },
+                expression.span
+            };
         }
         const auto parsed = parse_decimal_packed(
             digits,
@@ -939,6 +970,17 @@ enum class Truth { False, True, Unknown };
     const ConstantEnvironment& fallback_environment,
     std::string& error);
 
+struct ConstantProfile {
+    std::uint32_t width { };
+    bool is_signed { };
+    frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
+};
+
+[[nodiscard]] std::optional<ConstantProfile> constant_profile(
+    const Expression& expression,
+    const SystemVerilogConstantEnvironment& environment,
+    const ConstantEnvironment& fallback_environment);
+
 [[nodiscard]] std::optional<Value> evaluate_binary(
     const Expression& expression,
     const SystemVerilogConstantEnvironment& environment,
@@ -958,6 +1000,11 @@ enum class Truth { False, True, Unknown };
     auto right = evaluate_impl(
         expression.operands[1], environment, fallback_environment, error);
     if (!right) {
+        return std::nullopt;
+    }
+    if (left->unbounded || right->unbounded) {
+        error = "symbolic unbounded '$' is only valid as a parameter value "
+                "or an argument to $isunbounded";
         return std::nullopt;
     }
     if (expression.text == "&&" || expression.text == "||") {
@@ -1103,13 +1150,6 @@ enum class Truth { False, True, Unknown };
         return result;
     }
 
-    if (left->width > 64U || right->width > 64U) {
-        error =
-            "unsupported arbitrary-width SystemVerilog constant operator '"
-            + expression.text + "'";
-        return std::nullopt;
-    }
-
     const auto width = std::max(left->width, right->width);
     const bool common_signed = left->is_signed && right->is_signed;
     const auto lhs = common_operand(*left, width, common_signed);
@@ -1232,6 +1272,18 @@ enum class Truth { False, True, Unknown };
         return result;
     }
     if (expression.kind == ExpressionKind::Identifier) {
+        if (expression.text == "$") {
+            auto result = Value {
+                PackedLogic4 { 1, Logic4::zero },
+                false,
+                false,
+                frontend::ValueDomain::Bit2,
+                {},
+                expression.span
+            };
+            result.unbounded = true;
+            return result;
+        }
         if (const auto found = environment.find(expression.text);
             found != environment.end()) {
             auto result = found->second;
@@ -1392,6 +1444,11 @@ enum class Truth { False, True, Unknown };
             fallback_environment,
             error);
         if (!operand) {
+            return std::nullopt;
+        }
+        if (operand->unbounded) {
+            error = "symbolic unbounded '$' is only valid as a parameter "
+                    "value or an argument to $isunbounded";
             return std::nullopt;
         }
         operand->source = expression.span;
@@ -1565,11 +1622,8 @@ enum class Truth { False, True, Unknown };
             return std::nullopt;
         }
         result = resized(std::move(*result), width);
-        if (two_state && !result->known()) {
-            error =
-                "X or Z bits would be lost converting a constant into "
-                "two-state cast type '" + std::string{type_name} + "'";
-            return std::nullopt;
+        if (two_state) {
+            convert_to_two_state(*result);
         }
         if (domain == frontend::ValueDomain::Logic4
             && result->packed.is_logic9()) {
@@ -1724,15 +1778,6 @@ enum class Truth { False, True, Unknown };
                 if (!low || !high) {
                     return std::nullopt;
                 }
-                if (low->width != left->width
-                    || high->width != left->width
-                    || low->is_signed != left->is_signed
-                    || high->is_signed != left->is_signed) {
-                    error =
-                        "inside range bounds must exactly match the left "
-                        "operand width and signedness";
-                    return std::nullopt;
-                }
                 matched = logical_and(
                     relational(*low, *high, true),
                     logical_and(
@@ -1742,13 +1787,6 @@ enum class Truth { False, True, Unknown };
                 const auto value = evaluate_impl(
                     item, environment, fallback_environment, error);
                 if (!value) {
-                    return std::nullopt;
-                }
-                if (value->width != left->width
-                    || value->is_signed != left->is_signed) {
-                    error =
-                        "inside members must exactly match the left operand "
-                        "width and signedness";
                     return std::nullopt;
                 }
                 matched = wildcard_equal(*left, *value);
@@ -1778,6 +1816,27 @@ enum class Truth { False, True, Unknown };
         }
         return make_known(
             operand->known() ? 0U : 1U,
+            1,
+            false,
+            false,
+            expression.span);
+    }
+    if (expression.kind == ExpressionKind::Call
+        && expression.text == "$isunbounded") {
+        if (expression.operands.size() != 1U) {
+            error = "$isunbounded requires exactly one argument";
+            return std::nullopt;
+        }
+        const auto operand = evaluate_impl(
+            expression.operands.front(),
+            environment,
+            fallback_environment,
+            error);
+        if (!operand) {
+            return std::nullopt;
+        }
+        return make_known(
+            operand->unbounded ? 1U : 0U,
             1,
             false,
             false,
@@ -1913,6 +1972,36 @@ enum class Truth { False, True, Unknown };
             error);
         if (!condition) {
             return std::nullopt;
+        }
+        const auto condition_truth = truth(*condition);
+        if (condition_truth != Truth::Unknown) {
+            const auto selected_index = condition_truth == Truth::True
+                ? std::size_t { 1 }
+                : std::size_t { 2 };
+            const auto unselected_index = selected_index == 1U
+                ? std::size_t { 2 }
+                : std::size_t { 1 };
+            auto selected = evaluate_impl(
+                expression.operands[selected_index],
+                environment,
+                fallback_environment,
+                error);
+            if (!selected) {
+                return std::nullopt;
+            }
+            const auto unselected = constant_profile(
+                expression.operands[unselected_index],
+                environment,
+                fallback_environment);
+            if (unselected) {
+                const auto width = std::max(
+                    selected->width, unselected->width);
+                const bool common_signed = selected->is_signed && unselected->is_signed;
+                *selected = common_operand(
+                    *selected, width, common_signed);
+            }
+            selected->source = expression.span;
+            return selected;
         }
         auto when_true = evaluate_impl(
             expression.operands[1],
@@ -2101,6 +2190,95 @@ enum class Truth { False, True, Unknown };
     return std::nullopt;
 }
 
+[[nodiscard]] std::optional<ConstantProfile> constant_profile(
+    const Expression& expression,
+    const SystemVerilogConstantEnvironment& environment,
+    const ConstantEnvironment& fallback_environment)
+{
+    std::string ignored_error;
+    if (const auto value = evaluate_impl(
+            expression, environment, fallback_environment, ignored_error)) {
+        return ConstantProfile {
+            value->width, value->is_signed, value->domain
+        };
+    }
+    if (expression.call_result_width != 0U
+        && expression.call_result_width <= maximum_constant_width) {
+        return ConstantProfile {
+            static_cast<std::uint32_t>(expression.call_result_width),
+            expression.call_result_signed,
+            expression.call_result_domain
+        };
+    }
+    if (expression.kind == ExpressionKind::Unary
+        && expression.operands.size() == 1U) {
+        const auto operand = constant_profile(
+            expression.operands.front(), environment, fallback_environment);
+        if (!operand) {
+            return std::nullopt;
+        }
+        if (expression.text == "!" || expression.text == "&"
+            || expression.text == "|" || expression.text == "^"
+            || expression.text == "~&" || expression.text == "~|"
+            || expression.text == "~^" || expression.text == "^~") {
+            return ConstantProfile {
+                1U, false, frontend::ValueDomain::Logic4
+            };
+        }
+        return operand;
+    }
+    if (expression.kind == ExpressionKind::Binary
+        && expression.operands.size() == 2U) {
+        const auto left = constant_profile(
+            expression.operands[0], environment, fallback_environment);
+        const auto right = constant_profile(
+            expression.operands[1], environment, fallback_environment);
+        if (!left || !right) {
+            return std::nullopt;
+        }
+        if (expression.text == "==" || expression.text == "!="
+            || expression.text == "===" || expression.text == "!=="
+            || expression.text == "==?" || expression.text == "!=?"
+            || expression.text == "<" || expression.text == "<="
+            || expression.text == ">" || expression.text == ">="
+            || expression.text == "&&" || expression.text == "||") {
+            return ConstantProfile {
+                1U, false, frontend::ValueDomain::Logic4
+            };
+        }
+        if (expression.text == "<<" || expression.text == "<<<"
+            || expression.text == ">>" || expression.text == ">>>") {
+            return left;
+        }
+        return ConstantProfile {
+            std::max(left->width, right->width),
+            left->is_signed && right->is_signed,
+            left->domain == right->domain
+                ? left->domain
+                : frontend::ValueDomain::Logic4
+        };
+    }
+    if (expression.kind == ExpressionKind::Call
+        && expression.text == "?:"
+        && expression.operands.size() == 3U) {
+        const auto when_true = constant_profile(
+            expression.operands[1], environment, fallback_environment);
+        const auto when_false = constant_profile(
+            expression.operands[2], environment, fallback_environment);
+        if (!when_true || !when_false) {
+            return std::nullopt;
+        }
+        return ConstantProfile {
+            std::max(when_true->width, when_false->width),
+            when_true->is_signed && when_false->is_signed,
+            when_true->domain == when_false->domain
+                ? when_true->domain
+                : frontend::ValueDomain::Logic4
+        };
+    }
+    return std::nullopt;
+}
+
 } // namespace
 
 SystemVerilogConstantValue::SystemVerilogConstantValue(
@@ -2180,82 +2358,6 @@ std::uint64_t SystemVerilogConstantValue::mask() const noexcept {
     return width_mask(width);
 }
 
-bool SystemVerilogConstantValue::known() const noexcept {
-    for (std::uint32_t bit = 0; bit < width; ++bit) {
-        if (runtime::to_logic4(packed.get_logic9(bit)) == Logic4::x
-            || runtime::to_logic4(packed.get_logic9(bit)) == Logic4::z) {
-            return false;
-        }
-    }
-    return true;
-}
-
-std::optional<bool>
-SystemVerilogConstantValue::truth_value() const noexcept {
-    bool unknown = false;
-    for (std::uint32_t bit = 0; bit < width; ++bit) {
-        const auto state = runtime::to_logic4(packed.get_logic9(bit));
-        if (state == Logic4::one) {
-            return true;
-        }
-        if (state == Logic4::x || state == Logic4::z) {
-            unknown = true;
-        }
-    }
-    return unknown ? std::nullopt : std::optional<bool>{false};
-}
-
-std::optional<std::int64_t>
-SystemVerilogConstantValue::integer_value() const noexcept {
-    if (!known()) {
-        return std::nullopt;
-    }
-    const auto value = bits & mask();
-    if (width > 64U) {
-        const auto sign_state = runtime::to_logic4(
-            packed.get_logic9(width - 1U));
-        const bool negative = is_signed && sign_state == Logic4::one;
-        for (std::uint32_t bit = 64U; bit < width; ++bit) {
-            const auto state = runtime::to_logic4(packed.get_logic9(bit));
-            if (state != (negative ? Logic4::one : Logic4::zero)) {
-                return std::nullopt;
-            }
-        }
-        if (!negative) {
-            if (value > static_cast<std::uint64_t>(
-                            std::numeric_limits<std::int64_t>::max())) {
-                return std::nullopt;
-            }
-            return static_cast<std::int64_t>(value);
-        }
-        if ((value & (std::uint64_t{1} << 63U)) == 0U) {
-            return std::nullopt;
-        }
-        const auto magnitude = (~value) + 1U;
-        if (magnitude == (std::uint64_t{1} << 63U)) {
-            return std::numeric_limits<std::int64_t>::min();
-        }
-        return -static_cast<std::int64_t>(magnitude);
-    }
-    if (!is_signed) {
-        if (value > static_cast<std::uint64_t>(
-                        std::numeric_limits<std::int64_t>::max())) {
-            return std::nullopt;
-        }
-        return static_cast<std::int64_t>(value);
-    }
-    const auto sign = std::uint64_t{1} << (width - 1U);
-    if ((value & sign) == 0) {
-        return static_cast<std::int64_t>(value);
-    }
-    const auto extended = value | ~mask();
-    const auto magnitude = (~extended) + 1U;
-    if (magnitude == (std::uint64_t{1} << 63U)) {
-        return std::numeric_limits<std::int64_t>::min();
-    }
-    return -static_cast<std::int64_t>(magnitude);
-}
-
 std::optional<SystemVerilogConstantValue>
 evaluate_systemverilog_constant_expression(
     const Expression& expression,
@@ -2285,6 +2387,13 @@ convert_systemverilog_parameter_value(
     const frontend::Type& type,
     std::string& error) {
     auto result = value;
+    if (result.unbounded) {
+        if (type.spelling == "implicit" && type.named_type.empty()) {
+            return result;
+        }
+        error = "symbolic unbounded '$' requires an implicit parameter type";
+        return std::nullopt;
+    }
     if (is_systemverilog_nominal_packed_type(type)
         && result.nominal_type != type.nominal_type) {
         error = "nominal packed parameter type '" + type.spelling
@@ -2317,11 +2426,8 @@ convert_systemverilog_parameter_value(
         || type.spelling == "bit" || type.spelling == "byte"
         || type.spelling == "shortint" || type.spelling == "int"
         || type.spelling == "longint";
-    if (two_state && !result.known()) {
-        error =
-            "X or Z bits would be lost converting a constant into "
-            "two-state parameter type '" + type.spelling + "'";
-        return std::nullopt;
+    if (two_state) {
+        convert_to_two_state(result);
     }
     if (type.domain != frontend::ValueDomain::Unknown) {
         result.domain = type.domain;

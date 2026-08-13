@@ -344,6 +344,7 @@ int main() {
     test_systemverilog_parameters();
     test_systemverilog_packages();
     test_systemverilog_interfaces();
+    test_systemverilog_hierarchy_declarations();
     test_systemverilog_programs();
     test_systemverilog_clocking_blocks();
     test_systemverilog_assertion_declarations();

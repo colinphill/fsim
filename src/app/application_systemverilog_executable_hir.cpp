@@ -414,6 +414,8 @@ namespace {
                 return sv::StatementKind::pause;
             case frontend::StatementKind::Finish:
                 return sv::StatementKind::finish;
+            case frontend::StatementKind::Exit:
+                return sv::StatementKind::exit_program;
             case frontend::StatementKind::Block:
                 return sv::StatementKind::block;
             case frontend::StatementKind::Null:
@@ -422,6 +424,8 @@ namespace {
                 return sv::StatementKind::procedural_assign;
             case frontend::StatementKind::Deassign:
                 return sv::StatementKind::deassign;
+            case frontend::StatementKind::WaitOrder:
+                return sv::StatementKind::wait_order;
             }
             return sv::StatementKind::null_statement;
         }
@@ -1264,6 +1268,48 @@ namespace {
             const frontend::DesignUnit& input,
             sv::Unit& output)
         {
+            for (std::size_t index = 0;
+                index < input.systemverilog_aliases.size()
+                && index < output.aliases.size();
+                ++index) {
+                const auto& input_alias = input.systemverilog_aliases[index];
+                auto& alias = output.aliases[index];
+                alias.terminals.clear();
+                for (const auto& terminal : input_alias.terminals) {
+                    if (const auto id = expression(
+                            terminal, output.scope, alias.origin)) {
+                        alias.terminals.push_back(*id);
+                    }
+                }
+            }
+            for (std::size_t index = 0;
+                index < input.systemverilog_lets.size()
+                && index < output.lets.size();
+                ++index) {
+                const auto& input_let = input.systemverilog_lets[index];
+                auto& let = output.lets[index];
+                for (std::size_t port_index = 0;
+                    port_index < input_let.ports.size()
+                    && port_index < let.ports.size();
+                    ++port_index) {
+                    const auto& input_port = input_let.ports[port_index];
+                    auto& port = let.ports[port_index];
+                    if (input_port.type) {
+                        port.type = type_reference(
+                            *input_port.type, input_port.span,
+                            output.scope, let.origin);
+                    }
+                    if (input_port.default_value) {
+                        port.default_value = expression(
+                            *input_port.default_value,
+                            output.scope, let.origin);
+                    }
+                }
+                if (const auto id = expression(
+                        input_let.expression, output.scope, let.origin)) {
+                    let.expression = *id;
+                }
+            }
             for (const auto& parameter : input.parameters) {
                 fill_parameter(parameter, output.scope);
             }

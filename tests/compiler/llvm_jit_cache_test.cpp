@@ -470,7 +470,7 @@ void test_process_module_grouping_at_level(
         };
         const std::array<std::uint32_t, 1> wide_widths { 65 };
         assert(rejected.supports_process(supported, wide_widths));
-        assert(!rejected.supports_process(too_wide, wide_widths));
+        assert(rejected.supports_process(too_wide, wide_widths));
         Process exact_register;
         exact_register.id = 24;
         exact_register.name = "exact_register";
@@ -574,9 +574,17 @@ void test_process_module_grouping_at_level(
                     std::array<std::uint32_t, 0> { });
             },
             "automatic callable frame identity must be nonzero");
+        Process unsupported_wide_attribute;
+        unsupported_wide_attribute.id = 30;
+        unsupported_wide_attribute.name = "unsupported_wide_attribute";
+        unsupported_wide_attribute.register_count = 1;
+        unsupported_wide_attribute.operations = {
+            SignalLastValue { 0, 0 }, Halt { }
+        };
         const std::array unsupported_entries {
             JitProcessModuleEntry { "eligible", &supported },
-            JitProcessModuleEntry { "unsupported", &too_wide },
+            JitProcessModuleEntry {
+                "unsupported", &unsupported_wide_attribute },
         };
         expect_unsupported(
             [&] {
@@ -584,7 +592,7 @@ void test_process_module_grouping_at_level(
                     "unsupported-member", unsupported_entries,
                     wide_widths);
             },
-            "wide exact-Logic9 constants");
+            "LLVM scalar subset");
         expect_error(
             [&] { (void)rejected.lookup("eligible"); },
             "was not added");
@@ -1442,14 +1450,22 @@ void test_wide_constant_cache_identity(
         JitOptimizationLevel::o2, cache_directory
     };
     const auto materialize = [&](const std::string& spelling,
+                                 const bool logic9,
                                  const std::uint64_t hits,
                                  const std::uint64_t misses) {
         Process process;
         process.id = 130;
         process.name = symbol;
         process.register_count = 1;
+        process.register_value_kinds = {
+            logic9 ? ValueKind::logic9 : ValueKind::logic4
+        };
         process.operations = {
-            LoadConstant { 0, PackedLogic4::from_msb_string(spelling) },
+            LoadConstant {
+                0,
+                logic9
+                    ? PackedLogic4::from_logic9_msb_string(spelling)
+                    : PackedLogic4::from_msb_string(spelling) },
             Halt { },
         };
         LlvmJit jit { options };
@@ -1466,12 +1482,184 @@ void test_wide_constant_cache_identity(
     upper_x[2] = 'x';
     auto upper_z = upper_one;
     upper_z[2] = 'z';
-    materialize(upper_one, 0, 1);
-    materialize(second_upper_one, 0, 1);
-    materialize(upper_x, 0, 1);
-    materialize(upper_z, 0, 1);
-    materialize(upper_z, 1, 0);
+    auto upper_u = upper_one;
+    upper_u[2] = 'U';
+    auto upper_w = upper_one;
+    upper_w[2] = 'W';
+    materialize(upper_one, false, 0, 1);
+    materialize(second_upper_one, false, 0, 1);
+    materialize(upper_x, false, 0, 1);
+    materialize(upper_z, false, 0, 1);
+    materialize(upper_z, false, 1, 0);
+    materialize(upper_u, true, 0, 1);
+    materialize(upper_w, true, 0, 1);
+    materialize(upper_w, true, 1, 0);
+    assert(cached_object_paths(cache_directory).size() == 6);
+}
+
+void test_coverage_query_cache_identity(
+    const std::filesystem::path& cache_directory)
+{
+    constexpr std::string_view symbol = "cached_coverage_query";
+    const std::array<std::uint32_t, 0> no_signals { };
+    const auto options = LlvmJitOptions {
+        JitOptimizationLevel::o2, cache_directory
+    };
+    const auto materialize = [&](const CoverageQueryKind kind,
+                                 const std::uint64_t hits,
+                                 const std::uint64_t misses) {
+        Process process;
+        process.id = 131;
+        process.name = symbol;
+        process.register_count = 1;
+        process.operations = {
+            CoverageQuery { 0, kind },
+            Halt { },
+        };
+        LlvmJit jit { options };
+        jit.add_process(symbol, process, no_signals);
+        assert(jit.lookup(symbol));
+        expect_cache_statistics(jit, hits, misses, misses);
+    };
+    materialize(CoverageQueryKind::overall_type, 0, 1);
+    materialize(CoverageQueryKind::overall_type, 1, 0);
+    materialize(CoverageQueryKind::overall_instance, 0, 1);
+    materialize(CoverageQueryKind::overall_instance, 1, 0);
+    assert(cached_object_paths(cache_directory).size() == 2);
+}
+
+void test_random_distribution_cache_identity(
+    const std::filesystem::path& cache_directory)
+{
+    constexpr std::string_view symbol = "cached_random_distribution";
+    const std::array<std::uint32_t, 0> no_signals { };
+    const auto options = LlvmJitOptions {
+        JitOptimizationLevel::o2, cache_directory
+    };
+    const auto materialize = [&](const RandomDistributionKind kind,
+                                 const RegisterId second,
+                                 const std::uint64_t hits,
+                                 const std::uint64_t misses) {
+        Process process;
+        process.id = 132;
+        process.name = symbol;
+        process.register_count = 5;
+        process.operations = {
+            LoadConstant { 1, PackedLogic4::from_aval_bval(32, 1, 0) },
+            LoadConstant { 2, PackedLogic4::from_aval_bval(32, 2, 0) },
+            LoadConstant { 3, PackedLogic4::from_aval_bval(32, 3, 0) },
+            LoadConstant { 4, PackedLogic4::from_aval_bval(32, 4, 0) },
+            RandomDistribution { 0, 1, kind, 2, second },
+            Halt { },
+        };
+        LlvmJit jit { options };
+        jit.add_process(symbol, process, no_signals);
+        assert(jit.lookup(symbol));
+        expect_cache_statistics(jit, hits, misses, misses);
+    };
+    materialize(RandomDistributionKind::uniform, 3, 0, 1);
+    materialize(RandomDistributionKind::uniform, 3, 1, 0);
+    materialize(RandomDistributionKind::normal, 3, 0, 1);
+    materialize(RandomDistributionKind::uniform, 4, 0, 1);
+    materialize(RandomDistributionKind::erlang, 3, 0, 1);
     assert(cached_object_paths(cache_directory).size() == 4);
+}
+
+void test_system_command_cache_identity(
+    const std::filesystem::path& cache_directory)
+{
+    constexpr std::string_view symbol = "cached_system_command";
+    const std::array<std::uint32_t, 0> no_signals { };
+    const auto options = LlvmJitOptions {
+        JitOptimizationLevel::o2, cache_directory
+    };
+    const auto materialize = [&](
+                                 const std::optional<StringRegisterId> command,
+                                 const std::optional<RegisterId> destination,
+                                 const std::uint64_t hits,
+                                 const std::uint64_t misses) {
+        Process process;
+        process.id = 133;
+        process.name = symbol;
+        process.register_count = 2;
+        process.string_register_count = 2;
+        process.operations = {
+            LoadStringConstant { 0, "first" },
+            LoadStringConstant { 1, "second" },
+            SystemCommand { command, destination },
+            Halt { },
+        };
+        LlvmJit jit { options };
+        jit.add_process(symbol, process, no_signals);
+        assert(jit.lookup(symbol));
+        expect_cache_statistics(jit, hits, misses, misses);
+    };
+    materialize(0, 0, 0, 1);
+    materialize(0, 0, 1, 0);
+    materialize(1, 0, 0, 1);
+    materialize(0, 1, 0, 1);
+    materialize(std::nullopt, std::nullopt, 0, 1);
+    assert(cached_object_paths(cache_directory).size() == 4);
+}
+
+void test_inline_constraint_cache_identity(
+    const std::filesystem::path& cache_directory)
+{
+    constexpr std::string_view symbol = "cached_inline_constraint";
+    const std::array<std::uint32_t, 0> no_signals { };
+    const auto options = LlvmJitOptions {
+        JitOptimizationLevel::o2, cache_directory
+    };
+    const auto materialize = [&](const std::string& spelling,
+                                 const std::uint64_t hits,
+                                 const std::uint64_t misses) {
+        runtime::SystemVerilogConstraintTemplate name;
+        name.kind = runtime::SystemVerilogConstraintTemplateKind::Name;
+        name.text = "wide";
+        runtime::SystemVerilogConstraintTemplate constant;
+        constant.kind = runtime::SystemVerilogConstraintTemplateKind::Constant;
+        constant.constant = PackedLogic4::from_msb_string(spelling);
+        constant.profile = {
+            runtime::SystemVerilogConstraintDomainKind::BitVector,
+            137,
+            false,
+            "logic[136:0]",
+            true
+        };
+        runtime::SystemVerilogConstraintTemplate predicate;
+        predicate.kind = runtime::SystemVerilogConstraintTemplateKind::Binary;
+        predicate.text = "==";
+        predicate.operands = { std::move(name), std::move(constant) };
+
+        ClassMethodCall randomize;
+        randomize.destination = 0;
+        randomize.receiver = 1;
+        randomize.method_identity = "cached_inline_constraint::$randomize";
+        randomize.result_width = 32;
+        randomize.inline_constraints.push_back(std::move(predicate));
+        Process process;
+        process.id = 131;
+        process.name = symbol;
+        process.register_count = 2;
+        process.operations = {
+            LoadConstant { 1, PackedLogic4(64, Logic4::zero) },
+            std::move(randomize),
+            Halt { },
+        };
+        LlvmJit jit { options };
+        jit.add_process(symbol, process, no_signals);
+        assert(jit.lookup(symbol));
+        expect_cache_statistics(jit, hits, misses, misses);
+    };
+
+    auto upper_one = std::string(137, '0');
+    upper_one.front() = '1';
+    auto distinct = upper_one;
+    distinct[1] = '1';
+    materialize(upper_one, 0, 1);
+    materialize(distinct, 0, 1);
+    materialize(distinct, 1, 0);
+    assert(cached_object_paths(cache_directory).size() == 2);
 }
 
 void test_static_pattern_cache_identity(
@@ -2245,6 +2433,10 @@ void test_persistent_object_cache()
     test_integer_cache_identity(root / "integer");
     test_signal_kind_cache_identity(root / "signal-kind");
     test_wide_constant_cache_identity(root / "wide-constant");
+    test_coverage_query_cache_identity(root / "coverage-query");
+    test_random_distribution_cache_identity(root / "random-distribution");
+    test_system_command_cache_identity(root / "system-command");
+    test_inline_constraint_cache_identity(root / "inline-constraint");
     test_static_pattern_cache_identity(
         root / "static-pattern");
     test_static_slice_cache_identity(

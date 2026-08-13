@@ -416,7 +416,7 @@ package string_pkg;
   localparam string PACKAGE_LABEL = "package";
 endpackage
 module string_parameters #(
-  parameter string LABEL = "fsim\n"
+  parameter string LABEL = "fsim\n\v\f\a\x41"
 ) ();
   localparam string DECORATED = {LABEL, "!"};
 endmodule
@@ -435,12 +435,38 @@ endmodule
           && string_unit->parameters[0].default_value.kind
               == ExpressionKind::StringLiteral
           && string_unit->parameters[0].default_value.decoded_string
-              == std::optional<std::string>{"fsim\n"}
+              == std::optional<std::string> { "fsim\n\v\f\aA" }
           && string_unit->parameters[1].local
           && string_unit->parameters[1].type.spelling == "string"
           && string_unit->parameters[1].default_value.kind
               == ExpressionKind::Concatenation,
       "string HIR retains type, locality, expression, and decoded bytes");
+
+  const auto invalid_systemverilog_hex_escape = parse_text(
+      "invalid-systemverilog-hex-escape.sv",
+      R"(module bad #(parameter string VALUE = "bad\x4") (); endmodule)",
+      Language::SystemVerilog2017);
+  require(
+      !invalid_systemverilog_hex_escape.ok()
+          && std::ranges::any_of(
+              invalid_systemverilog_hex_escape.diagnostics,
+              [](const auto& diagnostic) {
+                  return diagnostic.code == "FSIM-SV-SEM-040";
+              }),
+      "SystemVerilog hexadecimal string escapes require two digits");
+
+  const auto verilog_systemverilog_escape = parse_text(
+      "verilog-systemverilog-escape.v",
+      R"(module bad #(parameter VALUE = "bad\v") (); endmodule)",
+      Language::Verilog2005);
+  require(
+      !verilog_systemverilog_escape.ok()
+          && std::ranges::any_of(
+              verilog_systemverilog_escape.diagnostics,
+              [](const auto& diagnostic) {
+                  return diagnostic.code == "FSIM-SV-SEM-040";
+              }),
+      "SystemVerilog-only string escapes remain illegal in Verilog-2005");
 
   const auto mutable_strings = parse_text(
       "mutable-strings.sv",
@@ -818,6 +844,98 @@ endmodule
           && has_diagnostic(
               invalid_verilog_memories, "FSIM-SV-SEM-079"),
       "multidimensional and net Verilog memories diagnose precisely");
+
+  const auto nettypes = parse_text(
+      "nettypes.sv",
+      R"(
+package resolution_pkg;
+  function automatic logic [7:0] resolve(
+      input logic [7:0] drivers[]);
+    return drivers[0];
+  endfunction
+endpackage
+package nettype_pkg;
+  nettype logic [7:0] byte_net with resolution_pkg::resolve;
+endpackage
+module nettype_user;
+  import nettype_pkg::*;
+  byte_net value;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(nettypes.ok(), "user-defined nettypes must parse");
+  const auto* nettype_package = nettypes.design.find(
+      UnitKind::SystemVerilogPackage, "nettype_pkg");
+  const auto* nettype_user = nettypes.design.find(
+      UnitKind::VerilogModule, "nettype_user");
+  require(
+      nettype_package != nullptr
+          && nettype_package->type_aliases.size() == 1
+          && nettype_package->type_aliases.front().name == "byte_net"
+          && nettype_package->type_aliases.front().declaration_kind
+              == TypeDeclarationKind::SystemVerilogNettype
+          && nettype_package->type_aliases.front()
+                  .type.systemverilog_net_type
+              == "byte_net"
+          && nettype_package->type_aliases.front().type.width()
+              == std::optional<std::uint64_t> { 8 }
+          && nettype_package->type_aliases.front()
+                  .systemverilog_resolution_function
+              == "resolution_pkg::resolve"
+          && nettype_user != nullptr
+          && nettype_user->signals.size() == 1
+          && nettype_user->signals.front().type.named_type == "byte_net",
+      "nettype base, resolver, declaration identity, and imported use");
+
+  const auto duplicate_nettype = parse_text(
+      "duplicate-nettype.sv",
+      "package p; nettype logic n; nettype logic n; endpackage",
+      Language::SystemVerilog2017);
+  require(
+      !duplicate_nettype.ok()
+          && has_diagnostic(duplicate_nettype, "FSIM-SV-SEM-237"),
+      "duplicate nettypes diagnose deterministically");
+
+  const auto alias_and_let = parse_text(
+      "alias-let.sv",
+      R"(
+package let_pkg;
+  let passthrough(value) = value;
+endpackage
+module alias_let;
+  logic [7:0] left;
+  logic [7:0] right;
+  alias left = right;
+  let merge(input logic [7:0] value, fallback = 8'h01) =
+      value | fallback;
+  initial right = merge(left);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(alias_and_let.ok(), "alias and let declarations must parse");
+  const auto* let_package = alias_and_let.design.find(
+      UnitKind::SystemVerilogPackage, "let_pkg");
+  const auto* alias_let_unit = alias_and_let.design.find(
+      UnitKind::VerilogModule, "alias_let");
+  require(
+      let_package != nullptr
+          && let_package->systemverilog_lets.size() == 1
+          && let_package->systemverilog_lets.front().name == "passthrough"
+          && alias_let_unit != nullptr
+          && alias_let_unit->systemverilog_aliases.size() == 1
+          && alias_let_unit->systemverilog_aliases.front().terminals.size()
+              == 2
+          && alias_let_unit->systemverilog_aliases.front().terminals[0].text
+              == "left"
+          && alias_let_unit->systemverilog_aliases.front().terminals[1].text
+              == "right"
+          && alias_let_unit->systemverilog_lets.size() == 1
+          && alias_let_unit->systemverilog_lets.front().ports.size() == 2
+          && alias_let_unit->systemverilog_lets.front().ports[0].type
+          && alias_let_unit->systemverilog_lets.front().ports[0].type->width()
+              == std::optional<std::uint64_t> { 8 }
+          && alias_let_unit->systemverilog_lets.front().ports[1].default_value,
+      "alias terminals and typed/defaulted let formals remain exact");
 
   const auto invalid = parse_text(
       "invalid-parameters.sv",
@@ -2055,10 +2173,16 @@ end architecture;
 module events;
   logic trigger;
   logic observed;
+  event first_event;
+  event second_event;
   initial begin
     @(posedge trigger);
     @(negedge trigger) observed = trigger;
     wait (trigger) observed = 1'b1;
+    wait_order (first_event, second_event, first_event)
+      observed = 1'b0;
+    else
+      observed = 1'b1;
   end
 endmodule
 )",
@@ -2069,7 +2193,7 @@ endmodule
   const auto& sv_statements =
       system_verilog.design.units.front().processes.front().statements;
   require(
-      sv_statements.size() == 3
+      sv_statements.size() == 4
           && sv_statements[0].kind == StatementKind::WaitOn
           && sv_statements[0].sensitivities.size() == 1
           && sv_statements[0].sensitivities.front().signal == "trigger"
@@ -2088,9 +2212,46 @@ endmodule
               == ExpressionKind::Identifier
           && sv_statements[2].statements.size() == 1
           && sv_statements[2].statements.front().kind
-              == StatementKind::Assignment,
+              == StatementKind::Assignment
+          && sv_statements[3].kind
+              == StatementKind::WaitOrder
+          && sv_statements[3].sensitivities.size() == 3
+          && sv_statements[3].sensitivities[0].signal
+              == "first_event"
+          && sv_statements[3].sensitivities[1].signal
+              == "second_event"
+          && sv_statements[3].sensitivities[2].signal
+              == "first_event"
+          && sv_statements[3].statements.size() == 1
+          && sv_statements[3].else_statements.size() == 1,
       "SystemVerilog procedural event metadata");
 
+  const auto malformed_wait_order = parse_text(
+      "bad_wait_order.sv",
+      R"(
+module bad_wait_order;
+  event first_event;
+  event second_event;
+  initial wait_order () ;
+  initial wait_order (first_event | second_event) ;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !malformed_wait_order.ok()
+          && std::ranges::any_of(
+              malformed_wait_order.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                  return diagnostic.code
+                      == "FSIM-SV-PARSE-365";
+              })
+          && std::ranges::any_of(
+              malformed_wait_order.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                  return diagnostic.code
+                      == "FSIM-SV-SEM-243";
+              }),
+      "malformed wait_order statements receive stable diagnostics");
 
   const auto malformed_sv_wait = parse_text(
       "bad_wait.sv",

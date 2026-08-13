@@ -4,7 +4,9 @@
 #include "fsim/runtime/systemverilog_string.hpp"
 #include "simir_execution_context.hpp"
 #include "simir_internal.hpp"
+
 #include "simir_signal_attributes.hpp"
+#include <bit>
 #include <cmath>
 
 namespace fsim::runtime::simir {
@@ -114,6 +116,306 @@ namespace {
 
 } // namespace
 
+void Interpreter::Impl::execute_stochastic_queue(
+    ProcessState& process,
+    const StochasticQueueOperation& operation)
+{
+    const auto read_i32 = [&](const RegisterId id,
+                              const std::string_view role) {
+        const auto value = process.executor
+            ? process.executor->read_register(id, 32U)
+            : get_register(process, id);
+        const auto word = value.low_word();
+        if (value.width() != 32U || word.bval != 0) {
+            fail(
+                process,
+                std::string { "stochastic queue " } + std::string { role }
+                    + " must be a known 32-bit integer");
+        }
+        return std::bit_cast<std::int32_t>(
+            static_cast<std::uint32_t>(word.aval));
+    };
+    const auto write_i32 = [&](const RegisterId id, const std::int32_t value) {
+        write_process_register(
+            process,
+            id,
+            PackedLogic4::from_aval_bval(
+                32U, std::bit_cast<std::uint32_t>(value), 0));
+    };
+    const auto write_status = [&](const std::int32_t value) {
+        write_i32(operation.status, value);
+    };
+    const auto required = [&](const std::optional<RegisterId> value,
+                              const std::string_view role) {
+        if (!value) {
+            fail(
+                process,
+                std::string { "stochastic queue operation is missing " }
+                    + std::string { role });
+        }
+        return *value;
+    };
+    const auto saturating_add = [](const SimulationTick lhs,
+                                    const SimulationTick rhs) {
+        return rhs > std::numeric_limits<SimulationTick>::max() - lhs
+            ? std::numeric_limits<SimulationTick>::max()
+            : lhs + rhs;
+    };
+    const auto queue_id = read_i32(operation.queue_id, "queue ID");
+
+    if (operation.kind == StochasticQueueKind::initialize) {
+        const auto queue_type = read_i32(
+            required(operation.queue_type, "queue type"), "queue type");
+        const auto maximum_length = read_i32(
+            required(operation.maximum_length, "maximum length"),
+            "maximum length");
+        if (queue_type != 1 && queue_type != 2) {
+            write_status(4);
+            return;
+        }
+        if (maximum_length <= 0) {
+            write_status(5);
+            return;
+        }
+        if (stochastic_queues.contains(queue_id)) {
+            write_status(6);
+            return;
+        }
+        if (stochastic_queues.size()
+            >= maximum_container_storage_bytes
+                / sizeof(StochasticQueueState)) {
+            write_status(7);
+            return;
+        }
+        try {
+            StochasticQueueState state;
+            state.lifo = queue_type == 2;
+            state.maximum_length
+                = static_cast<std::uint32_t>(maximum_length);
+            stochastic_queues.emplace(queue_id, std::move(state));
+        } catch (const std::bad_alloc&) {
+            write_status(7);
+            return;
+        }
+        write_status(0);
+        return;
+    }
+
+    const auto found = stochastic_queues.find(queue_id);
+    if (found == stochastic_queues.end()) {
+        if (operation.job_id)
+            write_i32(*operation.job_id, 0);
+        if (operation.information_id)
+            write_i32(*operation.information_id, 0);
+        if (operation.statistic_value)
+            write_i32(*operation.statistic_value, 0);
+        if (operation.result)
+            write_i32(*operation.result, 0);
+        write_status(2);
+        return;
+    }
+    auto& queue = found->second;
+
+    if (operation.kind == StochasticQueueKind::add) {
+        if (queue.entries.size() >= queue.maximum_length) {
+            write_status(1);
+            return;
+        }
+        const auto job = read_i32(
+            required(operation.job_id, "job ID"), "job ID");
+        const auto information = read_i32(
+            required(operation.information_id, "information ID"),
+            "information ID");
+        const auto maximum_entries = maximum_container_storage_bytes
+            / sizeof(StochasticQueueEntry);
+        std::size_t stored_entries { };
+        for (const auto& [id, state] : stochastic_queues) {
+            (void)id;
+            if (state.entries.size() > maximum_entries - stored_entries) {
+                write_status(7);
+                return;
+            }
+            stored_entries += state.entries.size();
+        }
+        if (stored_entries >= maximum_entries) {
+            write_status(7);
+            return;
+        }
+        try {
+            queue.entries.push_back(
+                { job, information, scheduler.now() });
+        } catch (const std::bad_alloc&) {
+            write_status(7);
+            return;
+        }
+        if (queue.last_arrival) {
+            queue.total_interarrival = saturating_add(
+                queue.total_interarrival,
+                scheduler.now() - *queue.last_arrival);
+        }
+        queue.last_arrival = scheduler.now();
+        ++queue.arrivals;
+        queue.maximum_occupancy = std::max<std::uint64_t>(
+            queue.maximum_occupancy, queue.entries.size());
+        write_status(0);
+        return;
+    }
+
+    if (operation.kind == StochasticQueueKind::remove) {
+        const auto job = required(operation.job_id, "job ID output");
+        const auto information = required(
+            operation.information_id, "information ID output");
+        if (queue.entries.empty()) {
+            write_i32(job, 0);
+            write_i32(information, 0);
+            write_status(3);
+            return;
+        }
+        const auto entry = queue.lifo
+            ? queue.entries.back()
+            : queue.entries.front();
+        if (queue.lifo)
+            queue.entries.pop_back();
+        else
+            queue.entries.pop_front();
+        const auto wait = scheduler.now() - entry.arrival;
+        queue.shortest_wait = queue.shortest_wait
+            ? std::min(*queue.shortest_wait, wait)
+            : wait;
+        queue.total_removed_wait = saturating_add(
+            queue.total_removed_wait, wait);
+        ++queue.removals;
+        write_i32(job, entry.job_id);
+        write_i32(information, entry.information_id);
+        write_status(0);
+        return;
+    }
+
+    if (operation.kind == StochasticQueueKind::full) {
+        write_i32(
+            required(operation.result, "$q_full result"),
+            queue.entries.size() >= queue.maximum_length ? 1 : 0);
+        write_status(0);
+        return;
+    }
+
+    if (operation.kind != StochasticQueueKind::examine) {
+        fail(process, "stochastic queue operation kind is invalid");
+    }
+    const auto code = read_i32(
+        required(operation.statistic_code, "statistic code"),
+        "statistic code");
+    std::uint64_t statistic { };
+    switch (code) {
+    case 1:
+        statistic = queue.entries.size();
+        break;
+    case 2:
+        statistic = queue.arrivals > 1
+            ? queue.total_interarrival / (queue.arrivals - 1U)
+            : 0;
+        break;
+    case 3:
+        statistic = queue.maximum_occupancy;
+        break;
+    case 4:
+        statistic = queue.shortest_wait.value_or(0);
+        break;
+    case 5:
+        for (const auto& entry : queue.entries) {
+            statistic = std::max<std::uint64_t>(
+                statistic, scheduler.now() - entry.arrival);
+        }
+        break;
+    case 6:
+        statistic = queue.removals != 0
+            ? queue.total_removed_wait / queue.removals
+            : 0;
+        break;
+    default:
+        statistic = 0;
+        break;
+    }
+    write_i32(
+        required(operation.statistic_value, "statistic output"),
+        std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(statistic)));
+    write_status(0);
+}
+
+void Interpreter::Impl::execute_pla(
+    ProcessState& process,
+    const PlaEvaluate& operation)
+{
+    const auto& personality = read_container_object_value(operation.memory);
+    const auto packed_memory
+        = personality.type.element_kind == ContainerElementKind::Packed
+        || personality.type.element_kind == ContainerElementKind::Scalar;
+    if (!personality.type.fixed || !packed_memory
+        || personality.type.dimensions.size() != 1U
+        || personality.type.element_width != operation.input_width
+        || personality.elements.size() != operation.output_width
+        || operation.input_width == 0U || operation.output_width == 0U) {
+        fail(
+            process,
+            "PLA personality memory must be a one-dimensional fixed packed array with one input-width word per output bit");
+    }
+    const auto input = process.executor
+        ? process.executor->read_register(operation.input, operation.input_width)
+        : get_register(process, operation.input);
+    if (input.width() != operation.input_width) {
+        fail(process, "PLA input register width does not match its personality");
+    }
+    const bool and_plane = operation.logic == PlaLogicKind::and_logic
+        || operation.logic == PlaLogicKind::nand_logic;
+    const bool invert = operation.logic == PlaLogicKind::nand_logic
+        || operation.logic == PlaLogicKind::nor_logic;
+    auto output = PackedLogic4(operation.output_width, Logic4::x);
+    for (std::size_t row = 0; row < personality.elements.size(); ++row) {
+        const auto& word = personality.elements[row];
+        if (word.width() != operation.input_width) {
+            fail(process, "PLA personality word has an invalid packed width");
+        }
+        auto result = and_plane ? Logic4::one : Logic4::zero;
+        for (std::size_t bit = 0; bit < operation.input_width; ++bit) {
+            const auto personality_bit = word.get(bit);
+            std::optional<Logic4> selected;
+            if (!operation.plane) {
+                if (personality_bit == Logic4::one) {
+                    selected = input.get(bit);
+                } else if (personality_bit != Logic4::zero) {
+                    selected = Logic4::x;
+                }
+            } else {
+                switch (personality_bit) {
+                case Logic4::zero:
+                    selected = logic_not(input.get(bit));
+                    break;
+                case Logic4::one:
+                    selected = input.get(bit);
+                    break;
+                case Logic4::x:
+                    selected = Logic4::x;
+                    break;
+                case Logic4::z:
+                    break;
+                }
+            }
+            if (selected) {
+                result = and_plane
+                    ? logic_and(result, *selected)
+                    : logic_or(result, *selected);
+            }
+        }
+        if (invert) {
+            result = logic_not(result);
+        }
+        // Fixed-array storage is declared-left first, while packed bit zero is
+        // the declared-right term for the required ascending PLA profiles.
+        output.set(operation.output_width - 1U - row, result);
+    }
+    write_process_register(process, operation.output, output);
+}
+
 void Interpreter::Impl::request_channel_update(
     const ProcessId process_id,
     const std::uint64_t channel)
@@ -140,7 +442,10 @@ void Interpreter::Impl::request_channel_update(
             pending_channel_updates.erase(channel);
         };
     const auto phase = scheduler.current_phase();
-    if (phase && *phase >= SchedulerPhase::update) {
+    if (phase
+        && (*phase == SchedulerPhase::update
+            || *phase == SchedulerPhase::observed
+            || *phase >= SchedulerPhase::re_update)) {
         scheduler.schedule_next_delta(
             SchedulerPhase::update, channel, std::move(callback));
     } else {
@@ -464,509 +769,14 @@ void Interpreter::Impl::restore_callable_context(ProcessState& process)
     }
 }
 
-void Interpreter::Impl::handle_boundary(
-    ProcessState& process,
-    const InstructionIndex instruction,
-    const InstructionIndex next_instruction)
-{
-    if (instruction >= process.program.operations.size()) {
-        process.pc = instruction;
-        fail(process, "executor returned an invalid boundary instruction");
-    }
-
-    const auto& operation = process.program.operations[instruction];
-    const auto* dynamic_call = fsim::runtime::simir::operation_get_if<Call>(&operation);
-    const auto* dynamic_return = fsim::runtime::simir::operation_get_if<Return>(&operation);
-    const auto* frame_push = fsim::runtime::simir::operation_get_if<CallableFramePush>(&operation);
-    const auto* frame_pop = fsim::runtime::simir::operation_get_if<CallableFramePop>(&operation);
-    const bool callable_boundary = (dynamic_call && dynamic_call->stack.capacity == 0)
-        || (dynamic_return && dynamic_return->stack.capacity == 0)
-        || frame_push || frame_pop;
-    const auto expected_next = callable_boundary
-        ? instruction
-        : instruction + 1;
-    if (instruction == std::numeric_limits<InstructionIndex>::max()
-        || next_instruction != expected_next) {
-        process.pc = instruction;
-        fail(
-            process,
-            "executor returned a non-sequential boundary resume instruction");
-    }
-
-    process.pc = callable_boundary ? instruction : next_instruction;
-    if (dynamic_call && dynamic_call->stack.capacity == 0) {
-        execute_dynamic_call(process, *dynamic_call);
-        return;
-    }
-    if (dynamic_return && dynamic_return->stack.capacity == 0) {
-        execute_dynamic_return(process, *dynamic_return);
-        return;
-    }
-    if (frame_push) {
-        push_callable_frame(process, *frame_push);
-        return;
-    }
-    if (frame_pop) {
-        pop_callable_frame(process, *frame_pop);
-        return;
-    }
-    if (const auto* point = fsim::runtime::simir::operation_get_if<DebugPoint>(&operation)) {
-        clear_wait_timeout(process);
-        process.current_source = point->source;
-        process.current_scope = point->scope;
-        auto kind = ExecutionPointKind::statement;
-        switch (point->kind) {
-        case DebugPointKind::statement:
-            kind = ExecutionPointKind::statement;
-            break;
-        case DebugPointKind::call:
-            kind = ExecutionPointKind::call;
-            break;
-        case DebugPointKind::wait:
-            kind = ExecutionPointKind::wait;
-            break;
-        case DebugPointKind::assertion:
-            kind = ExecutionPointKind::assertion;
-            break;
-        case DebugPointKind::process_entry:
-            kind = ExecutionPointKind::process_entry;
-            break;
-        }
-        notify_execution_point(
-            process, instruction, kind, process.current_source,
-            process.current_scope);
-        if (scheduler.stop_requested()) {
-            queue_current(process.program.id);
-        }
-        return;
-    }
-    if (const auto* wait = fsim::runtime::simir::operation_get_if<WaitFor>(&operation)) {
-        clear_wait_timeout(process);
-        auto delay = wait->delay;
-        if (wait->source) {
-            try {
-                const auto payload = process.executor
-                    ? process.executor->read_register(
-                          *wait->source, wait->source_width)
-                    : get_register(process, *wait->source);
-                delay = normalized_dynamic_wait_delay(*wait, payload);
-            } catch (const std::exception& error) {
-                process.pc = instruction;
-                fail(process, error.what());
-            }
-        }
-        if (delay == 0) {
-            process.status = ProcessStatus::waiting;
-            if (process.program.reactive || process.program.postponed) {
-                queue_next_delta(process.program.id);
-            } else {
-                process.queued = true;
-                scheduler.schedule(
-                    SchedulerPhase::inactive,
-                    process.program.id,
-                    [this, id = process.program.id](Scheduler&) {
-                        auto& state = get_process(id);
-                        state.queued = false;
-                        execute(id);
-                    });
-            }
-            notify_execution_point(
-                process, instruction, ExecutionPointKind::process_suspend,
-                process.current_source);
-            return;
-        }
-        if (delay
-            > std::numeric_limits<SimulationTick>::max() - scheduler.now()) {
-            process.pc = instruction;
-            fail(process, "simulation time overflow in WaitFor");
-        }
-        queue_at(process.program.id, scheduler.now() + delay);
-        process.status = ProcessStatus::waiting;
-        notify_execution_point(
-            process, instruction, ExecutionPointKind::process_suspend,
-            process.current_source);
-        return;
-    }
-    if (const auto* wait = fsim::runtime::simir::operation_get_if<WaitOn>(&operation)) {
-        if (wait->signals.empty() && !wait->timeout) {
-            process.pc = instruction;
-            fail(
-                process,
-                "WaitOn requires at least one signal or a timeout");
-        }
-        if (!wait->edges.empty()
-            && wait->edges.size() != wait->signals.size()) {
-            process.pc = instruction;
-            fail(process, "WaitOn edge count must match its signal count");
-        }
-        if (!wait->timeout
-            && (wait->timeout_result
-                || wait->timeout_origin)) {
-            process.pc = instruction;
-            fail(
-                process,
-                "WaitOn timeout metadata requires a timeout");
-        }
-        if (wait->timeout_origin
-            && !wait->timeout_result) {
-            process.pc = instruction;
-            fail(
-                process,
-                "WaitOn timeout rearm requires a result register");
-        }
-        if (wait->timeout_origin) {
-            if (*wait->timeout_origin >= instruction) {
-                process.pc = instruction;
-                fail(
-                    process,
-                    "WaitOn timeout origin must precede its rearm");
-            }
-            const auto* origin = fsim::runtime::simir::operation_get_if<WaitOn>(
-                &process.program.operations[*wait->timeout_origin]);
-            if (origin == nullptr
-                || !origin->timeout
-                || origin->timeout_origin
-                || origin->timeout != wait->timeout
-                || origin->timeout_result
-                    != wait->timeout_result
-                || origin->signals != wait->signals
-                || origin->edges != wait->edges) {
-                process.pc = instruction;
-                fail(
-                    process,
-                    "WaitOn timeout rearm does not match its origin");
-            }
-        }
-        process.waiting_on_signal = true;
-        process.status = ProcessStatus::waiting;
-        process.dynamic_sensitivity.clear();
-        process.dynamic_sensitivity.reserve(wait->signals.size());
-        for (std::size_t index = 0; index < wait->signals.size(); ++index) {
-            const auto signal = wait->signals[index];
-            (void)get_signal(signal);
-            const auto edge = wait->edges.empty() ? EdgeKind::any : wait->edges[index];
-            switch (edge) {
-            case EdgeKind::any:
-                break;
-            case EdgeKind::posedge:
-            case EdgeKind::negedge:
-                if (get_signal(signal).initial_value.width() != 1) {
-                    process.pc = instruction;
-                    fail(process, "WaitOn edge requires a scalar signal");
-                }
-                break;
-            default:
-                process.pc = instruction;
-                fail(process, "WaitOn has an invalid edge kind");
-            }
-            process.dynamic_sensitivity.push_back({ signal, edge });
-        }
-        std::sort(
-            process.dynamic_sensitivity.begin(),
-            process.dynamic_sensitivity.end(),
-            [](const Sensitivity& lhs, const Sensitivity& rhs) {
-                return lhs.signal < rhs.signal
-                    || (lhs.signal == rhs.signal
-                        && lhs.edge < rhs.edge);
-            });
-        process.dynamic_sensitivity.erase(
-            std::unique(
-                process.dynamic_sensitivity.begin(),
-                process.dynamic_sensitivity.end(),
-                [](const Sensitivity& lhs, const Sensitivity& rhs) {
-                    return lhs.signal == rhs.signal
-                        && lhs.edge == rhs.edge;
-                }),
-            process.dynamic_sensitivity.end());
-        for (const auto sensitivity : process.dynamic_sensitivity) {
-            dynamic_fanout[sensitivity.signal].push_back(
-                { process.program.id, sensitivity.edge });
-        }
-        if (wait->timeout) {
-            if (wait->timeout_origin) {
-                rearm_wait_timeout(
-                    process,
-                    instruction,
-                    *wait->timeout_origin,
-                    wait->timeout_result);
-            } else {
-                begin_wait_timeout(
-                    process,
-                    instruction,
-                    *wait->timeout,
-                    wait->timeout_result);
-            }
-        } else {
-            clear_wait_timeout(process);
-        }
-        notify_execution_point(
-            process, instruction, ExecutionPointKind::process_suspend,
-            process.current_source);
-        return;
-    }
-    if (fsim::runtime::simir::operation_holds<WaitSensitivity>(operation)) {
-        clear_wait_timeout(process);
-        if (process.program.static_sensitivity.empty()) {
-            process.pc = instruction;
-            fail(process, "WaitSensitivity requires a static sensitivity list");
-        }
-        process.waiting_on_static = true;
-        process.status = ProcessStatus::waiting;
-        notify_execution_point(
-            process, instruction, ExecutionPointKind::process_suspend,
-            process.current_source);
-        return;
-    }
-    if (fsim::runtime::simir::operation_holds<WaitForever>(operation)) {
-        clear_wait_timeout(process);
-        process.status = ProcessStatus::waiting;
-        notify_execution_point(
-            process, instruction, ExecutionPointKind::process_suspend,
-            process.current_source);
-        return;
-    }
-    if (fsim::runtime::simir::operation_holds<Yield>(operation)) {
-        clear_wait_timeout(process);
-        process.status = ProcessStatus::waiting;
-        queue_next_delta(process.program.id);
-        notify_execution_point(
-            process, instruction, ExecutionPointKind::process_suspend,
-            process.current_source);
-        return;
-    }
-    const auto read_boundary_value = [&](const RegisterId id) {
-        return process.executor->read_register(
-            id, ProcessExecutor::native_register_width);
-    };
-    const auto read_boundary_handle = [&](const RegisterId id) {
-        return process.executor->read_register(id, 64U);
-    };
-    if (const auto* class_allocate = fsim::runtime::simir::operation_get_if<ClassAllocate>(&operation)) {
-        if (!class_allocate_hook) {
-            fail(process, "class allocation service is unavailable");
-        }
-        std::vector<PackedLogic4> actuals;
-        std::vector<std::string> string_actuals;
-        actuals.reserve(class_allocate->constructor_actuals.size());
-        string_actuals.reserve(class_allocate->constructor_actuals.size());
-        for (std::size_t index = 0;
-            index < class_allocate->constructor_actuals.size(); ++index) {
-            const auto actual = class_allocate->constructor_actuals[index];
-            const auto string_actual = !class_allocate->constructor_actual_kinds.empty()
-                && class_allocate->constructor_actual_kinds[index] == 1U;
-            actuals.push_back(
-                string_actual ? PackedLogic4(64) : read_boundary_value(actual));
-            string_actuals.push_back(
-                string_actual
-                    ? process.executor->read_string_register(actual)
-                    : std::string { });
-        }
-        const auto handle = class_allocate_hook(
-            process.program.name,
-            class_allocate->specialization_identity,
-            class_allocate->declared_type,
-            actuals,
-            string_actuals,
-            class_allocate->constructor_actual_names);
-        write_process_register(
-            process,
-            class_allocate->destination,
-            PackedLogic4::from_aval_bval(64, handle, 0));
-        return;
-    }
-    if (const auto* property = fsim::runtime::simir::operation_get_if<ClassPropertyRead>(
-            &operation)) {
-        if (!class_property_read_hook) {
-            fail(process, "class property service is unavailable");
-        }
-        const auto handle = read_boundary_handle(
-            property->receiver)
-                                .low_word()
-                                .aval;
-        write_process_register(
-            process,
-            property->destination,
-            resize_class_value(
-                class_property_read_hook(handle, property->property_identity),
-                property->width));
-        return;
-    }
-    if (const auto* property = fsim::runtime::simir::operation_get_if<ClassPropertyWrite>(
-            &operation)) {
-        if (!class_property_write_hook) {
-            fail(process, "class property service is unavailable");
-        }
-        class_property_write_hook(
-            read_boundary_handle(property->receiver).low_word().aval,
-            property->property_identity,
-            read_boundary_value(property->source));
-        return;
-    }
-    if (const auto* method = fsim::runtime::simir::operation_get_if<ClassMethodCall>(
-            &operation)) {
-        if (!class_method_call_hook) {
-            fail(process, "class method service is unavailable");
-        }
-        std::vector<PackedLogic4> actuals;
-        std::vector<std::string> string_actuals;
-        actuals.reserve(method->actuals.size());
-        string_actuals.reserve(method->actuals.size());
-        for (std::size_t index = 0; index < method->actuals.size(); ++index) {
-            const auto actual = method->actuals[index];
-            const auto string_actual = !method->actual_kinds.empty()
-                && method->actual_kinds[index] == 1U;
-            actuals.push_back(
-                string_actual ? PackedLogic4(64) : read_boundary_value(actual));
-            string_actuals.push_back(
-                string_actual
-                    ? process.executor->read_string_register(actual)
-                    : std::string { });
-        }
-        const auto handle = read_boundary_handle(
-            method->receiver)
-                                .low_word()
-                                .aval;
-        write_process_register(
-            process,
-            method->destination,
-            resize_class_value(
-                class_method_call_hook(
-                    handle,
-                    method->method_identity,
-                    actuals,
-                    string_actuals,
-                    method->actual_names,
-                    method->actual_directions,
-                    method->virtual_dispatch),
-                method->result_width));
-        for (std::size_t index = 0; index < actuals.size(); ++index) {
-            const auto string_actual = !method->actual_kinds.empty()
-                && method->actual_kinds[index] == 1U;
-            if (string_actual) {
-                process.executor->write_string_register(
-                    method->actuals[index], string_actuals[index]);
-            } else {
-                write_process_register(process, method->actuals[index], actuals[index]);
-            }
-        }
-        return;
-    }
-    if (const auto* property = fsim::runtime::simir::operation_get_if<ClassStaticPropertyRead>(
-            &operation)) {
-        if (!class_static_property_read_hook) {
-            fail(process, "class static property service is unavailable");
-        }
-        write_process_register(
-            process,
-            property->destination,
-            resize_class_value(
-                class_static_property_read_hook(property->property_identity),
-                property->width));
-        return;
-    }
-    if (const auto* property = fsim::runtime::simir::operation_get_if<ClassStaticPropertyWrite>(
-            &operation)) {
-        if (!class_static_property_write_hook) {
-            fail(process, "class static property service is unavailable");
-        }
-        class_static_property_write_hook(
-            property->property_identity,
-            read_boundary_value(property->source));
-        return;
-    }
-    if (const auto* method = fsim::runtime::simir::operation_get_if<ClassStaticMethodCall>(
-            &operation)) {
-        if (!class_static_method_call_hook) {
-            fail(process, "class static method service is unavailable");
-        }
-        std::vector<PackedLogic4> actuals;
-        std::vector<std::string> string_actuals;
-        actuals.reserve(method->actuals.size());
-        string_actuals.reserve(method->actuals.size());
-        for (std::size_t index = 0; index < method->actuals.size(); ++index) {
-            const auto actual = method->actuals[index];
-            const auto string_actual = !method->actual_kinds.empty()
-                && method->actual_kinds[index] == 1U;
-            actuals.push_back(
-                string_actual ? PackedLogic4(64) : read_boundary_value(actual));
-            string_actuals.push_back(
-                string_actual
-                    ? process.executor->read_string_register(actual)
-                    : std::string { });
-        }
-        write_process_register(
-            process,
-            method->destination,
-            resize_class_value(
-                class_static_method_call_hook(
-                    method->method_identity,
-                    actuals,
-                    string_actuals,
-                    method->actual_names,
-                    method->actual_directions),
-                method->result_width));
-        for (std::size_t index = 0; index < actuals.size(); ++index) {
-            const auto string_actual = !method->actual_kinds.empty()
-                && method->actual_kinds[index] == 1U;
-            if (string_actual) {
-                process.executor->write_string_register(
-                    method->actuals[index], string_actuals[index]);
-            } else {
-                write_process_register(process, method->actuals[index], actuals[index]);
-            }
-        }
-        return;
-    }
-    if (handle_synchronization_boundary(process, instruction, operation)) {
-        return;
-    }
-    if (handle_process_boundary(process, instruction, operation)) {
-        return;
-    }
-    if (handle_fork_boundary(process, instruction, operation)) {
-        return;
-    }
-    if (fsim::runtime::simir::operation_holds<Pause>(operation)) {
-        clear_wait_timeout(process);
-        scheduler.request_stop();
-        queue_current(process.program.id);
-        notify_execution_point(
-            process, instruction, ExecutionPointKind::process_suspend,
-            process.current_source);
-        return;
-    }
-    if (fsim::runtime::simir::operation_holds<Stop>(operation)) {
-        clear_wait_timeout(process);
-        process.halted = true;
-        stopped_by_design = true;
-        scheduler.request_stop();
-        notify_execution_point(
-            process, instruction, ExecutionPointKind::process_suspend,
-            process.current_source);
-        return;
-    }
-    if (fsim::runtime::simir::operation_holds<Halt>(operation)) {
-        clear_wait_timeout(process);
-        notify_execution_point(
-            process, instruction, ExecutionPointKind::process_suspend,
-            process.current_source);
-        if (process.fork_parent) {
-            complete_fork_child(process);
-        } else {
-            complete_process(process, ProcessStatus::finished);
-        }
-        return;
-    }
-
-    process.pc = instruction;
-    fail(
-        process,
-        "executor returned at an operation that is not a kernel boundary");
-}
-
+#include "simir_execution_boundaries.tpp"
 void Interpreter::Impl::execute(ProcessId id)
 {
     auto& process = get_process(id);
+    if (process.suspended) {
+        process.suspended_wake = true;
+        return;
+    }
     restore_callable_context(process);
     if (!process.halted) {
         process.status = ProcessStatus::running;
@@ -975,67 +785,14 @@ void Interpreter::Impl::execute(ProcessId id)
         ExecutionContext context { *this, id };
         while (!process.halted) {
             const auto boundary = process.executor->resume(context, process.pc);
-            const bool debug_boundary = boundary.instruction < process.program.operations.size()
-                && fsim::runtime::simir::operation_holds<DebugPoint>(
-                    process.program.operations[boundary.instruction]);
-            const bool class_boundary = boundary.instruction < process.program.operations.size()
-                && (fsim::runtime::simir::operation_holds<ClassAllocate>(
-                        process.program.operations[boundary.instruction])
-                    || fsim::runtime::simir::operation_holds<ClassPropertyRead>(
-                        process.program.operations[boundary.instruction])
-                    || fsim::runtime::simir::operation_holds<ClassPropertyWrite>(
-                        process.program.operations[boundary.instruction])
-                    || fsim::runtime::simir::operation_holds<ClassMethodCall>(
-                        process.program.operations[boundary.instruction])
-                    || fsim::runtime::simir::operation_holds<
-                        ClassStaticPropertyRead>(
-                        process.program.operations[boundary.instruction])
-                    || fsim::runtime::simir::operation_holds<
-                        ClassStaticPropertyWrite>(
-                        process.program.operations[boundary.instruction])
-                    || fsim::runtime::simir::operation_holds<ClassStaticMethodCall>(
-                        process.program.operations[boundary.instruction]));
-            const bool immediate_process_boundary = boundary.instruction < process.program.operations.size()
-                && (fsim::runtime::simir::operation_holds<ProcessSelf>(
-                        process.program.operations[boundary.instruction])
-                    || fsim::runtime::simir::operation_holds<ProcessStatusQuery>(
-                        process.program.operations[boundary.instruction])
-                    || fsim::runtime::simir::operation_holds<ProcessCompleted>(
-                        process.program.operations[boundary.instruction])
-                    || fsim::runtime::simir::operation_holds<DisableBlock>(
-                        process.program.operations[boundary.instruction]));
-            const bool synchronization_boundary = boundary.instruction < process.program.operations.size()
-                && (fsim::runtime::simir::operation_holds<MailboxCreate>(
-                        process.program.operations[boundary.instruction])
-                    || fsim::runtime::simir::operation_holds<MailboxPut>(
-                        process.program.operations[boundary.instruction])
-                    || fsim::runtime::simir::operation_holds<MailboxGet>(
-                        process.program.operations[boundary.instruction])
-                    || fsim::runtime::simir::operation_holds<MailboxNum>(
-                        process.program.operations[boundary.instruction])
-                    || fsim::runtime::simir::operation_holds<SemaphoreCreate>(
-                        process.program.operations[boundary.instruction])
-                    || fsim::runtime::simir::operation_holds<SemaphoreGet>(
-                        process.program.operations[boundary.instruction])
-                    || fsim::runtime::simir::operation_holds<SemaphorePut>(
-                        process.program.operations[boundary.instruction]));
-            const bool callable_boundary = boundary.instruction < process.program.operations.size()
-                && ((fsim::runtime::simir::operation_holds<Call>(
-                         process.program.operations[boundary.instruction])
-                        && fsim::runtime::simir::operation_get<Call>(
-                               process.program.operations[boundary.instruction])
-                                .stack.capacity
-                            == 0)
-                    || (fsim::runtime::simir::operation_holds<Return>(
-                            process.program.operations[boundary.instruction])
-                        && fsim::runtime::simir::operation_get<Return>(
-                               process.program.operations[boundary.instruction])
-                                .stack.capacity
-                            == 0)
-                    || fsim::runtime::simir::operation_holds<CallableFramePush>(
-                        process.program.operations[boundary.instruction])
-                    || fsim::runtime::simir::operation_holds<CallableFramePop>(
-                        process.program.operations[boundary.instruction]));
+            const auto* operation = boundary.instruction < process.program.operations.size()
+                ? &process.program.operations[boundary.instruction]
+                : nullptr;
+            const bool debug_boundary = operation && operation_holds<DebugPoint>(*operation);
+            const bool class_boundary = operation && is_class_execution_boundary(*operation);
+            const bool immediate_process_boundary = operation && is_immediate_process_boundary(*operation);
+            const bool synchronization_boundary = operation && is_synchronization_boundary(*operation);
+            const bool callable_boundary = operation && is_dynamic_callable_boundary(*operation);
             if (boundary.external.kind
                 == ExternalSuspendKind::simir_boundary) {
                 handle_boundary(
@@ -1120,10 +877,15 @@ void Interpreter::Impl::execute(ProcessId id)
                             process, op.destination));
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, ReadSignal>) {
-                    get_register(process, op.destination) = coerce_value_kind(
-                        get_signal(op.signal).initial_value,
-                        register_value_kind(
-                            process, op.destination));
+                    const auto& signal = get_signal(op.signal);
+                    if (op.kind == SignalReadKind::current) {
+                        get_register(process, op.destination) = coerce_value_kind(
+                            signal.initial_value,
+                            register_value_kind(process, op.destination));
+                        ++process.pc;
+                        return;
+                    }
+                    execute_sampled_read(process, op);
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, SignalEvent>) {
                     (void)get_signal(op.signal);
@@ -1203,6 +965,19 @@ void Interpreter::Impl::execute(ProcessId id)
                         get_register(process, op.source),
                         register_value_kind(
                             process, op.destination));
+                    ++process.pc;
+                } else if constexpr (
+                    std::is_same_v<OperationType, ConvertToTwoState>) {
+                    const auto& source = get_register(process, op.source);
+                    auto converted = PackedLogic4(
+                        source.width(), Logic4::zero);
+                    for (std::size_t bit = 0; bit < source.width(); ++bit) {
+                        if (to_logic4(source.get_logic9(bit))
+                            == Logic4::one) {
+                            converted.set(bit, Logic4::one);
+                        }
+                    }
+                    get_register(process, op.destination) = std::move(converted);
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, ClassAllocate>) {
                     if (!class_allocate_hook) {
@@ -1284,6 +1059,7 @@ void Interpreter::Impl::execute(ProcessId id)
                         string_actuals,
                         op.actual_names,
                         op.actual_directions,
+                        op.inline_constraints,
                         op.virtual_dispatch);
                     for (std::size_t index = 0; index < actuals.size(); ++index) {
                         const auto string_actual = !op.actual_kinds.empty()
@@ -1456,6 +1232,115 @@ void Interpreter::Impl::execute(ProcessId id)
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, StringMethod>) {
                     execute_string(process, op);
+                } else if constexpr (std::is_same_v<OperationType, PlusArgSelect>) {
+                    const auto& query = get_string_register(process, op.query);
+                    const std::string* selected = nullptr;
+                    for (const auto& argument : plusargs) {
+                        auto candidate = std::string_view { argument };
+                        if (candidate.starts_with('+')) {
+                            candidate.remove_prefix(1);
+                        }
+                        if (candidate.starts_with(query)) {
+                            selected = &argument;
+                            break;
+                        }
+                    }
+                    if (op.selected) {
+                        auto& destination = get_string_register(process, *op.selected);
+                        destination.clear();
+                        if (selected != nullptr) {
+                            auto candidate = std::string_view { *selected };
+                            if (candidate.starts_with('+')) {
+                                candidate.remove_prefix(1);
+                            }
+                            destination.assign(candidate);
+                        }
+                    }
+                    get_register(process, op.destination) = PackedLogic4::from_aval_bval(
+                        32, selected != nullptr ? 1U : 0U, 0);
+                    ++process.pc;
+                } else if constexpr (std::is_same_v<OperationType, SystemCommand>) {
+                    if (!system_command_hook) {
+                        fail(process, "$system service is unavailable");
+                    }
+                    const auto command = op.command
+                        ? std::optional<std::string_view> {
+                              get_string_register(process, *op.command)
+                          }
+                        : std::nullopt;
+                    const auto status = system_command_hook(command);
+                    if (op.destination) {
+                        get_register(process, *op.destination)
+                            = PackedLogic4::from_aval_bval(
+                                32,
+                                static_cast<std::uint32_t>(status),
+                                0);
+                    }
+                    ++process.pc;
+                } else if constexpr (std::is_same_v<OperationType, VcdControl>) {
+                    if (!vcd_control_hook) {
+                        fail(process, "VCD control service is unavailable");
+                    }
+                    VcdControlEvent event;
+                    event.kind = op.kind;
+                    if (op.filename) {
+                        event.filename = get_string_register(process, *op.filename);
+                    }
+                    if (op.value) {
+                        const auto converted
+                            = get_register(process, *op.value).known_unsigned_value();
+                        if (!converted) {
+                            fail(process, "VCD control value must be a known unsigned 64-bit integer");
+                        }
+                        event.value = *converted;
+                    }
+                    event.selections = op.selections;
+                    event.scope = op.scope;
+                    event.time = scheduler.now();
+                    event.delta = scheduler.delta();
+                    vcd_control_hook(event);
+                    if (op.kind == VcdControlKind::variables
+                        || op.kind == VcdControlKind::ports) {
+                        const auto begin_kind
+                            = op.kind == VcdControlKind::variables
+                            ? VcdControlKind::begin_variables
+                            : VcdControlKind::begin_ports;
+                        scheduler.schedule(
+                            SchedulerPhase::postponed,
+                            process.program.id,
+                            [this, begin_kind](Scheduler& runtime) {
+                                if (!vcd_control_hook) {
+                                    return;
+                                }
+                                VcdControlEvent begin;
+                                begin.kind = begin_kind;
+                                begin.time = runtime.now();
+                                begin.delta = runtime.delta();
+                                vcd_control_hook(begin);
+                            });
+                    }
+                    ++process.pc;
+                } else if constexpr (
+                    std::is_same_v<OperationType,
+                        CoverageDatabaseControl>) {
+                    if (!coverage_database_control_hook) {
+                        fail(process,
+                            "coverage database service is unavailable");
+                    }
+                    coverage_database_control_hook({ op.kind,
+                        get_string_register(process, op.filename) });
+                    ++process.pc;
+                } else if constexpr (
+                    std::is_same_v<OperationType, StochasticQueueOperation>) {
+                    execute_stochastic_queue(process, op);
+                    ++process.pc;
+                } else if constexpr (std::is_same_v<OperationType, PlaEvaluate>) {
+                    execute_pla(process, op);
+                    ++process.pc;
+                } else if constexpr (
+                    std::is_same_v<OperationType, TimeFormatControl>) {
+                    set_time_format(process, op);
+                    ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, UnaryNot>) {
                     get_register(process, op.destination) = unary_not(get_register(process, op.source));
                     ++process.pc;
@@ -1589,6 +1474,73 @@ void Interpreter::Impl::execute(ProcessId id)
                                 + std::to_string(static_cast<unsigned>(op.lhs_kind))
                                 + ", rhs kind "
                                 + std::to_string(static_cast<unsigned>(op.rhs_kind))
+                                + ")");
+                    }
+                    get_register(process, op.destination) = result.value;
+                    ++process.pc;
+                } else if constexpr (
+                    std::is_same_v<OperationType, SystemVerilogMath>) {
+                    if (op.function >= SystemVerilogMathFunction::Time) {
+                        const auto function
+                            = op.function == SystemVerilogMathFunction::Time
+                            ? SystemVerilogTimeFunction::Time
+                            : op.function
+                                == SystemVerilogMathFunction::Stime
+                            ? SystemVerilogTimeFunction::Stime
+                            : SystemVerilogTimeFunction::Realtime;
+                        const auto value = systemverilog_time_function(
+                            function,
+                            scheduler.now(),
+                            { op.time_unit_femtoseconds,
+                                op.time_precision_femtoseconds,
+                                time_format.resolution_femtoseconds });
+                        if (!value) {
+                            fail(
+                                process,
+                                "SystemVerilog time query failed (error "
+                                    + std::to_string(static_cast<unsigned>(
+                                        value.error))
+                                    + ")");
+                        }
+                        const auto encoded = op.function
+                                == SystemVerilogMathFunction::Realtime
+                            ? encode_systemverilog_scalar_payload(value.value)
+                            : systemverilog_scalar_to_packed(
+                                  value.value,
+                                  op.function
+                                          == SystemVerilogMathFunction::Stime
+                                      ? 32U
+                                      : 64U,
+                                  false);
+                        if (!encoded) {
+                            fail(
+                                process,
+                                "SystemVerilog time query failed (error "
+                                    + std::to_string(static_cast<unsigned>(
+                                        encoded.error))
+                                    + ")");
+                        }
+                        get_register(process, op.destination) = encoded.value;
+                        ++process.pc;
+                        return;
+                    }
+                    const auto* second = op.second_width == 0
+                        ? nullptr
+                        : &get_register(process, op.second);
+                    const auto result = systemverilog_math_payload(
+                        op.function,
+                        get_register(process, op.first),
+                        op.first_kind,
+                        op.first_signed,
+                        second,
+                        op.second_kind,
+                        op.second_signed);
+                    if (!result) {
+                        fail(
+                            process,
+                            "SystemVerilog math function failed (error "
+                                + std::to_string(
+                                    static_cast<unsigned>(result.error))
                                 + ")");
                     }
                     get_register(process, op.destination) = result.value;
@@ -1970,7 +1922,22 @@ void Interpreter::Impl::execute(ProcessId id)
                 } else if constexpr (std::is_same_v<OperationType, WaitFor>) {
                     (void)op;
                     boundary = true;
+                } else if constexpr (std::is_same_v<OperationType, WaitRegion>) {
+                    (void)op;
+                    boundary = true;
                 } else if constexpr (std::is_same_v<OperationType, WaitOn>) {
+                    (void)op;
+                    boundary = true;
+                } else if constexpr (std::is_same_v<OperationType, WaitPla>) {
+                    (void)op;
+                    boundary = true;
+                } else if constexpr (std::is_same_v<OperationType, WaitOrder>) {
+                    (void)op;
+                    boundary = true;
+                } else if constexpr (std::is_same_v<OperationType, EventTriggered>) {
+                    (void)op;
+                    boundary = true;
+                } else if constexpr (std::is_same_v<OperationType, EventAlias>) {
                     (void)op;
                     boundary = true;
                 } else if constexpr (std::is_same_v<OperationType, WaitSensitivity>) {
@@ -2001,7 +1968,12 @@ void Interpreter::Impl::execute(ProcessId id)
                     std::is_same_v<OperationType, ProcessAwait>) {
                     boundary = true;
                 } else if constexpr (
-                    std::is_same_v<OperationType, ProcessKill>) {
+                    std::is_same_v<OperationType, ProcessKill>
+                    || std::is_same_v<OperationType, ProcessSuspend>
+                    || std::is_same_v<OperationType, ProcessResume>
+                    || std::is_same_v<OperationType, ProcessGetRandState>
+                    || std::is_same_v<OperationType, ProcessSetRandState>
+                    || std::is_same_v<OperationType, ProcessSrandom>) {
                     boundary = true;
                 } else if constexpr (
                     std::is_same_v<OperationType, MailboxCreate>
@@ -2272,6 +2244,8 @@ void Interpreter::Impl::execute(ProcessId id)
                         op.prefix,
                         op.suffix,
                         scheduler.now(),
+                        time_format,
+                        op.use_timeformat_width,
                         op.minimum_width,
                         op.left_justify,
                         op.zero_pad);
@@ -2307,6 +2281,34 @@ void Interpreter::Impl::execute(ProcessId id)
                 } else if constexpr (std::is_same_v<OperationType, MonitorControl>) {
                     set_monitor_enabled(op.enabled);
                     ++process.pc;
+                } else if constexpr (std::is_same_v<OperationType, CoverageSample>) {
+                    if (!coverage_sample_hook) {
+                        fail(process, "coverage sampling service is unavailable");
+                    }
+                    std::vector<PackedLogic4> actuals;
+                    actuals.reserve(op.actuals.size());
+                    for (const auto actual : op.actuals) {
+                        actuals.push_back(get_register(process, actual));
+                    }
+                    coverage_sample_hook(
+                        op.instance_identity, actuals, op.signed_actuals,
+                        op.trigger);
+                    ++process.pc;
+                } else if constexpr (std::is_same_v<OperationType, CoverageQuery>) {
+                    if (op.kind != CoverageQueryKind::overall_type
+                        && op.kind
+                            != CoverageQueryKind::overall_instance) {
+                        fail(process, "coverage query kind is invalid");
+                    }
+                    if (!coverage_query_hook) {
+                        fail(process, "coverage query service is unavailable");
+                    }
+                    auto value = coverage_query_hook(op.kind);
+                    if (value.width() != 64U || value.is_logic9()) {
+                        fail(process, "coverage query service returned an invalid real payload");
+                    }
+                    get_register(process, op.destination) = std::move(value);
+                    ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, RandomValue>) {
                     const auto maximum = op.maximum
                         ? std::optional<PackedLogic4> {
@@ -2323,6 +2325,38 @@ void Interpreter::Impl::execute(ProcessId id)
                         op.kind,
                         maximum,
                         minimum);
+                    ++process.pc;
+                } else if constexpr (
+                    std::is_same_v<OperationType, RandomDistribution>) {
+                    const auto integer_operand = [&](const RegisterId register_id) {
+                        const auto& operand = get_register(process, register_id);
+                        if (operand.width() != 32U || operand.is_logic9()
+                            || operand.low_word().bval != 0U) {
+                            fail(process,
+                                "random distribution operand must be a known 32-bit integer");
+                        }
+                        return std::bit_cast<std::int32_t>(
+                            static_cast<std::uint32_t>(operand.low_word().aval));
+                    };
+                    const auto seed = integer_operand(op.seed);
+                    const auto first = integer_operand(op.first);
+                    const auto second = op.second
+                        ? std::optional<std::int32_t> {
+                              integer_operand(*op.second)
+                          }
+                        : std::nullopt;
+                    const auto evaluated = evaluate_random_distribution(
+                        op.kind, seed, first, second);
+                    get_register(process, op.destination)
+                        = PackedLogic4::from_aval_bval(
+                            32U,
+                            std::bit_cast<std::uint32_t>(evaluated.value),
+                            0U);
+                    get_register(process, op.seed)
+                        = PackedLogic4::from_aval_bval(
+                            32U,
+                            std::bit_cast<std::uint32_t>(evaluated.seed),
+                            0U);
                     ++process.pc;
                 } else if constexpr (
                     std::is_same_v<OperationType, ScopeRandomize>) {
@@ -2344,6 +2378,16 @@ void Interpreter::Impl::execute(ProcessId id)
                                 target.nominal_type },
                             target.domain,
                             &get_register(process, target.target) });
+                    }
+                    if (!op.inline_constraints.empty()) {
+                        request.inline_constraints = [&](auto& solver, const auto& variables) {
+                            configure_systemverilog_inline_constraints(
+                                solver,
+                                variables,
+                                op.inline_constraints,
+                                process.program.name + "::std::randomize@"
+                                    + std::to_string(process.pc));
+                        };
                     }
                     const auto result = randomize_systemverilog_scope(request);
                     get_register(process, op.destination) = PackedLogic4::from_aval_bval(
@@ -2395,20 +2439,8 @@ void Interpreter::Impl::execute(ProcessId id)
 
         if (boundary) {
             const bool debug_boundary = fsim::runtime::simir::operation_holds<DebugPoint>(operation);
-            const bool immediate_process_boundary = fsim::runtime::simir::operation_holds<ProcessSelf>(operation)
-                || fsim::runtime::simir::operation_holds<ProcessStatusQuery>(
-                    operation)
-                || fsim::runtime::simir::operation_holds<ProcessCompleted>(
-                    operation)
-                || fsim::runtime::simir::operation_holds<DisableBlock>(
-                    operation);
-            const bool synchronization_boundary = fsim::runtime::simir::operation_holds<MailboxCreate>(operation)
-                || fsim::runtime::simir::operation_holds<MailboxPut>(operation)
-                || fsim::runtime::simir::operation_holds<MailboxGet>(operation)
-                || fsim::runtime::simir::operation_holds<MailboxNum>(operation)
-                || fsim::runtime::simir::operation_holds<SemaphoreCreate>(operation)
-                || fsim::runtime::simir::operation_holds<SemaphoreGet>(operation)
-                || fsim::runtime::simir::operation_holds<SemaphorePut>(operation);
+            const bool immediate_process_boundary = is_immediate_process_boundary(operation);
+            const bool synchronization_boundary = is_synchronization_boundary(operation);
             handle_boundary(process, instruction, instruction + 1);
             if ((immediate_process_boundary
                     || (synchronization_boundary

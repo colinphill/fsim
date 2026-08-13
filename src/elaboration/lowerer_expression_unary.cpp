@@ -5,6 +5,157 @@ namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
 
+std::optional<std::vector<runtime::SystemVerilogConstraintTemplate>>
+Lowerer::lower_inline_constraints(const Expression& expression)
+{
+    const auto marker = std::ranges::find(
+        expression.aggregate_choices, "@sv-inline-constraint");
+    if (marker == expression.aggregate_choices.end()) {
+        return std::vector<runtime::SystemVerilogConstraintTemplate> { };
+    }
+    const auto marker_index = static_cast<std::size_t>(std::distance(
+        expression.aggregate_choices.begin(), marker));
+    if (marker_index >= expression.aggregate_choice_expressions.size()) {
+        report(
+            "FSIM-ELAB-SVRAND-005",
+            "inline constraint syntax has no retained expression block",
+            expression.span);
+        return std::nullopt;
+    }
+
+    using Template = runtime::SystemVerilogConstraintTemplate;
+    using TemplateKind = runtime::SystemVerilogConstraintTemplateKind;
+    std::function<std::optional<Template>(const Expression&)> lower;
+    lower = [&](const Expression& input) -> std::optional<Template> {
+        Template output;
+        output.text = input.text;
+        if (input.text == "@sv-null") {
+            output.kind = TemplateKind::Constant;
+            output.constant = PackedLogic4::from_aval_bval(64, 0, 0);
+            output.profile = {
+                runtime::SystemVerilogConstraintDomainKind::BitVector,
+                64,
+                false,
+                "null",
+                false
+            };
+            return output;
+        }
+        if (input.kind == ExpressionKind::Identifier) {
+            std::string error;
+            const auto value = evaluate_systemverilog_constant_expression(
+                input, { }, { }, error);
+            if (!value) {
+                output.kind = TemplateKind::Name;
+                return output;
+            }
+            output.kind = TemplateKind::Constant;
+            output.constant = value->packed;
+            output.profile = {
+                value->domain == frontend::ValueDomain::Integer
+                    ? runtime::SystemVerilogConstraintDomainKind::Integer
+                    : runtime::SystemVerilogConstraintDomainKind::BitVector,
+                value->width,
+                value->is_signed,
+                value->nominal_type.empty()
+                    ? std::string { "$inline-constant" }
+                    : value->nominal_type,
+                value->domain == frontend::ValueDomain::Logic4
+            };
+            return output;
+        }
+        const auto special_kind = [&]() -> std::optional<TemplateKind> {
+            if (input.kind == ExpressionKind::Unary) {
+                return TemplateKind::Unary;
+            }
+            if (input.kind == ExpressionKind::Binary) {
+                return TemplateKind::Binary;
+            }
+            if (input.kind != ExpressionKind::Call)
+                return std::nullopt;
+            if (input.text == "?:")
+                return TemplateKind::Conditional;
+            if (input.text == "inside")
+                return TemplateKind::InsideSet;
+            if (input.text == "@inside-range") {
+                return TemplateKind::InsideRange;
+            }
+            if (input.text == "dist")
+                return TemplateKind::Distribution;
+            if (input.text == "@dist-:=" || input.text == "@dist-:/") {
+                return TemplateKind::DistributionItem;
+            }
+            if (input.text == "soft")
+                return TemplateKind::Soft;
+            if (input.text == "@constraint-block") {
+                return TemplateKind::Block;
+            }
+            if (input.text == "@constraint-implies") {
+                return TemplateKind::Implication;
+            }
+            if (input.text == "@constraint-if") {
+                return TemplateKind::ConditionalConstraint;
+            }
+            if (input.text == "@solve-before") {
+                return TemplateKind::SolveBefore;
+            }
+            if (input.text == "@solve-list") {
+                return TemplateKind::SolveList;
+            }
+            return std::nullopt;
+        }();
+        if (special_kind) {
+            output.kind = *special_kind;
+            output.operands.reserve(input.operands.size());
+            for (const auto& operand : input.operands) {
+                auto retained = lower(operand);
+                if (!retained)
+                    return std::nullopt;
+                output.operands.push_back(std::move(*retained));
+            }
+            return output;
+        }
+        std::string error;
+        const auto value = evaluate_systemverilog_constant_expression(
+            input, { }, { }, error);
+        if (!value) {
+            report(
+                "FSIM-ELAB-SVRAND-006",
+                "inline constraint expression '" + input.text
+                    + "' is not a supported variable, constant, or operator: "
+                    + error,
+                input.span);
+            return std::nullopt;
+        }
+        output.kind = TemplateKind::Constant;
+        output.constant = value->packed;
+        output.profile = {
+            value->domain == frontend::ValueDomain::Integer
+                ? runtime::SystemVerilogConstraintDomainKind::Integer
+                : runtime::SystemVerilogConstraintDomainKind::BitVector,
+            value->width,
+            value->is_signed,
+            value->nominal_type.empty()
+                ? std::string { "$inline-constant" }
+                : value->nominal_type,
+            value->domain == frontend::ValueDomain::Logic4
+        };
+        return output;
+    };
+
+    std::vector<Template> result;
+    const auto& expressions
+        = expression.aggregate_choice_expressions[marker_index];
+    result.reserve(expressions.size());
+    for (const auto& item : expressions) {
+        auto retained = lower(item);
+        if (!retained)
+            return std::nullopt;
+        result.push_back(std::move(*retained));
+    }
+    return result;
+}
+
 Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
     const Expression& expression,
     const std::size_t expected_width,
@@ -768,6 +919,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
         ScopeRandomize operation;
         operation.destination = allocate_register(
             32, frontend::ValueDomain::Integer);
+        auto inline_constraints = lower_inline_constraints(expression);
+        if (!inline_constraints)
+            return std::nullopt;
+        operation.inline_constraints = std::move(*inline_constraints);
         operation.maximum_domain_values = std::size_t { 1 } << 20U;
         struct CopyOut {
             const Expression* expression { };
@@ -876,6 +1031,153 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
                     : RandomKind::random,
                 std::nullopt,
                 std::nullopt });
+        return destination;
+    }
+    if (expression.kind == ExpressionKind::Call
+        && (expression.text == "$dist_uniform"
+            || expression.text == "$dist_normal"
+            || expression.text == "$dist_exponential"
+            || expression.text == "$dist_poisson"
+            || expression.text == "$dist_chi_square"
+            || expression.text == "$dist_t"
+            || expression.text == "$dist_erlang")) {
+        using Kind = RandomDistributionKind;
+        const auto kind = expression.text == "$dist_uniform"
+            ? Kind::uniform
+            : expression.text == "$dist_normal"
+            ? Kind::normal
+            : expression.text == "$dist_exponential"
+            ? Kind::exponential
+            : expression.text == "$dist_poisson"
+            ? Kind::poisson
+            : expression.text == "$dist_chi_square"
+            ? Kind::chi_square
+            : expression.text == "$dist_t"
+            ? Kind::student_t
+            : Kind::erlang;
+        const bool three_arguments = kind == Kind::uniform
+            || kind == Kind::normal || kind == Kind::erlang;
+        const auto required_arity = three_arguments ? 3U : 2U;
+        if (language_ == frontend::Language::Vhdl2008
+            || expression.operands.size() != required_arity
+            || expression.operands.empty()
+            || expression.operands.front().kind
+                != ExpressionKind::Identifier) {
+            report(
+                "FSIM-ELAB-SVRAND-008",
+                expression.text
+                    + " requires a direct writable seed followed by "
+                    + std::to_string(required_arity - 1U)
+                    + " integer argument"
+                    + (required_arity == 3U ? "s" : ""),
+                expression.span);
+            return std::nullopt;
+        }
+
+        const auto& seed_expression = expression.operands.front();
+        const auto* seed_type = object_type(seed_expression.text);
+        const auto invalid_seed_type = seed_type == nullptr
+            || seed_type->systemverilog_scalar
+                == frontend::SystemVerilogScalarKind::ShortReal
+            || seed_type->systemverilog_scalar
+                == frontend::SystemVerilogScalarKind::Real
+            || seed_type->systemverilog_scalar
+                == frontend::SystemVerilogScalarKind::Realtime
+            || seed_type->systemverilog_scalar
+                == frontend::SystemVerilogScalarKind::Chandle;
+        if (invalid_seed_type) {
+            report(
+                "FSIM-ELAB-SVRAND-008",
+                expression.text
+                    + " seed must be a writable packed integer variable at least 32 bits wide",
+                seed_expression.span);
+            return std::nullopt;
+        }
+
+        std::optional<RegisterId> seed_register;
+        std::optional<RegisterId> seed_local;
+        std::optional<SignalId> seed_signal;
+        std::size_t seed_width { };
+        if (const auto local = locals_.find(seed_expression.text);
+            local != locals_.end()) {
+            seed_local = local->second;
+            seed_width = register_width(local->second);
+            seed_register = local->second;
+        } else if (const auto signal = signals_.find(seed_expression.text);
+            signal != signals_.end()
+            && !read_only_signals_.contains(signal->second)) {
+            seed_signal = signal->second;
+            seed_width = design_.signal_info_[signal->second].width;
+            seed_register = allocate_register(
+                seed_width,
+                design_.signal_info_[signal->second].source_domain);
+            process_.operations.emplace_back(
+                ReadSignal { *seed_register, signal->second });
+        }
+        if (!seed_register || seed_width < 32U) {
+            report(
+                "FSIM-ELAB-SVRAND-008",
+                expression.text
+                    + " seed must be a writable packed integer variable at least 32 bits wide",
+                seed_expression.span);
+            return std::nullopt;
+        }
+        if (seed_width != 32U) {
+            *seed_register = resize_register(
+                *seed_register, 32U, true);
+        }
+
+        const auto lower_integer_argument = [&](const std::size_t index)
+            -> std::optional<RegisterId> {
+            const auto& operand = expression.operands[index];
+            const auto* type = operand.kind == ExpressionKind::Identifier
+                ? object_type(operand.text)
+                : nullptr;
+            const auto scalar = type != nullptr
+                ? type->systemverilog_scalar
+                : operand.systemverilog_scalar_kind;
+            if (scalar == frontend::SystemVerilogScalarKind::ShortReal
+                || scalar == frontend::SystemVerilogScalarKind::Real
+                || scalar == frontend::SystemVerilogScalarKind::Realtime
+                || scalar == frontend::SystemVerilogScalarKind::Chandle) {
+                report(
+                    "FSIM-ELAB-SVRAND-008",
+                    expression.text + " arguments must be integral",
+                    operand.span);
+                return std::nullopt;
+            }
+            auto value = lower_expression(operand, 32U);
+            if (value && register_width(*value) != 32U) {
+                *value = resize_register(
+                    *value, 32U, is_signed_expression(operand));
+            }
+            return value;
+        };
+        const auto first = lower_integer_argument(1U);
+        const auto second = three_arguments
+            ? lower_integer_argument(2U)
+            : std::optional<RegisterId> { };
+        if (!first || (three_arguments && !second))
+            return std::nullopt;
+
+        const auto destination = allocate_register(
+            32U, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(RandomDistribution {
+            destination, *seed_register, kind, *first, second });
+        if (seed_width != 32U) {
+            const auto widened = resize_register(
+                *seed_register, seed_width, true);
+            if (seed_local) {
+                process_.operations.emplace_back(
+                    CopyRegister { *seed_local, widened });
+            } else {
+                process_.operations.emplace_back(
+                    WriteBlocking { *seed_signal, widened });
+            }
+        } else if (seed_signal) {
+            process_.operations.emplace_back(
+                WriteBlocking { *seed_signal, *seed_register });
+        }
         return destination;
     }
     if (expression.kind == ExpressionKind::Call

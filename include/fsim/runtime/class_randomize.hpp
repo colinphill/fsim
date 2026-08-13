@@ -11,9 +11,7 @@
 
 namespace fsim::runtime {
 
-using SystemVerilogClassRandomizeVariables = std::map<
-    std::string,
-    SystemVerilogConstraintVariableId>;
+using SystemVerilogClassRandomizeVariables = SystemVerilogConstraintVariables;
 
 using SystemVerilogClassConstraintConfigurator = std::function<void(
     SystemVerilogConstraintSolver&,

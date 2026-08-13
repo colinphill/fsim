@@ -72,17 +72,16 @@ void Lowerer::lower_qualified_case(const Statement& statement) {
   if ((inside_matching || pattern_matching)
       && (is_container_expression(statement.condition)
           || is_string_expression(statement.condition)
-          || statement.condition.kind == ExpressionKind::Aggregate
-          || statement.condition.kind == ExpressionKind::Concatenation)) {
-    report(
-        pattern_matching
-            ? "FSIM-ELAB-SVMATCH-002"
-            : "FSIM-ELAB-SVCASEINSIDE-002",
-        pattern_matching
-            ? "bounded case matches requires a scalar integral selector"
-            : "bounded case inside requires a scalar integral selector",
-        statement.condition.span);
-    return;
+          || statement.condition.kind == ExpressionKind::Aggregate)) {
+      report(
+          pattern_matching
+              ? "FSIM-ELAB-SVMATCH-002"
+              : "FSIM-ELAB-SVCASEINSIDE-002",
+          pattern_matching
+              ? "bounded case matches requires a scalar integral selector"
+              : "bounded case inside requires a scalar integral selector",
+          statement.condition.span);
+      return;
   }
   const auto inferred_selector_width = infer_width(statement.condition);
   if ((inside_matching || pattern_matching)
@@ -114,6 +113,9 @@ void Lowerer::lower_qualified_case(const Statement& statement) {
   if (!selector) {
     return;
   }
+  const InsideIntegralOperand selector_operand {
+      *selector, register_width(*selector), selector_signed
+  };
 
   const auto one = allocate_register(1, frontend::ValueDomain::Logic4);
   process_.operations.emplace_back(
@@ -124,151 +126,192 @@ void Lowerer::lower_qualified_case(const Statement& statement) {
         LoadConstant{value, PackedLogic4(1, Logic4::zero)});
     return value;
   };
-  const auto lower_inside_operand =
-      [&](const Expression& operand) -> std::optional<RegisterId> {
-    if (is_container_expression(operand)
-        || is_string_expression(operand)
-        || operand.kind == ExpressionKind::Aggregate
-        || operand.kind == ExpressionKind::Concatenation
-        || (operand.kind == ExpressionKind::Call
-            && (operand.text == "inside"
-                || operand.text == "@inside-range"))) {
-      report(
-          "FSIM-ELAB-SVCASEINSIDE-003",
-          "case inside choices must be nonnested scalar integral values",
-          operand.span);
-      return std::nullopt;
-    }
-    const auto width = infer_width(operand);
-    if (!width || *width != selector_width
-        || is_signed_expression(operand) != selector_signed) {
-      report(
-          "FSIM-ELAB-SVCASEINSIDE-004",
-          "case inside choices and range bounds must exactly match the "
-          "selector width and signedness",
-          operand.span);
-      return std::nullopt;
-    }
-    return lower_expression(operand, selector_width);
+  const auto bind_patterns = [&](const auto& bindings) {
+      for (const auto& binding : bindings) {
+          locals_.insert_or_assign(binding.name, binding.value);
+          local_signed_.insert_or_assign(
+              binding.name, binding.signed_value);
+          local_ranges_.insert_or_assign(
+              binding.name, binding.packed_range);
+          local_integer_ranges_.insert_or_assign(
+              binding.name, binding.integer_range);
+          local_members_.insert_or_assign(
+              binding.name, binding.members);
+          if (binding.type != nullptr) {
+              local_types_.insert_or_assign(binding.name, binding.type);
+          } else {
+              local_types_.erase(binding.name);
+          }
+      }
   };
   const auto lower_choice =
-      [&](const Expression& choice) -> std::optional<RegisterId> {
-    if (pattern_matching && choice.kind == ExpressionKind::Call
-        && choice.text == "@match-wildcard") {
-      const auto matched = allocate_register(
-          1, frontend::ValueDomain::Bit2);
-      process_.operations.emplace_back(
-          LoadConstant{matched, PackedLogic4(1, Logic4::one)});
-      return matched;
-    }
-    if (pattern_matching) {
-      if (!is_bounded_case_pattern_constant(choice)) {
-        report(
-            "FSIM-ELAB-SVMATCH-003",
-            "bounded case matches patterns must be scalar integral constants "
-            "or '.*'",
-            choice.span);
-        return std::nullopt;
+      [&](const Expression& choice,
+          std::vector<CasePatternBinding>& bindings)
+      -> std::optional<RegisterId> {
+      const Expression* match_choice = &choice;
+      const Expression* match_guard = nullptr;
+      if (pattern_matching && choice.kind == ExpressionKind::Call
+          && choice.text == "@match-guard") {
+          if (choice.operands.size() != 2U) {
+              report(
+                  "FSIM-ELAB-SVMATCH-005",
+                  "guarded case matches HIR requires one pattern and one guard",
+                  choice.span);
+              return std::nullopt;
+          }
+          match_choice = &choice.operands[0];
+          match_guard = &choice.operands[1];
       }
-      const auto width = infer_width(choice);
-      if (!width || *width != selector_width
-          || is_signed_expression(choice) != selector_signed) {
-        report(
-            "FSIM-ELAB-SVMATCH-004",
-            "case matches constants must exactly match the selector width "
-            "and signedness",
-            choice.span);
-        return std::nullopt;
+      const auto apply_guard =
+          [&](const RegisterId raw_match) -> std::optional<RegisterId> {
+          if (match_guard == nullptr) {
+              return raw_match;
+          }
+          const auto guarded = make_false();
+          const auto match_branch = static_cast<InstructionIndex>(
+              process_.operations.size());
+          process_.operations.emplace_back(Branch {
+              raw_match, 0, 0, UnknownBranchPolicy::when_false });
+          const auto guard_start = static_cast<InstructionIndex>(
+              process_.operations.size());
+          const auto guard = lower_condition(
+              *match_guard,
+              "FSIM-ELAB-SVMATCH-006",
+              "case matches guard");
+          if (!guard) {
+              return std::nullopt;
+          }
+          const auto definite = allocate_register(
+              1, frontend::ValueDomain::Bit2);
+          process_.operations.emplace_back(Binary {
+              BinaryOperator::case_equal, definite, *guard, one });
+          process_.operations.emplace_back(
+              CopyRegister { guarded, definite });
+          const auto guard_end = static_cast<InstructionIndex>(
+              process_.operations.size());
+          process_.operations[match_branch] = Branch {
+              raw_match,
+              guard_start,
+              guard_end,
+              UnknownBranchPolicy::when_false
+          };
+          return guarded;
+      };
+      if (pattern_matching) {
+          auto pattern = lower_case_match_pattern(
+              *match_choice,
+              *selector,
+              selector_width,
+              selector_signed,
+              selector_type);
+          if (!pattern) {
+              return std::nullopt;
+          }
+          bindings = std::move(pattern->bindings);
+          bind_patterns(bindings);
+          return apply_guard(pattern->condition);
       }
-      const auto pattern = lower_expression(choice, selector_width);
-      if (!pattern) {
-        return std::nullopt;
+      if (inside_matching && match_choice->kind == ExpressionKind::Call
+          && match_choice->text == "@inside-range") {
+          if (match_choice->operands.size() != 2) {
+              report(
+                  "FSIM-ELAB-SVCASEINSIDE-006",
+                  "a case inside range requires exactly one low and high bound",
+                  match_choice->span);
+              return std::nullopt;
+          }
+          const auto low = lower_inside_integral_operand(
+              match_choice->operands[0],
+              "FSIM-ELAB-SVCASEINSIDE-003",
+              "case inside range bounds must be integral expressions");
+          const auto high = lower_inside_integral_operand(
+              match_choice->operands[1],
+              "FSIM-ELAB-SVCASEINSIDE-003",
+              "case inside range bounds must be integral expressions");
+          if (!low || !high) {
+              return std::nullopt;
+          }
+          const auto valid_operands = size_integral_comparison(*low, *high);
+          const auto low_operands = size_integral_comparison(selector_operand, *low);
+          const auto high_operands = size_integral_comparison(selector_operand, *high);
+          const auto domain = frontend::ValueDomain::Logic4;
+          const auto valid = allocate_register(1, domain);
+          const auto above_low = allocate_register(1, domain);
+          const auto below_high = allocate_register(1, domain);
+          const auto within_lower = allocate_register(1, domain);
+          const auto matched = allocate_register(1, domain);
+          process_.operations.emplace_back(Binary {
+              valid_operands.signed_value
+                  ? BinaryOperator::less_equal_signed
+                  : BinaryOperator::less_equal_unsigned,
+              valid, valid_operands.lhs, valid_operands.rhs });
+          process_.operations.emplace_back(Binary {
+              low_operands.signed_value
+                  ? BinaryOperator::greater_equal_signed
+                  : BinaryOperator::greater_equal_unsigned,
+              above_low, low_operands.lhs, low_operands.rhs });
+          process_.operations.emplace_back(Binary {
+              high_operands.signed_value
+                  ? BinaryOperator::less_equal_signed
+                  : BinaryOperator::less_equal_unsigned,
+              below_high, high_operands.lhs, high_operands.rhs });
+          process_.operations.emplace_back(LogicalBinary {
+              LogicalBinaryOperator::logical_and,
+              within_lower, valid, above_low });
+          process_.operations.emplace_back(LogicalBinary {
+              LogicalBinaryOperator::logical_and,
+              matched, within_lower, below_high });
+          return matched;
       }
-      const auto matched = allocate_register(
-          1, frontend::ValueDomain::Bit2);
-      process_.operations.emplace_back(Binary{
-          BinaryOperator::case_equal,
-          matched,
-          *selector,
-          *pattern});
-      return matched;
-    }
-    if (inside_matching && choice.kind == ExpressionKind::Call
-        && choice.text == "@inside-range") {
-      if (choice.operands.size() != 2) {
-        report(
-            "FSIM-ELAB-SVCASEINSIDE-006",
-            "a case inside range requires exactly one low and high bound",
-            choice.span);
-        return std::nullopt;
-      }
-      const auto low = lower_inside_operand(choice.operands[0]);
-      const auto high = lower_inside_operand(choice.operands[1]);
-      if (!low || !high) {
-        return std::nullopt;
-      }
-      const auto domain = frontend::ValueDomain::Logic4;
-      const auto valid = allocate_register(1, domain);
-      const auto above_low = allocate_register(1, domain);
-      const auto below_high = allocate_register(1, domain);
-      const auto within_lower = allocate_register(1, domain);
-      const auto matched = allocate_register(1, domain);
-      process_.operations.emplace_back(Binary{
-          selector_signed ? BinaryOperator::less_equal_signed
-                          : BinaryOperator::less_equal_unsigned,
-          valid, *low, *high});
-      process_.operations.emplace_back(Binary{
-          selector_signed ? BinaryOperator::greater_equal_signed
-                          : BinaryOperator::greater_equal_unsigned,
-          above_low, *selector, *low});
-      process_.operations.emplace_back(Binary{
-          selector_signed ? BinaryOperator::less_equal_signed
-                          : BinaryOperator::less_equal_unsigned,
-          below_high, *selector, *high});
-      process_.operations.emplace_back(LogicalBinary{
-          LogicalBinaryOperator::logical_and,
-          within_lower, valid, above_low});
-      process_.operations.emplace_back(LogicalBinary{
-          LogicalBinaryOperator::logical_and,
-          matched, within_lower, below_high});
-      return matched;
-    }
-    const auto choice_register = inside_matching
-        ? lower_inside_operand(choice)
-        : lower_expression(
-              choice,
+      std::optional<RegisterId> choice_register;
+      auto comparison_selector = *selector;
+      if (inside_matching) {
+          const auto operand = lower_inside_integral_operand(
+              *match_choice,
+              "FSIM-ELAB-SVCASEINSIDE-003",
+              "case inside choices must be integral expressions");
+          if (operand) {
+              const auto comparison = size_integral_comparison(selector_operand, *operand);
+              comparison_selector = comparison.lhs;
+              choice_register = comparison.rhs;
+          }
+      } else {
+          choice_register = lower_expression(
+              *match_choice,
               register_width(*selector),
               selector_type != nullptr
                       && !selector_type->enumeration_literals.empty()
                   ? selector_type
                   : nullptr);
-    if (!choice_register) {
-      return std::nullopt;
-    }
-    if (!inside_matching
-        && register_width(*choice_register)
-            != register_width(*selector)) {
-      report(
-          "FSIM-ELAB-063",
-          "case item width "
-              + std::to_string(register_width(*choice_register))
-              + " does not match selector width "
-              + std::to_string(register_width(*selector)),
-          choice.span);
-      return std::nullopt;
-    }
-    const auto matched = allocate_register(
-        1,
-        inside_matching ? frontend::ValueDomain::Logic4
-                        : frontend::ValueDomain::Bit2);
-    process_.operations.emplace_back(Binary{
-        match_operation, matched, *selector, *choice_register});
-    return matched;
+      }
+      if (!choice_register) {
+          return std::nullopt;
+      }
+      if (!inside_matching
+          && register_width(*choice_register)
+              != register_width(*selector)) {
+          report(
+              "FSIM-ELAB-063",
+              "case item width "
+                  + std::to_string(register_width(*choice_register))
+                  + " does not match selector width "
+                  + std::to_string(register_width(*selector)),
+              match_choice->span);
+          return std::nullopt;
+      }
+      const auto matched = allocate_register(
+          1,
+          inside_matching ? frontend::ValueDomain::Logic4
+                          : frontend::ValueDomain::Bit2);
+      process_.operations.emplace_back(Binary {
+          match_operation, matched, comparison_selector, *choice_register });
+      return matched;
   };
 
   struct QualifiedAlternative {
     const frontend::CaseAlternative* source{};
     RegisterId matched{};
+    std::vector<CasePatternBinding> bindings;
   };
   std::vector<QualifiedAlternative> alternatives;
   const frontend::CaseAlternative* default_alternative = nullptr;
@@ -293,24 +336,40 @@ void Lowerer::lower_qualified_case(const Statement& statement) {
       continue;
     }
     auto alternative_match = make_false();
+    std::vector<CasePatternBinding> alternative_bindings;
     for (const auto& choice : alternative.choices) {
-      const auto raw_match = lower_choice(choice);
-      if (!raw_match) {
-        continue;
-      }
-      const auto definite =
-          allocate_register(1, frontend::ValueDomain::Bit2);
-      process_.operations.emplace_back(Binary{
-          BinaryOperator::case_equal, definite, *raw_match, one});
-      const auto merged =
-          allocate_register(1, frontend::ValueDomain::Bit2);
-      process_.operations.emplace_back(Binary{
-          BinaryOperator::bit_or,
-          merged, alternative_match, definite});
-      alternative_match = merged;
+        auto outer_locals = locals_;
+        auto outer_signed = local_signed_;
+        auto outer_ranges = local_ranges_;
+        auto outer_integer_ranges = local_integer_ranges_;
+        auto outer_members = local_members_;
+        auto outer_types = local_types_;
+        std::vector<CasePatternBinding> choice_bindings;
+        const auto raw_match = lower_choice(choice, choice_bindings);
+        locals_ = std::move(outer_locals);
+        local_signed_ = std::move(outer_signed);
+        local_ranges_ = std::move(outer_ranges);
+        local_integer_ranges_ = std::move(outer_integer_ranges);
+        local_members_ = std::move(outer_members);
+        local_types_ = std::move(outer_types);
+        if (!raw_match) {
+            continue;
+        }
+        alternative_bindings = std::move(choice_bindings);
+        const auto definite = allocate_register(1, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::case_equal, definite, *raw_match, one });
+        const auto merged = allocate_register(1, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::bit_or,
+            merged, alternative_match, definite });
+        alternative_match = merged;
     }
     alternatives.push_back(
-        QualifiedAlternative{&alternative, alternative_match});
+        QualifiedAlternative {
+            &alternative,
+            alternative_match,
+            std::move(alternative_bindings) });
     const auto overlap =
         allocate_register(1, frontend::ValueDomain::Bit2);
     process_.operations.emplace_back(Binary{
@@ -372,7 +431,20 @@ void Lowerer::lower_qualified_case(const Statement& statement) {
         UnknownBranchPolicy::when_false});
     const auto body = static_cast<InstructionIndex>(
         process_.operations.size());
+    auto outer_locals = locals_;
+    auto outer_signed = local_signed_;
+    auto outer_ranges = local_ranges_;
+    auto outer_integer_ranges = local_integer_ranges_;
+    auto outer_members = local_members_;
+    auto outer_types = local_types_;
+    bind_patterns(alternative.bindings);
     lower_statements(alternative.source->statements);
+    locals_ = std::move(outer_locals);
+    local_signed_ = std::move(outer_signed);
+    local_ranges_ = std::move(outer_ranges);
+    local_integer_ranges_ = std::move(outer_integer_ranges);
+    local_members_ = std::move(outer_members);
+    local_types_ = std::move(outer_types);
     exit_jumps.push_back(static_cast<InstructionIndex>(
         process_.operations.size()));
     process_.operations.emplace_back(Jump{0});

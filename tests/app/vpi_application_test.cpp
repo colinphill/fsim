@@ -9,6 +9,7 @@
 #include <fstream>
 #include <initializer_list>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -227,6 +228,27 @@ void collect_hierarchy(
     return config;
 }
 
+[[nodiscard]] fsim::project::Config make_systemverilog_metadata_config(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source)
+{
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "vpi-systemverilog-metadata";
+    config.project.top = "sv:work.vpi_metadata";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = fsim::project::Optimization::o2;
+    config.build.cache_path = directory / "cache-systemverilog-metadata";
+    config.run.max_deltas = 1'000;
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2017";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
+    return config;
+}
+
 [[nodiscard]] fsim::app::BuiltProject build_project(
     const fsim::project::Config& config)
 {
@@ -328,6 +350,45 @@ Capture execute(
         && module.value->parent == root.value->handle);
     assert(target.value->kind == SystemVerilogVpiObjectKind::Variable
         && target.value->parent == root.value->handle);
+
+    fsim::runtime::SystemVerilogVpiTypeDescriptor wide_enum_descriptor;
+    wide_enum_descriptor.kind
+        = fsim::runtime::SystemVerilogVpiDescriptorKind::Enum;
+    wide_enum_descriptor.category
+        = fsim::runtime::SystemVerilogVpiValueCategory::Logic4;
+    wide_enum_descriptor.width = 129;
+    wide_enum_descriptor.is_signed = true;
+    wide_enum_descriptor.enum_literals = {
+        { "Minimum", fsim::runtime::PackedLogic4::from_msb_string("1" + std::string(128, '0')) },
+        { "Unknown", fsim::runtime::PackedLogic4::from_msb_string("X" + std::string(127, '0') + "Z") },
+        { "Maximum", fsim::runtime::PackedLogic4::from_msb_string("0" + std::string(128, '1')) },
+    };
+    fsim::runtime::SystemVerilogVpiTypeInfo wide_enum_info;
+    wide_enum_info.category = wide_enum_descriptor.category;
+    wide_enum_info.width = wide_enum_descriptor.width;
+    wide_enum_info.is_signed = wide_enum_descriptor.is_signed;
+    wide_enum_info.descriptor
+        = std::make_shared<fsim::runtime::SystemVerilogVpiTypeDescriptor>(
+            wide_enum_descriptor);
+    const auto wide_enum = registry.create(
+        { SystemVerilogVpiObjectKind::Variable, root.value->handle,
+            "wide_enum_api", std::nullopt, wide_enum_info });
+    assert(wide_enum);
+    wide_enum_descriptor.enum_literals[1].value
+        = fsim::runtime::PackedLogic4::from_msb_string(
+            std::string(129, '0'));
+    const auto wide_enum_type = registry.type_info(wide_enum.value);
+    assert(wide_enum_type && wide_enum_type.value->descriptor
+        && wide_enum_type.value->descriptor->width == 129
+        && wide_enum_type.value->descriptor->enum_literals.size() == 3
+        && wide_enum_type.value->descriptor->enum_literals[0]
+                .value.to_msb_string()
+            == "1" + std::string(128, '0')
+        && wide_enum_type.value->descriptor->enum_literals[1]
+                .value.to_msb_string()
+            == "X" + std::string(127, '0') + "Z"
+        && fsim::runtime::validate_systemverilog_vpi_descriptor(
+            *wide_enum_type.value->descriptor));
     const auto target_type = registry.type_info(target.value->handle);
     const auto input_type = registry.type_info(input_port.value->handle);
     const auto output_type = registry.type_info(output_port.value->handle);
@@ -824,6 +885,99 @@ Capture execute(
     return capture;
 }
 
+void test_systemverilog_metadata(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source)
+{
+    const auto config = make_systemverilog_metadata_config(directory, source);
+    auto project = build_project(config);
+    fsim::app::Simulation simulation { std::move(project),
+        config.run.max_deltas, fsim::app::SimulationEngine::interpreter };
+    auto& registry = simulation.systemverilog_vpi_objects();
+    auto& callbacks = simulation.systemverilog_vpi_callbacks();
+
+    const auto root = registry.find("vpi_metadata");
+    const auto interface_instance = registry.find("vpi_metadata.bus");
+    const auto program_instance = registry.find("vpi_metadata.stimulus");
+    const auto package = registry.find("vpi_metadata_pkg");
+    const auto packet = registry.find("vpi_metadata_pkg.packet");
+    const auto payload = registry.find("vpi_metadata_pkg.packet.payload");
+    assert(root && interface_instance && program_instance && package && packet
+        && payload);
+    assert(root.value->kind == SystemVerilogVpiObjectKind::Root);
+    assert(interface_instance.value->kind
+        == SystemVerilogVpiObjectKind::Interface);
+    assert(interface_instance.value->parent == root.value->handle);
+    assert(program_instance.value->kind
+        == SystemVerilogVpiObjectKind::Program);
+    assert(program_instance.value->parent == root.value->handle);
+    assert(package.value->kind == SystemVerilogVpiObjectKind::Package);
+    assert(packet.value->kind == SystemVerilogVpiObjectKind::Class
+        && packet.value->parent == package.value->handle);
+    assert(payload.value->kind
+            == SystemVerilogVpiObjectKind::ClassProperty
+        && payload.value->parent == packet.value->handle);
+
+    const auto packet_type = registry.type_info(packet.value->handle);
+    const auto payload_type = registry.type_info(payload.value->handle);
+    assert(packet_type && packet_type.value->descriptor);
+    assert(packet_type.value->descriptor->kind
+            == fsim::runtime::SystemVerilogVpiDescriptorKind::Class
+        && packet_type.value->descriptor->nominal_name
+            == "work::vpi_metadata_pkg::packet"
+        && packet_type.value->descriptor->member_names
+            == std::vector<std::string> { "payload" });
+    assert(payload_type && payload_type.value->descriptor);
+    assert(payload_type.value->descriptor->kind
+            == fsim::runtime::SystemVerilogVpiDescriptorKind::PackedArray
+        && payload_type.value->width == 129
+        && payload_type.value->is_signed);
+    const std::vector<fsim::runtime::SystemVerilogVpiRange> payload_ranges {
+        { 128, 0 }
+    };
+    assert(payload_type.value->descriptor->ranges == payload_ranges);
+
+    std::vector<SystemVerilogVpiObjectInfo> hierarchy { *root.value };
+    collect_hierarchy(registry, root.value->handle, hierarchy);
+    const auto assertion = std::ranges::find_if(
+        hierarchy, [](const auto& object) {
+            return object.kind == SystemVerilogVpiObjectKind::Assertion;
+        });
+    assert(assertion != hierarchy.end());
+    std::vector<fsim::runtime::SystemVerilogVpiAssertionEvent> events;
+    const auto collect = [&](const SystemVerilogVpiCallbackEvent& event) {
+        assert(event.assertion && event.object == assertion->handle);
+        events.push_back(*event.assertion);
+    };
+    const auto success = callbacks.register_callback(
+        { SystemVerilogVpiCallbackKind::AssertionSuccess, assertion->handle,
+            std::nullopt, 101, collect });
+    const auto failure = callbacks.register_callback(
+        { SystemVerilogVpiCallbackKind::AssertionFailure, assertion->handle,
+            std::nullopt, 102, collect });
+    assert(success && failure);
+
+    const auto run = simulation.run();
+    assert(run.status == fsim::runtime::RunStatus::stopped
+        && simulation.finished());
+    assert(std::ranges::any_of(events, [](const auto& event) {
+        return event.name == "request_check"
+            && event.kind
+            == fsim::runtime::SystemVerilogVpiAssertionKind::Assertion
+            && event.outcome
+            == fsim::runtime::SystemVerilogVpiAssertionOutcome::Failure;
+    }));
+    assert(std::ranges::any_of(events, [](const auto& event) {
+        return event.name == "request_check"
+            && event.outcome
+            == fsim::runtime::SystemVerilogVpiAssertionOutcome::Success;
+    }));
+    assert(callbacks.status(success.value).status
+            == fsim::runtime::SystemVerilogVpiCallbackStatus::Active
+        && callbacks.status(failure.value).status
+            == fsim::runtime::SystemVerilogVpiCallbackStatus::Active);
+}
+
 } // namespace
 
 int main()
@@ -947,5 +1101,49 @@ int main()
         && interpreter.observably_equal(compiled_o2));
     assert(interpreter.named_events.size() == 1
         && interpreter.named_events.front().value.empty());
+
+    const auto metadata_source = temporary.path / "vpi-metadata.sv";
+    {
+        std::ofstream output(metadata_source, std::ios::binary);
+        output << R"(
+package vpi_metadata_pkg;
+class packet;
+  logic signed [128:0] payload;
+endclass
+endpackage
+
+interface vpi_metadata_if;
+  logic ready;
+endinterface
+
+program vpi_metadata_program;
+initial #100;
+endprogram
+
+module vpi_metadata;
+  vpi_metadata_if bus();
+  vpi_metadata_program stimulus();
+  logic clock;
+  logic request;
+  property requested;
+    @(posedge clock) request;
+  endproperty
+  request_check: assert property (requested)
+    $display("vpi assertion pass");
+    else $display("vpi assertion failure");
+  initial begin
+    clock = 1'b0;
+    forever #1 clock = ~clock;
+  end
+  initial begin
+    request = 1'b0;
+    #2 request = 1'b1;
+    #3 $finish;
+  end
+endmodule
+)";
+        assert(output.good());
+    }
+    test_systemverilog_metadata(temporary.path, metadata_source);
     return 0;
 }

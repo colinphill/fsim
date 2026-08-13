@@ -35,6 +35,8 @@ enum class SystemVerilogVpiObjectKind {
     NamedEvent,
     /// Executable occurrence published beneath its owning hierarchy scope.
     Process,
+    /// Concurrent assertion occurrence with stable hierarchy identity.
+    Assertion,
     /// Read-only stored contribution, distinct from a signal's effective value.
     Driver,
 };

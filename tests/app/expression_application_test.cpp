@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/design_artifact.hpp"
 
 #include <array>
 #include <cassert>
@@ -17,1103 +18,1392 @@
 namespace {
 
 struct TemporaryDirectory {
-  std::filesystem::path path;
+    std::filesystem::path path;
 
-  ~TemporaryDirectory() {
-    std::error_code error;
-    std::filesystem::remove_all(path, error);
-  }
+    ~TemporaryDirectory()
+    {
+        std::error_code error;
+        std::filesystem::remove_all(path, error);
+    }
 };
 
 struct Capture {
-  fsim::runtime::RunResult result;
-  std::vector<std::string> values;
-  fsim::app::NativeCacheStatistics native_cache;
-  std::size_t compiled_processes{};
-  std::size_t compiled_modules{};
+    fsim::runtime::RunResult result;
+    std::vector<std::string> values;
+    fsim::app::NativeCacheStatistics native_cache;
+    std::size_t compiled_processes { };
+    std::size_t compiled_modules { };
 };
 
 struct StopCapture {
-  fsim::runtime::RunResult paused;
-  fsim::runtime::RunResult resumed;
-  std::vector<std::string> paused_values;
-  std::vector<std::string> resumed_values;
-  std::size_t compiled_processes{};
-  std::size_t compiled_modules{};
+    fsim::runtime::RunResult paused;
+    fsim::runtime::RunResult resumed;
+    std::vector<std::string> paused_values;
+    std::vector<std::string> resumed_values;
+    std::size_t compiled_processes { };
+    std::size_t compiled_modules { };
 };
 
 struct FatalCapture {
-  fsim::runtime::simir::AssertionSeverity severity{};
-  std::string message;
-  std::uint32_t line{};
-  std::uint32_t column{};
-  std::size_t compiled_processes{};
-  std::size_t compiled_modules{};
+    fsim::runtime::simir::AssertionSeverity severity { };
+    std::string message;
+    std::uint32_t line { };
+    std::uint32_t column { };
+    std::size_t compiled_processes { };
+    std::size_t compiled_modules { };
 };
 
-void print_diagnostics(const fsim::diagnostic::Engine& diagnostics) {
-  for (const auto& diagnostic : diagnostics.diagnostics()) {
-    std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
-    for (const auto& note : diagnostic.notes) {
-      std::cerr << "  " << note.message << '\n';
+void print_diagnostics(const fsim::diagnostic::Engine& diagnostics)
+{
+    for (const auto& diagnostic : diagnostics.diagnostics()) {
+        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+        for (const auto& note : diagnostic.notes) {
+            std::cerr << "  " << note.message << '\n';
+        }
     }
-  }
 }
 
 template <std::size_t SignalCount>
 [[nodiscard]] Capture run(
     fsim::app::BuiltProject project,
     const fsim::app::SimulationEngine engine,
-    const std::array<std::string, SignalCount>& signal_paths) {
-  std::array<
-      fsim::runtime::simir::SignalId, SignalCount> signals{};
-  for (std::size_t index = 0; index < signal_paths.size(); ++index) {
-    const auto signal = project.design.find_signal(signal_paths[index]);
-    if (!signal) {
-      std::cerr << "missing expression-test signal: "
-                << signal_paths[index] << '\n';
+    const std::array<std::string, SignalCount>& signal_paths)
+{
+    std::array<
+        fsim::runtime::simir::SignalId, SignalCount>
+        signals { };
+    for (std::size_t index = 0; index < signal_paths.size(); ++index) {
+        const auto signal = project.design.find_signal(signal_paths[index]);
+        if (!signal) {
+            std::cerr << "missing expression-test signal: "
+                      << signal_paths[index] << '\n';
+        }
+        assert(signal);
+        signals[index] = *signal;
     }
-    assert(signal);
-    signals[index] = *signal;
-  }
 
-  fsim::app::Simulation simulation(
-      std::move(project), 1000, engine);
-  Capture capture;
-  capture.compiled_processes = simulation.compiled_process_count();
-  capture.compiled_modules = simulation.compiled_module_count();
-  capture.native_cache = simulation.native_cache_statistics();
-  capture.result = simulation.run();
-  capture.values.reserve(signals.size());
-  for (const auto signal : signals) {
-    capture.values.push_back(
-        simulation.read_signal(signal).to_msb_string());
-  }
-  return capture;
+    fsim::app::Simulation simulation(
+        std::move(project), 1000, engine);
+    Capture capture;
+    capture.compiled_processes = simulation.compiled_process_count();
+    capture.compiled_modules = simulation.compiled_module_count();
+    capture.native_cache = simulation.native_cache_statistics();
+    capture.result = simulation.run();
+    capture.values.reserve(signals.size());
+    for (const auto signal : signals) {
+        capture.values.push_back(
+            simulation.read_signal(signal).to_msb_string());
+    }
+    return capture;
 }
 
 [[nodiscard]] StopCapture run_stop(
     fsim::app::BuiltProject project,
-    const fsim::app::SimulationEngine engine) {
-  const std::array<std::string, 3> signal_paths{
-      "stop_app.before_stop",
-      "stop_app.after_stop",
-      "stop_app.final_hit"};
-  std::array<fsim::runtime::simir::SignalId, 3> signals{};
-  for (std::size_t index = 0; index < signal_paths.size(); ++index) {
-    const auto signal = project.design.find_signal(signal_paths[index]);
-    assert(signal);
-    signals[index] = *signal;
-  }
+    const fsim::app::SimulationEngine engine)
+{
+    const std::array<std::string, 3> signal_paths {
+        "stop_app.before_stop",
+        "stop_app.after_stop",
+        "stop_app.final_hit"
+    };
+    std::array<fsim::runtime::simir::SignalId, 3> signals { };
+    for (std::size_t index = 0; index < signal_paths.size(); ++index) {
+        const auto signal = project.design.find_signal(signal_paths[index]);
+        assert(signal);
+        signals[index] = *signal;
+    }
 
-  fsim::app::Simulation simulation(
-      std::move(project), 1000, engine);
-  StopCapture capture;
-  capture.compiled_processes = simulation.compiled_process_count();
-  capture.compiled_modules = simulation.compiled_module_count();
-  capture.paused = simulation.run();
-  assert(!simulation.finished());
-  for (const auto signal : signals) {
-    capture.paused_values.push_back(
-        simulation.read_signal(signal).to_msb_string());
-  }
+    fsim::app::Simulation simulation(
+        std::move(project), 1000, engine);
+    StopCapture capture;
+    capture.compiled_processes = simulation.compiled_process_count();
+    capture.compiled_modules = simulation.compiled_module_count();
+    capture.paused = simulation.run();
+    assert(!simulation.finished());
+    for (const auto signal : signals) {
+        capture.paused_values.push_back(
+            simulation.read_signal(signal).to_msb_string());
+    }
 
-  simulation.clear_stop();
-  capture.resumed = simulation.run();
-  assert(simulation.finished());
-  for (const auto signal : signals) {
-    capture.resumed_values.push_back(
-        simulation.read_signal(signal).to_msb_string());
-  }
-  return capture;
+    simulation.clear_stop();
+    capture.resumed = simulation.run();
+    assert(simulation.finished());
+    for (const auto signal : signals) {
+        capture.resumed_values.push_back(
+            simulation.read_signal(signal).to_msb_string());
+    }
+    return capture;
 }
 
 [[nodiscard]] FatalCapture run_fatal(
     fsim::app::BuiltProject project,
-    const fsim::app::SimulationEngine engine) {
-  fsim::app::Simulation simulation(
-      std::move(project), 1000, engine);
-  FatalCapture capture;
-  capture.compiled_processes = simulation.compiled_process_count();
-  capture.compiled_modules = simulation.compiled_module_count();
-  try {
-    (void)simulation.run();
-    assert(false && "$fatal must fail simulation");
-  } catch (const fsim::runtime::simir::AssertionError& error) {
-    capture.severity = error.severity();
-    capture.message = error.what();
-    capture.line = error.source().line;
-    capture.column = error.source().column;
-  }
-  return capture;
+    const fsim::app::SimulationEngine engine)
+{
+    fsim::app::Simulation simulation(
+        std::move(project), 1000, engine);
+    FatalCapture capture;
+    capture.compiled_processes = simulation.compiled_process_count();
+    capture.compiled_modules = simulation.compiled_module_count();
+    try {
+        (void)simulation.run();
+        assert(false && "$fatal must fail simulation");
+    } catch (const fsim::runtime::simir::AssertionError& error) {
+        capture.severity = error.severity();
+        capture.message = error.what();
+        capture.line = error.source().line;
+        capture.column = error.source().column;
+    }
+    return capture;
 }
 
 void test_systemverilog_clog2(
     const std::filesystem::path& directory,
     const std::filesystem::path& source,
-    const fsim::project::Optimization optimization) {
-  fsim::project::Config config;
-  config.base_directory = directory;
-  config.project.name = "systemverilog-clog2-expression-test";
-  config.project.top = "sv:work.clog2_application";
-  config.project.time_resolution = "1ns";
-  config.build.optimization = optimization;
-  config.build.cache_path =
-      directory
-      / (optimization == fsim::project::Optimization::o0
-             ? "clog2-cache-o0"
-             : "clog2-cache-o2");
-  config.run.max_deltas = 1000;
+    const fsim::project::Optimization optimization)
+{
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "systemverilog-clog2-expression-test";
+    config.project.top = "sv:work.clog2_application";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path = directory
+        / (optimization == fsim::project::Optimization::o0
+                ? "clog2-cache-o0"
+                : "clog2-cache-o2");
+    config.run.max_deltas = 1000;
 
-  fsim::project::SourceSet sources;
-  sources.language = fsim::project::Language::system_verilog;
-  sources.standard = "2017";
-  sources.library = "work";
-  sources.files.push_back(source);
-  config.source_sets.push_back(std::move(sources));
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2017";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
 
-  fsim::diagnostic::Engine diagnostics;
-  auto reference_project =
-      fsim::app::build_project(config, diagnostics);
-  auto compiled_project =
-      fsim::app::build_project(config, diagnostics);
-  if (!reference_project || !compiled_project) {
-    print_diagnostics(diagnostics);
-  }
-  assert(reference_project);
-  assert(compiled_project);
-  assert(reference_project->design.specializations().size() == 3);
-  assert(reference_project->specialization_cache_keys.size() == 3);
-
-  std::optional<std::size_t> narrow_specialization;
-  std::optional<std::size_t> wide_specialization;
-  for (std::size_t index = 0;
-       index < reference_project->design.specializations().size();
-       ++index) {
-    const auto& specialization =
-        reference_project->design.specializations()[index];
-    if (specialization.instance == "clog2_application.narrow") {
-      narrow_specialization = index;
-      assert((
-          specialization.parameter_values
-          == std::vector<std::pair<std::string, std::string>>{
-              {"DEPTH", "9"}, {"WIDTH", "4"}}));
-    } else if (
-        specialization.instance == "clog2_application.wide") {
-      wide_specialization = index;
-      assert((
-          specialization.parameter_values
-          == std::vector<std::pair<std::string, std::string>>{
-              {"DEPTH", "17"}, {"WIDTH", "5"}}));
+    fsim::diagnostic::Engine diagnostics;
+    auto reference_project = fsim::app::build_project(config, diagnostics);
+    auto compiled_project = fsim::app::build_project(config, diagnostics);
+    if (!reference_project || !compiled_project) {
+        print_diagnostics(diagnostics);
     }
-  }
-  assert(narrow_specialization && wide_specialization);
-  assert(
-      reference_project->specialization_cache_keys
-          .at(*narrow_specialization)
-      != reference_project->specialization_cache_keys
-             .at(*wide_specialization));
+    assert(reference_project);
+    assert(compiled_project);
+    assert(reference_project->design.specializations().size() == 3);
+    assert(reference_project->specialization_cache_keys.size() == 3);
 
-  const std::array<std::string, 2> signal_paths{
-      "clog2_application.narrow_result",
-      "clog2_application.wide_result"};
-  const auto reference = run(
-      std::move(*reference_project),
-      fsim::app::SimulationEngine::interpreter,
-      signal_paths);
-  const auto compiled = run(
-      std::move(*compiled_project),
-      fsim::app::SimulationEngine::compiled,
-      signal_paths);
+    std::optional<std::size_t> narrow_specialization;
+    std::optional<std::size_t> wide_specialization;
+    for (std::size_t index = 0;
+        index < reference_project->design.specializations().size();
+        ++index) {
+        const auto& specialization = reference_project->design.specializations()[index];
+        if (specialization.instance == "clog2_application.narrow") {
+            narrow_specialization = index;
+            assert((
+                specialization.parameter_values
+                == std::vector<std::pair<std::string, std::string>> {
+                    { "DEPTH", "9" }, { "WIDTH", "4" } }));
+        } else if (
+            specialization.instance == "clog2_application.wide") {
+            wide_specialization = index;
+            assert((
+                specialization.parameter_values
+                == std::vector<std::pair<std::string, std::string>> {
+                    { "DEPTH", "17" }, { "WIDTH", "5" } }));
+        }
+    }
+    assert(narrow_specialization && wide_specialization);
+    assert(
+        reference_project->specialization_cache_keys
+            .at(*narrow_specialization)
+        != reference_project->specialization_cache_keys
+            .at(*wide_specialization));
 
-  assert(reference.result.status == fsim::runtime::RunStatus::completed);
-  assert(reference.result.status == compiled.result.status);
-  assert(reference.result.time == compiled.result.time);
-  assert(reference.result.delta == compiled.result.delta);
-  assert(reference.values == compiled.values);
-  assert((
-      compiled.values
-      == std::vector<std::string>{"0100", "00101"}));
-  assert(reference.compiled_processes == 0);
-  assert(reference.compiled_modules == 0);
+    const std::array<std::string, 2> signal_paths {
+        "clog2_application.narrow_result",
+        "clog2_application.wide_result"
+    };
+    const auto reference = run(
+        std::move(*reference_project),
+        fsim::app::SimulationEngine::interpreter,
+        signal_paths);
+    const auto compiled = run(
+        std::move(*compiled_project),
+        fsim::app::SimulationEngine::compiled,
+        signal_paths);
+
+    assert(reference.result.status == fsim::runtime::RunStatus::completed);
+    assert(reference.result.status == compiled.result.status);
+    assert(reference.result.time == compiled.result.time);
+    assert(reference.result.delta == compiled.result.delta);
+    assert(reference.values == compiled.values);
+    assert((
+        compiled.values
+        == std::vector<std::string> { "0100", "00101" }));
+    assert(reference.compiled_processes == 0);
+    assert(reference.compiled_modules == 0);
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 2);
-  assert(compiled.compiled_modules == 2);
-  assert(compiled.native_cache.hits == 0);
-  assert(compiled.native_cache.misses == 2);
-  assert(compiled.native_cache.stores == 2);
+    assert(compiled.compiled_processes == 2);
+    assert(compiled.compiled_modules == 2);
+    assert(compiled.native_cache.hits == 0);
+    assert(compiled.native_cache.misses == 2);
+    assert(compiled.native_cache.stores == 2);
 #else
-  assert(compiled.compiled_processes == 0);
-  assert(compiled.compiled_modules == 0);
+    assert(compiled.compiled_processes == 0);
+    assert(compiled.compiled_modules == 0);
 #endif
 }
 
 void test_vhdl_shift_rotate(
     const std::filesystem::path& directory,
     const std::filesystem::path& source,
-    const fsim::project::Optimization optimization) {
-  fsim::project::Config config;
-  config.base_directory = directory;
-  config.project.name = "vhdl-shift-rotate-expression-test";
-  config.project.top = "vhdl:work.shift_rotate_app(rtl)";
-  config.project.time_resolution = "1ns";
-  config.build.optimization = optimization;
-  config.build.cache_path =
-      directory
-      / (optimization == fsim::project::Optimization::o0
-             ? "vhdl-cache-o0"
-             : "vhdl-cache-o2");
-  config.run.max_deltas = 1000;
+    const fsim::project::Optimization optimization)
+{
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "vhdl-shift-rotate-expression-test";
+    config.project.top = "vhdl:work.shift_rotate_app(rtl)";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path = directory
+        / (optimization == fsim::project::Optimization::o0
+                ? "vhdl-cache-o0"
+                : "vhdl-cache-o2");
+    config.run.max_deltas = 1000;
 
-  fsim::project::SourceSet sources;
-  sources.language = fsim::project::Language::vhdl;
-  sources.standard = "2008";
-  sources.library = "work";
-  sources.files.push_back(source);
-  config.source_sets.push_back(std::move(sources));
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::vhdl;
+    sources.standard = "2008";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
 
-  fsim::diagnostic::Engine diagnostics;
-  auto reference_project =
-      fsim::app::build_project(config, diagnostics);
-  auto compiled_project =
-      fsim::app::build_project(config, diagnostics);
-  if (!reference_project || !compiled_project) {
-    print_diagnostics(diagnostics);
-  }
-  assert(reference_project);
-  assert(compiled_project);
+    fsim::diagnostic::Engine diagnostics;
+    auto reference_project = fsim::app::build_project(config, diagnostics);
+    auto compiled_project = fsim::app::build_project(config, diagnostics);
+    if (!reference_project || !compiled_project) {
+        print_diagnostics(diagnostics);
+    }
+    assert(reference_project);
+    assert(compiled_project);
 
-  const std::array<std::string, 26> signal_paths{
-      "shift_rotate_app.arithmetic_left",
-      "shift_rotate_app.rotated_left",
-      "shift_rotate_app.rotated_right",
-      "shift_rotate_app.reversed_logical_left",
-      "shift_rotate_app.reversed_arithmetic_right",
-      "shift_rotate_app.reversed_rotate_left",
-      "shift_rotate_app.oversized_arithmetic_left",
-      "shift_rotate_app.wrapped_rotate_left",
-      "shift_rotate_app.wrapped_rotate_right",
-      "shift_rotate_app.absolute_unknown",
-      "shift_rotate_app.absolute_known",
-      "shift_rotate_app.power_positive",
-      "shift_rotate_app.power_negative",
-      "shift_rotate_app.power_zero",
-      "shift_rotate_app.conditional_true",
-      "shift_rotate_app.conditional_false",
-      "shift_rotate_app.conditional_chain",
-      "shift_rotate_app.conditional_selected",
-      "shift_rotate_app.expression_conditional",
-      "shift_rotate_app.short_circuit_conditional",
-      "shift_rotate_app.case_expression",
-      "shift_rotate_app.case_range_expression",
-      "shift_rotate_app.external_name_expression",
-      "shift_rotate_app.selected_choice",
-      "shift_rotate_app.selected_default",
-      "shift_rotate_app.selected_dynamic"};
-  const auto reference = run(
-      std::move(*reference_project),
-      fsim::app::SimulationEngine::interpreter,
-      signal_paths);
-  const auto compiled = run(
-      std::move(*compiled_project),
-      fsim::app::SimulationEngine::compiled,
-      signal_paths);
+    const std::array<std::string, 26> signal_paths {
+        "shift_rotate_app.arithmetic_left",
+        "shift_rotate_app.rotated_left",
+        "shift_rotate_app.rotated_right",
+        "shift_rotate_app.reversed_logical_left",
+        "shift_rotate_app.reversed_arithmetic_right",
+        "shift_rotate_app.reversed_rotate_left",
+        "shift_rotate_app.oversized_arithmetic_left",
+        "shift_rotate_app.wrapped_rotate_left",
+        "shift_rotate_app.wrapped_rotate_right",
+        "shift_rotate_app.absolute_unknown",
+        "shift_rotate_app.absolute_known",
+        "shift_rotate_app.power_positive",
+        "shift_rotate_app.power_negative",
+        "shift_rotate_app.power_zero",
+        "shift_rotate_app.conditional_true",
+        "shift_rotate_app.conditional_false",
+        "shift_rotate_app.conditional_chain",
+        "shift_rotate_app.conditional_selected",
+        "shift_rotate_app.expression_conditional",
+        "shift_rotate_app.short_circuit_conditional",
+        "shift_rotate_app.case_expression",
+        "shift_rotate_app.case_range_expression",
+        "shift_rotate_app.external_name_expression",
+        "shift_rotate_app.selected_choice",
+        "shift_rotate_app.selected_default",
+        "shift_rotate_app.selected_dynamic"
+    };
+    const auto reference = run(
+        std::move(*reference_project),
+        fsim::app::SimulationEngine::interpreter,
+        signal_paths);
+    const auto compiled = run(
+        std::move(*compiled_project),
+        fsim::app::SimulationEngine::compiled,
+        signal_paths);
 
-  assert(reference.result.status == fsim::runtime::RunStatus::completed);
-  assert(reference.result.status == compiled.result.status);
-  assert(reference.result.time == compiled.result.time);
-  assert(reference.result.delta == compiled.result.delta);
-  assert(reference.values == compiled.values);
-  assert((
-      compiled.values
-      == std::vector<std::string>{
-          "0X0000ZZ",
-          "0X0000Z1",
-          "Z10X0000",
-          "010X0000",
-          "0X0000ZZ",
-          "Z10X0000",
-          "ZZZZZZZZ",
-          "0X0000Z1",
-          "Z10X0000",
-          "XXXXXXXX",
-          "00000101",
-          "01010001",
-          "11111000",
-          "00000001",
-          "10100101",
-          "01011010",
-          "00000010",
-          "ZZZZ0110",
-          "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
-          "00000000000000000000000000000111",
-          "00111100",
-          "00000000000000000000000000001011",
-          "11111011",
-          "10100101",
-          "01011010",
-          "01011010"}));
-  assert(reference.compiled_processes == 0);
-  assert(reference.compiled_modules == 0);
+    assert(reference.result.status == fsim::runtime::RunStatus::completed);
+    assert(reference.result.status == compiled.result.status);
+    assert(reference.result.time == compiled.result.time);
+    assert(reference.result.delta == compiled.result.delta);
+    assert(reference.values == compiled.values);
+    assert((
+        compiled.values
+        == std::vector<std::string> {
+            "0X0000ZZ",
+            "0X0000Z1",
+            "Z10X0000",
+            "010X0000",
+            "0X0000ZZ",
+            "Z10X0000",
+            "ZZZZZZZZ",
+            "0X0000Z1",
+            "Z10X0000",
+            "XXXXXXXX",
+            "00000101",
+            "01010001",
+            "11111000",
+            "00000001",
+            "10100101",
+            "01011010",
+            "00000010",
+            "ZZZZ0110",
+            "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+            "00000000000000000000000000000111",
+            "00111100",
+            "00000000000000000000000000001011",
+            "11111011",
+            "10100101",
+            "01011010",
+            "01011010" }));
+    assert(reference.compiled_processes == 0);
+    assert(reference.compiled_modules == 0);
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 11);
-  assert(compiled.compiled_modules == 1);
+    assert(compiled.compiled_processes == 11);
+    assert(compiled.compiled_modules == 1);
 #else
-  assert(compiled.compiled_processes == 0);
-  assert(compiled.compiled_modules == 0);
+    assert(compiled.compiled_processes == 0);
+    assert(compiled.compiled_modules == 0);
 #endif
 }
 
 void test_vhdl_external_name_mismatch(
     const std::filesystem::path& directory,
-    const std::filesystem::path& source) {
-  fsim::project::Config config;
-  config.base_directory = directory;
-  config.project.name = "vhdl-external-name-mismatch-test";
-  config.project.top = "vhdl:work.external_mismatch_app(rtl)";
-  config.build.cache_path = directory / "vhdl-external-mismatch-cache";
+    const std::filesystem::path& source)
+{
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "vhdl-external-name-mismatch-test";
+    config.project.top = "vhdl:work.external_mismatch_app(rtl)";
+    config.build.cache_path = directory / "vhdl-external-mismatch-cache";
 
-  fsim::project::SourceSet sources;
-  sources.language = fsim::project::Language::vhdl;
-  sources.standard = "2008";
-  sources.library = "work";
-  sources.files.push_back(source);
-  config.source_sets.push_back(std::move(sources));
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::vhdl;
+    sources.standard = "2008";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
 
-  fsim::diagnostic::Engine diagnostics;
-  const auto project = fsim::app::build_project(config, diagnostics);
-  assert(!project);
-  assert(std::ranges::any_of(
-      diagnostics.diagnostics(),
-      [](const auto& diagnostic) {
-        return diagnostic.code == "FSIM-ELAB-VHEXTERNAL-001";
-      }));
+    fsim::diagnostic::Engine diagnostics;
+    const auto project = fsim::app::build_project(config, diagnostics);
+    assert(!project);
+    assert(std::ranges::any_of(
+        diagnostics.diagnostics(),
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ELAB-VHEXTERNAL-001";
+        }));
 }
 
 void test_verilog_power(
     const std::filesystem::path& directory,
     const std::filesystem::path& source,
-    const fsim::project::Optimization optimization) {
-  fsim::project::Config config;
-  config.base_directory = directory;
-  config.project.name = "verilog-power-expression-test";
-  config.project.top = "verilog:work.verilog_power_app";
-  config.project.time_resolution = "1ns";
-  config.build.optimization = optimization;
-  config.build.cache_path =
-      directory
-      / (optimization == fsim::project::Optimization::o0
-             ? "verilog-power-cache-o0"
-             : "verilog-power-cache-o2");
-  config.run.max_deltas = 1000;
+    const fsim::project::Optimization optimization)
+{
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "verilog-power-expression-test";
+    config.project.top = "verilog:work.verilog_power_app";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path = directory
+        / (optimization == fsim::project::Optimization::o0
+                ? "verilog-power-cache-o0"
+                : "verilog-power-cache-o2");
+    config.run.max_deltas = 1000;
 
-  fsim::project::SourceSet sources;
-  sources.language = fsim::project::Language::verilog;
-  sources.standard = "2005";
-  sources.library = "work";
-  sources.files.push_back(source);
-  config.source_sets.push_back(std::move(sources));
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::verilog;
+    sources.standard = "2005";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
 
-  fsim::diagnostic::Engine diagnostics;
-  auto reference_project =
-      fsim::app::build_project(config, diagnostics);
-  auto compiled_project =
-      fsim::app::build_project(config, diagnostics);
-  if (!reference_project || !compiled_project) {
-    print_diagnostics(diagnostics);
-  }
-  assert(reference_project);
-  assert(compiled_project);
+    fsim::diagnostic::Engine diagnostics;
+    auto reference_project = fsim::app::build_project(config, diagnostics);
+    auto compiled_project = fsim::app::build_project(config, diagnostics);
+    if (!reference_project || !compiled_project) {
+        print_diagnostics(diagnostics);
+    }
+    assert(reference_project);
+    assert(compiled_project);
 
-  const std::array<std::string, 2> signal_paths{
-      "verilog_power_app.positive",
-      "verilog_power_app.left_associative"};
-  const auto reference = run(
-      std::move(*reference_project),
-      fsim::app::SimulationEngine::interpreter,
-      signal_paths);
-  const auto compiled = run(
-      std::move(*compiled_project),
-      fsim::app::SimulationEngine::compiled,
-      signal_paths);
+    const std::array<std::string, 2> signal_paths {
+        "verilog_power_app.positive",
+        "verilog_power_app.left_associative"
+    };
+    const auto reference = run(
+        std::move(*reference_project),
+        fsim::app::SimulationEngine::interpreter,
+        signal_paths);
+    const auto compiled = run(
+        std::move(*compiled_project),
+        fsim::app::SimulationEngine::compiled,
+        signal_paths);
 
-  assert(reference.result.status == fsim::runtime::RunStatus::stopped);
-  assert(reference.result.status == compiled.result.status);
-  assert(reference.result.time == compiled.result.time);
-  assert(reference.result.delta == compiled.result.delta);
-  assert(reference.values == compiled.values);
-  assert((
-      compiled.values
-      == std::vector<std::string>{
-          "01010001", "0000000001000000"}));
+    assert(reference.result.status == fsim::runtime::RunStatus::stopped);
+    assert(reference.result.status == compiled.result.status);
+    assert(reference.result.time == compiled.result.time);
+    assert(reference.result.delta == compiled.result.delta);
+    assert(reference.values == compiled.values);
+    assert((
+        compiled.values
+        == std::vector<std::string> {
+            "01010001", "0000000001000000" }));
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 1);
-  assert(compiled.compiled_modules == 1);
+    assert(compiled.compiled_processes == 1);
+    assert(compiled.compiled_modules == 1);
 #else
-  assert(compiled.compiled_processes == 0);
-  assert(compiled.compiled_modules == 0);
+    assert(compiled.compiled_processes == 0);
+    assert(compiled.compiled_modules == 0);
 #endif
 }
 
 void test_wildcard_equality(
     const std::filesystem::path& directory,
     const std::filesystem::path& source,
-    const fsim::project::Optimization optimization) {
-  fsim::project::Config config;
-  config.base_directory = directory;
-  config.project.name = "wildcard-equality-expression-test";
-  config.project.top = "sv:work.wildcard_equality_app";
-  config.project.time_resolution = "1ns";
-  config.build.optimization = optimization;
-  config.build.cache_path =
-      directory
-      / (optimization == fsim::project::Optimization::o0
-             ? "cache-o0"
-             : "cache-o2");
-  config.run.max_deltas = 1000;
+    const fsim::project::Optimization optimization)
+{
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "wildcard-equality-expression-test";
+    config.project.top = "sv:work.wildcard_equality_app";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path = directory
+        / (optimization == fsim::project::Optimization::o0
+                ? "cache-o0"
+                : "cache-o2");
+    config.run.max_deltas = 1000;
 
-  fsim::project::SourceSet sources;
-  sources.language = fsim::project::Language::system_verilog;
-  sources.standard = "2017";
-  sources.library = "work";
-  sources.files.push_back(source);
-  config.source_sets.push_back(std::move(sources));
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2017";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
 
-  fsim::diagnostic::Engine diagnostics;
-  auto reference_project =
-      fsim::app::build_project(config, diagnostics);
-  auto compiled_project =
-      fsim::app::build_project(config, diagnostics);
-  if (!reference_project || !compiled_project) {
-    print_diagnostics(diagnostics);
-  }
-  assert(reference_project);
-  assert(compiled_project);
+    fsim::diagnostic::Engine diagnostics;
+    auto reference_project = fsim::app::build_project(config, diagnostics);
+    auto compiled_project = fsim::app::build_project(config, diagnostics);
+    if (!reference_project || !compiled_project) {
+        print_diagnostics(diagnostics);
+    }
+    assert(reference_project);
+    assert(compiled_project);
 
-  const std::array<std::string, 5> signal_paths{
-      "wildcard_equality_app.masked",
-      "wildcard_equality_app.left_unknown",
-      "wildcard_equality_app.known_mismatch",
-      "wildcard_equality_app.wildcard_neq",
-      "wildcard_equality_app.logical_equal"};
-  const auto reference = run(
-      std::move(*reference_project),
-      fsim::app::SimulationEngine::interpreter,
-      signal_paths);
-  const auto compiled = run(
-      std::move(*compiled_project),
-      fsim::app::SimulationEngine::compiled,
-      signal_paths);
+    const std::array<std::string, 5> signal_paths {
+        "wildcard_equality_app.masked",
+        "wildcard_equality_app.left_unknown",
+        "wildcard_equality_app.known_mismatch",
+        "wildcard_equality_app.wildcard_neq",
+        "wildcard_equality_app.logical_equal"
+    };
+    const auto reference = run(
+        std::move(*reference_project),
+        fsim::app::SimulationEngine::interpreter,
+        signal_paths);
+    const auto compiled = run(
+        std::move(*compiled_project),
+        fsim::app::SimulationEngine::compiled,
+        signal_paths);
 
-  assert(reference.result.status == fsim::runtime::RunStatus::stopped);
-  assert(reference.result.status == compiled.result.status);
-  assert(reference.result.time == compiled.result.time);
-  assert(reference.result.delta == compiled.result.delta);
-  assert(reference.values == compiled.values);
-  assert((
-      compiled.values
-      == std::vector<std::string>{"1", "X", "0", "0", "X"}));
-  assert(reference.compiled_processes == 0);
-  assert(reference.compiled_modules == 0);
+    assert(reference.result.status == fsim::runtime::RunStatus::stopped);
+    assert(reference.result.status == compiled.result.status);
+    assert(reference.result.time == compiled.result.time);
+    assert(reference.result.delta == compiled.result.delta);
+    assert(reference.values == compiled.values);
+    assert((
+        compiled.values
+        == std::vector<std::string> { "1", "X", "0", "0", "X" }));
+    assert(reference.compiled_processes == 0);
+    assert(reference.compiled_modules == 0);
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 1);
-  assert(compiled.compiled_modules == 1);
+    assert(compiled.compiled_processes == 1);
+    assert(compiled.compiled_modules == 1);
 #else
-  assert(compiled.compiled_processes == 0);
-  assert(compiled.compiled_modules == 0);
+    assert(compiled.compiled_processes == 0);
+    assert(compiled.compiled_modules == 0);
 #endif
 }
 
 void test_systemverilog_signedness_casts(
     const std::filesystem::path& directory,
     const std::filesystem::path& source,
-    const fsim::project::Optimization optimization) {
-  fsim::project::Config config;
-  config.base_directory = directory;
-  config.project.name = "signedness-cast-expression-test";
-  config.project.top = "sv:work.signedness_cast_app";
-  config.project.time_resolution = "1ns";
-  config.build.optimization = optimization;
-  config.build.cache_path =
-      directory
-      / (optimization == fsim::project::Optimization::o0
-             ? "signedness-cache-o0"
-             : "signedness-cache-o2");
-  config.run.max_deltas = 1000;
+    const fsim::project::Optimization optimization)
+{
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "signedness-cast-expression-test";
+    config.project.top = "sv:work.signedness_cast_app";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path = directory
+        / (optimization == fsim::project::Optimization::o0
+                ? "signedness-cache-o0"
+                : "signedness-cache-o2");
+    config.run.max_deltas = 1000;
 
-  fsim::project::SourceSet sources;
-  sources.language = fsim::project::Language::system_verilog;
-  sources.standard = "2017";
-  sources.library = "work";
-  sources.files.push_back(source);
-  config.source_sets.push_back(std::move(sources));
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2017";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
 
-  fsim::diagnostic::Engine diagnostics;
-  auto reference_project =
-      fsim::app::build_project(config, diagnostics);
-  auto compiled_project =
-      fsim::app::build_project(config, diagnostics);
-  if (!reference_project || !compiled_project) {
-    print_diagnostics(diagnostics);
-  }
-  assert(reference_project);
-  assert(compiled_project);
+    fsim::diagnostic::Engine diagnostics;
+    auto reference_project = fsim::app::build_project(config, diagnostics);
+    auto compiled_project = fsim::app::build_project(config, diagnostics);
+    if (!reference_project || !compiled_project) {
+        print_diagnostics(diagnostics);
+    }
+    assert(reference_project);
+    assert(compiled_project);
 
-  const std::array<std::string, 64> signal_paths{
-      "signedness_cast_app.signed_less",
-      "signedness_cast_app.unsigned_less",
-      "signedness_cast_app.signed_shift",
-      "signedness_cast_app.unsigned_shift",
-      "signedness_cast_app.known_is_unknown",
-      "signedness_cast_app.xz_is_unknown",
-      "signedness_cast_app.object_bits",
-      "signedness_cast_app.concatenation_bits",
-      "signedness_cast_app.descending_left",
-      "signedness_cast_app.descending_right",
-      "signedness_cast_app.descending_low",
-      "signedness_cast_app.descending_high",
-      "signedness_cast_app.descending_size",
-      "signedness_cast_app.descending_increment",
-      "signedness_cast_app.ascending_left",
-      "signedness_cast_app.ascending_right",
-      "signedness_cast_app.ascending_low",
-      "signedness_cast_app.ascending_high",
-      "signedness_cast_app.ascending_size",
-      "signedness_cast_app.ascending_increment",
-      "signedness_cast_app.dimensions",
-      "signedness_cast_app.unpacked_dimensions",
-      "signedness_cast_app.power_positive",
-      "signedness_cast_app.power_zero",
-      "signedness_cast_app.power_left_associative",
-      "signedness_cast_app.power_negative_exponent",
-      "signedness_cast_app.power_minus_one_negative",
-      "signedness_cast_app.power_zero_negative",
-      "signedness_cast_app.power_unknown",
-      "signedness_cast_app.power_parameter",
-      "signedness_cast_app.compound_add",
-      "signedness_cast_app.compound_subtract",
-      "signedness_cast_app.compound_multiply",
-      "signedness_cast_app.compound_divide",
-      "signedness_cast_app.compound_remainder",
-      "signedness_cast_app.compound_and",
-      "signedness_cast_app.compound_or",
-      "signedness_cast_app.compound_xor",
-      "signedness_cast_app.compound_shift_left",
-      "signedness_cast_app.compound_shift_right",
-      "signedness_cast_app.compound_arithmetic_left",
-      "signedness_cast_app.compound_arithmetic_right",
-      "signedness_cast_app.prefix_increment",
-      "signedness_cast_app.postfix_decrement",
-      "signedness_cast_app.compound_selected",
-      "signedness_cast_app.compound_unknown",
-      "signedness_cast_app.final_value",
-      "signedness_cast_app.onehot_zero",
-      "signedness_cast_app.onehot_single",
-      "signedness_cast_app.onehot_multiple",
-      "signedness_cast_app.onehot_unknown",
-      "signedness_cast_app.onehot0_zero",
-      "signedness_cast_app.onehot0_single",
-      "signedness_cast_app.onehot0_multiple",
-      "signedness_cast_app.onehot0_unknown",
-      "signedness_cast_app.countones_zero",
-      "signedness_cast_app.countones_single",
-      "signedness_cast_app.countones_multiple",
-      "signedness_cast_app.countones_unknown",
-      "signedness_cast_app.countbits_known",
-      "signedness_cast_app.countbits_unknown",
-      "signedness_cast_app.countbits_zero_x",
-      "signedness_cast_app.indexed_update",
-      "signedness_cast_app.update_calls"};
-  const auto reference = run(
-      std::move(*reference_project),
-      fsim::app::SimulationEngine::interpreter,
-      signal_paths);
-  const auto compiled = run(
-      std::move(*compiled_project),
-      fsim::app::SimulationEngine::compiled,
-      signal_paths);
+    const std::array<std::string, 64> signal_paths {
+        "signedness_cast_app.signed_less",
+        "signedness_cast_app.unsigned_less",
+        "signedness_cast_app.signed_shift",
+        "signedness_cast_app.unsigned_shift",
+        "signedness_cast_app.known_is_unknown",
+        "signedness_cast_app.xz_is_unknown",
+        "signedness_cast_app.object_bits",
+        "signedness_cast_app.concatenation_bits",
+        "signedness_cast_app.descending_left",
+        "signedness_cast_app.descending_right",
+        "signedness_cast_app.descending_low",
+        "signedness_cast_app.descending_high",
+        "signedness_cast_app.descending_size",
+        "signedness_cast_app.descending_increment",
+        "signedness_cast_app.ascending_left",
+        "signedness_cast_app.ascending_right",
+        "signedness_cast_app.ascending_low",
+        "signedness_cast_app.ascending_high",
+        "signedness_cast_app.ascending_size",
+        "signedness_cast_app.ascending_increment",
+        "signedness_cast_app.dimensions",
+        "signedness_cast_app.unpacked_dimensions",
+        "signedness_cast_app.power_positive",
+        "signedness_cast_app.power_zero",
+        "signedness_cast_app.power_left_associative",
+        "signedness_cast_app.power_negative_exponent",
+        "signedness_cast_app.power_minus_one_negative",
+        "signedness_cast_app.power_zero_negative",
+        "signedness_cast_app.power_unknown",
+        "signedness_cast_app.power_parameter",
+        "signedness_cast_app.compound_add",
+        "signedness_cast_app.compound_subtract",
+        "signedness_cast_app.compound_multiply",
+        "signedness_cast_app.compound_divide",
+        "signedness_cast_app.compound_remainder",
+        "signedness_cast_app.compound_and",
+        "signedness_cast_app.compound_or",
+        "signedness_cast_app.compound_xor",
+        "signedness_cast_app.compound_shift_left",
+        "signedness_cast_app.compound_shift_right",
+        "signedness_cast_app.compound_arithmetic_left",
+        "signedness_cast_app.compound_arithmetic_right",
+        "signedness_cast_app.prefix_increment",
+        "signedness_cast_app.postfix_decrement",
+        "signedness_cast_app.compound_selected",
+        "signedness_cast_app.compound_unknown",
+        "signedness_cast_app.final_value",
+        "signedness_cast_app.onehot_zero",
+        "signedness_cast_app.onehot_single",
+        "signedness_cast_app.onehot_multiple",
+        "signedness_cast_app.onehot_unknown",
+        "signedness_cast_app.onehot0_zero",
+        "signedness_cast_app.onehot0_single",
+        "signedness_cast_app.onehot0_multiple",
+        "signedness_cast_app.onehot0_unknown",
+        "signedness_cast_app.countones_zero",
+        "signedness_cast_app.countones_single",
+        "signedness_cast_app.countones_multiple",
+        "signedness_cast_app.countones_unknown",
+        "signedness_cast_app.countbits_known",
+        "signedness_cast_app.countbits_unknown",
+        "signedness_cast_app.countbits_zero_x",
+        "signedness_cast_app.indexed_update",
+        "signedness_cast_app.update_calls"
+    };
+    const auto reference = run(
+        std::move(*reference_project),
+        fsim::app::SimulationEngine::interpreter,
+        signal_paths);
+    const auto compiled = run(
+        std::move(*compiled_project),
+        fsim::app::SimulationEngine::compiled,
+        signal_paths);
 
-  assert(reference.result.status == fsim::runtime::RunStatus::stopped);
-  assert(reference.result.status == compiled.result.status);
-  assert(reference.result.time == compiled.result.time);
-  assert(reference.result.delta == compiled.result.delta);
-  assert(reference.values == compiled.values);
-  assert((
-      compiled.values
-      == std::vector<std::string>{
-          "1",
-          "1",
-          "1111",
-          "0000",
-          "0",
-          "1",
-          "00000000000000000000000000000100",
-          "00000000000000000000000000001000",
-          "00000000000000000000000000000111",
-          "00000000000000000000000000000100",
-          "00000000000000000000000000000100",
-          "00000000000000000000000000000111",
-          "00000000000000000000000000000100",
-          "00000000000000000000000000000001",
-          "00000000000000000000000000000010",
-          "00000000000000000000000000000101",
-          "00000000000000000000000000000010",
-          "00000000000000000000000000000101",
-          "00000000000000000000000000000100",
-          "11111111111111111111111111111111",
-          "00000000000000000000000000000001",
-          "00000000000000000000000000000000",
-          "01010001",
-          "00000001",
-          "0000000001000000",
-          "00000000",
-          "11111111",
-          "XXXXXXXX",
-          "XXXXXXXX",
-          "01010001",
-          "00010101",
-          "00001101",
-          "00100110",
-          "00010001",
-          "00000010",
-          "10100000",
-          "10101111",
-          "01010101",
-          "00000010",
-          "01000000",
-          "00000010",
-          "11111100",
-          "11111111",
-          "11111111",
-          "10100110",
-          "XXXXXXXX",
-          "00010101",
-          "0",
-          "1",
-          "0",
-          "1",
-          "1",
-          "1",
-          "0",
-          "1",
-          "00000000000000000000000000000000",
-          "00000000000000000000000000000001",
-          "00000000000000000000000000000011",
-          "00000000000000000000000000000001",
-          "00000000000000000000000000000010",
-          "00000000000000000000000000000010",
-          "00000000000000000000000000000010",
-          "10100100",
-          "00000000000000000000000000000001"}));
+    assert(reference.result.status == fsim::runtime::RunStatus::stopped);
+    assert(reference.result.status == compiled.result.status);
+    assert(reference.result.time == compiled.result.time);
+    assert(reference.result.delta == compiled.result.delta);
+    assert(reference.values == compiled.values);
+    assert((
+        compiled.values
+        == std::vector<std::string> {
+            "1",
+            "1",
+            "1111",
+            "0000",
+            "0",
+            "1",
+            "00000000000000000000000000000100",
+            "00000000000000000000000000001000",
+            "00000000000000000000000000000111",
+            "00000000000000000000000000000100",
+            "00000000000000000000000000000100",
+            "00000000000000000000000000000111",
+            "00000000000000000000000000000100",
+            "00000000000000000000000000000001",
+            "00000000000000000000000000000010",
+            "00000000000000000000000000000101",
+            "00000000000000000000000000000010",
+            "00000000000000000000000000000101",
+            "00000000000000000000000000000100",
+            "11111111111111111111111111111111",
+            "00000000000000000000000000000001",
+            "00000000000000000000000000000000",
+            "01010001",
+            "00000001",
+            "0000000001000000",
+            "00000000",
+            "11111111",
+            "XXXXXXXX",
+            "XXXXXXXX",
+            "01010001",
+            "00010101",
+            "00001101",
+            "00100110",
+            "00010001",
+            "00000010",
+            "10100000",
+            "10101111",
+            "01010101",
+            "00000010",
+            "01000000",
+            "00000010",
+            "11111100",
+            "11111111",
+            "11111111",
+            "10100110",
+            "XXXXXXXX",
+            "00010101",
+            "0",
+            "1",
+            "0",
+            "1",
+            "1",
+            "1",
+            "0",
+            "1",
+            "00000000000000000000000000000000",
+            "00000000000000000000000000000001",
+            "00000000000000000000000000000011",
+            "00000000000000000000000000000001",
+            "00000000000000000000000000000010",
+            "00000000000000000000000000000010",
+            "00000000000000000000000000000010",
+            "10100100",
+            "00000000000000000000000000000001" }));
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 2);
-  assert(compiled.compiled_modules == 1);
+    assert(compiled.compiled_processes == 2);
+    assert(compiled.compiled_modules == 1);
 #else
-  assert(compiled.compiled_processes == 0);
-  assert(compiled.compiled_modules == 0);
+    assert(compiled.compiled_processes == 0);
+    assert(compiled.compiled_modules == 0);
+#endif
+}
+
+void test_systemverilog_literal_closure(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization)
+{
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "literal-closure-expression-test";
+    config.project.top = "sv:work.literal_closure_app";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path = directory
+        / (optimization == fsim::project::Optimization::o0
+                ? "literal-closure-cache-o0"
+                : "literal-closure-cache-o2");
+    config.run.max_deltas = 1000;
+
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2017";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
+
+    fsim::diagnostic::Engine diagnostics;
+    auto reference_project = fsim::app::build_project(config, diagnostics);
+    auto compiled_project = fsim::app::build_project(config, diagnostics);
+    if (!reference_project || !compiled_project) {
+        print_diagnostics(diagnostics);
+    }
+    assert(reference_project);
+    assert(compiled_project);
+
+    const std::array<std::string, 5> signal_paths {
+        "literal_closure_app.decimal_x",
+        "literal_closure_app.decimal_z",
+        "literal_closure_app.decimal_question",
+        "literal_closure_app.unbased_one",
+        "literal_closure_app.unbased_x"
+    };
+    const auto reference = run(
+        std::move(*reference_project),
+        fsim::app::SimulationEngine::interpreter,
+        signal_paths);
+    const auto compiled = run(
+        std::move(*compiled_project),
+        fsim::app::SimulationEngine::compiled,
+        signal_paths);
+
+    assert(reference.result.status == fsim::runtime::RunStatus::stopped);
+    assert(reference.result.status == compiled.result.status);
+    assert(reference.result.time == compiled.result.time);
+    assert(reference.result.delta == compiled.result.delta);
+    assert(reference.values == compiled.values);
+    assert((compiled.values
+        == std::vector<std::string> {
+            std::string(257, 'X'),
+            std::string(257, 'Z'),
+            std::string(257, 'Z'),
+            std::string(257, '1'),
+            std::string(257, 'X') }));
+    assert(reference.compiled_processes == 0);
+    assert(reference.compiled_modules == 0);
+#if defined(FSIM_HAS_LLVM)
+    assert(compiled.compiled_processes == 1);
+    assert(compiled.compiled_modules == 1);
+#else
+    assert(compiled.compiled_processes == 0);
+    assert(compiled.compiled_modules == 0);
 #endif
 }
 
 void test_vhdl_concurrent_assertion(
     const std::filesystem::path& directory,
     const std::filesystem::path& source,
-    const fsim::project::Optimization optimization) {
-  fsim::project::Config config;
-  config.base_directory = directory;
-  config.project.name = "vhdl-concurrent-assertion-test";
-  config.project.top = "vhdl:work.concurrent_assertion_app(rtl)";
-  config.project.time_resolution = "1ns";
-  config.build.optimization = optimization;
-  config.build.cache_path =
-      directory
-      / (optimization == fsim::project::Optimization::o0
-             ? "concurrent-assert-cache-o0"
-             : "concurrent-assert-cache-o2");
-  config.run.max_deltas = 1000;
+    const fsim::project::Optimization optimization)
+{
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "vhdl-concurrent-assertion-test";
+    config.project.top = "vhdl:work.concurrent_assertion_app(rtl)";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path = directory
+        / (optimization == fsim::project::Optimization::o0
+                ? "concurrent-assert-cache-o0"
+                : "concurrent-assert-cache-o2");
+    config.run.max_deltas = 1000;
 
-  fsim::project::SourceSet sources;
-  sources.language = fsim::project::Language::vhdl;
-  sources.standard = "2008";
-  sources.library = "work";
-  sources.files.push_back(source);
-  config.source_sets.push_back(std::move(sources));
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::vhdl;
+    sources.standard = "2008";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
 
-  fsim::diagnostic::Engine diagnostics;
-  auto reference_project =
-      fsim::app::build_project(config, diagnostics);
-  auto compiled_project =
-      fsim::app::build_project(config, diagnostics);
-  if (!reference_project || !compiled_project) {
-    print_diagnostics(diagnostics);
-  }
-  assert(reference_project);
-  assert(compiled_project);
+    fsim::diagnostic::Engine diagnostics;
+    auto reference_project = fsim::app::build_project(config, diagnostics);
+    auto compiled_project = fsim::app::build_project(config, diagnostics);
+    if (!reference_project || !compiled_project) {
+        print_diagnostics(diagnostics);
+    }
+    assert(reference_project);
+    assert(compiled_project);
 
-  const std::array<std::string, 1> signal_paths{
-      "concurrent_assertion_app.passed"};
-  const auto reference = run(
-      std::move(*reference_project),
-      fsim::app::SimulationEngine::interpreter,
-      signal_paths);
-  const auto compiled = run(
-      std::move(*compiled_project),
-      fsim::app::SimulationEngine::compiled,
-      signal_paths);
+    const std::array<std::string, 1> signal_paths {
+        "concurrent_assertion_app.passed"
+    };
+    const auto reference = run(
+        std::move(*reference_project),
+        fsim::app::SimulationEngine::interpreter,
+        signal_paths);
+    const auto compiled = run(
+        std::move(*compiled_project),
+        fsim::app::SimulationEngine::compiled,
+        signal_paths);
 
-  assert(reference.result.status == fsim::runtime::RunStatus::completed);
-  assert(reference.result.status == compiled.result.status);
-  assert(reference.result.time == compiled.result.time);
-  assert(reference.result.delta == compiled.result.delta);
-  assert(reference.values == compiled.values);
-  assert(compiled.values == std::vector<std::string>{"1"});
+    assert(reference.result.status == fsim::runtime::RunStatus::completed);
+    assert(reference.result.status == compiled.result.status);
+    assert(reference.result.time == compiled.result.time);
+    assert(reference.result.delta == compiled.result.delta);
+    assert(reference.values == compiled.values);
+    assert(compiled.values == std::vector<std::string> { "1" });
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 2);
-  assert(compiled.compiled_modules == 1);
+    assert(compiled.compiled_processes == 2);
+    assert(compiled.compiled_modules == 1);
 #else
-  assert(compiled.compiled_processes == 0);
-  assert(compiled.compiled_modules == 0);
+    assert(compiled.compiled_processes == 0);
+    assert(compiled.compiled_modules == 0);
 #endif
 }
 
 void test_vhdl_falling_edge(
     const std::filesystem::path& directory,
     const std::filesystem::path& source,
-    const fsim::project::Optimization optimization) {
-  fsim::project::Config config;
-  config.base_directory = directory;
-  config.project.name = "vhdl-falling-edge-test";
-  config.project.top = "vhdl:work.falling_edge_app(rtl)";
-  config.project.time_resolution = "1ns";
-  config.build.optimization = optimization;
-  config.build.cache_path =
-      directory
-      / (optimization == fsim::project::Optimization::o0
-             ? "falling-edge-cache-o0"
-             : "falling-edge-cache-o2");
-  config.run.max_deltas = 1000;
+    const fsim::project::Optimization optimization)
+{
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "vhdl-falling-edge-test";
+    config.project.top = "vhdl:work.falling_edge_app(rtl)";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path = directory
+        / (optimization == fsim::project::Optimization::o0
+                ? "falling-edge-cache-o0"
+                : "falling-edge-cache-o2");
+    config.run.max_deltas = 1000;
 
-  fsim::project::SourceSet sources;
-  sources.language = fsim::project::Language::vhdl;
-  sources.standard = "2008";
-  sources.library = "work";
-  sources.files.push_back(source);
-  config.source_sets.push_back(std::move(sources));
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::vhdl;
+    sources.standard = "2008";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
 
-  fsim::diagnostic::Engine diagnostics;
-  auto reference_project =
-      fsim::app::build_project(config, diagnostics);
-  auto compiled_project =
-      fsim::app::build_project(config, diagnostics);
-  auto warm_project =
-      fsim::app::build_project(config, diagnostics);
-  if (!reference_project || !compiled_project || !warm_project) {
-    print_diagnostics(diagnostics);
-  }
-  assert(reference_project);
-  assert(compiled_project);
-  assert(warm_project);
+    fsim::diagnostic::Engine diagnostics;
+    auto reference_project = fsim::app::build_project(config, diagnostics);
+    auto compiled_project = fsim::app::build_project(config, diagnostics);
+    auto warm_project = fsim::app::build_project(config, diagnostics);
+    if (!reference_project || !compiled_project || !warm_project) {
+        print_diagnostics(diagnostics);
+    }
+    assert(reference_project);
+    assert(compiled_project);
+    assert(warm_project);
 
-  const std::array<std::string, 22> signal_paths{
-      "falling_edge_app.hit",
-      "falling_edge_app.legacy_hit",
-      "falling_edge_app.falling_previous",
-      "falling_edge_app.elapsed",
-      "falling_edge_app.active_elapsed",
-      "falling_edge_app.stable_during_event",
-      "falling_edge_app.stable_after_event",
-      "falling_edge_app.redundant_active",
-      "falling_edge_app.redundant_event",
-      "falling_edge_app.driving_seen",
-      "falling_edge_app.driving_value_seen",
-      "falling_edge_app.driving_vector_seen",
-      "falling_edge_app.foreign_driving",
-      "falling_edge_app.stable_window_early",
-      "falling_edge_app.quiet_window_early",
-      "falling_edge_app.delayed_sample",
-      "falling_edge_app.redundant_transaction",
-      "falling_edge_app.single_transaction",
-      "falling_edge_app.stable_window_late",
-      "falling_edge_app.quiet_window_late",
-      "falling_edge_app.transaction_sensitive",
-      "falling_edge_app.transaction_waited"};
-  const auto reference = run(
-      std::move(*reference_project),
-      fsim::app::SimulationEngine::interpreter,
-      signal_paths);
-  const auto compiled = run(
-      std::move(*compiled_project),
-      fsim::app::SimulationEngine::compiled,
-      signal_paths);
-  const auto warm = run(
-      std::move(*warm_project),
-      fsim::app::SimulationEngine::compiled,
-      signal_paths);
+    const std::array<std::string, 22> signal_paths {
+        "falling_edge_app.hit",
+        "falling_edge_app.legacy_hit",
+        "falling_edge_app.falling_previous",
+        "falling_edge_app.elapsed",
+        "falling_edge_app.active_elapsed",
+        "falling_edge_app.stable_during_event",
+        "falling_edge_app.stable_after_event",
+        "falling_edge_app.redundant_active",
+        "falling_edge_app.redundant_event",
+        "falling_edge_app.driving_seen",
+        "falling_edge_app.driving_value_seen",
+        "falling_edge_app.driving_vector_seen",
+        "falling_edge_app.foreign_driving",
+        "falling_edge_app.stable_window_early",
+        "falling_edge_app.quiet_window_early",
+        "falling_edge_app.delayed_sample",
+        "falling_edge_app.redundant_transaction",
+        "falling_edge_app.single_transaction",
+        "falling_edge_app.stable_window_late",
+        "falling_edge_app.quiet_window_late",
+        "falling_edge_app.transaction_sensitive",
+        "falling_edge_app.transaction_waited"
+    };
+    const auto reference = run(
+        std::move(*reference_project),
+        fsim::app::SimulationEngine::interpreter,
+        signal_paths);
+    const auto compiled = run(
+        std::move(*compiled_project),
+        fsim::app::SimulationEngine::compiled,
+        signal_paths);
+    const auto warm = run(
+        std::move(*warm_project),
+        fsim::app::SimulationEngine::compiled,
+        signal_paths);
 
-  assert(reference.result.status == fsim::runtime::RunStatus::completed);
-  assert(reference.result.status == compiled.result.status);
-  assert(reference.result.time == compiled.result.time);
-  assert(reference.result.delta == compiled.result.delta);
-  assert(reference.values == compiled.values);
-  assert(warm.result.status == compiled.result.status);
-  assert(warm.values == compiled.values);
-  assert((
-      compiled.values
-      == std::vector<std::string>{
-          "1",
-          "1",
-          "1",
-          "0000000000000000000000000000000000000000000000000000000000000001",
-          "0000000000000000000000000000000000000000000000000000000000000001",
-          "1",
-          "1",
-          "1",
-          "0",
-          "1",
-          "1",
-          "10ZX",
-          "0",
-          "0",
-          "0",
-          "1",
-          "0",
-          "1",
-          "1",
-          "1",
-          "0",
-          "1"}));
+    assert(reference.result.status == fsim::runtime::RunStatus::completed);
+    assert(reference.result.status == compiled.result.status);
+    assert(reference.result.time == compiled.result.time);
+    assert(reference.result.delta == compiled.result.delta);
+    assert(reference.values == compiled.values);
+    assert(warm.result.status == compiled.result.status);
+    assert(warm.values == compiled.values);
+    assert((
+        compiled.values
+        == std::vector<std::string> {
+            "1",
+            "1",
+            "1",
+            "0000000000000000000000000000000000000000000000000000000000000001",
+            "0000000000000000000000000000000000000000000000000000000000000001",
+            "1",
+            "1",
+            "1",
+            "0",
+            "1",
+            "1",
+            "10ZX",
+            "0",
+            "0",
+            "0",
+            "1",
+            "0",
+            "1",
+            "1",
+            "1",
+            "0",
+            "1" }));
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 12);
-  assert(compiled.compiled_modules == 1);
-  assert(warm.native_cache.hits == 1);
-  assert(warm.native_cache.misses == 0);
+    assert(compiled.compiled_processes == 12);
+    assert(compiled.compiled_modules == 1);
+    assert(warm.native_cache.hits == 1);
+    assert(warm.native_cache.misses == 0);
 #else
-  assert(compiled.compiled_processes == 0);
-  assert(compiled.compiled_modules == 0);
+    assert(compiled.compiled_processes == 0);
+    assert(compiled.compiled_modules == 0);
 #endif
 }
 
 void test_verilog_stop(
     const std::filesystem::path& directory,
     const std::filesystem::path& source,
-    const fsim::project::Optimization optimization) {
-  fsim::project::Config config;
-  config.base_directory = directory;
-  config.project.name = "verilog-stop-test";
-  config.project.top = "sv:work.stop_app";
-  config.project.time_resolution = "1ns";
-  config.build.optimization = optimization;
-  config.build.cache_path =
-      directory
-      / (optimization == fsim::project::Optimization::o0
-             ? "stop-cache-o0"
-             : "stop-cache-o2");
-  config.run.max_deltas = 1000;
+    const fsim::project::Optimization optimization)
+{
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "verilog-stop-test";
+    config.project.top = "sv:work.stop_app";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path = directory
+        / (optimization == fsim::project::Optimization::o0
+                ? "stop-cache-o0"
+                : "stop-cache-o2");
+    config.run.max_deltas = 1000;
 
-  fsim::project::SourceSet sources;
-  sources.language = fsim::project::Language::system_verilog;
-  sources.standard = "2017";
-  sources.library = "work";
-  sources.files.push_back(source);
-  config.source_sets.push_back(std::move(sources));
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2017";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
 
-  fsim::diagnostic::Engine diagnostics;
-  auto reference_project =
-      fsim::app::build_project(config, diagnostics);
-  auto compiled_project =
-      fsim::app::build_project(config, diagnostics);
-  if (!reference_project || !compiled_project) {
-    print_diagnostics(diagnostics);
-  }
-  assert(reference_project);
-  assert(compiled_project);
+    fsim::diagnostic::Engine diagnostics;
+    auto reference_project = fsim::app::build_project(config, diagnostics);
+    auto compiled_project = fsim::app::build_project(config, diagnostics);
+    if (!reference_project || !compiled_project) {
+        print_diagnostics(diagnostics);
+    }
+    assert(reference_project);
+    assert(compiled_project);
 
-  const auto reference = run_stop(
-      std::move(*reference_project),
-      fsim::app::SimulationEngine::interpreter);
-  const auto compiled = run_stop(
-      std::move(*compiled_project),
-      fsim::app::SimulationEngine::compiled);
-  assert(reference.paused.status == fsim::runtime::RunStatus::stopped);
-  assert(reference.paused.status == compiled.paused.status);
-  assert(reference.paused.time == compiled.paused.time);
-  assert(reference.paused.delta == compiled.paused.delta);
-  assert(reference.paused_values == compiled.paused_values);
-  assert((
-      compiled.paused_values
-      == std::vector<std::string>{"1", "X", "X"}));
-  assert(reference.resumed.status == fsim::runtime::RunStatus::stopped);
-  assert(reference.resumed.status == compiled.resumed.status);
-  assert(reference.resumed.time == compiled.resumed.time);
-  assert(reference.resumed.delta == compiled.resumed.delta);
-  assert(reference.resumed_values == compiled.resumed_values);
-  assert((
-      compiled.resumed_values
-      == std::vector<std::string>{"1", "1", "1"}));
+    const auto reference = run_stop(
+        std::move(*reference_project),
+        fsim::app::SimulationEngine::interpreter);
+    const auto compiled = run_stop(
+        std::move(*compiled_project),
+        fsim::app::SimulationEngine::compiled);
+    assert(reference.paused.status == fsim::runtime::RunStatus::stopped);
+    assert(reference.paused.status == compiled.paused.status);
+    assert(reference.paused.time == compiled.paused.time);
+    assert(reference.paused.delta == compiled.paused.delta);
+    assert(reference.paused_values == compiled.paused_values);
+    assert((
+        compiled.paused_values
+        == std::vector<std::string> { "1", "X", "X" }));
+    assert(reference.resumed.status == fsim::runtime::RunStatus::stopped);
+    assert(reference.resumed.status == compiled.resumed.status);
+    assert(reference.resumed.time == compiled.resumed.time);
+    assert(reference.resumed.delta == compiled.resumed.delta);
+    assert(reference.resumed_values == compiled.resumed_values);
+    assert((
+        compiled.resumed_values
+        == std::vector<std::string> { "1", "1", "1" }));
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 2);
-  assert(compiled.compiled_modules == 1);
+    assert(compiled.compiled_processes == 2);
+    assert(compiled.compiled_modules == 1);
 #else
-  assert(compiled.compiled_processes == 0);
-  assert(compiled.compiled_modules == 0);
+    assert(compiled.compiled_processes == 0);
+    assert(compiled.compiled_modules == 0);
+#endif
+}
+
+void test_systemverilog_exit(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization)
+{
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "systemverilog-exit-test";
+    config.project.top = "sv:work.exit_app";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path = directory
+        / (optimization == fsim::project::Optimization::o0
+                ? "exit-cache-o0"
+                : "exit-cache-o2");
+    config.run.max_deltas = 1000;
+
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2017";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
+
+    const std::array<std::string, 5> paths {
+        "exit_app.first_after",
+        "exit_app.first_background",
+        "exit_app.second_done",
+        "exit_app.module_late",
+        "exit_app.final_hit"
+    };
+    const auto build = [&]() {
+        fsim::diagnostic::Engine diagnostics;
+        auto project = fsim::app::build_project(config, diagnostics);
+        if (!project)
+            print_diagnostics(diagnostics);
+        assert(project && !diagnostics.has_error());
+        fsim::diagnostic::Engine artifact_diagnostics;
+        const auto state = fsim::app::serialize_runtime_state(
+            project->design, artifact_diagnostics);
+        assert(state && !artifact_diagnostics.has_error());
+        auto restored = fsim::app::deserialize_runtime_state(
+            *state, "exit-runtime", artifact_diagnostics);
+        assert(restored && !artifact_diagnostics.has_error());
+        assert(fsim::app::serialize_runtime_state(
+                   *restored, artifact_diagnostics)
+            == state);
+        project->design = std::move(*restored);
+        return project;
+    };
+    const auto interpreted = run(
+        *build(), fsim::app::SimulationEngine::interpreter, paths);
+    const auto compiled_cold = run(
+        *build(), fsim::app::SimulationEngine::compiled, paths);
+    const auto compiled_warm = run(
+        *build(), fsim::app::SimulationEngine::compiled, paths);
+    const auto expected = std::vector<std::string> {
+        "0", "0", "1", "0", "1"
+    };
+    assert(interpreted.result.status == fsim::runtime::RunStatus::stopped);
+    assert(interpreted.result.time == 2);
+    assert(compiled_cold.result.status == interpreted.result.status);
+    assert(compiled_warm.result.status == interpreted.result.status);
+    assert(compiled_cold.result.time == interpreted.result.time);
+    assert(compiled_warm.result.time == interpreted.result.time);
+    assert(interpreted.values == expected);
+    assert(compiled_cold.values == expected);
+    assert(compiled_warm.values == expected);
+#if defined(FSIM_HAS_LLVM)
+    assert(compiled_cold.compiled_processes != 0);
+    assert(compiled_warm.native_cache.hits != 0);
+#else
+    assert(compiled_cold.compiled_processes == 0);
+#endif
+}
+
+void test_invalid_systemverilog_exit(
+    const std::filesystem::path& directory)
+{
+    const auto source = directory / "invalid_exit.sv";
+    {
+        std::ofstream output(source);
+        output << R"(
+module invalid_exit;
+  initial $exit;
+endmodule
+)";
+    }
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "invalid-systemverilog-exit-test";
+    config.project.top = "sv:work.invalid_exit";
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2017";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
+    fsim::diagnostic::Engine diagnostics;
+    const auto project = fsim::app::build_project(config, diagnostics);
+    assert(!project && diagnostics.has_error());
+    assert(std::ranges::any_of(
+        diagnostics.diagnostics(), [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ELAB-SVEXIT-001";
+        }));
+}
+
+void test_invalid_systemverilog_sampled_value(
+    const std::filesystem::path& directory)
+{
+    const auto source = directory / "invalid_sampled_value.sv";
+    {
+        std::ofstream output(source);
+        output << R"(
+module invalid_sampled_value;
+  logic data;
+  logic result;
+  initial result = $past(data, 0);
+endmodule
+)";
+    }
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "invalid-systemverilog-sampled-value-test";
+    config.project.top = "sv:work.invalid_sampled_value";
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2017";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
+    fsim::diagnostic::Engine diagnostics;
+    const auto project = fsim::app::build_project(config, diagnostics);
+    assert(!project && diagnostics.has_error());
+    assert(std::ranges::any_of(
+        diagnostics.diagnostics(), [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ELAB-SVSAMPLE-001";
+        }));
+}
+
+void test_systemverilog_sampled_values(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization)
+{
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "systemverilog-sampled-value-test";
+    config.project.top = "sv:work.sampled_value_app";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path = directory
+        / (optimization == fsim::project::Optimization::o0
+                ? "sampled-cache-o0"
+                : "sampled-cache-o2");
+    config.run.max_deltas = 1000;
+
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2017";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
+
+    const std::array<std::string, 12> paths {
+        "sampled_value_app.first",
+        "sampled_value_app.second",
+        "sampled_value_app.third",
+        "sampled_value_app.explicit_first",
+        "sampled_value_app.explicit_second",
+        "sampled_value_app.explicit_third",
+        "sampled_value_app.global_past_first",
+        "sampled_value_app.global_past_second",
+        "sampled_value_app.global_past_third",
+        "sampled_value_app.global_future_first",
+        "sampled_value_app.global_future_second",
+        "sampled_value_app.global_future_third"
+    };
+    const auto build = [&]() {
+        fsim::diagnostic::Engine diagnostics;
+        auto project = fsim::app::build_project(config, diagnostics);
+        if (!project)
+            print_diagnostics(diagnostics);
+        assert(project && !diagnostics.has_error());
+        fsim::diagnostic::Engine artifact_diagnostics;
+        const auto state = fsim::app::serialize_runtime_state(
+            project->design, artifact_diagnostics);
+        assert(state && !artifact_diagnostics.has_error());
+        auto restored = fsim::app::deserialize_runtime_state(
+            *state, "sampled-runtime", artifact_diagnostics);
+        assert(restored && !artifact_diagnostics.has_error());
+        assert(fsim::app::serialize_runtime_state(
+                   *restored, artifact_diagnostics)
+            == state);
+        project->design = std::move(*restored);
+        return project;
+    };
+    const auto interpreted = run(
+        *build(), fsim::app::SimulationEngine::interpreter, paths);
+    const auto compiled_cold = run(
+        *build(), fsim::app::SimulationEngine::compiled, paths);
+    const auto compiled_warm = run(
+        *build(), fsim::app::SimulationEngine::compiled, paths);
+    const auto expected = std::vector<std::string> {
+        "00101XX", "110010X", "0010110",
+        "00XX", "110X", "0110",
+        "X0101", "01001", "10101",
+        "11001", "00101", "11001"
+    };
+    assert(interpreted.result.status == fsim::runtime::RunStatus::stopped);
+    assert(interpreted.result.time == 6);
+    assert(interpreted.values == expected);
+    assert(compiled_cold.values == expected);
+    assert(compiled_warm.values == expected);
+#if defined(FSIM_HAS_LLVM)
+    assert(compiled_cold.compiled_processes != 0);
+    assert(compiled_warm.native_cache.hits != 0);
+#else
+    assert(compiled_cold.compiled_processes == 0);
 #endif
 }
 
 void test_systemverilog_fatal(
     const std::filesystem::path& directory,
     const std::filesystem::path& source,
-    const fsim::project::Optimization optimization) {
-  fsim::project::Config config;
-  config.base_directory = directory;
-  config.project.name = "systemverilog-fatal-test";
-  config.project.top = "sv:work.fatal_app";
-  config.project.time_resolution = "1ns";
-  config.build.optimization = optimization;
-  config.build.cache_path =
-      directory
-      / (optimization == fsim::project::Optimization::o0
-             ? "fatal-cache-o0"
-             : "fatal-cache-o2");
-  config.run.max_deltas = 1000;
+    const fsim::project::Optimization optimization)
+{
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "systemverilog-fatal-test";
+    config.project.top = "sv:work.fatal_app";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path = directory
+        / (optimization == fsim::project::Optimization::o0
+                ? "fatal-cache-o0"
+                : "fatal-cache-o2");
+    config.run.max_deltas = 1000;
 
-  fsim::project::SourceSet sources;
-  sources.language = fsim::project::Language::system_verilog;
-  sources.standard = "2017";
-  sources.library = "work";
-  sources.files.push_back(source);
-  config.source_sets.push_back(std::move(sources));
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2017";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
 
-  fsim::diagnostic::Engine diagnostics;
-  auto reference_project =
-      fsim::app::build_project(config, diagnostics);
-  auto compiled_project =
-      fsim::app::build_project(config, diagnostics);
-  if (!reference_project || !compiled_project) {
-    print_diagnostics(diagnostics);
-  }
-  assert(reference_project);
-  assert(compiled_project);
+    fsim::diagnostic::Engine diagnostics;
+    auto reference_project = fsim::app::build_project(config, diagnostics);
+    auto compiled_project = fsim::app::build_project(config, diagnostics);
+    if (!reference_project || !compiled_project) {
+        print_diagnostics(diagnostics);
+    }
+    assert(reference_project);
+    assert(compiled_project);
 
-  const auto reference = run_fatal(
-      std::move(*reference_project),
-      fsim::app::SimulationEngine::interpreter);
-  const auto compiled = run_fatal(
-      std::move(*compiled_project),
-      fsim::app::SimulationEngine::compiled);
-  assert(reference.severity
-         == fsim::runtime::simir::AssertionSeverity::failure);
-  assert(reference.severity == compiled.severity);
-  assert(reference.message == compiled.message);
-  assert(reference.line == compiled.line);
-  assert(reference.column == compiled.column);
-  assert(reference.message.find("fatal\nsource\tmessage \"quoted\"")
-         != std::string::npos);
+    const auto reference = run_fatal(
+        std::move(*reference_project),
+        fsim::app::SimulationEngine::interpreter);
+    const auto compiled = run_fatal(
+        std::move(*compiled_project),
+        fsim::app::SimulationEngine::compiled);
+    assert(reference.severity
+        == fsim::runtime::simir::AssertionSeverity::failure);
+    assert(reference.severity == compiled.severity);
+    assert(reference.message == compiled.message);
+    assert(reference.line == compiled.line);
+    assert(reference.column == compiled.column);
+    assert(reference.message.find("fatal\nsource\tmessage \"quoted\"")
+        != std::string::npos);
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 1);
-  assert(compiled.compiled_modules == 1);
+    assert(compiled.compiled_processes == 1);
+    assert(compiled.compiled_modules == 1);
 #else
-  assert(compiled.compiled_processes == 0);
-  assert(compiled.compiled_modules == 0);
+    assert(compiled.compiled_processes == 0);
+    assert(compiled.compiled_modules == 0);
 #endif
 }
 
 void test_vhdl_array_attributes(
     const std::filesystem::path& directory,
     const std::filesystem::path& source,
-    const fsim::project::Optimization optimization) {
-  fsim::project::Config config;
-  config.base_directory = directory;
-  config.project.name = "vhdl-array-attribute-test";
-  config.project.top = "vhdl:work.attribute_app(rtl)";
-  config.project.time_resolution = "1ns";
-  config.build.optimization = optimization;
-  config.build.cache_path =
-      directory
-      / (optimization == fsim::project::Optimization::o0
-             ? "attribute-cache-o0"
-             : "attribute-cache-o2");
-  config.run.max_deltas = 1000;
+    const fsim::project::Optimization optimization)
+{
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "vhdl-array-attribute-test";
+    config.project.top = "vhdl:work.attribute_app(rtl)";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path = directory
+        / (optimization == fsim::project::Optimization::o0
+                ? "attribute-cache-o0"
+                : "attribute-cache-o2");
+    config.run.max_deltas = 1000;
 
-  fsim::project::SourceSet sources;
-  sources.language = fsim::project::Language::vhdl;
-  sources.standard = "2008";
-  sources.library = "work";
-  sources.files.push_back(source);
-  config.source_sets.push_back(std::move(sources));
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::vhdl;
+    sources.standard = "2008";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
 
-  fsim::diagnostic::Engine diagnostics;
-  auto reference_project =
-      fsim::app::build_project(config, diagnostics);
-  auto compiled_project =
-      fsim::app::build_project(config, diagnostics);
-  if (!reference_project || !compiled_project) {
-    print_diagnostics(diagnostics);
-  }
-  assert(reference_project);
-  assert(compiled_project);
+    fsim::diagnostic::Engine diagnostics;
+    auto reference_project = fsim::app::build_project(config, diagnostics);
+    auto compiled_project = fsim::app::build_project(config, diagnostics);
+    if (!reference_project || !compiled_project) {
+        print_diagnostics(diagnostics);
+    }
+    assert(reference_project);
+    assert(compiled_project);
 
-  const std::array<std::string, 12> paths{
-      "attribute_app.descending_left",
-      "attribute_app.descending_right",
-      "attribute_app.descending_low",
-      "attribute_app.descending_high",
-      "attribute_app.descending_length",
-      "attribute_app.descending_ascending",
-      "attribute_app.ascending_left",
-      "attribute_app.ascending_right",
-      "attribute_app.ascending_low",
-      "attribute_app.ascending_high",
-      "attribute_app.ascending_length",
-      "attribute_app.ascending_ascending"};
-  const auto reference = run(
-      std::move(*reference_project),
-      fsim::app::SimulationEngine::interpreter,
-      paths);
-  const auto compiled = run(
-      std::move(*compiled_project),
-      fsim::app::SimulationEngine::compiled,
-      paths);
-  assert(reference.result.status == fsim::runtime::RunStatus::completed);
-  assert(reference.result.status == compiled.result.status);
-  assert(reference.values == compiled.values);
-  assert((
-      compiled.values
-      == std::vector<std::string>{
-          "00000000000000000000000000000111",
-          "00000000000000000000000000000100",
-          "00000000000000000000000000000100",
-          "00000000000000000000000000000111",
-          "00000000000000000000000000000100",
-          "0",
-          "00000000000000000000000000000010",
-          "00000000000000000000000000000101",
-          "00000000000000000000000000000010",
-          "00000000000000000000000000000101",
-          "00000000000000000000000000000100",
-          "1"}));
+    const std::array<std::string, 12> paths {
+        "attribute_app.descending_left",
+        "attribute_app.descending_right",
+        "attribute_app.descending_low",
+        "attribute_app.descending_high",
+        "attribute_app.descending_length",
+        "attribute_app.descending_ascending",
+        "attribute_app.ascending_left",
+        "attribute_app.ascending_right",
+        "attribute_app.ascending_low",
+        "attribute_app.ascending_high",
+        "attribute_app.ascending_length",
+        "attribute_app.ascending_ascending"
+    };
+    const auto reference = run(
+        std::move(*reference_project),
+        fsim::app::SimulationEngine::interpreter,
+        paths);
+    const auto compiled = run(
+        std::move(*compiled_project),
+        fsim::app::SimulationEngine::compiled,
+        paths);
+    assert(reference.result.status == fsim::runtime::RunStatus::completed);
+    assert(reference.result.status == compiled.result.status);
+    assert(reference.values == compiled.values);
+    assert((
+        compiled.values
+        == std::vector<std::string> {
+            "00000000000000000000000000000111",
+            "00000000000000000000000000000100",
+            "00000000000000000000000000000100",
+            "00000000000000000000000000000111",
+            "00000000000000000000000000000100",
+            "0",
+            "00000000000000000000000000000010",
+            "00000000000000000000000000000101",
+            "00000000000000000000000000000010",
+            "00000000000000000000000000000101",
+            "00000000000000000000000000000100",
+            "1" }));
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 1);
-  assert(compiled.compiled_modules == 1);
+    assert(compiled.compiled_processes == 1);
+    assert(compiled.compiled_modules == 1);
 #else
-  assert(compiled.compiled_processes == 0);
-  assert(compiled.compiled_modules == 0);
+    assert(compiled.compiled_processes == 0);
+    assert(compiled.compiled_modules == 0);
 #endif
 }
 
-}  // namespace
+} // namespace
 
-int main() {
-  const auto suffix =
-      std::chrono::steady_clock::now().time_since_epoch().count();
-  TemporaryDirectory directory{
-      std::filesystem::temp_directory_path()
-      / ("fsim-expression-application-test-"
-         + std::to_string(suffix))};
-  std::filesystem::create_directories(directory.path);
+int main()
+{
+    const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
+    TemporaryDirectory directory {
+        std::filesystem::temp_directory_path()
+        / ("fsim-expression-application-test-"
+            + std::to_string(suffix))
+    };
+    std::filesystem::create_directories(directory.path);
 
-  const auto source = directory.path / "wildcard_equality.sv";
-  {
-    std::ofstream output(source);
-    output << R"(
+    const auto source = directory.path / "wildcard_equality.sv";
+    {
+        std::ofstream output(source);
+        output << R"(
 module wildcard_equality_app;
   logic masked;
   logic left_unknown;
@@ -1130,11 +1420,11 @@ module wildcard_equality_app;
   end
 endmodule
 )";
-  }
-  const auto vhdl_source = directory.path / "shift_rotate.vhd";
-  {
-    std::ofstream output(vhdl_source);
-    output << R"(
+    }
+    const auto vhdl_source = directory.path / "shift_rotate.vhd";
+    {
+        std::ofstream output(vhdl_source);
+        output << R"(
 entity shift_rotate_app is
 end entity;
 
@@ -1245,12 +1535,11 @@ begin
       "01011010" when others;
 end architecture;
 )";
-  }
-  const auto external_mismatch_source =
-      directory.path / "external_mismatch.vhd";
-  {
-    std::ofstream output(external_mismatch_source);
-    output << R"(
+    }
+    const auto external_mismatch_source = directory.path / "external_mismatch.vhd";
+    {
+        std::ofstream output(external_mismatch_source);
+        output << R"(
 entity external_mismatch_app is
 end entity;
 
@@ -1262,12 +1551,11 @@ begin
     << signal .external_mismatch_app.source_value : signed(6 downto 0) >>;
 end architecture;
 )";
-  }
-  const auto verilog_power_source =
-      directory.path / "power.v";
-  {
-    std::ofstream output(verilog_power_source);
-    output << R"(
+    }
+    const auto verilog_power_source = directory.path / "power.v";
+    {
+        std::ofstream output(verilog_power_source);
+        output << R"(
 module verilog_power_app;
   reg [7:0] positive;
   reg [15:0] left_associative;
@@ -1278,11 +1566,11 @@ module verilog_power_app;
   end
 endmodule
 )";
-  }
-  const auto clog2_source = directory.path / "clog2.sv";
-  {
-    std::ofstream output(clog2_source);
-    output << R"(
+    }
+    const auto clog2_source = directory.path / "clog2.sv";
+    {
+        std::ofstream output(clog2_source);
+        output << R"(
 module clog2_child #(
   parameter int DEPTH = 1,
   localparam int WIDTH = $clog2(DEPTH)
@@ -1299,11 +1587,11 @@ module clog2_application;
   clog2_child #(.DEPTH(17)) wide(.result(wide_result));
 endmodule
 )";
-  }
-  const auto signedness_source = directory.path / "signedness_cast.sv";
-  {
-    std::ofstream output(signedness_source);
-    output << R"(
+    }
+    const auto signedness_source = directory.path / "signedness_cast.sv";
+    {
+        std::ofstream output(signedness_source);
+        output << R"(
 module signedness_cast_app #(
   parameter int PARAMETER_POWER = 3 ** 4
 );
@@ -1473,12 +1761,32 @@ module signedness_cast_app #(
   end
 endmodule
 )";
-  }
-  const auto concurrent_assertion_source =
-      directory.path / "concurrent_assertion.vhd";
-  {
-    std::ofstream output(concurrent_assertion_source);
-    output << R"(
+    }
+    const auto literal_closure_source = directory.path / "literal_closure.sv";
+    {
+        std::ofstream output(literal_closure_source);
+        output << R"(
+module literal_closure_app;
+  logic [256:0] decimal_x;
+  logic [256:0] decimal_z;
+  logic [256:0] decimal_question;
+  logic [256:0] unbased_one;
+  logic [256:0] unbased_x;
+  initial begin
+    decimal_x = 257'dx;
+    decimal_z = 257'dz;
+    decimal_question = 257'd?;
+    unbased_one = '1;
+    unbased_x = 'x;
+    $finish;
+  end
+endmodule
+)";
+    }
+    const auto concurrent_assertion_source = directory.path / "concurrent_assertion.vhd";
+    {
+        std::ofstream output(concurrent_assertion_source);
+        output << R"(
 entity concurrent_assertion_app is
 end entity;
 
@@ -1490,12 +1798,11 @@ begin
     report "unreachable concurrent assertion" severity failure;
 end architecture;
 )";
-  }
-  const auto falling_edge_source =
-      directory.path / "falling_edge.vhd";
-  {
-    std::ofstream output(falling_edge_source);
-    output << R"(
+    }
+    const auto falling_edge_source = directory.path / "falling_edge.vhd";
+    {
+        std::ofstream output(falling_edge_source);
+        output << R"(
 entity falling_edge_app is
 end entity;
 
@@ -1618,11 +1925,11 @@ begin
   end process;
 end architecture;
 )";
-  }
-  const auto stop_source = directory.path / "stop.sv";
-  {
-    std::ofstream output(stop_source);
-    output << R"(
+    }
+    const auto stop_source = directory.path / "stop.sv";
+    {
+        std::ofstream output(stop_source);
+        output << R"(
 module stop_app;
   logic before_stop;
   logic after_stop;
@@ -1636,20 +1943,143 @@ module stop_app;
   final final_hit = 1'b1;
 endmodule
 )";
-  }
-  const auto fatal_source = directory.path / "fatal.sv";
-  {
-    std::ofstream output(fatal_source);
-    output << R"(
+    }
+    const auto fatal_source = directory.path / "fatal.sv";
+    {
+        std::ofstream output(fatal_source);
+        output << R"(
 module fatal_app;
   initial $fatal(1, "fatal\nsource\tmessage \"quoted\"");
 endmodule
 )";
-  }
-  const auto attribute_source = directory.path / "attributes.vhd";
-  {
-    std::ofstream output(attribute_source);
-    output << R"(
+    }
+    const auto exit_source = directory.path / "exit.sv";
+    {
+        std::ofstream output(exit_source);
+        output << R"(
+program first_program(
+    output logic after_exit,
+    output logic background);
+  initial begin
+    after_exit = 1'b0;
+    background = 1'b0;
+    fork
+      begin
+        #5 background = 1'b1;
+      end
+    join_none
+    #1 $exit();
+    after_exit = 1'b1;
+  end
+endprogram
+
+program second_program(output logic done);
+  initial begin
+    done = 1'b0;
+    #2 done = 1'b1;
+  end
+endprogram
+
+module exit_app;
+  logic first_after;
+  logic first_background;
+  logic second_done;
+  logic module_late;
+  logic final_hit;
+  first_program first(first_after, first_background);
+  second_program second(second_done);
+  initial begin
+    module_late = 1'b0;
+    #3 module_late = 1'b1;
+  end
+  final final_hit = 1'b1;
+endmodule
+)";
+    }
+    const auto sampled_source = directory.path / "sampled_values.sv";
+    {
+        std::ofstream output(sampled_source);
+        output << R"(
+module sampled_value_app;
+  logic clock;
+  logic data;
+  logic gate;
+  logic [6:0] first;
+  logic [6:0] second;
+  logic [6:0] third;
+  logic [3:0] explicit_first;
+  logic [3:0] explicit_second;
+  logic [3:0] explicit_third;
+  logic [4:0] global_past_first;
+  logic [4:0] global_past_second;
+  logic [4:0] global_past_third;
+  logic [4:0] global_future_first;
+  logic [4:0] global_future_second;
+  logic [4:0] global_future_third;
+  initial begin
+    @(posedge clock);
+    first = {$sampled(data), $rose(data), $fell(data),
+             $stable(data), $changed(data), $past(data), $past(data, 2)};
+    explicit_first = {$sampled(data, @(posedge clock)),
+                      $rose(data, @(posedge clock)),
+                      $past(data, 1, , @(posedge clock)),
+                      $past(data, 1, gate, @(posedge clock))};
+    global_past_first = {$past_gclk(data), $rose_gclk(data),
+                         $fell_gclk(data), $stable_gclk(data),
+                         $changed_gclk(data)};
+    global_future_first = {$future_gclk(data), $rising_gclk(data),
+                           $falling_gclk(data), $steady_gclk(data),
+                           $changing_gclk(data)};
+    @(posedge clock);
+    second = {$sampled(data), $rose(data), $fell(data),
+              $stable(data), $changed(data), $past(data), $past(data, 2)};
+    explicit_second = {$sampled(data, @(posedge clock)),
+                       $rose(data, @(posedge clock)),
+                       $past(data, 1, , @(posedge clock)),
+                       $past(data, 1, gate, @(posedge clock))};
+    global_past_second = {$past_gclk(data), $rose_gclk(data),
+                          $fell_gclk(data), $stable_gclk(data),
+                          $changed_gclk(data)};
+    global_future_second = {$future_gclk(data), $rising_gclk(data),
+                            $falling_gclk(data), $steady_gclk(data),
+                            $changing_gclk(data)};
+    @(posedge clock);
+    third = {$sampled(data), $rose(data), $fell(data),
+             $stable(data), $changed(data), $past(data), $past(data, 2)};
+    explicit_third = {$sampled(data, @(posedge clock)),
+                      $fell(data, @(posedge clock)),
+                      $past(data, 1, , @(posedge clock)),
+                      $past(data, 1, gate, @(posedge clock))};
+    global_past_third = {$past_gclk(data), $rose_gclk(data),
+                         $fell_gclk(data), $stable_gclk(data),
+                         $changed_gclk(data)};
+    global_future_third = {$future_gclk(data), $rising_gclk(data),
+                           $falling_gclk(data), $steady_gclk(data),
+                           $changing_gclk(data)};
+  end
+  initial begin
+    clock = 1'b0;
+    data = 1'b0;
+    gate = 1'b1;
+    #1 data = 1'b1;
+    clock = 1'b1;
+    #1 gate = 1'b0;
+    clock = 1'b0;
+    #1 data = 1'b0;
+    clock = 1'b1;
+    #1 gate = 1'b1;
+    clock = 1'b0;
+    #1 data = 1'b1;
+    clock = 1'b1;
+    #1 $finish;
+  end
+endmodule
+)";
+    }
+    const auto attribute_source = directory.path / "attributes.vhd";
+    {
+        std::ofstream output(attribute_source);
+        output << R"(
 entity attribute_app is
 end entity;
 
@@ -1687,85 +2117,111 @@ begin
   end process;
 end architecture;
 )";
-  }
+    }
 
-  test_wildcard_equality(
-      directory.path, source, fsim::project::Optimization::o0);
-  test_wildcard_equality(
-      directory.path, source, fsim::project::Optimization::o2);
-  test_vhdl_shift_rotate(
-      directory.path,
-      vhdl_source,
-      fsim::project::Optimization::o0);
-  test_vhdl_shift_rotate(
-      directory.path,
-      vhdl_source,
-      fsim::project::Optimization::o2);
-  test_vhdl_external_name_mismatch(
-      directory.path, external_mismatch_source);
-  test_verilog_power(
-      directory.path,
-      verilog_power_source,
-      fsim::project::Optimization::o0);
-  test_verilog_power(
-      directory.path,
-      verilog_power_source,
-      fsim::project::Optimization::o2);
-  test_systemverilog_clog2(
-      directory.path,
-      clog2_source,
-      fsim::project::Optimization::o0);
-  test_systemverilog_clog2(
-      directory.path,
-      clog2_source,
-      fsim::project::Optimization::o2);
-  test_systemverilog_signedness_casts(
-      directory.path,
-      signedness_source,
-      fsim::project::Optimization::o0);
-  test_systemverilog_signedness_casts(
-      directory.path,
-      signedness_source,
-      fsim::project::Optimization::o2);
-  test_vhdl_concurrent_assertion(
-      directory.path,
-      concurrent_assertion_source,
-      fsim::project::Optimization::o0);
-  test_vhdl_concurrent_assertion(
-      directory.path,
-      concurrent_assertion_source,
-      fsim::project::Optimization::o2);
-  test_vhdl_falling_edge(
-      directory.path,
-      falling_edge_source,
-      fsim::project::Optimization::o0);
-  test_vhdl_falling_edge(
-      directory.path,
-      falling_edge_source,
-      fsim::project::Optimization::o2);
-  test_verilog_stop(
-      directory.path,
-      stop_source,
-      fsim::project::Optimization::o0);
-  test_verilog_stop(
-      directory.path,
-      stop_source,
-      fsim::project::Optimization::o2);
-  test_systemverilog_fatal(
-      directory.path,
-      fatal_source,
-      fsim::project::Optimization::o0);
-  test_systemverilog_fatal(
-      directory.path,
-      fatal_source,
-      fsim::project::Optimization::o2);
-  test_vhdl_array_attributes(
-      directory.path,
-      attribute_source,
-      fsim::project::Optimization::o0);
-  test_vhdl_array_attributes(
-      directory.path,
-      attribute_source,
-      fsim::project::Optimization::o2);
-  return 0;
+    test_wildcard_equality(
+        directory.path, source, fsim::project::Optimization::o0);
+    test_wildcard_equality(
+        directory.path, source, fsim::project::Optimization::o2);
+    test_vhdl_shift_rotate(
+        directory.path,
+        vhdl_source,
+        fsim::project::Optimization::o0);
+    test_vhdl_shift_rotate(
+        directory.path,
+        vhdl_source,
+        fsim::project::Optimization::o2);
+    test_vhdl_external_name_mismatch(
+        directory.path, external_mismatch_source);
+    test_verilog_power(
+        directory.path,
+        verilog_power_source,
+        fsim::project::Optimization::o0);
+    test_verilog_power(
+        directory.path,
+        verilog_power_source,
+        fsim::project::Optimization::o2);
+    test_systemverilog_clog2(
+        directory.path,
+        clog2_source,
+        fsim::project::Optimization::o0);
+    test_systemverilog_clog2(
+        directory.path,
+        clog2_source,
+        fsim::project::Optimization::o2);
+    test_systemverilog_signedness_casts(
+        directory.path,
+        signedness_source,
+        fsim::project::Optimization::o0);
+    test_systemverilog_signedness_casts(
+        directory.path,
+        signedness_source,
+        fsim::project::Optimization::o2);
+    test_systemverilog_literal_closure(
+        directory.path,
+        literal_closure_source,
+        fsim::project::Optimization::o0);
+    test_systemverilog_literal_closure(
+        directory.path,
+        literal_closure_source,
+        fsim::project::Optimization::o2);
+    test_vhdl_concurrent_assertion(
+        directory.path,
+        concurrent_assertion_source,
+        fsim::project::Optimization::o0);
+    test_vhdl_concurrent_assertion(
+        directory.path,
+        concurrent_assertion_source,
+        fsim::project::Optimization::o2);
+    test_vhdl_falling_edge(
+        directory.path,
+        falling_edge_source,
+        fsim::project::Optimization::o0);
+    test_vhdl_falling_edge(
+        directory.path,
+        falling_edge_source,
+        fsim::project::Optimization::o2);
+    test_verilog_stop(
+        directory.path,
+        stop_source,
+        fsim::project::Optimization::o0);
+    test_verilog_stop(
+        directory.path,
+        stop_source,
+        fsim::project::Optimization::o2);
+    test_systemverilog_exit(
+        directory.path,
+        exit_source,
+        fsim::project::Optimization::o0);
+    test_systemverilog_exit(
+        directory.path,
+        exit_source,
+        fsim::project::Optimization::o2);
+    test_invalid_systemverilog_exit(directory.path);
+    test_invalid_systemverilog_sampled_value(directory.path);
+    test_systemverilog_sampled_values(
+        directory.path,
+        sampled_source,
+        fsim::project::Optimization::o0);
+    test_systemverilog_sampled_values(
+        directory.path,
+        sampled_source,
+        fsim::project::Optimization::o2);
+    test_systemverilog_fatal(
+        directory.path,
+        fatal_source,
+        fsim::project::Optimization::o0);
+    test_systemverilog_fatal(
+        directory.path,
+        fatal_source,
+        fsim::project::Optimization::o2);
+    test_vhdl_array_attributes(
+        directory.path,
+        attribute_source,
+        fsim::project::Optimization::o0);
+    test_vhdl_array_attributes(
+        directory.path,
+        attribute_source,
+        fsim::project::Optimization::o2);
+    return 0;
 }

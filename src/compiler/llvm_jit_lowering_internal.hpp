@@ -166,6 +166,7 @@ struct ValueOperationLowerer {
         dynamic_offset;
 
     void lower(const runtime::simir::CopyRegister& operation);
+    void lower(const runtime::simir::ConvertToTwoState& operation);
     void lower(const runtime::simir::UnaryNot& operation);
     void lower(const runtime::simir::LogicalNot& operation);
     void lower(const runtime::simir::LogicalBinary& operation);
@@ -341,6 +342,7 @@ struct ContainerOperationLowerer {
 
     void lower(const runtime::simir::ResizeContainer&);
     void lower(const runtime::simir::SystemVerilogScalarBinary&);
+    void lower(const runtime::simir::SystemVerilogMath&);
     void lower(const runtime::simir::CopyContainerRegister&);
     void lower(const runtime::simir::ConditionalContainerSelect&);
     void lower(const runtime::simir::CompareContainers&);

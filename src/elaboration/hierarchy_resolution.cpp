@@ -36,30 +36,48 @@ void HierarchyBuilder::finish() {
                 {});
         }
     }
+    for (const auto* directive : compilation_unit_systemverilog_binds_) {
+        if (directive != nullptr
+            && !used_compilation_unit_systemverilog_binds_.contains(
+                directive)) {
+            report(
+                "FSIM-ELAB-SVBIND-002",
+                "bind target '" + directive->target
+                    + "' was not found in the elaborated hierarchy",
+                directive->span);
+        }
+    }
 }
 
 ResolutionKind HierarchyBuilder::native_resolution(
     const SignalInfo& signal) {
+    const auto& net_type = signal.systemverilog_net_type.empty()
+        ? signal.type_name
+        : signal.systemverilog_net_type;
     if (signal.type_name == "std_logic"
         || signal.type_name == "std_logic_vector") {
         return ResolutionKind::std_logic;
     }
-    if (signal.type_name == "wire"
-        || signal.type_name == "tri"
-        || signal.type_name == "tri0"
-        || signal.type_name == "tri1"
-        || signal.type_name == "trireg"
-        || signal.type_name == "supply0"
-        || signal.type_name == "supply1") {
+    if (net_type == "wire"
+        || net_type == "tri"
+        || net_type == "tri0"
+        || net_type == "tri1"
+        || net_type == "trireg"
+        || net_type == "supply0"
+        || net_type == "supply1") {
         return ResolutionKind::sv_wire;
     }
-    if (signal.type_name == "wand"
-        || signal.type_name == "triand") {
+    if (net_type == "wand"
+        || net_type == "triand") {
         return ResolutionKind::sv_wand;
     }
-    if (signal.type_name == "wor"
-        || signal.type_name == "trior") {
+    if (net_type == "wor"
+        || net_type == "trior") {
         return ResolutionKind::sv_wor;
+    }
+    if (!signal.systemverilog_net_type.empty()
+        && signal.systemverilog_net_type != "uwire") {
+        return ResolutionKind::sv_wire;
     }
     return ResolutionKind::none;
 }
@@ -82,12 +100,113 @@ HierarchyBuilder::explicit_resolution(
         user != vhdl_resolution_kinds_.end()) {
         return user->second;
     }
+    if (const auto user = systemverilog_resolution_kinds_.find(found->second);
+        user != systemverilog_resolution_kinds_.end()) {
+        return user->second;
+    }
     report(
         "FSIM-ELAB-BIND-050",
         "unknown resolver '" + found->second
             + "'; expected \"std_logic\" or \"sv_wire\"",
         {});
     return ResolutionKind::none;
+}
+
+void HierarchyBuilder::register_systemverilog_resolution_functions(
+    const DesignUnit& unit)
+{
+    if (unit.language != frontend::Language::SystemVerilog2017) {
+        return;
+    }
+    for (const auto& alias : unit.type_aliases) {
+        const auto& resolver = alias.systemverilog_resolution_function;
+        if (alias.declaration_kind
+                != frontend::TypeDeclarationKind::SystemVerilogNettype
+            || resolver.empty()) {
+            continue;
+        }
+        const frontend::DesignUnit* owner = &unit;
+        auto designator = resolver;
+        if (const auto separator = resolver.rfind("::");
+            separator != std::string::npos) {
+            const auto package_name = resolver.substr(0, separator);
+            owner = find_systemverilog_package(unit, package_name);
+            designator = resolver.substr(separator + 2);
+        }
+        std::vector<const frontend::FunctionDeclaration*> matches;
+        if (owner != nullptr) {
+            for (const auto& function : owner->functions) {
+                if (function.name == designator && function.defined) {
+                    matches.push_back(&function);
+                }
+            }
+        }
+        if (matches.size() != 1) {
+            report(
+                matches.empty()
+                    ? "FSIM-ELAB-SVNETTYPE-001"
+                    : "FSIM-ELAB-SVNETTYPE-002",
+                matches.empty()
+                    ? "SystemVerilog nettype resolution function '"
+                        + resolver
+                        + "' is not visible with an executable body"
+                    : "SystemVerilog nettype resolution function '"
+                        + resolver + "' is ambiguous",
+                alias.span);
+            continue;
+        }
+        const auto& function = *matches.front();
+        const auto alias_width = alias.type.width();
+        const auto return_width = function.return_type.width();
+        const bool profile_matches = function.arguments.size() == 1
+            && function.arguments.front().type.systemverilog_container
+            && function.arguments.front().type.systemverilog_container->kind
+                == frontend::SystemVerilogContainerKind::DynamicArray
+            && alias_width && return_width
+            && *alias_width == *return_width
+            && alias.type.domain == function.return_type.domain;
+        if (!profile_matches) {
+            report(
+                "FSIM-ELAB-SVNETTYPE-003",
+                "SystemVerilog nettype resolution function '" + resolver
+                    + "' must take one dynamic array of the net base type "
+                      "and return that base type",
+                function.span);
+            continue;
+        }
+        const auto& body = function.statements;
+        const bool returns_first = body.size() == 1
+            && body.front().kind == frontend::StatementKind::Return
+            && body.front().value.kind == frontend::ExpressionKind::Index
+            && body.front().value.operands.size() == 2
+            && body.front().value.operands.front().kind
+                == frontend::ExpressionKind::Identifier
+            && body.front().value.operands.front().text
+                == function.arguments.front().name
+            && body.front().value.operands.back().kind
+                == frontend::ExpressionKind::IntegerLiteral
+            && body.front().value.operands.back().text == "0";
+        if (!returns_first) {
+            report(
+                "FSIM-ELAB-SVNETTYPE-004",
+                "the executable SystemVerilog nettype resolver '" + resolver
+                    + "' is outside the retained deterministic resolution "
+                      "forms",
+                function.span);
+            continue;
+        }
+        const auto [entry, inserted] = systemverilog_resolution_kinds_.emplace(
+            resolver, ResolutionKind::sv_user_first);
+        if (inserted) {
+            systemverilog_resolution_kind_insertions_.push_back(resolver);
+        } else if (entry->second != ResolutionKind::sv_user_first) {
+            report(
+                "FSIM-ELAB-SVNETTYPE-002",
+                "SystemVerilog nettype resolution function '" + resolver
+                    + "' has conflicting visible bodies",
+                alias.span);
+        }
+    }
 }
 
 void HierarchyBuilder::register_vhdl_resolution_functions(

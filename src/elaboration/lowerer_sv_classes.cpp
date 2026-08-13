@@ -7,6 +7,14 @@ namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
 
+namespace {
+    [[maybe_unused]] constexpr std::string_view retired_string_copyout_diagnostic {
+        "FSIM-ELAB-SVCLASS-018"
+    };
+    [[maybe_unused]] constexpr std::string_view
+        retired_static_string_copyout_diagnostic { "FSIM-ELAB-SVCLASS-019" };
+} // namespace
+
 bool Lowerer::lower_class_assignment(const Statement& statement) {
   constexpr std::string_view property_prefix{"@sv-property:"};
   constexpr std::string_view static_property_prefix{"@sv-static-property:"};
@@ -346,7 +354,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_class_expression(
          expression.call_argument_directions | std::views::drop(1)) {
       directions.push_back(static_cast<std::uint8_t>(direction));
     }
-    process_.operations.emplace_back(ClassMethodCall{
+    auto inline_constraints = lower_inline_constraints(expression);
+    if (!inline_constraints)
+        return std::nullopt;
+    ClassMethodCall operation {
         destination,
         *receiver,
         expression.text.substr(selected_prefix.size()),
@@ -355,19 +366,28 @@ Lowerer::ExpressionAttempt Lowerer::lower_class_expression(
         std::move(directions),
         static_cast<std::uint32_t>(result_width),
         selected_prefix == method_prefix,
-        actual_kinds});
+        actual_kinds
+    };
+    operation.inline_constraints = std::move(*inline_constraints);
+    process_.operations.emplace_back(std::move(operation));
     for (std::size_t index = 0; index < actuals.size(); ++index) {
       if (expression.call_argument_directions[index + 1U]
           == frontend::PortDirection::Input) {
         continue;
       }
       if (actual_kinds[index] == 1U) {
-        report(
-            "FSIM-ELAB-SVCLASS-018",
-            "string output and inout class method actuals are not yet "
-            "executable",
-            expression.operands[index + 1U].span);
-        return std::nullopt;
+          frontend::Type actual_type;
+          actual_type.domain = frontend::ValueDomain::String;
+          lower_callable_copy_out(
+              expression.operands[index + 1U],
+              actual_type,
+              { },
+              actuals[index],
+              { },
+              true,
+              false,
+              "@class_function_copyout_" + std::to_string(index));
+          continue;
       }
       frontend::Type actual_type;
       actual_type.domain = actual_domains[index];
@@ -460,12 +480,13 @@ Lowerer::ExpressionAttempt Lowerer::lower_class_expression(
         continue;
       }
       if (actual_kinds[index] == 1U) {
-        report(
-            "FSIM-ELAB-SVCLASS-019",
-            "string output and inout class static method actuals are not yet "
-            "executable",
-            expression.operands[index].span);
-        return std::nullopt;
+          frontend::Type actual_type;
+          actual_type.domain = frontend::ValueDomain::String;
+          lower_callable_copy_out(
+              expression.operands[index], actual_type, { }, actuals[index], { },
+              true, false,
+              "@class_static_function_copyout_" + std::to_string(index));
+          continue;
       }
       frontend::Type actual_type;
       actual_type.domain = actual_domains[index];

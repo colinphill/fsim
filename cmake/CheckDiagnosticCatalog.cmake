@@ -27,8 +27,10 @@ file(
   "${FSIM_SOURCE_DIR}/src/*.cpp"
   "${FSIM_SOURCE_DIR}/src/*.h"
   "${FSIM_SOURCE_DIR}/src/*.hpp"
+  "${FSIM_SOURCE_DIR}/src/*.tpp"
   "${FSIM_SOURCE_DIR}/include/*.h"
   "${FSIM_SOURCE_DIR}/include/*.hpp"
+  "${FSIM_SOURCE_DIR}/include/*.tpp"
 )
 
 set(FSIM_EMITTED_CODES)

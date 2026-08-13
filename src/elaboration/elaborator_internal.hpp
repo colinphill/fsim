@@ -21,6 +21,8 @@
 
 namespace fsim::elaboration {
 namespace elaboration_detail {
+
+    std::string systemverilog_type_identity(const frontend::Type& type);
     using frontend::AssignmentKind;
     using frontend::DesignUnit;
     using frontend::Expression;
@@ -48,6 +50,10 @@ namespace elaboration_detail {
         std::uint32_t width { 32 };
         bool is_signed { true };
         bool unsized { };
+        // IEEE 1800 symbolic unbounded parameter value (`$`). It is retained
+        // independently from the packed payload and is only consumable by
+        // `$isunbounded`; ordinary value conversion is ill-formed.
+        bool unbounded { };
         frontend::ValueDomain domain { frontend::ValueDomain::Logic4 };
         std::string nominal_type;
         frontend::SourceSpan source;
@@ -183,6 +189,10 @@ namespace elaboration_detail {
     void substitute_systemverilog_parameters(
         frontend::GenerateBody& body,
         const SystemVerilogConstantEnvironment& environment);
+
+    void expand_systemverilog_lets(
+        DesignUnit& unit,
+        std::vector<Diagnostic>& diagnostics);
     [[nodiscard]] bool is_two_state_domain(
         const frontend::ValueDomain domain) noexcept;
 #include "elaborator_value_helpers.hpp"
@@ -835,6 +845,7 @@ public:
         const std::vector<frontend::FunctionDeclaration>& functions,
         const std::vector<frontend::TaskDeclaration>& tasks,
         const std::vector<frontend::ProcedureDeclaration>& procedures,
+        frontend::SystemVerilogScalarEvaluationContext scalar_context,
         std::vector<Diagnostic>& diagnostics);
 
     Process lower_process(
@@ -849,6 +860,9 @@ public:
         const std::size_t order);
 
     [[nodiscard]] std::vector<Process> take_generated_processes();
+
+    void set_systemverilog_program_owner(
+        std::optional<std::uint32_t> owner) noexcept;
 
 private:
     [[nodiscard]] const frontend::Type* visible_type(
@@ -923,6 +937,7 @@ private:
     void lower_fork(const Statement& statement);
 
     void lower_event_trigger(const Statement& statement);
+    void lower_wait_order(const Statement& statement);
 
     static const Statement* recognized_vhdl_edge_guard(
         const frontend::Process& source);
@@ -1132,8 +1147,46 @@ private:
         const Expression& expression,
         std::size_t expected_width,
         const frontend::Type& expected_type);
+    struct InsideIntegralOperand {
+        RegisterId value { };
+        std::size_t width { };
+        bool signed_value { };
+    };
+    struct SizedIntegralComparison {
+        RegisterId lhs { };
+        RegisterId rhs { };
+        bool signed_value { };
+    };
+    struct CasePatternBinding {
+        std::string name;
+        RegisterId value { };
+        bool signed_value { };
+        std::optional<frontend::PackedRange> packed_range;
+        std::optional<frontend::IntegerRange> integer_range;
+        std::vector<frontend::PackedMember> members;
+        const frontend::Type* type { };
+    };
+    struct CasePatternMatch {
+        RegisterId condition { };
+        std::vector<CasePatternBinding> bindings;
+    };
+    std::optional<InsideIntegralOperand> lower_inside_integral_operand(
+        const Expression& expression,
+        std::string_view diagnostic_code,
+        std::string_view diagnostic_message);
+    SizedIntegralComparison size_integral_comparison(
+        InsideIntegralOperand lhs,
+        InsideIntegralOperand rhs);
+    std::optional<CasePatternMatch> lower_case_match_pattern(
+        const Expression& pattern,
+        RegisterId value,
+        std::size_t width,
+        bool signed_value,
+        const frontend::Type* type);
     ExpressionAttempt lower_membership_expression(
         const Expression& expression);
+    std::optional<std::vector<runtime::SystemVerilogConstraintTemplate>>
+    lower_inline_constraints(const Expression& expression);
     ExpressionAttempt lower_class_expression(
         const Expression& expression,
         std::size_t expected_width,
@@ -1156,7 +1209,8 @@ private:
         const std::vector<Expression>& arguments,
         std::size_t format_index,
         std::string_view call_name,
-        const frontend::SourceSpan& span);
+        const frontend::SourceSpan& span,
+        std::optional<frontend::OutputFormat> default_format = std::nullopt);
     bool lower_string_format_task(const Statement& statement);
     ExpressionAttempt lower_file_scan(const Expression& expression);
     ExpressionAttempt lower_file_binary_read(const Expression& expression);
@@ -1338,6 +1392,9 @@ private:
     [[nodiscard]] bool is_integer_expression(
         const Expression& expression) const;
 
+    [[nodiscard]] bool is_file_handle_expression(
+        const Expression& expression) const;
+
     [[nodiscard]] const frontend::FunctionDeclaration*
     visible_function(std::string_view name) const;
 
@@ -1422,6 +1479,7 @@ private:
             std::string, CallableVariableRegister>& registers);
 
     void lower_task_call(const Statement& statement);
+    [[nodiscard]] bool lower_pla_task(const Statement& statement);
     void lower_pending_tasks();
 
     void lower_task_body(std::size_t task_index);
@@ -1464,6 +1522,7 @@ private:
         RegisterId source,
         std::size_t width,
         bool sign_extend);
+    [[nodiscard]] RegisterId convert_to_two_state(RegisterId source);
     void report(std::string code, std::string message,
         frontend::SourceSpan span);
     [[nodiscard]] bool report_unsupported_cross_root_reference(
@@ -1487,8 +1546,10 @@ private:
     const std::vector<frontend::FunctionDeclaration>& functions_;
     const std::vector<frontend::TaskDeclaration>& tasks_;
     const std::vector<frontend::ProcedureDeclaration>& procedures_;
+    frontend::SystemVerilogScalarEvaluationContext scalar_context_;
     std::vector<Diagnostic>& diagnostics_;
     Process process_;
+    std::optional<std::uint32_t> systemverilog_program_owner_;
     std::vector<Process> generated_processes_;
     std::vector<SignalId> implicit_signal_dependencies_;
     RegisterId next_register_ { };
@@ -1741,6 +1802,7 @@ private:
         std::size_t stack_depth { };
         std::size_t boundary_resolver_insertions { };
         std::size_t vhdl_resolution_kind_insertions { };
+        std::size_t systemverilog_resolution_kind_insertions { };
         std::uint64_t next_interface_handle { };
     };
 
@@ -1753,6 +1815,34 @@ private:
 
     const DesignUnit* select_vhdl_configuration_root(
         const DesignUnit& configuration);
+
+    const DesignUnit* select_systemverilog_configuration_root(
+        const DesignUnit& configuration);
+
+    std::string systemverilog_configuration_identity(
+        const DesignUnit& configuration) const;
+
+    struct ConfiguredSystemVerilogInstance {
+        const DesignUnit* target { };
+        const DesignUnit* referenced_configuration { };
+        std::string configuration_identity;
+        bool applied { };
+        bool valid { true };
+    };
+
+    ConfiguredSystemVerilogInstance
+    configure_systemverilog_instance(
+        const DesignUnit& unit,
+        const frontend::Instance& instance,
+        const std::string& path);
+
+    std::vector<frontend::Instance> systemverilog_bound_instances(
+        const DesignUnit& unit,
+        const std::string& path,
+        const ConstantEnvironment& parameter_environment,
+        const ConstantDomainEnvironment& parent_domains);
+
+    void validate_systemverilog_extern_declarations();
 
     std::string vhdl_configuration_identity(
         const DesignUnit& configuration) const;
@@ -1954,6 +2044,38 @@ private:
 
     void register_vhdl_resolution_functions(
         const DesignUnit& unit);
+
+    void register_systemverilog_resolution_functions(
+        const DesignUnit& unit);
+
+    struct SystemVerilogAliasConnection {
+        std::string left;
+        std::uint64_t left_offset { };
+        std::string right;
+        std::uint64_t right_offset { };
+        std::uint64_t width { };
+        frontend::SourceSpan source;
+    };
+
+    struct SystemVerilogAliasPlan {
+        std::vector<std::vector<std::string>> whole_groups;
+        std::vector<SystemVerilogAliasConnection> connections;
+    };
+
+    SystemVerilogAliasPlan
+    apply_systemverilog_aliases(
+        const DesignUnit& unit,
+        std::span<const frontend::SignalDeclaration> ports,
+        const SystemVerilogConstantEnvironment& integral_environment,
+        const ConstantEnvironment& fallback_environment,
+        bool compile_connections,
+        bool diagnose);
+
+    void add_systemverilog_alias_connections(
+        const SystemVerilogAliasPlan& plan,
+        std::string_view path,
+        const SignalMap& signals,
+        SpecializationInfo& specialization);
 
     void set_resolution(
         const SignalId signal,
@@ -2166,6 +2288,19 @@ private:
     const DesignUnit* active_vhdl_configuration_ { };
     std::unordered_map<std::string, const DesignUnit*>
         vhdl_configurations_by_path_;
+    const DesignUnit* active_systemverilog_configuration_ { };
+    std::unordered_map<std::string, const DesignUnit*>
+        systemverilog_configurations_by_path_;
+    std::vector<const frontend::SystemVerilogBindDirective*>
+        compilation_unit_systemverilog_binds_;
+    std::unordered_map<
+        const frontend::SystemVerilogBindDirective*, std::string>
+        systemverilog_bind_libraries_;
+    std::unordered_map<std::string, std::string>
+        systemverilog_bound_instance_libraries_;
+    std::unordered_set<const frontend::SystemVerilogBindDirective*>
+        used_compilation_unit_systemverilog_binds_;
+    std::string active_systemverilog_root_name_;
     std::unordered_map<const DesignUnit*, DesignUnit>
         resolved_vhdl_entity_interfaces_;
     std::unordered_map<
@@ -2218,6 +2353,10 @@ private:
     std::unordered_map<std::string, ResolutionKind>
         vhdl_resolution_kinds_;
     std::vector<std::string> vhdl_resolution_kind_insertions_;
+    std::unordered_map<std::string, ResolutionKind>
+        systemverilog_resolution_kinds_;
+    std::vector<std::string>
+        systemverilog_resolution_kind_insertions_;
     std::unordered_map<
         ContainerObjectId,
         std::vector<ContainerBoundaryDriver>>

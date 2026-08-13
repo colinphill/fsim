@@ -1597,6 +1597,14 @@ module membership_expression;
   logic bit_match;
   logic unknown_range;
   logic short_circuit;
+  logic sized_match;
+  logic signedness_match;
+  logic concat_lhs_match;
+  logic concat_rhs_match;
+  logic nested_match;
+  logic wide_match;
+  logic sized_range;
+  logic signed_sized_range;
 
   function automatic logic [7:0] observed(input logic [7:0] value);
     return value;
@@ -1625,6 +1633,14 @@ module membership_expression;
     short_circuit =
         observed(selector) inside {
           [observed(low_bound):observed(high_bound)], failing(8'h00)};
+    sized_match = 8'h05 inside {4'h5};
+    signedness_match = signed_selector inside {8'hfb};
+    concat_lhs_match = {4'h1, 4'h5} inside {8'h15};
+    concat_rhs_match = selector inside {{4'h1, 4'h5}};
+    nested_match = 1'b1 inside {selector inside {8'h15}};
+    wide_match = 137'h15 inside {8'h15};
+    sized_range = selector inside {[4'h0:5'h1f]};
+    signed_sized_range = signed_selector inside {[-4'sd8:-16'sd2]};
   end
 endmodule
 )",
@@ -1682,40 +1698,28 @@ endmodule
     assert(value("bit_match") == "1");
     assert(value("unknown_range") == "X");
     assert(value("short_circuit") == "1");
+    assert(value("sized_match") == "1");
+    assert(value("signedness_match") == "1");
+    assert(value("concat_lhs_match") == "1");
+    assert(value("concat_rhs_match") == "1");
+    assert(value("nested_match") == "1");
+    assert(value("wide_match") == "1");
+    assert(value("sized_range") == "1");
+    assert(value("signed_sized_range") == "1");
 
     const auto reject = [](
-        const std::string_view path,
-        const std::string_view source,
-        const std::string_view code) {
-      const auto candidate = fsim::frontend::parse_text(
-          path, source,
-          fsim::frontend::Language::SystemVerilog2017);
-      assert(candidate.ok());
-      const auto rejected = fsim::elaboration::elaborate(
-          candidate.design, "sv:work.membership_negative");
-      assert(!rejected.ok());
-      assert(has_diagnostic(rejected, code));
+                            const std::string_view path,
+                            const std::string_view source,
+                            const std::string_view code) {
+        const auto candidate = fsim::frontend::parse_text(
+            path, source,
+            fsim::frontend::Language::SystemVerilog2017);
+        assert(candidate.ok());
+        const auto rejected = fsim::elaboration::elaborate(
+            candidate.design, "sv:work.membership_negative");
+        assert(!rejected.ok());
+        assert(has_diagnostic(rejected, code));
     };
-    reject(
-        "membership_width.sv",
-        R"(
-module membership_negative;
-  logic [7:0] value;
-  logic result;
-  initial result = value inside {4'h1};
-endmodule
-)",
-        "FSIM-ELAB-SVMEMBER-005");
-    reject(
-        "membership_signedness.sv",
-        R"(
-module membership_negative;
-  logic signed [7:0] value;
-  logic result;
-  initial result = value inside {8'h01};
-endmodule
-)",
-        "FSIM-ELAB-SVMEMBER-005");
     reject(
         "membership_container.sv",
         R"(
@@ -1724,16 +1728,6 @@ module membership_negative;
   logic [7:0] values[1:0];
   logic result;
   initial result = value inside {values};
-endmodule
-)",
-        "FSIM-ELAB-SVMEMBER-004");
-    reject(
-        "membership_nested.sv",
-        R"(
-module membership_negative;
-  logic [7:0] value;
-  logic result;
-  initial result = value inside {value inside {value}};
 endmodule
 )",
         "FSIM-ELAB-SVMEMBER-004");
@@ -1758,6 +1752,11 @@ module case_inside;
   logic [3:0] bit_choice;
   logic [3:0] first_selected;
   logic [3:0] short_circuit;
+  logic [3:0] sized_choice;
+  logic [3:0] signedness_choice;
+  logic [3:0] concat_choice;
+  logic [3:0] wide_choice;
+  logic [3:0] qualified_sized_choice;
 
   function automatic logic [7:0] observed(input logic [7:0] value);
     return value;
@@ -1811,6 +1810,26 @@ module case_inside;
         short_circuit = 4'ha;
       default: short_circuit = 4'hf;
     endcase
+    case (8'h05) inside
+      4'h5: sized_choice = 4'h1;
+      default: sized_choice = 4'hf;
+    endcase
+    case (signed_selector) inside
+      8'hfb: signedness_choice = 4'h2;
+      default: signedness_choice = 4'hf;
+    endcase
+    case ({4'h1, 4'h5}) inside
+      8'h15: concat_choice = 4'h3;
+      default: concat_choice = 4'hf;
+    endcase
+    case (137'h15) inside
+      8'h15: wide_choice = 4'h4;
+      default: wide_choice = 4'hf;
+    endcase
+    unique case (8'h05) inside
+      4'h5: qualified_sized_choice = 4'h5;
+      default: qualified_sized_choice = 4'hf;
+    endcase
   end
 endmodule
 )",
@@ -1862,30 +1881,25 @@ endmodule
     assert(value("bit_choice") == "1000");
     assert(value("first_selected") == "1001");
     assert(value("short_circuit") == "1010");
+    assert(value("sized_choice") == "0001");
+    assert(value("signedness_choice") == "0010");
+    assert(value("concat_choice") == "0011");
+    assert(value("wide_choice") == "0100");
+    assert(value("qualified_sized_choice") == "0101");
 
     const auto reject = [](
-        const std::string_view path,
-        const std::string_view source,
-        const std::string_view code) {
-      const auto candidate = fsim::frontend::parse_text(
-          path, source,
-          fsim::frontend::Language::SystemVerilog2017);
-      assert(candidate.ok());
-      const auto rejected = fsim::elaboration::elaborate(
-          candidate.design, "sv:work.case_inside_negative");
-      assert(!rejected.ok());
-      assert(has_diagnostic(rejected, code));
+                            const std::string_view path,
+                            const std::string_view source,
+                            const std::string_view code) {
+        const auto candidate = fsim::frontend::parse_text(
+            path, source,
+            fsim::frontend::Language::SystemVerilog2017);
+        assert(candidate.ok());
+        const auto rejected = fsim::elaboration::elaborate(
+            candidate.design, "sv:work.case_inside_negative");
+        assert(!rejected.ok());
+        assert(has_diagnostic(rejected, code));
     };
-    reject(
-        "case_inside_width.sv",
-        "module case_inside_negative; logic [7:0] s; logic r; "
-        "initial case (s) inside 4'h1: r = 1; endcase endmodule",
-        "FSIM-ELAB-SVCASEINSIDE-004");
-    reject(
-        "case_inside_signedness.sv",
-        "module case_inside_negative; logic signed [7:0] s; logic r; "
-        "initial case (s) inside 8'h1: r = 1; endcase endmodule",
-        "FSIM-ELAB-SVCASEINSIDE-004");
     reject(
         "case_inside_choice_container.sv",
         "module case_inside_negative; logic [7:0] s; logic [7:0] a[1:0]; "
@@ -1896,12 +1910,6 @@ endmodule
         "module case_inside_negative; logic [7:0] a[1:0]; logic r; "
         "initial case (a) inside 8'h1: r = 1; endcase endmodule",
         "FSIM-ELAB-SVCASEINSIDE-002");
-    reject(
-        "case_inside_nested.sv",
-        "module case_inside_negative; logic [7:0] s; logic r; "
-        "initial case (s) inside s inside {s}: r = 1; endcase endmodule",
-        "FSIM-ELAB-SVCASEINSIDE-003");
-
     const auto malformed_parsed = fsim::frontend::parse_text(
         "case_inside_malformed_hir.sv",
         "module case_inside_malformed_hir; logic [7:0] s; logic r; "

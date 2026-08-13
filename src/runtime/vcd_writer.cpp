@@ -127,10 +127,13 @@ struct VcdWriter::Impl {
   std::string buffer;
   std::vector<Declaration> declarations;
   bool started{};
+  bool checkpoint_open{};
   SimulationTick current_time{};
+  std::uint64_t byte_count{};
 
   void append(std::string_view value) {
     buffer.append(value);
+    byte_count += value.size();
     if (buffer.size() >= buffer_capacity) {
       flush();
     }
@@ -138,6 +141,7 @@ struct VcdWriter::Impl {
 
   void append(char value) {
     buffer.push_back(value);
+    ++byte_count;
     if (buffer.size() >= buffer_capacity) {
       flush();
     }
@@ -202,7 +206,8 @@ struct VcdWriter::Impl {
     if (value.size() != declaration.width) {
       throw std::invalid_argument("VCD value width does not match declaration");
     }
-    if (declaration.has_value && declaration.last_value == value) {
+    if (!checkpoint_open
+        && declaration.has_value && declaration.last_value == value) {
       return;
     }
     declaration.last_value = std::move(value);
@@ -225,7 +230,8 @@ struct VcdWriter::Impl {
     if (!started) {
       throw std::logic_error("VCD writer has not begun");
     }
-    if (declaration.has_value && declaration.last_value == value) return;
+    if (!checkpoint_open
+        && declaration.has_value && declaration.last_value == value) return;
     declaration.last_value = std::move(value);
     declaration.has_value = true;
     append('r');
@@ -401,6 +407,51 @@ void VcdWriter::change(
   impl_->write_real(declaration, formatted.text);
 }
 
+void VcdWriter::begin_checkpoint(const std::string_view command) {
+  if (!impl_->started) {
+    throw std::logic_error("VCD writer has not begun");
+  }
+  if (impl_->checkpoint_open) {
+    throw std::logic_error("VCD checkpoint is already open");
+  }
+  if (command != "dumpvars" && command != "dumpoff"
+      && command != "dumpon" && command != "dumpall") {
+    throw std::invalid_argument("invalid VCD checkpoint command");
+  }
+  impl_->append("$");
+  impl_->append(command);
+  impl_->append("\n");
+  impl_->checkpoint_open = true;
+}
+
+void VcdWriter::end_checkpoint() {
+  if (!impl_->checkpoint_open) {
+    throw std::logic_error("VCD checkpoint is not open");
+  }
+  impl_->append("$end\n");
+  impl_->checkpoint_open = false;
+}
+
+void VcdWriter::change_unknown(const VcdSignal signal) {
+  auto& declaration = impl_->get(signal);
+  if (declaration.scalar_kind == SystemVerilogScalarKind::ShortReal
+      || declaration.scalar_kind == SystemVerilogScalarKind::Real
+      || declaration.scalar_kind == SystemVerilogScalarKind::Realtime) {
+    impl_->write_real(declaration, "NaN");
+    return;
+  }
+  impl_->write_value(declaration, std::string(declaration.width, 'x'));
+}
+
+void VcdWriter::comment(const std::string_view text) {
+  if (!impl_->started) {
+    throw std::logic_error("VCD writer has not begun");
+  }
+  impl_->append("$comment ");
+  impl_->append(text);
+  impl_->append(" $end\n");
+}
+
 void VcdWriter::set_time(SimulationTick time) {
   if (!impl_->started) {
     throw std::logic_error("VCD writer has not begun");
@@ -420,5 +471,8 @@ void VcdWriter::set_time(SimulationTick time) {
 void VcdWriter::flush() { impl_->flush(); }
 bool VcdWriter::begun() const noexcept { return impl_->started; }
 SimulationTick VcdWriter::time() const noexcept { return impl_->current_time; }
+std::uint64_t VcdWriter::bytes_written() const noexcept {
+  return impl_->byte_count;
+}
 
 } // namespace fsim::runtime

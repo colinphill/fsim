@@ -171,13 +171,6 @@ systemverilog_uvm_compatibility(SystemVerilogUvmRelease release) noexcept;
     const std::filesystem::path& manifest,
     diagnostic::Engine& diagnostics);
 
-// Produces a schema-2 manifest without modifying the input file. Schema 1 is
-// upgraded by changing only the top-level schema declaration; schema 2 is
-// returned unchanged so migration scripts are idempotent.
-[[nodiscard]] std::optional<std::string> migrate_to_schema_2(
-    const std::filesystem::path& manifest,
-    diagnostic::Engine& diagnostics);
-
 // Parses an in-memory manifest. source_name is used in diagnostics and
 // base_directory is used for resolving project paths and source globs.
 [[nodiscard]] std::optional<Config> parse(

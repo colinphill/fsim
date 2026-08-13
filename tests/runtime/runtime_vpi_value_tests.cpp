@@ -105,6 +105,10 @@ void test_systemverilog_vpi_checked_value_reads() {
       SystemVerilogVpiObjectKind::Variable,
       "time_value",
       value_type(SystemVerilogVpiValueCategory::Time, 64));
+  const auto unknown_time_object = create(
+      SystemVerilogVpiObjectKind::Variable,
+      "unknown_time_value",
+      value_type(SystemVerilogVpiValueCategory::Time, 64));
   auto strength_type = value_type(
       SystemVerilogVpiValueCategory::Logic4, 1);
   strength_type.net_kind = SystemVerilogVpiNetKind::Wire;
@@ -118,7 +122,7 @@ void test_systemverilog_vpi_checked_value_reads() {
       root && bit_object && logic4_object && logic9_object
           && integer_object && unknown_integer_object && real_object
           && shortreal_object && string_object && time_object
-          && strength_object && unbound_object,
+          && unknown_time_object && strength_object && unbound_object,
       "VPI value fixtures publish every readable scalar category");
 
   PackedBit2 bits{65};
@@ -133,6 +137,8 @@ void test_systemverilog_vpi_checked_value_reads() {
   logic9.set(63, Logic9::h);
   logic9.set(64, Logic9::dont_care);
   auto unknown_integer = PackedLogic4::from_msb_string("x1");
+  auto unknown_time = PackedLogic4 { 64, Logic4::x };
+  unknown_time.set(0, Logic4::z);
   auto strength = stored(PackedLogic4{1, Logic4::one});
   strength.strength = SystemVerilogVpiDriveStrength{
       SystemVerilogVpiStrengthRank::Pull,
@@ -158,11 +164,14 @@ void test_systemverilog_vpi_checked_value_reads() {
           && registry.bind_value(shortreal_object.value, stored(1.25F))
               == SystemVerilogVpiValueError::None
           && registry.bind_value(
-                 string_object.value, stored(std::string{"a\0b", 3}))
+                 string_object.value, stored(std::string { "a\0b", 3 }))
               == SystemVerilogVpiValueError::None
           && registry.bind_value(
                  time_object.value,
-                 stored(std::uint64_t{0xfedcba9876543210ULL}))
+                 stored(std::uint64_t { 0xfedcba9876543210ULL }))
+              == SystemVerilogVpiValueError::None
+          && registry.bind_value(
+                 unknown_time_object.value, stored(unknown_time))
               == SystemVerilogVpiValueError::None
           && registry.bind_value(strength_object.value, strength)
               == SystemVerilogVpiValueError::None,
@@ -259,17 +268,33 @@ void test_systemverilog_vpi_checked_value_reads() {
 
   const auto time_read = registry.read_value(
       time_object.value, SystemVerilogVpiValueFormat::Time);
+  std::array<std::uint64_t, 2> unknown_time_words { };
+  const auto unknown_time_read = registry.read_value(
+      unknown_time_object.value,
+      SystemVerilogVpiValueFormat::Logic4Vector,
+      SystemVerilogVpiValueReadBuffers { unknown_time_words, { } });
   const auto strength_read = registry.read_value(
       strength_object.value, SystemVerilogVpiValueFormat::Strength);
   require_vpi_value(
       time_read && time_read.time == 0xfedcba9876543210ULL
+          && unknown_time_read && unknown_time_read.required_words == 2U
+          && unknown_time_words[0]
+              == (std::numeric_limits<std::uint64_t>::max() & ~1ULL)
+          && unknown_time_words[1]
+              == std::numeric_limits<std::uint64_t>::max()
+          && registry.read_value(
+                         unknown_time_object.value,
+                         SystemVerilogVpiValueFormat::Time)
+                  .error
+              == SystemVerilogVpiValueError::UnknownState
           && strength_read
           && strength_read.strength.state == Logic4::one
           && strength_read.strength.drive
-              == SystemVerilogVpiDriveStrength{
+              == SystemVerilogVpiDriveStrength {
                   SystemVerilogVpiStrengthRank::Pull,
-                  SystemVerilogVpiStrengthRank::Supply},
-      "VPI time and strength reads preserve full ticks and distinct zero/one ranks");
+                  SystemVerilogVpiStrengthRank::Supply },
+      "VPI time reads preserve full ticks or exact X/Z planes and strength reads "
+      "preserve distinct zero/one ranks");
 
   require_vpi_value(
       registry.read_value(

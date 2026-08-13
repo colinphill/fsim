@@ -26,6 +26,15 @@ A path counts as evidence only when it is built and registered as an automated
 test. Example designs, parser implementation paths, and documentation do not
 count.
 
+The governed SystemVerilog-2017 release contract is the composition of
+`systemverilog_gap_inventory.tsv`,
+`systemverilog_literal_width_inventory.tsv`, and
+`systemverilog_release_closure.tsv`. It contains 30 supported clause/integration
+rows, 21 preserved width paths, 153 witness cells, zero active rows, and five
+explicit later-owned deferrals. Address-space, work, trace, and timeout values
+in that matrix are evidence ceilings and must never be described as language
+legality or packed-width limits.
+
 ## Intended atomic layout
 
 New tests should use the stable feature ID from the matrix and keep one
@@ -80,6 +89,10 @@ These suites are the evidence currently referenced by the matrix:
 | [feature_matrix/verilog_gap_inventory.tsv](verilog_gap_inventory.tsv) | Authoritative Batch 164 IEEE 1364-2005 clause inventory with 34 supported rows, zero active residual rows, and three explicit SDF, removed TF/ACC, and informative-optional deferrals after Change 16 closed the mixed-language and public-boundary surface; every supported row has parser, analyzer, elaboration, runtime, positive, negative, execution, diagnostic, and resource ownership |
 | [feature_matrix/verilog_literal_width_inventory.tsv](verilog_literal_width_inventory.tsv) | Separate Batch 164 audit of every known Verilog literal-width cap and host-word assumption across lexical text, parsing, folding, materialization, runtime packed storage, LLVM, scalar/VPI host formats, memory files, traces, public boundaries, artifacts, and caches, now closed at 12 preserved paths, zero active obligations, and three governed physical boundaries after Change 17 proved exact artifact, checkpoint, relocation, replay, and native-cache identity |
 | [feature_matrix/verilog_release_closure.tsv](verilog_release_closure.tsv) | Authoritative Batch 164 execution closure mapping all 34 supported clause rows and 12 preserved width paths to 138 positive, negative, and execution witnesses across exactly 23 registered CTests and 17 governed direct, engine, cache, debugger, trace, artifact, checkpoint, multiple-root, VHDL, and SystemC stages under explicit 6 GiB, delta, trace, stage, and matrix limits |
+| [feature_matrix/systemverilog_gap_inventory.tsv](systemverilog_gap_inventory.tsv) | Authoritative Batch 165 IEEE 1800-2017 clause inventory currently freezing 25 reviewed or closed supported families, five one-to-one active Changes 12-16 residual owners, and five explicit SDF, protected-envelope, FST, Accellera-SystemC/TLM/SCV, and legacy-PLI deferrals after timing-region closure |
+| [feature_matrix/systemverilog_literal_width_inventory.tsv](systemverilog_literal_width_inventory.tsv) | Separate Batch 165 audit of SystemVerilog bit-string, based-number, unbased-unsized and host-word assumptions across lexical text, folding, types, constraints, containers, both engines, DPI/VPI, mixed debugging, traces, artifacts and UVM; it freezes 17 preserved paths, four active removal obligations and four explicitly governed physical boundaries |
+| [app/sv_parameter_sizing_application_test.cpp](../app/sv_parameter_sizing_application_test.cpp) | Exact arbitrary-width self/context sizing and signedness, two-state casts and aggregate stores, lazy logical/conditional evaluation, concatenation/replication/streaming and dynamic selections, common-profile `inside`/`case inside`, wildcard equality, guarded/binding/tagged/structured `case matches`, and interpreter/LLVM O0/O2 cold/warm parity |
+| [app/systemverilog_hir_application_test.cpp](../app/systemverilog_hir_application_test.cpp) | Retained SystemVerilog semantic HIR and constraint identities including a declared 137-bit `dist` weight whose known magnitude remains representable by the governed deterministic sampler |
 | [../docs/verilog-2005.md](../../docs/verilog-2005.md), [tutorial](../../docs/verilog-2005-tutorial.md), and [closure audit](../../docs/verilog-2005-closure-audit.md) | Installed public statement of the zero-gap Verilog-2005 surface, producer-independent wide-literal workflow, exact clause/width/closure digests, and the rule that host/resource ceilings are physical evidence boundaries rather than language-width limits |
 | [app/uvm_conformance_inventory.cpp](../app/uvm_conformance_inventory.cpp) | Post-load direct/object/design enforcement of the selected release inventory, retained class identities, evidence paths, uniqueness, counts, and zero supported gaps across the exact engine/cache/replay matrix |
 | [../docs/uvm-tutorial.md](../../docs/uvm-tutorial.md) | Producer-independent source-set, interpreter/compiled/debug, cache/trace, portable artifact, plusarg, resource, pass-criteria, and failure-diagnosis usage bound to the executable inventory rather than parser-only claims |

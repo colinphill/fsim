@@ -144,9 +144,9 @@ endmodule
     assert(
         default_copy->parameter_values.size() == 1
         && default_copy->parameter_values[0].second.starts_with(
-            "sv-type-v1;")
+            "sv-type-v3;")
         && byte_copy->parameter_values[0].second.starts_with(
-            "sv-type-v1;")
+            "sv-type-v3;")
         && default_copy->parameter_values[0].second
             != byte_copy->parameter_values[0].second
         && byte_copy->parameter_values[0].second
@@ -157,7 +157,7 @@ endmodule
         && dependent->parameter_values[0].second == "6"
         && dependent->parameter_values[1].first == "T"
         && dependent->parameter_values[1].second.starts_with(
-            "sv-type-v1;")
+            "sv-type-v3;")
         && dependent->parameter_values[2].first == "RESET");
 
     const auto expect_width =
@@ -259,6 +259,141 @@ endmodule
         !boundary.ok()
         && has_diagnostic(
             boundary, "FSIM-ELAB-SVTYPEPARAM-004"));
+
+    const auto type_operator_parsed = fsim::frontend::parse_text(
+        "sv-type-operator.sv",
+        R"(
+module type_operator_top;
+  typedef logic [7:0] word_t;
+  typedef enum logic [136:0] { A_ZERO = 137'h0 } enum_a_t;
+  typedef enum logic [136:0] { B_ZERO = 137'h0 } enum_b_t;
+  typedef enum bit [136:0] { TWO_ZERO = 137'h0 } enum_two_t;
+  bit bit_value;
+  byte byte_value;
+  shortint short_value;
+  int int_value;
+  longint long_value;
+  logic logic_value;
+  reg reg_value;
+  integer integer_value;
+  time time_value;
+  shortreal shortreal_value;
+  real real_value;
+  realtime realtime_value;
+  chandle handle_value;
+  enum_a_t enum_a_one;
+  enum_a_t enum_a_two;
+  enum_b_t enum_b_one;
+  enum_two_t enum_two;
+  word_t word_value;
+  logic [7:0] vector_value;
+  bit values[1:0][2:1][0:1][3:2][4:3][5:4];
+  bit values_copy[1:0][2:1][0:1][3:2][4:3][5:4];
+  logic [6:0] type_results;
+  initial begin
+    type_results[0] = type(logic_value) == type(reg_value);
+    type_results[1] = type(bit_value) != type(logic_value);
+    type_results[2] = type(int_value) != type(integer_value);
+    type_results[3] = type(word_value) == type(vector_value);
+    type_results[4] = type(enum_a_one) == type(enum_a_two);
+    type_results[5] = type(enum_a_one) != type(enum_b_one);
+    type_results[6] = type(values) == type(values_copy);
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(type_operator_parsed.ok());
+    const auto type_operator = fsim::elaboration::elaborate(
+        type_operator_parsed.design, "sv:work.type_operator_top");
+    if (!type_operator.ok()) {
+        for (const auto& diagnostic : type_operator.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(type_operator.ok());
+    auto type_interpreter = type_operator.design->create_interpreter();
+    const auto expect_default = [&](const std::string_view name,
+                                    const std::size_t width,
+                                    const char state) {
+        const auto signal = type_operator.design->find_signal(name);
+        assert(signal);
+        const auto value = type_interpreter->signal_value(*signal);
+        assert(value.width() == width);
+        if (!std::ranges::all_of(
+                value.to_msb_string(),
+                [&](const char bit) { return bit == state; })) {
+            std::cerr << name << " default was "
+                      << value.to_msb_string() << '\n';
+        }
+        assert(std::ranges::all_of(
+            value.to_msb_string(),
+            [&](const char bit) { return bit == state; }));
+    };
+    expect_default("bit_value", 1U, '0');
+    expect_default("byte_value", 8U, '0');
+    expect_default("short_value", 16U, '0');
+    expect_default("int_value", 32U, '0');
+    expect_default("long_value", 64U, '0');
+    expect_default("logic_value", 1U, 'X');
+    expect_default("reg_value", 1U, 'X');
+    expect_default("integer_value", 32U, 'X');
+    expect_default("time_value", 64U, 'X');
+    expect_default("shortreal_value", 32U, '0');
+    expect_default("real_value", 64U, '0');
+    expect_default("realtime_value", 64U, '0');
+    expect_default("handle_value", 64U, '0');
+    expect_default("enum_a_one", 137U, 'X');
+    expect_default("enum_two", 137U, '0');
+    (void)type_interpreter->run();
+    const auto results = type_operator.design->find_signal("type_results");
+    assert(results);
+    assert(type_interpreter->signal_value(*results).to_msb_string()
+        == "1111111");
+
+    const auto invalid_type_operator_parsed = fsim::frontend::parse_text(
+        "sv-invalid-type-operator.sv",
+        R"(
+module invalid_type_operator;
+  logic value;
+  logic result;
+  initial result = type(value);
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_type_operator_parsed.ok());
+    const auto invalid_type_operator = fsim::elaboration::elaborate(
+        invalid_type_operator_parsed.design,
+        "sv:work.invalid_type_operator");
+    assert(
+        !invalid_type_operator.ok()
+        && has_diagnostic(
+            invalid_type_operator, "FSIM-ELAB-SVTYPE-006"));
+
+    const auto resolved_union_parsed = fsim::frontend::parse_text(
+        "sv-resolved-union-width.sv",
+        R"(
+package resolved_union_types;
+  typedef logic [15:0] wide_t;
+  typedef logic [7:0] narrow_t;
+  typedef union packed {
+    wide_t wide;
+    narrow_t narrow;
+  } unequal_t;
+endpackage
+module resolved_union_width;
+  resolved_union_types::unequal_t value;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(resolved_union_parsed.ok());
+    const auto resolved_union = fsim::elaboration::elaborate(
+        resolved_union_parsed.design,
+        "sv:work.resolved_union_width");
+    assert(
+        !resolved_union.ok()
+        && has_diagnostic(
+            resolved_union, "FSIM-ELAB-SVTYPE-007"));
 }
 
 } // namespace fsim::tests::elaboration

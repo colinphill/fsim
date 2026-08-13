@@ -64,6 +64,7 @@ namespace {
         SystemVerilogVpiIoService io;
         fsim_vpi_handle_v1 top { };
         fsim_vpi_handle_v1 value { };
+        fsim_vpi_handle_v1 wide_enum { };
 
         explicit CheckpointFixture(const std::uint64_t identity)
             : root(prepare_root(identity))
@@ -85,15 +86,47 @@ namespace {
                 std::nullopt,
                 type,
             });
+            SystemVerilogVpiTypeDescriptor enum_descriptor;
+            enum_descriptor.kind = SystemVerilogVpiDescriptorKind::Enum;
+            enum_descriptor.category
+                = SystemVerilogVpiValueCategory::Logic4;
+            enum_descriptor.width = 129;
+            enum_descriptor.is_signed = true;
+            enum_descriptor.enum_literals = {
+                { "Known", PackedLogic4::from_msb_string("1" + std::string(128, '0')) },
+                { "Unknown", PackedLogic4::from_msb_string("X" + std::string(127, '0') + "Z") },
+            };
+            SystemVerilogVpiTypeInfo enum_type;
+            enum_type.category = enum_descriptor.category;
+            enum_type.width = enum_descriptor.width;
+            enum_type.is_signed = enum_descriptor.is_signed;
+            enum_type.descriptor
+                = std::make_shared<SystemVerilogVpiTypeDescriptor>(
+                    std::move(enum_descriptor));
+            const auto created_enum = objects.create(
+                SystemVerilogVpiObjectDescriptor {
+                    SystemVerilogVpiObjectKind::Variable,
+                    created_top.value,
+                    "wide_enum",
+                    std::nullopt,
+                    std::move(enum_type),
+                });
             require_vpi_checkpoint(
-                created_top && created_value,
+                created_top && created_value && created_enum,
                 "VPI checkpoint fixture hierarchy creation failed");
             top = created_top.value;
             value = created_value.value;
+            wide_enum = created_enum.value;
             require_vpi_checkpoint(
                 objects.bind_value(value, checkpoint_value(137, Logic4::zero))
                     == SystemVerilogVpiValueError::None,
                 "VPI checkpoint fixture initial value bind failed");
+            require_vpi_checkpoint(
+                objects.bind_value(wide_enum,
+                    checkpoint_value(
+                        "X" + std::string(127, '0') + "Z"))
+                    == SystemVerilogVpiValueError::None,
+                "VPI checkpoint fixture exact enum value bind failed");
         }
 
         static std::filesystem::path prepare_root(
@@ -422,6 +455,15 @@ void test_systemverilog_vpi_checkpoint_restart_and_artifact()
         saved_value,
         saved_force,
         "VPI portable artifact restore lost forced value state");
+    const auto restored_enum = target.objects.type_info(target.wide_enum);
+    require_vpi_checkpoint(
+        systemverilog_vpi_checkpoint_schema == 2 && restored_enum
+            && restored_enum.value->descriptor
+            && restored_enum.value->descriptor->enum_literals.size() == 2
+            && restored_enum.value->descriptor->enum_literals[1]
+                    .value.to_msb_string()
+                == "X" + std::string(127, '0') + "Z",
+        "VPI portable artifact restore lost exact wide enum identity");
     const auto remapped = std::find_if(
         restored.handles.begin(),
         restored.handles.end(),

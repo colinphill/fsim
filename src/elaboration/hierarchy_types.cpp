@@ -52,7 +52,8 @@ DesignUnit HierarchyBuilder::effective_unit(
                     result.span,
                     { },
                     frontend::TypeDeclarationKind::
-                        SystemVerilogTypedef });
+                        SystemVerilogTypedef,
+                    { } });
         }
         return result;
     }
@@ -330,7 +331,8 @@ DesignUnit HierarchyBuilder::effective_unit(
                 binding.type,
                 result.span,
                 { },
-                frontend::TypeDeclarationKind::Alias });
+                frontend::TypeDeclarationKind::Alias,
+                { } });
     }
     for (auto& component :
         result.vhdl_component_declarations) {
@@ -451,6 +453,10 @@ SpecializedUnit HierarchyBuilder::specialize_selected_unit(
     auto effective = effective_unit(
         selected_override ? *selected_override : selected,
         entity_override ? &*entity_override : nullptr);
+    if (effective.language
+        == frontend::Language::SystemVerilog2017) {
+        expand_systemverilog_lets(effective, diagnostics_);
+    }
     auto type_specialized = selected.language
             == frontend::Language::SystemVerilog2017
         ? specialize_systemverilog_type_parameters(
@@ -696,9 +702,14 @@ std::optional<SignalId> HierarchyBuilder::add_owned_signal(
     if (!declaration.type.vhdl_resolution_function.empty()) {
         resolver_by_signal_.insert_or_assign(
             id, declaration.type.vhdl_resolution_function);
+    } else if (!declaration.type.systemverilog_resolution_function.empty()) {
+        resolver_by_signal_.insert_or_assign(
+            id, declaration.type.systemverilog_resolution_function);
     }
     auto initial = declaration.type.systemverilog_scalar
-            != frontend::SystemVerilogScalarKind::None
+                != frontend::SystemVerilogScalarKind::None
+            && declaration.type.systemverilog_scalar
+                != frontend::SystemVerilogScalarKind::Time
         ? Logic4::zero
         : Logic4::x;
     if (declaration.type.spelling == "event") {
@@ -713,6 +724,8 @@ std::optional<SignalId> HierarchyBuilder::add_owned_signal(
         initial = Logic4::one;
     } else if (is_two_state_domain(declaration.type.domain)) {
         initial = Logic4::zero;
+    } else if (!declaration.type.systemverilog_net_type.empty()) {
+        initial = Logic4::z;
     } else if (
         declaration.type.domain == frontend::ValueDomain::Logic4
         && (declaration.type.spelling == "wire"
@@ -746,6 +759,7 @@ std::optional<SignalId> HierarchyBuilder::add_owned_signal(
         std::nullopt,
         declaration.type.systemverilog_scalar
     };
+    signal.event_variable = declaration.type.spelling == "event";
     if (declaration.type.spelling == "tri0"
         || declaration.type.spelling == "tri1") {
         signal.implicit_driver = declaration.type.spelling == "tri0"

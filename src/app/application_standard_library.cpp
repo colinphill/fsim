@@ -588,8 +588,9 @@ void add_vital_alias(
           unit.span});
     }
   }
-  unit.type_aliases.push_back(frontend::TypeAliasDeclaration{
-      std::string{name}, std::move(type), unit.span, std::move(literals), kind});
+  unit.type_aliases.push_back(frontend::TypeAliasDeclaration {
+      std::string { name }, std::move(type), unit.span, std::move(literals), kind,
+      { } });
 }
 
 void materialize_vital_types(frontend::DesignUnit& unit) {

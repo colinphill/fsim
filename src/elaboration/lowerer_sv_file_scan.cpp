@@ -100,13 +100,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_file_scan(
         operation.source = *source;
     } else {
         const auto& source = expression.operands[0];
-        const auto* type = source.kind == ExpressionKind::Identifier
-            ? object_type(source.text)
-            : nullptr;
-        if (!(source.kind == ExpressionKind::IntegerLiteral
-                || (type != nullptr
-                    && type->domain == frontend::ValueDomain::Integer)
-                || is_integer_expression(source))) {
+        if (!is_file_handle_expression(source)) {
             report(
                 "FSIM-ELAB-SVFILE-011",
                 "$fscanf source must be a 32-bit integer file handle",

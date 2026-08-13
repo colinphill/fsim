@@ -683,7 +683,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                         ? std::string_view {
                               state.executor->string_registers_.at(method->argument) }
                         : std::string_view { },
-                    state.context->current_time());
+                    state.context->current_time(), state.context->systemverilog_time_format());
                 return 0;
             }
             const auto signed32 = [](
@@ -1129,6 +1129,77 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 throw runtime::simir::InterpreterError {
                     process, instruction,
                     "SystemVerilog scalar binary operation failed"
+                };
+            }
+            const auto word = value.value.low_word();
+            *result_aval = word.aval;
+            *result_bval = word.bval;
+        } else if (const auto* math = fsim::runtime::simir::operation_get_if<
+                       runtime::simir::SystemVerilogMath>(&operation)) {
+            if (math->function
+                >= runtime::SystemVerilogMathFunction::Time) {
+                const auto function
+                    = math->function
+                        == runtime::SystemVerilogMathFunction::Time
+                    ? runtime::SystemVerilogTimeFunction::Time
+                    : math->function
+                        == runtime::SystemVerilogMathFunction::Stime
+                    ? runtime::SystemVerilogTimeFunction::Stime
+                    : runtime::SystemVerilogTimeFunction::Realtime;
+                const auto time_format
+                    = state.context->systemverilog_time_format();
+                const auto value = runtime::systemverilog_time_function(
+                    function,
+                    state.context->current_time(),
+                    { math->time_unit_femtoseconds,
+                        math->time_precision_femtoseconds,
+                        time_format.resolution_femtoseconds });
+                if (!value) {
+                    throw runtime::simir::InterpreterError {
+                        process, instruction,
+                        "SystemVerilog time query failed"
+                    };
+                }
+                const auto encoded = math->function
+                        == runtime::SystemVerilogMathFunction::Realtime
+                    ? runtime::encode_systemverilog_scalar_payload(value.value)
+                    : runtime::systemverilog_scalar_to_packed(
+                          value.value,
+                          math->function
+                                  == runtime::SystemVerilogMathFunction::Stime
+                              ? 32U
+                              : 64U,
+                          false);
+                if (!encoded) {
+                    throw runtime::simir::InterpreterError {
+                        process, instruction,
+                        "SystemVerilog time-query payload encoding failed"
+                    };
+                }
+                const auto word = encoded.value.low_word();
+                *result_aval = word.aval;
+                *result_bval = word.bval;
+                return 0;
+            }
+            const auto first = state.executor->read_register(
+                math->first, math->first_width);
+            std::optional<runtime::PackedLogic4> second;
+            if (math->second_width != 0) {
+                second = state.executor->read_register(
+                    math->second, math->second_width);
+            }
+            const auto value = runtime::systemverilog_math_payload(
+                math->function,
+                first,
+                math->first_kind,
+                math->first_signed,
+                second ? &*second : nullptr,
+                math->second_kind,
+                math->second_signed);
+            if (!value) {
+                throw runtime::simir::InterpreterError {
+                    process, instruction,
+                    "SystemVerilog math function failed"
                 };
             }
             const auto word = value.value.low_word();

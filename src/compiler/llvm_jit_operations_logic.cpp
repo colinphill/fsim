@@ -12,21 +12,22 @@
 namespace fsim::compiler::llvm_detail {
 
 using runtime::Logic9;
-using runtime::simir::CopyRegister;
-using runtime::simir::UnaryNot;
-using runtime::simir::LogicalNot;
-using runtime::simir::LogicalBinary;
-using runtime::simir::Reduction;
-using runtime::simir::CountOnes;
-using runtime::simir::CountBits;
-using runtime::simir::Shift;
-using runtime::simir::Extract;
 using runtime::simir::BinaryOperator;
+using runtime::simir::ConvertToTwoState;
+using runtime::simir::CopyRegister;
+using runtime::simir::CountBits;
+using runtime::simir::CountOnes;
+using runtime::simir::Extract;
 using runtime::simir::IntegerBinaryOperator;
 using runtime::simir::IntegerUnaryOperator;
+using runtime::simir::LogicalBinary;
 using runtime::simir::LogicalBinaryOperator;
+using runtime::simir::LogicalNot;
+using runtime::simir::Reduction;
 using runtime::simir::ReductionOperator;
+using runtime::simir::Shift;
 using runtime::simir::ShiftOperator;
+using runtime::simir::UnaryNot;
 using runtime::simir::ValueKind;
 
 void ValueOperationLowerer::lower(
@@ -37,6 +38,26 @@ void ValueOperationLowerer::lower(
                       builder, registers, operation.source));
               branch_to_next();
             
+}
+
+void ValueOperationLowerer::lower(
+    const ConvertToTwoState& operation)
+{
+    auto value = coerce_value_kind(
+        builder,
+        load_register(builder, registers, operation.source),
+        ValueKind::logic4);
+    auto* mask = packed_mask(builder.getContext(), value.width);
+    auto* zero = packed_constant(builder.getContext(), value.width, 0);
+    value.aval = builder.CreateAnd(
+        value.aval, builder.CreateNot(value.bval));
+    value.aval = builder.CreateAnd(value.aval, mask);
+    value.bval = zero;
+    value.logic9_plane2 = zero;
+    value.logic9_plane3 = zero;
+    store_register(
+        builder, registers, operation.destination, value);
+    branch_to_next();
 }
 
 void ValueOperationLowerer::lower(

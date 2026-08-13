@@ -79,14 +79,45 @@
     runtime::PackedLogic4 value;
   };
 
+  [[nodiscard]] static std::optional<std::string>
+  evaluate_source_string_expression(
+      const frontend::Expression& expression,
+      const SourceStringEnvironment& environment) {
+    if (expression.kind == frontend::ExpressionKind::StringLiteral) {
+      return expression.decoded_string.value_or(expression.text);
+    }
+    if (expression.kind == frontend::ExpressionKind::Identifier) {
+      if (const auto found = environment.find(expression.text);
+          found != environment.end()) {
+        return found->second;
+      }
+    }
+    return std::nullopt;
+  }
+
   [[nodiscard]] SourceFunctionResult execute_source_function_statements(
       const std::span<const frontend::Statement> statements,
       const runtime::SystemVerilogClassHandle handle,
-      ConstructorEnvironment& environment) {
+      ConstructorEnvironment& environment,
+      SourceStringEnvironment& string_environment) {
     constexpr std::string_view property_prefix{"@sv-property:"};
     constexpr std::string_view static_property_prefix{"@sv-static-property:"};
     for (const auto& statement : statements) {
       if (statement.kind == frontend::StatementKind::Assignment) {
+        if (statement.target.kind == frontend::ExpressionKind::Identifier) {
+          if (const auto found = string_environment.find(statement.target.text);
+              found != string_environment.end()) {
+            const auto value = evaluate_source_string_expression(
+                statement.value, string_environment);
+            if (!value) {
+              throw std::invalid_argument{
+                  "class function string assignment expression is not "
+                  "executable"};
+            }
+            found->second = *value;
+            continue;
+          }
+        }
         const auto value = evaluate_constructor_expression(
             statement.value, handle, environment);
         if (!value) {
@@ -133,7 +164,7 @@
       }
       if (statement.kind == frontend::StatementKind::Block) {
         auto result = execute_source_function_statements(
-            statement.statements, handle, environment);
+            statement.statements, handle, environment, string_environment);
         if (result.returned) return result;
         continue;
       }
@@ -149,7 +180,8 @@
                 ? std::span<const frontend::Statement>{statement.statements}
                 : std::span<const frontend::Statement>{statement.else_statements},
             handle,
-            environment);
+            environment,
+            string_environment);
         if (result.returned) return result;
         continue;
       }
@@ -165,6 +197,7 @@
       const frontend::SystemVerilogClassMethodProfile& method,
       const runtime::SystemVerilogClassHandle handle,
       std::vector<runtime::PackedLogic4>& actuals,
+      std::vector<std::string>& string_actuals,
       const std::span<const std::string> actual_names,
       const std::span<const std::uint8_t> actual_directions) {
     constexpr std::size_t maximum_source_method_depth = 1024;
@@ -184,7 +217,8 @@
           "source class function invocation selected non-function '"
           + method.canonical_identity + "'"};
     }
-    if ((!actual_names.empty() && actual_names.size() != actuals.size())
+    if (string_actuals.size() != actuals.size()
+        || (!actual_names.empty() && actual_names.size() != actuals.size())
         || (!actual_directions.empty()
             && actual_directions.size() != actuals.size())) {
       throw std::invalid_argument{
@@ -195,34 +229,9 @@
     for (const auto& actual : actuals) {
       original_widths.push_back(actual.width());
     }
-    auto environment = bind_constructor_actuals(
-        method, handle, actuals, actual_names);
-    if (method.lifetime == frontend::SystemVerilogClassLifetime::Static) {
-      auto& retained = source_static_locals_[method.canonical_identity];
-      for (const auto& variable : method.variables) {
-        if (const auto found = retained.find(variable.name);
-            found != retained.end()) {
-          environment[variable.name] = found->second;
-        } else {
-          retained[variable.name] = environment.at(variable.name);
-        }
-      }
-    }
-    const auto result = execute_source_function_statements(
-        method.statements, handle, environment);
-    const auto void_result = method.return_type.spelling == "void";
-    if (!result.returned && !void_result) {
-      throw std::invalid_argument{
-          "class function completed without returning a value"};
-    }
-    if (method.lifetime == frontend::SystemVerilogClassLifetime::Static) {
-      auto& retained = source_static_locals_.at(method.canonical_identity);
-      for (const auto& variable : method.variables) {
-        retained[variable.name] = environment.at(variable.name);
-      }
-    }
-
     std::vector<bool> assigned(method.arguments.size());
+    std::vector<std::size_t> actual_formals;
+    actual_formals.reserve(actuals.size());
     std::size_t next_positional{};
     for (std::size_t index = 0; index < actuals.size(); ++index) {
       const auto name = actual_names.empty()
@@ -248,6 +257,95 @@
             "class function actual does not select a unique formal"};
       }
       assigned[formal] = true;
+      actual_formals.push_back(formal);
+    }
+    auto environment = bind_constructor_actuals(
+        method, handle, actuals, actual_names);
+    SourceStringEnvironment string_environment;
+    for (std::size_t formal = 0; formal < method.arguments.size(); ++formal) {
+      const auto& argument = method.arguments[formal];
+      if (argument.type.domain != frontend::ValueDomain::String) continue;
+      const auto actual = std::ranges::find(actual_formals, formal);
+      if (actual != actual_formals.end()) {
+        const auto index = static_cast<std::size_t>(
+            std::distance(actual_formals.begin(), actual));
+        string_environment.emplace(
+            argument.name,
+            argument.direction == frontend::PortDirection::Output
+                ? std::string{}
+                : string_actuals[index]);
+        continue;
+      }
+      const auto value = argument.default_value
+          ? evaluate_source_string_expression(
+                *argument.default_value, string_environment)
+          : std::nullopt;
+      if (!value) {
+        throw std::invalid_argument{
+            "class function string formal '" + argument.name
+            + "' has no executable actual or default"};
+      }
+      string_environment.emplace(argument.name, *value);
+    }
+    for (const auto& variable : method.variables) {
+      if (variable.type.domain != frontend::ValueDomain::String) continue;
+      const auto value = variable.initializer
+          ? evaluate_source_string_expression(
+                *variable.initializer, string_environment)
+          : std::optional<std::string>{std::string{}};
+      if (!value) {
+        throw std::invalid_argument{
+            "class function string local initializer for '" + variable.name
+            + "' is not executable"};
+      }
+      string_environment[variable.name] = *value;
+    }
+    if (method.lifetime == frontend::SystemVerilogClassLifetime::Static) {
+      auto& retained = source_static_locals_[method.canonical_identity];
+      for (const auto& variable : method.variables) {
+        if (const auto found = retained.find(variable.name);
+            found != retained.end()) {
+          environment[variable.name] = found->second;
+        } else {
+          retained[variable.name] = environment.at(variable.name);
+        }
+      }
+      auto& retained_strings =
+          source_static_string_locals_[method.canonical_identity];
+      for (const auto& variable : method.variables) {
+        if (variable.type.domain != frontend::ValueDomain::String) continue;
+        if (const auto found = retained_strings.find(variable.name);
+            found != retained_strings.end()) {
+          string_environment[variable.name] = found->second;
+        } else {
+          retained_strings[variable.name] = string_environment.at(variable.name);
+        }
+      }
+    }
+    const auto result = execute_source_function_statements(
+        method.statements, handle, environment, string_environment);
+    const auto void_result = method.return_type.spelling == "void";
+    if (!result.returned && !void_result) {
+      throw std::invalid_argument{
+          "class function completed without returning a value"};
+    }
+    if (method.lifetime == frontend::SystemVerilogClassLifetime::Static) {
+      auto& retained = source_static_locals_.at(method.canonical_identity);
+      for (const auto& variable : method.variables) {
+        retained[variable.name] = environment.at(variable.name);
+      }
+      auto& retained_strings =
+          source_static_string_locals_.at(method.canonical_identity);
+      for (const auto& variable : method.variables) {
+        if (variable.type.domain == frontend::ValueDomain::String) {
+          retained_strings[variable.name] =
+              string_environment.at(variable.name);
+        }
+      }
+    }
+
+    for (std::size_t index = 0; index < actuals.size(); ++index) {
+      const auto formal = actual_formals[index];
       const auto direction = method.arguments[formal].direction;
       if (!actual_directions.empty()
           && actual_directions[index]
@@ -256,9 +354,15 @@
             "class function actual direction metadata is inconsistent"};
       }
       if (direction != frontend::PortDirection::Input) {
-        actuals[index] = resize_packed(
-            environment.at(method.arguments[formal].name),
-            original_widths[index]);
+        if (method.arguments[formal].type.domain
+            == frontend::ValueDomain::String) {
+          string_actuals[index] =
+              string_environment.at(method.arguments[formal].name);
+        } else {
+          actuals[index] = resize_packed(
+              environment.at(method.arguments[formal].name),
+              original_widths[index]);
+        }
       }
     }
     if (void_result) return runtime::PackedLogic4{};
@@ -270,6 +374,18 @@
     }
     return resize_packed(
         result.value, static_cast<std::size_t>(*width));
+  }
+
+  [[nodiscard]] runtime::PackedLogic4 invoke_source_profile(
+      const frontend::SystemVerilogClassMethodProfile& method,
+      const runtime::SystemVerilogClassHandle handle,
+      std::vector<runtime::PackedLogic4>& actuals,
+      const std::span<const std::string> actual_names,
+      const std::span<const std::uint8_t> actual_directions) {
+    std::vector<std::string> string_actuals(actuals.size());
+    return invoke_source_profile(
+        method, handle, actuals, string_actuals, actual_names,
+        actual_directions);
   }
 
   void invoke_source_task_profile(
@@ -297,6 +413,20 @@
     }
     auto environment = bind_constructor_actuals(
         method, handle, actuals, {});
+    SourceStringEnvironment string_environment;
+    for (const auto& variable : method.variables) {
+      if (variable.type.domain != frontend::ValueDomain::String) continue;
+      const auto value = variable.initializer
+          ? evaluate_source_string_expression(
+                *variable.initializer, string_environment)
+          : std::optional<std::string>{std::string{}};
+      if (!value) {
+        throw std::invalid_argument{
+            "class task string local initializer for '" + variable.name
+            + "' is not executable"};
+      }
+      string_environment[variable.name] = *value;
+    }
     if (method.lifetime == frontend::SystemVerilogClassLifetime::Static) {
       auto& retained = source_static_locals_[method.canonical_identity];
       for (const auto& variable : method.variables) {
@@ -309,7 +439,7 @@
       }
     }
     const auto result = execute_source_function_statements(
-        method.statements, handle, environment);
+        method.statements, handle, environment, string_environment);
     if (result.returned) {
       throw std::invalid_argument{"SystemVerilog class task returned a value"};
     }
@@ -429,7 +559,8 @@
           "instance class call selected a static function"};
     }
     return invoke_source_profile(
-        method, handle, actuals, actual_names, actual_directions);
+        method, handle, actuals, string_actuals, actual_names,
+        actual_directions);
   }
 
   [[nodiscard]] const frontend::SystemVerilogClassMethodProfile&
@@ -570,6 +701,7 @@
         source_static_method(canonical_identity),
         0,
         actuals,
+        string_actuals,
         actual_names,
         actual_directions);
   }

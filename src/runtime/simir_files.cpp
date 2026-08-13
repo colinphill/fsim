@@ -552,7 +552,10 @@ FileHandle Interpreter::Impl::known_file_handle(
     ProcessState& process,
     const RegisterId handle_register)
 {
-    const auto word = get_register(process, handle_register).low_word();
+    const auto value = process.executor
+        ? process.executor->read_register(handle_register, 32U)
+        : get_register(process, handle_register);
+    const auto word = value.low_word();
     if (word.width == 0 || word.width > 32
         || word.bval != 0
         || word.aval
@@ -659,20 +662,44 @@ void Interpreter::Impl::execute_file(
     const FileWriteFormatted& operation)
 {
     try {
-        write_file(
-            process.program.id,
-            known_file_handle(process, operation.handle),
-            make_formatted_output(
+        const auto& value = get_register(process, operation.source);
+        std::string text;
+        if (operation.format == OutputFormat::time) {
+            const auto decoded = decode_systemverilog_scalar_payload(
+                value, operation.scalar_kind);
+            const auto tick = decoded ? decoded.value.as_time() : std::nullopt;
+            if (!tick) {
+                throw std::runtime_error {
+                    "invalid time payload for formatted file output"
+                };
+            }
+            text = make_time_output(
+                operation.prefix,
+                operation.suffix,
+                *tick,
+                time_format,
+                operation.minimum_width == 0
+                    && !operation.suppress_leading_zero,
+                operation.minimum_width,
+                operation.left_justify,
+                operation.zero_pad);
+        } else {
+            text = make_formatted_output(
                 operation.prefix,
                 operation.suffix,
                 operation.format,
-                get_register(process, operation.source),
+                value,
                 operation.signed_decimal,
                 operation.suppress_leading_zero,
                 operation.minimum_width,
                 operation.left_justify,
                 operation.zero_pad,
-                operation.scalar_kind),
+                operation.scalar_kind);
+        }
+        write_file(
+            process.program.id,
+            known_file_handle(process, operation.handle),
+            text,
             operation.newline);
         ++process.pc;
     } catch (const InterpreterError&) {

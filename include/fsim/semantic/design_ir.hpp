@@ -180,6 +180,7 @@ struct ProcessOccurrence {
     std::optional<SourceSpanId> source;
     std::uint32_t runtime_index{};
     bool initialize{};
+    bool observed { };
     bool reactive{};
     bool final{};
     std::vector<SensitivityId> sensitivities;

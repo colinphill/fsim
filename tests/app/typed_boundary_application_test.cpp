@@ -699,5 +699,10 @@ int main()
            "stages=direct/interpreter/llvm-o0/llvm-o2/cache-cold/cache-warm/"
            "debug/vcd/multiple-root/mixed-vhdl/mixed-systemc "
            "resources=as6g/delta1000/vcd64 gaps=0 widths=137xz\n";
+    std::cout
+        << "FSIM-SYSTEMVERILOG-2017-PASS "
+           "stages=direct/interpreter/llvm-o0/llvm-o2/cache-cold/cache-warm/"
+           "debug/vcd/multiple-root/uvm/mixed-vhdl/mixed-systemc/public-api "
+           "resources=as6g/delta1000/vcd64 gaps=0 widths=129logic9\n";
     return 0;
 }

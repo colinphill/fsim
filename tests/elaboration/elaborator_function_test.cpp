@@ -408,6 +408,12 @@ endmodule
     assert(constant.ok());
     const auto constant_elaborated = fsim::elaboration::elaborate(
         constant.design, "sv:work.constant_function");
+    if (!constant_elaborated.ok()) {
+        for (const auto& diagnostic : constant_elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
     assert(constant_elaborated.ok());
     const auto internal = constant_elaborated.design->find_signal("internal");
     const auto constant_result = constant_elaborated.design->find_signal("result");

@@ -20,10 +20,16 @@ void append_expression_identity(
 
 std::string canonical_type_identity(const frontend::Type& type) {
     std::ostringstream output;
-    output << "sv-type-v1;domain="
+    output << "sv-type-v3;domain="
            << static_cast<unsigned>(type.domain)
            << ";spelling=" << type.spelling
+           << ";scalar="
+           << static_cast<unsigned>(type.systemverilog_scalar)
+           << ";net=" << type.systemverilog_net_type
+           << ";resolution="
+           << type.systemverilog_resolution_function
            << ";nominal=" << type.nominal_type
+           << ";named=" << type.named_type
            << ";signed=" << (type.is_signed ? 1 : 0)
            << ";aggregate="
            << static_cast<unsigned>(type.packed_aggregate);
@@ -32,8 +38,43 @@ std::string canonical_type_identity(const frontend::Type& type) {
                << type.packed_range->right << ':'
                << (type.packed_range->descending ? 1 : 0);
     }
+    if (type.packed_range_expression) {
+        output << ";packed-expression=";
+        append_expression_identity(
+            output, type.packed_range_expression->left);
+        append_expression_identity(
+            output, type.packed_range_expression->right);
+        output << ':';
+        if (type.packed_range_expression->descending) {
+            output << (*type.packed_range_expression->descending ? 1 : 0);
+        } else {
+            output << '?';
+        }
+    }
+    for (const auto& dimension :
+        type.systemverilog_packed_dimensions) {
+        output << ";packed-dimension=";
+        append_expression_identity(output, dimension.left);
+        append_expression_identity(output, dimension.right);
+        output << ':';
+        if (dimension.descending) {
+            output << (*dimension.descending ? 1 : 0);
+        } else {
+            output << '?';
+        }
+    }
+    if (type.enumeration_range) {
+        output << ";enum-range=" << type.enumeration_range->left
+               << ':' << type.enumeration_range->right << ':'
+               << (type.enumeration_range->descending ? 1 : 0);
+    }
     for (const auto& literal : type.enumeration_literals) {
         output << ";literal=" << literal;
+    }
+    for (const auto& value :
+        type.systemverilog_enumeration_values) {
+        output << ";enum-value=";
+        append_expression_identity(output, value);
     }
     for (const auto& member : type.packed_members) {
         output << ";member=" << member.name << ':'
@@ -76,7 +117,36 @@ std::string canonical_type_identity(const frontend::Type& type) {
             output << ";dimension=";
             append_expression_identity(output, dimension.left);
             append_expression_identity(output, dimension.right);
-            output << ':' << (dimension.descending ? 1 : 0);
+            output << ':';
+            if (dimension.descending) {
+                output << (*dimension.descending ? 1 : 0);
+            } else {
+                output << '?';
+            }
+        }
+        for (const auto& element : container.element_types) {
+            output << ";element={"
+                   << canonical_type_identity(element) << '}';
+        }
+    }
+    output << ";virtual-interface="
+           << (type.systemverilog_virtual_interface ? 1 : 0)
+           << ':' << type.systemverilog_interface_type
+           << ':' << type.systemverilog_interface_modport
+           << ";class=" << type.systemverilog_class_name
+           << ':' << type.systemverilog_class_declaration;
+    for (const auto& actual :
+        type.systemverilog_class_parameter_actuals) {
+        output << ";class-actual="
+               << (actual.name ? *actual.name : std::string { })
+               << ':';
+        if (actual.type_actual) {
+            output << "type={"
+                   << canonical_type_identity(*actual.type_actual)
+                   << '}';
+        } else {
+            output << "value=";
+            append_expression_identity(output, actual.value);
         }
     }
     return output.str();
@@ -86,7 +156,7 @@ bool supported_type_actual(const frontend::Type& type) {
     const auto width = type.width();
     return type.domain != frontend::ValueDomain::Unknown
         && type.domain != frontend::ValueDomain::Boolean
-        && width && *width > 0 && *width <= 64
+        && width && *width > 0
         && !type.vhdl_array;
 }
 
@@ -126,6 +196,11 @@ std::optional<frontend::Type> resolve_expression_type(
 }
 
 } // namespace
+
+std::string systemverilog_type_identity(const frontend::Type& type)
+{
+    return canonical_type_identity(type);
+}
 
 std::optional<std::string> systemverilog_type_parameter_identity(
     const frontend::Type& type) {
@@ -294,13 +369,14 @@ InterfaceTypeSpecialization specialize_systemverilog_type_parameters(
             continue;
         }
         result.unit.type_aliases.push_back(
-            frontend::TypeAliasDeclaration{
+            frontend::TypeAliasDeclaration {
                 formal.name,
                 *actual_type,
                 formal.span,
-                {},
+                { },
                 frontend::TypeDeclarationKind::
-                    SystemVerilogTypedef});
+                    SystemVerilogTypedef,
+                { } });
         result.values.emplace_back(
             formal.name,
             supported_type_actual(*actual_type)
@@ -337,13 +413,14 @@ InterfaceTypeSpecialization specialize_systemverilog_type_parameters(
             continue;
         }
         result.unit.type_aliases.push_back(
-            frontend::TypeAliasDeclaration{
+            frontend::TypeAliasDeclaration {
                 parameter.name,
                 *actual_type,
                 parameter.span,
-                {},
+                { },
                 frontend::TypeDeclarationKind::
-                    SystemVerilogTypedef});
+                    SystemVerilogTypedef,
+                { } });
         result.values.emplace_back(
             parameter.name,
             supported_type_actual(*actual_type)

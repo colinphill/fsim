@@ -114,7 +114,8 @@ void Lowerer::initialize_task_support()
         for (const auto& statement : statements) {
             if (statement.kind == StatementKind::Delay
                 || statement.kind == StatementKind::WaitOn
-                || statement.kind == StatementKind::WaitUntil) {
+                || statement.kind == StatementKind::WaitUntil
+                || statement.kind == StatementKind::WaitOrder) {
                 return true;
             }
             if (statement.kind == StatementKind::TaskCall) {
@@ -160,6 +161,486 @@ void Lowerer::initialize_task_support()
 
 void Lowerer::lower_task_call(const Statement& statement)
 {
+    if (lower_pla_task(statement)) {
+        return;
+    }
+    const bool coverage_database_task
+        = statement.task_name == "$set_coverage_db_name"
+        || statement.task_name == "$load_coverage_db";
+    if (coverage_database_task) {
+        const bool named = std::ranges::any_of(
+            statement.task_argument_names,
+            [](const std::string& name) { return !name.empty(); });
+        if (language_ != frontend::Language::SystemVerilog2017
+            || named || statement.task_arguments.size() != 1U
+            || !statement.task_arguments.front().valid()) {
+            report(
+                "FSIM-ELAB-SVCOV-002",
+                statement.task_name
+                    + " requires one positional SystemVerilog filename expression",
+                statement.span);
+            return;
+        }
+        auto filename = lower_string_format(
+            statement.task_arguments,
+            0U,
+            statement.task_name,
+            statement.span,
+            frontend::OutputFormat::String);
+        if (!filename) {
+            return;
+        }
+        CoverageDatabaseControl operation;
+        operation.kind = statement.task_name == "$load_coverage_db"
+            ? CoverageDatabaseControlKind::load
+            : CoverageDatabaseControlKind::set_name;
+        operation.filename = *filename;
+        process_.operations.emplace_back(std::move(operation));
+        return;
+    }
+    const bool stochastic_queue_task
+        = statement.task_name == "$q_initialize"
+        || statement.task_name == "$q_add"
+        || statement.task_name == "$q_remove"
+        || statement.task_name == "$q_exam";
+    if (stochastic_queue_task) {
+        const bool named = std::ranges::any_of(
+            statement.task_argument_names,
+            [](const std::string& name) { return !name.empty(); });
+        if (language_ != frontend::Language::SystemVerilog2017
+            || named || statement.task_arguments.size() != 4U) {
+            report(
+                "FSIM-ELAB-SVQUEUE-001",
+                statement.task_name
+                    + " requires four positional 32-bit integer arguments",
+                statement.span);
+            return;
+        }
+        std::array<bool, 4> output { false, false, false, true };
+        if (statement.task_name == "$q_remove") {
+            output = { false, true, true, true };
+        } else if (statement.task_name == "$q_exam") {
+            output = { false, false, true, true };
+        }
+        std::array<Expression, 4> output_targets;
+        for (std::size_t index = 0; index < output.size(); ++index) {
+            if (!output[index]) {
+                continue;
+            }
+            auto target = capture_callable_copy_out_target(
+                statement.task_arguments[index],
+                "@stochastic_queue_target_"
+                    + std::to_string(process_.operations.size()) + "_"
+                    + std::to_string(index));
+            if (!target)
+                return;
+            output_targets[index] = std::move(*target);
+        }
+        std::array<RegisterId, 4> arguments { };
+        for (std::size_t index = 0; index < arguments.size(); ++index) {
+            if (output[index]) {
+                arguments[index] = allocate_register(
+                    32U, frontend::ValueDomain::Integer);
+                continue;
+            }
+            auto argument = lower_expression(
+                statement.task_arguments[index], 32U);
+            if (!argument)
+                return;
+            if (register_width(*argument) != 32U) {
+                *argument = resize_register(
+                    *argument, 32U,
+                    is_signed_expression(statement.task_arguments[index]));
+            }
+            arguments[index] = *argument;
+        }
+        StochasticQueueOperation operation;
+        operation.queue_id = arguments[0];
+        operation.status = arguments[3];
+        if (statement.task_name == "$q_initialize") {
+            operation.kind = StochasticQueueKind::initialize;
+            operation.queue_type = arguments[1];
+            operation.maximum_length = arguments[2];
+        } else if (statement.task_name == "$q_add") {
+            operation.kind = StochasticQueueKind::add;
+            operation.job_id = arguments[1];
+            operation.information_id = arguments[2];
+        } else if (statement.task_name == "$q_remove") {
+            operation.kind = StochasticQueueKind::remove;
+            operation.job_id = arguments[1];
+            operation.information_id = arguments[2];
+        } else {
+            operation.kind = StochasticQueueKind::examine;
+            operation.statistic_code = arguments[1];
+            operation.statistic_value = arguments[2];
+        }
+        process_.operations.emplace_back(std::move(operation));
+        frontend::Type integer_type;
+        integer_type.spelling = "integer";
+        integer_type.domain = frontend::ValueDomain::Integer;
+        integer_type.packed_range = frontend::PackedRange { 31, 0, true };
+        integer_type.is_signed = true;
+        for (std::size_t index = 0; index < output.size(); ++index) {
+            if (!output[index])
+                continue;
+            lower_callable_copy_out(
+                output_targets[index],
+                integer_type,
+                arguments[index],
+                0,
+                0,
+                false,
+                false,
+                "@stochastic_queue_output_"
+                    + std::to_string(process_.operations.size()) + "_"
+                    + std::to_string(index));
+        }
+        return;
+    }
+    if (statement.task_name == "$system") {
+        if (language_ != frontend::Language::SystemVerilog2017
+            || statement.task_arguments.size() > 1U
+            || (!statement.task_arguments.empty()
+                && !is_string_expression(
+                    statement.task_arguments.front()))) {
+            report(
+                "FSIM-ELAB-SVSYS-001",
+                "$system requires SystemVerilog and zero or one command string",
+                statement.span);
+            return;
+        }
+        const auto command = statement.task_arguments.empty()
+            ? std::optional<StringRegisterId> { }
+            : lower_string_expression(statement.task_arguments.front());
+        if (!statement.task_arguments.empty() && !command) {
+            return;
+        }
+        process_.operations.emplace_back(SystemCommand {
+            command,
+            std::nullopt });
+        return;
+    }
+    const bool vcd_control_task = statement.task_name == "$dumpfile"
+        || statement.task_name == "$dumpvars"
+        || statement.task_name == "$dumpoff"
+        || statement.task_name == "$dumpon"
+        || statement.task_name == "$dumpall"
+        || statement.task_name == "$dumplimit"
+        || statement.task_name == "$dumpflush"
+        || statement.task_name == "$dumpports"
+        || statement.task_name == "$dumpportsoff"
+        || statement.task_name == "$dumpportson"
+        || statement.task_name == "$dumpportsall"
+        || statement.task_name == "$dumpportslimit"
+        || statement.task_name == "$dumpportsflush";
+    if (vcd_control_task) {
+        const bool named = std::ranges::any_of(
+            statement.task_argument_names,
+            [](const std::string& name) { return !name.empty(); });
+        if ((language_ != frontend::Language::SystemVerilog2017
+                && language_ != frontend::Language::Verilog2005)
+            || named) {
+            report(
+                "FSIM-ELAB-SVVCD-001",
+                statement.task_name
+                    + " requires positional Verilog/SystemVerilog arguments",
+                statement.span);
+            return;
+        }
+        VcdControl operation;
+        operation.scope = hierarchy_;
+        const bool extended = statement.task_name.starts_with("$dumpports");
+        const auto filename_expression = [&](const Expression& expression) {
+            if (!expression.valid()) {
+                return false;
+            }
+            if (expression.kind != frontend::ExpressionKind::Identifier
+                || is_string_expression(expression)) {
+                return true;
+            }
+            return signals_.contains(expression.text)
+                || string_objects_.contains(expression.text)
+                || locals_.contains(expression.text)
+                || string_locals_.contains(expression.text);
+        };
+        const auto lower_filename = [&](const Expression& expression,
+                                        const std::string_view task)
+            -> std::optional<StringRegisterId> {
+            std::vector<Expression> argument { expression };
+            return lower_string_format(argument, 0U, task, statement.span,
+                frontend::OutputFormat::String);
+        };
+        if (extended && statement.task_name == "$dumpports") {
+            operation.kind = VcdControlKind::ports;
+            std::optional<std::size_t> filename_index;
+            std::size_t selection_end = statement.task_arguments.size();
+            if (!statement.task_arguments.empty()
+                && !statement.task_arguments.front().valid()) {
+                if (statement.task_arguments.size() != 2U
+                    || !statement.task_arguments[1].valid()) {
+                    report("FSIM-ELAB-SVVCD-001",
+                        "$dumpports permits a null scope only before one filename expression",
+                        statement.span);
+                    return;
+                }
+                filename_index = 1U;
+                selection_end = 0U;
+            } else if (!statement.task_arguments.empty()
+                && filename_expression(statement.task_arguments.back())) {
+                filename_index = statement.task_arguments.size() - 1U;
+                selection_end = *filename_index;
+            }
+            for (std::size_t index = 0U; index < selection_end; ++index) {
+                const auto& selection = statement.task_arguments[index];
+                if (selection.kind != frontend::ExpressionKind::Identifier
+                    || selection.text.empty()) {
+                    report("FSIM-ELAB-SVVCD-001",
+                        "$dumpports scope selections must name modules",
+                        selection.span);
+                    return;
+                }
+                operation.selections.push_back(selection.text);
+            }
+            if (filename_index) {
+                operation.filename = lower_filename(
+                    statement.task_arguments[*filename_index], "$dumpports");
+                if (!operation.filename) {
+                    return;
+                }
+            }
+        } else if (extended && statement.task_name == "$dumpportslimit") {
+            if (statement.task_arguments.empty()
+                || statement.task_arguments.size() > 2U
+                || !statement.task_arguments.front().valid()
+                || (statement.task_arguments.size() == 2U
+                    && !statement.task_arguments[1].valid())) {
+                report("FSIM-ELAB-SVVCD-001",
+                    "$dumpportslimit requires a byte count and optional filename",
+                    statement.span);
+                return;
+            }
+            operation.kind = VcdControlKind::ports_limit;
+            auto limit = lower_expression(
+                statement.task_arguments.front(), 64U);
+            if (!limit) {
+                report("FSIM-ELAB-SVVCD-001",
+                    "$dumpportslimit byte count must be an integral expression",
+                    statement.task_arguments.front().span);
+                return;
+            }
+            if (register_width(*limit) != 64U) {
+                *limit = resize_register(*limit, 64U, false);
+            }
+            operation.value = *limit;
+            if (statement.task_arguments.size() == 2U) {
+                operation.filename = lower_filename(
+                    statement.task_arguments[1], "$dumpportslimit");
+                if (!operation.filename) {
+                    return;
+                }
+            }
+        } else if (extended) {
+            if (statement.task_arguments.size() > 1U
+                || (!statement.task_arguments.empty()
+                    && !statement.task_arguments.front().valid())) {
+                report("FSIM-ELAB-SVVCD-001",
+                    statement.task_name + " accepts at most one filename expression",
+                    statement.span);
+                return;
+            }
+            operation.kind = statement.task_name == "$dumpportsoff"
+                ? VcdControlKind::ports_off
+                : statement.task_name == "$dumpportson"
+                ? VcdControlKind::ports_on
+                : statement.task_name == "$dumpportsall"
+                ? VcdControlKind::ports_all
+                : VcdControlKind::ports_flush;
+            if (!statement.task_arguments.empty()) {
+                operation.filename = lower_filename(
+                    statement.task_arguments.front(), statement.task_name);
+                if (!operation.filename) {
+                    return;
+                }
+            }
+        } else if (statement.task_name == "$dumpfile") {
+            if (statement.task_arguments.size() > 1U) {
+                report(
+                    "FSIM-ELAB-SVVCD-001",
+                    "$dumpfile accepts zero or one filename expression",
+                    statement.span);
+                return;
+            }
+            operation.kind = VcdControlKind::file;
+            if (!statement.task_arguments.empty()) {
+                operation.filename = lower_string_format(
+                    statement.task_arguments,
+                    0U,
+                    "$dumpfile",
+                    statement.span,
+                    frontend::OutputFormat::String);
+                if (!operation.filename) {
+                    return;
+                }
+            }
+        } else if (statement.task_name == "$dumpvars") {
+            operation.kind = VcdControlKind::variables;
+            if (!statement.task_arguments.empty()) {
+                if (statement.task_arguments.size() < 2U) {
+                    report(
+                        "FSIM-ELAB-SVVCD-001",
+                        "$dumpvars arguments require levels and at least one module or variable",
+                        statement.span);
+                    return;
+                }
+                auto levels = lower_expression(
+                    statement.task_arguments.front(), 64U);
+                if (!levels) {
+                    report(
+                        "FSIM-ELAB-SVVCD-001",
+                        "$dumpvars levels must be an integral expression",
+                        statement.task_arguments.front().span);
+                    return;
+                }
+                if (register_width(*levels) != 64U) {
+                    *levels = resize_register(*levels, 64U, false);
+                }
+                operation.value = *levels;
+                for (std::size_t index = 1U;
+                    index < statement.task_arguments.size(); ++index) {
+                    const auto& selection = statement.task_arguments[index];
+                    if (selection.kind != frontend::ExpressionKind::Identifier
+                        || selection.text.empty()) {
+                        report(
+                            "FSIM-ELAB-SVVCD-001",
+                            "$dumpvars selections must name modules or variables",
+                            selection.span);
+                        return;
+                    }
+                    operation.selections.push_back(selection.text);
+                }
+            }
+        } else if (statement.task_name == "$dumplimit") {
+            if (statement.task_arguments.size() != 1U) {
+                report(
+                    "FSIM-ELAB-SVVCD-001",
+                    "$dumplimit requires one byte-count expression",
+                    statement.span);
+                return;
+            }
+            operation.kind = VcdControlKind::limit;
+            auto limit = lower_expression(
+                statement.task_arguments.front(), 64U);
+            if (!limit) {
+                report(
+                    "FSIM-ELAB-SVVCD-001",
+                    "$dumplimit byte count must be an integral expression",
+                    statement.task_arguments.front().span);
+                return;
+            }
+            if (register_width(*limit) != 64U) {
+                *limit = resize_register(*limit, 64U, false);
+            }
+            operation.value = *limit;
+        } else {
+            if (!statement.task_arguments.empty()) {
+                report(
+                    "FSIM-ELAB-SVVCD-001",
+                    statement.task_name + " does not accept arguments",
+                    statement.span);
+                return;
+            }
+            operation.kind = statement.task_name == "$dumpoff"
+                ? VcdControlKind::off
+                : statement.task_name == "$dumpon"
+                ? VcdControlKind::on
+                : statement.task_name == "$dumpall"
+                ? VcdControlKind::all
+                : VcdControlKind::flush;
+        }
+        process_.operations.emplace_back(std::move(operation));
+        return;
+    }
+    if (statement.task_name == "$printtimescale") {
+        const bool named_actual = std::ranges::any_of(
+            statement.task_argument_names,
+            [](const std::string& name) { return !name.empty(); });
+        if (language_ != frontend::Language::SystemVerilog2017
+            || statement.task_arguments.size() > 1U || named_actual
+            || (!statement.task_arguments.empty()
+                && (statement.task_arguments.front().kind
+                        != frontend::ExpressionKind::Identifier
+                    || statement.task_arguments.front().text.empty()))) {
+            report(
+                "FSIM-ELAB-SVTIME-002",
+                "$printtimescale accepts at most one hierarchical identifier in SystemVerilog",
+                statement.span);
+            return;
+        }
+        process_.operations.emplace_back(Display {
+            std::string {
+                "\x1f"
+                "fsim.printtimescale|" }
+                + (statement.task_arguments.empty()
+                        ? std::string { }
+                        : statement.task_arguments.front().text),
+            true,
+            false });
+        return;
+    }
+    if (statement.task_name == "$timeformat") {
+        if (language_ != frontend::Language::SystemVerilog2017
+            || statement.task_arguments.size() != 4U) {
+            report(
+                "FSIM-ELAB-SVTIME-001",
+                "$timeformat requires units, precision, suffix, and minimum width in SystemVerilog",
+                statement.span);
+            return;
+        }
+        const auto units = lower_expression(statement.task_arguments[0], 32U);
+        const auto precision = lower_expression(statement.task_arguments[1], 32U);
+        const auto suffix = lower_string_expression(statement.task_arguments[2]);
+        const auto minimum_width = lower_expression(
+            statement.task_arguments[3], 32U);
+        if (!units || !precision || !suffix || !minimum_width) {
+            report(
+                "FSIM-ELAB-SVTIME-001",
+                "$timeformat arguments require integral, integral, string, and integral profiles",
+                statement.span);
+            return;
+        }
+        process_.operations.emplace_back(TimeFormatControl {
+            *units, *precision, *suffix, *minimum_width });
+        return;
+    }
+    if (statement.task_name == "$srandom") {
+        if (language_ != frontend::Language::SystemVerilog2017
+            || statement.task_arguments.size() != 1U) {
+            report(
+                "FSIM-ELAB-SVRAND-007",
+                "$srandom requires one integral seed in SystemVerilog",
+                statement.span);
+            return;
+        }
+        auto seed = lower_expression(statement.task_arguments.front(), 32U);
+        if (!seed) {
+            report(
+                "FSIM-ELAB-SVRAND-007",
+                "$srandom seed must be an integral expression",
+                statement.task_arguments.front().span);
+            return;
+        }
+        if (register_width(*seed) != 32U) {
+            *seed = resize_register(
+                *seed,
+                32U,
+                is_signed_expression(statement.task_arguments.front()));
+        }
+        const auto process = allocate_register(
+            64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(ProcessSelf { process });
+        process_.operations.emplace_back(ProcessSrandom { process, *seed });
+        return;
+    }
     if (statement.assertion_control
         != frontend::SystemVerilogAssertionControlKind::None) {
         auto marker = std::string { "\x1f"
@@ -172,6 +653,83 @@ void Lowerer::lower_task_call(const Statement& statement)
         }
         process_.operations.emplace_back(
             Display { std::move(marker), false, false });
+        return;
+    }
+    constexpr std::string_view coverage_sample_procedural_prefix {
+        "@sv-coverage-sample-procedural:"
+    };
+    constexpr std::string_view coverage_sample_explicit_prefix {
+        "@sv-coverage-sample-explicit:"
+    };
+    constexpr std::string_view coverage_sample_event_prefix {
+        "@sv-coverage-sample-event:"
+    };
+    constexpr std::string_view coverage_control_start_prefix {
+        "@sv-coverage-control-start:"
+    };
+    constexpr std::string_view coverage_control_stop_prefix {
+        "@sv-coverage-control-stop:"
+    };
+    if (statement.task_name.starts_with(coverage_control_start_prefix)
+        || statement.task_name.starts_with(coverage_control_stop_prefix)) {
+        const auto start = statement.task_name.starts_with(
+            coverage_control_start_prefix);
+        const auto prefix = start
+            ? coverage_control_start_prefix
+            : coverage_control_stop_prefix;
+        process_.operations.emplace_back(Display {
+            std::string { "\x1f"
+                          "fsim.coverage-control|" }
+                + (start ? "start|" : "stop|")
+                + statement.task_name.substr(prefix.size()),
+            false,
+            false });
+        return;
+    }
+    if (statement.task_name.starts_with(coverage_sample_procedural_prefix)
+        || statement.task_name.starts_with(coverage_sample_explicit_prefix)
+        || statement.task_name.starts_with(coverage_sample_event_prefix)) {
+        const auto trigger = statement.task_name.starts_with(
+                                 coverage_sample_procedural_prefix)
+            ? CoverageSampleTrigger::procedural
+            : statement.task_name.starts_with(coverage_sample_event_prefix)
+            ? CoverageSampleTrigger::event
+            : CoverageSampleTrigger::explicit_sample;
+        const auto prefix = trigger == CoverageSampleTrigger::procedural
+            ? coverage_sample_procedural_prefix
+            : trigger == CoverageSampleTrigger::event
+            ? coverage_sample_event_prefix
+            : coverage_sample_explicit_prefix;
+        std::vector<RegisterId> actuals;
+        std::vector<std::uint32_t> actual_widths;
+        std::vector<std::uint8_t> signed_actuals;
+        actuals.reserve(statement.task_arguments.size());
+        actual_widths.reserve(statement.task_arguments.size());
+        signed_actuals.reserve(statement.task_arguments.size());
+        for (const auto& expression : statement.task_arguments) {
+            const auto width = infer_width(expression);
+            if (!width || *width == 0U
+                || *width > std::numeric_limits<std::uint32_t>::max()) {
+                report(
+                    "FSIM-ELAB-SVTASK-014",
+                    "covergroup sample actual requires a positive packed width",
+                    expression.span);
+                return;
+            }
+            const auto actual = lower_expression(expression, *width);
+            if (!actual) {
+                return;
+            }
+            actuals.push_back(*actual);
+            actual_widths.push_back(static_cast<std::uint32_t>(*width));
+            signed_actuals.push_back(
+                is_signed_expression(expression) ? 1U : 0U);
+        }
+        process_.operations.emplace_back(CoverageSample {
+            statement.task_name.substr(prefix.size()),
+            std::move(actuals),
+            std::move(actual_widths),
+            std::move(signed_actuals), trigger });
         return;
     }
     if (lower_string_format_task(statement)) {

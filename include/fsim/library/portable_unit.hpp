@@ -14,20 +14,20 @@ namespace fsim::library {
 
 // Stable little-endian owning-unit schema. This is independent of the host
 // compiler ABI and the LLVM native-object schema.
-inline constexpr std::uint32_t kOwningUnitSchemaVersion = 18;
+inline constexpr std::uint32_t kOwningUnitSchemaVersion = 25;
 inline constexpr std::uint32_t kUdpDeclarationSchemaVersion = 1;
 
 struct PortableSystemVerilogClassUnit {
-  std::string library;
-  std::string compilation_unit_identity;
-  std::string uvm_release{"none"};
-  std::vector<frontend::SystemVerilogClassDeclaration> declarations;
-  std::vector<frontend::SystemVerilogClassMethod> method_definitions;
+    std::string library;
+    std::string compilation_unit_identity;
+    std::string uvm_release { "none" };
+    std::vector<frontend::SystemVerilogClassDeclaration> declarations;
+    std::vector<frontend::SystemVerilogClassMethod> method_definitions;
 };
 
 struct SourceNameMapping {
-  std::string producer_name;
-  std::string logical_name;
+    std::string producer_name;
+    std::string logical_name;
 };
 
 // Rewrites producer-absolute names in every nested source span. Relative
@@ -81,4 +81,4 @@ deserialize_portable_class_unit(
     std::string source_name,
     diagnostic::Engine& diagnostics);
 
-}  // namespace fsim::library
+} // namespace fsim::library

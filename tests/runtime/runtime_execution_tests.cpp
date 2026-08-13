@@ -516,6 +516,118 @@ void test_simir_force_release()
         "final selected release must reveal the complete underlying value");
 }
 
+void test_simir_wait_order()
+{
+    using namespace fsim::runtime;
+    using namespace fsim::runtime::simir;
+
+    {
+        Interpreter interpreter;
+        Signal first_signal {
+            "order.first", PackedLogic4::from_msb_string("0")
+        };
+        first_signal.event_variable = true;
+        const auto first = interpreter.add_signal(std::move(first_signal));
+        Signal second_signal {
+            "order.second", PackedLogic4::from_msb_string("0")
+        };
+        second_signal.event_variable = true;
+        const auto second = interpreter.add_signal(std::move(second_signal));
+        const auto observed = interpreter.add_signal(
+            { "order.success", PackedLogic4::from_msb_string("0") });
+
+        Process waiter;
+        waiter.id = 0;
+        waiter.name = "wait_order_success";
+        waiter.register_count = 1;
+        waiter.operations = {
+            WaitOrder { { first, second, first }, 0 },
+            WriteBlocking { observed, 0 },
+            Halt { },
+        };
+        (void)interpreter.add_process(std::move(waiter));
+
+        Process driver;
+        driver.id = 1;
+        driver.name = "wait_order_success_driver";
+        driver.register_count = 2;
+        driver.operations = {
+            LoadConstant { 0, PackedLogic4::from_msb_string("1") },
+            LoadConstant { 1, PackedLogic4::from_msb_string("0") },
+            WaitFor { 1 },
+            WriteBlocking { first, 0 },
+            WaitFor { 1 },
+            WriteBlocking { second, 0 },
+            WaitFor { 1 },
+            WriteBlocking { first, 1 },
+            Halt { },
+        };
+        (void)interpreter.add_process(std::move(driver));
+
+        const auto result = interpreter.run();
+        require(
+            result.status == RunStatus::completed
+                && result.time == 3
+                && interpreter.signal_value(observed).to_msb_string()
+                    == "1",
+            "wait_order accepts source-order triggers including repeated events");
+    }
+
+    {
+        Interpreter interpreter;
+        Signal first_signal {
+            "order.first", PackedLogic4::from_msb_string("0")
+        };
+        first_signal.event_variable = true;
+        const auto first = interpreter.add_signal(std::move(first_signal));
+        Signal second_signal {
+            "order.second", PackedLogic4::from_msb_string("0")
+        };
+        second_signal.event_variable = true;
+        const auto second = interpreter.add_signal(std::move(second_signal));
+        Signal third_signal {
+            "order.third", PackedLogic4::from_msb_string("0")
+        };
+        third_signal.event_variable = true;
+        const auto third = interpreter.add_signal(std::move(third_signal));
+        const auto observed = interpreter.add_signal(
+            { "order.failure", PackedLogic4::from_msb_string("1") });
+
+        Process waiter;
+        waiter.id = 0;
+        waiter.name = "wait_order_failure";
+        waiter.register_count = 1;
+        waiter.operations = {
+            WaitOrder { { first, second, third }, 0 },
+            WriteBlocking { observed, 0 },
+            Halt { },
+        };
+        (void)interpreter.add_process(std::move(waiter));
+
+        Process driver;
+        driver.id = 1;
+        driver.name = "wait_order_failure_driver";
+        driver.register_count = 1;
+        driver.operations = {
+            LoadConstant { 0, PackedLogic4::from_msb_string("1") },
+            WaitFor { 1 },
+            WriteBlocking { first, 0 },
+            WaitFor { 1 },
+            WriteBlocking { third, 0 },
+            Halt { },
+        };
+        (void)interpreter.add_process(std::move(driver));
+
+        const auto result = interpreter.run();
+        require(
+            result.status == RunStatus::completed
+                && result.time == 2
+                && interpreter.signal_value(observed).to_msb_string()
+                    == "0",
+            "wait_order reports an out-of-order listed event");
+    }
+}
+
 void test_simir_postponed_process_ordering()
 {
     using namespace fsim::runtime;
@@ -528,8 +640,22 @@ void test_simir_postponed_process_ordering()
     active.operations = { Display { "active", true }, Halt { } };
     (void)interpreter.add_process(std::move(active));
 
+    Process observed;
+    observed.id = 1;
+    observed.name = "observed";
+    observed.observed = true;
+    observed.operations = { Display { "observed", true }, Halt { } };
+    (void)interpreter.add_process(std::move(observed));
+
+    Process reactive;
+    reactive.id = 2;
+    reactive.name = "reactive";
+    reactive.reactive = true;
+    reactive.operations = { Display { "reactive", true }, Halt { } };
+    (void)interpreter.add_process(std::move(reactive));
+
     Process postponed;
-    postponed.id = 1;
+    postponed.id = 3;
     postponed.name = "postponed";
     postponed.postponed = true;
     postponed.operations = { Display { "postponed", true }, Halt { } };
@@ -556,29 +682,112 @@ void test_simir_postponed_process_ordering()
     const auto result = interpreter.run();
     require(
         result.status == RunStatus::completed
-            && events.size() == 2
+            && events.size() == 4
             && events[0].text == "active"
             && events[0].phase == SchedulerPhase::active
-            && events[1].text == "postponed"
-            && events[1].phase == SchedulerPhase::postponed,
-        "postponed processes must execute after active processes");
+            && events[1].text == "observed"
+            && events[1].phase == SchedulerPhase::observed
+            && events[2].text == "reactive"
+            && events[2].phase == SchedulerPhase::reactive
+            && events[3].text == "postponed"
+            && events[3].phase == SchedulerPhase::postponed,
+        "processes must execute in active, observed, reactive, postponed order");
 
     Interpreter malformed;
     Process incompatible;
     incompatible.id = 0;
-    incompatible.name = "reactive_and_postponed";
+    incompatible.name = "observed_and_reactive";
+    incompatible.observed = true;
     incompatible.reactive = true;
-    incompatible.postponed = true;
     incompatible.operations = { Halt { } };
     bool rejected = false;
     try {
         (void)malformed.add_process(std::move(incompatible));
     } catch (const std::invalid_argument& error) {
         rejected = std::string_view { error.what() }.find(
-                       "both reactive and postponed")
+                       "multiple scheduling regions")
             != std::string_view::npos;
     }
     require(rejected, "incompatible process scheduling phases must be rejected");
+
+    Interpreter split_region;
+    Process assertion;
+    assertion.id = 0;
+    assertion.name = "observed_then_reactive";
+    assertion.observed = true;
+    assertion.operations = {
+        WaitRegion { SchedulerPhase::reactive },
+        Display { "reactive-action", true },
+        Halt { }
+    };
+    (void)split_region.add_process(std::move(assertion));
+    std::optional<SchedulerPhase> action_phase;
+    split_region.set_output_hook(
+        [&](const ProcessId, const std::string_view text, const bool,
+            const SimulationTick, const std::uint64_t) {
+            if (text == "reactive-action") {
+                action_phase = split_region.scheduler().current_phase();
+            }
+        });
+    require(
+        split_region.run().status == RunStatus::completed
+            && action_phase == SchedulerPhase::reactive,
+        "an observed process must resume its action in the reactive region");
+
+    Interpreter coverage_runtime;
+    const auto wide_sample = PackedLogic4::from_msb_string(
+        "1" + std::string(63, '0') + "X"
+        + std::string(63, '0') + "Z10101010");
+    Process sampler;
+    sampler.id = 0;
+    sampler.name = "coverage_sampler";
+    sampler.register_count = 2;
+    sampler.operations = {
+        LoadConstant { 0, wide_sample },
+        CoverageSample { "work.sample@wide", { 0 }, { 137 }, { 1 },
+            CoverageSampleTrigger::procedural },
+        CoverageQuery { 0, CoverageQueryKind::overall_type },
+        CoverageQuery { 1, CoverageQueryKind::overall_instance },
+        Halt { }
+    };
+    (void)coverage_runtime.add_process(std::move(sampler));
+    std::size_t coverage_samples { };
+    std::size_t coverage_queries { };
+    const auto coverage_query_payload = encode_systemverilog_scalar_payload(
+        SystemVerilogScalarValue::real(43.75));
+    const auto instance_coverage_query_payload
+        = encode_systemverilog_scalar_payload(
+            SystemVerilogScalarValue::real(37.5));
+    require(
+        static_cast<bool>(coverage_query_payload)
+            && static_cast<bool>(instance_coverage_query_payload),
+        "coverage query fixture must have a canonical real payload");
+    coverage_runtime.set_coverage_sample_hook(
+        [&](const std::string_view identity,
+            const std::span<const PackedLogic4> actuals,
+            const std::span<const std::uint8_t> signed_actuals,
+            const CoverageSampleTrigger trigger) {
+            require(
+                identity == "work.sample@wide"
+                    && actuals.size() == 1
+                    && actuals.front() == wide_sample
+                    && signed_actuals.size() == 1
+                    && signed_actuals.front() == 1U
+                    && trigger == CoverageSampleTrigger::procedural,
+                "coverage sample boundary must preserve exact wide metadata");
+            ++coverage_samples;
+        });
+    coverage_runtime.set_coverage_query_hook([&](const auto kind) {
+        ++coverage_queries;
+        return kind == CoverageQueryKind::overall_instance
+            ? instance_coverage_query_payload.value
+            : coverage_query_payload.value;
+    });
+    require(
+        coverage_runtime.run().status == RunStatus::completed
+            && coverage_samples == 1
+            && coverage_queries == 2,
+        "coverage sample and both query boundaries must execute exactly once");
 }
 
 void test_simir_design_stop_identity()
@@ -1767,412 +1976,203 @@ void test_simir_alternate_executor_validation()
     }
 }
 
-void test_simir_mutable_strings()
+void test_simir_system_command()
 {
     using namespace fsim::runtime;
     using namespace fsim::runtime::simir;
 
     Interpreter interpreter;
-    const auto object = interpreter.add_string_object(
-        StringObject { "top.title", { } });
-
+    const auto status = interpreter.add_signal(
+        { "top.system_status", PackedLogic4(32, Logic4::zero) });
+    std::vector<std::optional<std::string>> commands;
+    interpreter.set_system_command_hook(
+        [&commands](const std::optional<std::string_view> command) {
+            commands.emplace_back(command
+                    ? std::optional<std::string> { *command }
+                    : std::nullopt);
+            return command ? std::int32_t { -17 } : std::int32_t { 41 };
+        });
     Process process;
     process.id = 0;
-    process.name = "mutable_strings";
-    process.register_count = 5;
-    process.string_register_count = 4;
-    process.debug_locals = {
-        DebugLocal {
-            "equal", "logic", 0, 1, { }, { }, { },
-            ValueKind::logic4, { } },
-        DebugLocal {
-            "length", "int", 1, 32, { }, { }, { },
-            ValueKind::logic4, { } },
-        DebugLocal {
-            "first", "int", 3, 32, { }, { }, { },
-            ValueKind::logic4, { } },
-    };
-    process.debug_string_locals = {
-        DebugStringLocal { "copy", 3, { } },
-    };
+    process.name = "system_command";
+    process.register_count = 1;
+    process.string_register_count = 1;
     process.operations = {
-        LoadStringConstant { 0, "f\xcf\x80" },
-        LoadStringConstant { 1, "\xf0\x9f\x98\x80" },
-        ConcatenateStrings { 2, { 0, 1 } },
-        WriteStringObject { object, 2 },
-        ReadStringObject { 3, object },
-        CompareStrings { 0, 2, 3, false },
-        StringLength { 1, 3 },
-        LoadConstant {
-            2, PackedLogic4::from_aval_bval(32, 1, 0) },
-        StringIndex { 3, 3, 2, true },
-        LoadConstant {
-            4, PackedLogic4::from_aval_bval(32, 0x1f642, 0) },
-        StringReplaceCodePoint { 3, 2, 4, true },
-        WriteStringObject { object, 3 },
+        LoadStringConstant { 0, "command with spaces" },
+        SystemCommand { StringRegisterId { 0 }, RegisterId { 0 } },
+        WriteBlocking { status, 0 },
+        SystemCommand { std::nullopt, std::nullopt },
         Halt { },
     };
     (void)interpreter.add_process(std::move(process));
     const auto result = interpreter.run();
     require(
         result.status == RunStatus::completed
-            && interpreter.string_object_value(object)
-                == "f\xf0\x9f\x99\x82\xf0\x9f\x98\x80",
-        "mutable string object read, value-copy, concatenation, index, and "
-        "replacement");
-    require(
-        interpreter.read_debug_local(0, 0).to_msb_string() == "1"
-            && interpreter.read_debug_local(0, 1).low_word().aval == 3
-            && interpreter.read_debug_local(0, 2).low_word().aval == 0x03c0
-            && interpreter.read_debug_string_local(0, 0)
-                == "f\xf0\x9f\x99\x82\xf0\x9f\x98\x80",
-        "mutable string comparison, length, indexing, and debugger values");
+            && commands
+                == std::vector<std::optional<std::string>> {
+                    std::string { "command with spaces" }, std::nullopt }
+            && interpreter.signal_value(status).low_word().bval == 0 && interpreter.signal_value(status).low_word().aval == static_cast<std::uint32_t>(-17),
+        "$system preserves command text, NULL calls, task discard, and raw int results");
 
-    try {
-        Interpreter invalid;
-        (void)invalid.add_string_object(
-            StringObject {
-                "oversize",
-                std::string(maximum_string_bytes + 1, 'x') });
-        throw std::runtime_error { "oversize string object was accepted" };
-    } catch (const std::length_error& error) {
-        require(
-            std::string_view { error.what() }.find("byte limit")
-                != std::string_view::npos,
-            "oversize string object diagnostic");
-    }
-
-    Interpreter invalid_index;
-    Process bad;
-    bad.id = 0;
-    bad.name = "invalid_string_index";
-    bad.register_count = 2;
-    bad.string_register_count = 1;
-    bad.operations = {
-        LoadStringConstant { 0, "x" },
-        LoadConstant {
-            0, PackedLogic4::from_aval_bval(32, 1, 0) },
-        StringIndex { 1, 0, 0, true },
-        Halt { },
+    Interpreter unavailable;
+    Process missing;
+    missing.id = 0;
+    missing.name = "missing_system_command";
+    missing.operations = {
+        SystemCommand { std::nullopt, std::nullopt }, Halt { }
     };
-    (void)invalid_index.add_process(std::move(bad));
+    (void)unavailable.add_process(std::move(missing));
     try {
-        (void)invalid_index.run();
-        throw std::runtime_error { "out-of-range string index was accepted" };
+        (void)unavailable.run();
+        throw std::runtime_error("missing $system service was accepted");
     } catch (const InterpreterError& error) {
         require(
-            std::string_view { error.what() }.find("outside the code-point range")
+            std::string_view { error.what() }.find(
+                "$system service is unavailable")
                 != std::string_view::npos,
-            "out-of-range string index diagnostic");
+            "missing $system service diagnostic");
     }
 }
 
-void test_simir_fork_process_lifecycle()
+void test_simir_stochastic_queues()
 {
     using namespace fsim::runtime;
     using namespace fsim::runtime::simir;
 
-    const auto run_fork = [](
-                              std::vector<Operation> operations,
-                              const std::string_view expected,
-                              const SimulationTick expected_time,
-                              const std::uint64_t expected_register) {
-        Interpreter interpreter;
-        const auto output = interpreter.add_signal(
-            Signal { "fork.output", PackedLogic4::from_msb_string("00") });
-        Process process;
-        process.id = 0;
-        process.name = "fork_lifecycle";
-        process.register_count = 4;
-        process.debug_locals = {
-            DebugLocal {
-                "shared", "logic [1:0]", 0, 2, { }, { }, { },
-                ValueKind::logic4, { } },
-        };
-        for (auto& operation : operations) {
-            if (auto* write = fsim::runtime::simir::operation_get_if<WriteBlocking>(&operation)) {
-                write->signal = output;
-            }
-        }
-        process.operations = std::move(operations);
-        (void)interpreter.add_process(std::move(process));
-        const auto result = interpreter.run();
-        require(
-            result.status == RunStatus::completed
-                && result.time == expected_time
-                && interpreter.signal_value(output).to_msb_string()
-                    == expected
-                && interpreter.read_debug_local(0, 0).low_word().aval
-                    == expected_register,
-            "fork lifecycle, shared frame, and deterministic completion");
+    Interpreter interpreter;
+    const auto full_before = interpreter.add_signal(
+        { "top.full_before", PackedLogic4(32, Logic4::zero) });
+    const auto mean_interarrival = interpreter.add_signal(
+        { "top.mean_interarrival", PackedLogic4(32, Logic4::zero) });
+    const auto maximum_occupancy = interpreter.add_signal(
+        { "top.maximum_occupancy", PackedLogic4(32, Logic4::zero) });
+    const auto removed_job = interpreter.add_signal(
+        { "top.removed_job", PackedLogic4(32, Logic4::zero) });
+    const auto removed_information = interpreter.add_signal(
+        { "top.removed_information", PackedLogic4(32, Logic4::zero) });
+    const auto shortest_wait = interpreter.add_signal(
+        { "top.shortest_wait", PackedLogic4(32, Logic4::zero) });
+    const auto longest_wait = interpreter.add_signal(
+        { "top.longest_wait", PackedLogic4(32, Logic4::zero) });
+    const auto average_wait = interpreter.add_signal(
+        { "top.average_wait", PackedLogic4(32, Logic4::zero) });
+    const auto full_after = interpreter.add_signal(
+        { "top.full_after", PackedLogic4(32, Logic4::zero) });
+    const auto empty_status = interpreter.add_signal(
+        { "top.empty_status", PackedLogic4(32, Logic4::zero) });
+
+    Process process;
+    process.id = 0;
+    process.name = "stochastic_queues";
+    process.register_count = 11;
+    const auto load = [&](const RegisterId id, const std::uint32_t value) {
+        process.operations.emplace_back(LoadConstant {
+            id, PackedLogic4::from_aval_bval(32, value, 0) });
     };
-
-    run_fork(
-        {
-            LoadConstant { 0, PackedLogic4::from_aval_bval(2, 0, 0) },
-            Fork { { 4, 7 }, ForkJoinKind::all },
-            WriteBlocking { 0, 0 },
-            Halt { },
-            WaitFor { 2 },
-            LoadConstant { 0, PackedLogic4::from_aval_bval(2, 1, 0) },
-            ForkEnd { },
-            WaitFor { 1 },
-            LoadConstant { 0, PackedLogic4::from_aval_bval(2, 2, 0) },
-            ForkEnd { },
-        },
-        "01", 2, 1);
-
-    run_fork(
-        {
-            LoadConstant { 0, PackedLogic4::from_aval_bval(2, 0, 0) },
-            Fork { { 5, 8 }, ForkJoinKind::any },
-            WriteBlocking { 0, 0 },
-            WaitFork { },
-            Halt { },
-            WaitFor { 1 },
-            LoadConstant { 0, PackedLogic4::from_aval_bval(2, 1, 0) },
-            ForkEnd { },
-            WaitFor { 2 },
-            LoadConstant { 0, PackedLogic4::from_aval_bval(2, 2, 0) },
-            ForkEnd { },
-        },
-        "01", 2, 2);
-
-    run_fork(
-        {
-            LoadConstant { 0, PackedLogic4::from_aval_bval(2, 0, 0) },
-            Fork { { 6, 9 }, ForkJoinKind::none },
-            LoadConstant { 0, PackedLogic4::from_aval_bval(2, 3, 0) },
-            WaitFork { },
-            WriteBlocking { 0, 0 },
-            Halt { },
-            WaitFor { 2 },
-            LoadConstant { 0, PackedLogic4::from_aval_bval(2, 1, 0) },
-            ForkEnd { },
-            WaitFor { 1 },
-            LoadConstant { 0, PackedLogic4::from_aval_bval(2, 2, 0) },
-            ForkEnd { },
-        },
-        "01", 2, 1);
-
-    run_fork(
-        {
-            LoadConstant { 0, PackedLogic4::from_aval_bval(2, 0, 0) },
-            Fork { { 5 }, ForkJoinKind::none },
-            DisableFork { },
-            WaitFor { 2 },
-            Halt { },
-            WaitFor { 1 },
-            LoadConstant { 0, PackedLogic4::from_aval_bval(2, 3, 0) },
-            WriteBlocking { 0, 0 },
-            ForkEnd { },
-        },
-        "00", 2, 0);
-
-    run_fork(
-        {
-            LoadConstant { 0, PackedLogic4::from_aval_bval(2, 0, 0) },
-            Fork { { 8 }, ForkJoinKind::none },
-            Fork { { 12 }, ForkJoinKind::none },
-            DisableFork { 1 },
-            WaitFork { },
-            WriteBlocking { 0, 0 },
-            Halt { },
-            Halt { },
-            WaitFor { 1 },
-            LoadConstant { 0, PackedLogic4::from_aval_bval(2, 1, 0) },
-            ForkEnd { },
-            Halt { },
-            WaitFor { 2 },
-            LoadConstant { 0, PackedLogic4::from_aval_bval(2, 2, 0) },
-            ForkEnd { },
-        },
-        "10", 2, 2);
-
-    run_fork(
-        {
-            LoadConstant { 0, PackedLogic4::from_aval_bval(2, 0, 0) },
-            Fork { { 4 }, ForkJoinKind::any },
-            DisableFork { },
-            Halt { },
-            Fork { { 7 }, ForkJoinKind::none },
-            ForkEnd { },
-            Halt { },
-            WaitFor { 1 },
-            LoadConstant { 0, PackedLogic4::from_aval_bval(2, 3, 0) },
-            WriteBlocking { 0, 0 },
-            ForkEnd { },
-        },
-        "00", 0, 0);
-
-    run_fork(
-        {
-            LoadConstant { 0, PackedLogic4::from_aval_bval(2, 0, 0) },
-            Fork { { 9 }, ForkJoinKind::none },
-            LoadConstant { 1, PackedLogic4::from_aval_bval(2, 1, 0) },
-            Binary { BinaryOperator::add_unsigned, 0, 0, 1 },
-            LoadConstant { 2, PackedLogic4::from_aval_bval(2, 2, 0) },
-            Binary { BinaryOperator::less_unsigned, 3, 0, 2 },
-            Branch { 3, 1, 7, UnknownBranchPolicy::when_false },
-            WaitFork { },
-            Halt { },
-            WaitFor { 2 },
-            ForkEnd { },
-        },
-        "00", 2, 2);
-
-    {
-        Interpreter interpreter;
-        Process process;
-        process.id = 0;
-        process.name = "process_handle_lifecycle";
-        process.register_count = 7;
-        process.debug_locals = {
-            DebugLocal {
-                "handle", "process", 0, 64, { }, { }, { },
-                ValueKind::logic4, { } },
-            DebugLocal {
-                "waiting_status", "process::state", 1, 32, { }, { }, { },
-                ValueKind::logic4, { } },
-            DebugLocal {
-                "waiting_completed", "bit", 2, 1, { }, { }, { },
-                ValueKind::logic4, { } },
-            DebugLocal {
-                "finished_status", "process::state", 3, 32, { }, { }, { },
-                ValueKind::logic4, { } },
-            DebugLocal {
-                "finished_completed", "bit", 4, 1, { }, { }, { },
-                ValueKind::logic4, { } },
-            DebugLocal {
-                "killed_status", "process::state", 5, 32, { }, { }, { },
-                ValueKind::logic4, { } },
-            DebugLocal {
-                "killed_completed", "bit", 6, 1, { }, { }, { },
-                ValueKind::logic4, { } },
-        };
-        process.operations = {
-            Fork { { 14 }, ForkJoinKind::none },
-            Yield { },
-            ProcessStatusQuery { 1, 0 },
-            ProcessCompleted { 2, 0 },
-            ProcessAwait { 0 },
-            ProcessStatusQuery { 3, 0 },
-            ProcessCompleted { 4, 0 },
-            Fork { { 17 }, ForkJoinKind::none },
-            Yield { },
-            ProcessKill { 0 },
-            ProcessStatusQuery { 5, 0 },
-            ProcessCompleted { 6, 0 },
-            Halt { },
-            Halt { },
-            ProcessSelf { 0 },
-            WaitFor { 2 },
-            ForkEnd { },
-            ProcessSelf { 0 },
-            WaitForever { },
-            ForkEnd { },
-        };
-        (void)interpreter.add_process(std::move(process));
-        const auto result = interpreter.run();
-        const auto value = [&](const RegisterId id) {
-            return interpreter.read_debug_local(0, id).low_word().aval;
-        };
-        require(
-            result.status == RunStatus::completed
-                && result.time == 2
-                && value(1)
-                    == static_cast<std::uint32_t>(ProcessStatus::waiting)
-                && value(2) == 0
-                && value(3)
-                    == static_cast<std::uint32_t>(ProcessStatus::finished)
-                && value(4) == 1
-                && value(5)
-                    == static_cast<std::uint32_t>(ProcessStatus::killed)
-                && value(6) == 1,
-            "generation-safe process handles await, kill, and report lifecycle");
-    }
-
-    {
-        Interpreter interpreter;
-        const auto trigger = interpreter.add_signal(
-            Signal { "fork.trigger", PackedLogic4::from_msb_string("0") });
-        const auto observed = interpreter.add_signal(
-            Signal { "fork.observed", PackedLogic4::from_msb_string("0") });
-        Process process;
-        process.id = 0;
-        process.name = "fork_static_sensitivity";
-        process.register_count = 1;
-        process.static_sensitivity = { { trigger, EdgeKind::any } };
-        process.operations = {
-            Fork { { 3, 7 }, ForkJoinKind::all },
-            Halt { },
-            Halt { },
-            WaitSensitivity { },
-            LoadConstant { 0, PackedLogic4::from_msb_string("1") },
-            WriteBlocking { observed, 0 },
-            ForkEnd { },
-            WaitFor { 1 },
-            LoadConstant { 0, PackedLogic4::from_msb_string("1") },
-            WriteBlocking { trigger, 0 },
-            ForkEnd { },
-        };
-        (void)interpreter.add_process(std::move(process));
-        const auto result = interpreter.run();
-        require(
-            result.status == RunStatus::completed
-                && result.time == 1
-                && interpreter.signal_value(observed).to_msb_string() == "1",
-            "dynamic fork children register inherited static sensitivity");
-    }
-
-    const auto expect_malformed = [](
-                                      std::vector<Operation> operations,
-                                      const std::string_view message) {
-        Interpreter interpreter;
-        Process process;
-        process.id = 0;
-        process.name = "malformed_fork";
-        process.register_count = 2;
-        process.operations = std::move(operations);
-        (void)interpreter.add_process(std::move(process));
-        bool rejected = false;
-        try {
-            (void)interpreter.run();
-        } catch (const InterpreterError& error) {
-            rejected = std::string_view { error.what() }.find(message)
-                != std::string_view::npos;
-        }
-        require(rejected, "malformed fork SimIR must be rejected");
+    const auto initialize_queue = [&]() {
+        StochasticQueueOperation operation;
+        operation.kind = StochasticQueueKind::initialize;
+        operation.queue_id = 0;
+        operation.queue_type = 1;
+        operation.maximum_length = 2;
+        operation.status = 3;
+        process.operations.emplace_back(operation);
     };
-    expect_malformed(
-        { ForkEnd { }, Halt { } },
-        "ForkEnd requires a dynamically spawned fork child");
-    expect_malformed(
-        { Fork { { 2, 2 }, ForkJoinKind::all }, Halt { }, ForkEnd { } },
-        "fork branch entry is duplicated");
-    expect_malformed(
-        { Fork { { 1 }, ForkJoinKind::all }, ForkEnd { } },
-        "fork branch must follow its parent continuation");
-    expect_malformed(
-        { Fork { { }, ForkJoinKind::all } },
-        "fork parent continuation is outside the operation stream");
-    expect_malformed(
-        {
-            Fork { { 2 }, static_cast<ForkJoinKind>(99) },
-            Halt { },
-            ForkEnd { },
-        },
-        "fork has an invalid join kind");
-    expect_malformed(
-        {
-            LoadConstant {
-                0,
-                PackedLogic4::from_aval_bval(
-                    64, (std::uint64_t { 99 } << 32U) | 1U, 0) },
-            ProcessStatusQuery { 1, 0 },
-            Halt { },
-        },
-        "process handle generation is stale");
+    const auto add_queue = [&]() {
+        StochasticQueueOperation operation;
+        operation.kind = StochasticQueueKind::add;
+        operation.queue_id = 0;
+        operation.job_id = 4;
+        operation.information_id = 5;
+        operation.status = 3;
+        process.operations.emplace_back(operation);
+    };
+    const auto remove_queue = [&]() {
+        StochasticQueueOperation operation;
+        operation.kind = StochasticQueueKind::remove;
+        operation.queue_id = 0;
+        operation.job_id = 9;
+        operation.information_id = 10;
+        operation.status = 3;
+        process.operations.emplace_back(operation);
+    };
+    const auto queue_full = [&]() {
+        StochasticQueueOperation operation;
+        operation.kind = StochasticQueueKind::full;
+        operation.queue_id = 0;
+        operation.status = 3;
+        operation.result = 6;
+        process.operations.emplace_back(operation);
+    };
+    const auto examine_queue = [&]() {
+        StochasticQueueOperation operation;
+        operation.kind = StochasticQueueKind::examine;
+        operation.queue_id = 0;
+        operation.statistic_code = 7;
+        operation.statistic_value = 8;
+        operation.status = 3;
+        process.operations.emplace_back(operation);
+    };
+    load(0, 7);
+    load(1, 1);
+    load(2, 2);
+    initialize_queue();
+    load(4, 11);
+    load(5, 101);
+    add_queue();
+    process.operations.emplace_back(WaitFor { 4 });
+    load(4, 12);
+    load(5, 102);
+    add_queue();
+    queue_full();
+    process.operations.emplace_back(WriteBlocking { full_before, 6 });
+    load(7, 2);
+    examine_queue();
+    process.operations.emplace_back(WriteBlocking { mean_interarrival, 8 });
+    load(7, 3);
+    examine_queue();
+    process.operations.emplace_back(WriteBlocking { maximum_occupancy, 8 });
+    process.operations.emplace_back(WaitFor { 6 });
+    remove_queue();
+    process.operations.emplace_back(WriteBlocking { removed_job, 9 });
+    process.operations.emplace_back(WriteBlocking { removed_information, 10 });
+    for (const auto& [code, signal] : std::array {
+             std::pair { 4U, shortest_wait },
+             std::pair { 5U, longest_wait },
+             std::pair { 6U, average_wait } }) {
+        load(7, code);
+        examine_queue();
+        process.operations.emplace_back(WriteBlocking { signal, 8 });
+    }
+    remove_queue();
+    queue_full();
+    process.operations.emplace_back(WriteBlocking { full_after, 6 });
+    remove_queue();
+    process.operations.emplace_back(WriteBlocking { empty_status, 3 });
+    process.operations.emplace_back(Halt { });
+    (void)interpreter.add_process(std::move(process));
+    require(
+        interpreter.run().status == RunStatus::completed,
+        "stochastic queue execution completes");
+    const auto observed = [&](const SignalId signal) {
+        const auto word = interpreter.signal_value(signal).low_word();
+        require(word.bval == 0, "stochastic queue result is known");
+        return static_cast<std::uint32_t>(word.aval);
+    };
+    require(
+        observed(full_before) == 1
+            && observed(mean_interarrival) == 4
+            && observed(maximum_occupancy) == 2
+            && observed(removed_job) == 11
+            && observed(removed_information) == 101
+            && observed(shortest_wait) == 10
+            && observed(longest_wait) == 6
+            && observed(average_wait) == 10
+            && observed(full_after) == 0
+            && observed(empty_status) == 3,
+        "stochastic FIFO operations, status codes, and statistics");
 }
+
+#include "runtime_execution_lifecycle.tpp"
 
 } // namespace fsim::tests::runtime

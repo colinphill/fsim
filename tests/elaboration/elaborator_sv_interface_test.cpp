@@ -455,24 +455,30 @@ endmodule
           const bool,
           const fsim::runtime::SimulationTick,
           const std::uint64_t) {
-        const auto phase = runtime->scheduler().current_phase();
-        assert(phase);
-        lifecycle.push_back({
-            std::string{text},
-            host.design->processes().at(process).name,
-            *phase});
+          const auto phase = runtime->scheduler().current_phase();
+          assert(phase);
+          lifecycle.push_back({ std::string { text },
+              host.design->processes().at(process).name,
+              *phase });
       });
   const auto run = runtime->run();
+  const auto observed_value = runtime->signal_value(*observed).to_msb_string();
+  if (run.status != fsim::runtime::RunStatus::stopped
+      || observed_value != "1010") {
+      std::cerr << "program instance run status="
+                << static_cast<int>(run.status)
+                << " observed=" << observed_value << '\n';
+  }
   assert(
-      run.status == fsim::runtime::RunStatus::completed
-      && runtime->signal_value(*observed).to_msb_string()
-          == "1010");
+      run.status == fsim::runtime::RunStatus::stopped
+      && observed_value == "1010");
   assert(lifecycle.size() == 4);
-  const std::array expected_text{
-      std::string_view{"module-initial"},
-      std::string_view{"program-initial"},
-      std::string_view{"module-final"},
-      std::string_view{"program-final"}};
+  const std::array expected_text {
+      std::string_view { "module-initial" },
+      std::string_view { "program-initial" },
+      std::string_view { "module-final" },
+      std::string_view { "program-final" }
+  };
   for (std::size_t index = 0; index < lifecycle.size(); ++index) {
     const auto program = index == 1 || index == 3;
     assert(lifecycle[index].text == expected_text[index]);

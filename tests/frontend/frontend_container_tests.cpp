@@ -194,7 +194,7 @@ endmodule
               == SystemVerilogContainerKind::AssociativeArray
           && scores.associative_index_type
           && scores.associative_index_type->domain
-              == ValueDomain::Integer
+              == ValueDomain::Bit2
           && scores.associative_index_type->is_signed
           && scores.associative_index_type->width() == 32,
       "integral associative-array index metadata is retained");

@@ -107,6 +107,7 @@ void HierarchyBuilder::validate_systemverilog_exports(
         std::vector<frontend::FunctionDeclaration>
             function_imports;
         std::vector<frontend::TaskDeclaration> task_imports;
+        std::vector<frontend::SystemVerilogLetDeclaration> let_imports;
         std::set<std::string_view> class_scopes;
         std::vector<const frontend::SystemVerilogClassDeclaration*> pending;
         const auto append_class_scopes =
@@ -236,6 +237,17 @@ void HierarchyBuilder::validate_systemverilog_exports(
                     task_imports.push_back(std::move(imported));
                     found_local = true;
                 }
+                if (const auto let = std::ranges::find_if(
+                        package->systemverilog_lets,
+                        [&](const auto& candidate) {
+                            return candidate.name == constant_name;
+                        });
+                    let != package->systemverilog_lets.end()) {
+                    auto imported = *let;
+                    imported.name = identifier;
+                    let_imports.push_back(std::move(imported));
+                    found_local = true;
+                }
                 found_local = found_local || std::ranges::any_of(
                     package->systemverilog_classes,
                     [&](const auto& candidate) {
@@ -349,6 +361,16 @@ void HierarchyBuilder::validate_systemverilog_exports(
                                 candidate, package->tasks)
                             || explicitly_exported(candidate.name));
                 });
+            const auto let = std::find_if(
+                specialized_package->unit.systemverilog_lets.begin(),
+                specialized_package->unit.systemverilog_lets.end(),
+                [&](const auto& candidate) {
+                    return candidate.name == constant_name
+                        && (directly_declared(
+                                candidate,
+                                package->systemverilog_lets)
+                            || explicitly_exported(candidate.name));
+                });
             const auto class_declaration = std::find_if(
                 specialized_package->unit.systemverilog_classes.begin(),
                 specialized_package->unit.systemverilog_classes.end(),
@@ -366,6 +388,8 @@ void HierarchyBuilder::validate_systemverilog_exports(
                     == specialized_package->unit.functions.end()
                 && task
                     == specialized_package->unit.tasks.end()
+                && let
+                    == specialized_package->unit.systemverilog_lets.end()
                 && class_declaration
                     == specialized_package->unit.systemverilog_classes.end()) {
                 report(
@@ -402,6 +426,15 @@ void HierarchyBuilder::validate_systemverilog_exports(
                 auto imported = *task;
                 imported.name = identifier;
                 task_imports.push_back(std::move(imported));
+                append_package_dependencies(
+                    unit, *package, *specialized_package);
+                continue;
+            }
+            if (let
+                != specialized_package->unit.systemverilog_lets.end()) {
+                auto imported = *let;
+                imported.name = identifier;
+                let_imports.push_back(std::move(imported));
                 append_package_dependencies(
                     unit, *package, *specialized_package);
                 continue;
@@ -471,6 +504,11 @@ void HierarchyBuilder::validate_systemverilog_exports(
             std::make_move_iterator(unit.tasks.begin()),
             std::make_move_iterator(unit.tasks.end()));
         unit.tasks = std::move(task_imports);
+        let_imports.insert(
+            let_imports.end(),
+            std::make_move_iterator(unit.systemverilog_lets.begin()),
+            std::make_move_iterator(unit.systemverilog_lets.end()));
+        unit.systemverilog_lets = std::move(let_imports);
     }
 
 } // namespace fsim::elaboration

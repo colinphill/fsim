@@ -8,7 +8,6 @@ using namespace elaboration_detail;
 std::optional<std::size_t> Lowerer::infer_width(const Expression& expression) const
 {
     if (expression.kind == ExpressionKind::Call
-        && expression.text.starts_with("@sv-")
         && expression.call_result_width != 0
         && expression.call_result_width
             <= std::numeric_limits<std::size_t>::max()) {
@@ -208,10 +207,12 @@ std::optional<std::size_t> Lowerer::infer_width(const Expression& expression) co
     if (expression.kind == ExpressionKind::Call
         && expression.text == "?:"
         && expression.operands.size() == 3) {
-        if (const auto width = infer_width(expression.operands[1])) {
-            return width;
+        const auto when_true = infer_width(expression.operands[1]);
+        const auto when_false = infer_width(expression.operands[2]);
+        if (when_true && when_false) {
+            return std::max(*when_true, *when_false);
         }
-        return infer_width(expression.operands[2]);
+        return when_true ? when_true : when_false;
     }
     if (expression.kind == ExpressionKind::Call
         && (expression.text == ".len"
@@ -232,8 +233,45 @@ std::optional<std::size_t> Lowerer::infer_width(const Expression& expression) co
         return std::size_t { 1 };
     }
     if (expression.kind == ExpressionKind::Call
+        && (expression.text == "$sampled"
+            || expression.text == "$past"
+            || expression.text == "$past_gclk"
+            || expression.text == "$future_gclk")
+        && !expression.operands.empty()) {
+        return infer_width(expression.operands.front());
+    }
+    if (expression.kind == ExpressionKind::Call
+        && (expression.text == "$rose"
+            || expression.text == "$fell"
+            || expression.text == "$stable"
+            || expression.text == "$changed"
+            || expression.text == "$rose_gclk"
+            || expression.text == "$fell_gclk"
+            || expression.text == "$stable_gclk"
+            || expression.text == "$changed_gclk"
+            || expression.text == "$rising_gclk"
+            || expression.text == "$falling_gclk"
+            || expression.text == "$steady_gclk"
+            || expression.text == "$changing_gclk")) {
+        return std::size_t { 1 };
+    }
+    if (expression.kind == ExpressionKind::Call
         && expression.text == "$bits") {
         return std::size_t { 32 };
+    }
+    if (expression.kind == ExpressionKind::Call
+        && (expression.text == "$time"
+            || expression.text == "$realtime")) {
+        return std::size_t { 64 };
+    }
+    if (expression.kind == ExpressionKind::Call
+        && expression.text == "$stime") {
+        return std::size_t { 32 };
+    }
+    if (expression.kind == ExpressionKind::Call
+        && (expression.text == "$get_coverage"
+            || expression.text == "$get_inst_coverage")) {
+        return std::size_t { 64 };
     }
     if (expression.kind == ExpressionKind::Call
         && language_ == frontend::Language::Vhdl2008) {
@@ -431,6 +469,11 @@ std::optional<std::size_t> Lowerer::infer_width(const Expression& expression) co
         return std::size_t { 32 };
     }
     if (expression.kind == ExpressionKind::Call
+        && (expression.text == "$test$plusargs"
+            || expression.text == "$value$plusargs")) {
+        return std::size_t { 32 };
+    }
+    if (expression.kind == ExpressionKind::Call
         && (expression.text == "$fopen"
             || expression.text == "$fgets"
             || expression.text == "$fgetc"
@@ -460,6 +503,18 @@ std::optional<std::size_t> Lowerer::infer_width(const Expression& expression) co
         }
     }
     if (expression.kind == ExpressionKind::Identifier) {
+        constexpr std::string_view triggered_suffix { ".triggered" };
+        if (language_ == frontend::Language::SystemVerilog2017
+            && expression.text.ends_with(triggered_suffix)) {
+            const auto event_name = expression.text.substr(
+                0, expression.text.size() - triggered_suffix.size());
+            if (const auto found = signals_.find(event_name);
+                found != signals_.end()
+                && design_.signal_info_[found->second].type_name
+                    == "event") {
+                return std::size_t { 1 };
+            }
+        }
         if (const auto local = locals_.find(expression.text);
             local != locals_.end()) {
             return register_width(local->second);
@@ -621,6 +676,9 @@ std::optional<std::size_t> Lowerer::select_offset(
         return expression.operands.size() == 1
             && is_signed_expression(expression.operands.front());
     case ExpressionKind::Call:
+        if (expression.call_result_width != 0) {
+            return expression.call_result_signed;
+        }
         if (language_ == frontend::Language::Vhdl2008
             && expression.text.starts_with(
                 "@vhdl-physical:")) {
@@ -779,6 +837,11 @@ std::optional<std::size_t> Lowerer::select_offset(
                 || expression.text == "$fseek"
                 || expression.text == "$ftell"
                 || expression.text == "$rewind")) {
+            return true;
+        }
+        if (language_ != frontend::Language::Vhdl2008
+            && (expression.text == "$test$plusargs"
+                || expression.text == "$value$plusargs")) {
             return true;
         }
         if (language_
@@ -1042,6 +1105,26 @@ std::optional<std::size_t> Lowerer::select_offset(
     return false;
 }
 
+[[nodiscard]] bool Lowerer::is_file_handle_expression(
+    const Expression& expression) const
+{
+    if (expression.kind == ExpressionKind::IntegerLiteral) {
+        return true;
+    }
+    const auto* type = expression.kind == ExpressionKind::Identifier
+        ? object_type(expression.text)
+        : systemverilog_expression_type(expression);
+    const auto width = type == nullptr
+        ? std::optional<std::size_t> { }
+        : type->width();
+    return type != nullptr && width && *width == 32U
+        && type->systemverilog_scalar
+        == frontend::SystemVerilogScalarKind::None
+        && (type->domain == frontend::ValueDomain::Bit2
+            || type->domain == frontend::ValueDomain::Logic4
+            || type->domain == frontend::ValueDomain::Integer);
+}
+
 void Lowerer::collect_identifiers(
     const Expression& expression,
     std::set<std::string>& output) const
@@ -1200,10 +1283,12 @@ void Lowerer::collect_statement_identifiers(
             break;
         case StatementKind::MonitorControl:
             break;
+        case StatementKind::WaitOrder:
         case StatementKind::EventTrigger:
         case StatementKind::Report:
         case StatementKind::Pause:
         case StatementKind::Finish:
+        case StatementKind::Exit:
         case StatementKind::Fork:
         case StatementKind::WaitFork:
         case StatementKind::DisableFork:
@@ -1501,6 +1586,19 @@ bool Lowerer::validate_sv_nominal_assignment(
         destination,
         std::move(operands),
         static_cast<std::uint32_t>(width) });
+    return destination;
+}
+
+[[nodiscard]] RegisterId Lowerer::convert_to_two_state(
+    const RegisterId source)
+{
+    if (is_two_state_domain(register_domain(source))) {
+        return source;
+    }
+    const auto destination = allocate_register(
+        register_width(source), frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(ConvertToTwoState {
+        destination, source });
     return destination;
 }
 

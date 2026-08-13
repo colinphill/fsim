@@ -267,13 +267,12 @@ class Lowerer final {
       if (foreach_element_
           && expression.operands[1].text == foreach_iterator_) {
         index = foreach_index_;
-      } else if (const auto retained = literal(expression.operands[1]);
-                 retained && retained->first.width() <= 64U
-                 && !std::ranges::any_of(
-                     retained->first.bval_words(), [](const auto word) {
-                       return word != 0;
-                     })) {
-        index = static_cast<std::size_t>(retained->first.low_word().aval);
+      } else if (const auto retained = literal(expression.operands[1])) {
+          const auto value = retained->first.known_unsigned_value();
+          if (value
+              && *value <= std::numeric_limits<std::size_t>::max()) {
+              index = static_cast<std::size_t>(*value);
+          }
       }
       if (!index || *index >= elements->second.size()) {
         error_ = "constraint container index is outside its materialized bounds";
@@ -554,16 +553,15 @@ lower_systemverilog_constraint_distribution(
       return std::nullopt;
     }
     const auto weight = retained_constant(item.operands[1]);
-    if (!weight || weight->first.width() > 64U
-        || std::ranges::any_of(
-            weight->first.bval_words(), [](const auto word) {
-              return word != 0;
-            })) {
-      error = "dist weight is not a known bounded integer";
-      return std::nullopt;
+    const auto sampled_weight = weight
+        ? weight->first.known_unsigned_value()
+        : std::nullopt;
+    if (!sampled_weight) {
+        error = "dist weight is not a known host-representable sampling integer";
+        return std::nullopt;
     }
     runtime::SystemVerilogConstraintDistributionEntry retained;
-    retained.weight = weight->first.low_word().aval;
+    retained.weight = *sampled_weight;
     retained.weight_kind = item.text == "@dist-:/"
         ? runtime::SystemVerilogConstraintDistributionWeight::AcrossRange
         : runtime::SystemVerilogConstraintDistributionWeight::PerValue;
