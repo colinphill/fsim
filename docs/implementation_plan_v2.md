@@ -8588,20 +8588,111 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 167 - Older Verilog and SystemVerilog standard modes
 
-- **Changes 1-4:** add Verilog-1995/2001/2001-noconfig and SystemVerilog-2005/
-  2009/2012 modes, manifest/CLI selection, identity, cache keys, and diagnostics.
-- **Changes 5-8:** enforce revision-specific preprocessing, keywords, grammar,
-  declarations/types, ports, hierarchy/generate, expressions, assignments,
-  processes, assertions, classes, interfaces, and packages.
-- **Changes 9-12:** provide revision-correct predefined names, system tasks,
-  DPI/VPI profiles, default semantics, compatibility switches, and actionable
-  newer-feature diagnostics.
-- **Changes 13-16:** preserve revision identity through libraries, artifacts,
-  mixed boundaries, debugger, relocation, caches, and non-project phases.
-- **Changes 17-19:** add standard-specific positive/negative corpora and
-  cross-platform/engine evidence; update docs, matrices, inventories, and handoff.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push once without hosted CI monitoring.
+- **Locked scope:** implement explicit Verilog-1995, Verilog-2001,
+  Verilog-2001-noconfig, SystemVerilog-2005, SystemVerilog-2009 and
+  SystemVerilog-2012 modes. Preserve Verilog-2005 and SystemVerilog-2017 as the
+  default complete baselines. A selected older mode must control preprocessing,
+  keywords, grammar, semantics, predefined services, execution and every
+  persistent/public boundary; it must never be a parser-only label. Preserve
+  arbitrary-width behavior and exact four-state semantics. Compatibility
+  switches must be explicit, deterministic and provenance-bearing rather than
+  silently enabling a newer revision.
+- **Change 1:** freeze authoritative revision-mode and compatibility-switch
+  inventories. Assign every preprocessing, lexical, grammar, declaration/type,
+  port, hierarchy/generate, expression, assignment/process, assertion, class,
+  interface, package, predefined, system-task, DPI/VPI, default-semantics,
+  execution, artifact, public and closure obligation one-to-one to Changes
+  2-18, with exact positive, negative, arbitrary-width, provenance and resource
+  owners for all six older modes.
+- **Change 2:** add canonical public identities for the six older revisions to
+  project manifests, source sets, direct CLI, help and Tcl selection. Keep
+  absent selection mapped to Verilog-2005 or SystemVerilog-2017 by language,
+  accept only documented aliases, round-trip one canonical spelling and reject
+  cross-family or unknown selections with stable source-owned diagnostics.
+- **Change 3:** carry the typed selected revision through source registration,
+  preprocessing/parsing, analyzed units, dependency graphs, logical libraries
+  and mixed-source projects. Diagnose incompatible reanalysis, include/import
+  use or library-unit consumption at the owning source boundary rather than
+  reinterpreting an existing unit under a different revision.
+- **Change 4:** make revision and explicit compatibility switches independent
+  dimensions of preprocessing, compilation, specialization, LLVM and project
+  cache keys. Version portable object/design state as required; prove canonical
+  round trips, deterministic invalidation, future-schema rejection and no key
+  collision with the Verilog-2005/SystemVerilog-2017 defaults.
+- **Change 5:** enforce revision-correct preprocessing and lexical behavior:
+  directive availability/arguments, macro forms, include provenance, keyword
+  introduction/removal, escaped identifiers, numeric/string tokens and
+  `begin_keywords`/`end_keywords` regions. Preserve exact arbitrary-width
+  literals and issue actionable exact-span diagnostics for later-only forms.
+- **Change 6:** gate declaration, net/variable, data-type, parameter, lifetime,
+  port and module/program/checker header forms by revision. Preserve legal
+  Verilog-1995/2001 non-ANSI and ANSI forms, exact implicit-net/default-nettype
+  behavior, unpacked/packed direction and widths, and SystemVerilog type
+  evolution without leaking later declarations into an older environment.
+- **Change 7:** gate expression/operator, cast/pattern, assignment, timing
+  control, procedural block, task/function and process forms by revision.
+  Preserve exact four-state and arbitrary-width evaluation in interpreter and
+  LLVM, including signedness, self/context sizing, unsized values and scheduler
+  behavior; reject later-only syntax or semantics at the narrowest stable
+  boundary.
+- **Change 8:** gate hierarchy/configuration, generate, bind, assertion/
+  coverage, class/constraint, interface/modport, package/import and compilation-
+  unit constructs by revision. Treat Verilog-2001-noconfig as Verilog-2001 with
+  configuration syntax and semantics disabled, while ordinary Verilog-2001 and
+  Verilog-2005 retain their standard configuration behavior.
+- **Change 9:** materialize revision-correct predefined names, scalar/vector/
+  integer/time types, compiler directives, `$unit`/root visibility and standard
+  method/operator profiles. Prevent SystemVerilog-only names and post-2005/
+  post-2009 additions from leaking into Verilog or earlier SystemVerilog modes.
+- **Change 10:** provide revision-correct system task/function availability,
+  argument/result profiles, severity and scheduling semantics. Cover file,
+  formatting, random, time, coverage/assertion and introspection families with
+  deterministic diagnostics when a service or later signature is unavailable.
+- **Change 11:** expose revision-correct DPI and VPI identities, constants,
+  object kinds, callbacks and traversal surfaces. Reject DPI in Verilog modes,
+  prevent later VPI objects from leaking into earlier profiles and preserve ABI
+  compatibility, exact widths, four-state values and stable object ownership.
+- **Change 12:** implement default semantic differences and explicit
+  compatibility switches, including net type, port connection, parameter/
+  expression sizing, variable lifetime, scheduler/assertion and configuration
+  defaults. Switches must compose deterministically with the selected standard,
+  enter diagnostics/provenance/cache identities and never authorize unrelated
+  later grammar.
+- **Change 13:** preserve selected revision and compatibility provenance through
+  analyzed libraries and portable objects/designs. Bind source/include digests,
+  preprocessed identity and dependency profiles; reject omitted, stale,
+  duplicate, reordered or compiler-incompatible records before consumption.
+- **Change 14:** preserve revision-correct elaboration and interpreter/LLVM
+  O0/O2 execution through Verilog/SystemVerilog/VHDL/SystemC boundaries,
+  multiple roots and configuration/bind selection. Prove four-state conversion,
+  arbitrary-width ports/parameters, time/scheduler parity and no cross-root
+  profile contamination.
+- **Change 15:** expose canonical revision and compatibility provenance through
+  the C/C++/Tcl APIs, debugger, VPI, activity callbacks, VCD comments and public
+  diagnostics. Report the owning semantic unit/source while keeping compiler
+  implementation details out of hierarchy and user-visible object discovery.
+- **Change 16:** preserve identities through cold/warm native caches,
+  checkpoints/replay, relocation and direct compile/object/elaborate/design/
+  simulate phases. Remove original source and producer paths in evidence,
+  reload portable outputs in both engines and reject partial/stale provenance.
+- **Change 17:** publish authoritative standard-indexed positive and negative
+  corpora for all six older modes plus every compatibility switch. Freeze exact
+  diagnostics, coordinates, execution witnesses, arbitrary-width values,
+  include/preprocess provenance and artifact mismatch evidence.
+- **Change 18:** publish and run a serial retained-log cross-engine closure
+  matrix covering all six revisions, switches, interpreter/LLVM O0/O2, cold/
+  warm caches, mixed languages, artifacts, relocation/replay, C/C++/Tcl/VPI,
+  MSVC/Windows and governed memory/time/trace ceilings.
+- **Change 19:** synchronize diagnostics, language/feature support tables,
+  matrices, evidence and release inventories, public guides, architecture/API
+  documents, counts, digests and this restart handoff. Describe compatibility
+  switches and resource ceilings without overstating standard conformance.
+- **Change 20:** run fresh clean-first exact-LLVM Debug/Release eight-worker
+  builds, complete non-sanitized regressions and every release gate with
+  retained timing/RSS/swap/transcript evidence. This is not a hosted-CI
+  monitoring boundary. Commit and push the one accumulated Batch 167
+  implementation only after all local gates pass, then save and push the exact
+  Batch 168 restart plan and clear context before implementation.
 
 ### Batch 168 - SDF 4.0 parser, normalization, and artifacts
 

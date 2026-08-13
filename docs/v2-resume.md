@@ -5,6 +5,89 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
+## Batch 167 planned restart checkpoint - 2026-08-13
+
+1. Start in `/home/colin/projects/fsim`, read this section and the authoritative
+   expanded Batch 167 allocation in `implementation_plan_v2.md`, and verify
+   branch `codex/v2` is clean and synchronized at Batch 166 implementation
+   `474abc34da5949b5bdb4e1457fc06e59f7d7366d` plus this documentation-only
+   Batch 167 planning checkpoint.
+2. This checkpoint implements the required pre-batch flow. Batch 167 is
+   expanded into exactly twenty changes without broadening its locked older-
+   Verilog/SystemVerilog-standard scope. No Batch 167 implementation file has
+   changed; clear context after pushing this plan and resume only from this
+   section and the authoritative allocation.
+3. Preserve Batch 166's explicit VHDL-87/93/2000/2002 selection, typed source/
+   dependency identity, revision-correct predefined environments, protected/
+   shared semantics and clean-room non-standard Synopsys package declarations
+   and arbitrary-width bodies beside the VHDL-2008 default.
+4. Preserve Batch 166's `.fsimlib`, `.fsimobj`, `.fsimdesign`, LLVM cache,
+   semantic-unit provenance, mixed-language, debugger/VHPI/VCD, checkpoint,
+   relocation, replay and non-project evidence. Final standard/package ledger
+   identities are
+   `9a97ed1964d3fd24aa4644f85dcada8bf114fc6bce42001bd092e02e9bbd8434`
+   and
+   `118ee444e373f2fc46624bd17fb7c9d2664c838f647f7d75bae59a10eea9f6b0`.
+5. Batch 166's fresh clean-first exact-LLVM 22.1.8 Debug and Release
+   eight-worker builds complete 781 steps warning-free in 12:03.44 and 9:48.97
+   at 5,015,728 and 2,253,856 KiB peak RSS with zero swaps.
+6. The first complete Debug run exposed an analysis-order fixture using VHDL-
+   2008 reserved word `shared` as a context identifier. The legal
+   `analysis_context` repair and diagnostic-on-unexpected-failure output pass
+   three focused runs in each configuration. Complete Debug and Release reruns
+   pass 144/144 in 12:12.23 and 10:24.45 wall time, with CTest totals of 732.22
+   and 624.44 seconds, peak RSS of 3,786,880 and 3,791,172 KiB, and zero swaps.
+7. Final post-documentation static/release slices pass 41/41 in 21.84 and 21.02
+   seconds. New Batch 166 C++ sources and the exact correction pass pinned
+   clang-format 22.1.8; repository whitespace is clean. Batch 166 was neither
+   a sanitizer nor hosted-CI monitoring boundary and is pushed as `474abc3`.
+8. The synchronized Batch 166 baseline is 2,236 production diagnostics, 887
+   bounded C/C++ sources, 1,029 SPDX-scoped artifacts, 332 authored test/control
+   files, 1,294 feature rows, 5,176 evidence cells and 617 exact evidence paths.
+   Feature and evidence SHA-256 identities are
+   `5f6a4d99889db39a81694c8d4ee585bdb0cdffaea577ddf275e5d3e1eca1cd4f`
+   and
+   `e4076a40c31945c3385495a1c3076b85518143712c89ea1fa3f629fffaac6120`.
+9. Batch 167 adds explicit Verilog-1995, Verilog-2001,
+   Verilog-2001-noconfig, SystemVerilog-2005, SystemVerilog-2009 and
+   SystemVerilog-2012 modes while preserving Verilog-2005 and
+   SystemVerilog-2017 as the default complete baselines.
+10. A selected older mode controls preprocessing, keywords, grammar, semantic
+    defaults, predefined services, execution and all persistent/public
+    boundaries. It may not be a parser-only label. Explicit compatibility
+    switches must be deterministic, provenance-bearing and independently
+    cache-keyed; they may not silently enable unrelated newer grammar.
+11. Changes 1-4 freeze revision/switch inventories, expose canonical manifest/
+    CLI/Tcl identities, carry source/library dependency identity and key
+    preprocessing, artifacts and native caches with stable mismatch diagnostics.
+12. Changes 5-8 close preprocessing/lexical, declaration/type/port,
+    expression/assignment/process and hierarchy/generate/configuration/
+    assertion/class/interface/package legality by revision. The noconfig mode
+    differs from ordinary Verilog-2001 only by disabling configuration syntax
+    and semantics.
+13. Changes 9-12 provide revision-correct predefined environments, system
+    tasks/functions, DPI/VPI surfaces, semantic defaults and explicit
+    compatibility switches while preserving arbitrary widths and exact
+    four-state behavior.
+14. Changes 13-16 preserve selected revision/switch provenance through
+    libraries/artifacts, interpreter/LLVM/mixed execution, C/C++/Tcl/debugger/
+    VPI/VCD surfaces, checkpoints, relocation, replay, caches and non-project
+    phases.
+15. Changes 17-19 publish standard/switch-specific positive and negative
+    corpora and a retained-log cross-engine/platform matrix, then synchronize
+    public documentation, diagnostics, inventories, counts, digests and this
+    handoff.
+16. Change 20 runs fresh clean-first exact-LLVM Debug/Release builds with at
+    least eight workers and 120-minute command timeouts, full non-sanitized
+    regressions and every release gate. Retain timing/RSS/swap/transcript
+    evidence and create the sole Batch 167 implementation commit/push only
+    after all local gates pass. Batch 167 is not a hosted-CI monitoring
+    boundary.
+17. Accumulate Changes 1-20 in one intentionally dirty worktree. Do not reset,
+    commit or push implementation before Change 20. After that implementation
+    commit, save and push the exact Batch 168 restart plan and clear context
+    before Batch 168 implementation.
+
 ## Batch 166 planned restart checkpoint - 2026-08-12
 
 1. Start in `/home/colin/projects/fsim`, read this section and the authoritative
