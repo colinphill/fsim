@@ -9572,22 +9572,121 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 169 - Verilog/SystemVerilog SDF annotation
 
-- **Changes 1-4:** annotate module/interconnect/device/path/pulse delays onto
-  elaborated Verilog/SystemVerilog specify and primitive timing objects with
-  min/typ/max selection and incremental/absolute modes.
-- **Changes 5-8:** annotate all standard timing checks, conditions, edge forms,
-  notifier behavior, negative timing checks, retain/removal/recovery, and
-  pathpulse semantics.
-- **Changes 9-12:** define precedence and interaction with source delays,
-  delay modes, transport/inertial queues, strengths/switches, force/release,
-  multiple roots, and reannotation.
-- **Changes 13-16:** expose annotation summaries/errors through CLI/API,
-  debugger/callback/trace, VPI, artifacts, relocation, caches, and scripted
-  compile/elaborate/simulate phases.
-- **Changes 17-19:** add standard cell/timing fixtures, missing/mismatch/resource
-  negatives, interpreter/LLVM/platform differentials, docs, and inventories.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push once without hosted CI monitoring.
+- **Locked scope:** apply Batch 168's validated, resolved and portable SDF IR to
+  elaborated Verilog/SystemVerilog specify, primitive, net and timing-check
+  behavior. Preserve exact SDF values until the selected simulation-time
+  policy boundary, annotate transactionally, and keep interpreter/LLVM,
+  project/non-project and cold/warm execution equivalent. VHDL/VITAL targets
+  and timing that crosses a VHDL boundary remain exclusively in Batch 170.
+  Do not weaken Batch 168 parsing, resolution or stale/corrupt-artifact
+  rejection, and do not copy unlicensed standard text.
+- **Change 1:** freeze an authoritative Verilog/SystemVerilog SDF-application
+  ledger that assigns Changes 2-18 one-to-one across value policy, atomic
+  target planning, path, interconnect/device, delay-list/mode, timing-check,
+  pulse, scheduler, drive-state, reannotation, API, persistence, observability,
+  corpus and closure domains. Bind every row to exact implementation, positive,
+  negative, interpreter/LLVM, diagnostic, artifact and resource evidence, then
+  register its stable order, closure rules and SHA-256 identity before timing
+  behavior changes.
+- **Change 2:** implement one typed annotation-value policy that selects min,
+  typ or max from exact partial triples, converts the selected rational value
+  through SDF and design timescales, and rounds once at the simulator precision
+  boundary. Preserve negative-zero identity for diagnostics; reject missing
+  selected slots, negative effective delays, overflow and governed expansion
+  without floating-point or host-locale dependence.
+- **Change 3:** translate every resolved SDF mapping into an immutable atomic
+  Verilog annotation plan keyed by stable elaborated timing-object identities.
+  Validate cell type, object kind, delay/check arity, source span and duplicate
+  ownership for the complete plan before publishing any runtime mutation, and
+  retain a deterministic before/after value record for diagnostics and replay.
+- **Change 4:** apply absolute and incremental `IOPATH` annotations to full and
+  parallel module paths, conditional and else paths, edge-sensitive paths and
+  state-dependent specify paths. Preserve source path polarity, edge and
+  condition semantics, select the correct transition slot, and diagnose every
+  resolved SDF path that has no compatible elaborated specify target.
+- **Change 5:** apply `INTERCONNECT`, `PORT`, `MIPD` and `DEVICE` annotations to
+  Verilog/SystemVerilog nets, ports, primitives, UDPs, gates, switches and
+  continuous-assignment timing objects. Preserve driver/load direction,
+  instance boundaries and multi-driver ownership while rejecting ambiguous
+  endpoints, unsupported object kinds and incompatible transition profiles.
+- **Change 6:** implement absolute replacement and incremental accumulation for
+  governed 1/2/3/6/12-value delay lists, including rise, fall, turn-off and all
+  supported scalar/vector transition classes. Define exact expansion and
+  fallback rules, checked addition and deterministic repeated-file order while
+  retaining both source and effective delay identities.
+- **Change 7:** annotate `$setup`, `$hold`, `$setuphold`, `$recovery`, `$removal`
+  and `$recrem` limits onto elaborated timing checks with exact reference/data
+  event ownership. Preserve distinct combined-check limits, optional delayed
+  signals and all legal scalar/triple shapes; reject partial or type-mismatched
+  mappings before any check is modified.
+- **Change 8:** annotate `$skew`, `$timeskew`, `$fullskew`, `$width`, `$period`
+  and `$nochange` checks, including governed secondary limits and event roles.
+  Preserve each check's runtime state and violation coordinate, and diagnose
+  unsupported limit shapes, missing events and incompatible source checks at
+  the owning SDF span.
+- **Change 9:** apply SDF edge qualifiers, scalar and compound conditions,
+  conditional timing-check expressions, notifier bindings and negative timing-
+  check behavior. Reuse elaborated condition semantics without reparsing HDL,
+  retain X/Z handling and deterministic same-tick ordering, and make disabled
+  or unmatched conditions observable without silently widening applicability.
+- **Change 10:** implement `PATHPULSE`, `PATHPULSEPERCENT`, embedded pulse
+  limits, `GLOBALPATHPULSE` where its revision permits it, and `RETAIN` timing
+  behavior. Apply reject/error thresholds at the annotated path boundary,
+  preserve pulse polarity and transition identity, and cover cancellation,
+  unknown values, zero-width and threshold-boundary cases.
+- **Change 11:** define and implement precedence between SDF absolute/increment
+  annotations, source specify/primitive/net delays, command-selected delay mode
+  and disabled timing controls. Record the selected source for every effective
+  value, reject contradictory policies, and ensure zero-delay and no-annotation
+  execution retain existing behavior byte-for-byte where observable.
+- **Change 12:** carry effective annotated delays through interpreter and LLVM
+  event scheduling with the correct inertial/transport queue, cancellation,
+  delta-cycle and same-time region behavior. Preserve deterministic ordering
+  across multiple producers, delayed checks and pulse filtering without adding
+  per-event hierarchy resolution or annotation lookup.
+- **Change 13:** preserve annotated timing through strengths, resolved nets,
+  MOS/CMOS and bidirectional switches, tran paths, continuous drivers and
+  procedural force/release. Define how delayed pending values interact with
+  force, release, driver removal and strength resolution, with equivalent
+  scalar/vector and interpreter/LLVM results.
+- **Change 14:** make multiple SDF files, wildcard cells, multiple elaboration
+  roots and runtime reannotation one ordered transactional operation. Define
+  file/cell precedence, exact duplicate/conflict diagnostics, pending-event and
+  timing-check-state handling, rollback on failure and deterministic concurrent
+  observation at the annotation safe point.
+- **Change 15:** expose annotation inputs, min/typ/max selection and summary/
+  error reports through project CLI, Tcl, C/C++ APIs and explicit compile,
+  elaborate and simulate phases. Return stable counts and source/object
+  identities, keep phase legality explicit, and make batch/non-project failure
+  atomic with cataloged diagnostics and bounded report sizes.
+- **Change 16:** version and preserve effective annotations, original/exact
+  values, target identities, policies and provenance through `.fsimobj`,
+  `.fsimdesign`, mapped `.fsimlib`, relocation, cold/warm native caches and
+  checkpoint/replay. Reject stale, corrupt, cross-policy and incompatible
+  producer records before use without adding compatibility readers for
+  superseded development schemas.
+- **Change 17:** expose effective timing and violations through debugger reads,
+  callbacks, internal trace, VPI and VCD without changing scheduling. Provide
+  stable annotated-object enumeration, before/after values and source spans;
+  preserve callback regions and trace ordering, bound dynamic reporting, and
+  keep disabled observation behavior allocation-free on event hot paths.
+- **Change 18:** publish clean-room standard-cell, primitive, interconnect,
+  pulse and timing-check corpora plus exhaustive missing/mismatch/conflict/
+  overflow/resource negatives. Retain interpreter/LLVM, optimized/debug,
+  project/non-project, artifact/cold-warm and Linux/Windows differential logs
+  that prove real time advancement, timing outcomes, violations and clean exit.
+- **Change 19:** synchronize public SDF/language/architecture/API/diagnostic
+  documentation, examples, feature matrices, release audits, source/catalog/
+  SPDX counts and the application ledger. Close every row with executable
+  evidence and stable digests, record resource and performance results, and
+  update the exact Batch 170 handoff without implementing VHDL/VITAL timing.
+- **Change 20:** run fresh clean-first exact-LLVM Debug and Release builds with
+  at least eight workers, complete non-sanitized regressions and every source,
+  catalog, inventory, installed-public, relocation, differential, resource and
+  release gate. Retain timing/RSS/swap/log evidence, commit and push the sole
+  Batch 169 implementation checkpoint, then save and push the exact Batch 170
+  restart plan. Batch 169 runs no sanitizer and is not a hosted-CI monitoring
+  boundary.
 
 ### Batch 170 - VHDL/VITAL and mixed-language SDF - CI monitoring boundary
 

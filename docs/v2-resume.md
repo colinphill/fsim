@@ -5,6 +5,87 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
+## Batch 169 planned restart checkpoint - 2026-08-13
+
+1. Start in `/home/colin/projects/fsim`, read this section and the authoritative
+   expanded Batch 169 allocation in `implementation_plan_v2.md`, and verify
+   branch `codex/v2` is clean and synchronized at pushed Batch 168 closeout
+   `625c1fb328b356b2116d0f9e3012281d7f6aa71f` plus this documentation-only
+   Batch 169 planning checkpoint.
+2. This checkpoint implements the required pre-batch flow. Batch 169 is
+   expanded into exactly twenty changes without broadening its locked
+   Verilog/SystemVerilog SDF timing-application scope. No Batch 169
+   implementation file has changed; after pushing this checkpoint, resume only
+   from this section and the authoritative allocation.
+3. Batch 168 provides clean-room SDF 4.0 parsing, independent SDF 2.1/3.0
+   adapters, exact normalization, one immutable IR, deterministic mixed-
+   hierarchy resolution, whole-plan validation and portable phase/artifact/
+   cache persistence. It intentionally applies no annotation to runtime timing.
+4. Preserve Batch 168's closed 17-row ledger and six owned corpus inputs. The
+   final SDF inventory identity is
+   `5a4817053834c76fef49650d38b73957a4be5560c62d1eb0f8c72c7180340c4b`;
+   the synchronized feature and VHDL/PSL closure identities are
+   `ac8c85884b50854481f4eb68aa621b6b6b1ff080f00b0745fcf3046de7dba1b9`
+   and
+   `ae197625c75869bc8d60d4c7f66151f1196f78c22d2e566664dba62bd1bec1f0`.
+5. Batch 168's fresh clean-first exact-LLVM 22.1.8 Debug and Release
+   eight-worker builds complete 824/824 steps warning-free in 12:16.97 and
+   10:27.27 at 5,084,240 and 2,255,404 KiB peak RSS with zero swaps.
+6. Complete non-sanitized Debug and Release regressions pass 162/162 in
+   11:19.96 and 10:30.22 wall time, with CTest totals of 679.95 and 630.22
+   seconds, peak RSS of 3,782,884 and 3,794,928 KiB and zero swaps. The SDF
+   closure passes inside them in 30.48 and 26.15 seconds; final static/release
+   slices pass 13/13 in 9.14 and 8.78 seconds.
+7. Batch 168 is committed once as `625c1fb` and pushed. Its retained transcripts
+   pass warning/error scans and record successful exit; pinned formatting
+   touched only the new `sdf_parser.cpp`, with no header or legacy-source
+   formatting churn. It ran neither sanitizer nor hosted-CI inspection.
+8. Batch 169 applies the validated SDF IR only to Verilog/SystemVerilog specify,
+   primitive, net and timing-check behavior. VHDL/VITAL targets and any timing
+   that crosses a VHDL boundary remain exclusively in Batch 170.
+9. Change 1 freezes a seventeen-row application ledger assigning Changes 2-18
+   one-to-one across exact value policy, atomic target plans, paths,
+   interconnect/device objects, delay modes/lists, timing checks, pulse behavior,
+   scheduling, drive state, reannotation, APIs, persistence, observability,
+   corpora and closure.
+10. Changes 2-6 select and quantize exact values once, publish only fully valid
+    immutable target plans, and apply path/interconnect/device/port/MIPD plus
+    absolute/increment transition-list annotations without partial mutation.
+11. Changes 7-10 apply the complete supported timing-check, edge, condition,
+    notifier, negative-check, pulse-filtering and retain surface while
+    preserving exact event roles, limits and violation coordinates.
+12. Changes 11-14 define source/SDF precedence, delay modes, interpreter/LLVM
+    queue semantics, strength/switch and force/release behavior, multiple-root/
+    multiple-file ordering and rollback-safe reannotation.
+13. Changes 15-17 expose bounded annotation control and observability through
+    CLI, Tcl, C/C++ APIs, explicit non-project phases, artifacts/caches/
+    checkpoints, debugger, callbacks, trace, VPI and VCD.
+14. Changes 18-19 publish clean-room timing corpora and exhaustive negative,
+    resource, engine, phase, artifact and platform differentials, then close
+    documentation, ledgers, matrices, inventories, counts and digests.
+15. Preserve Batch 168's exact parser, resolution and portable rejection
+    contracts. Do not introduce VHDL/VITAL runtime timing, approximate floating-
+    point annotation, per-event hierarchy lookup, silent target widening or
+    compatibility readers for superseded development schemas.
+16. Accumulate Changes 1-19 in one recoverable worktree with focused dependent
+    Debug validation. Release build/testing is not required before final Change
+    20 batch checks. Avoid header-only formatting changes that induce long
+    rebuilds; make semantic header edits only when required and format changed
+    implementation sources without churning unchanged headers.
+17. Change 20 alone runs fresh clean-first exact-LLVM Debug and Release builds
+    with at least eight workers and 120-minute command timeouts, the complete
+    non-sanitized regressions and every release gate. Retain timing/RSS/swap/log
+    evidence and create the sole Batch 169 implementation commit/push only
+    after all local gates pass.
+18. Batch 169 is neither a sanitizer nor hosted-CI monitoring boundary. Do not
+    configure sanitizer targets or inspect hosted CI. After its implementation
+    commit, save and push the exact Batch 170 restart plan; Batch 170 owns both
+    the sanitizer and non-documentation CI inspection boundary.
+19. Do not reset, commit or push accumulated Batch 169 implementation before
+    Change 20. Begin only with Change 1's registered ledger, preserve each
+    completed change in the same dirty worktree, and record focused evidence in
+    both authoritative documents before proceeding one change at a time.
+
 ## Batch 168 planned restart checkpoint - 2026-08-13
 
 1. Start in `/home/colin/projects/fsim`, read this section and the authoritative
