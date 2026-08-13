@@ -5,6 +5,81 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
+## Batch 168 planned restart checkpoint - 2026-08-13
+
+1. Start in `/home/colin/projects/fsim`, read this section and the authoritative
+   expanded Batch 168 allocation in `implementation_plan_v2.md`, and verify
+   branch `codex/v2` is clean and synchronized at pushed Batch 167 closeout
+   `7f9fce1f6a0dc658ead37291f9672ba1b10fe5c1` plus this documentation-only
+   Batch 168 planning checkpoint.
+2. This checkpoint implements the required pre-batch flow. Batch 168 is
+   expanded into exactly twenty changes without broadening its locked SDF 4.0
+   parser, normalization, resolution and artifact scope. No Batch 168
+   implementation file has changed; clear context after pushing this plan and
+   resume only from this section and the authoritative allocation.
+3. Preserve Batch 167's explicit Verilog-1995/2001/2001-noconfig and
+   SystemVerilog-2005/2009/2012 modes beside the Verilog-2005 and
+   SystemVerilog-2017 defaults. Preserve typed revision/profile identity through
+   preprocessing, semantics, execution, APIs, libraries, artifacts, caches,
+   relocation, checkpoint/replay and non-project phases.
+4. Preserve Batch 167's two 17-row ledgers with zero active obligations, six
+   revision and seven compatibility corpus rows, and the retained 16-witness
+   closure matrix. Their final inventory identities are
+   `21a05e4732aa8da8b546f2c7048ee2b5d51cdca4572114fb5c9946d4bfad8d3e`
+   and
+   `5e7a74d4f9c0af29e28c4d0b9b35b96a5c9df6482b53759633f80904812c5f6f`.
+5. Batch 167's fresh clean-first exact-LLVM 22.1.8 Debug and Release
+   eight-worker builds complete 781/781 steps warning-free in 11:55.31 and
+   9:36.37 at 5,030,336 and 2,254,716 KiB peak RSS with zero swaps.
+6. Complete non-sanitized Debug and Release regressions pass 146/146 in 9:11.10
+   and 7:59.35 wall time, with CTest totals of 551.08 and 479.34 seconds, peak
+   RSS of 3,781,532 and 3,750,768 KiB, and zero swaps. Final post-documentation
+   static/release slices pass 42/42 in 22.84 and 21.63 seconds.
+7. Batch 167 closeout repairs legal Verilog `timescale` lexical validation,
+   semantic ownership of system-function arity, Verilog library export/import
+   metadata identity and the synchronized v1 feature digest. Pinned formatter
+   work was confined to changed `.cpp` files; no public header formatting churn
+   was introduced. Batch 167 ran neither sanitizer nor hosted-CI inspection.
+8. Batch 168 implements a clean-room SDF 4.0 parser, explicit SDF 2.1/3.0
+   revision adapters, one immutable normalized SDF IR, deterministic resolution
+   against elaborated multi-root mixed-language hierarchy and versioned portable
+   persistence. It does not apply SDF to simulator timing behavior.
+9. Changes 1-4 freeze the allocation and close bounded lexical, complete SDF
+   4.0 header and complete cell/delay/timing-check/timing-environment grammar
+   with precise source spans and resource diagnostics.
+10. Changes 5-8 implement independent SDF 2.1 and 3.0 adapters, exact decimal/
+    triple/timescale/name normalization and one immutable ordered IR shared by
+    all accepted revisions without losing revision-specific distinctions.
+11. Changes 9-12 define annotation scope and resolve celltype, exact/wildcard
+    instance, port/interconnect/device/path and timing-check references across
+    multi-root Verilog/SystemVerilog/VHDL/SystemC hierarchy. Resolution publishes
+    nothing until all missing, ambiguous, duplicate and conflict checks pass.
+12. Changes 13-16 version and preserve syntax, normalized IR, resolved mappings,
+    provenance, timescale, policies, digests and semantic identities through
+    design/library artifacts, relocation, non-project phases and cold/warm
+    caches with strict stale/corrupt/future-format rejection.
+13. Changes 17-19 publish standard-specific positive corpora, exhaustive
+    parser/schema/resolution/resource negatives, retained-log cross-engine and
+    platform differentials, then synchronize public docs, diagnostics, matrices,
+    inventories, counts, digests and this handoff.
+14. Batches 169 and 170 retain all timing-application work. Batch 169 applies
+    SDF to Verilog/SystemVerilog specify/primitive behavior; Batch 170 applies
+    it to VHDL/VITAL and mixed-language timing. Do not partially implement those
+    behaviors in Batch 168.
+15. Accumulate Changes 1-19 in one recoverable worktree with focused dependent
+    Debug validation. Release build/testing is not required before the final
+    Change 20 batch checks. Avoid header-only formatting changes that induce
+    long rebuilds; make semantic header edits only when the owning change needs
+    them and format implementation hunks without churning unchanged headers.
+16. Change 20 alone runs fresh clean-first exact-LLVM Debug and Release builds
+    with at least eight workers and 120-minute command timeouts, full non-
+    sanitized regressions and every release gate. Retain timing/RSS/swap/log
+    evidence and create the sole Batch 168 implementation commit/push only
+    after all local gates pass. Batch 168 is not a hosted-CI monitoring boundary.
+17. Do not reset, commit or push accumulated Batch 168 implementation before
+    Change 20. After that implementation commit, save and push the exact Batch
+    169 restart plan and clear context before Batch 169 implementation.
+
 ## Batch 167 planned restart checkpoint - 2026-08-13
 
 1. Start in `/home/colin/projects/fsim`, read this section and the authoritative

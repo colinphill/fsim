@@ -9115,21 +9115,112 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 168 - SDF 4.0 parser, normalization, and artifacts
 
-- **Changes 1-4:** implement complete SDF 4.0 lexical/parser coverage with
-  headers, hierarchy dividers, escaped identifiers, conditions, triples,
-  scaling, and precise diagnostics.
-- **Changes 5-8:** accept SDF 2.1/3.0 inputs through explicit revision adapters
-  and normalize all delay/timing-check constructs into one immutable SDF IR.
-- **Changes 9-12:** resolve celltype/instance/wildcard/divider names against
-  elaborated multi-root mixed hierarchy with deterministic missing/ambiguous
-  diagnostics and explicit annotation scope.
-- **Changes 13-16:** version and preserve normalized SDF, source provenance,
-  timescale, selection, digests, and mapping through design artifacts,
-  libraries, relocation, non-project phases, and cache keys.
-- **Changes 17-19:** add parser/schema/corruption/resource negatives, standard
-  fixture corpora, docs, diagnostics, matrices, inventories, and handoff.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push once without hosted CI monitoring.
+- **Locked scope:** implement a clean-room SDF 4.0 parser, revision adapters for
+  SDF 2.1 and 3.0, one immutable normalized delay/timing-check IR, deterministic
+  resolution against elaborated multi-root mixed-language hierarchy, and
+  versioned portable persistence. This batch parses, validates, resolves and
+  preserves annotations but does not apply them to simulator timing behavior;
+  Verilog/SystemVerilog annotation remains Batch 169 and VHDL/VITAL mixed-
+  language annotation remains Batch 170. Preserve exact decimal/triple values,
+  arbitrary hierarchy depth, source spans and existing portable-artifact
+  rejection guarantees without copying unlicensed standard text.
+- **Change 1:** freeze authoritative SDF revision, lexical, header, cell,
+  delay, timing-check, normalization, resolution, artifact and resource
+  inventories. Assign every obligation one-to-one to Changes 2-18 with exact
+  positive, negative, revision, coordinate, round-trip and resource owners;
+  register the inventory and its stable digest before implementation expands.
+- **Change 2:** add a bounded SDF lexer retaining comments, quoted strings,
+  escaped and divider-qualified identifiers, keywords, delimiters, signed
+  decimal/realtime values, min/typ/max triples and exact byte/line/column spans.
+  Reject invalid bytes, unterminated forms, numeric overflow and governed token/
+  nesting/resource limits with stable source-owned diagnostics.
+- **Change 3:** parse the complete SDF 4.0 file/header surface, including
+  revision, design, date, vendor, program/version, hierarchy divider, voltage,
+  process, temperature and timescale records. Preserve optionality, ordering,
+  exact values and original/canonical identities while diagnosing duplicates,
+  incompatible headers and unsupported future revisions.
+- **Change 4:** parse the complete SDF 4.0 cell, instance, delay, timing-check,
+  timing-environment, label, conditional, edge, port/interconnect/device/path,
+  retain/pulse and incremental/absolute construct families into syntax nodes.
+  Cover legal empty/optional/list forms and issue precise construct-owned
+  diagnostics for malformed arity, ordering, selectors and conditions.
+- **Change 5:** accept SDF 2.1 only through an explicit typed revision adapter.
+  Map every legal 2.1 header and delay/timing-check form to the common syntax
+  vocabulary, retain original revision/provenance and reject later-only forms
+  rather than silently parsing them as SDF 4.0.
+- **Change 6:** accept SDF 3.0 only through an independent typed revision
+  adapter. Preserve its exact supported construct/profile differences, retain
+  original revision/provenance and reject 4.0-only forms at the narrowest
+  stable source boundary without contaminating the 2.1 or 4.0 profiles.
+- **Change 7:** normalize decimal values, min/typ/max triples, timescale units,
+  scaling, edges, conditions, hierarchy dividers and escaped names into exact
+  canonical values. Detect overflow, invalid scaling and lossy conversion;
+  never select min/typ/max or simulator time precision during parsing.
+- **Change 8:** lower every accepted revision's delay, timing-check, timing-
+  environment and label construct into one immutable ordered SDF IR with stable
+  node/source identities, canonical equality and deterministic introspection.
+  Prove equivalent 2.1/3.0/4.0 inputs normalize identically where their
+  semantics overlap and remain distinct where the standards differ.
+- **Change 9:** define explicit annotation scope over one selected elaborated
+  root or a deterministic set of roots. Bind SDF source identity, design name,
+  hierarchy divider and case policy to that scope; reject missing, stale or
+  cross-project scopes before publishing any resolved mapping.
+- **Change 10:** resolve celltype, exact instance, wildcard instance and divider-
+  qualified hierarchy names against elaborated multi-root designs. Preserve
+  declaration/elaboration identities, deterministic match order and empty-
+  instance semantics; diagnose missing and ambiguous cells with actionable
+  candidate paths.
+- **Change 11:** resolve ports, port instances, nets/interconnects, device/path
+  endpoints and timing-check signals/conditions against Verilog,
+  SystemVerilog, VHDL/VITAL and native-SystemC proxy boundaries without
+  applying timing. Preserve language ownership, vector selectors, edge forms
+  and exact mixed-language conversion endpoints.
+- **Change 12:** validate the complete resolved mapping for duplicates,
+  conflicts, unsupported object kinds, direction/width/select mismatches,
+  overlapping wildcard/exact matches and unconsumed constructs. Emit stable
+  deterministic missing/ambiguous/conflict diagnostics and publish an
+  immutable annotation summary only after the whole mapping succeeds.
+- **Change 13:** version normalized SDF syntax/IR and resolved-mapping schemas;
+  retain source checksum, canonical revision, headers, exact source spans,
+  parse/normalization options and compiler compatibility identity. Reject
+  omitted, duplicate, reordered, stale, corrupt and future-schema records
+  before partial materialization.
+- **Change 14:** preserve exact timescale, min/typ/max selection policy,
+  annotation scope, source/design digests and resolved semantic-unit/object
+  identities in portable design artifacts and cache/specialization keys.
+  Prove deterministic invalidation for source, revision, option, hierarchy and
+  selected-root changes without path-dependent cache identity.
+- **Change 15:** preserve normalized and resolved SDF through analyzed
+  libraries, mapped libraries, design save/load, relocation and source-hidden
+  consumption. Reconstruct mappings against archived semantic identities,
+  reject incompatible library/design combinations and avoid re-resolving an
+  archived annotation under language-wide defaults.
+- **Change 16:** preserve SDF state through direct compile/object/elaborate/
+  design/simulate phases, interpreter/LLVM consumers and cold/warm native
+  caches. Remove producer source/object paths, relocate outputs and prove exact
+  standalone round trips plus deterministic partial/stale/corrupt rejection;
+  simulator timing remains deliberately unchanged in this batch.
+- **Change 17:** publish authoritative clean-room SDF 2.1, 3.0 and 4.0 positive
+  corpora covering headers, dividers/escaping, decimals/triples, conditions,
+  cells, delays, timing checks, timing environments, normalization and exact/
+  wildcard mixed-hierarchy resolution with retained parser/mapping summaries.
+- **Change 18:** add exhaustive lexical/parser/revision/schema/corruption,
+  missing/ambiguous/conflict, relocation/cache and governed depth/token/memory/
+  time negatives. Run retained-log interpreter/LLVM, mixed-language,
+  Linux/MSVC and portable-artifact differentials that verify progress, expected
+  diagnostics and resource ceilings rather than trusting exit status alone.
+- **Change 19:** synchronize public CLI/API and format documentation,
+  architecture, language support, diagnostics, feature/evidence matrices,
+  inventories, counts, digests and this restart handoff. State explicitly that
+  Batch 168 resolves and persists SDF but Batches 169-170 own application to
+  Verilog/SystemVerilog and VHDL/VITAL timing behavior.
+- **Change 20:** run fresh clean-first exact-LLVM Debug and Release eight-worker
+  builds, complete non-sanitized regressions and every release gate with
+  retained timing/RSS/swap/transcript evidence. Release build/testing is not
+  required before this final batch check. Avoid formatting-only public-header
+  churn that would induce broad rebuilds. This is not a hosted-CI monitoring
+  boundary; commit and push the accumulated implementation once after all
+  local gates pass, then save and push the exact Batch 169 restart plan.
 
 ### Batch 169 - Verilog/SystemVerilog SDF annotation
 
