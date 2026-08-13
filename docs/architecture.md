@@ -18,6 +18,15 @@ The architectural invariants are:
 - the SimIR interpreter is the semantic reference for differential tests; and
 - source spans and stable identifiers survive every lowering stage.
 
+VHDL source identity is a typed tuple of language family, canonical revision,
+predefined environment, compatibility profile and selected compiler-package
+revisions. VHDL-87/93/2000/2002 use the same frontend/HIR/DesignIR/SimIR route
+as the VHDL-2008 default; legality is selected before parsing and preserved
+through specialization, native cache keys, portable objects/designs, replay
+and public introspection. Compiler-owned Synopsys packages remain dependency
+metadata and never become user hierarchy. Their clean-room bodies are
+explicitly non-standard compatibility services, not IEEE declarations.
+
 ## Conformance evidence and provenance
 
 The v1 conformance corpus is original fsim test code with explicit behavioral

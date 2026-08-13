@@ -105,6 +105,7 @@ std::string make_cache_key(
     key.add("optimization", project::to_string(config.build.optimization));
     key.add("llvm", production_llvm_version);
     key.add("standard-library", standard_library_cache_version);
+    key.add("vhdl-compatibility-profile", vhdl_compatibility_profile());
     key.add(
         "verilog-preprocessor",
         frontend::verilog_preprocessor_cache_version);
@@ -197,6 +198,7 @@ std::string make_cache_key(
         key.add("object-compilation", object.compilation_digest);
         key.add("object-language", object.language);
         key.add("object-standard", object.standard);
+        key.add("object-compatibility-profile", object.compatibility_profile);
         key.add("object-library", object.library);
         for (const auto& checksum : object.unit_checksums) {
             key.add("object-unit", checksum);
@@ -389,6 +391,9 @@ make_specialization_cache_keys(
             "fsim-specialization-provenance-v8-mapped-native");
         key.add("fsim-version", version);
         key.add("standard-library", standard_library_cache_version);
+        key.add(
+            "vhdl-compatibility-profile",
+            vhdl_compatibility_profile());
         key.add("delay-mode", project::to_string(config.run.delay_mode));
         key.add(
             "verilog-preprocessor",
@@ -749,6 +754,9 @@ std::unique_ptr<TraceState> attach_trace(
             throw std::overflow_error { "VCD timestamp scaling overflow" };
         }
         trace->writer->begin(simulation.now() * trace->tick_multiplier);
+        for (const auto& comment : simulation.vhdl_provenance_comments()) {
+            trace->writer->comment(comment);
+        }
         for (const auto& signal : simulation.runtime_adapter().signals()) {
             if (trace->enabled[signal.id]) {
                 if (!trace->handles[signal.id].empty()) {

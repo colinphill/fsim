@@ -30,6 +30,31 @@ namespace {
         };
     }
 
+    [[nodiscard]] const VhdlUnitProvenance* unit_provenance(
+        const std::span<const VhdlUnitProvenance> provenance,
+        const semantic::UnitId unit)
+    {
+        const auto found = std::ranges::find(
+            provenance, unit,
+            &VhdlUnitProvenance::unit);
+        return found == provenance.end()
+            ? nullptr
+            : &*found;
+    }
+
+    [[nodiscard]] std::vector<runtime::VhdlVhpiPackageProvenance>
+    vhpi_packages(const VhdlUnitProvenance& provenance)
+    {
+        std::vector<runtime::VhdlVhpiPackageProvenance> result;
+        result.reserve(provenance.package_dependencies.size());
+        for (const auto& package : provenance.package_dependencies) {
+            result.push_back({ package.standard,
+                package.predefined_environment, package.package,
+                package.revision, package.source_digest });
+        }
+        return result;
+    }
+
     [[nodiscard]] bool basic_identifier(const std::string_view value)
     {
         if (value.empty()
@@ -361,6 +386,30 @@ namespace application_detail {
         if (!registry->valid()) {
             throw VhdlDebugError { "VHDL VHPI registry identity exhausted" };
         }
+        struct ScopeProvenance {
+            std::string standard;
+            std::string predefined_environment;
+            std::string compatibility_profile;
+            std::vector<runtime::VhdlVhpiPackageProvenance> packages;
+        };
+        std::map<std::string, ScopeProvenance, std::less<>> provenance_by_path;
+        for (const auto& specialization : project.design_ir.specializations()) {
+            if (specialization.language != semantic::Language::vhdl) {
+                continue;
+            }
+            const auto* provenance = unit_provenance(
+                project.vhdl_unit_provenance, specialization.unit);
+            if (!provenance) {
+                continue;
+            }
+            const auto& instance = project.design_ir.instances().at(
+                specialization.instance.value());
+            provenance_by_path.insert_or_assign(instance.path,
+                ScopeProvenance { provenance->standard,
+                    provenance->predefined_environment,
+                    provenance->compatibility_profile,
+                    vhpi_packages(*provenance) });
+        }
         std::map<std::string, fsim_vhpi_handle_v1, std::less<>> handles;
         const auto ensure_scope = [&](const std::string_view path)
             -> fsim_vhpi_handle_v1 {
@@ -386,6 +435,17 @@ namespace application_detail {
                 descriptor.parent = parent;
                 const auto name = vhpi_name(segment);
                 descriptor.name = name;
+                if (const auto provenance = provenance_by_path.find(prefix);
+                    provenance != provenance_by_path.end()) {
+                    descriptor.language_standard
+                        = provenance->second.standard;
+                    descriptor.predefined_environment
+                        = provenance->second.predefined_environment;
+                    descriptor.compatibility_profile
+                        = provenance->second.compatibility_profile;
+                    descriptor.package_dependencies
+                        = provenance->second.packages;
+                }
                 const auto created = registry->create_object(descriptor);
                 if (!created) {
                     throw VhdlDebugError {
@@ -535,6 +595,39 @@ namespace application_detail {
 
 } // namespace application_detail
 
+std::vector<std::string> Simulation::vhdl_provenance_comments() const
+{
+    std::vector<std::string> result;
+    for (const auto& specialization : design_ir().specializations()) {
+        if (specialization.language != semantic::Language::vhdl) {
+            continue;
+        }
+        const auto* provenance = unit_provenance(
+            vhdl_unit_provenance(), specialization.unit);
+        if (!provenance) {
+            continue;
+        }
+        const auto& instance = design_ir().instances().at(
+            specialization.instance.value());
+        std::ostringstream comment;
+        comment << "fsim-vhdl-scope path=" << instance.path << " unit="
+                << specialization.library << ':' << specialization.name
+                << " source="
+                << (specialization.source
+                        ? specialization.source->value()
+                        : std::numeric_limits<std::uint32_t>::max())
+                << " standard=" << provenance->standard
+                << " environment=" << provenance->predefined_environment
+                << " profile=" << provenance->compatibility_profile;
+        for (const auto& package : provenance->package_dependencies) {
+            comment << " package=" << package.package << '@'
+                    << package.revision;
+        }
+        result.push_back(std::move(comment).str());
+    }
+    return result;
+}
+
 VhdlDebugSnapshot Simulation::vhdl_debug_snapshot(
     const VhdlDebugLimits limits) const
 {
@@ -568,6 +661,16 @@ VhdlDebugSnapshot Simulation::vhdl_debug_snapshot(
         scope.path = instance.path;
         scope.library = specialization.library;
         scope.unit = specialization.name;
+        if (const auto* provenance = unit_provenance(
+                vhdl_unit_provenance(), specialization.unit)) {
+            scope.standard = provenance->standard;
+            scope.predefined_environment
+                = provenance->predefined_environment;
+            scope.compatibility_profile
+                = provenance->compatibility_profile;
+            scope.package_dependencies
+                = provenance->package_dependencies;
+        }
         scope.source_span = specialization.source
             ? specialization.source->value()
             : std::numeric_limits<std::uint32_t>::max();
@@ -577,6 +680,17 @@ VhdlDebugSnapshot Simulation::vhdl_debug_snapshot(
         add_payload(payload, scope.path, limits.maximum_payload_bytes);
         add_payload(payload, scope.library, limits.maximum_payload_bytes);
         add_payload(payload, scope.unit, limits.maximum_payload_bytes);
+        add_payload(payload, scope.standard, limits.maximum_payload_bytes);
+        add_payload(payload, scope.predefined_environment,
+            limits.maximum_payload_bytes);
+        add_payload(payload, scope.compatibility_profile,
+            limits.maximum_payload_bytes);
+        for (const auto& package : scope.package_dependencies) {
+            add_payload(payload, package.package,
+                limits.maximum_payload_bytes);
+            add_payload(payload, package.revision,
+                limits.maximum_payload_bytes);
+        }
         result.scopes.push_back(std::move(scope));
 
         const auto* unit = unit_for(hir, specialization.unit);
@@ -728,7 +842,15 @@ std::string format_vhdl_debug_snapshot(const VhdlDebugSnapshot& snapshot,
            << snapshot.time << " delta=" << snapshot.delta << '\n';
     for (const auto& scope : snapshot.scopes) {
         output << "scope " << scope.path << " unit=" << scope.library << ':'
-               << scope.unit << " vhpi=" << scope.vhpi_handle << '\n';
+               << scope.unit << " source=" << scope.source_span
+               << " standard=" << scope.standard
+               << " environment=" << scope.predefined_environment
+               << " profile=" << scope.compatibility_profile;
+        for (const auto& package : scope.package_dependencies) {
+            output << " package=" << package.package << '@'
+                   << package.revision;
+        }
+        output << " vhpi=" << scope.vhpi_handle << '\n';
     }
     for (const auto& declaration : snapshot.declarations) {
         output << "object " << declaration.path << " kind="

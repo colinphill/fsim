@@ -863,6 +863,9 @@ public:
 
     void set_systemverilog_program_owner(
         std::optional<std::uint32_t> owner) noexcept;
+    void set_vhdl_standard(frontend::VhdlStandard standard) noexcept;
+    void set_vhdl_synopsys_numeric_context(
+        bool signed_visible, bool unsigned_visible) noexcept;
 
 private:
     [[nodiscard]] const frontend::Type* visible_type(
@@ -1389,6 +1392,9 @@ private:
     [[nodiscard]] bool is_signed_expression(
         const Expression& expression) const;
 
+    [[nodiscard]] bool is_synopsys_std_logic_vector_expression(
+        const Expression& expression) const;
+
     [[nodiscard]] bool is_integer_expression(
         const Expression& expression) const;
 
@@ -1735,6 +1741,11 @@ private:
         frontend::ProcessKind::VhdlProcess
     };
     frontend::Language language_ { frontend::Language::Vhdl2008 };
+    frontend::VhdlStandard vhdl_standard_ {
+        frontend::VhdlStandard::Vhdl2008
+    };
+    bool vhdl_synopsys_signed_visible_ { };
+    bool vhdl_synopsys_unsigned_visible_ { };
     std::string hierarchy_;
 };
 
@@ -1999,6 +2010,10 @@ private:
         const bool vhdl = false,
         const bool resolve_ports = true);
     void merge_vhdl_protected_types(DesignUnit&, const DesignUnit&);
+    void materialize_vhdl_1993_shared_variable(
+        const frontend::VariableDeclaration&,
+        const std::string& path,
+        SignalMap& signals);
 
     DesignUnit effective_unit(
         const DesignUnit& selected,
@@ -2348,6 +2363,7 @@ private:
     std::vector<std::string> stack_;
     std::unordered_map<SignalId, std::vector<std::string>>
         boundary_driver_paths_;
+    std::unordered_set<SignalId> vhdl_1993_shared_signals_;
     std::unordered_map<SignalId, std::string> resolver_by_signal_;
     std::vector<SignalId> boundary_resolver_insertions_;
     std::unordered_map<std::string, ResolutionKind>

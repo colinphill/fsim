@@ -1,17 +1,83 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/token.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cctype>
+#include <string>
 #include <string_view>
 #include <utility>
 
 namespace fsim::frontend {
 namespace {
 
+    template <std::size_t Size>
+    [[nodiscard]] bool contains(
+        const std::array<std::string_view, Size>& words,
+        const std::string_view word) noexcept
+    {
+        return std::ranges::find(words, word) != words.end();
+    }
+
+    [[nodiscard]] std::string ascii_lower(std::string_view text)
+    {
+        std::string result { text };
+        std::ranges::transform(result, result.begin(), [](const char character) {
+            return static_cast<char>(
+                std::tolower(static_cast<unsigned char>(character)));
+        });
+        return result;
+    }
+
+    [[nodiscard]] bool vhdl_reserved_word_impl(
+        const std::string_view word, const VhdlStandard standard) noexcept
+    {
+        static constexpr auto vhdl_1987 = std::to_array<std::string_view>({ "abs", "access", "after", "alias", "all", "and", "architecture",
+            "array", "assert", "attribute", "begin", "block", "body", "buffer",
+            "bus", "case", "component", "configuration", "constant",
+            "disconnect", "downto", "else", "elsif", "end", "entity", "exit",
+            "file", "for", "function", "generate", "generic", "guarded", "if",
+            "in", "inout", "is", "label", "library", "linkage", "loop", "map",
+            "mod", "nand", "new", "next", "nor", "not", "null", "of", "on",
+            "open", "or", "others", "out", "package", "port", "procedure",
+            "process", "range", "record", "register", "rem", "report", "return",
+            "select", "severity", "signal", "subtype", "then", "to", "transport",
+            "type", "units", "until", "use", "variable", "wait", "when", "while",
+            "with", "xor" });
+        static constexpr auto vhdl_1993 = std::to_array<std::string_view>({ "group", "impure", "inertial", "literal", "postponed", "pure",
+            "reject", "rol", "ror", "shared", "sla", "sll", "sra", "srl",
+            "unaffected", "xnor" });
+        static constexpr auto vhdl_2008 = std::to_array<std::string_view>({ "assume", "assume_guarantee", "context", "cover", "default",
+            "fairness", "force", "parameter", "property", "release", "restrict",
+            "restrict_guarantee", "sequence", "strong", "vmode", "vprop",
+            "vunit" });
+        if (contains(vhdl_1987, word)) {
+            return true;
+        }
+        if (standard != VhdlStandard::Vhdl1987 && contains(vhdl_1993, word)) {
+            return true;
+        }
+        if (standard != VhdlStandard::Vhdl1987 && standard != VhdlStandard::Vhdl1993 && word == "protected") {
+            return true;
+        }
+        return standard == VhdlStandard::Vhdl2008 && contains(vhdl_2008, word);
+    }
+
+    [[nodiscard]] bool vhdl_2008_bit_string_specifier(
+        const std::string_view word) noexcept
+    {
+        static constexpr auto specifiers = std::to_array<std::string_view>({ "d", "ub", "uo", "ux", "sb", "so", "sx", "ud", "sd" });
+        return contains(specifiers, word);
+    }
+
 class Lexer {
  public:
-  Lexer(SourceText source, Language language)
-      : source_(std::move(source)), language_(language) {}
+     Lexer(SourceText source, Language language, VhdlStandard vhdl_standard)
+         : source_(std::move(source))
+         , language_(language)
+         , vhdl_standard_(vhdl_standard)
+     {
+     }
 
   LexResult run() {
     skip_utf8_bom();
@@ -103,6 +169,18 @@ class Lexer {
                    std::move(message), span(begin, current_location()), {}});
   }
 
+  void diagnose_revision_feature(
+      const std::string_view feature, const VhdlStandard required,
+      const SourceLocation begin)
+  {
+      diagnose(
+          "FSIM-VHDL-LEX-001",
+          std::string(feature) + " requires VHDL-" + std::string(to_string(required)) + "; select that or a later "
+                                                                                        "revision, or rewrite the lexical form for VHDL-"
+              + std::string(to_string(vhdl_standard_)),
+          begin);
+  }
+
   [[nodiscard]] bool vhdl_psl_comment() const noexcept {
     if (!is_vhdl() || peek() != '-' || peek(1) != '-') {
       return false;
@@ -166,6 +244,10 @@ class Lexer {
       }
       if (peek() == '/' && peek(1) == '*') {
         const auto begin = current_location();
+        if (is_vhdl() && vhdl_standard_ != VhdlStandard::Vhdl2008) {
+            diagnose_revision_feature(
+                "a delimited block comment", VhdlStandard::Vhdl2008, begin);
+        }
         advance();
         advance();
         std::size_t depth = 1;
@@ -231,6 +313,13 @@ class Lexer {
             "contain adjacent or trailing underscores",
             begin);
       }
+      const auto lower = ascii_lower(text);
+      const bool follows_explicit_width = begin.offset != 0U && std::isdigit(static_cast<unsigned char>(source_.text[begin.offset - 1U]));
+      if (vhdl_standard_ != VhdlStandard::Vhdl2008 && peek() == '"' && vhdl_2008_bit_string_specifier(lower) && !follows_explicit_width) {
+          diagnose_revision_feature(
+              "a D, signed, or unsigned bit-string base specifier",
+              VhdlStandard::Vhdl2008, begin);
+      }
     }
     emit(TokenKind::Identifier, begin);
   }
@@ -238,6 +327,7 @@ class Lexer {
   void lex_extended_identifier() {
     const auto begin = current_location();
     advance();
+    const bool unavailable_in_revision = is_vhdl() && vhdl_standard_ == VhdlStandard::Vhdl1987;
     if (!is_vhdl() && (peek() == '\n' || peek() == '\r')) {
       advance();
       emit(TokenKind::Identifier, begin);
@@ -273,6 +363,10 @@ class Lexer {
             begin);
       }
     }
+    if (unavailable_in_revision) {
+        diagnose_revision_feature(
+            "an extended identifier", VhdlStandard::Vhdl1993, begin);
+    }
     emit(TokenKind::Identifier, begin);
   }
 
@@ -300,6 +394,22 @@ class Lexer {
     while (std::isdigit(static_cast<unsigned char>(peek())) ||
            peek() == '_') {
       advance();
+    }
+
+    if (is_vhdl() && vhdl_standard_ != VhdlStandard::Vhdl2008) {
+        std::size_t letters = 0;
+        while (letters != 2U && std::isalpha(static_cast<unsigned char>(peek(letters)))) {
+            ++letters;
+        }
+        if (letters != 0U && peek(letters) == '"') {
+            const auto specifier = ascii_lower(source_.text.substr(
+                current_location().offset, letters));
+            if (specifier == "b" || specifier == "o" || specifier == "x" || vhdl_2008_bit_string_specifier(specifier)) {
+                diagnose_revision_feature(
+                    "an explicit bit-string length", VhdlStandard::Vhdl2008,
+                    begin);
+            }
+        }
     }
 
     if (is_vhdl() && peek() == '#') {
@@ -382,6 +492,34 @@ class Lexer {
     }
     if (!terminated) {
       diagnose("FSIM-FE-LEX-004", "unterminated string literal", begin);
+    }
+    if (is_vhdl() && vhdl_standard_ != VhdlStandard::Vhdl2008 && terminated && !result_.tokens.empty()) {
+        const auto& specifier_token = result_.tokens.back();
+        const auto specifier = ascii_lower(specifier_token.text);
+        if (specifier_token.kind == TokenKind::Identifier && specifier_token.span.end.offset == begin.offset && (specifier == "b" || specifier == "o" || specifier == "x")) {
+            const auto digits = source_.text.substr(
+                begin.offset + 1U,
+                current_location().offset - begin.offset - 2U);
+            const auto valid_digit = [&](const char raw) {
+                const auto character = static_cast<char>(
+                    std::tolower(static_cast<unsigned char>(raw)));
+                if (character == '_') {
+                    return true;
+                }
+                if (specifier == "b") {
+                    return character == '0' || character == '1';
+                }
+                if (specifier == "o") {
+                    return character >= '0' && character <= '7';
+                }
+                return std::isdigit(static_cast<unsigned char>(character)) || (character >= 'a' && character <= 'f');
+            };
+            if (!std::ranges::all_of(digits, valid_digit)) {
+                diagnose_revision_feature(
+                    "non-numeric bit-string digits", VhdlStandard::Vhdl2008,
+                    begin);
+            }
+        }
     }
     emit(TokenKind::StringLiteral, begin);
   }
@@ -475,6 +613,10 @@ class Lexer {
         emit(TokenKind::At, begin);
         return;
       case '?':
+          if (is_vhdl() && vhdl_standard_ != VhdlStandard::Vhdl2008) {
+              diagnose_revision_feature(
+                  "a question-mark delimiter", VhdlStandard::Vhdl2008, begin);
+          }
         emit(TokenKind::Question, begin);
         return;
       case '`':
@@ -510,6 +652,11 @@ class Lexer {
         if (consume_if('=')) {
           emit(TokenKind::LessEqual, begin);
         } else if (consume_if('<')) {
+            if (is_vhdl() && vhdl_standard_ != VhdlStandard::Vhdl2008) {
+                diagnose_revision_feature(
+                    "an external-name delimiter", VhdlStandard::Vhdl2008,
+                    begin);
+            }
           if (!is_vhdl() && consume_if('<')) {
             emit(
                 consume_if('=')
@@ -531,6 +678,11 @@ class Lexer {
         if (consume_if('=')) {
           emit(TokenKind::GreaterEqual, begin);
         } else if (consume_if('>')) {
+            if (is_vhdl() && vhdl_standard_ != VhdlStandard::Vhdl2008) {
+                diagnose_revision_feature(
+                    "an external-name delimiter", VhdlStandard::Vhdl2008,
+                    begin);
+            }
           if (!is_vhdl() && consume_if('>')) {
             emit(
                 consume_if('=')
@@ -665,6 +817,7 @@ class Lexer {
 
   SourceText source_;
   Language language_;
+  VhdlStandard vhdl_standard_;
   std::size_t index_{};
   std::size_t line_{1};
   std::size_t column_{1};
@@ -673,8 +826,16 @@ class Lexer {
 
 }  // namespace
 
-LexResult lex(SourceText source, Language language) {
-  return Lexer(std::move(source), language).run();
+LexResult lex(
+    SourceText source, Language language, const VhdlStandard vhdl_standard)
+{
+    return Lexer(std::move(source), language, vhdl_standard).run();
+}
+
+bool is_vhdl_reserved_word(
+    const std::string_view word, const VhdlStandard standard)
+{
+    return vhdl_reserved_word_impl(ascii_lower(word), standard);
 }
 
 const char* to_string(TokenKind kind) noexcept {

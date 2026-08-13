@@ -15,29 +15,32 @@ namespace fsim::elaboration::elaboration_detail {
 ConstantTypeInfo::ConstantTypeInfo() = default;
 
 ConstantTypeInfo::ConstantTypeInfo(
-        const frontend::ValueDomain value)
-    : domain(value) {}
+    const frontend::ValueDomain value)
+    : domain(value)
+{
+}
 
 ConstantTypeInfo::ConstantTypeInfo(
-        const frontend::ValueDomain value,
-        const bool enumeration,
-        std::string nominal)
-    : domain(value),
-      vhdl_enumeration(enumeration),
-      nominal_type(std::move(nominal)) {}
-
+    const frontend::ValueDomain value,
+    const bool enumeration,
+    std::string nominal)
+    : domain(value)
+    , vhdl_enumeration(enumeration)
+    , nominal_type(std::move(nominal))
+{
+}
 
 [[nodiscard]] bool is_two_state_domain(
-    const frontend::ValueDomain domain) noexcept {
+    const frontend::ValueDomain domain) noexcept
+{
     return domain == frontend::ValueDomain::Bit2
         || domain == frontend::ValueDomain::Boolean
         || domain == frontend::ValueDomain::Integer;
 }
 
-
-
 [[nodiscard]] runtime::simir::ValueKind value_kind(
-    const frontend::ValueDomain domain) noexcept {
+    const frontend::ValueDomain domain) noexcept
+{
     return domain == frontend::ValueDomain::Logic9
         ? runtime::simir::ValueKind::logic9
         : runtime::simir::ValueKind::logic4;
@@ -45,7 +48,8 @@ ConstantTypeInfo::ConstantTypeInfo(
 
 std::int64_t normalize_systemverilog_parameter_value(
     const std::int64_t value,
-    const frontend::Type& type) noexcept {
+    const frontend::Type& type) noexcept
+{
     if (type.spelling == "implicit" && type.named_type.empty()) {
         return value;
     }
@@ -53,19 +57,17 @@ std::int64_t normalize_systemverilog_parameter_value(
     if (!width || *width == 0 || *width >= 64) {
         return value;
     }
-    const auto mask =
-        (std::uint64_t{1} << *width) - std::uint64_t{1};
+    const auto mask = (std::uint64_t { 1 } << *width) - std::uint64_t { 1 };
     auto bits = static_cast<std::uint64_t>(value) & mask;
     if (type.is_signed
-        && (bits & (std::uint64_t{1} << (*width - 1U))) != 0) {
+        && (bits & (std::uint64_t { 1 } << (*width - 1U))) != 0) {
         bits |= ~mask;
     }
     return static_cast<std::int64_t>(bits);
 }
 
-
-
-std::string simple_top_name(std::string_view top) {
+std::string simple_top_name(std::string_view top)
+{
     if (const auto colon = top.rfind(':'); colon != std::string_view::npos) {
         top.remove_prefix(colon + 1);
     }
@@ -75,36 +77,33 @@ std::string simple_top_name(std::string_view top) {
     if (const auto architecture = top.find('('); architecture != std::string_view::npos) {
         top = top.substr(0, architecture);
     }
-    return std::string{top};
+    return std::string { top };
 }
 
-
-
-std::optional<std::uint64_t> unsigned_decimal(std::string_view text) {
-    std::string cleaned{text};
+std::optional<std::uint64_t> unsigned_decimal(std::string_view text)
+{
+    std::string cleaned { text };
     cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '_'), cleaned.end());
-    std::uint64_t value{};
-    const auto result =
-        std::from_chars(cleaned.data(), cleaned.data() + cleaned.size(), value);
-    if (result.ec != std::errc{} || result.ptr != cleaned.data() + cleaned.size()) {
+    std::uint64_t value { };
+    const auto result = std::from_chars(cleaned.data(), cleaned.data() + cleaned.size(), value);
+    if (result.ec != std::errc { } || result.ptr != cleaned.data() + cleaned.size()) {
         return std::nullopt;
     }
     return value;
 }
 
-
-
 std::optional<std::int64_t> constant_index(
-    const Expression& expression) {
+    const Expression& expression)
+{
     if (expression.kind == ExpressionKind::IntegerLiteral) {
-        std::string cleaned{expression.text};
+        std::string cleaned { expression.text };
         cleaned.erase(
             std::remove(cleaned.begin(), cleaned.end(), '_'),
             cleaned.end());
-        std::int64_t value{};
+        std::int64_t value { };
         const auto result = std::from_chars(
             cleaned.data(), cleaned.data() + cleaned.size(), value);
-        if (result.ec == std::errc{}
+        if (result.ec == std::errc { }
             && result.ptr == cleaned.data() + cleaned.size()) {
             return value;
         }
@@ -129,26 +128,24 @@ std::optional<std::int64_t> constant_index(
         || expression.kind == ExpressionKind::Call) {
         std::string error;
         return evaluate_constant_expression(
-            expression, {}, error);
+            expression, { }, error);
     }
     return std::nullopt;
 }
 
-
-
 std::uint64_t index_distance(
     const std::int64_t lhs,
-    const std::int64_t rhs) noexcept {
+    const std::int64_t rhs) noexcept
+{
     return lhs >= rhs
         ? static_cast<std::uint64_t>(lhs)
-              - static_cast<std::uint64_t>(rhs)
+            - static_cast<std::uint64_t>(rhs)
         : static_cast<std::uint64_t>(rhs)
-              - static_cast<std::uint64_t>(lhs);
+            - static_cast<std::uint64_t>(lhs);
 }
 
-
-
-PackedLogic4 unsigned_value(const std::uint64_t value, const std::size_t width) {
+PackedLogic4 unsigned_value(const std::uint64_t value, const std::size_t width)
+{
     PackedLogic4 result(width, Logic4::zero);
     for (std::size_t bit = 0; bit < width && bit < 64; ++bit) {
         result.set(bit, ((value >> bit) & 1U) != 0 ? Logic4::one : Logic4::zero);
@@ -156,32 +153,29 @@ PackedLogic4 unsigned_value(const std::uint64_t value, const std::size_t width) 
     return result;
 }
 
-
-
-PackedLogic4 integer_value(const std::int64_t value) {
+PackedLogic4 integer_value(const std::int64_t value)
+{
     const auto bits = static_cast<std::uint32_t>(
         static_cast<std::int32_t>(value));
     return unsigned_value(bits, 32);
 }
 
-
-
 std::optional<std::int64_t> vhdl_enumeration_ordinal(
     const Expression& expression,
-    const frontend::Type& type) {
+    const frontend::Type& type)
+{
     if (type.enumeration_literals.empty()) {
         return std::nullopt;
     }
-    constexpr std::string_view internal_prefix{"@fsim-enum:"};
+    constexpr std::string_view internal_prefix { "@fsim-enum:" };
     if (expression.kind == ExpressionKind::LogicLiteral
         && expression.text.starts_with(internal_prefix)) {
         std::int64_t ordinal = 0;
-        const auto text =
-            std::string_view{expression.text}.substr(
-                internal_prefix.size());
+        const auto text = std::string_view { expression.text }.substr(
+            internal_prefix.size());
         const auto parsed = std::from_chars(
             text.data(), text.data() + text.size(), ordinal);
-        if (parsed.ec == std::errc{}
+        if (parsed.ec == std::errc { }
             && parsed.ptr == text.data() + text.size()
             && ordinal >= 0
             && static_cast<std::uint64_t>(ordinal)
@@ -195,10 +189,9 @@ std::optional<std::int64_t> vhdl_enumeration_ordinal(
         return std::nullopt;
     }
     const auto separator = expression.text.find_last_of('.');
-    const auto literal_name =
-        separator == std::string::npos
-            ? std::string_view{expression.text}
-            : std::string_view{expression.text}.substr(separator + 1);
+    const auto literal_name = separator == std::string::npos
+        ? std::string_view { expression.text }
+        : std::string_view { expression.text }.substr(separator + 1);
     const auto literal = std::find(
         type.enumeration_literals.begin(),
         type.enumeration_literals.end(),
@@ -216,11 +209,10 @@ std::optional<std::int64_t> vhdl_enumeration_ordinal(
     return static_cast<std::int64_t>(ordinal);
 }
 
-
-
 const frontend::Type* vhdl_enumeration_type_mark(
     const DesignUnit& unit,
-    const std::string_view name) {
+    const std::string_view name)
+{
     const auto alias = std::find_if(
         unit.type_aliases.begin(),
         unit.type_aliases.end(),
@@ -234,11 +226,11 @@ const frontend::Type* vhdl_enumeration_type_mark(
     const frontend::Type* found = nullptr;
     const auto consider =
         [&](const frontend::Type& type) {
-          if (found == nullptr
-              && type.spelling == name
-              && !type.enumeration_literals.empty()) {
-              found = &type;
-          }
+            if (found == nullptr
+                && type.spelling == name
+                && !type.enumeration_literals.empty()) {
+                found = &type;
+            }
         };
     for (const auto& parameter : unit.parameters) {
         consider(parameter.type);
@@ -252,14 +244,14 @@ const frontend::Type* vhdl_enumeration_type_mark(
     return found;
 }
 
-
-
 const frontend::Type* vhdl_object_type(
     const DesignUnit& unit,
-    const std::string_view name) {
+    const std::string_view name)
+{
     const auto separator = name.find('.');
     const auto base = separator == std::string_view::npos
-        ? name : name.substr(0, separator);
+        ? name
+        : name.substr(0, separator);
     const auto parameter = std::find_if(
         unit.parameters.begin(),
         unit.parameters.end(),
@@ -314,15 +306,14 @@ const frontend::Type* vhdl_object_type(
     }
 }
 
-
-
 std::optional<FoldedEnumerationAttribute>
 evaluate_vhdl_enumeration_attribute(
     const Expression& expression,
     const DesignUnit& unit,
     const ConstantEnvironment& environment,
     std::string& error,
-    bool& range_error) {
+    bool& range_error)
+{
     if (expression.kind != ExpressionKind::Call
         || expression.operands.empty()
         || expression.operands.front().kind
@@ -342,105 +333,105 @@ evaluate_vhdl_enumeration_attribute(
         error = "enumeration attribute prefix has no representable range";
         return std::nullopt;
     }
-    auto range =
-        type->enumeration_range.value_or(
-            frontend::EnumerationRange{
-                0,
-                static_cast<std::int64_t>(count - 1U),
-                false});
+    auto range = type->enumeration_range.value_or(
+        frontend::EnumerationRange {
+            0,
+            static_cast<std::int64_t>(count - 1U),
+            false });
     if (type->enumeration_range_expression) {
         const auto evaluate_bound =
             [&](const Expression& bound)
-                -> std::optional<std::int64_t> {
-              if (const auto ordinal =
-                      vhdl_enumeration_ordinal(
-                          bound, *type)) {
-                  return ordinal;
-              }
-              if (bound.kind == ExpressionKind::Identifier) {
-                  if (const auto found =
-                          environment.find(bound.text);
-                      found != environment.end()) {
-                      return found->second;
-                  }
-              }
-              return std::nullopt;
-            };
+            -> std::optional<std::int64_t> {
+            if (const auto ordinal = vhdl_enumeration_ordinal(
+                    bound, *type)) {
+                return ordinal;
+            }
+            if (bound.kind == ExpressionKind::Identifier) {
+                if (const auto found = environment.find(bound.text);
+                    found != environment.end()) {
+                    return found->second;
+                }
+            }
+            return std::nullopt;
+        };
         const auto left = evaluate_bound(
             type->enumeration_range_expression->left);
         const auto right = evaluate_bound(
             type->enumeration_range_expression->right);
         if (!left || !right) {
-            error =
-                "enumeration attribute subtype bounds are not locally "
-                "static in this specialization";
+            error = "enumeration attribute subtype bounds are not locally "
+                    "static in this specialization";
             return std::nullopt;
         }
-        range = frontend::EnumerationRange{
+        range = frontend::EnumerationRange {
             *left,
             *right,
-            type->enumeration_range_expression->descending};
+            type->enumeration_range_expression->descending
+        };
     }
     const auto lower = std::min(range.left, range.right);
     const auto upper = std::max(range.left, range.right);
     const auto require_arity =
         [&](const std::size_t expected) {
-          if (expression.operands.size() != expected + 1U) {
-              error = expression.text + " requires "
-                  + std::to_string(expected)
-                  + (expected == 1 ? " argument" : " arguments");
-              return false;
-          }
-          return true;
+            if (expression.operands.size() != expected + 1U) {
+                error = expression.text + " requires "
+                    + std::to_string(expected)
+                    + (expected == 1 ? " argument" : " arguments");
+                return false;
+            }
+            return true;
         };
     if (expression.text == "'left") {
         if (!require_arity(0)) {
             return std::nullopt;
         }
-        return FoldedEnumerationAttribute{
-            range.left, true, false};
+        return FoldedEnumerationAttribute {
+            range.left, true, false
+        };
     }
     if (expression.text == "'right") {
         if (!require_arity(0)) {
             return std::nullopt;
         }
-        return FoldedEnumerationAttribute{
-            range.right, true, false};
+        return FoldedEnumerationAttribute {
+            range.right, true, false
+        };
     }
     if (expression.text == "'low"
         || expression.text == "'high") {
         if (!require_arity(0)) {
             return std::nullopt;
         }
-        return FoldedEnumerationAttribute{
+        return FoldedEnumerationAttribute {
             expression.text == "'low" ? lower : upper,
             true,
-            false};
+            false
+        };
     }
     if (expression.text == "'length") {
         if (!require_arity(0)) {
             return std::nullopt;
         }
-        return FoldedEnumerationAttribute{
-            upper - lower + 1, false, false};
+        return FoldedEnumerationAttribute {
+            upper - lower + 1, false, false
+        };
     }
     if (expression.text == "'ascending") {
         if (!require_arity(0)) {
             return std::nullopt;
         }
-        return FoldedEnumerationAttribute{
-            range.descending ? 0 : 1, false, true};
+        return FoldedEnumerationAttribute {
+            range.descending ? 0 : 1, false, true
+        };
     }
     const bool position = expression.text == "'pos";
     const bool value = expression.text == "'val";
-    const bool successor =
-        expression.text == "'succ"
+    const bool successor = expression.text == "'succ"
         || (expression.text == "'leftof"
             && range.descending)
         || (expression.text == "'rightof"
             && !range.descending);
-    const bool predecessor =
-        expression.text == "'pred"
+    const bool predecessor = expression.text == "'pred"
         || (expression.text == "'leftof"
             && !range.descending)
         || (expression.text == "'rightof"
@@ -452,17 +443,16 @@ evaluate_vhdl_enumeration_attribute(
         return std::nullopt;
     }
     const auto& argument_expression = expression.operands[1];
-    const auto* argument_object_type =
-        argument_expression.kind == ExpressionKind::Identifier
-            ? vhdl_object_type(unit, argument_expression.text)
-            : nullptr;
+    const auto* argument_object_type = argument_expression.kind == ExpressionKind::Identifier
+        ? vhdl_object_type(unit, argument_expression.text)
+        : nullptr;
     std::optional<std::int64_t> argument;
     if (value) {
         if (vhdl_enumeration_ordinal(
                 argument_expression, *type)
             || (argument_object_type != nullptr
                 && !argument_object_type
-                        ->enumeration_literals.empty())) {
+                    ->enumeration_literals.empty())) {
             error = "'val requires an integer-family argument";
             return std::nullopt;
         }
@@ -503,8 +493,9 @@ evaluate_vhdl_enumeration_attribute(
             error = "'pos argument is outside the enumeration range";
             return std::nullopt;
         }
-        return FoldedEnumerationAttribute{
-            *argument, false, false};
+        return FoldedEnumerationAttribute {
+            *argument, false, false
+        };
     }
     if (value) {
         if (*argument < lower || *argument > upper) {
@@ -512,8 +503,9 @@ evaluate_vhdl_enumeration_attribute(
             error = "'val argument is outside the enumeration range";
             return std::nullopt;
         }
-        return FoldedEnumerationAttribute{
-            *argument, true, false};
+        return FoldedEnumerationAttribute {
+            *argument, true, false
+        };
     }
     if (*argument < lower || *argument > upper) {
         range_error = true;
@@ -521,20 +513,21 @@ evaluate_vhdl_enumeration_attribute(
             + " argument is outside the enumeration range";
         return std::nullopt;
     }
-    const auto adjusted =
-        successor ? *argument + 1 : *argument - 1;
+    const auto adjusted = successor ? *argument + 1 : *argument - 1;
     if (adjusted < lower || adjusted > upper) {
         range_error = true;
         error = expression.text
             + " argument has no result inside the enumeration range";
         return std::nullopt;
     }
-    return FoldedEnumerationAttribute{
-        adjusted, true, false};
+    return FoldedEnumerationAttribute {
+        adjusted, true, false
+    };
 }
 std::optional<std::int64_t> constant_literal_integer(
     const Expression& expression,
-    std::string& error) {
+    std::string& error)
+{
     if (expression.kind == ExpressionKind::BooleanLiteral) {
         if (expression.text == "true") {
             return 1;
@@ -602,8 +595,8 @@ bool checked_add(
     std::int64_t& result)
 {
     if ((right > 0
-         && left
-             > std::numeric_limits<std::int64_t>::max() - right)
+            && left
+                > std::numeric_limits<std::int64_t>::max() - right)
         || (right < 0
             && left
                 < std::numeric_limits<std::int64_t>::min() - right)) {
@@ -616,10 +609,11 @@ bool checked_add(
 bool checked_subtract(
     const std::int64_t left,
     const std::int64_t right,
-    std::int64_t& result) {
+    std::int64_t& result)
+{
     if ((right < 0
-         && left
-             > std::numeric_limits<std::int64_t>::max() + right)
+            && left
+                > std::numeric_limits<std::int64_t>::max() + right)
         || (right > 0
             && left
                 < std::numeric_limits<std::int64_t>::min() + right)) {
@@ -629,26 +623,25 @@ bool checked_subtract(
     return true;
 }
 
-
-
 bool checked_multiply(
     const std::int64_t left,
     const std::int64_t right,
-    std::int64_t& result) {
+    std::int64_t& result)
+{
     if (left == 0 || right == 0) {
         result = 0;
         return true;
     }
     if ((left == -1
-         && right == std::numeric_limits<std::int64_t>::min())
+            && right == std::numeric_limits<std::int64_t>::min())
         || (right == -1
             && left == std::numeric_limits<std::int64_t>::min())) {
         return false;
     }
     if (left > 0) {
         if ((right > 0
-             && left
-                 > std::numeric_limits<std::int64_t>::max() / right)
+                && left
+                    > std::numeric_limits<std::int64_t>::max() / right)
             || (right < 0
                 && right
                     < std::numeric_limits<std::int64_t>::min() / left)) {
@@ -656,8 +649,8 @@ bool checked_multiply(
         }
     } else if (
         (right > 0
-         && left
-             < std::numeric_limits<std::int64_t>::min() / right)
+            && left
+                < std::numeric_limits<std::int64_t>::min() / right)
         || (right < 0
             && left
                 < std::numeric_limits<std::int64_t>::max() / right)) {
@@ -667,12 +660,11 @@ bool checked_multiply(
     return true;
 }
 
-
-
 bool checked_power(
     const std::int64_t base,
     const std::int64_t exponent,
-    std::int64_t& result) {
+    std::int64_t& result)
+{
     if (exponent < 0) {
         if (base == 0) {
             return false;
@@ -704,12 +696,11 @@ bool checked_power(
     return true;
 }
 
-
-
 std::optional<std::int64_t> evaluate_constant_expression(
     const Expression& expression,
     const ConstantEnvironment& environment,
-    std::string& error) {
+    std::string& error)
+{
     if (expression.kind == ExpressionKind::IntegerLiteral
         || expression.kind == ExpressionKind::LogicLiteral
         || expression.kind == ExpressionKind::BooleanLiteral) {
@@ -718,8 +709,7 @@ std::optional<std::int64_t> evaluate_constant_expression(
     if (expression.kind == ExpressionKind::Identifier) {
         const auto found = environment.find(expression.text);
         if (found == environment.end()) {
-            error =
-                "unknown or forward parameter reference '"
+            error = "unknown or forward parameter reference '"
                 + expression.text + "'";
             return std::nullopt;
         }
@@ -750,8 +740,7 @@ std::optional<std::int64_t> evaluate_constant_expression(
         if (expression.text == "!") {
             return *operand == 0 ? 1 : 0;
         }
-        error =
-            "unsupported unary constant operator '"
+        error = "unsupported unary constant operator '"
             + expression.text + "'";
         return std::nullopt;
     }
@@ -767,9 +756,8 @@ std::optional<std::int64_t> evaluate_constant_expression(
             return std::nullopt;
         }
         if (*operand < 0) {
-            error =
-                "$clog2 requires a nonnegative integral argument in "
-                "the current executable slice";
+            error = "$clog2 requires a nonnegative integral argument in "
+                    "the current executable slice";
             return std::nullopt;
         }
         auto magnitude = static_cast<std::uint64_t>(*operand);
@@ -787,8 +775,7 @@ std::optional<std::int64_t> evaluate_constant_expression(
         && (expression.text == "$signed"
             || expression.text == "$unsigned")) {
         if (expression.operands.size() != 1) {
-            error =
-                expression.text + " requires exactly one argument";
+            error = expression.text + " requires exactly one argument";
             return std::nullopt;
         }
         return evaluate_constant_expression(
@@ -865,11 +852,10 @@ std::optional<std::int64_t> evaluate_constant_expression(
     }
     if (expression.text == "**") {
         if (!checked_power(*left, *right, result)) {
-            error =
-                *left == 0 && *right < 0
-                    ? "constant zero to a negative power is undefined"
-                    : "constant exponentiation overflows signed 64-bit "
-                      "range";
+            error = *left == 0 && *right < 0
+                ? "constant zero to a negative power is undefined"
+                : "constant exponentiation overflows signed 64-bit "
+                  "range";
             return std::nullopt;
         }
         return result;
@@ -905,7 +891,7 @@ std::optional<std::int64_t> evaluate_constant_expression(
             || expression.text == "sll") {
             if (*left
                 > (std::numeric_limits<std::int64_t>::max()
-                   >> static_cast<unsigned>(*right))) {
+                    >> static_cast<unsigned>(*right))) {
                 error = "constant left shift overflows signed 64-bit range";
                 return std::nullopt;
             }
@@ -969,12 +955,9 @@ std::optional<std::int64_t> evaluate_constant_expression(
     if (expression.text == ">=") {
         return *left >= *right ? 1 : 0;
     }
-    error =
-        "unsupported binary constant operator '" + expression.text + "'";
+    error = "unsupported binary constant operator '" + expression.text + "'";
     return std::nullopt;
 }
-
-
 
 Expression constant_expression(
     const std::int64_t value,
@@ -982,14 +965,16 @@ Expression constant_expression(
     const frontend::ValueDomain domain,
     const frontend::Language language,
     const bool vhdl_enumeration,
-    std::string nominal_type) {
+    std::string nominal_type)
+{
     if (vhdl_enumeration
         && language == frontend::Language::Vhdl2008) {
-        Expression result{
+        Expression result {
             ExpressionKind::LogicLiteral,
             "@fsim-enum:" + std::to_string(value),
-            {},
-            span};
+            { },
+            span
+        };
         result.nominal_type = std::move(nominal_type);
         return result;
     }
@@ -997,50 +982,51 @@ Expression constant_expression(
         return {
             ExpressionKind::BooleanLiteral,
             value == 0 ? "false" : "true",
-            {},
-            span};
+            { },
+            span
+        };
     }
     if (domain == frontend::ValueDomain::Bit2
         && language == frontend::Language::Vhdl2008) {
         return {
             ExpressionKind::LogicLiteral,
             value == 0 ? "'0'" : "'1'",
-            {},
-            span};
+            { },
+            span
+        };
     }
     if (value >= 0) {
         return {
             ExpressionKind::IntegerLiteral,
             std::to_string(value),
-            {},
-            span};
+            { },
+            span
+        };
     }
-    const auto magnitude =
-        value == std::numeric_limits<std::int64_t>::min()
-            ? std::uint64_t{1} << 63U
-            : static_cast<std::uint64_t>(-value);
+    const auto magnitude = value == std::numeric_limits<std::int64_t>::min()
+        ? std::uint64_t { 1 } << 63U
+        : static_cast<std::uint64_t>(-value);
     return {
         ExpressionKind::Unary,
         "-",
-        {
-            Expression{
-                ExpressionKind::IntegerLiteral,
-                std::to_string(magnitude),
-                {},
-                span}},
-        span};
+        { Expression {
+            ExpressionKind::IntegerLiteral,
+            std::to_string(magnitude),
+            { },
+            span } },
+        span
+    };
 }
-
-
 
 bool fold_vhdl_enumeration_attributes(
     Expression& expression,
     const DesignUnit& unit,
     const ConstantEnvironment& environment,
     std::string& error,
-    bool& range_error) {
+    bool& range_error)
+{
     for (auto& association :
-         expression.aggregate_choice_expressions) {
+        expression.aggregate_choice_expressions) {
         for (auto& choice : association) {
             if (!fold_vhdl_enumeration_attributes(
                     choice,
@@ -1071,19 +1057,17 @@ bool fold_vhdl_enumeration_attributes(
             != ExpressionKind::Identifier) {
         return true;
     }
-    const auto* type_mark =
-        vhdl_enumeration_type_mark(
-            unit, expression.operands.front().text);
+    const auto* type_mark = vhdl_enumeration_type_mark(
+        unit, expression.operands.front().text);
     if (type_mark == nullptr) {
         return true;
     }
-    const auto folded =
-        evaluate_vhdl_enumeration_attribute(
-            expression,
-            unit,
-            environment,
-            error,
-            range_error);
+    const auto folded = evaluate_vhdl_enumeration_attribute(
+        expression,
+        unit,
+        environment,
+        error,
+        range_error);
     if (!folded) {
         return false;
     }
@@ -1094,23 +1078,22 @@ bool fold_vhdl_enumeration_attributes(
         folded->boolean_result
             ? frontend::ValueDomain::Boolean
             : folded->enumeration_result
-                ? frontend::ValueDomain::Bit2
-                : frontend::ValueDomain::Integer,
+            ? frontend::ValueDomain::Bit2
+            : frontend::ValueDomain::Integer,
         frontend::Language::Vhdl2008,
         folded->enumeration_result,
         folded->enumeration_result
             ? type_mark->nominal_type
-            : std::string{});
+            : std::string { });
     return true;
 }
-
-
 
 void substitute_parameters(
     Expression& expression,
     const ConstantEnvironment& environment,
     const ConstantDomainEnvironment& domains,
-    const frontend::Language language) {
+    const frontend::Language language)
+{
     if (expression.kind == ExpressionKind::Identifier) {
         if (const auto domain = domains.find(expression.text);
             domain != domains.end()
@@ -1133,13 +1116,13 @@ void substitute_parameters(
                 domain != domains.end()
                     && domain->second.vhdl_enumeration,
                 domain == domains.end()
-                    ? std::string{}
+                    ? std::string { }
                     : domain->second.nominal_type);
             return;
         }
     }
     for (auto& association :
-         expression.aggregate_choice_expressions) {
+        expression.aggregate_choice_expressions) {
         for (auto& choice : association) {
             substitute_parameters(
                 choice, environment, domains, language);
@@ -1151,14 +1134,13 @@ void substitute_parameters(
     }
 }
 
-
-
 void substitute_parameters(
     frontend::Type& type,
     const ConstantEnvironment& environment,
     const ConstantDomainEnvironment& domains,
     std::vector<Diagnostic>& diagnostics,
-    const frontend::Language language) {
+    const frontend::Language language)
+{
     for (auto& value : type.systemverilog_enumeration_values) {
         substitute_parameters(value, environment, domains, language);
     }
@@ -1207,9 +1189,8 @@ void substitute_parameters(
         }
     }
     if (type.vhdl_protected) {
-        type.vhdl_protected =
-            std::make_shared<frontend::VhdlProtectedInfo>(
-                *type.vhdl_protected);
+        type.vhdl_protected = std::make_shared<frontend::VhdlProtectedInfo>(
+            *type.vhdl_protected);
         auto& protected_info = *type.vhdl_protected;
         for (auto& variable : protected_info.variables) {
             substitute_parameters(
@@ -1246,128 +1227,115 @@ void substitute_parameters(
         [&](std::optional<frontend::IntegerRangeExpression>& expression,
             std::optional<frontend::IntegerRange>& range,
             const std::string_view description) {
-          auto span = frontend::SourceSpan{};
-          if (!expression) {
-              return span;
-          }
-          span = expression->span;
-          std::string error;
-          const auto left = evaluate_constant_expression(
-              expression->left, environment, error);
-          const auto right = left
-              ? evaluate_constant_expression(
-                    expression->right, environment, error)
-              : std::nullopt;
-          if (!left || !right) {
-              diagnostics.push_back({
-                  "FSIM-ELAB-INTEGER-001",
-                  "cannot evaluate VHDL " + std::string{description}
-                      + " constraint: " + error,
-                  expression->span});
-              range.reset();
-          } else {
-              range = frontend::IntegerRange{
-                  *left, *right, expression->descending};
-          }
-          expression.reset();
-          return span;
+            auto span = frontend::SourceSpan { };
+            if (!expression) {
+                return span;
+            }
+            span = expression->span;
+            std::string error;
+            const auto left = evaluate_constant_expression(
+                expression->left, environment, error);
+            const auto right = left
+                ? evaluate_constant_expression(
+                      expression->right, environment, error)
+                : std::nullopt;
+            if (!left || !right) {
+                diagnostics.push_back({ "FSIM-ELAB-INTEGER-001",
+                    "cannot evaluate VHDL " + std::string { description }
+                        + " constraint: " + error,
+                    expression->span });
+                range.reset();
+            } else {
+                range = frontend::IntegerRange {
+                    *left, *right, expression->descending
+                };
+            }
+            expression.reset();
+            return span;
         };
-    const auto integer_base_range_span =
-        evaluate_integer_range(
-            type.integer_base_range_expression,
-            type.integer_base_range,
-            "base integer subtype");
-    auto integer_range_span = frontend::SourceSpan{};
-    integer_range_span =
-        evaluate_integer_range(
-            type.integer_range_expression,
-            type.integer_range,
-            "integer subtype");
+    const auto integer_base_range_span = evaluate_integer_range(
+        type.integer_base_range_expression,
+        type.integer_base_range,
+        "base integer subtype");
+    auto integer_range_span = frontend::SourceSpan { };
+    integer_range_span = evaluate_integer_range(
+        type.integer_range_expression,
+        type.integer_range,
+        "integer subtype");
     if (type.domain != frontend::ValueDomain::Integer
         && (type.integer_range
             || type.integer_base_range)) {
-        diagnostics.push_back({
-            "FSIM-ELAB-VHSUBTYPE-001",
+        diagnostics.push_back({ "FSIM-ELAB-VHSUBTYPE-001",
             "a VHDL range constraint is valid only for an integer-family "
             "subtype in the current bounded scalar path",
-            integer_range_span});
+            integer_range_span });
         type.integer_range.reset();
         type.integer_base_range.reset();
     }
     if (type.domain == frontend::ValueDomain::Integer
         && type.integer_range) {
-        const bool builtin_time =
-            type.nominal_type == "@builtin:time";
+        const bool builtin_time = type.nominal_type == "@builtin:time";
         const auto minimum = builtin_time
-            ? std::int64_t{0}
-            : std::int64_t{std::numeric_limits<std::int32_t>::min()};
+            ? std::int64_t { 0 }
+            : std::int64_t { std::numeric_limits<std::int32_t>::min() };
         const auto maximum = builtin_time
             ? std::numeric_limits<std::int64_t>::max()
-            : std::int64_t{std::numeric_limits<std::int32_t>::max()};
+            : std::int64_t { std::numeric_limits<std::int32_t>::max() };
         const auto& range = *type.integer_range;
-        const bool null =
-            range.descending ? range.left < range.right
-                             : range.left > range.right;
+        const bool null = range.descending ? range.left < range.right
+                                           : range.left > range.right;
         if (range.left < minimum || range.left > maximum
             || range.right < minimum || range.right > maximum
             || null) {
-            diagnostics.push_back({
-                "FSIM-ELAB-INTEGER-002",
+            diagnostics.push_back({ "FSIM-ELAB-INTEGER-002",
                 null
                     ? "null VHDL integer subtype constraints are not "
                       "executable in this bounded runtime"
                     : builtin_time
-                        ? "VHDL time constraint lies outside the "
-                          "nonnegative signed 64-bit representation"
-                        : "VHDL integer subtype constraint lies outside the "
-                          "portable signed 32-bit representation",
-                integer_range_span});
+                    ? "VHDL time constraint lies outside the "
+                      "nonnegative signed 64-bit representation"
+                    : "VHDL integer subtype constraint lies outside the "
+                      "portable signed 32-bit representation",
+                integer_range_span });
             type.integer_range.reset();
         } else {
             const auto separator = type.spelling.find_last_of('.');
             const auto simple_name = type.spelling.substr(
                 separator == std::string::npos ? 0 : separator + 1);
-            const auto base_lower =
-                simple_name == "positive"
-                    ? std::int64_t{1}
-                    : simple_name == "natural"
-                        ? std::int64_t{0}
-                        : minimum;
-            const auto lower =
-                std::min(range.left, range.right);
+            const auto base_lower = simple_name == "positive"
+                ? std::int64_t { 1 }
+                : simple_name == "natural"
+                ? std::int64_t { 0 }
+                : minimum;
+            const auto lower = std::min(range.left, range.right);
             if (lower < base_lower) {
-                diagnostics.push_back({
-                    "FSIM-ELAB-INTEGER-002",
+                diagnostics.push_back({ "FSIM-ELAB-INTEGER-002",
                     "VHDL integer subtype constraint is outside the "
-                    "range of base subtype '" + simple_name + "'",
-                    integer_range_span});
+                    "range of base subtype '"
+                        + simple_name + "'",
+                    integer_range_span });
                 type.integer_range.reset();
             }
         }
         if (type.integer_range
             && type.integer_base_range) {
             const auto& base = *type.integer_base_range;
-            const auto base_lower =
-                std::min(base.left, base.right);
-            const auto base_upper =
-                std::max(base.left, base.right);
-            const auto derived_lower =
-                std::min(
-                    type.integer_range->left,
-                    type.integer_range->right);
-            const auto derived_upper =
-                std::max(
-                    type.integer_range->left,
-                    type.integer_range->right);
+            const auto base_lower = std::min(base.left, base.right);
+            const auto base_upper = std::max(base.left, base.right);
+            const auto derived_lower = std::min(
+                type.integer_range->left,
+                type.integer_range->right);
+            const auto derived_upper = std::max(
+                type.integer_range->left,
+                type.integer_range->right);
             if (derived_lower < base_lower
                 || derived_upper > base_upper) {
-                diagnostics.push_back({
-                    "FSIM-ELAB-VHSUBTYPE-002",
+                diagnostics.push_back({ "FSIM-ELAB-VHSUBTYPE-002",
                     "derived VHDL integer subtype constraint lies outside "
                     "its resolved base subtype range",
                     integer_range_span.begin.offset != 0
                         ? integer_range_span
-                        : integer_base_range_span});
+                        : integer_base_range_span });
                 type.integer_range.reset();
             }
         }
@@ -1377,30 +1345,26 @@ void substitute_parameters(
                 frontend::DiscreteRangeExpression>& expression,
             std::optional<frontend::EnumerationRange>& range,
             const std::string_view description) {
-          auto span = frontend::SourceSpan{};
-          if (!expression) {
-              return span;
-          }
-          span = expression->span;
-          const auto evaluate_bound =
-              [&](const Expression& bound,
-                  std::string& error)
-                  -> std::optional<std::int64_t> {
-                if (const auto ordinal =
-                        vhdl_enumeration_ordinal(
-                            bound, type)) {
+            auto span = frontend::SourceSpan { };
+            if (!expression) {
+                return span;
+            }
+            span = expression->span;
+            const auto evaluate_bound =
+                [&](const Expression& bound,
+                    std::string& error)
+                -> std::optional<std::int64_t> {
+                if (const auto ordinal = vhdl_enumeration_ordinal(
+                        bound, type)) {
                     return ordinal;
                 }
                 if (bound.kind != ExpressionKind::Identifier) {
-                    error =
-                        "enumeration range bound is not a literal, "
-                        "constant, or prior generic";
+                    error = "enumeration range bound is not a literal, "
+                            "constant, or prior generic";
                     return std::nullopt;
                 }
-                const auto value =
-                    environment.find(bound.text);
-                const auto domain =
-                    domains.find(bound.text);
+                const auto value = environment.find(bound.text);
+                const auto domain = domains.find(bound.text);
                 if (value == environment.end()
                     || domain == domains.end()) {
                     error = "unknown enumeration range bound '"
@@ -1417,146 +1381,128 @@ void substitute_parameters(
                     return std::nullopt;
                 }
                 return value->second;
-              };
-          std::string error;
-          const auto left =
-              evaluate_bound(expression->left, error);
-          const auto right =
-              left
-                  ? evaluate_bound(
-                        expression->right, error)
-                  : std::nullopt;
-          if (!left || !right) {
-              diagnostics.push_back({
-                  "FSIM-ELAB-VHENUMRANGE-001",
-                  "cannot evaluate VHDL " + std::string{description}
-                      + " constraint: " + error,
-                  expression->span});
-              range.reset();
-          } else {
-              range = frontend::EnumerationRange{
-                  *left,
-                  *right,
-                  expression->descending};
-          }
-          expression.reset();
-          return span;
+            };
+            std::string error;
+            const auto left = evaluate_bound(expression->left, error);
+            const auto right = left
+                ? evaluate_bound(
+                      expression->right, error)
+                : std::nullopt;
+            if (!left || !right) {
+                diagnostics.push_back({ "FSIM-ELAB-VHENUMRANGE-001",
+                    "cannot evaluate VHDL " + std::string { description }
+                        + " constraint: " + error,
+                    expression->span });
+                range.reset();
+            } else {
+                range = frontend::EnumerationRange {
+                    *left,
+                    *right,
+                    expression->descending
+                };
+            }
+            expression.reset();
+            return span;
         };
-    const auto enumeration_base_range_span =
-        evaluate_enumeration_range(
-            type.enumeration_base_range_expression,
-            type.enumeration_base_range,
-            "base enumeration subtype");
-    const auto enumeration_range_span =
-        evaluate_enumeration_range(
-            type.enumeration_range_expression,
-            type.enumeration_range,
-            "enumeration subtype");
+    const auto enumeration_base_range_span = evaluate_enumeration_range(
+        type.enumeration_base_range_expression,
+        type.enumeration_base_range,
+        "base enumeration subtype");
+    const auto enumeration_range_span = evaluate_enumeration_range(
+        type.enumeration_range_expression,
+        type.enumeration_range,
+        "enumeration subtype");
     if (!type.enumeration_literals.empty()
         && !type.enumeration_range
         && !type.enumeration_range_expression) {
-        type.enumeration_range =
-            frontend::EnumerationRange{
-                0,
-                static_cast<std::int64_t>(
-                    type.enumeration_literals.size() - 1U),
-                false};
+        type.enumeration_range = frontend::EnumerationRange {
+            0,
+            static_cast<std::int64_t>(
+                type.enumeration_literals.size() - 1U),
+            false
+        };
     }
     if (type.enumeration_range) {
         const auto& range = *type.enumeration_range;
-        const auto count =
-            type.enumeration_literals.size();
-        const bool representable =
-            range.left >= 0 && range.right >= 0
+        const auto count = type.enumeration_literals.size();
+        const bool representable = range.left >= 0 && range.right >= 0
             && static_cast<std::uint64_t>(range.left) < count
             && static_cast<std::uint64_t>(range.right) < count;
-        const bool null =
-            range.descending ? range.left < range.right
-                             : range.left > range.right;
+        const bool null = range.descending ? range.left < range.right
+                                           : range.left > range.right;
         if (!representable || null) {
-            diagnostics.push_back({
-                "FSIM-ELAB-VHENUMRANGE-002",
+            diagnostics.push_back({ "FSIM-ELAB-VHENUMRANGE-002",
                 null
                     ? "null VHDL enumeration subtype constraints are "
                       "not executable in this bounded runtime"
                     : "VHDL enumeration subtype constraint lies outside "
                       "the base enumeration literal range",
-                enumeration_range_span});
+                enumeration_range_span });
             type.enumeration_range.reset();
         }
     }
     if (type.enumeration_range
         && type.enumeration_base_range) {
-        const auto& base =
-            *type.enumeration_base_range;
-        const auto base_lower =
-            std::min(base.left, base.right);
-        const auto base_upper =
-            std::max(base.left, base.right);
-        const auto derived_lower =
-            std::min(
-                type.enumeration_range->left,
-                type.enumeration_range->right);
-        const auto derived_upper =
-            std::max(
-                type.enumeration_range->left,
-                type.enumeration_range->right);
+        const auto& base = *type.enumeration_base_range;
+        const auto base_lower = std::min(base.left, base.right);
+        const auto base_upper = std::max(base.left, base.right);
+        const auto derived_lower = std::min(
+            type.enumeration_range->left,
+            type.enumeration_range->right);
+        const auto derived_upper = std::max(
+            type.enumeration_range->left,
+            type.enumeration_range->right);
         if (derived_lower < base_lower
             || derived_upper > base_upper) {
-            diagnostics.push_back({
-                "FSIM-ELAB-VHENUMRANGE-003",
+            diagnostics.push_back({ "FSIM-ELAB-VHENUMRANGE-003",
                 "derived VHDL enumeration subtype constraint lies "
                 "outside its resolved base subtype range",
                 enumeration_range_span.begin.offset != 0
                     ? enumeration_range_span
-                    : enumeration_base_range_span});
+                    : enumeration_base_range_span });
             type.enumeration_range.reset();
         }
     }
     if (!type.packed_members.empty()) {
-        const bool is_union =
-            type.packed_aggregate
+        const bool is_union = type.packed_aggregate
                 == frontend::PackedAggregateKind::Union
             || type.packed_aggregate
                 == frontend::PackedAggregateKind::TaggedUnion
             || type.packed_aggregate
                 == frontend::PackedAggregateKind::UnpackedUnion;
-        const bool tagged_union =
-            type.packed_aggregate
+        const bool tagged_union = type.packed_aggregate
             == frontend::PackedAggregateKind::TaggedUnion;
         const bool ordinary_packed_union = type.packed_aggregate
             == frontend::PackedAggregateKind::Union;
-        const bool vhdl_record =
-            language == frontend::Language::Vhdl2008
+        const bool vhdl_record = language == frontend::Language::Vhdl2008
             && type.packed_aggregate
                 == frontend::PackedAggregateKind::Struct;
-        const bool heterogeneous_unpacked =
-            (type.packed_aggregate
-                 == frontend::PackedAggregateKind::UnpackedStruct
-             || type.packed_aggregate
-                 == frontend::PackedAggregateKind::UnpackedUnion)
+        const bool heterogeneous_unpacked = (type.packed_aggregate
+                                                    == frontend::PackedAggregateKind::UnpackedStruct
+                                                || type.packed_aggregate
+                                                    == frontend::PackedAggregateKind::UnpackedUnion)
             && std::ranges::any_of(
                 type.packed_members,
                 [](const frontend::PackedMember& member) {
-                  if (member.nested_types.size() != 1) return true;
-                  const auto& nested = member.nested_types.front();
-                  return nested.domain == frontend::ValueDomain::String
-                      || nested.systemverilog_scalar
-                          != frontend::SystemVerilogScalarKind::None
-                      || nested.systemverilog_container.has_value()
-                      || nested.packed_aggregate
-                          == frontend::PackedAggregateKind::UnpackedStruct
-                      || nested.packed_aggregate
-                          == frontend::PackedAggregateKind::UnpackedUnion;
+                    if (member.nested_types.size() != 1)
+                        return true;
+                    const auto& nested = member.nested_types.front();
+                    return nested.domain == frontend::ValueDomain::String
+                        || nested.systemverilog_scalar
+                        != frontend::SystemVerilogScalarKind::None
+                        || nested.systemverilog_container.has_value()
+                        || nested.packed_aggregate
+                        == frontend::PackedAggregateKind::UnpackedStruct
+                        || nested.packed_aggregate
+                        == frontend::PackedAggregateKind::UnpackedUnion;
                 });
         if (heterogeneous_unpacked) {
             for (auto& member : type.packed_members) {
                 if (member.nested_types.size() != 1) {
-                    diagnostics.push_back({
-                        "FSIM-ELAB-SVSTRUCT-001",
+                    diagnostics.push_back({ "FSIM-ELAB-SVSTRUCT-001",
                         "unpacked struct member '" + member.name
                             + "' does not retain one complete type",
-                        member.span});
+                        member.span });
                     continue;
                 }
                 substitute_parameters(
@@ -1569,8 +1515,7 @@ void substitute_parameters(
                 member.domain = nested.domain;
                 member.spelling = nested.spelling;
                 member.packed_range = nested.packed_range;
-                member.packed_range_expression =
-                    nested.packed_range_expression;
+                member.packed_range_expression = nested.packed_range_expression;
                 member.is_signed = nested.is_signed;
             }
             type.packed_range.reset();
@@ -1599,8 +1544,7 @@ void substitute_parameters(
                 member.domain = nested.domain;
                 member.spelling = nested.spelling;
                 member.packed_range = nested.packed_range;
-                member.packed_range_expression =
-                    nested.packed_range_expression;
+                member.packed_range_expression = nested.packed_range_expression;
                 member.is_signed = nested.is_signed;
             }
             if (member.packed_range_expression) {
@@ -1616,38 +1560,37 @@ void substitute_parameters(
                           error)
                     : std::nullopt;
                 if (!left || !right) {
-                    diagnostics.push_back({
-                        vhdl_record
+                    diagnostics.push_back({ vhdl_record
                             ? "FSIM-ELAB-VHRECORD-001"
                             : "FSIM-ELAB-SVSTRUCT-001",
-                        std::string{
+                        std::string {
                             vhdl_record
                                 ? "cannot evaluate VHDL record element range: "
-                                : "cannot evaluate packed struct member range: "}
+                                : "cannot evaluate packed struct member range: " }
                             + error,
-                        member.packed_range_expression->span});
+                        member.packed_range_expression->span });
                     valid = false;
                     continue;
                 }
-                member.packed_range = frontend::PackedRange{
-                    *left, *right, *left >= *right};
+                member.packed_range = frontend::PackedRange {
+                    *left, *right, *left >= *right
+                };
                 member.packed_range_expression.reset();
             }
             const auto width = member.width();
             if (!width || *width == 0) {
-                diagnostics.push_back({
-                    vhdl_record
+                diagnostics.push_back({ vhdl_record
                         ? "FSIM-ELAB-VHRECORD-001"
                         : "FSIM-ELAB-SVSTRUCT-001",
-                    std::string{
+                    std::string {
                         vhdl_record
                             ? "VHDL record element '"
-                            : "packed aggregate member '"}
+                            : "packed aggregate member '" }
                         + member.name
                         + (vhdl_record
-                            ? "' does not have a concrete bounded packed layout"
-                            : "' has an invalid or overflowing width"),
-                    member.span});
+                                ? "' does not have a concrete bounded packed layout"
+                                : "' has an invalid or overflowing width"),
+                    member.span });
                 valid = false;
                 continue;
             }
@@ -1669,47 +1612,44 @@ void substitute_parameters(
                 if (*width
                     > std::numeric_limits<std::uint64_t>::max()
                         - total_width) {
-                    diagnostics.push_back({
-                        vhdl_record
+                    diagnostics.push_back({ vhdl_record
                             ? "FSIM-ELAB-VHRECORD-002"
                             : "FSIM-ELAB-SVSTRUCT-001",
-                        std::string{
+                        std::string {
                             vhdl_record
                                 ? "VHDL record element '"
-                                : "packed struct member '"}
+                                : "packed struct member '" }
                             + member.name
                             + "' overflows the aggregate width",
-                        member.span});
+                        member.span });
                     valid = false;
                     continue;
                 }
                 total_width += *width;
             }
         }
-        const auto tag_width =
-            tagged_union && !type.packed_members.empty()
-                ? std::max<std::uint64_t>(
-                      1U,
-                      std::bit_width(
-                          type.packed_members.size() - 1U))
-                : 0U;
+        const auto tag_width = tagged_union && !type.packed_members.empty()
+            ? std::max<std::uint64_t>(
+                  1U,
+                  std::bit_width(
+                      type.packed_members.size() - 1U))
+            : 0U;
         if (!valid || total_width == 0
             || tag_width
                 > static_cast<std::uint64_t>(
-                    std::numeric_limits<std::int64_t>::max())
+                      std::numeric_limits<std::int64_t>::max())
                     - (total_width - 1U)
             || total_width + tag_width - 1U
                 > static_cast<std::uint64_t>(
                     std::numeric_limits<std::int64_t>::max())) {
             if (valid) {
-                diagnostics.push_back({
-                    vhdl_record
+                diagnostics.push_back({ vhdl_record
                         ? "FSIM-ELAB-VHRECORD-002"
                         : "FSIM-ELAB-SVSTRUCT-001",
                     vhdl_record
                         ? "VHDL record total width exceeds the supported range"
                         : "packed aggregate total width exceeds the supported range",
-                    type.packed_members.front().span});
+                    type.packed_members.front().span });
             }
             type.packed_range.reset();
             return;
@@ -1725,11 +1665,12 @@ void substitute_parameters(
                 member.lsb_offset = 0;
             }
         }
-        type.packed_range = frontend::PackedRange{
+        type.packed_range = frontend::PackedRange {
             static_cast<std::int64_t>(
                 total_width + tag_width - 1U),
             0,
-            true};
+            true
+        };
         type.packed_range_expression.reset();
         if (language == frontend::Language::SystemVerilog2017) {
             for (auto& member : type.packed_members) {
@@ -1747,31 +1688,30 @@ void substitute_parameters(
                     scalar_type.is_signed = member.is_signed;
                 }
                 std::string error;
-                const auto packed =
-                    evaluate_systemverilog_packed_constant(
-                        *member.initializer,
-                        *member_type,
-                        {},
-                        environment,
-                        error);
+                const auto packed = evaluate_systemverilog_packed_constant(
+                    *member.initializer,
+                    *member_type,
+                    { },
+                    environment,
+                    error);
                 if (!packed) {
                     if (error.find("unknown") == std::string::npos) {
-                        diagnostics.push_back({
-                            "FSIM-ELAB-SVAGG-007",
+                        diagnostics.push_back({ "FSIM-ELAB-SVAGG-007",
                             "cannot evaluate initializer for packed member '"
                                 + member.name + "': " + error,
-                            member.initializer->span});
+                            member.initializer->span });
                     }
                     continue;
                 }
-                member.initializer = SystemVerilogConstantValue{
+                member.initializer = SystemVerilogConstantValue {
                     *packed,
                     member_type->is_signed,
                     false,
                     member_type->domain,
                     member_type->nominal_type,
-                    member.initializer->span}
-                    .expression(member.initializer->span);
+                    member.initializer->span
+                }
+                                         .expression(member.initializer->span);
             }
         }
         return;
@@ -1811,31 +1751,25 @@ void substitute_parameters(
         ? evaluate_bound(type.packed_range_expression->right)
         : std::nullopt;
     if (!left || !right) {
-        diagnostics.push_back({
-            language == frontend::Language::Vhdl2008
+        diagnostics.push_back({ language == frontend::Language::Vhdl2008
                 ? "FSIM-ELAB-GENERIC-006"
                 : "FSIM-ELAB-PARAM-006",
             "cannot evaluate packed range: " + error,
-            type.packed_range_expression->span});
+            type.packed_range_expression->span });
         return;
     }
-    const frontend::PackedRange range{
+    const frontend::PackedRange range {
         *left,
         *right,
         type.packed_range_expression->descending.value_or(
-            *left >= *right)};
+            *left >= *right)
+    };
     if (language == frontend::Language::Vhdl2008
         && type.packed_range_expression->descending) {
-        const bool null =
-            range.descending ? range.left < range.right
-                             : range.left > range.right;
+        const bool null = range.descending ? range.left < range.right
+                                           : range.left > range.right;
         if (null) {
-            diagnostics.push_back({
-                "FSIM-ELAB-VHARRAY-002",
-                "null VHDL array constraints are not executable in the "
-                "current packed runtime",
-                type.packed_range_expression->span});
-            type.packed_range.reset();
+            type.packed_range = range;
             type.packed_range_expression.reset();
             return;
         }
@@ -1845,19 +1779,17 @@ void substitute_parameters(
             && (!type.vhdl_array->index_base_range->contains(range.left)
                 || !type.vhdl_array->index_base_range->contains(
                     range.right))) {
-            diagnostics.push_back({
-                "FSIM-ELAB-VHARRAY-003",
+            diagnostics.push_back({ "FSIM-ELAB-VHARRAY-003",
                 "VHDL array constraint lies outside index subtype '"
                     + type.vhdl_array->index_subtype + "'",
-                type.packed_range_expression->span});
+                type.packed_range_expression->span });
             type.packed_range.reset();
             type.packed_range_expression.reset();
             return;
         }
     }
     if (range.width() == 0) {
-        diagnostics.push_back({
-            type.vhdl_array
+        diagnostics.push_back({ type.vhdl_array
                 ? "FSIM-ELAB-VHARRAY-004"
                 : language == frontend::Language::Vhdl2008
                 ? "FSIM-ELAB-GENERIC-007"
@@ -1866,7 +1798,7 @@ void substitute_parameters(
                 ? "VHDL array constraint width overflows fsim's 64-bit "
                   "packed representation"
                 : "packed range width overflows fsim's 64-bit range",
-            type.packed_range_expression->span});
+            type.packed_range_expression->span });
         type.packed_range.reset();
         type.packed_range_expression.reset();
         return;

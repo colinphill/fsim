@@ -35,6 +35,11 @@ fsim::library::Metadata example_metadata()
     metadata.standards = {
         { "systemverilog", "2017" }, { "vhdl", "2008" }
     };
+    metadata.vhdl_package_dependencies = {{
+        "2008", "ieee-1076-standard:2008:fsim-v1",
+        "ieee.std_logic_unsigned",
+        "synopsys-legacy-ieee:1990-1992:fsim-synopsys-ieee-compat-v2",
+        std::string(64, 'f') }};
     metadata.dependencies = { "ieee_models", "common" };
     metadata.sources = {
         { "sources/00000000/stage.sv", "sources/00000000/stage.sv",
@@ -61,8 +66,10 @@ int main()
     const auto expected = example_metadata();
     const auto serialized = fsim::library::serialize_metadata(expected);
     assert(serialized.starts_with(
-        "format = 1\nlibrary = \"vendor\"\nproducer = \"fsim 0.2.0-dev\"\n"));
+        "format = 2\nlibrary = \"vendor\"\nproducer = \"fsim 0.2.0-dev\"\n"));
     assert(serialized.find("[[dependency]]") != std::string::npos);
+    assert(serialized.find("[[vhdl_package_dependency]]")
+        != std::string::npos);
     assert(serialized.find("artifact = \"units/00000001.fsimir\"")
         != std::string::npos);
     assert(serialized.find("[[native]]") != std::string::npos);
@@ -930,8 +937,8 @@ endprimitive
 
     auto incompatible_text = serialized;
     incompatible_text.replace(
-        incompatible_text.find("format = 1"),
-        std::string { "format = 1" }.size(), "format = 99");
+        incompatible_text.find("format = 2"),
+        std::string { "format = 2" }.size(), "format = 99");
     fsim::diagnostic::Engine schema_diagnostics;
     assert(!fsim::library::parse_metadata(
         incompatible_text, "future.toml", schema_diagnostics));

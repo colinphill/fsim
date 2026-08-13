@@ -44,6 +44,7 @@ void test_vhdl_vhpi_hierarchy_and_names() {
   using fsim::runtime::VhdlVhpiObjectDescriptor;
   using fsim::runtime::VhdlVhpiObjectError;
   using fsim::runtime::VhdlVhpiObjectKind;
+  using fsim::runtime::VhdlVhpiPackageProvenance;
   using fsim::runtime::VhdlVhpiObjectRegistry;
   using fsim::runtime::VhdlVhpiRelationshipKind;
   using fsim::runtime::VhdlVhpiSourceLocation;
@@ -51,8 +52,23 @@ void test_vhdl_vhpi_hierarchy_and_names() {
   VhdlVhpiObjectRegistry registry{401};
   VhdlVhpiObjectRegistry other_registry{402};
   VhdlVhpiSourceLocation root_source{"design/top.vhd", 2, 1};
-  const auto root = registry.create_object(VhdlVhpiObjectDescriptor{
-      VhdlVhpiObjectKind::Root, 0, "WORK", {}, root_source});
+  const std::vector<VhdlVhpiPackageProvenance> root_packages {
+      { "1993", "ieee-1076-standard:1993:fsim-v1",
+          "ieee.std_logic_unsigned",
+          "synopsys-legacy-ieee:1990-1992:"
+          "fsim-synopsys-ieee-compat-v2:std_logic_unsigned:vhdl-1993",
+          std::string(64U, 'a') }
+  };
+  VhdlVhpiObjectDescriptor root_descriptor {
+      VhdlVhpiObjectKind::Root, 0, "WORK", {}, root_source
+  };
+  root_descriptor.language_standard = "1993";
+  root_descriptor.predefined_environment
+      = "ieee-1076-standard:1993:fsim-v1";
+  root_descriptor.compatibility_profile
+      = "fsim-synopsys-ieee-compat-v2";
+  root_descriptor.package_dependencies = root_packages;
+  const auto root = registry.create_object(root_descriptor);
   const auto other_root =
       other_registry.create_object(VhdlVhpiObjectDescriptor{
           VhdlVhpiObjectKind::Root, 0, "other", {}, std::nullopt});
@@ -105,6 +121,16 @@ void test_vhdl_vhpi_hierarchy_and_names() {
           && root_metadata.value.full_name == "work"
           && root_metadata.value.source
           && root_metadata.value.source->file == "design/top.vhd"
+          && root_metadata.value.language_standard == "1993"
+          && root_metadata.value.predefined_environment
+              == "ieee-1076-standard:1993:fsim-v1"
+          && root_metadata.value.compatibility_profile
+              == "fsim-synopsys-ieee-compat-v2"
+          && root_metadata.value.package_dependencies.size() == 1U
+          && root_metadata.value.package_dependencies.front().package
+              == "ieee.std_logic_unsigned"
+          && root_metadata.value.package_dependencies.front().revision
+              == root_packages.front().revision
           && generate_metadata
           && generate_metadata.value.name == "gen"
           && generate_metadata.value.selected_name == "gen(3,-1)"
@@ -199,6 +225,14 @@ void test_vhdl_vhpi_hierarchy_and_names() {
               .error
           == VhdlVhpiObjectError::InvalidSource,
       "VHPI malformed source metadata is rejected");
+  VhdlVhpiObjectDescriptor invalid_provenance {
+      VhdlVhpiObjectKind::Root, 0, "bad_provenance"
+  };
+  invalid_provenance.language_standard = "1993";
+  require_vhpi_hierarchy(
+      registry.create_object(invalid_provenance).error
+          == VhdlVhpiObjectError::InvalidProvenance,
+      "VHPI partial provenance metadata is rejected");
   const auto anonymous_root =
       registry.create_object(VhdlVhpiObjectKind::Root);
   require_vhpi_hierarchy(

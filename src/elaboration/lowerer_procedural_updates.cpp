@@ -805,6 +805,12 @@ void Lowerer::materialize_procedural_continuous_assignments()
             read_only_string_objects_, container_objects_,
             read_only_container_objects_, visible_types_, visible_type_marks_,
             functions_, tasks_, procedures_, scalar_context_, diagnostics_);
+        driver_lowerer.set_systemverilog_program_owner(
+            systemverilog_program_owner_);
+        driver_lowerer.set_vhdl_standard(vhdl_standard_);
+        driver_lowerer.set_vhdl_synopsys_numeric_context(
+            vhdl_synopsys_signed_visible_,
+            vhdl_synopsys_unsigned_visible_);
         auto driver = driver_lowerer.lower_concurrent(
             active, language_, hierarchy_, index);
         const auto process_index = design_.processes_.size()

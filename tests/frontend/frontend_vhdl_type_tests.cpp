@@ -719,61 +719,256 @@ end package;
       "physical closing-name failures retain a targeted source span");
 }
 
+void test_vhdl_revision_declaration_profiles()
+{
+    const auto diagnostics_with_code = [](const ParseResult& parsed,
+                                           const std::string_view code) {
+        return std::ranges::count_if(
+            parsed.diagnostics, [&](const Diagnostic& diagnostic) {
+                return diagnostic.code == code;
+            });
+    };
+
+    const auto vhdl_1987 = parse_text(
+        "vhdl87-declarations.vhd",
+        R"(
+package Legacy_Types is
+  type Text_File is file of string;
+  type Wide_T is array (136 downto 0) of bit;
+  subtype Descending_T is Wide_T(105 downto 8);
+  attribute Trace_Id : integer;
+end package;
+architecture rtl of legacy_endpoint is
+  signal Bus_Value : Wide_T;
+  file Input_File : Text_File is in "legacy.txt";
+  alias Bus_Alias : Wide_T is Bus_Value;
+begin
+end architecture;
+)",
+        Language::Vhdl2008, VhdlStandard::Vhdl1987);
+    require(vhdl_1987.ok() && vhdl_1987.design.units.size() == 2,
+        "VHDL-1987 declaration, alias, attribute, access/file, and subtype "
+        "forms remain available");
+    const auto& legacy_package = vhdl_1987.design.units.front();
+    const auto& legacy_architecture = vhdl_1987.design.units.back();
+    require(
+        legacy_package.type_aliases.size() == 3 && legacy_package.type_aliases[1].type.width() == 137U && legacy_package.type_aliases[2].type.packed_range && legacy_package.type_aliases[2].type.packed_range->left == 105 && legacy_package.type_aliases[2].type.packed_range->right == 8 && legacy_package.type_aliases[2].type.packed_range->descending && legacy_package.vhdl_attributes.size() == 1 && legacy_architecture.variables.size() == 1 && legacy_architecture.variables.front().vhdl_file_open_kind && legacy_architecture.variables.front().vhdl_file_open_kind->text == "read_mode" && legacy_architecture.signal_aliases.size() == 1,
+        "VHDL-1987 HIR retains exact 137-bit bounds, descending direction, "
+        "legacy file mode, attribute, and alias identity");
+
+    const auto vhdl_1993 = parse_text(
+        "vhdl93-declarations.vhd",
+        R"(
+architecture rtl of shared_endpoint is
+  shared variable Shared_State : integer := 0;
+  group Signal_Group is (signal <>);
+begin
+end architecture;
+)",
+        Language::Vhdl2008, VhdlStandard::Vhdl1993);
+    require(vhdl_1993.ok() && vhdl_1993.design.units.front().variables.size() == 1 && vhdl_1993.design.units.front().variables.front().vhdl_shared && vhdl_1993.design.units.front().vhdl_groups.size() == 1,
+        "VHDL-1993 admits shared variables and group declarations");
+
+    const auto vhdl_2000 = parse_text(
+        "vhdl2000-declarations.vhd",
+        R"(
+package Protected_Types is
+  type Guard_T is protected
+    procedure Lock;
+  end protected Guard_T;
+end package;
+)",
+        Language::Vhdl2008, VhdlStandard::Vhdl2000);
+    require(vhdl_2000.ok() && vhdl_2000.design.units.front().type_aliases.size() == 1 && vhdl_2000.design.units.front().type_aliases.front().type.vhdl_protected,
+        "VHDL-2000 admits protected type declarations");
+
+    const auto vhdl_2002 = parse_text(
+        "vhdl2002-declarations.vhd",
+        R"(
+package File_Types is
+  type Text_File is file of string;
+end package;
+architecture rtl of file_endpoint is
+  file Output_File : Text_File open write_mode is "modern.txt";
+begin
+end architecture;
+)",
+        Language::Vhdl2008, VhdlStandard::Vhdl2002);
+    require(vhdl_2002.ok() && vhdl_2002.design.units.back().variables.front().vhdl_file && vhdl_2002.design.units.back().variables.front().vhdl_file_open_kind->text == "write_mode",
+        "VHDL-2002 retains the VHDL-1993 file open-kind declaration form");
+
+    const auto vhdl_2008 = parse_text(
+        "vhdl2008-declarations.vhd",
+        R"(
+package Generic_Types is
+  generic (
+    type Element_T;
+    function Convert(Value : integer) return integer is <>;
+    procedure Observe(Value : integer) is <>);
+  type Matrix_T is array (7 downto 0) of bit_vector;
+end package;
+entity Generic_Endpoint is
+  generic (
+    package Selected is new work.generic_types generic map (<>));
+end entity;
+)",
+        Language::Vhdl2008, VhdlStandard::Vhdl2008);
+    require(
+        vhdl_2008.ok() && vhdl_2008.design.units.front().parameters.size() == 3 && vhdl_2008.design.units.front().type_aliases.size() == 1 && vhdl_2008.design.units.front().type_aliases.front().type.vhdl_array->element_spelling == "bit_vector" && vhdl_2008.design.units.back().parameters.front().kind == ParameterKind::Package,
+        "VHDL-2008 admits type/subprogram/package interfaces and unconstrained "
+        "array elements");
+
+    for (const auto standard : { VhdlStandard::Vhdl1987,
+             VhdlStandard::Vhdl1993,
+             VhdlStandard::Vhdl2000,
+             VhdlStandard::Vhdl2002 }) {
+        const auto aggregate = parse_text(
+            "older-static-aggregate.vhd",
+            R"(
+architecture rtl of aggregate_endpoint is
+  signal Result : bit_vector(136 downto 0);
+begin
+  Result <= (136 downto 69 => '1', others => '0');
+end architecture;
+)",
+            Language::Vhdl2008, standard);
+        require(
+            aggregate.ok() && aggregate.design.units.front().signals.front().type.width() == 137U && aggregate.design.units.front().concurrent_statements.front().value.kind == ExpressionKind::Aggregate && aggregate.design.units.front().concurrent_statements.front().value.aggregate_choice_expressions.front().front().text == "downto",
+            "all older revisions retain exact static aggregate choices, width, "
+            "and descending direction");
+    }
+
+    constexpr std::array<std::string_view, 4> synopsys_packages {
+        "std_logic_signed", "std_logic_unsigned", "std_logic_arith",
+        "std_logic_misc"
+    };
+    for (const auto standard : { VhdlStandard::Vhdl1987,
+             VhdlStandard::Vhdl1993,
+             VhdlStandard::Vhdl2000,
+             VhdlStandard::Vhdl2002 }) {
+        for (const auto package_name : synopsys_packages) {
+            const auto source = "package " + std::string { package_name } + " is\n" + "  subtype operand_t is std_logic_vector;\n" + "  subtype ascending_t is std_logic_vector(8 to 105);\n" + "  function \"+\" (left, right : operand_t) return operand_t;\n" + "end package;\n";
+            const auto parsed = parse_text(
+                "ieee/" + std::string { package_name } + ".vhd", source,
+                Language::Vhdl2008, standard);
+            require(
+                parsed.ok() && parsed.design.units.front().type_aliases.size() == 2 && parsed.design.units.front().functions.size() == 1 && parsed.design.units.front().functions.front().name == "+" && parsed.design.units.front().type_aliases[1].type.width() == 98U && !parsed.design.units.front().type_aliases[1].type.packed_range->descending,
+                "Synopsys package declaration profiles retain unconstrained "
+                "operands, operator names, exact ascending bounds, and direction "
+                "in every older revision");
+        }
+    }
+
+    const auto unavailable = [&](const std::string_view name,
+                                 const std::string_view source,
+                                 const VhdlStandard standard) {
+        const auto parsed = parse_text(std::string(name), std::string(source),
+            Language::Vhdl2008, standard);
+        require(!parsed.ok() && diagnostics_with_code(parsed, "FSIM-FE-VHSTD-003") == 1,
+            "a declaration unavailable in the selected revision has one "
+            "revision diagnostic");
+        return parsed;
+    };
+
+    const auto shared_in_1987 = unavailable(
+        "vhdl87-shared.vhd",
+        "architecture rtl of e is\n  shared variable Value : integer;\n"
+        "begin\nend architecture;\n",
+        VhdlStandard::Vhdl1987);
+    const auto shared_diagnostic = std::ranges::find_if(
+        shared_in_1987.diagnostics, [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-FE-VHSTD-003";
+        });
+    require(shared_diagnostic != shared_in_1987.diagnostics.end() && shared_diagnostic->span.begin.line == 2U && shared_diagnostic->span.begin.column == 3U && shared_diagnostic->message.find("VHDL-1993") != std::string::npos,
+        "revision diagnostics retain the exact feature token and migration "
+        "revision");
+
+    (void)unavailable(
+        "vhdl87-group.vhd",
+        "package p is\n  group G is (signal <>);\nend package;\n",
+        VhdlStandard::Vhdl1987);
+    (void)unavailable(
+        "vhdl93-protected.vhd",
+        "package p is\n  type Guard is protected\n  end protected Guard;\n"
+        "end package;\n",
+        VhdlStandard::Vhdl1993);
+    (void)unavailable(
+        "vhdl2002-interface-type.vhd",
+        "entity e is\n  generic (type T);\nend entity;\n",
+        VhdlStandard::Vhdl2002);
+    (void)unavailable(
+        "vhdl2002-interface-package.vhd",
+        "entity e is\n  generic (package P is new work.template generic "
+        "map (<>));\nend entity;\n",
+        VhdlStandard::Vhdl2002);
+    (void)unavailable(
+        "vhdl2002-unconstrained-element.vhd",
+        "package p is\n  type Matrix_T is array (0 to 3) of bit_vector;\n"
+        "end package;\n",
+        VhdlStandard::Vhdl2002);
+    (void)unavailable(
+        "vhdl87-open-kind.vhd",
+        "architecture rtl of e is\n  file F : text open read_mode is "
+        "\"input.txt\";\nbegin\nend architecture;\n",
+        VhdlStandard::Vhdl1987);
+    (void)unavailable(
+        "vhdl93-legacy-file-mode.vhd",
+        "architecture rtl of e is\n  file F : text is in \"input.txt\";\n"
+        "begin\nend architecture;\n",
+        VhdlStandard::Vhdl1993);
+    (void)unavailable(
+        "vhdl87-alias-signature.vhd",
+        "architecture rtl of e is\n  signal Value : bit;\n"
+        "  alias Selected : bit is Value [integer return integer];\n"
+        "begin\nend architecture;\n",
+        VhdlStandard::Vhdl1987);
+
+    const auto malformed = parse_text(
+        "vhdl2008-malformed-alias-signature.vhd",
+        "architecture rtl of e is\n  signal Value : bit;\n"
+        "  alias Selected : bit is Value [];\nbegin\nend architecture;\n",
+        Language::Vhdl2008, VhdlStandard::Vhdl2008);
+    require(!malformed.ok() && diagnostics_with_code(malformed, "FSIM-VHDL-PARSE-236") == 1 && diagnostics_with_code(malformed, "FSIM-FE-VHSTD-003") == 0,
+        "malformed syntax is distinguished from revision availability");
+}
+
 void test_vhdl_incomplete_type_declarations() {
-  const auto parsed = parse_text("incomplete_vhdl_types.vhd",
-                                 R"(
+    const auto parsed = parse_text("incomplete_vhdl_types.vhd",
+        R"(
 package Recursive_Types is
   type Node;
   type Node_Access is access Node;
   type Node is record
     Value : integer;
-    Next : Node_Access;
+    Next_Link : Node_Access;
   end record Node;
 end package;
 )",
-                                 Language::Vhdl2008);
-  require(parsed.ok(),
-          "a VHDL incomplete type must admit its full declaration");
-  const auto &package = parsed.design.units.front();
-  require(
-      package.type_aliases.size() == 2 &&
-          package.type_aliases[0].name == "node_access" &&
-          package.type_aliases[0].declaration_kind ==
-              TypeDeclarationKind::VhdlAccess &&
-          package.type_aliases[0].type.vhdl_access &&
-          package.type_aliases[0]
-                  .type.vhdl_access->designated_types.front()
-                  .named_type == "node" &&
-          package.type_aliases[1].name == "node" &&
-          package.type_aliases[1].declaration_kind ==
-              TypeDeclarationKind::VhdlRecord &&
-          package.type_aliases[1].type.packed_members.size() == 2 &&
-          package.type_aliases[1].type.packed_members[0].domain ==
-              ValueDomain::Integer &&
-          package.type_aliases[1]
-                  .type.packed_members[1]
-                  .nested_types.front()
-                  .named_type == "node_access",
-      "completion replaces the incomplete marker while preserving recursive "
-      "access identity and integer record members");
+        Language::Vhdl2008);
+    require(parsed.ok(),
+        "a VHDL incomplete type must admit its full declaration");
+    const auto& package = parsed.design.units.front();
+    require(
+        package.type_aliases.size() == 2 && package.type_aliases[0].name == "node_access" && package.type_aliases[0].declaration_kind == TypeDeclarationKind::VhdlAccess && package.type_aliases[0].type.vhdl_access && package.type_aliases[0].type.vhdl_access->designated_types.front().named_type == "node" && package.type_aliases[1].name == "node" && package.type_aliases[1].declaration_kind == TypeDeclarationKind::VhdlRecord && package.type_aliases[1].type.packed_members.size() == 2 && package.type_aliases[1].type.packed_members[0].domain == ValueDomain::Integer && package.type_aliases[1].type.packed_members[1].nested_types.front().named_type == "node_access",
+        "completion replaces the incomplete marker while preserving recursive "
+        "access identity and integer record members");
 
-  const auto malformed = parse_text("invalid_incomplete_vhdl_types.vhd",
-                                    R"(
+    const auto malformed = parse_text("invalid_incomplete_vhdl_types.vhd",
+        R"(
 package Invalid_Recursive_Types is
   type Missing;
   type Duplicate;
   type DUPLICATE;
 end package;
 )",
-                                    Language::Vhdl2008);
-  const auto count_code = [&](const std::string_view code) {
-    return std::ranges::count_if(
-        malformed.diagnostics,
-        [&](const Diagnostic &diagnostic) { return diagnostic.code == code; });
-  };
-  require(!malformed.ok() && count_code("FSIM-VHDL-SEM-036") == 1 &&
-              count_code("FSIM-VHDL-SEM-097") == 2,
-          "duplicate and uncompleted incomplete types need exact diagnostics");
+        Language::Vhdl2008);
+    const auto count_code = [&](const std::string_view code) {
+        return std::ranges::count_if(
+            malformed.diagnostics,
+            [&](const Diagnostic& diagnostic) { return diagnostic.code == code; });
+    };
+    require(!malformed.ok() && count_code("FSIM-VHDL-SEM-036") == 1 && count_code("FSIM-VHDL-SEM-097") == 2,
+        "duplicate and uncompleted incomplete types need exact diagnostics");
 }
 
 void test_vhdl_nested_composite_hir() {

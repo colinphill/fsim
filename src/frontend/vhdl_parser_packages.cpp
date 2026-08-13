@@ -128,23 +128,24 @@ ParameterDeclaration VhdlParser::parse_vhdl_interface_package(
 
 PackageInstantiation VhdlParser::parse_vhdl_package_instantiation(
     const Token& start) {
-  PackageInstantiation result;
-  const auto name = expect_identifier("local package instance name");
-  result.name = vhdl_name(name.text);
-  expect_keyword("is", true, "FSIM-VHDL-PARSE-190");
-  expect_keyword("new", true, "FSIM-VHDL-PARSE-191");
-  result.template_name =
-      parse_vhdl_selected_name("generic package template name");
-  const auto generic =
-      expect_keyword("generic", true, "FSIM-VHDL-PARSE-192");
-  parse_vhdl_package_generic_map(
-      result.generic_map, result.generic_map_box, generic);
-  expect(
-      TokenKind::Semicolon,
-      "';' after local package instantiation",
-      "FSIM-VHDL-PARSE-193");
-  result.span = span_from(start, previous());
-  return result;
+    require_vhdl_standard(
+        start, VhdlStandard::Vhdl2008, "a local package instantiation",
+        "select VHDL-2008 or use a non-generic package declaration");
+    PackageInstantiation result;
+    const auto name = expect_identifier("local package instance name");
+    result.name = vhdl_name(name.text);
+    expect_keyword("is", true, "FSIM-VHDL-PARSE-190");
+    expect_keyword("new", true, "FSIM-VHDL-PARSE-191");
+    result.template_name = parse_vhdl_selected_name("generic package template name");
+    const auto generic = expect_keyword("generic", true, "FSIM-VHDL-PARSE-192");
+    parse_vhdl_package_generic_map(
+        result.generic_map, result.generic_map_box, generic);
+    expect(
+        TokenKind::Semicolon,
+        "';' after local package instantiation",
+        "FSIM-VHDL-PARSE-193");
+    result.span = span_from(start, previous());
+    return result;
 }
 
 } // namespace fsim::frontend

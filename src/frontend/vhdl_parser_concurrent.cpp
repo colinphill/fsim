@@ -23,15 +23,20 @@ GenerateRegion VhdlParser::parse_vhdl_conditional_generate(
   }
   parse_vhdl_generate_branch(result.then_body);
   if (match_keyword("else", true)) {
-    expect_keyword("generate", true, "FSIM-VHDL-PARSE-057");
-    const bool else_declarations = parse_vhdl_generate_declarations(
-        result.else_body,
-        VhdlComponentDeclarationRegion::Generate);
-    if (else_declarations) {
-      expect_keyword("begin", true, "FSIM-VHDL-PARSE-234");
-    } else {
-      (void)match_keyword("begin", true);
-    }
+      (void)require_vhdl_standard(
+          previous(),
+          VhdlStandard::Vhdl2008,
+          "if-generate alternatives",
+          "use separate VHDL-93 if-generate statements");
+      expect_keyword("generate", true, "FSIM-VHDL-PARSE-057");
+      const bool else_declarations = parse_vhdl_generate_declarations(
+          result.else_body,
+          VhdlComponentDeclarationRegion::Generate);
+      if (else_declarations) {
+          expect_keyword("begin", true, "FSIM-VHDL-PARSE-234");
+      } else {
+          (void)match_keyword("begin", true);
+      }
     parse_vhdl_generate_branch(result.else_body);
   }
   expect_keyword("end", true, "FSIM-VHDL-PARSE-058");
@@ -763,13 +768,18 @@ Instance VhdlParser::parse_vhdl_instance(const Token& label) {
   instance.name = vhdl_name(label.text);
 
   if (match_keyword("entity", true)) {
-    const auto first = expect_identifier("entity name");
-    instance.unit_name = vhdl_name(first.text);
-    if (match(TokenKind::Dot)) {
-      const auto unit = expect_identifier("entity name after library");
-      instance.unit_name += '.';
-      instance.unit_name += vhdl_name(unit.text);
-    }
+      (void)require_vhdl_standard(
+          previous(),
+          VhdlStandard::Vhdl1993,
+          "direct entity instantiation",
+          "declare and instantiate a component in VHDL-87");
+      const auto first = expect_identifier("entity name");
+      instance.unit_name = vhdl_name(first.text);
+      if (match(TokenKind::Dot)) {
+          const auto unit = expect_identifier("entity name after library");
+          instance.unit_name += '.';
+          instance.unit_name += vhdl_name(unit.text);
+      }
     if (match(TokenKind::LeftParen)) {
       const auto architecture =
           expect_identifier("architecture name in entity aspect");
@@ -780,14 +790,18 @@ Instance VhdlParser::parse_vhdl_instance(const Token& label) {
              "FSIM-VHDL-PARSE-036");
     }
   } else if (match_keyword("configuration", true)) {
-    const auto first = expect_identifier("configuration name");
-    instance.unit_name = vhdl_name(first.text);
-    if (match(TokenKind::Dot)) {
-      const auto unit =
-          expect_identifier("configuration name after library");
-      instance.unit_name += '.';
-      instance.unit_name += vhdl_name(unit.text);
-    }
+      (void)require_vhdl_standard(
+          previous(),
+          VhdlStandard::Vhdl1993,
+          "direct configuration instantiation",
+          "declare and instantiate a component in VHDL-87");
+      const auto first = expect_identifier("configuration name");
+      instance.unit_name = vhdl_name(first.text);
+      if (match(TokenKind::Dot)) {
+          const auto unit = expect_identifier("configuration name after library");
+          instance.unit_name += '.';
+          instance.unit_name += vhdl_name(unit.text);
+      }
     instance.vhdl_configuration_instance = true;
   } else {
     const auto component = expect_identifier("component name");
@@ -1005,6 +1019,13 @@ Process VhdlParser::parse_process(
           expression.kind == ExpressionKind::Identifier;
       const bool wildcard = identifier
           && detail::iequals(expression.text, "all");
+      if (wildcard) {
+          (void)require_vhdl_standard(
+              previous(),
+              VhdlStandard::Vhdl2008,
+              "process(all) sensitivity lists",
+              "list every sensitivity signal explicitly");
+      }
       process.sensitivities.push_back(Sensitivity{
           EdgeKind::Any,
           identifier

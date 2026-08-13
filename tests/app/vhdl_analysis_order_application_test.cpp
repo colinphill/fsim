@@ -31,12 +31,16 @@ struct Source {
     std::string name;
     std::string library;
     std::string text;
+    fsim::project::Language language { fsim::project::Language::vhdl };
+    std::string standard { "2008" };
 };
 
 struct CheckResult {
     bool accepted { };
     std::vector<std::string> codes;
     std::vector<std::string> units;
+    std::vector<std::string> unit_profiles;
+    std::vector<std::string> source_profiles;
     bool deferred_constant_hir { };
     bool attribute_group_hir { };
     bool nested_attribute_group_hir { };
@@ -62,8 +66,8 @@ CheckResult check(
         assert(output.good());
 
         fsim::project::SourceSet source_set;
-        source_set.language = fsim::project::Language::vhdl;
-        source_set.standard = "2008";
+        source_set.language = sources[index].language;
+        source_set.standard = sources[index].standard;
         source_set.library = sources[index].library;
         source_set.compilation_unit = "file";
         source_set.files.push_back(path);
@@ -76,10 +80,22 @@ CheckResult check(
     result.accepted = checked.has_value();
     for (const auto& diagnostic : diagnostics.diagnostics()) {
         result.codes.push_back(diagnostic.code);
+        if (!checked && case_name == "valid") {
+            std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+        }
     }
     if (checked) {
+        for (const auto& source : checked->hdl_sources) {
+            result.source_profiles.push_back(
+                source.language + ":" + source.standard);
+        }
         for (const auto& unit : checked->parsed.units) {
             result.units.push_back(unit.library + ":" + unit.name);
+            if (unit.language == fsim::frontend::Language::Vhdl2008) {
+                result.unit_profiles.push_back(
+                    "vhdl:" + std::string { fsim::frontend::to_string(unit.vhdl_standard) }
+                    + ":" + unit.library + ":" + unit.name);
+            }
         }
         bool attribute_seen = false;
         bool attribute_specification_seen = false;
@@ -219,7 +235,7 @@ const Source context_declaration {
     "context.vhd", "libb", R"(
 library liba;
 use liba.values.all;
-context shared is
+context analysis_context is
   library liba;
   use liba.values.all;
 end context;
@@ -229,7 +245,7 @@ end context;
 const Source entity_declaration {
     // FSIM-CONFORMANCE CF-VHDL-GENERIC-001 source=SRC-UVVM expectation=accept
     "entity.vhd", "libb", R"(
-context work.shared;
+context work.analysis_context;
 entity leaf is
 end entity;
 )"
@@ -394,12 +410,73 @@ int main()
     };
     // FSIM-CONFORMANCE CF-VHDL-ORDER-P01 source=SRC-IEEE-P1076 expectation=accept
     const auto accepted = check(directory.path, "valid", valid);
+    if (!accepted.accepted) {
+        std::cerr << "unexpected diagnostics for valid VHDL analysis order:";
+        for (const auto& code : accepted.codes) {
+            std::cerr << ' ' << code;
+        }
+        std::cerr << '\n';
+    }
     assert(accepted.accepted);
     assert(accepted.codes.empty());
     assert(accepted.deferred_constant_hir);
     assert(accepted.attribute_group_hir);
     assert(accepted.nested_attribute_group_hir);
-    assert((accepted.units == std::vector<std::string> { "liba:values", "liba:values", "libb:shared", "libb:leaf", "libb:rtl", "libb:leaf_configuration" }));
+    assert((accepted.units == std::vector<std::string> { "liba:values", "liba:values", "libb:analysis_context", "libb:leaf", "libb:rtl", "libb:leaf_configuration" }));
+
+    const Source revision_package {
+        "revision_package.vhd", "profiles", R"(
+package revision_values is
+  constant amount : integer := 7;
+end package;
+)",
+        fsim::project::Language::vhdl, "1993"
+    };
+    const Source revision_consumer {
+        "revision_consumer.vhd", "profiles", R"(
+use work.revision_values.all;
+entity revision_consumer is
+end entity;
+)",
+        fsim::project::Language::vhdl, "1993"
+    };
+    const Source mixed_systemverilog {
+        "mixed_profile.sv", "profiles", R"(
+module mixed_profile;
+endmodule
+)",
+        fsim::project::Language::system_verilog, "2017"
+    };
+    const auto revision_profiles = check(
+        directory.path, "revision-profiles",
+        { revision_package, revision_consumer, mixed_systemverilog });
+    assert(revision_profiles.accepted);
+    assert(revision_profiles.codes.empty());
+    assert((revision_profiles.source_profiles
+        == std::vector<std::string> {
+            "vhdl:1993", "vhdl:1993", "systemverilog:2017" }));
+    assert(std::ranges::find(
+               revision_profiles.unit_profiles,
+               "vhdl:1993:profiles:revision_values")
+        != revision_profiles.unit_profiles.end());
+    assert(std::ranges::find(
+               revision_profiles.unit_profiles,
+               "vhdl:1993:profiles:revision_consumer")
+        != revision_profiles.unit_profiles.end());
+
+    auto incompatible_consumer = revision_consumer;
+    incompatible_consumer.standard = "2002";
+    expect_code(
+        directory.path, "incompatible-package-dependency",
+        { revision_package, incompatible_consumer },
+        "FSIM-FE-VHORDER-011");
+
+    auto incompatible_reanalysis = revision_package;
+    incompatible_reanalysis.standard = "1987";
+    expect_code(
+        directory.path, "incompatible-reanalysis",
+        { revision_package, incompatible_reanalysis },
+        "FSIM-FE-VHORDER-011");
 
     const auto psl_accepted = check(
         directory.path, "psl-ownership", { psl_declaration });

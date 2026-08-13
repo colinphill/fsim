@@ -445,6 +445,36 @@ bool HierarchyBuilder::connect_vhdl_expression_port(
             connection.value.span);
         return true;
     }
+    const auto older_port_name_or_conversion =
+        [](const frontend::Expression& actual) {
+            if (actual.kind == frontend::ExpressionKind::Identifier) {
+                return true;
+            }
+            if ((actual.kind == frontend::ExpressionKind::Index
+                    || actual.kind == frontend::ExpressionKind::Slice)
+                && !actual.operands.empty()
+                && actual.operands.front().kind
+                    == frontend::ExpressionKind::Identifier) {
+                return true;
+            }
+            // A one-argument call in an older port association retains the
+            // historical conversion-function/type-conversion interpretation.
+            return actual.kind == frontend::ExpressionKind::Call
+                && actual.operands.size() == 1U;
+        };
+    if (dependency_owner.vhdl_standard
+            < frontend::VhdlStandard::Vhdl2008
+        && !older_port_name_or_conversion(connection.value)) {
+        report(
+            "FSIM-ELAB-VHPORT-001",
+            "nonstatic input port expressions require VHDL-2008, but '"
+                + path + "." + port.name + "' is owned by VHDL-"
+                + std::string(frontend::to_string(
+                    dependency_owner.vhdl_standard))
+                + "; introduce an explicitly driven intermediate signal",
+            connection.value.span);
+        return true;
+    }
     frontend::Statement driver;
     driver.kind = frontend::StatementKind::Assignment;
     driver.assignment_kind = frontend::AssignmentKind::Continuous;

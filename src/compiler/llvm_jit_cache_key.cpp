@@ -188,7 +188,7 @@ using runtime::simir::WriteUpdateDynamicSlice;
 using runtime::simir::WriteUpdateSlice;
 using runtime::simir::Yield;
 
-constexpr std::string_view kNativeObjectCacheSchema = "fsim-llvm-native-object-v115";
+constexpr std::string_view kNativeObjectCacheSchema = "fsim-llvm-native-object-v116";
 
 void add_key_u64(CacheKeyBuilder& builder, const std::string_view label,
     const std::uint64_t value)
@@ -396,6 +396,8 @@ void add_container_type_key(
     builder.add("symbol", symbol);
     add_key_u64(builder, "process-id", process.id);
     builder.add("process-name", process.name);
+    builder.add("language-standard", process.language_standard);
+    builder.add("compatibility-profile", process.compatibility_profile);
     add_key_u64(builder, "register-count", process.register_count);
     add_key_u64(
         builder, "string-register-count", process.string_register_count);

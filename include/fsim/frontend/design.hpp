@@ -1361,9 +1361,30 @@ struct SystemVerilogBindDirective {
     SourceSpan span;
 };
 
+// The implicit environment attached to every VHDL design unit. Keeping this
+// data on the owning unit avoids sharing a VHDL-2008 namespace with an older
+// source in a mixed-revision project and gives portable libraries an explicit
+// environment identity to preserve.
+struct VhdlPredefinedEnvironment {
+    std::string identity;
+    std::string working_library;
+    std::vector<std::string> implicit_libraries;
+    std::vector<std::string> implicit_packages;
+    std::vector<std::string> declarations;
+    std::vector<std::string> operator_profiles;
+    std::vector<std::string> time_units;
+    std::string default_time_unit;
+    std::vector<std::string> attributes;
+};
+
 struct DesignUnit {
     UnitKind kind { UnitKind::VerilogModule };
     Language language { Language::SystemVerilog2017 };
+    // The owning source profile remains explicit even while all VHDL revisions
+    // share the VHDL language family and common parsed representation.
+    VhdlStandard vhdl_standard { VhdlStandard::Vhdl2008 };
+    std::string vhdl_compatibility_profile;
+    VhdlPredefinedEnvironment vhdl_predefined_environment;
     std::string library;
     std::string compilation_unit_identity;
     std::string name;
@@ -1376,6 +1397,7 @@ struct DesignUnit {
     // lowering. The exact upstream files remain source dependencies.
     std::string standard_package_revision;
     std::vector<std::string> standard_package_declarations;
+    std::vector<std::string> standard_package_operator_profiles;
     // Verilog/SystemVerilog compilation-unit timing context. Empty when no
     // `timescale directive precedes this unit.
     std::string time_unit;

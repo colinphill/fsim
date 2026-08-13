@@ -194,7 +194,13 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
             || expression.text == "~&"
             || expression.text == "~|"
             || expression.text == "~^"
-            || expression.text == "^~")) {
+            || expression.text == "^~"
+            || expression.text == "and"
+            || expression.text == "or"
+            || expression.text == "nand"
+            || expression.text == "nor"
+            || expression.text == "xor"
+            || expression.text == "xnor")) {
         const auto source_width = infer_width(expression.operands[0])
                                       .value_or(expected_width);
         const auto source = lower_expression(
@@ -210,23 +216,61 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
             : frontend::ValueDomain::Logic4;
         auto operation = ReductionOperator::bit_xor;
         if (expression.text == "&"
-            || expression.text == "~&") {
+            || expression.text == "~&"
+            || expression.text == "and"
+            || expression.text == "nand") {
             operation = ReductionOperator::bit_and;
         } else if (expression.text == "|"
-            || expression.text == "~|") {
+            || expression.text == "~|"
+            || expression.text == "or"
+            || expression.text == "nor") {
             operation = ReductionOperator::bit_or;
         }
         const auto destination = allocate_register(1, result_domain);
         process_.operations.emplace_back(
             Reduction { operation, destination, *source });
         if (expression.text.starts_with("~")
-            || expression.text == "^~") {
+            || expression.text == "^~"
+            || expression.text == "nand"
+            || expression.text == "nor"
+            || expression.text == "xnor") {
             const auto inverted = allocate_register(1, result_domain);
             process_.operations.emplace_back(
                 UnaryNot { inverted, destination });
             return inverted;
         }
         return destination;
+    }
+    if (expression.kind == ExpressionKind::Unary
+        && expression.operands.size() == 1
+        && expression.text == "??") {
+        const auto source_width = infer_width(expression.operands[0])
+                                      .value_or(expected_width);
+        const auto source = lower_expression(
+            expression.operands[0], source_width);
+        if (!source || register_width(*source) != 1U) {
+            report(
+                "FSIM-ELAB-082",
+                "the VHDL condition operator requires a scalar Boolean, "
+                "bit, or logic operand",
+                expression.span);
+            return std::nullopt;
+        }
+        const auto result = allocate_register(
+            1, frontend::ValueDomain::Boolean);
+        const auto one = allocate_register(
+            1, register_domain(*source));
+        process_.operations.emplace_back(LoadConstant {
+            one, PackedLogic4(1, Logic4::one) });
+        process_.operations.emplace_back(Binary {
+            register_domain(*source)
+                    == frontend::ValueDomain::Logic9
+                ? BinaryOperator::vhdl_match_equal
+                : BinaryOperator::case_equal,
+            result,
+            *source,
+            one });
+        return result;
     }
     if (expression.kind == ExpressionKind::Unary
         && expression.operands.size() == 1

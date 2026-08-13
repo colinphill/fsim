@@ -15,12 +15,12 @@
 #include <variant>
 #include <vector>
 
-
 namespace fsim::tests::elaboration {
 
 inline bool has_diagnostic(
     const fsim::elaboration::ElaborationResult& result,
-    const std::string_view code) {
+    const std::string_view code)
+{
     for (const auto& diagnostic : result.diagnostics) {
         if (diagnostic.code == code) {
             return true;
@@ -37,7 +37,7 @@ public:
     fsim::elaboration::SystemCInstanceDescription prototype;
     std::vector<std::pair<std::string, std::int64_t>>
         last_values;
-    std::uint64_t next_handle{10'000};
+    std::uint64_t next_handle { 10'000 };
     std::string schema_failure;
     std::string construction_failure;
     std::vector<fsim::elaboration::SystemCFactoryCandidate>
@@ -45,11 +45,13 @@ public:
     std::vector<std::string> available_libraries;
 
     std::vector<fsim::elaboration::SystemCFactoryCandidate>
-    candidates() const override {
+    candidates() const override
+    {
         return factory_candidates;
     }
 
-    std::vector<std::string> libraries() const override {
+    std::vector<std::string> libraries() const override
+    {
         auto result = available_libraries;
         for (const auto& candidate : factory_candidates) {
             if (std::ranges::find(result, candidate.library)
@@ -64,7 +66,8 @@ public:
         fsim::elaboration::SystemCConstructionParameter>>
     schema(
         std::string_view,
-        std::string& error) override {
+        std::string& error) override
+    {
         if (!schema_failure.empty()) {
             error = schema_failure;
             return std::nullopt;
@@ -78,8 +81,10 @@ public:
         const std::string_view path,
         const std::string_view target,
         const std::span<
-            const std::pair<std::string, std::int64_t>> values,
-        std::string& error) override {
+            const std::pair<std::string, std::int64_t>>
+            values,
+        std::string& error) override
+    {
         if (!construction_failure.empty()) {
             error = construction_failure;
             return std::nullopt;
@@ -101,9 +106,9 @@ public:
         if (width != values.end() && width->second > 0) {
             for (auto& port : result.ports) {
                 if (port.name == "value" && width->second > 1) {
-                    port.type.packed_range =
-                        fsim::frontend::PackedRange{
-                            width->second - 1, 0, true};
+                    port.type.packed_range = fsim::frontend::PackedRange {
+                        width->second - 1, 0, true
+                    };
                 }
             }
         }
@@ -153,6 +158,7 @@ void test_numeric_and_system_function_lowering();
 void test_selection_and_assignment_lowering();
 void test_vhdl_dynamic_slices();
 void test_vhdl_recursive_composite_layout();
+void test_vhdl_revision_expression_elaboration();
 void test_vhdl_access_type_storage();
 void test_vhdl_protected_type_storage();
 void test_vhdl_physical_type_execution();
@@ -167,6 +173,7 @@ void test_vhdl_callable_overloads();
 void test_vhdl_interface_procedure_generics();
 void test_vhdl_procedure_waits();
 void test_vhdl_interface_package_generics();
+void test_vhdl_predefined_environment_profiles();
 void test_vhdl_generic_subprograms();
 void test_vhdl_generic_associations();
 void test_vhdl_components();

@@ -688,7 +688,7 @@ void LlvmJit::initialize_frame(
         throw LlvmJitError(
             "caller-owned JIT register storage is smaller than the frame layout");
     }
-    if (layout.register_count != 0 && (register_aval.data() == register_bval.data() || (layout.uses_logic9 && (register_logic9_plane2.data() == register_logic9_plane3.data() || register_logic9_plane2.data() == register_aval.data() || register_logic9_plane2.data() == register_bval.data() || register_logic9_plane3.data() == register_aval.data() || register_logic9_plane3.data() == register_bval.data())))) {
+    if (layout.register_word_count != 0 && (register_aval.data() == register_bval.data() || (layout.uses_logic9 && (register_logic9_plane2.data() == register_logic9_plane3.data() || register_logic9_plane2.data() == register_aval.data() || register_logic9_plane2.data() == register_bval.data() || register_logic9_plane3.data() == register_aval.data() || register_logic9_plane3.data() == register_bval.data())))) {
         throw LlvmJitError(
             "caller-owned JIT register planes must be distinct");
     }
@@ -1232,15 +1232,20 @@ LlvmJit::resume(const JitProcessHandle process,
     if (frame.layout_id_low != entry.info.frame_layout.layout_id_low || frame.layout_id_high != entry.info.frame_layout.layout_id_high || frame.register_count != entry.info.frame_layout.register_count) {
         throw LlvmJitError("JIT frame layout mismatch");
     }
-    if (frame.register_count != 0 && (frame.register_aval == nullptr || frame.register_bval == nullptr || frame.register_initialized == nullptr)) {
+    if ((entry.info.frame_layout.register_word_count != 0
+            && (frame.register_aval == nullptr
+                || frame.register_bval == nullptr))
+        || (frame.register_count != 0
+            && frame.register_initialized == nullptr)) {
         throw LlvmJitError("JIT frame register storage is null");
     }
-    if (frame.register_count != 0 && frame.register_aval == frame.register_bval) {
+    if (entry.info.frame_layout.register_word_count != 0
+        && frame.register_aval == frame.register_bval) {
         throw LlvmJitError(
             "JIT frame aval and bval register storage must be distinct");
     }
     if (entry.info.frame_layout.uses_logic9
-        && frame.register_count != 0
+        && entry.info.frame_layout.register_word_count != 0
         && (frame.register_logic9_plane2 == nullptr
             || frame.register_logic9_plane3 == nullptr)) {
         throw LlvmJitError("JIT frame Logic9 register storage is null");

@@ -6,6 +6,7 @@
 #include "fsim/frontend/class_specialization.hpp"
 #include "fsim/frontend/coverage_persistence.hpp"
 #include "fsim/frontend/design.hpp"
+#include "fsim/library/artifact.hpp"
 #include "fsim/project/project.hpp"
 #include "fsim/runtime/class_methods.hpp"
 #include "fsim/runtime/simir.hpp"
@@ -65,6 +66,8 @@ namespace fsim::app {
 
 struct CheckedSource {
     std::filesystem::path path;
+    std::string language;
+    std::string standard;
     /// SHA-256 of the exact root bytes supplied to analysis/preprocessing.
     std::string content_digest;
     struct Dependency {
@@ -99,7 +102,9 @@ struct CheckedProject {
         std::string compilation_digest;
         std::string language;
         std::string standard;
+        std::string compatibility_profile { "none" };
         std::string library;
+        std::vector<library::VhdlPackageDependency> vhdl_package_dependencies;
         std::vector<std::string> unit_checksums;
         project::SourceSet source_settings;
     };
@@ -107,6 +112,7 @@ struct CheckedProject {
         std::string library;
         std::filesystem::path directory;
         std::string metadata_digest;
+        std::vector<library::VhdlPackageDependency> vhdl_package_dependencies;
         std::vector<std::string> unit_checksums;
         std::vector<project::SourceSet> source_settings;
         bool native_accepted { };
@@ -149,6 +155,18 @@ struct MappedLibraryProvenance {
     bool native_accepted { };
     std::string native_kind;
     std::string native_fingerprint;
+};
+
+/// Source-profile identity retained for each analyzed VHDL library unit. The
+/// semantic unit ID is the stable join key used by elaborated hierarchy,
+/// debugger, trace, and VHPI publication; compiler package implementations do
+/// not become hierarchy objects.
+struct VhdlUnitProvenance {
+    semantic::UnitId unit { };
+    std::string standard;
+    std::string predefined_environment;
+    std::string compatibility_profile;
+    std::vector<library::VhdlPackageDependency> package_dependencies;
 };
 
 struct BuiltProject {
@@ -196,6 +214,7 @@ struct BuiltProject {
     /// Versioned, pointer-free UVM bootstrap state loaded from a portable design.
     std::optional<runtime::SystemVerilogUvmCheckpointArtifact>
         systemverilog_uvm_checkpoint;
+    std::vector<VhdlUnitProvenance> vhdl_unit_provenance;
 };
 
 /// Parse all HDL source files in deterministic manifest order. Independent
@@ -441,6 +460,10 @@ struct VhdlDebugScope {
     std::string path;
     std::string library;
     std::string unit;
+    std::string standard;
+    std::string predefined_environment;
+    std::string compatibility_profile;
+    std::vector<library::VhdlPackageDependency> package_dependencies;
     std::uint32_t source_span { };
     fsim_vhpi_handle_v1 vhpi_handle { };
 };
@@ -557,6 +580,10 @@ public:
     [[nodiscard]] const semantic::Model& semantics() const noexcept;
     [[nodiscard]] const std::vector<MappedLibraryProvenance>&
     mapped_libraries() const noexcept;
+    [[nodiscard]] const std::vector<VhdlUnitProvenance>&
+    vhdl_unit_provenance() const noexcept;
+    [[nodiscard]] std::vector<std::string>
+    vhdl_provenance_comments() const;
     [[nodiscard]] std::string_view time_resolution() const noexcept;
     [[nodiscard]] std::optional<runtime::simir::SignalId> find_signal(
         std::string_view path) const noexcept;

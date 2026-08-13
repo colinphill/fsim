@@ -747,18 +747,25 @@ void HierarchyBuilder::instantiate(
             variable.name, &variable.type);
         visible_types.emplace(
             path + "." + variable.name, &variable.type);
-        if (variable.vhdl_shared) {
-            if (unit.language
-                    != frontend::Language::Vhdl2008
-                || !variable.type.vhdl_protected) {
+        if (variable.vhdl_shared
+            && !variable.type.vhdl_protected) {
+            if (unit.language == frontend::Language::Vhdl2008
+                && unit.vhdl_standard
+                    == frontend::VhdlStandard::Vhdl1993) {
+                materialize_vhdl_1993_shared_variable(
+                    variable, path, local);
+            } else {
                 report(
                     "FSIM-ELAB-VHPROTECTED-008",
-                    "shared variable '" + path + "."
-                        + variable.name
-                        + "' must have a protected type",
+                    "shared variable '" + path + "." + variable.name
+                        + "' must have a protected type in VHDL-2000 and "
+                          "later; only VHDL-1993 permits the legacy "
+                          "unprotected form",
                     variable.span);
-                continue;
             }
+            continue;
+        }
+        if (variable.vhdl_shared) {
             const auto& protected_info = *variable.type.vhdl_protected;
             if (!protected_info.has_body
                 || !protected_info.body_conformant) {
@@ -1540,6 +1547,33 @@ void HierarchyBuilder::instantiate(
         diagnostics_
     };
     lowerer.set_systemverilog_program_owner(program_owner);
+    lowerer.set_vhdl_standard(unit.vhdl_standard);
+    const auto uses_synopsys_package = [&](const std::string_view package) {
+        const auto prefix = "ieee." + std::string { package };
+        return std::ranges::any_of(
+            unit.vhdl_context,
+            [&](const frontend::VhdlContextItem& item) {
+                return item.kind == frontend::VhdlContextItemKind::UseClause
+                    && std::ranges::any_of(
+                        item.selected_names,
+                        [&](const std::string& selected) {
+                            return selected == prefix
+                                || selected.starts_with(prefix + ".");
+                        });
+            });
+    };
+    lowerer.set_vhdl_synopsys_numeric_context(
+        uses_synopsys_package("std_logic_signed"),
+        uses_synopsys_package("std_logic_unsigned"));
+    const auto append_profiled_process =
+        [&](Process process) {
+            if (unit.language == frontend::Language::Vhdl2008) {
+                process.language_standard = frontend::to_string(unit.vhdl_standard);
+                process.compatibility_profile = unit.vhdl_compatibility_profile;
+            }
+            specialization.processes.push_back(process.id);
+            design_.processes_.push_back(std::move(process));
+        };
     for (std::size_t index = 0;
         index < clocking_skew_statements.size(); ++index) {
         auto process = lowerer.lower_concurrent(
@@ -1547,27 +1581,23 @@ void HierarchyBuilder::instantiate(
             unit.language,
             path,
             unit.concurrent_statements.size() + index);
-        specialization.processes.push_back(process.id);
-        design_.processes_.push_back(std::move(process));
+        append_profiled_process(std::move(process));
         for (auto& generated :
             lowerer.take_generated_processes()) {
             generated.reactive = program_owner.has_value();
             generated.program_owner = program_owner;
-            specialization.processes.push_back(generated.id);
-            design_.processes_.push_back(std::move(generated));
+            append_profiled_process(std::move(generated));
         }
     }
     for (const auto& event_process : clocking_event_processes) {
         auto lowered = lowerer.lower_process(
             event_process.process, unit.language, path);
         lowered.observed = event_process.observed;
-        specialization.processes.push_back(lowered.id);
-        design_.processes_.push_back(std::move(lowered));
+        append_profiled_process(std::move(lowered));
         for (auto& generated : lowerer.take_generated_processes()) {
             generated.reactive = program_owner.has_value();
             generated.program_owner = program_owner;
-            specialization.processes.push_back(generated.id);
-            design_.processes_.push_back(std::move(generated));
+            append_profiled_process(std::move(generated));
         }
     }
     for (std::size_t index = 0;
@@ -1577,13 +1607,11 @@ void HierarchyBuilder::instantiate(
             unit.language,
             path,
             index);
-        specialization.processes.push_back(process.id);
-        design_.processes_.push_back(std::move(process));
+        append_profiled_process(std::move(process));
         for (auto& generated : lowerer.take_generated_processes()) {
             generated.reactive = program_owner.has_value();
             generated.program_owner = program_owner;
-            specialization.processes.push_back(generated.id);
-            design_.processes_.push_back(std::move(generated));
+            append_profiled_process(std::move(generated));
         }
     }
     for (const auto& source_process : unit.processes) {
@@ -1600,13 +1628,11 @@ void HierarchyBuilder::instantiate(
         lowered.reactive = !concurrent_assertion
             && unit.kind == frontend::UnitKind::SystemVerilogProgram;
         lowered.program_owner = program_owner;
-        specialization.processes.push_back(lowered.id);
-        design_.processes_.push_back(std::move(lowered));
+        append_profiled_process(std::move(lowered));
         for (auto& generated : lowerer.take_generated_processes()) {
             generated.reactive = program_owner.has_value();
             generated.program_owner = program_owner;
-            specialization.processes.push_back(generated.id);
-            design_.processes_.push_back(std::move(generated));
+            append_profiled_process(std::move(generated));
         }
     }
     const auto regions_overlap = [](

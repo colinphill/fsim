@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+revision	positive_stage	positive_evidence	positive_anchor	negative_stage	negative_evidence	negative_anchor	diagnostic_code	diagnostic_line	diagnostic_column
+VHDL87	semantic	tests/frontend/frontend_vhdl_type_tests.cpp	vhdl87-declarations.vhd	parse	tests/frontend/frontend_vhdl_revision_profile_tests.cpp	corpus-vhdl87-direct-entity	FSIM-FE-VHSTD-003	2	7
+VHDL93	semantic	tests/frontend/frontend_vhdl_type_tests.cpp	vhdl93-declarations.vhd	parse	tests/frontend/frontend_vhdl_revision_profile_tests.cpp	corpus-vhdl93-protected	FSIM-FE-VHSTD-003	2	17
+VHDL2000	semantic	tests/frontend/frontend_vhdl_type_tests.cpp	vhdl2000-declarations.vhd	parse	tests/frontend/frontend_vhdl_revision_profile_tests.cpp	corpus-vhdl2000-context	FSIM-FE-VHSTD-003	1	1
+VHDL2002	semantic	tests/frontend/frontend_vhdl_type_tests.cpp	vhdl2002-declarations.vhd	parse	tests/frontend/frontend_vhdl_revision_profile_tests.cpp	corpus-vhdl2002-context	FSIM-FE-VHSTD-003	1	1

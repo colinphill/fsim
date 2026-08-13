@@ -283,36 +283,6 @@ std::optional<project::Language> infer_language(
   return std::nullopt;
 }
 
-std::string default_standard(const project::Language language) {
-  switch (language) {
-    case project::Language::vhdl:
-      return "2008";
-    case project::Language::verilog:
-      return "2005";
-    case project::Language::system_verilog:
-      return "2017";
-    case project::Language::systemc:
-      return "2023-subset";
-  }
-  return {};
-}
-
-bool supported_standard(
-    const project::Language language,
-    const std::string_view standard) noexcept {
-  switch (language) {
-    case project::Language::vhdl:
-      return standard == "2008" || standard == "08";
-    case project::Language::verilog:
-      return standard == "2005" || standard == "2001";
-    case project::Language::system_verilog:
-      return standard == "2017" || standard == "2012";
-    case project::Language::systemc:
-      return standard == "2023-subset" || standard == "2023";
-  }
-  return false;
-}
-
 std::filesystem::path absolute_normalized(const std::filesystem::path& path) {
   std::error_code error;
   auto result = std::filesystem::absolute(path, error);
@@ -364,30 +334,34 @@ std::optional<project::Config> make_direct_config(
         config.source_sets.end(),
         [&](const project::SourceSet& set) { return set.language == *language; });
     if (iterator == config.source_sets.end()) {
-      project::SourceSet source_set;
-      source_set.language = *language;
-      source_set.standard =
-          invocation.standard.value_or(default_standard(*language));
-      if (!supported_standard(*language, source_set.standard)) {
-        argument_error(
-            diagnostics,
-            "unsupported standard '" + source_set.standard + "' for "
-                + std::string(project::to_string(*language)));
-        continue;
-      }
-      source_set.library = invocation.library;
-      source_set.compilation_unit = invocation.compilation_unit.value_or(
-          invocation.command == Command::compile
-                  && *language != project::Language::vhdl
-              ? "source-set" : "file");
-      source_set.uvm_release = invocation.uvm_release.value_or(
-          project::SystemVerilogUvmRelease::none);
-      for (const auto& directory : invocation.include_directories) {
-        source_set.include_directories.push_back(absolute_normalized(directory));
-      }
-      source_set.defines = invocation.defines;
-      config.source_sets.push_back(std::move(source_set));
-      iterator = std::prev(config.source_sets.end());
+        project::SourceSet source_set;
+        source_set.language = *language;
+        const auto requested_standard = invocation.standard.value_or(
+            std::string { project::default_standard(*language) });
+        const auto canonical_standard = project::canonical_standard(
+            *language, requested_standard);
+        if (!canonical_standard) {
+            argument_error(
+                diagnostics,
+                "unsupported standard '" + requested_standard + "' for "
+                    + std::string(project::to_string(*language)));
+            continue;
+        }
+        source_set.standard = *canonical_standard;
+        source_set.library = invocation.library;
+        source_set.compilation_unit = invocation.compilation_unit.value_or(
+            invocation.command == Command::compile
+                    && *language != project::Language::vhdl
+                ? "source-set"
+                : "file");
+        source_set.uvm_release = invocation.uvm_release.value_or(
+            project::SystemVerilogUvmRelease::none);
+        for (const auto& directory : invocation.include_directories) {
+            source_set.include_directories.push_back(absolute_normalized(directory));
+        }
+        source_set.defines = invocation.defines;
+        config.source_sets.push_back(std::move(source_set));
+        iterator = std::prev(config.source_sets.end());
     }
     iterator->file_patterns.push_back(path);
     iterator->files.push_back(path);
@@ -494,97 +468,101 @@ void apply_overrides(const Invocation& invocation, project::Config& config) {
   config.systemc.libraries = invocation.systemc_libraries;
 }
 
-void print_help(std::ostream& output, const std::string_view program) {
-  output
-      << "Usage: " << program
-      << " <check|build|run|debug|tcl|compile|elaborate|simulate>"
-         " [options] [files...]\n"
-      << "\n"
-      << "Commands:\n"
-      << "  check   Parse and analyze sources\n"
-      << "  build   Elaborate and populate the native-code cache\n"
-      << "  run     Build incrementally and simulate in optimized mode\n"
-      << "  debug   Build incrementally and enter the interactive debugger\n"
-      << "  tcl     Enter Tcl or evaluate a Tcl script/command batch\n"
-      << "  compile Compile explicit HDL sources into a .fsimobj artifact\n"
-      << "  elaborate Elaborate explicit .fsimobj inputs into .fsimdesign\n"
-      << "  simulate Simulate an explicit .fsimdesign artifact\n"
-      << "  systemc compile Compile one SystemC C++ translation unit into .fsimscobj\n"
-      << "  systemc link Link .fsimscobj inputs into one .fsimscplugin\n"
-      << "\n"
-      << "Project and source options:\n"
-      << "  -p, --project PATH       Project manifest (default: fsim.toml)\n"
-      << "      --top [ALIAS=]NAME   Replace design tops; repeatable, aliases required for multiple\n"
-      << "      --lang LANGUAGE      Language for every direct source file\n"
-      << "      --standard VERSION   Standard for direct source files\n"
-      << "      --uvm-release VERSION\n"
-      << "                           Governed SystemVerilog UVM release: 1.2 or 2020.3.1\n"
-      << "      --compilation-unit file|source-set\n"
-      << "                           Compile files separately or as one unit\n"
-      << "      --library NAME       Library for direct source files (default: work)\n"
-      << "      --search-library NAME\n"
-      << "                           Replace the manifest elaboration search list; repeatable\n"
-      << "      --map-library NAME=DIRECTORY\n"
-      << "                           Replace manifest precompiled-library mappings; repeatable\n"
-      << "      --export-library NAME=DIRECTORY\n"
-      << "                           Publish a project library during build; repeatable\n"
-      << "  -I, --include PATH       Add a direct-source include directory\n"
-      << "  -D, --define NAME[=VAL]  Add a direct-source preprocessor definition\n"
-      << "      --output PATH        Output for compile or elaborate\n"
-      << "      --object PATH        Input object for elaborate; repeatable\n"
-      << "      --systemc-plugin PATH\n"
-      << "                           Linked SystemC input for elaborate; repeatable\n"
-      << "      --compiler PATH      SystemC C++ compiler executable\n"
-      << "      --compile-option ARG SystemC compiler option; repeatable\n"
-      << "      --link-option ARG    SystemC linker option; repeatable\n"
-      << "      --link-library ARG   SystemC link library/path; repeatable\n"
-      << "      --design PATH        Input design for simulate\n"
-      << "\n"
-      << "Build and run options:\n"
-      << "  -O, --optimization O0..O3\n"
-      << "  -j, --jobs COUNT\n"
-      << "      --duration TIME\n"
-      << "      --max-deltas COUNT\n"
-      << "      --delay-mode min|typ|max\n"
-      << "      --trace PATH\n"
-      << "      --trace-filter GLOB  Trace selection for simulate; repeatable\n"
-      << "      --cache PATH         Native cache for standalone simulate\n"
-      << "      --file-root PATH     File-I/O root for standalone simulate\n"
-      << "      --engine interpreter|compiled|debug\n"
-      << "      --seed COUNT|random\n"
-      << "      --diagnostics text|json\n"
-      << "\n"
-      << "Tcl options:\n"
-      << "  -c, --command SCRIPT    Evaluate Tcl text (repeatable)\n"
-      << "  SCRIPT [ARG...]         Evaluate a Tcl file with argv/argc set\n"
-      << "                          Omit both forms for interactive Tcl\n"
-      << "  -h, --help\n"
-      << "      --version\n";
+void print_help(std::ostream& output, const std::string_view program)
+{
+    output
+        << "Usage: " << program
+        << " <check|build|run|debug|tcl|compile|elaborate|simulate>"
+           " [options] [files...]\n"
+        << "\n"
+        << "Commands:\n"
+        << "  check   Parse and analyze sources\n"
+        << "  build   Elaborate and populate the native-code cache\n"
+        << "  run     Build incrementally and simulate in optimized mode\n"
+        << "  debug   Build incrementally and enter the interactive debugger\n"
+        << "  tcl     Enter Tcl or evaluate a Tcl script/command batch\n"
+        << "  compile Compile explicit HDL sources into a .fsimobj artifact\n"
+        << "  elaborate Elaborate explicit .fsimobj inputs into .fsimdesign\n"
+        << "  simulate Simulate an explicit .fsimdesign artifact\n"
+        << "  systemc compile Compile one SystemC C++ translation unit into .fsimscobj\n"
+        << "  systemc link Link .fsimscobj inputs into one .fsimscplugin\n"
+        << "\n"
+        << "Project and source options:\n"
+        << "  -p, --project PATH       Project manifest (default: fsim.toml)\n"
+        << "      --top [ALIAS=]NAME   Replace design tops; repeatable, aliases required for multiple\n"
+        << "      --lang LANGUAGE      Language for every direct source file\n"
+        << "      --standard VERSION   Standard for direct source files\n"
+        << "                           VHDL: 87/1987, 93/1993, 00/2000, 02/2002, 08/2008\n"
+        << "      --uvm-release VERSION\n"
+        << "                           Governed SystemVerilog UVM release: 1.2 or 2020.3.1\n"
+        << "      --compilation-unit file|source-set\n"
+        << "                           Compile files separately or as one unit\n"
+        << "      --library NAME       Library for direct source files (default: work)\n"
+        << "      --search-library NAME\n"
+        << "                           Replace the manifest elaboration search list; repeatable\n"
+        << "      --map-library NAME=DIRECTORY\n"
+        << "                           Replace manifest precompiled-library mappings; repeatable\n"
+        << "      --export-library NAME=DIRECTORY\n"
+        << "                           Publish a project library during build; repeatable\n"
+        << "  -I, --include PATH       Add a direct-source include directory\n"
+        << "  -D, --define NAME[=VAL]  Add a direct-source preprocessor definition\n"
+        << "      --output PATH        Output for compile or elaborate\n"
+        << "      --object PATH        Input object for elaborate; repeatable\n"
+        << "      --systemc-plugin PATH\n"
+        << "                           Linked SystemC input for elaborate; repeatable\n"
+        << "      --compiler PATH      SystemC C++ compiler executable\n"
+        << "      --compile-option ARG SystemC compiler option; repeatable\n"
+        << "      --link-option ARG    SystemC linker option; repeatable\n"
+        << "      --link-library ARG   SystemC link library/path; repeatable\n"
+        << "      --design PATH        Input design for simulate\n"
+        << "\n"
+        << "Build and run options:\n"
+        << "  -O, --optimization O0..O3\n"
+        << "  -j, --jobs COUNT\n"
+        << "      --duration TIME\n"
+        << "      --max-deltas COUNT\n"
+        << "      --delay-mode min|typ|max\n"
+        << "      --trace PATH\n"
+        << "      --trace-filter GLOB  Trace selection for simulate; repeatable\n"
+        << "      --cache PATH         Native cache for standalone simulate\n"
+        << "      --file-root PATH     File-I/O root for standalone simulate\n"
+        << "      --engine interpreter|compiled|debug\n"
+        << "      --seed COUNT|random\n"
+        << "      --diagnostics text|json\n"
+        << "\n"
+        << "Tcl options:\n"
+        << "  -c, --command SCRIPT    Evaluate Tcl text (repeatable)\n"
+        << "  SCRIPT [ARG...]         Evaluate a Tcl file with argv/argc set\n"
+        << "                          Omit both forms for interactive Tcl\n"
+        << "  -h, --help\n"
+        << "      --version\n";
 }
 
 void print_diagnostics(
     std::ostream& error,
     const diagnostic::Engine& diagnostics,
-    const DiagnosticFormat format) {
-  if (format == DiagnosticFormat::json) {
-    diagnostic::print_json(error, diagnostics);
-  } else {
-    diagnostic::print_text(error, diagnostics);
-  }
+    const DiagnosticFormat format)
+{
+    if (format == DiagnosticFormat::json) {
+        diagnostic::print_json(error, diagnostics);
+    } else {
+        diagnostic::print_text(error, diagnostics);
+    }
 }
 
-const Handler* select_handler(const Services& services, const Command command) {
-  switch (command) {
+const Handler* select_handler(const Services& services, const Command command)
+{
+    switch (command) {
     case Command::check:
-      return &services.check;
+        return &services.check;
     case Command::build:
-      return &services.build;
+        return &services.build;
     case Command::run:
-      return &services.run;
+        return &services.run;
     case Command::debug:
-      return &services.debug;
+        return &services.debug;
     case Command::tcl:
-      return &services.tcl;
+        return &services.tcl;
     case Command::compile:
       return &services.compile;
     case Command::elaborate:
@@ -595,7 +573,7 @@ const Handler* select_handler(const Services& services, const Command command) {
       return &services.systemc_compile;
     case Command::systemc_link:
       return &services.systemc_link;
-  }
+    }
   return nullptr;
 }
 

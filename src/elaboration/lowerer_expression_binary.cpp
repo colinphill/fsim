@@ -1071,6 +1071,23 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
             || *operation == BinaryOperator::power_unsigned
             || *operation == BinaryOperator::divide_unsigned
             || *operation == BinaryOperator::modulo_unsigned;
+        const bool synopsys_overload = arithmetic || relational
+            || expression.text == "=" || expression.text == "/=";
+        if (language_ == frontend::Language::Vhdl2008
+            && vhdl_synopsys_signed_visible_
+            && vhdl_synopsys_unsigned_visible_ && synopsys_overload
+            && (is_synopsys_std_logic_vector_expression(
+                    expression.operands[0])
+                || is_synopsys_std_logic_vector_expression(
+                    expression.operands[1]))) {
+            report(
+                "FSIM-ELAB-VHSYN-001",
+                "std_logic_signed and std_logic_unsigned expose conflicting "
+                "std_logic_vector overloads; remove one use clause or add "
+                "an explicit numeric conversion",
+                expression.span);
+            return std::nullopt;
+        }
         const bool lhs_signed = is_signed_expression(expression.operands[0]);
         const bool rhs_signed = is_signed_expression(expression.operands[1]);
         const bool signed_operation = lhs_signed && rhs_signed;

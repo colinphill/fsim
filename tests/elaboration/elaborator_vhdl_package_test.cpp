@@ -3,7 +3,8 @@
 
 namespace fsim::tests::elaboration {
 
-void test_vhdl_interface_package_generics() {
+void test_vhdl_interface_package_generics()
+{
     auto parsed = fsim::frontend::parse_text(
         "vhdl-package-generics.vhd",
         R"(
@@ -209,14 +210,14 @@ end architecture;
         [](const auto& value) {
             return value.first == "api"
                 && value.second.find("work.math_template")
-                    != std::string::npos;
+                != std::string::npos;
         }));
     assert(std::ranges::any_of(
         nested->parameter_identity_values,
         [](const auto& value) {
             return value.first == "api"
                 && value.second.find("bias=4")
-                    != std::string::npos;
+                != std::string::npos;
         }));
 
     const auto missing = fsim::frontend::parse_text(
@@ -396,18 +397,89 @@ end architecture;
             std::move(unit));
     }
     const std::vector<fsim::elaboration::Binding>
-        cross_language_binding{{
-            "cross_language_package.child",
+        cross_language_binding { { "cross_language_package.child",
             "vhdl:work.foreign_package_target(rtl)",
-            std::nullopt}};
-    const auto cross_language_result =
-        fsim::elaboration::elaborate(
-            cross_language_parent.design,
-            "sv:work.cross_language_package",
-            cross_language_binding);
+            std::nullopt } };
+    const auto cross_language_result = fsim::elaboration::elaborate(
+        cross_language_parent.design,
+        "sv:work.cross_language_package",
+        cross_language_binding);
     assert(!cross_language_result.ok());
     assert(has_diagnostic(
         cross_language_result, "FSIM-ELAB-VHPKG-002"));
+}
+
+void test_vhdl_predefined_environment_profiles()
+{
+    const auto parsed = fsim::frontend::parse_text(
+        "vhdl87-predefined-environment.vhd",
+        R"(
+entity environment_child is
+  port (source : in bit_vector(136 downto 0);
+        result : out bit_vector(136 downto 0));
+end environment_child;
+architecture rtl of environment_child is
+begin
+  result <= source;
+end rtl;
+
+entity environment_root is end environment_root;
+architecture rtl of environment_root is
+  component environment_child
+    port (source : in bit_vector(136 downto 0);
+          result : out bit_vector(136 downto 0));
+  end component;
+  signal source : bit_vector(136 downto 0);
+  signal result : bit_vector(136 downto 0);
+  signal delay_value : time;
+  signal universal_value : integer;
+begin
+  child : environment_child port map (source, result);
+  universal_value <= 68 + 69;
+end rtl;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl1987);
+    if (!parsed.ok()) {
+        for (const auto& diagnostic : parsed.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(parsed.ok());
+    const auto elaborated = fsim::elaboration::elaborate(
+        parsed.design, "vhdl:work.environment_root(rtl)");
+    if (!elaborated.ok()) {
+        for (const auto& diagnostic : elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated.ok());
+    const auto result = elaborated.design->find_signal(
+        "environment_root.child.result");
+    assert(result);
+    assert(elaborated.design->signals().at(*result).width == 137U);
+
+    const auto vhdl_1993 = fsim::frontend::parse_text(
+        "vhdl93-predefined-environment.vhd",
+        R"(
+entity vhdl93_predefined is end vhdl93_predefined;
+architecture rtl of vhdl93_predefined is
+  signal source : bit_vector(136 downto 0);
+  signal result : bit_vector(136 downto 0);
+  signal direction : boolean;
+begin
+  result <= source xnor (source sll 1);
+  direction <= source'ascending;
+end rtl;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl1993);
+    assert(vhdl_1993.ok());
+    const auto elaborated_1993 = fsim::elaboration::elaborate(
+        vhdl_1993.design, "vhdl:work.vhdl93_predefined(rtl)");
+    assert(elaborated_1993.ok());
 }
 
 } // namespace fsim::tests::elaboration

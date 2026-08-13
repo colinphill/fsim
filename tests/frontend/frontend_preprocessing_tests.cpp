@@ -931,10 +931,10 @@ parent_after
 }
 
 void test_vhdl_vertical_slice() {
-  constexpr std::string_view source = R"(
+    constexpr std::string_view source = R"(
 library ieee;
 use ieee.std_logic_1164.all;
-context work.shared;
+context work.shared_context;
 
 entity Counter is
   port (
@@ -963,86 +963,66 @@ begin
 end architecture RTL;
 )";
 
-  const auto result = parse_text("counter.vhd", source, Language::Vhdl2008);
-  require(result.ok(), "VHDL vertical slice must parse without errors");
-  require(result.design.units.size() == 2,
-          "VHDL entity and architecture must remain distinct units");
+    const auto result = parse_text("counter.vhd", source, Language::Vhdl2008);
+    require(result.ok(), "VHDL vertical slice must parse without errors");
+    require(result.design.units.size() == 2,
+        "VHDL entity and architecture must remain distinct units");
 
-  const auto *entity = result.design.find(UnitKind::VhdlEntity, "counter");
-  require(entity != nullptr, "VHDL names must be canonicalized");
-  require(entity->vhdl_context.size() == 3,
-          "VHDL context items must attach to the following unit");
-  require(entity->vhdl_context[0].kind == VhdlContextItemKind::LibraryClause &&
-              entity->vhdl_context[0].selected_names ==
-                  std::vector<std::string>{"ieee"},
-          "library clause representation");
-  require(entity->vhdl_context[1].kind == VhdlContextItemKind::UseClause &&
-              entity->vhdl_context[1].selected_names ==
-                  std::vector<std::string>{"ieee.std_logic_1164.all"},
-          "use clause representation");
-  require(entity->vhdl_context[2].kind ==
-                  VhdlContextItemKind::ContextReference &&
-              entity->vhdl_context[2].selected_names ==
-                  std::vector<std::string>{"work.shared"},
-          "context reference representation");
-  require(entity->ports.size() == 2, "entity port count");
-  require(entity->ports[1].type.width() == 8, "VHDL vector width");
-  require(entity->ports[1].type.domain == ValueDomain::Logic9,
-          "std_logic_vector must retain nine-state domain");
+    const auto* entity = result.design.find(UnitKind::VhdlEntity, "counter");
+    require(entity != nullptr, "VHDL names must be canonicalized");
+    require(entity->vhdl_context.size() == 3,
+        "VHDL context items must attach to the following unit");
+    require(entity->vhdl_context[0].kind == VhdlContextItemKind::LibraryClause && entity->vhdl_context[0].selected_names == std::vector<std::string> { "ieee" },
+        "library clause representation");
+    require(entity->vhdl_context[1].kind == VhdlContextItemKind::UseClause && entity->vhdl_context[1].selected_names == std::vector<std::string> { "ieee.std_logic_1164.all" },
+        "use clause representation");
+    require(entity->vhdl_context[2].kind == VhdlContextItemKind::ContextReference && entity->vhdl_context[2].selected_names == std::vector<std::string> { "work.shared_context" },
+        "context reference representation");
+    require(entity->ports.size() == 2, "entity port count");
+    require(entity->ports[1].type.width() == 8, "VHDL vector width");
+    require(entity->ports[1].type.domain == ValueDomain::Logic9,
+        "std_logic_vector must retain nine-state domain");
 
-  const auto *architecture =
-      result.design.find(UnitKind::VhdlArchitecture, "rtl");
-  require(architecture != nullptr, "architecture lookup");
-  require(architecture->vhdl_context.empty(),
-          "a context clause applies only to its following library unit");
-  require(architecture->primary_name == "counter",
-          "architecture must identify its entity");
-  require(architecture->signals.size() == 1, "architecture signal count");
-  require(architecture->concurrent_statements.size() == 1,
-          "concurrent assignment count");
-  require(architecture->instances.size() == 2, "VHDL instance count");
-  const auto &direct_instance = architecture->instances[0];
-  require(direct_instance.name == "direct_child",
-          "VHDL instance names must be canonicalized");
-  require(direct_instance.unit_name == "work.child(gates)",
-          "direct entity library, unit, and architecture");
-  require(direct_instance.connections.size() == 2,
-          "direct entity connection count");
-  require(!direct_instance.connections[0].port,
-          "VHDL positional actual remains positional");
-  require(direct_instance.connections[0].value.kind ==
-                  ExpressionKind::Identifier &&
-              direct_instance.connections[0].value.text == "clk",
-          "VHDL positional actual identifier");
-  require(direct_instance.connections[1].port ==
-                  std::optional<std::string>{"q"} &&
-              direct_instance.connections[1].value.text == "q",
-          "VHDL positional-then-named connection");
-  require(direct_instance.span.source_name == "counter.vhd" &&
-              direct_instance.span.begin.line > 1 &&
-              direct_instance.connections[0].span.begin.line > 1,
-          "VHDL instance and connection source spans");
-  const auto &component_instance = architecture->instances[1];
-  require(component_instance.name == "component_child" &&
-              component_instance.unit_name == "child",
-          "component-style VHDL instance");
-  require(component_instance.connections.size() == 2 &&
-              component_instance.connections[1].port ==
-                  std::optional<std::string>{"result"} &&
-              component_instance.connections[1].value.text == "count",
-          "component-style named and positional connections");
-  require(architecture->processes.size() == 1, "process count");
-  const auto &process = architecture->processes.front();
-  require(process.name == "update", "process label");
-  require(process.sensitivities.size() == 1, "VHDL sensitivity count");
-  require(process.sensitivities.front().edge == EdgeKind::Any,
-          "an edge guard with an else branch must retain any-edge sensitivity");
-  require(process.statements.size() == 1 &&
-              process.statements.front().kind == StatementKind::If,
-          "VHDL if statement");
-  require(process.statements.front().statements.front().assignment_kind ==
-              AssignmentKind::VhdlSignal,
-          "VHDL sequential signal assignment");
+    const auto* architecture = result.design.find(UnitKind::VhdlArchitecture, "rtl");
+    require(architecture != nullptr, "architecture lookup");
+    require(architecture->vhdl_context.empty(),
+        "a context clause applies only to its following library unit");
+    require(architecture->primary_name == "counter",
+        "architecture must identify its entity");
+    require(architecture->signals.size() == 1, "architecture signal count");
+    require(architecture->concurrent_statements.size() == 1,
+        "concurrent assignment count");
+    require(architecture->instances.size() == 2, "VHDL instance count");
+    const auto& direct_instance = architecture->instances[0];
+    require(direct_instance.name == "direct_child",
+        "VHDL instance names must be canonicalized");
+    require(direct_instance.unit_name == "work.child(gates)",
+        "direct entity library, unit, and architecture");
+    require(direct_instance.connections.size() == 2,
+        "direct entity connection count");
+    require(!direct_instance.connections[0].port,
+        "VHDL positional actual remains positional");
+    require(direct_instance.connections[0].value.kind == ExpressionKind::Identifier && direct_instance.connections[0].value.text == "clk",
+        "VHDL positional actual identifier");
+    require(direct_instance.connections[1].port == std::optional<std::string> { "q" } && direct_instance.connections[1].value.text == "q",
+        "VHDL positional-then-named connection");
+    require(direct_instance.span.source_name == "counter.vhd" && direct_instance.span.begin.line > 1 && direct_instance.connections[0].span.begin.line > 1,
+        "VHDL instance and connection source spans");
+    const auto& component_instance = architecture->instances[1];
+    require(component_instance.name == "component_child" && component_instance.unit_name == "child",
+        "component-style VHDL instance");
+    require(component_instance.connections.size() == 2 && component_instance.connections[1].port == std::optional<std::string> { "result" } && component_instance.connections[1].value.text == "count",
+        "component-style named and positional connections");
+    require(architecture->processes.size() == 1, "process count");
+    const auto& process = architecture->processes.front();
+    require(process.name == "update", "process label");
+    require(process.sensitivities.size() == 1, "VHDL sensitivity count");
+    require(process.sensitivities.front().edge == EdgeKind::Any,
+        "an edge guard with an else branch must retain any-edge sensitivity");
+    require(process.statements.size() == 1 && process.statements.front().kind == StatementKind::If,
+        "VHDL if statement");
+    require(process.statements.front().statements.front().assignment_kind == AssignmentKind::VhdlSignal,
+        "VHDL sequential signal assignment");
 }
 
 void test_vhdl_falling_edge_guard() {

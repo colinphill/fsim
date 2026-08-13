@@ -65,12 +65,39 @@ class AnalysisOrderValidator {
   }
 
  private:
-  void report(
-      const std::string_view code,
-      std::string message,
-      const frontend::SourceSpan& source) {
-    diagnostics_.error(std::string{code}, std::move(message), span(source));
-  }
+     using RevisionIndex = std::map<std::string, frontend::VhdlStandard>;
+
+     void report(
+         const std::string_view code,
+         std::string message,
+         const frontend::SourceSpan& source)
+     {
+         diagnostics_.error(std::string { code }, std::move(message), span(source));
+     }
+
+     [[nodiscard]] bool validate_dependency(
+         const RevisionIndex& index,
+         const std::string& key,
+         const std::string_view kind,
+         const DesignUnit& owner,
+         const frontend::SourceSpan& source)
+     {
+         const auto found = index.find(key);
+         if (found == index.end()) {
+             return false;
+         }
+         if (found->second != owner.vhdl_standard) {
+             report(
+                 "FSIM-FE-VHORDER-011",
+                 "VHDL " + std::string { kind } + " '" + key
+                     + "' was analyzed as "
+                     + std::string { frontend::to_string(found->second) }
+                     + " but the owning source uses "
+                     + std::string { frontend::to_string(owner.vhdl_standard) },
+                 source);
+         }
+         return true;
+     }
 
   void validate_context(const DesignUnit& unit) {
     const auto owner_library = library_of(unit);
@@ -83,13 +110,15 @@ class AnalysisOrderValidator {
             continue;
           }
           const auto library = selected_library(parts[0], owner_library);
-          if (!packages_.contains(primary_key(library, parts[1]))) {
-            report(
-                "FSIM-FE-VHORDER-004",
-                "VHDL package '" + library + "."
-                    + std::string{parts[1]}
-                    + "' must be analyzed before its use clause",
-                item.span);
+          if (!validate_dependency(
+                  packages_, primary_key(library, parts[1]), "package",
+                  unit, item.span)) {
+              report(
+                  "FSIM-FE-VHORDER-004",
+                  "VHDL package '" + library + "."
+                      + std::string { parts[1] }
+                      + "' must be analyzed before its use clause",
+                  item.span);
           }
         } else if (
             item.kind
@@ -99,13 +128,15 @@ class AnalysisOrderValidator {
             continue;
           }
           const auto library = selected_library(parts[0], owner_library);
-          if (!contexts_.contains(primary_key(library, parts[1]))) {
-            report(
-                "FSIM-FE-VHORDER-003",
-                "VHDL context '" + library + "."
-                    + std::string{parts[1]}
-                    + "' must be analyzed before it is referenced",
-                item.span);
+          if (!validate_dependency(
+                  contexts_, primary_key(library, parts[1]), "context",
+                  unit, item.span)) {
+              report(
+                  "FSIM-FE-VHORDER-003",
+                  "VHDL context '" + library + "."
+                      + std::string { parts[1] }
+                      + "' must be analyzed before it is referenced",
+                  item.span);
           }
         }
       }
@@ -114,158 +145,178 @@ class AnalysisOrderValidator {
 
   void validate_binding(
       const frontend::VhdlBindingIndication& binding,
-      const std::string_view owner_library) {
-    if (binding.kind == frontend::VhdlBindingAspectKind::Open) {
-      return;
-    }
-    if (binding.kind == frontend::VhdlBindingAspectKind::Configuration) {
-      const auto parts = selected_name_parts(binding.configuration_name);
-      if (parts.empty() || parts.size() > 2) {
-        return;
+      const DesignUnit& owner)
+  {
+      const auto owner_library = library_of(owner);
+      if (binding.kind == frontend::VhdlBindingAspectKind::Open) {
+          return;
+      }
+      if (binding.kind == frontend::VhdlBindingAspectKind::Configuration) {
+          const auto parts = selected_name_parts(binding.configuration_name);
+          if (parts.empty() || parts.size() > 2) {
+              return;
+          }
+          const auto library = parts.size() == 2
+              ? selected_library(parts[0], owner_library)
+              : std::string { owner_library };
+          if (!validate_dependency(
+                  configurations_, primary_key(library, parts.back()),
+                  "configuration", owner, binding.span)) {
+              report(
+                  "FSIM-FE-VHORDER-008",
+                  "VHDL configuration '" + library + "."
+                      + std::string { parts.back() }
+                      + "' must be analyzed before it is used in a binding",
+                  binding.span);
+          }
+          return;
+      }
+
+      const auto parts = selected_name_parts(binding.entity_name);
+      if (parts.empty() || parts.size() > 2
+          || binding.architecture_name.empty()) {
+          return;
       }
       const auto library = parts.size() == 2
           ? selected_library(parts[0], owner_library)
-          : std::string{owner_library};
-      if (!configurations_.contains(primary_key(library, parts.back()))) {
-        report(
-            "FSIM-FE-VHORDER-008",
-            "VHDL configuration '" + library + "."
-                + std::string{parts.back()}
-                + "' must be analyzed before it is used in a binding",
-            binding.span);
+          : std::string { owner_library };
+      const auto entity = parts.back();
+      if (!validate_dependency(
+              entities_, primary_key(library, entity), "entity", owner,
+              binding.span)) {
+          report(
+              "FSIM-FE-VHORDER-007",
+              "VHDL entity '" + library + "." + std::string { entity }
+                  + "' must be analyzed before it is used in a binding",
+              binding.span);
       }
-      return;
-    }
-
-    const auto parts = selected_name_parts(binding.entity_name);
-    if (parts.empty() || parts.size() > 2
-        || binding.architecture_name.empty()) {
-      return;
-    }
-    const auto library = parts.size() == 2
-        ? selected_library(parts[0], owner_library)
-        : std::string{owner_library};
-    const auto entity = parts.back();
-    if (!entities_.contains(primary_key(library, entity))) {
-      report(
-          "FSIM-FE-VHORDER-007",
-          "VHDL entity '" + library + "." + std::string{entity}
-              + "' must be analyzed before it is used in a binding",
-          binding.span);
-    }
-    if (!architectures_.contains(architecture_key(
-            library, entity, binding.architecture_name))) {
-      report(
-          "FSIM-FE-VHORDER-006",
-          "VHDL architecture '" + library + "."
-              + std::string{entity} + "("
-              + binding.architecture_name
-              + ")' must be analyzed before it is used in a binding",
-          binding.span);
-    }
+      if (!validate_dependency(
+              architectures_, architecture_key(library, entity, binding.architecture_name),
+              "architecture", owner, binding.span)) {
+          report(
+              "FSIM-FE-VHORDER-006",
+              "VHDL architecture '" + library + "."
+                  + std::string { entity } + "("
+                  + binding.architecture_name
+                  + ")' must be analyzed before it is used in a binding",
+              binding.span);
+      }
   }
 
   void validate_block(
       const frontend::VhdlBlockConfiguration& block,
-      const std::string_view owner_library) {
-    for (const auto& component : block.component_configurations) {
-      validate_binding(component.binding, owner_library);
-    }
-    for (const auto& child : block.block_configurations) {
-      validate_block(child, owner_library);
-    }
+      const DesignUnit& owner)
+  {
+      for (const auto& component : block.component_configurations) {
+          validate_binding(component.binding, owner);
+      }
+      for (const auto& child : block.block_configurations) {
+          validate_block(child, owner);
+      }
   }
 
   void validate_instances(
       const std::span<const frontend::Instance> instances,
-      const std::string_view owner_library) {
-    for (const auto& instance : instances) {
-      if (!instance.vhdl_configuration_instance) {
-        continue;
+      const DesignUnit& owner)
+  {
+      const auto owner_library = library_of(owner);
+      for (const auto& instance : instances) {
+          if (!instance.vhdl_configuration_instance) {
+              continue;
+          }
+          const auto parts = selected_name_parts(instance.unit_name);
+          if (parts.empty() || parts.size() > 2) {
+              continue;
+          }
+          const auto library = parts.size() == 2
+              ? selected_library(parts[0], owner_library)
+              : std::string { owner_library };
+          if (!validate_dependency(
+                  configurations_, primary_key(library, parts.back()),
+                  "configuration", owner, instance.span)) {
+              report(
+                  "FSIM-FE-VHORDER-008",
+                  "VHDL configuration '" + library + "."
+                      + std::string { parts.back() }
+                      + "' must be analyzed before its direct instantiation",
+                  instance.span);
+          }
       }
-      const auto parts = selected_name_parts(instance.unit_name);
-      if (parts.empty() || parts.size() > 2) {
-        continue;
-      }
-      const auto library = parts.size() == 2
-          ? selected_library(parts[0], owner_library)
-          : std::string{owner_library};
-      if (!configurations_.contains(
-              primary_key(library, parts.back()))) {
-        report(
-            "FSIM-FE-VHORDER-008",
-            "VHDL configuration '" + library + "."
-                + std::string{parts.back()}
-                + "' must be analyzed before its direct instantiation",
-            instance.span);
-      }
-    }
   }
 
   void validate_generate_body(
       const frontend::GenerateBody& body,
-      const std::string_view owner_library) {
-    validate_instances(body.instances, owner_library);
-    for (const auto& region : body.generate_regions) {
-      validate_generate_region(region, owner_library);
-    }
+      const DesignUnit& owner)
+  {
+      validate_instances(body.instances, owner);
+      for (const auto& region : body.generate_regions) {
+          validate_generate_region(region, owner);
+      }
   }
 
   void validate_generate_region(
       const frontend::GenerateRegion& region,
-      const std::string_view owner_library) {
-    validate_generate_body(region.then_body, owner_library);
-    validate_generate_body(region.else_body, owner_library);
-    for (const auto& alternative : region.alternatives) {
-      validate_generate_body(alternative.body, owner_library);
-    }
+      const DesignUnit& owner)
+  {
+      validate_generate_body(region.then_body, owner);
+      validate_generate_body(region.else_body, owner);
+      for (const auto& alternative : region.alternatives) {
+          validate_generate_body(alternative.body, owner);
+      }
   }
 
   void validate_unit(const DesignUnit& unit) {
     const auto library = library_of(unit);
     switch (unit.kind) {
       case frontend::UnitKind::VhdlArchitecture:
-        if (!entities_.contains(primary_key(library, unit.primary_name))) {
-          report(
-              "FSIM-FE-VHORDER-001",
-              "VHDL entity '" + library + "." + unit.primary_name
-                  + "' must be analyzed before architecture '"
-                  + unit.name + "'",
-              unit.span);
-        }
+          if (!validate_dependency(
+                  entities_, primary_key(library, unit.primary_name),
+                  "entity", unit, unit.span)) {
+              report(
+                  "FSIM-FE-VHORDER-001",
+                  "VHDL entity '" + library + "." + unit.primary_name
+                      + "' must be analyzed before architecture '"
+                      + unit.name + "'",
+                  unit.span);
+          }
         break;
       case frontend::UnitKind::VhdlPackage:
-        if (!unit.primary_name.empty()
-            && !packages_.contains(primary_key(library, unit.name))) {
-          report(
-              "FSIM-FE-VHORDER-002",
-              "VHDL package '" + library + "." + unit.name
-                  + "' must be analyzed before its body",
-              unit.span);
-        }
+          if (!unit.primary_name.empty()
+              && !validate_dependency(
+                  packages_, primary_key(library, unit.name), "package",
+                  unit, unit.span)) {
+              report(
+                  "FSIM-FE-VHORDER-002",
+                  "VHDL package '" + library + "." + unit.name
+                      + "' must be analyzed before its body",
+                  unit.span);
+          }
         break;
       case frontend::UnitKind::VhdlConfiguration:
-        if (!entities_.contains(primary_key(library, unit.primary_name))) {
-          report(
-              "FSIM-FE-VHORDER-005",
-              "VHDL entity '" + library + "." + unit.primary_name
-                  + "' must be analyzed before configuration '"
-                  + unit.name + "'",
-              unit.span);
-        }
+          if (!validate_dependency(
+                  entities_, primary_key(library, unit.primary_name),
+                  "entity", unit, unit.span)) {
+              report(
+                  "FSIM-FE-VHORDER-005",
+                  "VHDL entity '" + library + "." + unit.primary_name
+                      + "' must be analyzed before configuration '"
+                      + unit.name + "'",
+                  unit.span);
+          }
         if (unit.vhdl_configuration) {
           const auto& block = unit.vhdl_configuration->block;
-          if (!architectures_.contains(architecture_key(
-                  library, unit.primary_name, block.block_name))) {
-            report(
-                "FSIM-FE-VHORDER-006",
-                "VHDL architecture '" + library + "."
-                    + unit.primary_name + "(" + block.block_name
-                    + ")' must be analyzed before configuration '"
-                    + unit.name + "'",
-                block.span);
+          if (!validate_dependency(
+                  architectures_, architecture_key(library, unit.primary_name, block.block_name),
+                  "architecture", unit, block.span)) {
+              report(
+                  "FSIM-FE-VHORDER-006",
+                  "VHDL architecture '" + library + "."
+                      + unit.primary_name + "(" + block.block_name
+                      + ")' must be analyzed before configuration '"
+                      + unit.name + "'",
+                  block.span);
           }
-          validate_block(block, library);
+          validate_block(block, unit);
         }
         break;
       default:
@@ -273,11 +324,11 @@ class AnalysisOrderValidator {
     }
     for (const auto& specification :
          unit.vhdl_configuration_specifications) {
-      validate_binding(specification.binding, library);
+        validate_binding(specification.binding, unit);
     }
-    validate_instances(unit.instances, library);
+    validate_instances(unit.instances, unit);
     for (const auto& region : unit.generate_regions) {
-      validate_generate_region(region, library);
+        validate_generate_region(region, unit);
     }
   }
 
@@ -299,22 +350,23 @@ class AnalysisOrderValidator {
     switch (unit.kind) {
       case frontend::UnitKind::VhdlEntity:
         record_primary();
-        entities_.insert(primary_key(library, unit.name));
+        entities_.insert_or_assign(primary_key(library, unit.name), unit.vhdl_standard);
         break;
       case frontend::UnitKind::VhdlArchitecture:
         record_secondary(
             architecture_key(library, unit.primary_name, unit.name));
-        architectures_.insert(architecture_key(
-            library, unit.primary_name, unit.name));
+        architectures_.insert_or_assign(architecture_key(
+                                            library, unit.primary_name, unit.name),
+            unit.vhdl_standard);
         break;
       case frontend::UnitKind::VhdlConfiguration:
         record_primary();
-        configurations_.insert(primary_key(library, unit.name));
+        configurations_.insert_or_assign(primary_key(library, unit.name), unit.vhdl_standard);
         break;
       case frontend::UnitKind::VhdlPackage:
         if (unit.primary_name.empty()) {
           record_primary();
-          packages_.insert(primary_key(library, unit.name));
+          packages_.insert_or_assign(primary_key(library, unit.name), unit.vhdl_standard);
         } else {
           record_secondary(
               primary_key(library, unit.name) + "\npackage-body");
@@ -322,7 +374,7 @@ class AnalysisOrderValidator {
         break;
       case frontend::UnitKind::VhdlContext:
         record_primary();
-        contexts_.insert(primary_key(library, unit.name));
+        contexts_.insert_or_assign(primary_key(library, unit.name), unit.vhdl_standard);
         break;
       case frontend::UnitKind::VhdlPslVerificationUnit:
         record_primary();
@@ -333,11 +385,11 @@ class AnalysisOrderValidator {
   }
 
   diagnostic::Engine& diagnostics_;
-  std::set<std::string> entities_;
-  std::set<std::string> architectures_;
-  std::set<std::string> packages_;
-  std::set<std::string> contexts_;
-  std::set<std::string> configurations_;
+  RevisionIndex entities_;
+  RevisionIndex architectures_;
+  RevisionIndex packages_;
+  RevisionIndex contexts_;
+  RevisionIndex configurations_;
   std::set<std::string> primary_units_;
   std::set<std::string> secondary_units_;
 };

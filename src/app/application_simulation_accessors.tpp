@@ -33,6 +33,12 @@ Simulation::mapped_libraries() const noexcept
     return impl_->built.mapped_libraries;
 }
 
+const std::vector<VhdlUnitProvenance>&
+Simulation::vhdl_unit_provenance() const noexcept
+{
+    return impl_->built.vhdl_unit_provenance;
+}
+
 std::string_view Simulation::time_resolution() const noexcept
 {
     return impl_->built.time_resolution;

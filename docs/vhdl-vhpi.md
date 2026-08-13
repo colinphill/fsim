@@ -6,11 +6,19 @@ and portable handle remapping, also see the public
 [`vhdl-psl.md`](vhdl-psl.md) support boundary and
 [`vhdl-psl-tutorial.md`](vhdl-psl-tutorial.md).
 
-fsim v2 provides a simulation-owned, versioned VHPI boundary for VHDL-2008.
+fsim v2 provides a simulation-owned, versioned VHPI boundary for VHDL-87,
+VHDL-93, VHDL-2000, VHDL-2002 and VHDL-2008.
 The implementation uses stable integer identities and owning C++ services;
 plug-ins and portable artifacts never receive addresses of simulator objects.
 VHPI handles, regions, selected names, values, and restart rules are distinct
 from the SystemVerilog VPI boundary.
+
+Each visible older-mode scope reports its canonical year, revision-specific
+predefined-environment identity, compiler compatibility profile and exact
+selected package revision/digest records. The same fields survive standalone
+design load, relocation, checkpoint remapping and replay. Compiler-owned
+`ieee.std_logic_*` implementation units are deliberately absent from hierarchy
+enumeration; user occurrences expose only their dependency provenance.
 
 ## ABI and plug-in lifecycle
 

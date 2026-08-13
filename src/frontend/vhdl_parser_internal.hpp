@@ -47,9 +47,11 @@ simple_integer_constant(const Expression &expression) {
 
 class VhdlParser final : private detail::ParserBase {
 public:
-  explicit VhdlParser(LexResult lexed);
+    explicit VhdlParser(
+        LexResult lexed,
+        VhdlStandard standard = VhdlStandard::Vhdl2008);
 
-  ParseResult run();
+    ParseResult run();
 
 private:
   static SourceSpan span_from(const Token &first, const Token &last);
@@ -59,6 +61,10 @@ private:
   std::optional<VhdlContextItem> parse_context_item();
 
   Token expect_identifier(std::string_view description);
+
+  bool require_vhdl_standard(const Token& token, VhdlStandard minimum,
+      std::string_view feature,
+      std::string_view migration);
 
   DesignUnit parse_context_declaration(const Token &start);
 
@@ -312,6 +318,7 @@ private:
   bool numeric_bit_context_{};
   bool in_vhdl_function_{};
   bool in_vhdl_procedure_{};
+  VhdlStandard vhdl_standard_ { VhdlStandard::Vhdl2008 };
 };
 
 } // namespace fsim::frontend

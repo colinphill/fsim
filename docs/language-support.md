@@ -27,6 +27,159 @@ values, traces, artifacts, relocation, and caches. The explicit VPI `uint32_t`
 descriptor width and governed memory/work/trace budgets are physical host or
 resource ceilings, not Verilog legality limits.
 
+Batch 166 currently makes VHDL-87, VHDL-93, VHDL-2000 and VHDL-2002 explicit
+selectable source profiles while retaining VHDL-2008 as the default. The
+selected revision is preserved through source and analyzed logical-library
+identity, and incompatible dependency use or reanalysis is rejected instead of
+being silently interpreted under another revision. Revision-specific grammar
+and predefined environments follow the selected typed revision.
+Lexical selection is revision-correct: VHDL-93, VHDL-2000 and VHDL-2008
+reserved-word additions remain identifiers before their introduction;
+extended identifiers begin in VHDL-93; and VHDL-2008 delimited comments,
+question-mark/external-name delimiters, explicit bit-string lengths, decimal
+bases, signed/unsigned bases and non-numeric bit digits receive exact-span
+migration diagnostics in older modes. Legacy B/O/X literals and arbitrary
+bit-string widths remain exact. Declaration selection also enforces the
+VHDL-93 introduction of shared variables, groups, alias signatures and modern
+file opening, the VHDL-2000 introduction of protected types, and the VHDL-2008
+introduction of type, subprogram and package interfaces plus unconstrained
+array element subtypes. VHDL-87 `is in`/`is out` file objects normalize to the
+same typed open-kind HIR as later declarations. Unavailable features use
+`FSIM-FE-VHSTD-003`; malformed forms retain their parser diagnostics. Exact
+array bounds, direction and arbitrary-width aggregate values are unchanged.
+VHDL-1993 legacy unprotected shared variables execute as one bounded
+scalar/packed shared identity with static initialization and deterministic
+source-ordered process access. VHDL-2000, VHDL-2002 and VHDL-2008 instead
+require a protected type; the legacy form receives
+`FSIM-ELAB-VHPROTECTED-008`. Protected private storage and public method calls
+execute under both older protected-type revisions. Methods are atomic because
+the bounded executable profile rejects suspension and reentry, and every fresh
+simulation reconstructs private/shared initial state. Interpreter and LLVM
+produce the same VHDL-1993/2000/2002 results without weakening multi-driver
+checks for actual signals.
+Expression selection is revision-correct as well: `xnor` and the six shift/
+rotate operators begin in VHDL-93, while unary logical reductions, `??`,
+matching equality, conditional/case expressions, external names and direct
+selection/indexing of function results require VHDL-2008. Qualification,
+conversion, named association, universal integer actuals and null array ranges
+remain available in their older owning revisions. Expected result types
+participate in deterministic overload selection; ambiguous package-style
+profiles reject explicitly. Interpreter and LLVM execution retain exact
+137-bit results, and zero-width null-array frames do not acquire host-word
+storage.
+Structural selection is revision-correct. VHDL-87 retains component
+instantiation, positional/named port maps, explicit sensitivity lists,
+packages and configuration declarations. Direct entity/configuration
+instantiation, postponed concurrent statements and standalone `report` begin
+in VHDL-93. Context declarations/references, `process(all)`, force/release,
+sequential conditional/selected assignments, matching case/select, case
+generate and if-generate alternatives require VHDL-2008 and receive an exact
+migration diagnostic in older modes. Nonstatic input-port expressions require
+VHDL-2008; older modes retain whole/selected signal names, historical
+single-argument conversion interpretations and static values. A VHDL-93
+component/direct-entity application executes an exact selected 137-bit port
+actual without narrowing, while the same revision rejects a dynamic composed
+port expression that VHDL-2008 elaborates.
+Each VHDL unit owns a canonical `ieee-1076-standard:<year>:fsim-v1`
+environment with its working library, implicit `std`/`work` and
+`std.standard.all` visibility, exact standard declarations and operator
+profiles, the `fs` through `hr` time-unit ladder with `fs` as the default, and
+revision-correct attributes. File status types, `xnor`, shifts/rotates,
+image/value and the signal/name attribute family begin in VHDL-93. Standard
+Boolean/integer/real/time vector types, reductions, condition/minimum/maximum
+operators and subtype/element attributes remain VHDL-2008-only. Compiler-owned
+IEEE packages are parsed under the requesting source's revision, later package
+families are rejected at their owning use clause, and one project cannot mix
+incompatible revisions of the same intrinsic IEEE environment. Older modes do
+not inherit VHDL-2008 string-conversion intrinsics such as `to_hstring`.
+Compiler-owned IEEE and Synopsys package projections are parsed under every
+older selectable revision. The
+historical `ieee.std_logic_signed`, `std_logic_unsigned`, `std_logic_arith` and
+`std_logic_misc` profiles are explicitly non-standard Synopsys compatibility
+dependencies; selecting an older VHDL revision alone does not make them
+visible. An explicit use clause injects a clean-room declaration projection
+with the historical package name, type/subtype names, conversion/reduction
+functions and exact overload profiles. Each analyzed projection records the
+package name, selected VHDL year and `synopsys-legacy-ieee:1990-1992` origin in
+its compiler-owned revision identity. VHDL-1993 and later projections coexist
+deterministically with `numeric_std`; redeclaration and incompatible projection
+fail at the owning use/source boundary. The clean-room executable profile
+implements the historical arithmetic, comparison, conversion, extension,
+shift and reduction families without a host-word width cap. A visible
+`std_logic_signed` or `std_logic_unsigned` package controls the interpretation
+of ordinary `std_logic_vector` arithmetic and comparison in its owning design
+unit, including ascending and descending constraints. `std_logic_arith`
+conversions retain exact arbitrary-width results, `std_logic_misc` reductions
+propagate standard-logic unknowns and use the historical identities on null
+vectors, and zero-width built-in vector constraints remain concrete through
+elaboration. Simultaneously importing signed and unsigned vector overloads is
+not resolved by preference: a genuinely conflicting expression fails with
+`FSIM-ELAB-VHSYN-001`; use one package, qualify `conv_integer`, or convert to an
+explicit standard numeric type.
+
+The revision-indexed conformance corpus is published in
+`tests/feature_matrix/vhdl_revision_corpus.tsv`: every VHDL-87, VHDL-93,
+VHDL-2000 and VHDL-2002 row owns a legal older semantic witness and an exact
+negative witness for a later construct. The companion
+`vhdl_synopsys_package_corpus.tsv` assigns every compatibility package its
+positive execution, negative diagnostic, arbitrary-width and revision-
+provenance evidence. The registered inventory gate verifies every evidence
+file and anchor so the published support table cannot drift from executable
+coverage.
+
+The serial `fsim.vhdl-standard-mode-closure-matrix` composes that corpus with
+the frontend, all four revision/package environments, arbitrary-width numeric
+execution, older-mode mixed SystemVerilog execution, artifacts, LLVM, public
+C/C++/Tcl services and the MSVC/Windows/tool/resource contracts. It retains a
+stage ledger and one verbose log per witness. Exact transcript tokens bind all
+four years and packages, interpreter/LLVM O0/O2, 137-bit ascending/descending
+operations, historical null reductions, ambiguity rejection, debugger/VHPI/
+VCD provenance, caches, relocation, replay and checkpoints. Each owning
+execution process applies the portable 6 GiB ceiling; delta-1000, VCD-64,
+1,200-second stage and 7,200-second serial-matrix limits are resource ceilings,
+not VHDL legality or width limits.
+
+Batch 166 cache identity independently binds the selected canonical VHDL year
+and the compiler-owned `fsim-synopsys-ieee-compat-v2` profile. `.fsimlib`
+format 2, `.fsimobj` format 4 and `.fsimdesign` format 6 retain each selected
+Synopsys package name, revision-specific predefined-environment identity and
+exact clean-room source digest. `.fsimdesign` format 7 additionally indexes
+that identity per semantic VHDL unit, so standalone debugger, VHPI, activity
+and VCD provenance remains available after source/object removal and design
+relocation. Object and design provenance digests cover the complete dependency
+records. Reload regenerates the current compiler packages and rejects stale,
+unavailable, omitted, unordered, unit-inconsistent or digest-mismatched
+dependencies with `FSIM-ART-VHDEP-001`, `FSIM-ART-0011` or `FSIM-ART-0014`; it
+never silently substitutes a newer implementation. Verilog and SystemVerilog
+explicitly use the `none` compatibility profile. An identical VHDL profile
+reuses the same native object, while changing the year, compatibility
+implementation, package source or design provenance produces a deterministic
+miss. Unsupported future object/design schemas retain the established
+`FSIM-ART-0001` and `FSIM-ART-0010` diagnostics.
+
+Older-revision execution uses that retained identity end to end. VHDL-87,
+VHDL-93, VHDL-2000 and VHDL-2002 component hierarchies execute on both the
+interpreter and LLVM engines at O0 and O2 when either a SystemVerilog parent
+drives a VHDL child or a VHDL parent drives a SystemVerilog child. The common
+boundary retains all Logic9 planes during Logic9-to-Logic4 projection, while
+the owning VHDL process retains ascending and descending 137-bit bounds and
+the `std_logic_unsigned` overload selected by its source revision. The same
+scheduler preserves time and delta ordering through the existing multiple-root
+VHDL/SystemVerilog/SystemC boundary. Optimization and language conversion do
+not select a different compatibility overload or reinterpret array direction.
+
+Public VHDL introspection now retains that same identity. Each elaborated
+VHDL scope exposes its canonical year, predefined-environment identity,
+compatibility profile and selected compiler-package name/revision through the
+bounded debugger snapshot and VHPI object metadata. Execution-point activity
+inherits the year/profile from the owning process, and VCD output emits stable
+scope/unit/source provenance comments. Exact 137-bit values remain mutable
+through deposit/force/release without narrowing. Compiler package projections
+remain dependencies rather than user hierarchy: neither their logical package
+names nor their implementation sources are published as discoverable scopes.
+Interpreter and LLVM O0/O2 runs produce the same public provenance for every
+older selectable revision.
+
 Batch 165 is authoritative for the governed SystemVerilog-2017 boundary. Its
 30 supported clause/integration rows and 21 preserved width paths have zero
 active residual rows; five explicitly deferred extensions keep their later

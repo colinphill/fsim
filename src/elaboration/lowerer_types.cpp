@@ -7,6 +7,37 @@ using namespace elaboration_detail;
 
 std::optional<std::size_t> Lowerer::infer_width(const Expression& expression) const
 {
+    if (language_ == frontend::Language::Vhdl2008
+        && expression.kind == ExpressionKind::Call) {
+        const auto separator = expression.text.find_last_of('.');
+        const auto name = std::string_view { expression.text }.substr(
+            separator == std::string::npos ? 0 : separator + 1);
+        if (name == "conv_integer") {
+            return std::size_t { 32 };
+        }
+        if ((name == "and_reduce" || name == "nand_reduce"
+                || name == "or_reduce" || name == "nor_reduce"
+                || name == "xor_reduce" || name == "xnor_reduce")) {
+            return std::size_t { 1 };
+        }
+        if ((name == "conv_signed" || name == "conv_unsigned"
+                || name == "conv_std_logic_vector" || name == "ext"
+                || name == "sxt")
+            && expression.operands.size() == 2U) {
+            std::string error;
+            const auto width = evaluate_constant_expression(
+                expression.operands[1], { }, error);
+            if (width && *width >= 0
+                && static_cast<std::uint64_t>(*width)
+                    <= std::numeric_limits<std::uint32_t>::max()) {
+                return static_cast<std::size_t>(*width);
+            }
+        }
+        if ((name == "shl" || name == "shr")
+            && !expression.operands.empty()) {
+            return infer_width(expression.operands.front());
+        }
+    }
     if (expression.kind == ExpressionKind::Call
         && expression.call_result_width != 0
         && expression.call_result_width
@@ -631,9 +662,12 @@ std::optional<std::size_t> Lowerer::select_offset(
         if (const auto signal = signals_.find(expression.text);
             signal != signals_.end()) {
             const auto* type = visible_type(expression.text);
-            return type != nullptr
-                ? type->is_signed
-                : design_.signal_info_[signal->second].is_signed;
+            if (type != nullptr) {
+                return type->is_signed
+                    || (vhdl_synopsys_signed_visible_
+                        && is_synopsys_std_logic_vector_expression(expression));
+            }
+            return design_.signal_info_[signal->second].is_signed;
         }
         if (const auto selected = packed_member_reference(expression.text)) {
             return selected->member->is_signed;
@@ -676,6 +710,23 @@ std::optional<std::size_t> Lowerer::select_offset(
         return expression.operands.size() == 1
             && is_signed_expression(expression.operands.front());
     case ExpressionKind::Call:
+        if (language_ == frontend::Language::Vhdl2008) {
+            const auto separator = expression.text.find_last_of('.');
+            const auto name = std::string_view { expression.text }.substr(
+                separator == std::string::npos ? 0 : separator + 1);
+            if (name == "conv_signed" || name == "sxt"
+                || name == "conv_integer") {
+                return true;
+            }
+            if (name == "conv_unsigned" || name == "conv_std_logic_vector"
+                || name == "ext") {
+                return false;
+            }
+            if ((name == "shl" || name == "shr")
+                && !expression.operands.empty()) {
+                return is_signed_expression(expression.operands.front());
+            }
+        }
         if (expression.call_result_width != 0) {
             return expression.call_result_signed;
         }
@@ -931,6 +982,19 @@ std::optional<std::size_t> Lowerer::select_offset(
     return false;
 }
 
+[[nodiscard]] bool Lowerer::is_synopsys_std_logic_vector_expression(
+    const Expression& expression) const
+{
+    const auto type = vhdl_expression_type(expression);
+    if (!type) {
+        return false;
+    }
+    const auto separator = type->spelling.find_last_of('.');
+    const auto name = std::string_view { type->spelling }.substr(
+        separator == std::string::npos ? 0 : separator + 1);
+    return name == "std_logic_vector";
+}
+
 [[nodiscard]] bool Lowerer::is_integer_expression(
     const Expression& expression) const
 {
@@ -1002,7 +1066,7 @@ std::optional<std::size_t> Lowerer::select_offset(
             const auto separator = expression.text.find_last_of('.');
             const auto name = std::string_view { expression.text }.substr(
                 separator == std::string::npos ? 0 : separator + 1);
-            if (name == "to_integer") {
+            if (name == "to_integer" || name == "conv_integer") {
                 return true;
             }
             if (name == "vitalcalcdelay") {

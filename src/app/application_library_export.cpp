@@ -448,6 +448,8 @@ bool export_library(
   for (const auto& [language, revision] : standards) {
     metadata.standards.push_back({language, revision});
   }
+  metadata.vhdl_package_dependencies =
+      application_detail::vhdl_package_dependencies(*checked);
 
   std::vector<library::PortablePayload> payloads;
   std::vector<library::SourceNameMapping> source_mappings;

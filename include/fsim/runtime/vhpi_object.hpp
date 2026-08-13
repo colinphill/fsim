@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace fsim::runtime {
@@ -49,6 +50,7 @@ enum class VhdlVhpiObjectError {
   InvalidName,
   DuplicateName,
   InvalidSource,
+  InvalidProvenance,
   NotFound,
   HasChildren,
   ResourceLimit,
@@ -60,12 +62,32 @@ struct VhdlVhpiSourceLocation {
   std::uint32_t column{};
 };
 
+struct VhdlVhpiPackageProvenance {
+  std::string standard;
+  std::string predefined_environment;
+  std::string package;
+  std::string revision;
+  std::string source_digest;
+};
+
 struct VhdlVhpiObjectDescriptor {
   VhdlVhpiObjectKind kind{VhdlVhpiObjectKind::Root};
   fsim_vhpi_handle_v1 parent{};
   std::string_view name;
   std::span<const std::int64_t> indices;
   std::optional<VhdlVhpiSourceLocation> source;
+  std::string_view language_standard;
+  std::string_view predefined_environment;
+  std::string_view compatibility_profile;
+  std::span<const VhdlVhpiPackageProvenance> package_dependencies;
+
+  VhdlVhpiObjectDescriptor() = default;
+  VhdlVhpiObjectDescriptor(VhdlVhpiObjectKind object_kind,
+      fsim_vhpi_handle_v1 object_parent, std::string_view object_name,
+      std::span<const std::int64_t> object_indices = {},
+      std::optional<VhdlVhpiSourceLocation> object_source = std::nullopt)
+      : kind(object_kind), parent(object_parent), name(object_name),
+        indices(object_indices), source(std::move(object_source)) {}
 };
 
 struct VhdlVhpiObjectMetadata {
@@ -79,6 +101,10 @@ struct VhdlVhpiObjectMetadata {
   std::string full_name;
   std::vector<std::int64_t> indices;
   std::optional<VhdlVhpiSourceLocation> source;
+  std::string language_standard;
+  std::string predefined_environment;
+  std::string compatibility_profile;
+  std::vector<VhdlVhpiPackageProvenance> package_dependencies;
 };
 
 struct VhdlVhpiObjectResult {
@@ -182,6 +208,10 @@ class VhdlVhpiObjectRegistry final {
     std::string full_name;
     std::vector<std::int64_t> indices;
     std::optional<VhdlVhpiSourceLocation> source;
+    std::string language_standard;
+    std::string predefined_environment;
+    std::string compatibility_profile;
+    std::vector<VhdlVhpiPackageProvenance> package_dependencies;
   };
 
   struct IteratorRecord {

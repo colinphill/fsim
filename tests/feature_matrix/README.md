@@ -35,6 +35,17 @@ explicit later-owned deferrals. Address-space, work, trace, and timeout values
 in that matrix are evidence ceilings and must never be described as language
 legality or packed-width limits.
 
+Batch 166's older-VHDL planning contract is the composition of
+`vhdl_standard_mode_inventory.tsv` and
+`vhdl_synopsys_package_inventory.tsv`. Each contains 17 preserved and zero
+active obligations assigned one-to-one to Changes 2-18: the first spans
+VHDL-87/93/2000/2002 revision behavior, and the second spans the explicitly
+non-standard Synopsys `ieee` compatibility packages. The revision and package
+corpus tables bind positive, negative, exact-diagnostic, arbitrary-width and
+provenance anchors. The registered 15-witness serial closure matrix retains
+one log per stage and covers interpreter/LLVM, artifacts/caches, relocation,
+public boundaries and platform/resource contracts.
+
 ## Intended atomic layout
 
 New tests should use the stable feature ID from the matrix and keep one

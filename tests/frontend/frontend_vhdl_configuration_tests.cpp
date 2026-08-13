@@ -3,6 +3,7 @@
 #include "fsim/frontend/frontend.hpp"
 
 #include <algorithm>
+#include <array>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -221,6 +222,41 @@ end configuration different;
     require(
         has_code(invalid, code),
         "expected bounded configuration diagnostic");
+  }
+
+  constexpr std::array older_standards {
+      VhdlStandard::Vhdl1987,
+      VhdlStandard::Vhdl1993,
+      VhdlStandard::Vhdl2000,
+      VhdlStandard::Vhdl2002
+  };
+  for (const auto standard : older_standards) {
+      const auto older = parse_text(
+          "older_configuration_visibility.vhd",
+          R"(library ieee;
+use ieee.std_logic_signed.all;
+use ieee.std_logic_unsigned.all;
+use ieee.std_logic_arith.all;
+use ieee.std_logic_misc.all;
+entity older_configuration_visibility is
+end older_configuration_visibility;
+architecture rtl of older_configuration_visibility is
+begin
+end rtl;
+configuration selected_configuration of older_configuration_visibility is
+  for rtl
+  end for;
+end selected_configuration;)",
+          Language::Vhdl2008,
+          standard);
+      require(
+          older.ok()
+              && older.design.units.size() == 3U
+              && older.design.units.front().vhdl_context.size() == 5U
+              && older.design.units.back().kind
+                  == UnitKind::VhdlConfiguration,
+          "every older revision retains deterministic Synopsys selected-name "
+          "visibility and legal configuration structure");
   }
 }
 

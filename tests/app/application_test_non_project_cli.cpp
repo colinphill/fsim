@@ -228,9 +228,10 @@ void ApplicationTestFixture::test_non_project_cli() {
   assert(systemc_elaborate && !systemc_elaborate_diagnostics.has_error());
   assert(systemc_elaborate->systemc_plugins == std::vector{systemc_plugin});
 
-  const std::vector<const char*> project_arguments{
+  const std::vector<const char*> project_arguments {
       "fsim", "simulate", "--project", "fsim.toml", "--design",
-      design_text.c_str()};
+      design_text.c_str()
+  };
   diagnostic::Engine project_diagnostics;
   assert(!cli::parse_arguments(
       static_cast<int>(project_arguments.size()),
@@ -238,23 +239,50 @@ void ApplicationTestFixture::test_non_project_cli() {
 
   bool compile_called = false;
   cli::Services services;
+  const std::vector<const char*> vhdl_standard_arguments {
+      "fsim", "check", "--lang", "vhdl-93", "--standard", "93",
+      source_text.c_str()
+  };
+  bool vhdl_standard_called = false;
+  services.check =
+      [&](const cli::Invocation& invocation,
+          const project::Config& config,
+          diagnostic::Engine&,
+          std::ostream&,
+          std::ostream&) {
+          vhdl_standard_called = true;
+          assert(invocation.language == project::Language::vhdl);
+          assert(invocation.standard == "93");
+          assert(config.source_sets.size() == 1);
+          assert(config.source_sets.front().standard == "1993");
+          return 0;
+      };
   services.compile =
       [&](const cli::Invocation& invocation,
           const project::Config& config,
           diagnostic::Engine&,
           std::ostream&,
           std::ostream&) {
-        compile_called = true;
-        assert(invocation.command == cli::Command::compile);
-        assert(config.source_sets.size() == 1);
-        assert(config.source_sets.front().files == std::vector{source});
-        return 0;
+          compile_called = true;
+          assert(invocation.command == cli::Command::compile);
+          assert(config.source_sets.size() == 1);
+          assert(config.source_sets.front().files == std::vector { source });
+          return 0;
       };
   std::ostringstream output;
   std::ostringstream error;
   assert(cli::run(
-      static_cast<int>(compile_arguments.size()), compile_arguments.data(),
-      services, output, error) == 0);
+             static_cast<int>(vhdl_standard_arguments.size()),
+             vhdl_standard_arguments.data(), services, output, error)
+      == 0);
+  assert(vhdl_standard_called);
+  assert(error.str().empty());
+  output.str({ });
+  error.str({ });
+  assert(cli::run(
+             static_cast<int>(compile_arguments.size()), compile_arguments.data(),
+             services, output, error)
+      == 0);
   assert(compile_called);
   assert(error.str().empty());
 
@@ -265,11 +293,11 @@ void ApplicationTestFixture::test_non_project_cli() {
           diagnostic::Engine&,
           std::ostream&,
           std::ostream&) {
-        elaborate_called = true;
-        assert(invocation.command == cli::Command::elaborate);
-        assert(config.manifest_path == "<non-project>");
-        assert(config.project.tops == invocation.tops);
-        return 0;
+          elaborate_called = true;
+          assert(invocation.command == cli::Command::elaborate);
+          assert(config.manifest_path == "<non-project>");
+          assert(config.project.tops == invocation.tops);
+          return 0;
       };
   output.str({});
   error.str({});
@@ -843,10 +871,10 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
   {
     std::ofstream vhdl_output(vhdl_source);
     vhdl_output << R"(
-package Shared is
+package SharedPkg is
   constant FLAG : boolean := true;
 end package;
-use work.Shared.all;
+use work.SharedPkg.all;
 entity MixedCase is end entity;
 architecture rtl of MixedCase is
 begin
@@ -863,17 +891,21 @@ end architecture;
       vhdl_object_text.c_str(), vhdl_source_text.c_str()};
   output.str({});
   error.str({});
-  assert(cli::run(
+  const auto vhdl_compile_result = cli::run(
       static_cast<int>(vhdl_compile_arguments.size()),
       vhdl_compile_arguments.data(), production_services,
-      output, error) == 0);
+      output, error);
+  if (vhdl_compile_result != 0) {
+    std::cerr << error.str();
+  }
+  assert(vhdl_compile_result == 0);
   assert(error.str().empty());
   diagnostic::Engine vhdl_metadata_diagnostics;
   const auto vhdl_metadata = artifact::load_object_metadata(
       vhdl_object, vhdl_metadata_diagnostics);
   assert(vhdl_metadata && !vhdl_metadata_diagnostics.has_error());
   assert(vhdl_metadata->units.size() == 3);
-  assert(vhdl_metadata->units[0].name == "shared");
+  assert(vhdl_metadata->units[0].name == "sharedpkg");
   assert(vhdl_metadata->units[1].name == "mixedcase");
   assert(vhdl_metadata->units[2].primary_name == "mixedcase");
 
@@ -906,6 +938,14 @@ end architecture;
   const auto ordered_vhdl = app::load_objects(
       ordered_vhdl_inputs, ordered_vhdl_diagnostics);
   assert(ordered_vhdl && !ordered_vhdl_diagnostics.has_error());
+  assert(ordered_vhdl->objects.size() == 2U);
+  assert(std::ranges::all_of(
+      ordered_vhdl->objects, [](const auto& provenance) {
+        return provenance.language == "vhdl"
+            && provenance.standard == "2008"
+            && provenance.compatibility_profile
+                == "fsim-synopsys-ieee-compat-v2";
+      }));
   diagnostic::Engine reversed_vhdl_diagnostics;
   const std::vector reversed_vhdl_inputs{design_object, package_object};
   assert(!app::load_objects(
@@ -926,6 +966,26 @@ end architecture;
   const std::vector wrong_library_inputs{wrong_library_object};
   assert(!app::load_objects(wrong_library_inputs, wrong_load_diagnostics));
   assert(wrong_load_diagnostics.has_error());
+
+  assert(std::filesystem::remove(vhdl_source));
+  std::filesystem::rename(
+      vhdl_object, directory / "ordered.fsimobj.producer-hidden");
+  assert(!std::filesystem::exists(vhdl_object));
+  diagnostic::Engine standalone_vhdl_diagnostics;
+  const auto standalone_vhdl = app::load_objects(
+      ordered_vhdl_inputs, standalone_vhdl_diagnostics);
+  assert(standalone_vhdl && !standalone_vhdl_diagnostics.has_error());
+  assert(standalone_vhdl->objects.size() == ordered_vhdl->objects.size());
+  for (std::size_t index = 0; index < ordered_vhdl->objects.size(); ++index) {
+    const auto& expected = ordered_vhdl->objects[index];
+    const auto& actual = standalone_vhdl->objects[index];
+    assert(actual.metadata_digest == expected.metadata_digest);
+    assert(actual.compilation_digest == expected.compilation_digest);
+    assert(actual.standard == expected.standard);
+    assert(actual.compatibility_profile == expected.compatibility_profile);
+    assert(actual.vhdl_package_dependencies
+        == expected.vhdl_package_dependencies);
+  }
 
   const auto isolated_source = directory / "isolated.sv";
   const auto isolated_object = directory / "isolated.fsimobj";

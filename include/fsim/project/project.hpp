@@ -15,17 +15,25 @@ namespace fsim::project {
 inline constexpr std::uint32_t kSchemaVersion = 2;
 
 enum class Language : std::uint8_t {
-  vhdl,
-  verilog,
-  system_verilog,
-  systemc,
+    vhdl,
+    verilog,
+    system_verilog,
+    systemc,
+};
+
+enum class VhdlStandard : std::uint8_t {
+    vhdl_1987,
+    vhdl_1993,
+    vhdl_2000,
+    vhdl_2002,
+    vhdl_2008,
 };
 
 enum class Optimization : std::uint8_t {
-  o0,
-  o1,
-  o2,
-  o3,
+    o0,
+    o1,
+    o2,
+    o3,
 };
 
 enum class DelayMode : std::uint8_t {
@@ -139,24 +147,31 @@ struct SystemCSection {
 };
 
 struct Config {
-  std::uint32_t schema{kSchemaVersion};
-  std::filesystem::path manifest_path;
-  std::filesystem::path base_directory;
-  ProjectSection project;
-  std::vector<SourceSet> source_sets;
-  std::vector<Binding> bindings;
-  std::vector<LibraryMapping> library_mappings;
-  ElaborationSection elaboration;
-  BuildSection build;
-  RunSection run;
-  SystemCSection systemc;
+    std::uint32_t schema { kSchemaVersion };
+    std::filesystem::path manifest_path;
+    std::filesystem::path base_directory;
+    ProjectSection project;
+    std::vector<SourceSet> source_sets;
+    std::vector<Binding> bindings;
+    std::vector<LibraryMapping> library_mappings;
+    ElaborationSection elaboration;
+    BuildSection build;
+    RunSection run;
+    SystemCSection systemc;
 };
 
 [[nodiscard]] std::string_view to_string(Language language) noexcept;
+[[nodiscard]] std::string_view to_string(VhdlStandard standard) noexcept;
 [[nodiscard]] std::string_view to_string(Optimization optimization) noexcept;
 [[nodiscard]] std::string_view to_string(DelayMode mode) noexcept;
 [[nodiscard]] std::string_view to_string(SystemVerilogUvmRelease release) noexcept;
 [[nodiscard]] std::optional<Language> parse_language(std::string_view spelling) noexcept;
+[[nodiscard]] std::optional<VhdlStandard> parse_vhdl_standard(
+    std::string_view spelling) noexcept;
+[[nodiscard]] std::string_view default_standard(Language language) noexcept;
+[[nodiscard]] std::optional<std::string_view> canonical_standard(
+    Language language,
+    std::string_view spelling) noexcept;
 [[nodiscard]] std::optional<SystemVerilogUvmRelease>
 parse_systemverilog_uvm_release(std::string_view spelling) noexcept;
 [[nodiscard]] SystemVerilogUvmCompatibility

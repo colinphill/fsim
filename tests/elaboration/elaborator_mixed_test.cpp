@@ -1878,12 +1878,12 @@ endmodule
 
     auto ambiguous_names = fsim::frontend::parse_text(
         "ambiguous-names.sv",
-        "module Shared; endmodule\n"
-        "module ambiguous_parent; Shared child(); endmodule\n",
+        "module CommonUnit; endmodule\n"
+        "module ambiguous_parent; CommonUnit child(); endmodule\n",
         fsim::frontend::Language::SystemVerilog2017);
     auto ambiguous_vhdl = fsim::frontend::parse_text(
         "ambiguous-names.vhd",
-        "entity shared is end entity; architecture rtl of shared is begin "
+        "entity commonunit is end entity; architecture rtl of commonunit is begin "
         "end architecture;",
         fsim::frontend::Language::Vhdl2008);
     assert(ambiguous_names.ok() && ambiguous_vhdl.ok());

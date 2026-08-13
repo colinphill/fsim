@@ -15,6 +15,32 @@ enum class Language {
   SystemVerilog2017,
 };
 
+enum class VhdlStandard {
+    Vhdl1987,
+    Vhdl1993,
+    Vhdl2000,
+    Vhdl2002,
+    Vhdl2008,
+};
+
+[[nodiscard]] constexpr std::string_view to_string(
+    const VhdlStandard standard) noexcept
+{
+    switch (standard) {
+    case VhdlStandard::Vhdl1987:
+        return "1987";
+    case VhdlStandard::Vhdl1993:
+        return "1993";
+    case VhdlStandard::Vhdl2000:
+        return "2000";
+    case VhdlStandard::Vhdl2002:
+        return "2002";
+    case VhdlStandard::Vhdl2008:
+        return "2008";
+    }
+    return "2008";
+}
+
 enum class TokenKind {
   Identifier,
   Number,
@@ -115,7 +141,11 @@ struct LexResult {
   [[nodiscard]] bool ok() const { return !has_errors(diagnostics); }
 };
 
-[[nodiscard]] LexResult lex(SourceText source, Language language);
+[[nodiscard]] LexResult lex(
+    SourceText source, Language language,
+    VhdlStandard vhdl_standard = VhdlStandard::Vhdl2008);
+[[nodiscard]] bool is_vhdl_reserved_word(
+    std::string_view word, VhdlStandard standard);
 [[nodiscard]] const char* to_string(TokenKind kind) noexcept;
 
 }  // namespace fsim::frontend

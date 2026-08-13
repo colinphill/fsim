@@ -34,6 +34,13 @@ distinct checked diagnostic rather than narrowing the value. See the
 
 The current tree contains:
 
+- explicit VHDL-87, VHDL-93, VHDL-2000 and VHDL-2002 source modes alongside
+  the VHDL-2008 default, with revision-correct syntax, predefined environments,
+  dependencies, artifacts, caches, relocation and interpreter/LLVM execution;
+- compiler-owned, explicitly non-standard `ieee.std_logic_signed`,
+  `std_logic_unsigned`, `std_logic_arith` and `std_logic_misc` compatibility
+  packages with exact revision/source provenance, arbitrary-width operations,
+  null/direction behavior and deterministic mixed-package ambiguity rejection;
 - C++20 value kernels for packed 2-, 4-, and 9-state logic, including governed
   arbitrary-width SystemVerilog Logic4 constants and runtime values;
 - a deterministic, single-thread, phased event scheduler;

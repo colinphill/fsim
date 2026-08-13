@@ -24,6 +24,7 @@ constexpr std::size_t maximum_identifier_size = 4096;
 constexpr std::size_t maximum_full_name_size = 1U << 20U;
 constexpr std::size_t maximum_source_size = 1U << 20U;
 constexpr std::size_t maximum_index_dimensions = 32;
+constexpr std::size_t maximum_package_dependencies = 256;
 std::atomic<std::uint32_t> next_registry_identity{1};
 
 VhdlVhpiIteratorError iterator_error(
@@ -440,6 +441,10 @@ VhdlVhpiObjectResult VhdlVhpiObjectRegistry::create_object(
               {},
               {},
               std::nullopt,
+              {},
+              {},
+              {},
+              {},
           });
     } catch (...) {
       return {{}, VhdlVhpiObjectError::ResourceLimit};
@@ -484,6 +489,41 @@ VhdlVhpiObjectResult VhdlVhpiObjectRegistry::create_object(
           || descriptor.source->line == 0U
           || descriptor.source->column == 0U)) {
     return {{}, VhdlVhpiObjectError::InvalidSource};
+  }
+  const auto valid_provenance_text = [](const std::string_view text) {
+    return !text.empty() && text.size() <= maximum_source_size
+        && text.find('\0') == std::string_view::npos;
+  };
+  const bool has_provenance = !descriptor.language_standard.empty()
+      || !descriptor.predefined_environment.empty()
+      || !descriptor.compatibility_profile.empty()
+      || !descriptor.package_dependencies.empty();
+  if (has_provenance
+      && (!valid_provenance_text(descriptor.language_standard)
+          || !valid_provenance_text(descriptor.predefined_environment)
+          || !valid_provenance_text(descriptor.compatibility_profile))) {
+    return {{}, VhdlVhpiObjectError::InvalidProvenance};
+  }
+  if (descriptor.package_dependencies.size()
+      > maximum_package_dependencies) {
+    return {{}, VhdlVhpiObjectError::InvalidProvenance};
+  }
+  for (std::size_t index = 0;
+      index < descriptor.package_dependencies.size(); ++index) {
+    const auto& package = descriptor.package_dependencies[index];
+    if (!valid_provenance_text(package.standard)
+        || !valid_provenance_text(package.predefined_environment)
+        || !valid_provenance_text(package.package)
+        || !valid_provenance_text(package.revision)
+        || !valid_provenance_text(package.source_digest)) {
+      return {{}, VhdlVhpiObjectError::InvalidProvenance};
+    }
+    for (std::size_t prior = 0; prior < index; ++prior) {
+      if (descriptor.package_dependencies[prior].package
+          == package.package) {
+        return {{}, VhdlVhpiObjectError::InvalidProvenance};
+      }
+    }
   }
 
   std::uint32_t parent_slot{};
@@ -538,6 +578,12 @@ VhdlVhpiObjectResult VhdlVhpiObjectRegistry::create_object(
     candidate.indices.assign(
         descriptor.indices.begin(), descriptor.indices.end());
     candidate.source = descriptor.source;
+    candidate.language_standard = descriptor.language_standard;
+    candidate.predefined_environment = descriptor.predefined_environment;
+    candidate.compatibility_profile = descriptor.compatibility_profile;
+    candidate.package_dependencies.assign(
+        descriptor.package_dependencies.begin(),
+        descriptor.package_dependencies.end());
   } catch (...) {
     return {{}, VhdlVhpiObjectError::ResourceLimit};
   }
@@ -616,6 +662,10 @@ VhdlVhpiObjectLookupResult VhdlVhpiObjectRegistry::lookup_locked(
       record.full_name,
       record.indices,
       record.source,
+      record.language_standard,
+      record.predefined_environment,
+      record.compatibility_profile,
+      record.package_dependencies,
   }, {}};
 }
 

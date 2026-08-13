@@ -695,7 +695,9 @@ void Interpreter::Impl::notify_execution_point(
             scheduler,
             ExecutionPoint {
                 process.program.id, process.design_process,
-                instruction, kind, source, std::string { effective_scope } });
+                instruction, kind, source, std::string { effective_scope },
+                process.program.language_standard,
+                process.program.compatibility_profile });
     }
 }
 

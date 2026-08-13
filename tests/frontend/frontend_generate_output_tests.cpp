@@ -1023,7 +1023,7 @@ end architecture;
   const auto guarded_vhdl_block = parse_text(
       "guarded_block.vhd",
       R"(
-architecture rtl of guarded is
+architecture rtl of guarded_design is
   signal enabled : boolean;
   signal source_value : bit;
   signal result_value : bit;
@@ -1168,7 +1168,7 @@ end architecture;
   const auto malformed_vhdl_guard = parse_text(
       "malformed_guarded_block.vhd",
       R"(
-architecture rtl of guarded is
+architecture rtl of guarded_design is
   signal enabled : boolean;
 begin
   guarded_scope: block (enabled

@@ -2468,6 +2468,8 @@ void test_persistent_object_cache()
     test_container_locator_transformation_cache_identity(
         root / "locator-transformation");
     test_callable_frame_cache_identity(root / "callable-frame");
+    test_vhdl_language_profile_cache_identity(
+        root / "vhdl-language-profile");
 
     std::filesystem::remove_all(root, error);
     assert(!error);

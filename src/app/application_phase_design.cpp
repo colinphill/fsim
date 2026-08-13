@@ -479,8 +479,25 @@ bool publish_design_artifact(
             { binding.instance, binding.target, binding.resolver });
     }
     for (const auto& object : project.objects) {
-        metadata.objects.push_back({ object.metadata_digest, object.compilation_digest, object.language,
-            object.standard, object.library, object.unit_checksums });
+        artifact::DesignObjectInput input;
+        input.metadata_digest = object.metadata_digest;
+        input.compilation_digest = object.compilation_digest;
+        input.language = object.language;
+        input.standard = object.standard;
+        input.compatibility_profile = object.compatibility_profile;
+        input.library = object.library;
+        input.vhdl_package_dependencies = object.vhdl_package_dependencies;
+        input.unit_checksums = object.unit_checksums;
+        metadata.objects.push_back(std::move(input));
+    }
+    for (const auto& provenance : project.vhdl_unit_provenance) {
+        artifact::DesignVhdlUnitProvenance record;
+        record.unit = provenance.unit.value();
+        record.standard = provenance.standard;
+        record.predefined_environment = provenance.predefined_environment;
+        record.compatibility_profile = provenance.compatibility_profile;
+        record.package_dependencies = provenance.package_dependencies;
+        metadata.vhdl_unit_provenance.push_back(std::move(record));
     }
     const auto add_payload = [&](
                                  const std::string_view kind,
@@ -602,6 +619,20 @@ std::optional<BuiltProject> load_design_artifact(
     auto metadata = artifact::load_design_metadata(directory, diagnostics);
     if (!metadata) {
         return std::nullopt;
+    }
+    for (const auto& object : metadata->objects) {
+        if (!application_detail::validate_vhdl_package_dependencies(
+                object.vhdl_package_dependencies,
+                ".fsimdesign", diagnostics)) {
+            return std::nullopt;
+        }
+    }
+    for (const auto& provenance : metadata->vhdl_unit_provenance) {
+        if (!application_detail::validate_vhdl_package_dependencies(
+                provenance.package_dependencies,
+                ".fsimdesign VHDL unit provenance", diagnostics)) {
+            return std::nullopt;
+        }
     }
     const auto* runtime_index = payload_by_kind(*metadata, "runtime");
     const auto* semantic_index = payload_by_kind(*metadata, "semantics");
@@ -729,9 +760,30 @@ std::optional<BuiltProject> load_design_artifact(
         provenance.compilation_digest = object.compilation_digest;
         provenance.language = object.language;
         provenance.standard = object.standard;
+        provenance.compatibility_profile = object.compatibility_profile;
         provenance.library = object.library;
+        provenance.vhdl_package_dependencies =
+            object.vhdl_package_dependencies;
         provenance.unit_checksums = object.unit_checksums;
         objects.push_back(std::move(provenance));
+    }
+    std::vector<VhdlUnitProvenance> vhdl_unit_provenance;
+    vhdl_unit_provenance.reserve(metadata->vhdl_unit_provenance.size());
+    for (const auto& record : metadata->vhdl_unit_provenance) {
+        if (record.unit >= semantics->units().size()) {
+            diagnostics.error(
+                "FSIM-ART-0014",
+                ".fsimdesign VHDL unit provenance references an invalid "
+                "semantic unit");
+            return std::nullopt;
+        }
+        VhdlUnitProvenance provenance;
+        provenance.unit = semantics->units()[record.unit].id;
+        provenance.standard = record.standard;
+        provenance.predefined_environment = record.predefined_environment;
+        provenance.compatibility_profile = record.compatibility_profile;
+        provenance.package_dependencies = record.package_dependencies;
+        vhdl_unit_provenance.push_back(std::move(provenance));
     }
     const auto optimization = metadata->optimization == "O0"
         ? project::Optimization::o0
@@ -754,7 +806,8 @@ std::optional<BuiltProject> load_design_artifact(
                 .value_or(project::SystemVerilogUvmRelease::none),
             metadata->uvm_source_identity },
         metadata->design_digest, std::move(*classes),
-        std::move(*coverage), std::move(*uvm_state)
+        std::move(*coverage), std::move(*uvm_state),
+        std::move(vhdl_unit_provenance)
     };
 }
 

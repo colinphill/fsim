@@ -310,20 +310,6 @@ std::string lowercase(std::string_view value) {
   return result;
 }
 
-std::string default_standard(const Language language) {
-  switch (language) {
-    case Language::vhdl:
-      return "2008";
-    case Language::verilog:
-      return "2005";
-    case Language::system_verilog:
-      return "2017";
-    case Language::systemc:
-      return "2023-subset";
-  }
-  return {};
-}
-
 bool valid_library_name(const std::string_view value) {
   if (value.empty()) {
     return false;
@@ -1374,37 +1360,25 @@ class Parser {
     return std::ranges::all_of(
         alias_name,
         [](const unsigned char character) {
-          return std::isalnum(character) != 0 || character == '_';
+            return std::isalnum(character) != 0 || character == '_';
         });
   }
 
   void validate_standard(
-      const SourceSet& source_set,
+      SourceSet& source_set,
       const std::size_t index,
-      const diagnostic::SourceSpan& span) {
-    bool valid = false;
-    switch (source_set.language) {
-      case Language::vhdl:
-        valid = source_set.standard == "2008" || source_set.standard == "08";
-        break;
-      case Language::verilog:
-        valid = source_set.standard == "2005" || source_set.standard == "2001";
-        break;
-      case Language::system_verilog:
-        valid = source_set.standard == "2017" || source_set.standard == "2012";
-        break;
-      case Language::systemc:
-        valid = source_set.standard == "2023-subset" || source_set.standard == "2023";
-        break;
-    }
-    if (!valid) {
-      diagnostics_.error(
-          std::string(kValueCode),
-          "unsupported standard '" + source_set.standard + "' for " +
-              std::string(to_string(source_set.language)) + " source set #" +
-              std::to_string(index + 1),
-          span);
-    }
+      const diagnostic::SourceSpan& span)
+  {
+      const auto canonical = canonical_standard(
+          source_set.language, source_set.standard);
+      if (!canonical) {
+          diagnostics_.error(
+              std::string(kValueCode),
+              "unsupported standard '" + source_set.standard + "' for " + std::string(to_string(source_set.language)) + " source set #" + std::to_string(index + 1),
+              span);
+          return;
+      }
+      source_set.standard = *canonical;
   }
 
   Lexer lexer_;
@@ -1413,10 +1387,10 @@ class Parser {
   diagnostic::Engine& diagnostics_;
   Token current_;
   Config config_;
-  Context context_{Context::root};
-  std::size_t context_index_{0};
-  std::size_t unknown_index_{0};
-  bool schema_seen_{false};
+  Context context_ { Context::root };
+  std::size_t context_index_ { 0 };
+  std::size_t unknown_index_ { 0 };
+  bool schema_seen_ { false };
   std::unordered_set<std::string> seen_tables_;
   std::unordered_set<std::string> seen_keys_;
   std::vector<bool> source_has_language_;
@@ -1617,27 +1591,45 @@ std::string_view to_string(const Language language) noexcept {
     case Language::vhdl:
       return "vhdl";
     case Language::verilog:
-      return "verilog";
+        return "verilog";
     case Language::system_verilog:
-      return "systemverilog";
+        return "systemverilog";
     case Language::systemc:
-      return "systemc";
-  }
-  return "systemverilog";
+        return "systemc";
+    }
+    return "systemverilog";
 }
 
-std::string_view to_string(const Optimization optimization) noexcept {
-  switch (optimization) {
+std::string_view to_string(const VhdlStandard standard) noexcept
+{
+    switch (standard) {
+    case VhdlStandard::vhdl_1987:
+        return "1987";
+    case VhdlStandard::vhdl_1993:
+        return "1993";
+    case VhdlStandard::vhdl_2000:
+        return "2000";
+    case VhdlStandard::vhdl_2002:
+        return "2002";
+    case VhdlStandard::vhdl_2008:
+        return "2008";
+    }
+    return "2008";
+}
+
+std::string_view to_string(const Optimization optimization) noexcept
+{
+    switch (optimization) {
     case Optimization::o0:
-      return "O0";
+        return "O0";
     case Optimization::o1:
-      return "O1";
+        return "O1";
     case Optimization::o2:
-      return "O2";
+        return "O2";
     case Optimization::o3:
-      return "O3";
-  }
-  return "O2";
+        return "O3";
+    }
+    return "O2";
 }
 
 std::string_view to_string(const DelayMode mode) noexcept {
@@ -1664,52 +1656,137 @@ std::string_view to_string(const SystemVerilogUvmRelease release) noexcept {
   return "none";
 }
 
-std::optional<Language> parse_language(const std::string_view spelling) noexcept {
-  const auto normalized = lowercase(spelling);
-  if (normalized == "vhdl" || normalized == "vhdl-2008") {
-    return Language::vhdl;
-  }
-  if (normalized == "verilog" || normalized == "verilog-2005" ||
-      normalized == "v") {
-    return Language::verilog;
-  }
-  if (normalized == "systemverilog" || normalized == "system-verilog" ||
-      normalized == "sv") {
-    return Language::system_verilog;
-  }
-  if (normalized == "systemc" || normalized == "sc") {
-    return Language::systemc;
-  }
-  return std::nullopt;
+std::optional<Language> parse_language(const std::string_view spelling) noexcept
+{
+    const auto normalized = lowercase(spelling);
+    if (normalized == "vhdl" || normalized == "vhdl-87"
+        || normalized == "vhdl-1987" || normalized == "vhdl-93"
+        || normalized == "vhdl-1993" || normalized == "vhdl-00"
+        || normalized == "vhdl-2000" || normalized == "vhdl-02"
+        || normalized == "vhdl-2002" || normalized == "vhdl-08"
+        || normalized == "vhdl-2008") {
+        return Language::vhdl;
+    }
+    if (normalized == "verilog" || normalized == "verilog-2005" || normalized == "v") {
+        return Language::verilog;
+    }
+    if (normalized == "systemverilog" || normalized == "system-verilog" || normalized == "sv") {
+        return Language::system_verilog;
+    }
+    if (normalized == "systemc" || normalized == "sc") {
+        return Language::systemc;
+    }
+    return std::nullopt;
+}
+
+std::optional<VhdlStandard> parse_vhdl_standard(
+    const std::string_view spelling) noexcept
+{
+    const auto normalized = lowercase(spelling);
+    if (normalized == "87" || normalized == "1987"
+        || normalized == "vhdl-87" || normalized == "vhdl-1987") {
+        return VhdlStandard::vhdl_1987;
+    }
+    if (normalized == "93" || normalized == "1993"
+        || normalized == "vhdl-93" || normalized == "vhdl-1993") {
+        return VhdlStandard::vhdl_1993;
+    }
+    if (normalized == "00" || normalized == "2000"
+        || normalized == "vhdl-00" || normalized == "vhdl-2000") {
+        return VhdlStandard::vhdl_2000;
+    }
+    if (normalized == "02" || normalized == "2002"
+        || normalized == "vhdl-02" || normalized == "vhdl-2002") {
+        return VhdlStandard::vhdl_2002;
+    }
+    if (normalized == "08" || normalized == "2008"
+        || normalized == "vhdl-08" || normalized == "vhdl-2008") {
+        return VhdlStandard::vhdl_2008;
+    }
+    return std::nullopt;
+}
+
+std::string_view default_standard(const Language language) noexcept
+{
+    switch (language) {
+    case Language::vhdl:
+        return "2008";
+    case Language::verilog:
+        return "2005";
+    case Language::system_verilog:
+        return "2017";
+    case Language::systemc:
+        return "2023-subset";
+    }
+    return "2017";
+}
+
+std::optional<std::string_view> canonical_standard(
+    const Language language,
+    const std::string_view spelling) noexcept
+{
+    const auto normalized = lowercase(spelling);
+    switch (language) {
+    case Language::vhdl:
+        if (const auto standard = parse_vhdl_standard(normalized)) {
+            return to_string(*standard);
+        }
+        break;
+    case Language::verilog:
+        if (normalized == "2005") {
+            return "2005";
+        }
+        if (normalized == "2001") {
+            return "2001";
+        }
+        break;
+    case Language::system_verilog:
+        if (normalized == "2017") {
+            return "2017";
+        }
+        if (normalized == "2012") {
+            return "2012";
+        }
+        break;
+    case Language::systemc:
+        if (normalized == "2023-subset" || normalized == "2023") {
+            return "2023-subset";
+        }
+        break;
+    }
+    return std::nullopt;
 }
 
 std::optional<SystemVerilogUvmRelease> parse_systemverilog_uvm_release(
-    const std::string_view spelling) noexcept {
-  const auto normalized = lowercase(spelling);
-  if (normalized.empty() || normalized == "none") {
-    return SystemVerilogUvmRelease::none;
-  }
-  if (normalized == "1.2" || normalized == "uvm-1.2"
-      || normalized == "uvm_1_2") {
-    return SystemVerilogUvmRelease::uvm_1_2;
-  }
-  if (normalized == "2020.3.1" || normalized == "uvm-2020.3.1"
-      || normalized == "uvm_2020_3_1"
-      || normalized == "ieee-1800.2-2020-3.1") {
-    return SystemVerilogUvmRelease::ieee_1800_2_2020_3_1;
-  }
-  return std::nullopt;
+    const std::string_view spelling) noexcept
+{
+    const auto normalized = lowercase(spelling);
+    if (normalized.empty() || normalized == "none") {
+        return SystemVerilogUvmRelease::none;
+    }
+    if (normalized == "1.2" || normalized == "uvm-1.2"
+        || normalized == "uvm_1_2") {
+        return SystemVerilogUvmRelease::uvm_1_2;
+    }
+    if (normalized == "2020.3.1" || normalized == "uvm-2020.3.1"
+        || normalized == "uvm_2020_3_1"
+        || normalized == "ieee-1800.2-2020-3.1") {
+        return SystemVerilogUvmRelease::ieee_1800_2_2020_3_1;
+    }
+    return std::nullopt;
 }
 
 SystemVerilogUvmCompatibility systemverilog_uvm_compatibility(
-    const SystemVerilogUvmRelease release) noexcept {
-  switch (release) {
+    const SystemVerilogUvmRelease release) noexcept
+{
+    switch (release) {
     case SystemVerilogUvmRelease::uvm_1_2:
-      return {
-          release, 1, 2,
-          true, true, true, true,
-          true, true,
-          false, false, false};
+        return {
+            release, 1, 2,
+            true, true, true, true,
+            true, true,
+            false, false, false
+        };
     case SystemVerilogUvmRelease::ieee_1800_2_2020_3_1:
       return {
           release, 2020, 3,
@@ -1718,7 +1795,7 @@ SystemVerilogUvmCompatibility systemverilog_uvm_compatibility(
           true, true, true};
     case SystemVerilogUvmRelease::none:
       return {};
-  }
+    }
   return {};
 }
 

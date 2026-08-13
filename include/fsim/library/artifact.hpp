@@ -12,7 +12,7 @@
 
 namespace fsim::library {
 
-inline constexpr std::uint32_t kFormatVersion = 1;
+inline constexpr std::uint32_t kFormatVersion = 2;
 inline constexpr std::uint32_t kPortableSchemaVersion = 9;
 inline constexpr std::string_view kMetadataFilename = "fsim-library.toml";
 
@@ -21,6 +21,21 @@ struct LanguageStandard {
   std::string revision;
 
   friend bool operator==(const LanguageStandard&, const LanguageStandard&) = default;
+};
+
+// Exact compiler-supplied VHDL package input selected while analyzing a
+// consumer.  The source digest prevents a package implementation from drifting
+// behind an unchanged public name or revision label; the predefined
+// environment identity pins the implicit std.standard surface as well.
+struct VhdlPackageDependency {
+  std::string standard;
+  std::string predefined_environment;
+  std::string package;
+  std::string revision;
+  std::string source_digest;
+
+  friend bool operator==(
+      const VhdlPackageDependency&, const VhdlPackageDependency&) = default;
 };
 
 struct UnitIndexEntry {
@@ -75,6 +90,7 @@ struct Metadata {
   std::uint32_t runtime_schema{};
   std::uint32_t portable_schema{kPortableSchemaVersion};
   std::vector<LanguageStandard> standards;
+  std::vector<VhdlPackageDependency> vhdl_package_dependencies;
   std::vector<std::string> dependencies;
   std::vector<SourceIndexEntry> sources;
   std::vector<UnitIndexEntry> units;

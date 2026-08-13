@@ -499,6 +499,18 @@ Lowerer::lower_string_expression(
             const bool octal = name == "to_ostring" || name == "to_octal_string";
             const bool hexadecimal = name == "to_hstring" || name == "to_hex_string";
             if (binary || octal || hexadecimal) {
+                if (vhdl_standard_ < frontend::VhdlStandard::Vhdl2008) {
+                    report(
+                        "FSIM-ELAB-VHSTD-001",
+                        "predefined IEEE function '"
+                            + std::string { name }
+                            + "' requires VHDL-2008, but this process uses "
+                              "VHDL-"
+                            + std::string { frontend::to_string(
+                                vhdl_standard_) },
+                        expression.span);
+                    return std::nullopt;
+                }
                 if (expression.operands.size() != 1) {
                     report(
                         "FSIM-ELAB-VHLOGIC-001",

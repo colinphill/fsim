@@ -7,6 +7,14 @@ therefore defines the following deterministic policy. It is part of fsim's
 observable behavior, not a claim about an IEEE or Accellera mixed-language
 standard.
 
+The selected VHDL revision and non-standard Synopsys package provenance remain
+attached to a VHDL occurrence on either side of a SystemVerilog boundary.
+VHDL-87/93/2000/2002 share the deterministic scheduler and conversion rules;
+the boundary never upgrades an older unit to VHDL-2008 or re-resolves its
+`std_logic_signed`/`std_logic_unsigned` overloads. Interpreter and LLVM O0/O2
+preserve exact 137-bit Logic9 planes and ascending/descending bounds in both
+SystemVerilog-parent/VHDL-child and VHDL-parent/SystemVerilog-child directions.
+
 This is the **v2 semantic contract**. Schema 2 adds deterministic automatic
 target resolution while retaining the v1 scheduler, boundary, and explicit
 override behavior.

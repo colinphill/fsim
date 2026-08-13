@@ -356,21 +356,53 @@ bool load_required_mapped_libraries(
     provenance.directory = mapping->second->path;
     provenance.metadata_digest = support::Sha256::hex(
         support::Sha256::digest(library::serialize_metadata(*metadata)));
+    provenance.vhdl_package_dependencies =
+        metadata->vhdl_package_dependencies;
+    std::optional<frontend::VhdlStandard> mapped_vhdl_standard;
     for (const auto& standard : metadata->standards) {
-      const auto language = project::parse_language(standard.language);
-      if (!language.has_value()) {
-        diagnostics.error(
-            "FSIM-LIB-0008",
-            "mapped library metadata names unsupported language '"
-                + standard.language + "'");
-        return false;
-      }
-      project::SourceSet settings;
-      settings.language = *language;
-      settings.standard = standard.revision;
-      settings.library = library_name;
-      settings.compilation_unit = "file";
-      provenance.source_settings.push_back(std::move(settings));
+        const auto language = project::parse_language(standard.language);
+        if (!language.has_value()) {
+            diagnostics.error(
+                "FSIM-LIB-0008",
+                "mapped library metadata names unsupported language '"
+                    + standard.language + "'");
+            return false;
+        }
+        project::SourceSet settings;
+        settings.language = *language;
+        settings.standard = standard.revision;
+        settings.library = library_name;
+        settings.compilation_unit = "file";
+        provenance.source_settings.push_back(std::move(settings));
+        if (*language == project::Language::vhdl) {
+            if (const auto selected = project::parse_vhdl_standard(standard.revision)) {
+                mapped_vhdl_standard = frontend_vhdl_standard(*selected);
+            }
+        }
+    }
+    if (mapped_vhdl_standard) {
+        for (const auto& owner : checked.parsed.units) {
+            if (owner.language != frontend::Language::Vhdl2008) {
+                continue;
+            }
+            for (const auto& context : owner.vhdl_context) {
+                for (const auto& selected : context.selected_names) {
+                    if (selected.starts_with(library_name + ".")
+                        && owner.vhdl_standard != *mapped_vhdl_standard) {
+                        diagnostics.error(
+                            "FSIM-FE-VHORDER-011",
+                            "mapped VHDL library '" + library_name
+                                + "' was analyzed as "
+                                + std::string { frontend::to_string(
+                                    *mapped_vhdl_standard) }
+                                + " but the owning source uses "
+                                + std::string { frontend::to_string(
+                                    owner.vhdl_standard) },
+                            span(context.span));
+                    }
+                }
+            }
+        }
     }
     for (const auto& source_entry : metadata->sources) {
       if (source_entry.artifact.empty()) {
@@ -385,24 +417,30 @@ bool load_required_mapped_libraries(
       }
       const auto logical_path =
           support::path_from_utf8(source_entry.logical_name);
-      CheckedSource checked_source{
-          logical_path, source_entry.checksum, {}, source_entry.checksum,
-          mapping->second->path / source_entry.artifact};
-      const auto source_language = source_entry.language.empty()
-          ? std::optional<project::Language>{}
-          : project::parse_language(source_entry.language);
-      if (source_language == project::Language::systemc) {
-        provenance.systemc_sources.push_back(
-            mapping->second->path / source_entry.artifact);
-        checked.systemc_sources.push_back(std::move(checked_source));
+      std::string source_standard;
+      for (const auto& standard : metadata->standards) {
+          if (standard.language == source_entry.language) {
+              source_standard = standard.revision;
+              break;
+          }
+      }
+      CheckedSource checked_source {
+          logical_path, source_entry.language, std::move(source_standard), source_entry.checksum, { }, source_entry.checksum,
+          mapping->second->path / source_entry.artifact
+      };
+      if (source_entry.language == "systemc") {
+          provenance.systemc_sources.push_back(
+              mapping->second->path / source_entry.artifact);
+          checked.systemc_sources.push_back(std::move(checked_source));
       } else {
-        checked.hdl_sources.push_back(std::move(checked_source));
+          checked.hdl_sources.push_back(std::move(checked_source));
       }
       for (auto& settings : provenance.source_settings) {
-        if (!source_language.has_value()
-            || settings.language == *source_language) {
-          settings.files.push_back(logical_path);
-        }
+          if (source_entry.language.empty()
+              || project::to_string(settings.language)
+                  == source_entry.language) {
+              settings.files.push_back(logical_path);
+          }
       }
     }
     for (const auto& entry : metadata->units) {
@@ -499,10 +537,15 @@ bool load_required_mapped_libraries(
         }
         return false;
       }
+      if (unit->language == frontend::Language::Vhdl2008
+          && mapped_vhdl_standard) {
+          unit->vhdl_standard = *mapped_vhdl_standard;
+          unit->vhdl_compatibility_profile = vhdl_compatibility_profile();
+      }
       const auto duplicate = std::ranges::find_if(
           checked.parsed.units,
           [&](const auto& existing) {
-            return unit_key(existing) == unit_key(*unit);
+              return unit_key(existing) == unit_key(*unit);
           });
       if (duplicate != checked.parsed.units.end()) {
         diagnostics.error(

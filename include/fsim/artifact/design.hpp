@@ -14,7 +14,7 @@
 
 namespace fsim::artifact {
 
-inline constexpr std::uint32_t kDesignFormatVersion = 4;
+inline constexpr std::uint32_t kDesignFormatVersion = 7;
 inline constexpr std::string_view kDesignMetadataFilename = "fsim-design.bin";
 
 struct DesignRoot {
@@ -36,10 +36,23 @@ struct DesignObjectInput {
   std::string compilation_digest;
   std::string language;
   std::string standard;
+  std::string compatibility_profile { "none" };
   std::string library;
+  std::vector<library::VhdlPackageDependency> vhdl_package_dependencies;
   std::vector<std::string> unit_checksums;
   friend bool operator==(
       const DesignObjectInput&, const DesignObjectInput&) = default;
+};
+
+struct DesignVhdlUnitProvenance {
+  std::uint32_t unit{};
+  std::string standard;
+  std::string predefined_environment;
+  std::string compatibility_profile;
+  std::vector<library::VhdlPackageDependency> package_dependencies;
+  friend bool operator==(
+      const DesignVhdlUnitProvenance&,
+      const DesignVhdlUnitProvenance&) = default;
 };
 
 struct DesignPayload {
@@ -82,6 +95,7 @@ struct DesignMetadata {
   std::vector<DesignRoot> roots;
   std::vector<DesignBinding> bindings;
   std::vector<DesignObjectInput> objects;
+  std::vector<DesignVhdlUnitProvenance> vhdl_unit_provenance;
   std::vector<DesignSystemCPlugin> systemc_plugins;
   std::vector<DesignPayload> payloads;
   std::vector<std::string> specialization_cache_keys;

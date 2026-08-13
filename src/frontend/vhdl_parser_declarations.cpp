@@ -202,65 +202,67 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
     return;
   }
   if (match_keyword("protected", true)) {
-    const bool body = match_keyword("body", true);
-    DesignUnit protected_region;
-    protected_region.language = Language::Vhdl2008;
-    std::vector<VariableDeclaration> variables;
-    while (!at_end() &&
-           !(keyword("end", 0, true) && keyword("protected", 1, true))) {
-      if ((keyword("pure", 0, true) || keyword("impure", 0, true)) &&
-          keyword("function", 1, true)) {
-        const bool pure = match_keyword("pure", true);
-        if (!pure) {
-          (void)match_keyword("impure", true);
-        }
-        const auto function_start = expect_keyword("function", true);
-        parse_vhdl_function_item(protected_region, function_start, pure, !body);
-        continue;
-      }
-      if (match_keyword("function", true)) {
-        parse_vhdl_function_item(protected_region, previous(), true, !body);
-        continue;
-      }
-      if (match_keyword("procedure", true)) {
-        parse_vhdl_procedure_item(protected_region, previous(), !body);
-        continue;
-      }
-      if (body && match_keyword("variable", true)) {
-        const auto variable_start = previous();
-        std::vector<Token> names{expect_identifier("protected variable name")};
-        while (match(TokenKind::Comma)) {
-          names.push_back(expect_identifier("protected variable name"));
-        }
-        expect(TokenKind::Colon, "':' after protected variable names",
-               "FSIM-VHDL-PARSE-245");
-        const auto variable_type = parse_vhdl_type(true, true);
-        std::optional<Expression> initializer;
-        if (match(TokenKind::ColonEqual)) {
-          initializer = parse_expression();
-        }
-        expect(TokenKind::Semicolon, "';' after protected variable declaration",
-               "FSIM-VHDL-PARSE-246");
-        for (const auto &variable_name : names) {
-          const auto canonical_variable = vhdl_name(variable_name.text);
-          if (std::ranges::any_of(variables, [&](const auto &existing) {
-                return existing.name == canonical_variable;
-              })) {
-            error(variable_name, "FSIM-VHDL-SEM-091",
-                  "duplicate protected variable '" + canonical_variable + "'");
-            continue;
+      require_vhdl_standard(
+          previous(), VhdlStandard::Vhdl2000, "a protected type declaration",
+          "select VHDL-2000 or replace the protected object with an ordinary "
+          "package-managed declaration");
+      const bool body = match_keyword("body", true);
+      DesignUnit protected_region;
+      protected_region.language = Language::Vhdl2008;
+      std::vector<VariableDeclaration> variables;
+      while (!at_end() && !(keyword("end", 0, true) && keyword("protected", 1, true))) {
+          if ((keyword("pure", 0, true) || keyword("impure", 0, true)) && keyword("function", 1, true)) {
+              const bool pure = match_keyword("pure", true);
+              if (!pure) {
+                  (void)match_keyword("impure", true);
+              }
+              const auto function_start = expect_keyword("function", true);
+              parse_vhdl_function_item(protected_region, function_start, pure, !body);
+              continue;
           }
-          variables.push_back(VariableDeclaration{
-              canonical_variable, variable_type, initializer,
-              span_from(variable_start, previous())});
-        }
-        continue;
+          if (match_keyword("function", true)) {
+              parse_vhdl_function_item(protected_region, previous(), true, !body);
+              continue;
+          }
+          if (match_keyword("procedure", true)) {
+              parse_vhdl_procedure_item(protected_region, previous(), !body);
+              continue;
+          }
+          if (body && match_keyword("variable", true)) {
+              const auto variable_start = previous();
+              std::vector<Token> names { expect_identifier("protected variable name") };
+              while (match(TokenKind::Comma)) {
+                  names.push_back(expect_identifier("protected variable name"));
+              }
+              expect(TokenKind::Colon, "':' after protected variable names",
+                  "FSIM-VHDL-PARSE-245");
+              const auto variable_type = parse_vhdl_type(true, true);
+              std::optional<Expression> initializer;
+              if (match(TokenKind::ColonEqual)) {
+                  initializer = parse_expression();
+              }
+              expect(TokenKind::Semicolon, "';' after protected variable declaration",
+                  "FSIM-VHDL-PARSE-246");
+              for (const auto& variable_name : names) {
+                  const auto canonical_variable = vhdl_name(variable_name.text);
+                  if (std::ranges::any_of(variables, [&](const auto& existing) {
+                          return existing.name == canonical_variable;
+                      })) {
+                      error(variable_name, "FSIM-VHDL-SEM-091",
+                          "duplicate protected variable '" + canonical_variable + "'");
+                      continue;
+                  }
+                  variables.push_back(VariableDeclaration {
+                      canonical_variable, variable_type, initializer,
+                      span_from(variable_start, previous()) });
+              }
+              continue;
+          }
+          const auto item = advance();
+          error(item, "FSIM-VHDL-UNSUPPORTED-055",
+              "unsupported protected type declarative item '" + item.text + "'");
+          skip_to_semicolon();
       }
-      const auto item = advance();
-      error(item, "FSIM-VHDL-UNSUPPORTED-055",
-            "unsupported protected type declarative item '" + item.text + "'");
-      skip_to_semicolon();
-    }
     expect_keyword("end", true, "FSIM-VHDL-PARSE-247");
     expect_keyword("protected", true, "FSIM-VHDL-PARSE-248");
     if (body) {
@@ -374,6 +376,18 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
     expect_keyword("of", true, "FSIM-VHDL-PARSE-147");
     const auto element_start = current();
     const auto element_type = parse_vhdl_type(true, true);
+    const auto element_simple_name = element_type.spelling.substr(
+        element_type.spelling.find_last_of('.') == std::string::npos
+            ? 0
+            : element_type.spelling.find_last_of('.') + 1);
+    const bool unconstrained_builtin_element = !element_type.packed_range && (element_simple_name == "bit_vector" || element_simple_name == "std_logic_vector" || element_simple_name == "std_ulogic_vector" || element_simple_name == "signed" || element_simple_name == "unsigned" || element_simple_name == "string");
+    if (unconstrained_builtin_element) {
+        require_vhdl_standard(
+            element_start, VhdlStandard::Vhdl2008,
+            "an unconstrained array element subtype",
+            "select VHDL-2008 or constrain the element subtype in the array "
+            "declaration");
+    }
     const bool unresolved_element = !element_type.named_type.empty();
     const auto element_width = element_type.width();
     const bool scalar_element =
@@ -635,11 +649,14 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
 
 void VhdlParser::parse_vhdl_shared_variable(DesignUnit &unit,
                                             const Token &start) {
-  expect_keyword("variable", true, "FSIM-VHDL-PARSE-251");
-  std::vector<Token> names{expect_identifier("shared variable name")};
-  while (match(TokenKind::Comma)) {
-    names.push_back(expect_identifier("shared variable name"));
-  }
+    require_vhdl_standard(
+        start, VhdlStandard::Vhdl1993, "a shared variable declaration",
+        "select VHDL-1993 or use a process-local ordinary variable");
+    expect_keyword("variable", true, "FSIM-VHDL-PARSE-251");
+    std::vector<Token> names { expect_identifier("shared variable name") };
+    while (match(TokenKind::Comma)) {
+        names.push_back(expect_identifier("shared variable name"));
+    }
   expect(TokenKind::Colon, "':' after shared variable names",
          "FSIM-VHDL-PARSE-252");
   const auto type = parse_vhdl_type(true, true);
@@ -685,14 +702,32 @@ void VhdlParser::parse_vhdl_file_declaration(
   std::optional<Expression> logical_name;
   const bool has_open = match_keyword("open", true);
   if (has_open) {
-    if (keyword("is", 0, true) || at(TokenKind::Semicolon)) {
-      error(current(), "FSIM-VHDL-PARSE-257",
-            "expected a file open-kind expression after 'open'");
-    } else {
-      open_kind = parse_expression();
-    }
+      require_vhdl_standard(
+          previous(), VhdlStandard::Vhdl1993,
+          "an explicit file open-kind expression",
+          "select VHDL-1993 or use the VHDL-1987 'is in'/'is out' file mode "
+          "form");
+      if (keyword("is", 0, true) || at(TokenKind::Semicolon)) {
+          error(current(), "FSIM-VHDL-PARSE-257",
+              "expected a file open-kind expression after 'open'");
+      } else {
+          open_kind = parse_expression();
+      }
   }
   if (match_keyword("is", true)) {
+      if (keyword("in", 0, true) || keyword("out", 0, true)) {
+          const auto legacy_mode = advance();
+          if (vhdl_standard_ != VhdlStandard::Vhdl1987) {
+              error(legacy_mode, "FSIM-FE-VHSTD-003",
+                  "the VHDL-1987 file mode '" + vhdl_name(legacy_mode.text) + "' is unavailable in VHDL-" + std::string(to_string(vhdl_standard_)) + "; replace it with 'open " + (detail::iequals(legacy_mode.text, "in") ? "read_mode" : "write_mode") + " is'");
+          }
+          open_kind = Expression {
+              ExpressionKind::Identifier,
+              detail::iequals(legacy_mode.text, "in") ? "read_mode"
+                                                      : "write_mode",
+              { }, legacy_mode.span
+          };
+      }
     if (at(TokenKind::Semicolon)) {
       error(current(), "FSIM-VHDL-PARSE-258",
             "expected a file logical-name expression after 'is'");
@@ -806,20 +841,23 @@ void VhdlParser::parse_vhdl_attribute_declaration(DesignUnit &unit,
 
 void VhdlParser::parse_vhdl_group_declaration(DesignUnit &unit,
                                                const Token &start) {
-  const auto name_token = expect_identifier("group name");
-  const auto name = vhdl_name(name_token.text);
-  const bool template_declaration = match_keyword("is", true);
-  std::string template_name;
-  if (!template_declaration) {
-    if (!match(TokenKind::Colon)) {
-      error(current(), "FSIM-VHDL-PARSE-268",
-            "a VHDL group requires 'is' for a template or ':' for an "
-            "instance");
-      skip_to_semicolon();
-      return;
+    require_vhdl_standard(
+        start, VhdlStandard::Vhdl1993, "a group declaration",
+        "select VHDL-1993 or remove the group template or instance");
+    const auto name_token = expect_identifier("group name");
+    const auto name = vhdl_name(name_token.text);
+    const bool template_declaration = match_keyword("is", true);
+    std::string template_name;
+    if (!template_declaration) {
+        if (!match(TokenKind::Colon)) {
+            error(current(), "FSIM-VHDL-PARSE-268",
+                "a VHDL group requires 'is' for a template or ':' for an "
+                "instance");
+            skip_to_semicolon();
+            return;
+        }
+        template_name = parse_vhdl_selected_name("group template name");
     }
-    template_name = parse_vhdl_selected_name("group template name");
-  }
 
   expect(TokenKind::LeftParen, "'(' before VHDL group entries",
          "FSIM-VHDL-PARSE-269");
@@ -1155,7 +1193,24 @@ void VhdlParser::parse_vhdl_object_alias(
   }
   auto type = parse_vhdl_type(true, true);
   expect_keyword("is", true, "FSIM-VHDL-PARSE-236");
-  const auto actual = expect_identifier("alias target");
+  const auto actual = parse_vhdl_selected_name("alias target");
+  if (match(TokenKind::LeftBracket)) {
+      const auto signature_start = previous();
+      require_vhdl_standard(
+          signature_start, VhdlStandard::Vhdl1993, "an alias signature",
+          "select VHDL-1993 or remove the overload-disambiguating signature");
+      std::size_t signature_tokens = 0;
+      while (!at_end() && !at(TokenKind::RightBracket) && !at(TokenKind::Semicolon)) {
+          ++signature_tokens;
+          advance();
+      }
+      if (signature_tokens == 0) {
+          error(signature_start, "FSIM-VHDL-PARSE-236",
+              "an alias signature cannot be empty");
+      }
+      expect(TokenKind::RightBracket, "']' after alias signature",
+          "FSIM-VHDL-PARSE-236");
+  }
   expect(TokenKind::Semicolon, "';' after alias declaration",
          "FSIM-VHDL-PARSE-236");
   const auto canonical = vhdl_name(name.text);
@@ -1166,9 +1221,9 @@ void VhdlParser::parse_vhdl_object_alias(
           "duplicate bounded object alias '" + canonical + "'");
     return;
   }
-  aliases.push_back(SignalAliasDeclaration{
-      canonical, vhdl_name(actual.text), std::move(type),
-      PortDirection::Unknown, span_from(start, previous())});
+  aliases.push_back(SignalAliasDeclaration {
+      canonical, std::move(actual), std::move(type),
+      PortDirection::Unknown, span_from(start, previous()) });
 }
 
 bool VhdlParser::parse_vhdl_local_nonobject_declaration(
@@ -1324,6 +1379,13 @@ void VhdlParser::parse_concurrent_statement(DesignUnit &unit) {
 
   const auto postponed_token = match_keyword("postponed", true)
       ? std::optional<Token>{previous()} : std::nullopt;
+  if (postponed_token) {
+      (void)require_vhdl_standard(
+          *postponed_token,
+          VhdlStandard::Vhdl1993,
+          "postponed concurrent statements",
+          "use an ordinary process, assertion, or procedure call");
+  }
   if (keyword("process", 0, true)) {
     unit.processes.push_back(
         parse_process(label_token, postponed_token.has_value()));
@@ -1379,9 +1441,14 @@ void VhdlParser::parse_concurrent_statement(DesignUnit &unit) {
     return;
   }
   if (label_token && match_keyword("case", true)) {
-    unit.generate_regions.push_back(
-        parse_vhdl_selection_generate(*label_token, previous()));
-    return;
+      (void)require_vhdl_standard(
+          previous(),
+          VhdlStandard::Vhdl2008,
+          "case-generate statements",
+          "replace the case generate with VHDL-93 if-generate statements");
+      unit.generate_regions.push_back(
+          parse_vhdl_selection_generate(*label_token, previous()));
+      return;
   }
   if (label_token && match_keyword("block", true)) {
     unit.generate_regions.push_back(

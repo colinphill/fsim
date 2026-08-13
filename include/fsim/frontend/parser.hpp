@@ -20,16 +20,20 @@ struct ParseResult {
   [[nodiscard]] bool ok() const { return !has_errors(diagnostics); }
 };
 
-[[nodiscard]] ParseResult parse(SourceText source, Language language);
+[[nodiscard]] ParseResult parse(SourceText source, Language language,
+    VhdlStandard vhdl_standard = VhdlStandard::Vhdl2008);
 [[nodiscard]] ParseResult parse_text(std::string_view source_name,
-                                     std::string_view text,
-                                     Language language);
+    std::string_view text,
+    Language language,
+    VhdlStandard vhdl_standard = VhdlStandard::Vhdl2008);
 [[nodiscard]] ParseResult parse_file(const std::filesystem::path& path,
-                                     Language language);
+    Language language,
+    VhdlStandard vhdl_standard = VhdlStandard::Vhdl2008);
 [[nodiscard]] ParseResult parse_file(const std::filesystem::path& path);
 [[nodiscard]] std::optional<Language> infer_language(
     const std::filesystem::path& path) noexcept;
-[[nodiscard]] ParseResult parse_vhdl(SourceText source);
+[[nodiscard]] ParseResult parse_vhdl(SourceText source,
+    VhdlStandard vhdl_standard = VhdlStandard::Vhdl2008);
 [[nodiscard]] ParseResult parse_verilog(SourceText source,
                                          bool system_verilog = true);
 [[nodiscard]] ParseResult parse_verilog(

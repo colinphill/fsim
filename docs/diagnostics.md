@@ -85,20 +85,25 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-FE-VHORDER-008` | error | A VHDL configuration binding names a configuration that has not yet been analyzed. |
 | `FSIM-FE-VHORDER-009` | error | A VHDL library repeats a primary entity, package, configuration, or context identity. |
 | `FSIM-FE-VHORDER-010` | error | A VHDL library repeats a secondary architecture or package-body identity. |
+| `FSIM-FE-VHORDER-011` | error | A VHDL source reanalyzes or consumes a logical-library unit under a different VHDL standard revision. |
 | `FSIM-FE-VHDECL-001` | error | A deferred VHDL package constant has no full declaration in the corresponding package body. |
 | `FSIM-FE-VHDECL-002` | error | A deferred VHDL package constant and its full declaration have nonconforming subtype indications. |
 | `FSIM-FE-VHDECL-003` | error | A package body redeclares a nondeferred constant from the package declaration. |
 | `FSIM-FE-VHSTD-001` | error | A required compiler-supplied IEEE 1076-2019 source file is unavailable or unreadable. |
 | `FSIM-FE-VHSTD-002` | error | A compiler-supplied IEEE 1076-2019 source file does not match its pinned upstream checksum. |
-| `FSIM-FE-VHSTD-003` | error | fsim's intrinsic semantic projection of a pinned IEEE package is internally invalid. |
+| `FSIM-FE-VHSTD-003` | error | A selected VHDL revision does not provide a declaration, expression, name, association, operator, context, generate, process, statement, instantiation, or port-map feature and names its minimum revision and migration, or fsim's intrinsic semantic projection of a pinned IEEE package is internally invalid for an owning revision. |
 | `FSIM-FE-VHSTD-004` | error | A project source attempts to redeclare a compiler-supplied IEEE package. |
-| `FSIM-ELAB-VHNUM-001` | error | A bounded IEEE numeric function has the wrong arity or value profile. |
-| `FSIM-ELAB-VHNUM-002` | error | A numeric conversion or resize result size is not locally static in 1 through 64. |
-| `FSIM-ELAB-VHNUM-003` | error | `to_integer` exceeds the bounded signed or unsigned input-width profile. |
+| `FSIM-FE-VHSTD-005` | error | Sources using different VHDL revisions attempt to share one compiler-supplied IEEE package environment; analyze them into separate logical libraries. |
+| `FSIM-FE-VHSTD-006` | error | A requested compiler-supplied non-standard Synopsys compatibility package is unavailable or incompatible with the selected VHDL revision; select a compatible revision or remove its use clause. |
+| `FSIM-ELAB-VHSTD-001` | error | A compiler-supplied IEEE intrinsic is unavailable in the owning process's selected VHDL revision and no user-defined overload owns the name. |
+| `FSIM-ELAB-VHNUM-001` | error | An IEEE or Synopsys numeric function has the wrong arity or value profile. |
+| `FSIM-ELAB-VHNUM-002` | error | A numeric conversion or resize result size is not locally static and representable by SimIR; standard conversions require a positive size while historical Synopsys conversions also permit zero. |
+| `FSIM-ELAB-VHNUM-003` | error | `to_integer` or `conv_integer` lacks a constrained non-null signed or unsigned input profile. |
 | `FSIM-ELAB-VHNUM-004` | error | A numeric conversion or resize result size differs from its contextual width. |
-| `FSIM-ELAB-VHLOGIC-001` | error | A bounded standard-logic conversion or predicate has an unsupported argument count. |
-| `FSIM-ELAB-VHLOGIC-002` | error | A standard-logic conversion has an unsupported scalar/vector width, state domain, or contextual result width. |
+| `FSIM-ELAB-VHLOGIC-001` | error | A standard-logic conversion, predicate, or reduction has an unsupported argument count. |
+| `FSIM-ELAB-VHLOGIC-002` | error | A standard-logic conversion or reduction has an unsupported scalar/vector width, state domain, or contextual result width. |
 | `FSIM-ELAB-VHLOGIC-003` | error | A standard-logic mapping or string conversion is outside the supported static mapping profile. |
+| `FSIM-ELAB-VHSYN-001` | error | Simultaneously visible `std_logic_signed` and `std_logic_unsigned` declarations provide genuinely conflicting `std_logic_vector` operator or `conv_integer` profiles; remove one use clause, qualify the call, or add an explicit numeric conversion. |
 | `FSIM-ELAB-VHFIX-001` | error | A bounded fixed-point conversion or resize has the wrong arity, operand type, or value profile. |
 | `FSIM-ELAB-VHFIX-002` | error | A fixed-point result range is not locally static, descending, and from 1 through 64 bits. |
 | `FSIM-ELAB-VHFIX-003` | error | A fixed-point conversion, scale expansion, or rounded resize is outside the bounded static/default profile. |
@@ -117,6 +122,8 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-FE-LEX-005` | error | A VHDL basic identifier starts with an underscore or contains adjacent or trailing underscores. |
 | `FSIM-FE-LEX-006` | error | A VHDL extended identifier is empty. |
 | `FSIM-FE-LEX-007` | error | VHDL-2008 delimited-comment nesting exceeds the bounded 64-level policy. |
+| `FSIM-VHDL-LEX-001` | error | A VHDL lexical form requires a later selected revision; the diagnostic identifies the required revision and exact source span. |
+| `FSIM-VHDL-LEX-002` | error | A word reserved by the selected VHDL revision was used where a user identifier is required; use an extended identifier or an older compatible revision. |
 | `FSIM-FE-PARSE-001` | error | A parser expectation using the common fallback code failed. |
 | `FSIM-FE-PP-0001` | error | Include directories or macro definitions were supplied for a VHDL source set; these settings apply only to Verilog/SystemVerilog or SystemC. |
 
@@ -1754,7 +1761,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-VHPROTECTED-005` | error | A protected procedure body has no conforming public profile. |
 | `FSIM-ELAB-VHPROTECTED-006` | error | A protected type declaration has no body. |
 | `FSIM-ELAB-VHPROTECTED-007` | error | A protected private variable lacks a bounded supported scalar or packed type. |
-| `FSIM-ELAB-VHPROTECTED-008` | error | A VHDL shared variable does not have a protected type. |
+| `FSIM-ELAB-VHPROTECTED-008` | error | A VHDL-2000-or-later shared variable does not have a protected type. |
 | `FSIM-ELAB-VHPROTECTED-009` | error | A shared protected object lacks one conforming protected body. |
 | `FSIM-ELAB-VHPROTECTED-010` | error | A shared protected object incorrectly carries an object initializer. |
 | `FSIM-ELAB-VHPROTECTED-011` | error | A protected private initializer is nonstatic or incompatible with its member. |
@@ -1769,6 +1776,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-VHPROTECTED-020` | error | A protected method attempts to suspend. |
 | `FSIM-ELAB-VHPROTECTED-021` | error | A protected method makes a nested procedure call outside the bounded non-reentrant policy. |
 | `FSIM-ELAB-VHPROTECTED-022` | error | A pure VHDL function calls an impure protected function. |
+| `FSIM-ELAB-VHPROTECTED-023` | error | A legacy VHDL-1993 unprotected shared variable lacks bounded executable storage or a compatible static initializer. |
 | `FSIM-ELAB-VHAGG-001` | error | A VHDL aggregate appears without a supported contextual record or array target type. |
 | `FSIM-ELAB-VHAGG-002` | error | A contextual record layout or aggregate-association HIR payload is internally inconsistent. |
 | `FSIM-ELAB-VHAGG-003` | error | A named aggregate association does not name an element of the contextual record type. |
@@ -1789,7 +1797,6 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-VHSUBTYPE-003` | error | A packed index constraint is applied to a scalar, record, or otherwise nonarray base subtype. |
 | `FSIM-ELAB-VHSUBTYPE-004` | error | A constrained packed-array subtype is constrained again. |
 | `FSIM-ELAB-VHARRAY-001` | error | A VHDL array element subtype is missing, indefinite, zero-width, integer, string, unknown, or otherwise outside the bounded packed runtime. |
-| `FSIM-ELAB-VHARRAY-002` | error | A null constraint on a legacy built-in VHDL vector cannot yet be represented by its one-dimensional packed path. |
 | `FSIM-ELAB-VHARRAY-003` | error | A VHDL array constraint lies outside its `integer`, `natural`, or `positive` index subtype. |
 | `FSIM-ELAB-VHARRAY-004` | error | A VHDL array constraint width overflows the packed runtime representation. |
 | `FSIM-ELAB-VHARRAY-005` | error | A VHDL array object uses an unconstrained or otherwise nonconcrete array subtype. |
@@ -1837,7 +1844,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-VHENUMRANGE-002` | error | A VHDL enumeration subtype constraint is null or lies outside the base enumeration's literal table. |
 | `FSIM-ELAB-VHENUMRANGE-003` | error | A derived VHDL enumeration subtype constraint is not contained by its resolved base subtype. |
 | `FSIM-ELAB-VHENUMRANGE-004` | error | A locally static value assigned to a constrained VHDL enumeration object lies outside the subtype range. |
-| `FSIM-ELAB-VHPORT-001` | error | A VHDL input-port expression is not a supported locally static value for its contextual formal type. |
+| `FSIM-ELAB-VHPORT-001` | error | A VHDL input-port expression is not a supported locally static value for its contextual formal type, or a nonstatic expression requires VHDL-2008 and an explicitly driven intermediate signal under the selected older revision. |
 | `FSIM-ELAB-VHPORT-002` | error | A VHDL output, buffer, or inout port is associated with an expression that is not a writable signal name. |
 | `FSIM-ELAB-VITAL-001` | error | A compiler-supplied VITAL constant is used without its exact concrete delay or map context. |
 | `FSIM-ELAB-VITAL-002` | error | A scalar VITAL primitive is used in a nonscalar result context. |
@@ -2302,11 +2309,12 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ART-0003` | error | `.fsimobj` metadata or payload publication/loading failed, including overwrite, staging, permissions, or exact-payload-set failures. |
 | `FSIM-ART-0004` | error | Explicit compilation is not one portable HDL source set, a checked source changed or became unreadable, or no owning unit was produced. |
 | `FSIM-ART-0005` | error | Ordered object loading found no input, corruption, duplicate/colliding identities, inconsistent library ownership, or an invalid restored semantic projection. |
+| `FSIM-ART-VHDEP-001` | error | A portable object, design, or mapped-library artifact names a stale, unavailable, incomplete, or source-digest-mismatched compiler-supplied VHDL package dependency. |
 | `FSIM-ART-0010` | error | `.fsimdesign` metadata has an unsupported, truncated, trailing, or runtime-ABI-incompatible encoding. |
-| `FSIM-ART-0011` | error | `.fsimdesign` metadata has invalid roots, bindings, paths, checksums, object provenance, counts, or design digest. |
+| `FSIM-ART-0011` | error | `.fsimdesign` metadata has invalid roots, bindings, paths, checksums, object provenance, ordered VHDL semantic-unit provenance, counts, or design digest. |
 | `FSIM-ART-0012` | error | `.fsimdesign` publication/loading failed, including overwrite, staging, permissions, or exact-payload-set failures. |
 | `FSIM-ART-0013` | error | A runtime, semantic, or DesignIR state payload is malformed, excessive, structurally invalid, contains an invalid scalar enumeration, or contains a producer-absolute source path. |
-| `FSIM-ART-0014` | error | Standalone design publication, inspection, loading, projection validation, fixed-delay compatibility, or required-payload verification failed. |
+| `FSIM-ART-0014` | error | Standalone design publication, inspection, loading, projection validation, VHDL semantic-unit association, fixed-delay compatibility, or required-payload verification failed. |
 
 ## SystemC source compiler and plug-in validation
 
@@ -2363,3 +2371,37 @@ The Batch 163 VHDL/PSL closure audit freezes all 19 PSL codes in this table,
 exact positive/negative/execution witnesses, and zero
 unresolved active rows. Runtime PSL resource failures retain typed resource
 kinds rather than synthesizing uncataloged diagnostic spellings.
+
+Batch 166 older-mode execution uses the selected VHDL revision and Synopsys
+package identity already established during analysis. The interpreter and
+LLVM O0/O2 paths preserve exact composite bounds, direction, Logic9 planes,
+time and delta ordering across VHDL/SystemVerilog/SystemC boundaries and
+multiple roots. This closed execution surface introduces no new diagnostic:
+revision, package-availability, overload-ambiguity and stale-artifact failures
+remain owned by their existing catalog entries above.
+
+The Batch 166 revision corpus freezes one exact older-standard availability
+message and coordinate for each older standard: VHDL-87 rejects direct entity
+instantiation at 2:7, VHDL-93 rejects a protected type at 2:17, and VHDL-2000
+and VHDL-2002 each reject a context declaration at 1:1. The package corpus
+also binds signed/unsigned ambiguity, stale `std_logic_arith` provenance and
+incompatible `std_logic_misc` source to their single catalog rows. The registered
+inventory validates the corresponding evidence anchors and prevents a
+code-only or coordinate-only substitute from satisfying the corpus.
+
+The registered Batch 166 closure matrix requires those diagnostics in the
+same retained run as every older revision, all four Synopsys packages,
+interpreter/LLVM O0/O2 execution, artifacts/caches, public boundaries and
+cross-platform contracts. Its transcript contract includes the exact
+mixed-package ambiguity code token. A passing child exit code
+without the revision, package, engine, width, direction, null, provenance and
+resource tokens cannot satisfy the matrix; each witness has its own retained
+verbose log and result row.
+
+Batch 166 public introspection carries the selected revision, predefined
+environment, compatibility profile and compiler-package revision through
+debugger scopes, execution activity, VCD comments and VHPI metadata. Invalid
+partial VHPI provenance is rejected by the typed runtime service, while
+compiler implementation packages remain absent from user hierarchy discovery.
+This surface adds no diagnostic spelling: source/unit identity and exact wide
+value/control evidence use the existing bounded public APIs.

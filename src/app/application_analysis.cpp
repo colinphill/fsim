@@ -236,6 +236,24 @@ frontend::Language frontend_language(const project::Language language)  {
   return frontend::Language::SystemVerilog2017;
 }
 
+frontend::VhdlStandard frontend_vhdl_standard(
+    const project::VhdlStandard standard)
+{
+    switch (standard) {
+    case project::VhdlStandard::vhdl_1987:
+        return frontend::VhdlStandard::Vhdl1987;
+    case project::VhdlStandard::vhdl_1993:
+        return frontend::VhdlStandard::Vhdl1993;
+    case project::VhdlStandard::vhdl_2000:
+        return frontend::VhdlStandard::Vhdl2000;
+    case project::VhdlStandard::vhdl_2002:
+        return frontend::VhdlStandard::Vhdl2002;
+    case project::VhdlStandard::vhdl_2008:
+        return frontend::VhdlStandard::Vhdl2008;
+    }
+    return frontend::VhdlStandard::Vhdl2008;
+}
+
 bool same_source_path(
     const std::filesystem::path& left,
     const std::filesystem::path& right)  {
@@ -254,26 +272,31 @@ bool same_source_path(
 
 std::string compilation_unit_digest(
     const std::vector<frontend::PreprocessedRoot>& roots,
-    const std::vector<frontend::PreprocessedDependency>& inputs)  {
-  compiler::CacheKeyBuilder key;
-  key.add(
-      "compilation-unit-snapshot-schema",
-      "fsim-hdl-compilation-unit-v1");
-  for (const auto& root : roots) {
+    const std::vector<frontend::PreprocessedDependency>& inputs,
+    const std::string_view language,
+    const std::string_view standard)
+{
+    compiler::CacheKeyBuilder key;
     key.add(
-        "root-path",
-        fsim::support::path_to_utf8(root.path.lexically_normal()));
-  }
-  for (const auto& input : inputs) {
-    key.add(
-        "input-path",
-        fsim::support::path_to_utf8(input.path.lexically_normal()));
-    key.add(
-        "input-content",
-        support::Sha256::hex(
-            support::Sha256::digest(input.contents)));
-  }
-  return key.finish();
+        "compilation-unit-snapshot-schema",
+        "fsim-hdl-compilation-unit-v2");
+    key.add("language", language);
+    key.add("standard", standard);
+    for (const auto& root : roots) {
+        key.add(
+            "root-path",
+            fsim::support::path_to_utf8(root.path.lexically_normal()));
+    }
+    for (const auto& input : inputs) {
+        key.add(
+            "input-path",
+            fsim::support::path_to_utf8(input.path.lexically_normal()));
+        key.add(
+            "input-content",
+            support::Sha256::hex(
+                support::Sha256::digest(input.contents)));
+    }
+    return key.finish();
 }
 
 void assign_class_source_metadata(
@@ -307,9 +330,12 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
         frontend::preprocess_verilog_compilation_unit(
             paths, group.language, options);
     ParsedSnapshot snapshot;
-    const auto unit_digest =
-        compilation_unit_digest(
-            preprocessed.roots, preprocessed.inputs);
+    const auto unit_digest = compilation_unit_digest(
+        preprocessed.roots, preprocessed.inputs,
+        group.language == frontend::Language::Verilog2005
+            ? std::string_view { "verilog" }
+            : std::string_view { "systemverilog" },
+        group.standard);
     snapshot.sources.reserve(preprocessed.roots.size());
     for (std::size_t root_index = 0;
          root_index < preprocessed.roots.size(); ++root_index) {
@@ -319,6 +345,10 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
           root_index < group.inputs.size()
               ? group.inputs[root_index].path
               : root.path;
+      source.language = group.language == frontend::Language::Verilog2005
+          ? "verilog"
+          : "systemverilog";
+      source.standard = group.standard;
       source.content_digest = support::Sha256::hex(
           support::Sha256::digest(root.contents));
       source.dependencies.reserve(root.dependencies.size());
@@ -444,6 +474,10 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
   const auto& input = group.inputs.front();
   CheckedSource source;
   source.path = input.path;
+  source.language = input.language == frontend::Language::Vhdl2008
+      ? "vhdl"
+      : "systemverilog";
+  source.standard = input.standard;
   std::ifstream stream(input.path, std::ios::binary);
   if (!stream) {
     snapshot.result.diagnostics.push_back({
@@ -475,16 +509,18 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
   compiler::CacheKeyBuilder key;
   key.add(
       "compilation-unit-snapshot-schema",
-      "fsim-hdl-compilation-unit-v1");
+      "fsim-hdl-compilation-unit-v2");
+  key.add("language", source.language);
+  key.add("standard", source.standard);
   key.add(
       "input-path",
       fsim::support::path_to_utf8(input.path.lexically_normal()));
   key.add("input-content", source.content_digest);
   source.compilation_unit_digest = key.finish();
   snapshot.result = frontend::parse(
-      frontend::SourceText{
-          fsim::support::path_to_utf8(input.path), std::move(text)},
-      input.language);
+      frontend::SourceText {
+          fsim::support::path_to_utf8(input.path), std::move(text) },
+      input.language, input.vhdl_standard);
   for (auto& unit : snapshot.result.design.units) {
     unit.library = input.library;
     unit.compilation_unit_identity = source.compilation_unit_digest;

@@ -39,7 +39,12 @@ std::vector<Statement> VhdlParser::parse_statement_list(
 std::optional<Statement> VhdlParser::parse_sequential_statement(
     const std::optional<Token>& opening_label) {
   if (match_keyword("with", true)) {
-    return parse_vhdl_selected_assignment(previous(), false);
+      (void)require_vhdl_standard(
+          previous(),
+          VhdlStandard::Vhdl2008,
+          "sequential selected assignments",
+          "replace the assignment with a sequential case statement");
+      return parse_vhdl_selected_assignment(previous(), false);
   }
   if (match_keyword("wait", true)) {
     const auto start = previous();
@@ -127,6 +132,11 @@ std::optional<Statement> VhdlParser::parse_sequential_statement(
   }
   if (match_keyword("report", true)) {
     const auto start = previous();
+    (void)require_vhdl_standard(
+        start,
+        VhdlStandard::Vhdl1993,
+        "report statements",
+        "use an assertion statement with an equivalent report clause in VHDL-87");
     Statement statement;
     statement.kind = StatementKind::Report;
     statement.assertion_severity = AssertionSeverity::Note;
@@ -199,7 +209,12 @@ std::optional<Statement> VhdlParser::parse_sequential_statement(
     statement.kind = StatementKind::Case;
     const bool matching = match(TokenKind::Question);
     if (matching) {
-      statement.case_match_kind = CaseMatchKind::VhdlMatching;
+        (void)require_vhdl_standard(
+            previous(),
+            VhdlStandard::Vhdl2008,
+            "matching case statements",
+            "use an ordinary case statement with exact choices");
+        statement.case_match_kind = CaseMatchKind::VhdlMatching;
     }
     statement.condition = parse_expression();
     expect_keyword("is", true, "FSIM-VHDL-PARSE-094");
@@ -713,6 +728,11 @@ std::optional<Statement> VhdlParser::parse_assignment(bool concurrent) {
       && (keyword("force", 0, true)
           || keyword("release", 0, true))) {
     const auto operation = advance();
+    (void)require_vhdl_standard(
+        operation,
+        VhdlStandard::Vhdl2008,
+        "force and release assignments",
+        "drive the signal through an explicit testbench source");
     const bool force = vhdl_name(operation.text) == "force";
     statement.kind = force ? StatementKind::Force
                            : StatementKind::Release;
@@ -775,7 +795,12 @@ Statement VhdlParser::parse_vhdl_selected_assignment(
   statement.condition = parse_expression();
   expect_keyword("select", true, "FSIM-VHDL-PARSE-116");
   if (match(TokenKind::Question)) {
-    statement.case_match_kind = CaseMatchKind::VhdlMatching;
+      (void)require_vhdl_standard(
+          previous(),
+          VhdlStandard::Vhdl2008,
+          "matching selected assignments",
+          "use an ordinary selected assignment with exact choices");
+      statement.case_match_kind = CaseMatchKind::VhdlMatching;
   }
   const auto target = parse_lvalue();
   AssignmentKind assignment_kind{};
@@ -902,6 +927,14 @@ Statement VhdlParser::parse_conditional_signal_assignment(Statement assignment) 
     return assignment;
   }
 
+  if (assignment.assignment_kind != AssignmentKind::Continuous) {
+      (void)require_vhdl_standard(
+          previous(),
+          VhdlStandard::Vhdl2008,
+          "sequential conditional assignments",
+          "replace the assignment with a sequential if statement");
+  }
+
   Statement conditional;
   conditional.kind = StatementKind::If;
   conditional.vhdl_conditional_assignment = true;
@@ -930,6 +963,13 @@ Statement VhdlParser::parse_conditional_signal_assignment(Statement assignment) 
 
 void VhdlParser::parse_vhdl_waveform(Statement& statement) {
   if (match_keyword("unaffected", true)) {
+      if (statement.assignment_kind != AssignmentKind::Continuous) {
+          (void)require_vhdl_standard(
+              previous(),
+              VhdlStandard::Vhdl2008,
+              "unaffected in sequential signal assignments",
+              "omit the assignment on the unaffected control path");
+      }
     statement.vhdl_unaffected = true;
     if (at(TokenKind::Comma)) {
       error(
@@ -1041,23 +1081,28 @@ void VhdlParser::diagnose_misplaced_vhdl_delay_mechanism() {
 }
 
 Expression VhdlParser::parse_conditional_assignment_value() {
-  auto when_true = parse_expression();
-  if (!match_keyword("when", true)) {
-    return when_true;
-  }
-  const auto begin_span = when_true.span;
-  auto condition = parse_expression();
-  expect_keyword("else", true, "FSIM-VHDL-PARSE-115");
-  auto when_false = parse_conditional_assignment_value();
-  const auto span = cover(begin_span, when_false.span);
-  return Expression{
-      ExpressionKind::Call,
-      "?:",
-      {
-          std::move(condition),
-          std::move(when_true),
-          std::move(when_false)},
-      span};
+    auto when_true = parse_expression(0, false);
+    if (!match_keyword("when", true)) {
+        return when_true;
+    }
+    (void)require_vhdl_standard(
+        previous(),
+        VhdlStandard::Vhdl2008,
+        "sequential conditional assignments",
+        "replace the assignment with a sequential if statement");
+    const auto begin_span = when_true.span;
+    auto condition = parse_expression();
+    expect_keyword("else", true, "FSIM-VHDL-PARSE-115");
+    auto when_false = parse_conditional_assignment_value();
+    const auto span = cover(begin_span, when_false.span);
+    return Expression {
+        ExpressionKind::Call,
+        "?:",
+        { std::move(condition),
+            std::move(when_true),
+            std::move(when_false) },
+        span
+    };
 }
 
 Delay VhdlParser::parse_vhdl_delay(const Token& start) {

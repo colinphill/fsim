@@ -1988,6 +1988,113 @@ end architecture;
         specialization(
             cross_language, "foreign_default_parent.child").unit
         == "sv:work.foreign_default");
+
+    const auto expression_port_source = R"(
+entity revision_port_leaf is
+  port (
+    input_value : in bit_vector(136 downto 0);
+    output_value : out bit_vector(136 downto 0));
+end entity;
+architecture rtl of revision_port_leaf is
+begin
+  output_value <= input_value;
+end architecture;
+entity revision_port_top is end entity;
+architecture rtl of revision_port_top is
+  signal left_value : bit_vector(136 downto 0);
+  signal right_value : bit_vector(136 downto 0);
+  signal observed : bit_vector(136 downto 0);
+  component revision_port_leaf
+    port (
+      input_value : in bit_vector(136 downto 0);
+      output_value : out bit_vector(136 downto 0));
+  end component;
+begin
+  child : revision_port_leaf
+    port map (
+      input_value => left_value xor right_value,
+      output_value => observed);
+end architecture;)";
+    const auto elaborate_expression_port = [&](
+                                               const fsim::frontend::VhdlStandard standard) {
+        const auto parsed = fsim::frontend::parse_text(
+            "revision-expression-port.vhd",
+            expression_port_source,
+            fsim::frontend::Language::Vhdl2008,
+            standard);
+        assert(parsed.ok());
+        return fsim::elaboration::elaborate(
+            parsed.design, "vhdl:work.revision_port_top(rtl)");
+    };
+    const auto rejected_expression_port = elaborate_expression_port(
+        fsim::frontend::VhdlStandard::Vhdl1993);
+    assert(
+        !rejected_expression_port.ok()
+        && has_diagnostic(
+            rejected_expression_port,
+            "FSIM-ELAB-VHPORT-001"));
+    const auto accepted_expression_port = elaborate_expression_port(
+        fsim::frontend::VhdlStandard::Vhdl2008);
+    assert(accepted_expression_port.ok());
+    const auto wide_observed = accepted_expression_port.design->find_signal(
+        "revision_port_top.observed");
+    assert(
+        wide_observed
+        && accepted_expression_port.design->signals().at(*wide_observed).width
+            == 137U);
+
+    const auto exact_137 = std::string { "1" } + std::string(135U, '0') + "1";
+    const auto vhdl93_source = std::string {
+        R"(entity revision_statement_leaf is
+  port (
+    input_value : in bit_vector(136 downto 0);
+    output_value : out bit_vector(136 downto 0));
+end entity;
+architecture rtl of revision_statement_leaf is
+begin
+  output_value <= input_value;
+end architecture;
+entity revision_statement_top is end entity;
+architecture rtl of revision_statement_top is
+  signal source : bit_vector(136 downto 0);
+  signal observed : bit_vector(136 downto 0);
+begin
+  drive : process
+  begin
+    source <= B")"
+    } + exact_137
+        + R"(";
+    wait;
+  end process drive;
+  child : entity work.revision_statement_leaf(rtl)
+    port map (source(136 downto 0), observed);
+end architecture;)";
+    const auto vhdl93_parsed = fsim::frontend::parse_text(
+        "revision-statement-execution.vhd",
+        vhdl93_source,
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl1993);
+    if (!vhdl93_parsed.ok()) {
+        for (const auto& diagnostic : vhdl93_parsed.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(vhdl93_parsed.ok());
+    const auto vhdl93_elaborated = fsim::elaboration::elaborate(
+        vhdl93_parsed.design,
+        "vhdl:work.revision_statement_top(rtl)");
+    assert(vhdl93_elaborated.ok());
+    const auto vhdl93_observed = vhdl93_elaborated.design->find_signal(
+        "revision_statement_top.observed");
+    assert(vhdl93_observed);
+    auto vhdl93_interpreter = vhdl93_elaborated.design->create_interpreter();
+    assert(
+        vhdl93_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        vhdl93_interpreter->signal_value(*vhdl93_observed).to_msb_string()
+        == exact_137);
 }
 
 }  // namespace fsim::tests::elaboration

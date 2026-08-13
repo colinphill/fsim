@@ -45,15 +45,29 @@ int main() {
   metadata.search_libraries = {"vendor"};
   metadata.roots.push_back({"primary", "sv:work.tb", "sv:work.tb"});
   metadata.bindings.push_back({"primary.child", std::nullopt, "std_logic"});
+  metadata.objects.push_back({ checksum("metadata"), checksum("compilation"), "systemverilog",
+      "2017", "none", "work", {}, { checksum("unit") } });
   metadata.objects.push_back({
-      checksum("metadata"), checksum("compilation"), "systemverilog",
-      "2017", "work", {checksum("unit")}});
+      checksum("vhdl-metadata"), checksum("vhdl-compilation"), "vhdl",
+      "1993", "fsim-synopsys-ieee-compat-v2", "vhdl_work",
+      {{"1993", "ieee-1076-standard:1993:fsim-v1",
+        "ieee.std_logic_unsigned",
+        "synopsys-legacy-ieee:1990-1992:fsim-synopsys-ieee-compat-v2",
+        checksum("synopsys-unsigned-source")}},
+      {checksum("vhdl-unit")} });
+  metadata.vhdl_unit_provenance.push_back({
+      1, "1993", "ieee-1076-standard:1993:fsim-v1",
+      "fsim-synopsys-ieee-compat-v2",
+      {{"1993", "ieee-1076-standard:1993:fsim-v1",
+        "ieee.std_logic_unsigned",
+        "synopsys-legacy-ieee:1990-1992:fsim-synopsys-ieee-compat-v2",
+        checksum("synopsys-unsigned-source")}}});
   metadata.payloads = {
       {"runtime", "state/runtime.bin", checksum(state_bytes)},
       {"semantics", "state/semantics.bin", checksum(state_bytes)},
       {"design-ir", "state/design-ir.bin", checksum(state_bytes)}};
   metadata.specialization_cache_keys = {checksum("specialization")};
-  metadata.unit_count = 1;
+  metadata.unit_count = 2;
   metadata.semantic_source_count = 1;
   metadata.specialization_count = 1;
   metadata.signal_count = 2;
@@ -67,8 +81,34 @@ int main() {
       encoded, "design", decode_diagnostics) == metadata);
   assert(!decode_diagnostics.has_error());
 
+  auto changed_unit_provenance = metadata;
+  changed_unit_provenance.vhdl_unit_provenance.front().standard = "2008";
+  assert(fsim::artifact::compute_design_digest(changed_unit_provenance)
+      != metadata.design_digest);
+  auto invalid_unit_provenance = metadata;
+  invalid_unit_provenance.vhdl_unit_provenance.front().unit = 2;
+  invalid_unit_provenance.design_digest =
+      fsim::artifact::compute_design_digest(invalid_unit_provenance);
+  fsim::diagnostic::Engine invalid_unit_diagnostics;
+  assert(!fsim::artifact::deserialize_design_metadata(
+      fsim::artifact::serialize_design_metadata(invalid_unit_provenance),
+      "invalid-vhdl-unit-provenance", invalid_unit_diagnostics));
+  assert(invalid_unit_diagnostics.has_error());
+  auto missing_unit_provenance = metadata;
+  missing_unit_provenance.vhdl_unit_provenance.clear();
+  missing_unit_provenance.design_digest =
+      fsim::artifact::compute_design_digest(missing_unit_provenance);
+  fsim::diagnostic::Engine missing_unit_diagnostics;
+  assert(!fsim::artifact::deserialize_design_metadata(
+      fsim::artifact::serialize_design_metadata(missing_unit_provenance),
+      "missing-vhdl-unit-provenance", missing_unit_diagnostics));
+  assert(missing_unit_diagnostics.has_error());
+
   auto format_one = metadata;
   format_one.format = 1;
+  format_one.objects.erase(format_one.objects.begin() + 1);
+  format_one.vhdl_unit_provenance.clear();
+  format_one.unit_count = 1;
   format_one.uvm_release = "none";
   format_one.uvm_source_identity.clear();
   format_one.design_digest =

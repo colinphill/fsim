@@ -1859,19 +1859,19 @@ end entity;
 architecture rtl of mixed_port_top is
   signal source : std_logic_vector(7 downto 0);
   signal result : std_logic_vector(7 downto 0);
-  signal shared : std_logic_vector(3 downto 0);
+  signal \shared\ : std_logic_vector(3 downto 0);
   component static_port_leaf is
     port (
       source : in std_logic_vector(7 downto 0);
       result : out std_logic_vector(7 downto 0);
-      shared : inout std_logic_vector(3 downto 0));
+      \shared\ : inout std_logic_vector(3 downto 0));
   end component;
 begin
   child: static_port_leaf
     port map (
       source => source,
       result => result,
-      shared => shared);
+      \shared\ => \shared\);
 end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);

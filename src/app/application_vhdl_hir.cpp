@@ -605,10 +605,15 @@ namespace {
                     vh::PredefinedAttribute::high,
                     vh::PredefinedAttribute::low,
                     vh::PredefinedAttribute::range,
-                    vh::PredefinedAttribute::reverse_range,
-                    vh::PredefinedAttribute::length,
-                    vh::PredefinedAttribute::ascending
+                    vh::PredefinedAttribute::length
                 };
+                if (current_vhdl_standard_
+                    >= frontend::VhdlStandard::Vhdl1993) {
+                    output.attributes.push_back(
+                        vh::PredefinedAttribute::reverse_range);
+                    output.attributes.push_back(
+                        vh::PredefinedAttribute::ascending);
+                }
             }
             if (!input.enumeration_literals.empty()) {
                 output.attributes.insert(
@@ -617,15 +622,21 @@ namespace {
                         vh::PredefinedAttribute::right,
                         vh::PredefinedAttribute::high,
                         vh::PredefinedAttribute::low,
-                        vh::PredefinedAttribute::ascending,
                         vh::PredefinedAttribute::pos,
                         vh::PredefinedAttribute::val,
                         vh::PredefinedAttribute::succ,
                         vh::PredefinedAttribute::pred,
                         vh::PredefinedAttribute::leftof,
-                        vh::PredefinedAttribute::rightof,
-                        vh::PredefinedAttribute::image,
-                        vh::PredefinedAttribute::value });
+                        vh::PredefinedAttribute::rightof });
+                if (current_vhdl_standard_
+                    >= frontend::VhdlStandard::Vhdl1993) {
+                    output.attributes.push_back(
+                        vh::PredefinedAttribute::ascending);
+                    output.attributes.push_back(
+                        vh::PredefinedAttribute::image);
+                    output.attributes.push_back(
+                        vh::PredefinedAttribute::value);
+                }
             }
         }
 
@@ -2000,6 +2011,7 @@ namespace {
             const frontend::DesignUnit& input,
             const semantic::UnitId unit_id)
         {
+            current_vhdl_standard_ = input.vhdl_standard;
             const auto& common_unit = model_.units()[unit_id.value()];
             vh::Unit output;
             output.id = unit_id;
@@ -2296,6 +2308,9 @@ namespace {
 
         semantic::Model& model_;
         vh::Hir& hir_;
+        frontend::VhdlStandard current_vhdl_standard_ {
+            frontend::VhdlStandard::Vhdl2008
+        };
     };
 
 } // namespace

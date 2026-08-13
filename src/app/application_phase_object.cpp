@@ -183,7 +183,10 @@ std::optional<CheckedProject> load_objects(
     provenance.compilation_digest = metadata->compilation_digest;
     provenance.language = metadata->language;
     provenance.standard = metadata->standard;
+    provenance.compatibility_profile = metadata->compatibility_profile;
     provenance.library = metadata->library;
+    provenance.vhdl_package_dependencies =
+        metadata->vhdl_package_dependencies;
     const auto source_language = project::parse_language(metadata->language);
     if (!source_language.has_value()
         || *source_language == project::Language::systemc) {
@@ -224,9 +227,9 @@ std::optional<CheckedProject> load_objects(
       source_mappings.push_back({indexed.logical_name, logical_name});
       provenance.source_settings.files.push_back(logical);
       if (inserted) {
-        checked.hdl_sources.push_back({
-            logical, indexed.checksum, {}, metadata->compilation_digest,
-            object / indexed.artifact});
+          checked.hdl_sources.push_back({ logical, metadata->language, metadata->standard,
+              indexed.checksum, { }, metadata->compilation_digest,
+              object / indexed.artifact });
       }
     }
     for (const auto& include : metadata->include_roots) {
@@ -329,6 +332,17 @@ std::optional<CheckedProject> load_objects(
               *unit, source_mappings, diagnostics)) {
         return std::nullopt;
       }
+      if (unit->language == frontend::Language::Vhdl2008) {
+          const auto standard = project::parse_vhdl_standard(metadata->standard);
+          if (!standard) {
+              diagnostics.error(
+                  "FSIM-ART-0005",
+                  ".fsimobj metadata names an unsupported VHDL revision");
+              return std::nullopt;
+          }
+          unit->vhdl_standard = application_detail::frontend_vhdl_standard(*standard);
+          unit->vhdl_compatibility_profile = metadata->compatibility_profile;
+      }
       const auto key = application_detail::unit_key(*unit);
       if (!known_units.insert(key).second) {
         diagnostics.error(
@@ -345,6 +359,32 @@ std::optional<CheckedProject> load_objects(
 
   checked.source_count = checked.hdl_sources.size();
   application_detail::inject_vhdl_standard_libraries(checked, diagnostics);
+  const auto available_vhdl_dependencies =
+      application_detail::vhdl_package_dependencies(checked);
+  std::vector<library::VhdlPackageDependency> archived_vhdl_dependencies;
+  for (const auto& object : checked.objects) {
+    if (!application_detail::validate_vhdl_package_dependencies(
+            object.vhdl_package_dependencies, ".fsimobj", diagnostics)) {
+      return std::nullopt;
+    }
+    for (const auto& dependency : object.vhdl_package_dependencies) {
+      if (std::ranges::find(archived_vhdl_dependencies, dependency)
+          == archived_vhdl_dependencies.end()) {
+        archived_vhdl_dependencies.push_back(dependency);
+      }
+    }
+  }
+  std::ranges::sort(
+      archived_vhdl_dependencies, {},
+      &library::VhdlPackageDependency::package);
+  if (archived_vhdl_dependencies != available_vhdl_dependencies) {
+    diagnostics.error(
+        "FSIM-ART-VHDEP-001",
+        ".fsimobj inputs do not completely name the compiler-supplied VHDL "
+        "package dependencies selected by their archived design units; "
+        "recompile every object with this fsim build");
+    return std::nullopt;
+  }
   application_detail::validate_vhdl_analysis_order(
       checked.parsed.units, diagnostics);
   std::vector<frontend::Diagnostic> class_diagnostics;

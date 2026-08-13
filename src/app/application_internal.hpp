@@ -871,10 +871,17 @@ void import_diagnostic(
     const frontend::Diagnostic& input);
 
 frontend::Language frontend_language(const project::Language language);
+frontend::VhdlStandard frontend_vhdl_standard(
+    project::VhdlStandard standard);
+std::string_view vhdl_compatibility_profile() noexcept;
 
 struct ParseInput {
     std::filesystem::path path;
     frontend::Language language { frontend::Language::SystemVerilog2017 };
+    frontend::VhdlStandard vhdl_standard {
+        frontend::VhdlStandard::Vhdl2008
+    };
+    std::string standard { "2017" };
     std::string library { "work" };
     std::size_t source_order { };
 };
@@ -902,7 +909,9 @@ bool same_source_path(
 
 std::string compilation_unit_digest(
     const std::vector<frontend::PreprocessedRoot>& roots,
-    const std::vector<frontend::PreprocessedDependency>& inputs);
+    const std::vector<frontend::PreprocessedDependency>& inputs,
+    std::string_view language,
+    std::string_view standard);
 
 ParsedSnapshot parse_group_snapshot(const ParseGroup& group);
 
@@ -947,6 +956,14 @@ void validate_vhdl_package_declarations(
 
 void inject_vhdl_standard_libraries(
     CheckedProject& checked,
+    diagnostic::Engine& diagnostics);
+
+[[nodiscard]] std::vector<library::VhdlPackageDependency>
+vhdl_package_dependencies(const CheckedProject& checked);
+
+[[nodiscard]] bool validate_vhdl_package_dependencies(
+    std::span<const library::VhdlPackageDependency> archived,
+    std::string_view artifact,
     diagnostic::Engine& diagnostics);
 
 std::vector<project::ProjectSection::TopLevel> selected_tops(

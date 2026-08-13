@@ -64,8 +64,8 @@ signedness, X/Z state, timing identity, and source-independent execution.
 ## Synchronized release baseline
 
 After adding this public documentation contract, the live static inventory is
-2,228 production diagnostics, 885 bounded C/C++ sources, 1,021 SPDX-owned files,
-and 330 authored test/control files. The closure audit composes diagnostic,
+2,236 production diagnostics, 887 bounded C/C++ sources, 1,029 SPDX-owned files,
+and 332 authored test/control files. The closure audit composes diagnostic,
 source-line, SPDX, v1 conformance, and resource-portability gates without
 waivers.
 

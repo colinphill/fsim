@@ -5,6 +5,54 @@ namespace fsim::app {
 using namespace application_detail;
 namespace {
 
+    [[nodiscard]] std::vector<VhdlUnitProvenance>
+    vhdl_unit_provenance(const CheckedProject& checked)
+    {
+        const auto packages = application_detail::vhdl_package_dependencies(
+            checked);
+        std::vector<VhdlUnitProvenance> result;
+        result.reserve(checked.parsed.units.size());
+        for (std::size_t index = 0; index < checked.parsed.units.size();
+            ++index) {
+            const auto& unit = checked.parsed.units[index];
+            if (unit.language != frontend::Language::Vhdl2008
+                || !unit.standard_package_revision.empty()) {
+                continue;
+            }
+            VhdlUnitProvenance item;
+            item.unit = checked.semantics.units().at(index).id;
+            item.standard = std::string { frontend::to_string(
+                unit.vhdl_standard) };
+            item.predefined_environment
+                = unit.vhdl_predefined_environment.identity;
+            item.compatibility_profile = unit.vhdl_compatibility_profile;
+            for (const auto& dependency : packages) {
+                if (dependency.standard != item.standard) {
+                    continue;
+                }
+                const auto selected = std::ranges::any_of(
+                    unit.vhdl_context, [&](const auto& context) {
+                        if (context.kind
+                            != frontend::VhdlContextItemKind::UseClause) {
+                            return false;
+                        }
+                        return std::ranges::any_of(
+                            context.selected_names,
+                            [&](const std::string_view name) {
+                                return name == dependency.package
+                                    || name.starts_with(
+                                        dependency.package + ".");
+                            });
+                    });
+                if (selected) {
+                    item.package_dependencies.push_back(dependency);
+                }
+            }
+            result.push_back(std::move(item));
+        }
+        return result;
+    }
+
     [[nodiscard]] diagnostic::SourceSpan diagnostic_span(
         const semantic::Model& model,
         const semantic::SourceSpanId source)
@@ -35,6 +83,7 @@ std::optional<BuiltProject> build_checked_project(
     if (!checked) {
         return std::nullopt;
     }
+    auto vhdl_provenance = vhdl_unit_provenance(*checked);
     for (const auto& source_set : config.source_sets) {
         if (source_set.uvm_release != project::SystemVerilogUvmRelease::none
             && source_set.uvm_release
@@ -395,7 +444,7 @@ std::optional<BuiltProject> build_checked_project(
             mapped.native_accepted, mapped.native_kind,
             mapped.native_fingerprint });
     }
-    return BuiltProject {
+    auto result = BuiltProject {
         std::move(*elaborated.design),
         std::move(design_ir),
         std::move(checked->semantics),
@@ -418,8 +467,10 @@ std::optional<BuiltProject> build_checked_project(
         std::move(checked->objects),
         std::move(checked->systemverilog_uvm_provenance), { },
         std::move(checked->systemverilog_class_specializations),
-        std::move(systemverilog_coverage), std::nullopt
+        std::move(systemverilog_coverage), std::nullopt, { }
     };
+    result.vhdl_unit_provenance = std::move(vhdl_provenance);
+    return result;
 }
 
 std::optional<BuiltProject> build_project(

@@ -652,9 +652,15 @@ std::optional<SignalId> HierarchyBuilder::add_owned_signal(
         return std::nullopt;
     }
     const auto width = declaration.type.width().value_or(1);
-    const bool null_vhdl_array = declaration.type.vhdl_array
-        && declaration.type.vhdl_array->flat_width
-        && *declaration.type.vhdl_array->flat_width == 0;
+    const bool null_vhdl_array
+        = (declaration.type.vhdl_array
+              && declaration.type.vhdl_array->flat_width
+              && *declaration.type.vhdl_array->flat_width == 0)
+        || (declaration.type.packed_range
+            && declaration.type.packed_range->width() == 0
+            && (simple_type_name == "bit_vector"
+                || simple_type_name == "std_logic_vector"
+                || simple_type_name == "std_ulogic_vector"));
     if ((!null_vhdl_array && width == 0)
         || width > std::numeric_limits<std::size_t>::max()) {
         report(

@@ -1708,6 +1708,10 @@ struct Sensitivity {
 struct Process {
     ProcessId id { };
     std::string name;
+    /// Canonical source-language identity for native-code cache separation.
+    /// Non-VHDL processes leave both profile fields empty.
+    std::string language_standard { };
+    std::string compatibility_profile { };
     std::size_t register_count { };
     std::size_t string_register_count { };
     std::size_t container_register_count { };
@@ -1823,6 +1827,8 @@ struct ExecutionPoint {
     ExecutionPointKind kind { ExecutionPointKind::statement };
     SourceLocation source;
     std::string scope;
+    std::string language_standard;
+    std::string compatibility_profile;
 
     ExecutionPoint() = default;
     ExecutionPoint(
@@ -1831,13 +1837,18 @@ struct ExecutionPoint {
         const InstructionIndex execution_instruction,
         const ExecutionPointKind execution_kind,
         SourceLocation execution_source,
-        std::string execution_scope = { })
+        std::string execution_scope = { },
+        std::string execution_language_standard = { },
+        std::string execution_compatibility_profile = { })
         : process(execution_process)
         , design_process(source_process)
         , instruction(execution_instruction)
         , kind(execution_kind)
         , source(std::move(execution_source))
         , scope(std::move(execution_scope))
+        , language_standard(std::move(execution_language_standard))
+        , compatibility_profile(
+              std::move(execution_compatibility_profile))
     {
     }
 };

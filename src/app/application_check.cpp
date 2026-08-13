@@ -117,19 +117,26 @@ std::optional<CheckedProject> check_project(
       continue;
     }
     const auto language = frontend_language(source_set.language);
+    auto vhdl_standard = frontend::VhdlStandard::Vhdl2008;
+    if (source_set.language == project::Language::vhdl) {
+        if (const auto selected = project::parse_vhdl_standard(source_set.standard)) {
+            vhdl_standard = frontend_vhdl_standard(*selected);
+        }
+    }
     const auto append_files = [&](ParseGroup& group) {
-      group.include_directories.insert(
-          group.include_directories.end(),
-          source_set.include_directories.begin(),
-          source_set.include_directories.end());
-      group.defines.insert(
-          group.defines.end(),
-          source_set.defines.begin(),
-          source_set.defines.end());
-      for (const auto& file : source_set.files) {
-        group.inputs.push_back(
-            {file, language, source_set.library, hdl_source_count++});
-      }
+        group.include_directories.insert(
+            group.include_directories.end(),
+            source_set.include_directories.begin(),
+            source_set.include_directories.end());
+        group.defines.insert(
+            group.defines.end(),
+            source_set.defines.begin(),
+            source_set.defines.end());
+        for (const auto& file : source_set.files) {
+            group.inputs.push_back(
+                { file, language, vhdl_standard, source_set.standard,
+                    source_set.library, hdl_source_count++ });
+        }
     };
     if (source_set.compilation_unit == "file"
         || source_set.language == project::Language::vhdl) {
@@ -140,7 +147,7 @@ std::optional<CheckedProject> check_project(
         group.include_directories = source_set.include_directories;
         group.defines = source_set.defines;
         group.inputs.push_back(
-            {file, language, source_set.library, hdl_source_count++});
+            { file, language, vhdl_standard, source_set.standard, source_set.library, hdl_source_count++ });
         groups.push_back(std::move(group));
       }
     } else if (source_set.compilation_unit == "source-set") {
@@ -410,18 +417,31 @@ std::optional<CheckedProject> check_project(
         return std::tie(left.source_order, left.declaration_order)
             < std::tie(right.source_order, right.declaration_order);
       });
-  std::set<std::string> known_units;
+  std::map<std::string, frontend::VhdlStandard> known_units;
   checked.parsed.units.reserve(ordered_units.size());
   for (auto& ordered : ordered_units) {
     const auto key = unit_key(ordered.unit);
-    if (!known_units.insert(key).second) {
-      report_vhdl_duplicate_design_unit(ordered.unit, diagnostics);
-      diagnostics.error(
-          "FSIM-FE-0002",
-          "duplicate design unit '" + key + "'",
-          span(ordered.unit.span));
+    const auto [known, inserted] = known_units.emplace(
+        key, ordered.unit.vhdl_standard);
+    if (!inserted) {
+        if (ordered.unit.language == frontend::Language::Vhdl2008
+            && known->second != ordered.unit.vhdl_standard) {
+            diagnostics.error(
+                "FSIM-FE-VHORDER-011",
+                "VHDL design unit '" + key + "' was already analyzed as "
+                    + std::string { frontend::to_string(known->second) }
+                    + " and cannot be reanalyzed as "
+                    + std::string {
+                        frontend::to_string(ordered.unit.vhdl_standard) },
+                span(ordered.unit.span));
+        }
+        report_vhdl_duplicate_design_unit(ordered.unit, diagnostics);
+        diagnostics.error(
+            "FSIM-FE-0002",
+            "duplicate design unit '" + key + "'",
+            span(ordered.unit.span));
     } else {
-      checked.parsed.units.push_back(std::move(ordered.unit));
+        checked.parsed.units.push_back(std::move(ordered.unit));
     }
   }
   std::set<std::string> known_udps;
@@ -466,7 +486,19 @@ std::optional<CheckedProject> check_project(
         "the project contains no local or selected mapped design units");
     return std::nullopt;
   }
+  for (auto& unit : checked.parsed.units) {
+      if (unit.language == frontend::Language::Vhdl2008) {
+          unit.vhdl_compatibility_profile = vhdl_compatibility_profile();
+      }
+  }
   inject_vhdl_standard_libraries(checked, diagnostics);
+  for (const auto& mapped : checked.mapped_libraries) {
+    if (!validate_vhdl_package_dependencies(
+            mapped.vhdl_package_dependencies,
+            ".fsimlib '" + mapped.library + "'", diagnostics)) {
+      return std::nullopt;
+    }
+  }
   validate_vhdl_analysis_order(checked.parsed.units, diagnostics);
   validate_vhdl_package_declarations(checked.parsed.units, diagnostics);
   std::vector<frontend::Diagnostic> class_diagnostics;

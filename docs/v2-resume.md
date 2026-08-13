@@ -86,6 +86,421 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     commit or push implementation before Change 20. After that implementation
     commit, save and push the exact Batch 167 restart plan and clear context
     before Batch 167 implementation.
+18. Batch 166 Change 1 is complete in the intentionally dirty worktree. The
+    registered planning contract governs two 17-row active ledgers assigned
+    one-to-one to Changes 2-18. The standard-mode ledger spans selection,
+    source/cache identity, revision-specific lexical and semantic legality,
+    predefined/protected environments, Synopsys declarations/bodies,
+    artifacts, engines, public introspection, relocation, corpora and closure
+    for VHDL-87/93/2000/2002. The separate package ledger covers the same
+    owners for `std_logic_signed`, `std_logic_unsigned`, `std_logic_arith` and
+    `std_logic_misc`, with explicit non-standard provenance and arbitrary-width
+    obligations. Their SHA-256 identities are
+    `2f298b8485861936db33960585ce2211bcabb501f42e97f1a0de3e777d2f39fe`
+    and
+    `0ff98c128af9b2229fb4ff44f0908a0a2a3d20cb6598d00ef6beb44812ec6c1b`.
+    Direct and registered Debug/Release inventory checks pass; the broad static
+    release slice passes 35/35. The live baseline remains 2,228 diagnostics,
+    885 bounded sources and 330 authored test/control files while SPDX
+    ownership advances to 1,024. Preserve Change 1 and begin Change 2 without
+    reset, commit or push before Change 20.
+19. Batch 166 Change 2 is complete in the same intentionally dirty worktree.
+    Public `VhdlStandard` identities and canonical project helpers accept
+    two-digit, full-year and `vhdl-*` forms for 1987/1993/2000/2002/2008,
+    normalize every alias to the full year, keep VHDL-2008 as the default and
+    reject unknown years deterministically. Manifest and direct non-project CLI
+    paths share that canonicalization; CLI help lists the accepted forms. Tcl
+    project dictionaries expose ordered source-profile language, canonical
+    standard and library fields. Project, application and actual Tcl evidence
+    passes in Debug and Release. `VHMODE-C02` and `VHSYN-C02` are preserved,
+    leaving 16 active rows in each ledger; their SHA-256 identities are
+    `614efdbb3d6e457f1c0bda9587d8f91a8755f899a46ae74cf46cc23e6c225689`
+    and
+    `1c1bd44119759ff3ade70c3fe5acc9c25f9b735a0dbd8b343aac4c3f2b716cc7`.
+    Preserve Changes 1-2 and begin Change 3 without reset, commit or push
+    before Change 20.
+20. Batch 166 Change 3 is complete in the same intentionally dirty worktree.
+    Typed frontend VHDL revision identity now flows from each canonical source
+    set through parse inputs, analyzed design units, checked-source provenance,
+    compilation-unit digests and mapped-library metadata while VHDL remains one
+    language family. Object and mapped sources recover language/standard
+    provenance, mapped units inherit their recorded VHDL revision, and
+    analysis-order indexes retain revision alongside every logical entity,
+    architecture, package, context and configuration identity.
+    `FSIM-FE-VHORDER-011` diagnoses incompatible dependency use or reanalysis at
+    the owning source span. Focused evidence covers VHDL-93 sources in a mixed
+    SystemVerilog-2017 project, compatible package use, VHDL-93/VHDL-2002
+    dependency mismatch and VHDL-93/VHDL-87 reanalysis. Debug and Release
+    warning-clean builds and the analysis-order, diagnostic-catalog and
+    inventory gates pass. `VHMODE-C03` and `VHSYN-C03` are preserved, leaving
+    15 active rows in each ledger; their SHA-256 identities are
+    `5112000d9afcb49529f32bd4afb3ce8c7fcff16efee7d93f751d5497ea747973`
+    and
+    `8b538b08e1b1eb1b39e060833c1066219f208d698d14c3d50e31e0840eb17c29`.
+    Preserve Changes 1-3 and begin Change 4 without reset, commit or push
+    before Change 20.
+21. Batch 166 Change 4 is complete in the same intentionally dirty worktree.
+    Object format 3 and design format 5 independently retain canonical VHDL
+    revision and compiler-owned `fsim-synopsys-ieee-compat-v2` identity;
+    Verilog/SystemVerilog retain `none`. Object compilation, design,
+    project/specialization and LLVM native-object schema v116 keys all bind the
+    profile. Runtime-state schema 48 preserves each lowered VHDL process's
+    native profile through standalone design reload. Focused persistent-cache
+    evidence proves identical-profile hits and independent revision/profile
+    misses. Artifact evidence proves digest invalidation, round trips, stable
+    `FSIM-ART-0001`/`FSIM-ART-0010` future-schema rejection and VHDL-2008
+    restoration. Debug and Release warning-clean focused builds plus object,
+    design, LLVM, application-artifact, diagnostic-catalog and inventory gates
+    pass. `VHMODE-C04` and `VHSYN-C04` are preserved, leaving 14 active rows in
+    each ledger; their SHA-256 identities are
+    `0eda102346b24e1893015aabe7689e99ccb9484a88d3603206bc6e9cd98eceec`
+    and
+    `06925c1cdd7fca807b715bc5755d859754ff15714d5e6021061a05db9c750b70`.
+    Preserve Changes 1-4 and begin Change 5 without reset, commit or push
+    before Change 20.
+22. Batch 166 Change 5 is complete in the same intentionally dirty worktree.
+    The selected typed VHDL revision now reaches the lexer. Complete reserved-
+    word introduction tables preserve later words as identifiers in earlier
+    modes and reject them at identifier boundaries under their owning revision
+    with exact-span `FSIM-VHDL-LEX-002`. Exact-span `FSIM-VHDL-LEX-001`
+    diagnoses VHDL-93 extended identifiers in VHDL-87 and VHDL-2008 comments,
+    delimiters and expanded bit-string forms in older modes while preserving
+    legacy B/O/X and arbitrary width. Compiler-owned IEEE/Synopsys projections
+    are audited under every older lexical profile. Focused frontend evidence
+    covers all revision transitions, coordinates and 137-bit values; the
+    Logic9 application executes a 137-bit fixture in VHDL-87/93/2000/2002 and
+    rejects an explicit-width VHDL-2008 form under VHDL-2002. Debug and Release
+    focused builds and frontend, application, diagnostics and inventory gates
+    pass. `VHMODE-C05` and `VHSYN-C05` are preserved, leaving 13 active rows in
+    each ledger. Their SHA-256 identities are
+    `1991755d476f1722284b8bdd8cee3dd6ba035ee620624abac879a4afb6539a58`
+    and
+    `e9f5fd5877c3637749a15bf0f3f8bee385e592ac1d996aa4f7933f640b82a215`.
+    Preserve Changes 1-5 and begin Change 6 without reset, commit,
+    push, sanitizer or hosted-CI inspection before Change 20.
+23. Batch 166 Change 6 is complete in the same intentionally dirty worktree.
+    Typed revision gates cover VHDL-93 shared variables, groups, file open-kind
+    clauses and alias signatures; VHDL-2000 protected types; and VHDL-2008
+    interface types/subprograms/packages, package instantiations and
+    unconstrained array element subtypes. VHDL-87 legacy `file ... is in/out`
+    syntax normalizes to the modern semantic modes and later revisions receive
+    an actionable migration. Availability uses exact `FSIM-FE-VHSTD-003`
+    diagnostics while malformed empty alias signatures remain a distinct parser
+    error. Positive proof preserves a 137-bit aggregate, descending 105-to-8
+    and ascending 8-to-105 bounds, typed aliases, attributes, access/file
+    declarations and representative declarations for every Synopsys package
+    under all older modes. Full parser audits validate all intrinsic package
+    projections. A VHDL-87 application executes and reloads an exact 137-bit
+    output, and IEEE integration passes in Debug and Release. The required
+    eight-worker clean-first Debug rebuild eliminated a stale SimIR layout;
+    final Debug and Release focused builds are warning-clean. Frontend,
+    advanced-type application, IEEE integration, diagnostic-catalog and
+    inventory gates pass in both configurations. `VHMODE-C06` and `VHSYN-C06`
+    are preserved, leaving 12 active rows in each ledger; their SHA-256
+    identities are
+    `6704a5d3912004498588a12eb7404de343ff01e59e17605df42b25acbfbfaf94`
+    and
+    `9f095548470b22953e8ddeb62914347a84efc32035a190eba243f5641f160674`.
+    Preserve Changes 1-6 and begin Change 7 without reset, commit, push,
+    sanitizer or hosted-CI inspection before Change 20.
+24. Batch 166 Change 7 is complete in the same intentionally dirty worktree.
+    Exact revision gates cover VHDL-93 `xnor` and shift/rotate operators plus
+    VHDL-2008 reductions, `??`, conditional/case expressions, external names
+    and suffixes on function-call results. Legal older modes retain
+    qualification, named associations and universal integer resolution.
+    Focused elaboration proves expected-result-type selection against an
+    intentionally ambiguous package-style overload, exact descending 137-bit
+    and null-array bounds and VHDL-93 operator execution. Interpreter and LLVM
+    application evidence executes exact 137-bit `xnor`/shift, signed addition,
+    unsigned wrap, contextual overload and zero-width null-array results;
+    VHDL-2008 reduction and explicit condition results agree across engines.
+    LLVM frame validation accepts the resulting zero-word register layout while
+    retaining all nonempty plane checks. Debug and Release focused builds are
+    warning-clean; frontend, elaboration, overload application, LLVM,
+    diagnostic-catalog and inventory gates pass in both configurations.
+    `VHMODE-C07` and `VHSYN-C07` are preserved, leaving 11 active rows in each
+    ledger. Their SHA-256 identities are
+    `9d607f7157e32b0e2f3646ae551b71e0a0a638a2cc2c045e9f7075282741e17a`
+    and
+    `8fe2e552fb40ea52d3c32c0b182a8a998d10e3b3f28528443fea331b13152e4a`.
+    Preserve Changes 1-7 and begin Change 8 without reset, commit, push,
+    sanitizer or hosted-CI inspection before Change 20.
+25. Batch 166 Change 8 is complete in the same intentionally dirty worktree.
+    Exact structural gates cover VHDL-93 direct entity/configuration
+    instantiation, postponed concurrent statements and standalone `report`,
+    plus VHDL-2008 contexts, `process(all)`, force/release, sequential
+    conditional/selected assignments, matching case/select and case/
+    alternative generate forms. Unavailable constructs retain parse structure
+    and receive one actionable `FSIM-FE-VHSTD-003`. Older port maps retain
+    static values, signal names/selections and one-argument conversion
+    interpretations; composed nonstatic expressions require VHDL-2008 and an
+    explicit intermediate signal otherwise. VHDL-87 component/configuration
+    structure and Synopsys selected-name contexts parse under all four older
+    modes. A VHDL-93 direct instance executes an exact selected 137-bit port
+    actual, and the VHDL-2008 dynamic form elaborates without narrowing. Debug
+    and Release focused builds are warning-clean; frontend, elaboration,
+    configuration application, diagnostic-catalog and inventory gates pass in
+    both configurations. `VHMODE-C08` and `VHSYN-C08` are preserved, leaving 10
+    active rows in each ledger. Their SHA-256 identities are
+    `6e53acbb5d71d92cc68e9598766eb5fef0aea088f7e68712b8c157f5cb7d5b78`
+    and
+    `da126ffa7d5dafab49e2af6692e2edd7f43ef9636e3241f4e1d756fcd2850c17`.
+    Preserve Changes 1-8 and begin Change 9 without reset, commit, push,
+    sanitizer or hosted-CI inspection before Change 20.
+26. Batch 166 Change 9 is complete in the same intentionally dirty worktree.
+    Every VHDL unit now retains an exact
+    `ieee-1076-standard:<year>:fsim-v1` environment, working library, implicit
+    `std`/`work` and `std.standard.all` visibility, revision-specific standard
+    declarations/operators/attributes and the `fs` through `hr` time ladder.
+    VHDL-93 and VHDL-2008 additions are separated exactly; standard vector,
+    reduction, condition/minimum/maximum and subtype/element profiles cannot
+    leak into VHDL-87/93/2000/2002. Compiler-owned IEEE projections are parsed
+    in their requesting revision, later packages and mixed intrinsic revisions
+    reject at stable `FSIM-FE-VHSTD-003`/`FSIM-FE-VHSTD-005` boundaries, and
+    older bare VHDL-2008 string-conversion names reject with
+    `FSIM-ELAB-VHSTD-001`. Focused evidence proves exact per-revision names and
+    overload counts, implicit `work` component binding, 137-bit ports,
+    universal arithmetic, standard attributes and the negative IEEE cases.
+    Pinned clang-format 22.1.8 is applied and `git diff --check` is clean. The
+    formatted Debug build completed 69 warning-clean steps; the Release build
+    completed 320 warning-clean steps, both with eight workers. Frontend,
+    elaboration, Logic9, numeric, IEEE integration, diagnostic-catalog and
+    inventory slices pass 7/7 in both configurations. `VHMODE-C09` and
+    `VHSYN-C09` are preserved, leaving nine active rows in each ledger. Their
+    SHA-256 identities are
+    `c1e450a8e7e1b7ae0faa96f76d0da33f8b8f6b6d4101e25fca56a2613b06dd1a`
+    and
+    `7015fb45b9f442cb2ba87d6c3953329d0be72e525a65209501de04592ae5f570`.
+    Preserve Changes 1-9 and begin Change 10 without reset, commit, push,
+    sanitizer or hosted-CI inspection before Change 20.
+27. Batch 166 Change 10 is complete in the same intentionally dirty worktree.
+    VHDL-1993 legacy unprotected shared scalars and packed values now own one
+    statically initialized immediate shared identity across processes. Only
+    those identities bypass unresolved-signal multi-driver validation; actual
+    signal driver checks remain unchanged. VHDL-2000/2002/2008 shared objects
+    require protected types and reject the legacy form with
+    `FSIM-ELAB-VHPROTECTED-008`; invalid legacy storage uses the registered
+    `FSIM-ELAB-VHPROTECTED-023`. Existing protected private storage and atomic
+    non-suspending/non-reentrant method lowering now execute under VHDL-2000
+    and VHDL-2002 as well as VHDL-2008. Focused elaboration proves source-
+    ordered two-process VHDL-1993 updates, both older protected revisions,
+    later unprotected rejection, private-state reset, and stable suspension,
+    reentry and purity diagnostics. The advanced-type application proves the
+    VHDL-1993/2000/2002 behavior in interpreter and LLVM with identical state,
+    timing and deltas. Pinned clang-format 22.1.8 is applied and
+    `git diff --check` is clean. Debug's affected 104-step elaboration and
+    13-step application builds and Release's combined 118-step build are
+    warning-clean with eight workers. Frontend, elaboration, advanced-type
+    application, diagnostic-catalog and inventory slices pass 5/5 in both
+    configurations. `VHMODE-C10` and `VHSYN-C10` are preserved, leaving eight
+    active rows in each ledger. Their SHA-256 identities are
+    `c1aa08f28bddf219399930c6dcb3ee3ae1bb34afc7f1ca7080b99532ca0f8170`
+    and
+    `ccfc8e6746bf593c43150fbe3dd4efd80cfff37baa92e8769edecd3adcc21160`.
+    Preserve Changes 1-10 and begin Change 11 without reset, commit, push,
+    sanitizer or hosted-CI inspection before Change 20.
+28. Batch 166 Change 11 is complete in the same intentionally dirty worktree.
+    Compiler-owned clean-room projections now provide historical declaration
+    names and exact overload profiles for `ieee.std_logic_arith`,
+    `std_logic_signed`, `std_logic_unsigned` and `std_logic_misc` under every
+    VHDL revision. Each projection records an explicit package/year-qualified
+    `synopsys-legacy-ieee:1990-1992:fsim-synopsys-ieee-compat-v2` identity and a
+    digest-owned generated source dependency with no third-party backing path.
+    `std_logic_arith` precedes its signed/unsigned dependents; the four packages
+    coexist deterministically with `std_logic_1164` and VHDL-1993-or-later
+    `numeric_std`. Project redeclaration and incompatible internal projection
+    failures use actionable `FSIM-FE-VHSTD-004`/`006` boundaries. Frontend
+    declaration evidence covers VHDL-87/93/2000/2002 and a VHDL-1993 protected
+    negative; IEEE integration covers all five revisions, order, exports,
+    profiles, provenance and source digests. Cache identity advances to v2 and
+    its focused test was split into a dedicated source-budget-compliant file;
+    the VHDL revision-profile frontend slice was likewise extracted so every
+    governed file remains below 2,500 lines. Debug and Release warning-clean
+    focused builds pass frontend, LLVM, artifact-profile, IEEE integration,
+    diagnostics, source-line and inventory gates. `VHMODE-C11` and `VHSYN-C11`
+    are preserved with seven active rows remaining. Their ledger SHA-256
+    identities are
+    `2095b47b281fd2e2435c8536f90d9b97b355916cc3387f521a18ab9753a40aca`
+    and
+    `38c48bf0597b127b671296444b9e1aadd1c94c8b684cd1495d6dd058b52a4232`.
+    Preserve Changes 1-11 and
+    begin Change 12 without reset, commit, push, sanitizer or hosted-CI
+    inspection before Change 20.
+29. Batch 166 Change 12 is complete in the same intentionally dirty worktree.
+    The compiler now executes the clean-room Synopsys arithmetic, comparison,
+    conversion, extension, shift and reduction families through arbitrary-width
+    SimIR. Architecture-local `std_logic_signed` and `std_logic_unsigned` use
+    clauses select ordinary `std_logic_vector` signedness across ascending and
+    descending ranges; importing both no longer chooses silently and instead
+    reports `FSIM-ELAB-VHSYN-001` on a genuinely conflicting vector operator or
+    unqualified `conv_integer`. Nested conversions retain exact widths, the
+    application corpus proves 137-bit results and historical vector shift
+    counts, and all six reductions preserve Logic9 unknowns plus null-vector
+    identities. Concrete zero-width built-in vectors now survive elaboration,
+    while invariant zero-element reads are excluded from compiled process
+    sensitivity. VHDL-1993 elaboration and O0/O2 interpreter, cold-LLVM and
+    warm-cache application evidence pass. Debug and Release warning-clean
+    frontend/elaboration/application builds and the seven focused gates pass.
+    `VHMODE-C12` and `VHSYN-C12` are preserved with six active rows remaining;
+    their ledger SHA-256 identities are
+    `59f63e67992b380eba3872adb5173bc77520ea369925a51f9fe63731ffd92320`
+    and
+    `b8f3bc72890a68bad129b45a6156b43916cacb05f7e42f1dfa3fbb015fc8da54`.
+    Preserve Changes 1-12 and begin Change 13 without reset, commit, push,
+    sanitizer or hosted-CI inspection before Change 20.
+30. Batch 166 Change 13 is complete in the same intentionally dirty worktree.
+    Library format 2, object format 4 and design format 6 retain canonical
+    VHDL year, predefined-environment, Synopsys package/revision and exact
+    clean-room source-digest dependencies. Object/design provenance digests
+    cover the records; object reload also rejects omission. Direct object,
+    standalone design and mapped-library consumers regenerate current compiler
+    identities and reject stale or unavailable records with
+    `FSIM-ART-VHDEP-001`. Codec round trips, future-schema rejection, changed
+    dependency rejection and exact 137-bit `std_logic_unsigned` arithmetic
+    survive object-to-design reload. Eight focused artifact/inventory/catalog/
+    source gates pass after warning-clean eight-worker Debug and Release builds.
+    `VHMODE-C13` and `VHSYN-C13` are preserved with five active rows remaining;
+    their ledger SHA-256 identities are
+    `2e6cc664961a3f49afdb22e109adc57be6a8febfef14ae67891d55a6f83a93b6`
+    and
+    `66cb9bd7dae423affb85897c66592585f1aee7f643f25e6de32a93b12f6b7cf8`.
+    Preserve Changes 1-13 and begin Change 14 without reset, commit, push,
+    sanitizer or hosted-CI inspection before Change 20.
+31. Batch 166 Change 14 is complete in the same intentionally dirty worktree.
+    The mixed Logic9 application executes VHDL-87/93/2000/2002 in both
+    SystemVerilog-parent/VHDL-child and VHDL-parent/SystemVerilog-child
+    hierarchies under interpreter and LLVM at O0/O2. Every run preserves the
+    exact Logic9-to-Logic4 projection, 137-bit ascending/descending
+    `std_logic_unsigned` results, completion status, time and delta. The typed
+    boundary companion retains multiple-root VHDL/SystemVerilog/SystemC,
+    debugger, VCD, cache and arbitrary-width evidence; the mixed-conversion
+    companion retains numeric, Boolean, bit and Logic4 conversion parity. No
+    production executor correction was required. Warning-clean eight-worker
+    Debug and Release application builds and the six focused execution,
+    inventory, catalog and source gates pass in both configurations.
+    `VHMODE-C14` and `VHSYN-C14` are preserved with four active rows remaining;
+    their ledger SHA-256 identities are
+    `11ac8f70c4cd047be0c10f3f5a41232a40b60b398c23443b9f41886b0ebb94bb`
+    and
+    `2725910c571c283e1bfb30ff297bb009712a0ff5ee45cddfd93144b01cf97f3e`.
+    Preserve Changes 1-14 and begin Change 15 without reset, commit, push,
+    sanitizer or hosted-CI inspection before Change 20.
+32. Batch 166 Change 15 is complete in the same intentionally dirty worktree.
+    Source builds retain semantic-unit-keyed VHDL year, predefined environment,
+    compatibility profile and exact compiler-package dependency records.
+    Debugger snapshots, execution activity, VCD comments and VHPI metadata
+    expose them on real elaborated scopes while compiler packages remain absent
+    from hierarchy discovery. The mixed Logic9 matrix proves stable unit/source
+    identity, exact 137-bit values and force/release preservation across all
+    four older revisions, both mixed-language directions, interpreter/LLVM and
+    O0/O2; runtime evidence rejects partial provenance. Warning-clean
+    eight-worker Debug and Release builds and all five focused gates pass.
+    `VHMODE-C15` and `VHSYN-C15` are preserved with three active rows
+    remaining; their ledger SHA-256 identities are
+    `6bd31fc136d1bfce2648d488bcc5ce2de093b9d022af26d21effe730b1d68bd2`
+    and
+    `921398ba881c319fdcbe3ee3a09580b54798c5e5414f4961beaf8e086362e83d`.
+    Preserve Changes 1-15 and begin Change 16 without reset, commit, push,
+    sanitizer or hosted-CI inspection before Change 20.
+33. Batch 166 Change 16 is complete in the same intentionally dirty worktree.
+    `.fsimdesign` format 7 retains an ordered semantic-unit VHDL provenance
+    index containing year, predefined environment, compatibility profile and
+    exact selected package records. Its design digest covers the full index;
+    load rejects missing, duplicate, out-of-range, unordered, stale or object-
+    inconsistent entries before rebuilding `BuiltProject` provenance. The
+    artifact-phase corpus removes the original VHDL source and producer object
+    paths, then proves direct load, interpreter, cold/warm LLVM, public
+    provenance comments, equal replay checkpoints, relocation and CLI VCD
+    output. The non-project corpus reloads split portable VHDL objects after
+    original source and producer paths disappear. Warning-clean eight-worker
+    Debug and Release design/application/LLVM builds and focused artifact,
+    application and LLVM gates pass in both configurations. `VHMODE-C16` and
+    `VHSYN-C16` are preserved with two active rows remaining; their ledger
+    SHA-256 identities are
+    `b0dcbf36f31e3f2d138b18ca35abef2c76cf037a3ec6c493d2d22755a2f805bb`
+    and
+    `e5162897fa9aac2fea7545951d3caa81fdef629bc659ea2df1d8354135a21959`.
+    Preserve Changes 1-16 and begin Change 17 without reset, commit, push,
+    sanitizer or hosted-CI inspection before Change 20.
+34. Batch 166 Change 17 is complete in the same intentionally dirty worktree.
+    `vhdl_revision_corpus.tsv` assigns VHDL-87/93/2000/2002 legal semantic
+    declarations and exact rejected-later-construct diagnostics, including
+    full `FSIM-FE-VHSTD-003` messages and source coordinates. The separate
+    `vhdl_synopsys_package_corpus.tsv` assigns all four compatibility packages
+    positive execution, negative ambiguity/revision/artifact diagnostics,
+    arbitrary-width evidence and revision-indexed provenance. The inventory
+    checker freezes ordered rows, stages, codes, coordinates, evidence files
+    and source anchors. Warning-clean eight-worker Debug and Release frontend/
+    application builds and focused frontend, numeric, IEEE-integration and
+    inventory gates pass. `VHMODE-C17` and `VHSYN-C17` are preserved with one
+    active row remaining; their ledger SHA-256 identities are
+    `53fbef6506d35465359f49961e7fc73b5da3ce56072b9928a281a390a6a140c5`
+    and
+    `098e05374b5417cf4c93f47c1bcabef4df18bd21699696c18de9905a24562cb9`.
+    Preserve Changes 1-17 and begin Change 18 without reset, commit, push,
+    sanitizer or hosted-CI inspection before Change 20.
+35. Batch 166 Change 18 is complete in the same intentionally dirty worktree.
+    `fsim.vhdl-standard-mode-closure-matrix` serially runs 15 witnesses and
+    retains one verbose log plus a result-ledger row for each. The exact
+    transcript contract covers VHDL-87/93/2000/2002, all four Synopsys
+    packages, interpreter/LLVM O0/O2, 137-bit and ascending/descending/null
+    behavior, ambiguity, mixed SystemVerilog, debugger/VHPI/VCD provenance,
+    artifacts, cold/warm caches, relocation, replay, checkpoints, C/C++/Tcl
+    boundaries and MSVC/Windows/tool/resource contracts. Owning executions use
+    the portable 6 GiB process ceiling with delta-1000 and VCD-64 evidence;
+    each stage has 1,200 seconds and the serial test has 7,200 seconds. Debug
+    passes 15/15 in 68.85 seconds and Release passes 15/15 in 65.39 seconds;
+    both retained directories contain a 16-line stage ledger and fifteen logs.
+    `VHMODE-C18` and `VHSYN-C18` are preserved, closing both ledgers at 17
+    preserved and zero active rows. Their SHA-256 identities are
+    `9a97ed1964d3fd24aa4644f85dcada8bf114fc6bce42001bd092e02e9bbd8434`
+    and
+    `118ee444e373f2fc46624bd17fb7c9d2664c838f647f7d75bae59a10eea9f6b0`.
+    Preserve Changes 1-18 and begin Change 19 without reset, commit, push,
+    sanitizer or hosted-CI inspection before Change 20.
+36. Batch 166 Change 19 is complete in the same intentionally dirty worktree.
+    README, language support, feature-matrix guidance, architecture, cross-
+    language semantics, VHPI and diagnostics now publish the five selectable
+    VHDL revisions, explicitly non-standard Synopsys compatibility surface,
+    exact package provenance and the serial closure contract. Memory, work,
+    trace and timeout bounds are consistently physical resource ceilings, not
+    VHDL legality or arbitrary-width limits. The exact diagnostic corpus moved
+    to the dedicated revision-profile owner so all 887 C/C++ sources remain
+    below 2,500 lines. The synchronized baseline is 2,236 diagnostics, 887
+    bounded sources, 1,029 SPDX-scoped artifacts and 332 authored test/control
+    files. The 1,294-row, 5,176-cell feature matrix has 617 exact evidence
+    paths with canonical SHA-256
+    `5f6a4d99889db39a81694c8d4ee585bdb0cdffaea577ddf275e5d3e1eca1cd4f`;
+    the evidence-path identity remains
+    `e4076a40c31945c3385495a1c3076b85518143712c89ea1fa3f629fffaac6120`.
+    Static catalog/source/VHDL inventory, all four language/compatibility
+    closure families, v1 release, installed/platform/resource and public
+    documentation contracts pass. Final standard-mode/package ledger SHA-256
+    identities are
+    `9a97ed1964d3fd24aa4644f85dcada8bf114fc6bce42001bd092e02e9bbd8434`
+    and
+    `118ee444e373f2fc46624bd17fb7c9d2664c838f647f7d75bae59a10eea9f6b0`.
+    Preserve Changes 1-19 and begin Change 20 without reset, commit, push,
+    sanitizer or hosted-CI inspection before the fresh final local gates.
+37. Batch 166 Change 20 local qualification is complete. Fresh clean-first
+    exact-LLVM 22.1.8 Debug and Release eight-worker builds complete all 781
+    steps warning-free in 12:03.44 and 9:48.97 at 5,015,728 and 2,253,856 KiB
+    peak RSS with zero swaps. The first complete Debug regression passed
+    143/144 and exposed only a stale-object-masked VHDL-2008 fixture defect:
+    the analysis-order context used reserved word `shared` as an identifier.
+    Rename it to legal `analysis_context` and retain diagnostic printing on an
+    unexpected failure. The focused case passes three consecutive runs in
+    both configurations. Complete reruns then pass Debug and Release 144/144
+    in 12:12.23 and 10:24.45 wall time, with CTest totals of 732.22 and 624.44
+    seconds, peak RSS of 3,786,880 and 3,791,172 KiB, and zero swaps. Their
+    retained transcripts include every closure matrix and release contract.
+    Final post-documentation static/release slices pass 41/41 in 21.84 and
+    21.02 seconds in Debug and Release.
+    Pinned clang-format 22.1.8 accepts the exact correction and `git diff
+    --check` is clean. This is neither a sanitizer nor hosted-CI monitoring
+    boundary. Create and push the sole accumulated Batch 166 implementation
+    commit, then save and push the exact Batch 167 documentation-only restart
+    checkpoint and clear context before implementation.
 
 ## Batch 165 planned restart checkpoint - 2026-08-11
 

@@ -3,6 +3,7 @@
 #include "fsim/project/project.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -564,74 +565,99 @@ files = ["missing.vhd"]
   check(
       std::ranges::any_of(
           diagnostics.diagnostics(), [](const auto& diagnostic) {
-            return diagnostic.code == "FSIM-PROJ-0007"
-                && diagnostic.message.find("uvm_release")
-                    != std::string::npos;
+              return diagnostic.code == "FSIM-PROJ-0007"
+                  && diagnostic.message.find("uvm_release")
+                  != std::string::npos;
           }),
       "invalid UVM release placement has a stable manifest diagnostic");
 }
 
-void test_vhdl_standard_values() {
-  fsim::diagnostic::Engine alias_diagnostics;
-  const auto alias = fsim::project::parse(
-      R"(schema = 2
-[project]
-top = "standard_mode"
-[[source_set]]
-language = "vhdl"
-standard = "08"
-files = ["project_config_test.cpp"]
-)",
-      "vhdl-08.toml", std::filesystem::path{__FILE__}.parent_path(),
-      alias_diagnostics);
-  check(
-      alias.has_value() && !alias_diagnostics.has_error()
-          && alias->source_sets.size() == 1
-          && alias->source_sets[0].standard == "08",
-      "the explicit VHDL-2008 short standard mode is retained");
+void test_vhdl_standard_values()
+{
+    using fsim::project::VhdlStandard;
+    const std::array aliases {
+        std::tuple { "87", "1987", VhdlStandard::vhdl_1987 },
+        std::tuple { "1987", "1987", VhdlStandard::vhdl_1987 },
+        std::tuple { "vhdl-87", "1987", VhdlStandard::vhdl_1987 },
+        std::tuple { "93", "1993", VhdlStandard::vhdl_1993 },
+        std::tuple { "1993", "1993", VhdlStandard::vhdl_1993 },
+        std::tuple { "vhdl-1993", "1993", VhdlStandard::vhdl_1993 },
+        std::tuple { "00", "2000", VhdlStandard::vhdl_2000 },
+        std::tuple { "2000", "2000", VhdlStandard::vhdl_2000 },
+        std::tuple { "02", "2002", VhdlStandard::vhdl_2002 },
+        std::tuple { "2002", "2002", VhdlStandard::vhdl_2002 },
+        std::tuple { "08", "2008", VhdlStandard::vhdl_2008 },
+        std::tuple { "2008", "2008", VhdlStandard::vhdl_2008 },
+    };
+    for (const auto& [spelling, canonical, identity] : aliases) {
+        fsim::diagnostic::Engine diagnostics;
+        const auto manifest = std::string { "schema = 2\n[project]\ntop = \"standard_mode\"\n"
+                                            "[[source_set]]\nlanguage = \"vhdl\"\nstandard = \"" }
+            + spelling
+            + "\"\nfiles = [\"project_config_test.cpp\"]\n";
+        const auto config = fsim::project::parse(
+            manifest, "vhdl-standard.toml",
+            std::filesystem::path { __FILE__ }.parent_path(), diagnostics);
+        check(
+            config && !diagnostics.has_error()
+                && config->source_sets.size() == 1
+                && config->source_sets[0].standard == canonical,
+            std::string { "VHDL standard alias is canonicalized: " } + spelling);
+        check(
+            fsim::project::parse_vhdl_standard(spelling) == identity
+                && fsim::project::to_string(identity) == canonical,
+            std::string { "VHDL standard identity round-trips: " } + spelling);
+    }
+    check(
+        fsim::project::parse_language("VHDL-93")
+                == fsim::project::Language::vhdl
+            && fsim::project::default_standard(fsim::project::Language::vhdl)
+                == "2008",
+        "explicit VHDL language profiles retain the VHDL-2008 default");
 
-  fsim::diagnostic::Engine legacy_diagnostics;
-  const auto legacy = fsim::project::parse(
-      R"(schema = 2
+    fsim::diagnostic::Engine legacy_diagnostics;
+    const auto legacy = fsim::project::parse(
+        R"(schema = 2
 [project]
 top = "legacy_mode"
 [[source_set]]
 language = "vhdl"
-standard = "1993"
+standard = "1988"
 files = ["project_config_test.cpp"]
 )",
-      "vhdl-1993.toml", std::filesystem::path{__FILE__}.parent_path(),
-      legacy_diagnostics);
-  check(!legacy.has_value(), "an unimplemented VHDL standard mode is rejected");
-  check(
-      std::ranges::any_of(
-          legacy_diagnostics.diagnostics(), [](const auto& diagnostic) {
-            return diagnostic.message.find(
-                       "unsupported standard '1993' for vhdl")
-                != std::string::npos;
-          }),
-      "VHDL standard-mode rejection is targeted and deterministic");
+        "vhdl-1988.toml", std::filesystem::path { __FILE__ }.parent_path(),
+        legacy_diagnostics);
+    check(!legacy.has_value(), "an unknown VHDL standard mode is rejected");
+    check(
+        std::ranges::any_of(
+            legacy_diagnostics.diagnostics(), [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                           "unsupported standard '1988' for vhdl")
+                    != std::string::npos;
+            }),
+        "VHDL standard-mode rejection is targeted and deterministic");
 }
 
-}  // namespace
+} // namespace
 
-int main() {
-  // FSIM-CONFORMANCE CF-COMMON-PROJECT-001 source=SRC-FSIM expectation=accept
-  // FSIM-CONFORMANCE CF-COMMON-DIAGNOSTIC-N01 source=SRC-FSIM expectation=reject
-  test_complete_manifest_and_glob_order();
-  test_multiple_top_manifest_model();
-  test_schema_and_unknown_key_errors();
-  test_elaboration_search_library_validation();
-  test_library_mapping_validation();
-  test_json_diagnostics_are_escaped();
-  test_zero_time_resolution_is_rejected();
-  test_delay_mode_values();
-  test_uvm_release_values();
-  test_vhdl_standard_values();
-  if (failures != 0) {
-    std::cerr << failures << " test(s) failed\n";
-    return 1;
-  }
-  std::cout << "project_config_test: all tests passed\n";
-  return 0;
+int main()
+{
+    // FSIM-CONFORMANCE CF-COMMON-PROJECT-001 source=SRC-FSIM expectation=accept
+    // FSIM-CONFORMANCE CF-COMMON-DIAGNOSTIC-N01 source=SRC-FSIM expectation=reject
+    test_complete_manifest_and_glob_order();
+    test_multiple_top_manifest_model();
+    test_schema_and_unknown_key_errors();
+    test_elaboration_search_library_validation();
+    test_library_mapping_validation();
+    test_json_diagnostics_are_escaped();
+    test_zero_time_resolution_is_rejected();
+    test_delay_mode_values();
+    test_uvm_release_values();
+    test_vhdl_standard_values();
+    if (failures != 0) {
+        std::cerr << failures << " test(s) failed\n";
+        return 1;
+    }
+    std::cout << "project_config_test: all tests passed\n";
+    return 0;
 }

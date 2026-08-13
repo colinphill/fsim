@@ -767,16 +767,34 @@ int project_command(
       result,
       "source_sets",
       unsigned_object(context.config.source_sets.size()));
+  Tcl_Obj* source_profiles = Tcl_NewListObj(0, nullptr);
+  for (const auto& source_set : context.config.source_sets) {
+      Tcl_Obj* entry = Tcl_NewDictObj();
+      dict_put(
+          interpreter, entry, "language",
+          string_object(project::to_string(source_set.language)));
+      dict_put(
+          interpreter, entry, "standard",
+          string_object(source_set.standard));
+      dict_put(
+          interpreter, entry, "library",
+          string_object(source_set.library));
+      if (Tcl_ListObjAppendElement(interpreter, source_profiles, entry)
+          != TCL_OK) {
+          return TCL_ERROR;
+      }
+  }
+  dict_put(interpreter, result, "source_profiles", source_profiles);
   Tcl_Obj* mappings = Tcl_NewListObj(0, nullptr);
   for (const auto& mapping : context.config.library_mappings) {
-    Tcl_Obj* entry = Tcl_NewDictObj();
-    dict_put(interpreter, entry, "library", string_object(mapping.library));
-    dict_put(
-        interpreter, entry, "path",
-        string_object(fsim::support::path_to_utf8(mapping.path)));
-    if (Tcl_ListObjAppendElement(interpreter, mappings, entry) != TCL_OK) {
-      return TCL_ERROR;
-    }
+      Tcl_Obj* entry = Tcl_NewDictObj();
+      dict_put(interpreter, entry, "library", string_object(mapping.library));
+      dict_put(
+          interpreter, entry, "path",
+          string_object(fsim::support::path_to_utf8(mapping.path)));
+      if (Tcl_ListObjAppendElement(interpreter, mappings, entry) != TCL_OK) {
+          return TCL_ERROR;
+      }
   }
   dict_put(interpreter, result, "library_mappings", mappings);
   Tcl_SetObjResult(interpreter, result);

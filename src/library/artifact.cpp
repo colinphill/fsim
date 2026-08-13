@@ -24,7 +24,14 @@ constexpr std::string_view kValueCode = "FSIM-LIB-0003";
 constexpr std::string_view kIoCode = "FSIM-LIB-0004";
 constexpr std::string_view kPublishCode = "FSIM-LIB-0005";
 
-enum class Section { root, standard, source, unit, native_artifact };
+enum class Section {
+  root,
+  standard,
+  vhdl_package_dependency,
+  source,
+  unit,
+  native_artifact
+};
 
 std::string trim(const std::string_view value) {
   const auto first = value.find_first_not_of(" \t\r");
@@ -296,6 +303,16 @@ std::string serialize_metadata(const Metadata& metadata) {
            << "language = \"" << escape(standard.language) << "\"\n"
            << "revision = \"" << escape(standard.revision) << "\"\n";
   }
+  for (const auto& dependency : metadata.vhdl_package_dependencies) {
+    output << "\n[[vhdl_package_dependency]]\n"
+           << "standard = \"" << escape(dependency.standard) << "\"\n"
+           << "predefined_environment = \""
+           << escape(dependency.predefined_environment) << "\"\n"
+           << "package = \"" << escape(dependency.package) << "\"\n"
+           << "revision = \"" << escape(dependency.revision) << "\"\n"
+           << "source_digest = \"" << escape(dependency.source_digest)
+           << "\"\n";
+  }
   for (const auto& source : metadata.sources) {
     output << "\n[[source]]\n"
            << "logical_name = \"" << escape(source.logical_name) << "\"\n";
@@ -387,6 +404,13 @@ std::optional<Metadata> parse_metadata(
       metadata.standards.emplace_back();
       dependency = nullptr;
       section = Section::standard;
+      section_keys.clear();
+      continue;
+    }
+    if (line == "[[vhdl_package_dependency]]") {
+      metadata.vhdl_package_dependencies.emplace_back();
+      dependency = nullptr;
+      section = Section::vhdl_package_dependency;
       section_keys.clear();
       continue;
     }
@@ -499,6 +523,26 @@ std::optional<Metadata> parse_metadata(
         error(
             diagnostics, kSyntaxCode,
             "unknown [[standard]] key '" + key + "'",
+            source_name, line_number);
+      }
+      continue;
+    }
+    if (section == Section::vhdl_package_dependency) {
+      auto& package_dependency = metadata.vhdl_package_dependencies.back();
+      if (key == "standard") {
+        package_dependency.standard = *text;
+      } else if (key == "predefined_environment") {
+        package_dependency.predefined_environment = *text;
+      } else if (key == "package") {
+        package_dependency.package = *text;
+      } else if (key == "revision") {
+        package_dependency.revision = *text;
+      } else if (key == "source_digest") {
+        package_dependency.source_digest = *text;
+      } else {
+        error(
+            diagnostics, kSyntaxCode,
+            "unknown [[vhdl_package_dependency]] key '" + key + "'",
             source_name, line_number);
       }
       continue;
@@ -620,6 +664,26 @@ std::optional<Metadata> parse_metadata(
       error(
           diagnostics, kValueCode,
           "every [[standard]] requires language and revision",
+          source_name, document_line);
+    }
+  }
+  std::unordered_set<std::string> vhdl_packages;
+  for (const auto& item : metadata.vhdl_package_dependencies) {
+    const bool known_standard = std::ranges::any_of(
+        metadata.standards,
+        [&](const LanguageStandard& standard) {
+          return standard.language == "vhdl"
+              && standard.revision == item.standard;
+        });
+    if (!known_standard || item.predefined_environment.empty()
+        || item.package.empty() || item.revision.empty()
+        || !checksum_spelling(item.source_digest)
+        || !vhdl_packages.insert(item.package).second) {
+      error(
+          diagnostics, kValueCode,
+          "every [[vhdl_package_dependency]] requires a unique package, a "
+          "selected VHDL standard, predefined-environment and revision "
+          "identities, and a lowercase SHA-256 source digest",
           source_name, document_line);
     }
   }

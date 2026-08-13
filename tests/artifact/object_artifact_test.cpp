@@ -62,6 +62,33 @@ int main() {
   assert(decoded == metadata);
   assert(!decode_diagnostics.has_error());
 
+  auto vhdl_metadata = metadata;
+  vhdl_metadata.language = "vhdl";
+  vhdl_metadata.standard = "1993";
+  vhdl_metadata.compatibility_profile = "fsim-synopsys-ieee-compat-v2";
+  vhdl_metadata.uvm_release = "none";
+  vhdl_metadata.sources.front().language = "vhdl";
+  vhdl_metadata.units.front().language = "vhdl";
+  vhdl_metadata.vhdl_package_dependencies = {{
+      "1993", "ieee-1076-standard:1993:fsim-v1",
+      "ieee.std_logic_unsigned",
+      "synopsys-legacy-ieee:1990-1992:fsim-synopsys-ieee-compat-v2",
+      checksum("synopsys-unsigned-source") }};
+  vhdl_metadata.compilation_digest =
+      fsim::artifact::compute_object_compilation_digest(vhdl_metadata);
+  fsim::diagnostic::Engine vhdl_decode_diagnostics;
+  assert(fsim::artifact::deserialize_object_metadata(
+      fsim::artifact::serialize_object_metadata(vhdl_metadata),
+      "vhdl-object", vhdl_decode_diagnostics) == vhdl_metadata);
+  assert(!vhdl_decode_diagnostics.has_error());
+  auto stale_vhdl_metadata = vhdl_metadata;
+  stale_vhdl_metadata.vhdl_package_dependencies.front().source_digest =
+      checksum("stale-source");
+  stale_vhdl_metadata.compilation_digest =
+      fsim::artifact::compute_object_compilation_digest(stale_vhdl_metadata);
+  assert(stale_vhdl_metadata.compilation_digest
+      != vhdl_metadata.compilation_digest);
+
   auto truncated = encoded;
   truncated.pop_back();
   fsim::diagnostic::Engine truncated_diagnostics;

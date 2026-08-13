@@ -12,6 +12,20 @@ void Lowerer::set_systemverilog_program_owner(
     systemverilog_program_owner_ = owner;
 }
 
+void Lowerer::set_vhdl_standard(
+    const frontend::VhdlStandard standard) noexcept
+{
+    vhdl_standard_ = standard;
+}
+
+void Lowerer::set_vhdl_synopsys_numeric_context(
+    const bool signed_visible,
+    const bool unsigned_visible) noexcept
+{
+    vhdl_synopsys_signed_visible_ = signed_visible;
+    vhdl_synopsys_unsigned_visible_ = unsigned_visible;
+}
+
 namespace {
 
     [[nodiscard]] runtime::simir::OutputFormat runtime_output_format(

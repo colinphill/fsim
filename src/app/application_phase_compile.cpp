@@ -133,10 +133,15 @@ bool compile_object(
   metadata.producer = std::string{"fsim "} + std::string{version};
   metadata.language = std::string{project::to_string(source_set.language)};
   metadata.standard = source_set.standard;
+  metadata.compatibility_profile = source_set.language == project::Language::vhdl
+      ? std::string { application_detail::vhdl_compatibility_profile() }
+      : std::string { "none" };
   metadata.library = source_set.library;
   metadata.compilation_unit = source_set.compilation_unit;
   metadata.uvm_release = std::string{project::to_string(source_set.uvm_release)};
   metadata.defines = source_set.defines;
+  metadata.vhdl_package_dependencies =
+      application_detail::vhdl_package_dependencies(*checked);
   for (std::size_t index = 0;
        index < source_set.include_directories.size(); ++index) {
     metadata.include_roots.push_back(

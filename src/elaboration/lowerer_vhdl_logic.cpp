@@ -26,6 +26,9 @@ Lowerer::lower_vhdl_logic_function_expression(
         return ExpressionAttempt { };
     }
     const auto name = simple_name(expression.text);
+    const bool reduction = name == "and_reduce" || name == "nand_reduce"
+        || name == "or_reduce" || name == "nor_reduce"
+        || name == "xor_reduce" || name == "xnor_reduce";
     const bool bit_conversion = name == "to_bit" || name == "to_bitvector"
         || name == "to_bit_vector" || name == "to_bv";
     const bool logic_conversion = name == "to_stdulogic"
@@ -35,8 +38,70 @@ Lowerer::lower_vhdl_logic_function_expression(
     const bool mapping = name == "to_01" || name == "to_x01"
         || name == "to_x01z" || name == "to_ux01";
     const bool predicate = name == "is_x";
-    if (!bit_conversion && !logic_conversion && !mapping && !predicate) {
+    if (!bit_conversion && !logic_conversion && !mapping && !predicate
+        && !reduction) {
         return ExpressionAttempt { };
+    }
+    if (reduction) {
+        if (expression.operands.size() != 1U || expected_width != 1U) {
+            report(
+                "FSIM-ELAB-VHLOGIC-001",
+                std::string { name }
+                    + " requires one packed operand and a scalar result",
+                expression.span);
+            return std::nullopt;
+        }
+        const auto source_width = infer_width(expression.operands.front());
+        if (!source_width) {
+            report(
+                "FSIM-ELAB-VHLOGIC-002",
+                std::string { name } + " requires a bounded packed operand",
+                expression.operands.front().span);
+            return std::nullopt;
+        }
+        const bool and_family = name == "and_reduce" || name == "nand_reduce";
+        const bool inverted = name == "nand_reduce" || name == "nor_reduce"
+            || name == "xnor_reduce";
+        if (*source_width == 0U) {
+            const bool identity = and_family;
+            runtime::PackedLogic4 value(1U);
+            value.set(0U, identity != inverted ? runtime::Logic4::one : runtime::Logic4::zero);
+            const auto result = allocate_register(1U, frontend::ValueDomain::Logic9);
+            process_.operations.emplace_back(
+                LoadConstant { result, std::move(value) });
+            return result;
+        }
+        const auto source = lower_expression(
+            expression.operands.front(), *source_width);
+        if (!source) {
+            return std::nullopt;
+        }
+        const auto scalar = [&](const std::size_t bit) {
+            const auto result = allocate_register(
+                1U, register_domain(*source));
+            process_.operations.emplace_back(Extract {
+                result, *source, static_cast<std::uint32_t>(bit), 1U });
+            return result;
+        };
+        auto result = scalar(0U);
+        const auto operation = and_family ? BinaryOperator::bit_and
+            : name == "or_reduce" || name == "nor_reduce"
+            ? BinaryOperator::bit_or
+            : BinaryOperator::bit_xor;
+        for (std::size_t bit = 1U; bit < *source_width; ++bit) {
+            const auto combined = allocate_register(
+                1U, register_domain(result));
+            process_.operations.emplace_back(
+                Binary { operation, combined, result, scalar(bit) });
+            result = combined;
+        }
+        if (inverted) {
+            const auto negated = allocate_register(
+                1U, register_domain(result));
+            process_.operations.emplace_back(UnaryNot { negated, result });
+            return negated;
+        }
+        return result;
     }
     const auto minimum_arity = bit_conversion || name == "to_01" ? 1U : 1U;
     const auto maximum_arity = bit_conversion || name == "to_01" ? 2U : 1U;

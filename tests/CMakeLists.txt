@@ -39,6 +39,7 @@ add_executable(
   frontend/frontend_sv_conformance_tests.cpp
   frontend/frontend_vhdl_type_tests.cpp
   frontend/frontend_vhdl_statement_tests.cpp
+  frontend/frontend_vhdl_revision_profile_tests.cpp
   frontend/frontend_vhdl_attribute_tests.cpp
   frontend/frontend_vhdl_time_file_tests.cpp
   frontend/frontend_vhdl_psl_tests.cpp
@@ -160,6 +161,22 @@ add_test(
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckVhdlPslGapInventory.cmake"
+)
+add_test(
+  NAME fsim.vhdl-standard-mode-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckVhdlStandardModeInventory.cmake"
+)
+add_test(
+  NAME fsim.vhdl-standard-mode-closure-matrix
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    "-DFSIM_BINARY_DIR=${CMAKE_BINARY_DIR}"
+    "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/vhdl-standard-mode-closure-evidence"
+    -P "${PROJECT_SOURCE_DIR}/cmake/RunVhdlStandardModeClosureMatrix.cmake"
 )
 add_test(
   NAME fsim.verilog-gap-inventory
@@ -445,6 +462,17 @@ set_tests_properties(
 set_tests_properties(
   fsim.vhdl-psl-gap-inventory
   PROPERTIES LABELS "fast;vhdl;psl;conformance;inventory;positive;negative;resources;cmake"
+)
+set_tests_properties(
+  fsim.vhdl-standard-mode-inventory
+  PROPERTIES LABELS "fast;vhdl;conformance;inventory;corpus;positive;negative;semantic;execution;diagnostics;width;packages;provenance;resources;cmake"
+)
+set_tests_properties(
+  fsim.vhdl-standard-mode-closure-matrix
+  PROPERTIES
+    LABELS "slow;vhdl;closure;release;positive;negative;llvm;artifact;cache;debug;trace;mixed;packages;provenance;portability;resources"
+    RUN_SERIAL TRUE
+    TIMEOUT 7200
 )
 set_tests_properties(
   fsim.verilog-gap-inventory
@@ -970,6 +998,7 @@ if(FSIM_WITH_LLVM)
       compiler/llvm_jit_scheduling_test.cpp
       compiler/llvm_jit_value_test.cpp
       compiler/llvm_jit_cache_test.cpp
+      compiler/llvm_jit_vhdl_profile_cache_test.cpp
       compiler/llvm_jit_control_cache_test.cpp
       compiler/llvm_jit_slice_cache_test.cpp
       compiler/llvm_jit_logic9_test.cpp

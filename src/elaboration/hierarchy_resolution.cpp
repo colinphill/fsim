@@ -7,13 +7,14 @@ namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
 
-void HierarchyBuilder::finish() {
+void HierarchyBuilder::finish()
+{
     validate_process_drivers();
     std::stable_sort(
         design_.systemc_objects_.begin(),
         design_.systemc_objects_.end(),
         [](const SystemCNamedObjectInfo& left,
-           const SystemCNamedObjectInfo& right) {
+            const SystemCNamedObjectInfo& right) {
             return left.native_handle < right.native_handle;
         });
     for (const auto& [path, binding] : bindings_) {
@@ -23,7 +24,7 @@ void HierarchyBuilder::finish() {
                 "FSIM-ELAB-BIND-011",
                 "binding instance path '" + path
                     + "' was not found in the elaborated hierarchy",
-                {});
+                { });
         }
     }
     for (const auto& [path, instance] : systemc_instances_) {
@@ -33,7 +34,7 @@ void HierarchyBuilder::finish() {
                 "FSIM-ELAB-BIND-033",
                 "constructed SystemC instance path '" + path
                     + "' was not reached from the elaborated hierarchy",
-                {});
+                { });
         }
     }
     for (const auto* directive : compilation_unit_systemverilog_binds_) {
@@ -50,7 +51,8 @@ void HierarchyBuilder::finish() {
 }
 
 ResolutionKind HierarchyBuilder::native_resolution(
-    const SignalInfo& signal) {
+    const SignalInfo& signal)
+{
     const auto& net_type = signal.systemverilog_net_type.empty()
         ? signal.type_name
         : signal.systemverilog_net_type;
@@ -84,7 +86,8 @@ ResolutionKind HierarchyBuilder::native_resolution(
 
 std::optional<ResolutionKind>
 HierarchyBuilder::explicit_resolution(
-    const SignalId signal) {
+    const SignalId signal)
+{
     const auto found = resolver_by_signal_.find(signal);
     if (found == resolver_by_signal_.end()) {
         return std::nullopt;
@@ -95,8 +98,7 @@ HierarchyBuilder::explicit_resolution(
     if (found->second == "sv_wire") {
         return ResolutionKind::sv_wire;
     }
-    if (const auto user =
-            vhdl_resolution_kinds_.find(found->second);
+    if (const auto user = vhdl_resolution_kinds_.find(found->second);
         user != vhdl_resolution_kinds_.end()) {
         return user->second;
     }
@@ -108,7 +110,7 @@ HierarchyBuilder::explicit_resolution(
         "FSIM-ELAB-BIND-050",
         "unknown resolver '" + found->second
             + "'; expected \"std_logic\" or \"sv_wire\"",
-        {});
+        { });
     return ResolutionKind::none;
 }
 
@@ -210,7 +212,8 @@ void HierarchyBuilder::register_systemverilog_resolution_functions(
 }
 
 void HierarchyBuilder::register_vhdl_resolution_functions(
-    const DesignUnit& unit) {
+    const DesignUnit& unit)
+{
     if (unit.language != frontend::Language::Vhdl2008) {
         return;
     }
@@ -235,15 +238,13 @@ void HierarchyBuilder::register_vhdl_resolution_functions(
         }
         std::vector<const frontend::FunctionDeclaration*> profiles;
         for (const auto* function : matches) {
-            const bool supported_base =
-                alias.type.domain == frontend::ValueDomain::Bit2
+            const bool supported_base = alias.type.domain == frontend::ValueDomain::Bit2
                 || alias.type.domain == frontend::ValueDomain::Logic9;
             if (function->pure
                 && function->arguments.size() == 1
                 && function->arguments.front().type.vhdl_array
                 && supported_base
-                && function->arguments.front().type.vhdl_array
-                       ->element_domain == alias.type.domain
+                && function->arguments.front().type.vhdl_array->element_domain == alias.type.domain
                 && function->return_type.domain == alias.type.domain) {
                 profiles.push_back(function);
             }
@@ -264,8 +265,7 @@ void HierarchyBuilder::register_vhdl_resolution_functions(
             continue;
         }
         const auto& body = profiles.front()->statements;
-        const auto supported_return =
-            body.size() == 1
+        const auto supported_return = body.size() == 1
             && body.front().kind == StatementKind::Return
             && body.front().value.kind == ExpressionKind::Binary
             && (body.front().value.text == "or"
@@ -281,8 +281,7 @@ void HierarchyBuilder::register_vhdl_resolution_functions(
         const auto kind = body.front().value.text == "or"
             ? ResolutionKind::vhdl_user_or
             : ResolutionKind::vhdl_user_and;
-        const auto [existing, inserted] =
-            vhdl_resolution_kinds_.emplace(resolver, kind);
+        const auto [existing, inserted] = vhdl_resolution_kinds_.emplace(resolver, kind);
         if (inserted) {
             vhdl_resolution_kind_insertions_.push_back(resolver);
         }
@@ -298,12 +297,14 @@ void HierarchyBuilder::register_vhdl_resolution_functions(
 
 void HierarchyBuilder::set_resolution(
     const SignalId signal,
-    const ResolutionKind resolution) {
+    const ResolutionKind resolution)
+{
     design_.signal_info_.at(signal).resolution = resolution;
     design_.signals_.at(signal).resolution = resolution;
 }
 
-void HierarchyBuilder::validate_process_drivers() {
+void HierarchyBuilder::validate_process_drivers()
+{
     using DriverRegion = Process::DriverRegion;
     using ProcessDriver = std::vector<DriverRegion>;
     std::unordered_map<SignalId, std::vector<ProcessDriver>> drivers;
@@ -317,8 +318,8 @@ void HierarchyBuilder::validate_process_drivers() {
         }
     }
     for (SignalId signal = 0;
-         signal < design_.signal_info_.size();
-         ++signal) {
+        signal < design_.signal_info_.size();
+        ++signal) {
         const auto selected = explicit_resolution(signal);
         set_resolution(
             signal,
@@ -332,23 +333,22 @@ void HierarchyBuilder::validate_process_drivers() {
         if (left.whole || right.whole) {
             return true;
         }
-        const auto left_end =
-            static_cast<std::uint64_t>(left.offset) + left.width;
-        const auto right_end =
-            static_cast<std::uint64_t>(right.offset) + right.width;
+        const auto left_end = static_cast<std::uint64_t>(left.offset) + left.width;
+        const auto right_end = static_cast<std::uint64_t>(right.offset) + right.width;
         return left.offset < right_end && right.offset < left_end;
     };
     for (const auto& [signal, process_drivers] : drivers) {
         if (process_drivers.size() <= 1
+            || vhdl_1993_shared_signals_.contains(signal)
             || design_.signal_info_.at(signal).resolution
                 != ResolutionKind::none) {
             continue;
         }
         bool overlap = false;
         for (std::size_t left = 0;
-             left < process_drivers.size() && !overlap; ++left) {
+            left < process_drivers.size() && !overlap; ++left) {
             for (std::size_t right = left + 1;
-                 right < process_drivers.size() && !overlap; ++right) {
+                right < process_drivers.size() && !overlap; ++right) {
                 overlap = std::ranges::any_of(
                     process_drivers[left],
                     [&](const auto& left_region) {
@@ -369,7 +369,7 @@ void HierarchyBuilder::validate_process_drivers() {
             "FSIM-ELAB-DRV-001",
             "unresolved variable '" + info.name
                 + "' has multiple process drivers",
-            {});
+            { });
     }
 }
 

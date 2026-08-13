@@ -23,6 +23,16 @@ Evidence columns mean:
 - **P+**: a source or input is accepted and its representation is checked.
 - **P-**: an invalid or unsupported form is rejected with a targeted
   diagnostic.
+
+Batch 166's governed older-VHDL extension is published in the two 17-row
+standard-mode/package inventories plus four-row revision and package corpora
+under `tests/feature_matrix`. All 34 obligations are preserved with zero
+active rows. A serial 15-witness retained-log matrix composes exact diagnostics,
+arbitrary-width interpreter/LLVM execution, public provenance, artifacts,
+caches, relocation and platform/resource contracts. The Synopsys package rows
+are explicitly non-standard compatibility behavior; configured memory, work,
+trace and timeout ceilings are physical evidence boundaries, not language
+width or legality restrictions.
 - **E**: elaboration/lowering behavior is checked.
 - **R**: runtime behavior is checked. An LLVM-only component test is identified
   as such; it is not interpreter/JIT differential evidence.

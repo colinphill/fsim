@@ -190,14 +190,22 @@ class Reader {
 
 std::string compilation_digest(const ObjectMetadata& metadata) {
   Writer writer;
-  writer.string("fsim-object-compilation-v2");
+  writer.string("fsim-object-compilation-v4-vhdl-package-dependencies");
   writer.string(metadata.language);
   writer.string(metadata.standard);
+  writer.string(metadata.compatibility_profile);
   writer.string(metadata.library);
   writer.string(metadata.compilation_unit);
   writer.string(metadata.uvm_release);
   writer.sequence(metadata.defines, [&](const auto& item) {
     writer.string(item);
+  });
+  writer.sequence(metadata.vhdl_package_dependencies, [&](const auto& item) {
+    writer.string(item.standard);
+    writer.string(item.predefined_environment);
+    writer.string(item.package);
+    writer.string(item.revision);
+    writer.string(item.source_digest);
   });
   writer.sequence(metadata.sources, [&](const auto& item) {
     writer.string(item.logical_name);
@@ -230,6 +238,11 @@ bool validate_metadata(
       || metadata.language == "verilog"
       || metadata.language == "systemverilog";
   if (metadata.producer.empty() || !known_language || metadata.standard.empty()
+      || metadata.compatibility_profile.empty()
+      || (metadata.language != "vhdl"
+          && metadata.compatibility_profile != "none")
+      || (metadata.language == "vhdl"
+          && metadata.compatibility_profile == "none")
       || !library_name(metadata.library)
       || (metadata.compilation_unit != "file"
           && metadata.compilation_unit != "source-set")
@@ -238,11 +251,12 @@ bool validate_metadata(
       || (metadata.uvm_release != "none"
           && metadata.language != "systemverilog")
       || !checksum_spelling(metadata.compilation_digest)) {
-    error(
-        diagnostics, kValueCode,
-        "object metadata requires producer, supported HDL language/standard, "
-        "safe library, compilation mode, UVM release, and compilation digest",
-        source);
+      error(
+          diagnostics, kValueCode,
+          "object metadata requires producer, supported HDL language/standard "
+          "and compatibility profile, safe library, compilation mode, UVM "
+          "release, and compilation digest",
+          source);
   }
   std::unordered_set<std::string> include_roots;
   for (const auto& include : metadata.include_roots) {
@@ -251,6 +265,20 @@ bool validate_metadata(
       error(
           diagnostics, kValueCode,
           "object include roots must be unique contained paths", source);
+    }
+  }
+  std::unordered_set<std::string> vhdl_packages;
+  for (const auto& item : metadata.vhdl_package_dependencies) {
+    if (metadata.language != "vhdl" || item.standard != metadata.standard
+        || item.predefined_environment.empty() || item.package.empty()
+        || item.revision.empty() || !checksum_spelling(item.source_digest)
+        || !vhdl_packages.insert(item.package).second) {
+      error(
+          diagnostics, kValueCode,
+          "VHDL package dependencies require unique package names, the "
+          "selected standard, predefined-environment and revision identities, "
+          "and lowercase SHA-256 source digests",
+          source);
     }
   }
   std::unordered_set<std::string> logical_sources;
@@ -413,6 +441,7 @@ std::string serialize_object_metadata(const ObjectMetadata& metadata) {
   writer.string(metadata.producer);
   writer.string(metadata.language);
   writer.string(metadata.standard);
+  writer.string(metadata.compatibility_profile);
   writer.string(metadata.library);
   writer.string(metadata.compilation_unit);
   writer.string(metadata.uvm_release);
@@ -422,6 +451,13 @@ std::string serialize_object_metadata(const ObjectMetadata& metadata) {
   });
   writer.sequence(metadata.include_roots, [&](const auto& item) {
     writer.path(item);
+  });
+  writer.sequence(metadata.vhdl_package_dependencies, [&](const auto& item) {
+    writer.string(item.standard);
+    writer.string(item.predefined_environment);
+    writer.string(item.package);
+    writer.string(item.revision);
+    writer.string(item.source_digest);
   });
   writer.sequence(metadata.sources, [&](const auto& item) {
     writer.string(item.logical_name);
@@ -468,12 +504,14 @@ std::optional<ObjectMetadata> deserialize_object_metadata(
     return true;
   };
   if (!read_string(metadata.producer) || !read_string(metadata.language)
-      || !read_string(metadata.standard) || !read_string(metadata.library)
+      || !read_string(metadata.standard)
+      || !read_string(metadata.compatibility_profile)
+      || !read_string(metadata.library)
       || !read_string(metadata.compilation_unit)
       || !read_string(metadata.uvm_release)
       || !read_string(metadata.compilation_digest)) {
-    error(diagnostics, kSchemaCode, "truncated .fsimobj metadata root", source_name);
-    return std::nullopt;
+      error(diagnostics, kSchemaCode, "truncated .fsimobj metadata root", source_name);
+      return std::nullopt;
   }
   const auto define_count = canonical.count();
   if (!define_count.has_value()) {
@@ -500,6 +538,22 @@ std::optional<ObjectMetadata> deserialize_object_metadata(
       return std::nullopt;
     }
     metadata.include_roots.push_back(std::move(*value));
+  }
+  const auto dependency_count = canonical.count();
+  if (!dependency_count.has_value()) {
+    error(diagnostics, kSchemaCode, "invalid VHDL package dependency count", source_name);
+    return std::nullopt;
+  }
+  for (std::size_t index = 0; index < *dependency_count; ++index) {
+    library::VhdlPackageDependency item;
+    if (!read_string(item.standard)
+        || !read_string(item.predefined_environment)
+        || !read_string(item.package) || !read_string(item.revision)
+        || !read_string(item.source_digest)) {
+      error(diagnostics, kSchemaCode, "truncated VHDL package dependency", source_name);
+      return std::nullopt;
+    }
+    metadata.vhdl_package_dependencies.push_back(std::move(item));
   }
   const auto source_count = canonical.count();
   if (!source_count.has_value()) {

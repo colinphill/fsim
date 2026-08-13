@@ -171,7 +171,7 @@ Capture run_once(
       *boolean_input,
       fsim::runtime::PackedLogic4::from_msb_string("1"));
 
-  constexpr std::array<std::string_view, 39> outputs{
+  constexpr std::array<std::string_view, 41> outputs {
       "package_integer",
       "selected_integer",
       "package_boolean",
@@ -210,7 +210,10 @@ Capture run_once(
       "static_length_value",
       "aggregate_value",
       "indexed_value",
-      "slice_value"};
+      "slice_value",
+      "reduction_value",
+      "condition_value"
+  };
   std::array<fsim::runtime::simir::SignalId, outputs.size()> ids{};
   for (std::size_t index = 0; index < outputs.size(); ++index) {
     const auto signal = simulation.find_signal(
@@ -303,7 +306,7 @@ void verify(
   assert(capture.result.time == 2);
   const auto boolean_value =
       boolean_passthrough ? std::string{"1"} : std::string{"0"};
-  const std::vector<std::string> expected{
+  const std::vector<std::string> expected {
       bits(5 + bias),
       bits(5 + bias),
       boolean_value,
@@ -342,7 +345,10 @@ void verify(
       bits(8),
       bits(88),
       bits(89),
-      bits(88)};
+      bits(88),
+      "1",
+      "1"
+  };
   if (capture.values != expected) {
     for (std::size_t index = 0; index < capture.values.size(); ++index) {
       std::cerr << index << ": actual=" << capture.values[index]
@@ -360,6 +366,107 @@ void verify(
           == std::vector<std::string>{"0", "1"}));
   assert(capture.vcd.find("#1") != std::string::npos);
   assert(capture.vcd.find("#2") != std::string::npos);
+}
+
+void verify_vhdl_1993_expression_execution(
+    const std::filesystem::path& parent)
+{
+    const auto directory = parent / "vhdl93-expressions";
+    std::filesystem::create_directories(directory);
+    const auto source = directory / "revision_expression.vhd";
+    const std::string wide_source = "1" + std::string(135U, '0') + "1";
+    {
+        std::ofstream output(source, std::ios::binary);
+        output
+            << "library ieee;\n"
+            << "use ieee.std_logic_1164.all;\n"
+            << "use ieee.numeric_std.all;\n"
+            << "entity Revision_Expression is end entity;\n"
+            << "architecture rtl of revision_expression is\n"
+            << "  subtype Wide_T is bit_vector(105 downto -31);\n"
+            << "  type Empty_T is array (0 downto 1) of bit;\n"
+            << "  function Contextual(Value : Wide_T) return Wide_T is\n"
+            << "  begin return Value; end function;\n"
+            << "  function Contextual(Value : Wide_T) return boolean is\n"
+            << "  begin return true; end function;\n"
+            << "  signal Source : Wide_T;\n"
+            << "  signal Wide_Result : Wide_T;\n"
+            << "  signal Boolean_Result : boolean;\n"
+            << "  signal Empty_Result : Empty_T;\n"
+            << "  signal Signed_Source : signed(136 downto 0);\n"
+            << "  signal Signed_Result : signed(136 downto 0);\n"
+            << "  signal Unsigned_Source : unsigned(136 downto 0);\n"
+            << "  signal Unsigned_Result : unsigned(136 downto 0);\n"
+            << "begin\n"
+            << "  Source <= B\"" << wide_source << "\";\n"
+            << "  Wide_Result <= Contextual((Source xnor Source) sll 5);\n"
+            << "  Boolean_Result <= Contextual(Source);\n"
+            << "  Empty_Result <= (others => '0');\n"
+            << "  Signed_Source <= B\"" << std::string(136U, '0')
+            << "1\";\n"
+            << "  Signed_Result <= Signed_Source + Signed_Source;\n"
+            << "  Unsigned_Source <= (others => '1');\n"
+            << "  Unsigned_Result <= Unsigned_Source + 1;\n"
+            << "end architecture;\n";
+        assert(output.good());
+    }
+
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "vhdl93-expression-overloads";
+    config.project.top = "vhdl:work.revision_expression(rtl)";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = fsim::project::Optimization::o0;
+    config.build.cache_path = directory / "cache";
+    config.run.max_deltas = 100;
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::vhdl;
+    sources.standard = "1993";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
+
+    const auto run = [&](const fsim::app::SimulationEngine engine) {
+        fsim::diagnostic::Engine diagnostics;
+        auto project = fsim::app::build_project(config, diagnostics);
+        if (!project) {
+            for (const auto& diagnostic : diagnostics.diagnostics()) {
+                std::cerr << diagnostic.code << ": "
+                          << diagnostic.message << '\n';
+            }
+        }
+        assert(project);
+        fsim::app::Simulation simulation {
+            std::move(*project), config.run.max_deltas, engine
+        };
+        const auto wide_result = simulation.find_signal("wide_result");
+        const auto boolean_result = simulation.find_signal("boolean_result");
+        const auto empty_result = simulation.find_signal("empty_result");
+        const auto signed_result = simulation.find_signal("signed_result");
+        const auto unsigned_result = simulation.find_signal("unsigned_result");
+        assert(
+            wide_result && boolean_result && empty_result && signed_result
+            && unsigned_result);
+        const auto result = simulation.run();
+        assert(result.status == fsim::runtime::RunStatus::completed);
+        return std::array {
+            simulation.read_signal(*wide_result).to_msb_string(),
+            simulation.read_signal(*boolean_result).to_msb_string(),
+            simulation.read_signal(*empty_result).to_msb_string(),
+            simulation.read_signal(*signed_result).to_msb_string(),
+            simulation.read_signal(*unsigned_result).to_msb_string()
+        };
+    };
+
+    const auto interpreter = run(fsim::app::SimulationEngine::interpreter);
+    const auto compiled = run(fsim::app::SimulationEngine::compiled);
+    const std::array expected {
+        std::string(132U, '1') + std::string(5U, '0'),
+        std::string { "1" }, std::string { },
+        std::string(135U, '0') + "10", std::string(137U, '0')
+    };
+    assert(interpreter == expected);
+    assert(compiled == expected);
 }
 
 }  // namespace
@@ -618,6 +725,8 @@ architecture rtl of overload_app is
   signal aggregate_value : integer;
   signal indexed_value : integer;
   signal slice_value : integer;
+  signal reduction_value : bit;
+  signal condition_value : boolean;
 begin
   resolved_value <= '1' after 1 ns;
   resolved_value <= '0' after 2 ns;
@@ -642,6 +751,8 @@ begin
   aggregate_value <= aggregate_select((others => '1'));
   indexed_value <= bit_select(static_vector_value(2));
   slice_value <= aggregate_select(static_vector_value(2 to 4));
+  reduction_value <= and static_vector_value;
+  condition_value <= ?? reduction_value;
   process(integer_input, boolean_input)
   begin
     package_integer <= choose(integer_input);
@@ -741,5 +852,6 @@ end architecture;
     assert(reference.keys != changed_reference.keys);
     assert(changed_reference.keys == changed.keys);
   }
+  verify_vhdl_1993_expression_execution(directory.path);
   return 0;
 }

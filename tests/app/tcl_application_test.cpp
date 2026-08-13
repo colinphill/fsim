@@ -68,6 +68,58 @@ int main()
     const auto directory = std::filesystem::temp_directory_path()
         / ("fsim-tcl-test-" + std::to_string(suffix));
     std::filesystem::create_directories(directory);
+    const auto older_vhdl_source = directory / "older-standard.vhd";
+    {
+        std::ofstream file(older_vhdl_source);
+        file << "entity older_standard is end entity;\n";
+    }
+    const auto older_vhdl_manifest = directory / "older-standard.toml";
+    {
+        std::ofstream file(older_vhdl_manifest);
+        file
+            << "schema = 2\n"
+            << "[project]\n"
+            << "name = \"older-standard\"\n"
+            << "top = \"vhdl:work.older_standard\"\n"
+            << "[[source_set]]\n"
+            << "language = \"vhdl\"\n"
+            << "standard = \"93\"\n"
+            << "files = [\"older-standard.vhd\"]\n";
+    }
+    {
+        std::istringstream input;
+        std::ostringstream output;
+        std::ostringstream error;
+        const int result = run_cli(
+            {
+                "fsim",
+                "tcl",
+                "-p",
+                older_vhdl_manifest.string(),
+                "-c",
+                R"tcl(
+set project [fsim::project]
+set profiles [dict get $project source_profiles]
+if {[llength $profiles] != 1} {error "bad source profile count"}
+set profile [lindex $profiles 0]
+if {[dict get $profile language] ne "vhdl" ||
+    [dict get $profile standard] ne "1993" ||
+    [dict get $profile library] ne "work"} {
+  error "bad canonical source profile: $profile"
+}
+puts "vhdl-standard-profile-ok"
+)tcl",
+            },
+            input, output, error);
+        if (result != 0) {
+            std::cerr << error.str();
+        }
+        assert(result == 0);
+        assert(
+            output.str().find("vhdl-standard-profile-ok")
+            != std::string::npos);
+        assert(error.str().empty());
+    }
     const auto display_source = directory / "display.sv";
     const auto display_manifest = directory / "display.toml";
     {

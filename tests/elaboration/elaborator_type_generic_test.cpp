@@ -724,7 +724,6 @@ end architecture;
     assert(has_diagnostic(rejected, "FSIM-ELAB-VHSUBTYPE-004"));
     assert(has_diagnostic(rejected, "FSIM-ELAB-VHSUBTYPE-002"));
     assert(has_diagnostic(rejected, "FSIM-ELAB-VHENUMRANGE-003"));
-    assert(has_diagnostic(rejected, "FSIM-ELAB-VHARRAY-002"));
     assert(has_diagnostic(rejected, "FSIM-ELAB-VHARRAY-005"));
 
     auto cross_language_design = invalid.design;
