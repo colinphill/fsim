@@ -96,6 +96,8 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
   DesignUnit unit;
   unit.kind = UnitKind::SystemVerilogPackage;
   unit.language = language_;
+  unit.standard_revision = standard_revision_;
+  unit.verilog_compatibility_profile = compatibility_profile_;
   unit.systemverilog_imports =
       compilation_unit_imports_;
   active_package_imports_ =
@@ -151,8 +153,13 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
     } else if (match_keyword("alias")) {
         module_has_non_time_item_ = true;
         parse_alias_statement(unit, previous());
-    } else if (match_keyword("let")) {
+    } else if (match_keyword("let")
+        || (at(TokenKind::Identifier)
+            && current().text == "let" && (advance(), true))) {
         module_has_non_time_item_ = true;
+        (void)require_standard(
+            "a let declaration", StandardRevision::SystemVerilog2009,
+            previous(), "FSIM-SV-PARSE-348");
         parse_let_declaration(unit, previous());
     } else if (match_keyword("typedef")) {
         module_has_non_time_item_ = true;
@@ -184,6 +191,11 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
         module_has_non_time_item_ = true;
         const auto qualifier = previous();
         if (match_keyword("class")) {
+            (void)require_standard(
+                "an interface class",
+                StandardRevision::SystemVerilog2012,
+                previous(),
+                "FSIM-SV-PARSE-348");
             add_class_declaration(
                 unit.systemverilog_classes,
                 parse_class(previous(), unit.name, false, true),
@@ -1095,6 +1107,28 @@ void VerilogParser::parse_generated_parameter_group(
 }
 
 Type VerilogParser::parse_parameter_type() {
+  if (at(TokenKind::Identifier)
+      && declaration_word_standard(current().text)
+      && !keyword_reserved(keyword_set_, current().text)
+      && contains_word(
+          {"bit", "byte", "chandle", "int", "interconnect", "logic",
+           "longint", "process", "shortint", "shortreal", "signed",
+           "string", "unsigned", "uwire"},
+          current().text)) {
+    const auto later_type = advance();
+    (void)require_standard(
+        "parameter type '" + later_type.text + "'",
+        *declaration_word_standard(later_type.text),
+        later_type);
+    Type type{
+        later_type.text == "string" ? ValueDomain::String
+                                    : ValueDomain::Logic4,
+        later_type.text,
+        std::nullopt,
+        later_type.text != "unsigned"};
+    parse_optional_range(type);
+    return type;
+  }
   if (keyword("struct") || keyword("union")) {
     return parse_systemverilog_aggregate_type();
   }
@@ -1294,7 +1328,16 @@ void VerilogParser::parse_parameter_group(
   const bool port_list,
   const Token& start,
   const bool class_list) {
-  const bool type_parameter = match_keyword("type");
+  bool type_parameter = match_keyword("type");
+  if (!type_parameter && at(TokenKind::Identifier)
+      && current().text == "type") {
+    const auto type_token = advance();
+    (void)require_standard(
+        "a type parameter",
+        StandardRevision::SystemVerilog2005,
+        type_token);
+    type_parameter = true;
+  }
   const bool implicit_value_type =
       !type_parameter && at(TokenKind::Identifier)
       && current(1).kind == TokenKind::Assign;

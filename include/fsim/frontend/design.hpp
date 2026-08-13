@@ -333,6 +333,10 @@ struct SystemVerilogClassDeclaration {
     std::string enclosing_scope;
     std::string library;
     std::string compilation_unit_identity;
+    StandardRevision standard_revision {
+        StandardRevision::SystemVerilog2017
+    };
+    std::string verilog_compatibility_profile { "none" };
     std::vector<ParameterDeclaration> parameters;
     std::optional<SystemVerilogClassBase> base;
     std::vector<SystemVerilogClassBase> implemented_interfaces;
@@ -949,6 +953,8 @@ struct VerilogUdpTableRow {
 
 struct VerilogUdpDeclaration {
     Language language { Language::Verilog2005 };
+    StandardRevision standard_revision { StandardRevision::Verilog2005 };
+    std::string verilog_compatibility_profile { "none" };
     std::string library;
     std::string name;
     std::string output;
@@ -1151,6 +1157,9 @@ struct SystemVerilogDpiResolvedProfile {
 // DPI closure phases validate and lower the retained declaration without
 // depending on the parser token stream remaining alive.
 struct SystemVerilogDpiDeclaration {
+    StandardRevision standard_revision {
+        StandardRevision::SystemVerilog2017
+    };
     SystemVerilogDpiDirection direction { SystemVerilogDpiDirection::Import };
     SystemVerilogDpiOwnerKind owner_kind {
         SystemVerilogDpiOwnerKind::CompilationUnit
@@ -1383,6 +1392,10 @@ struct DesignUnit {
     // The owning source profile remains explicit even while all VHDL revisions
     // share the VHDL language family and common parsed representation.
     VhdlStandard vhdl_standard { VhdlStandard::Vhdl2008 };
+    StandardRevision standard_revision {
+        StandardRevision::SystemVerilog2017
+    };
+    std::string verilog_compatibility_profile { "none" };
     std::string vhdl_compatibility_profile;
     VhdlPredefinedEnvironment vhdl_predefined_environment;
     std::string library;

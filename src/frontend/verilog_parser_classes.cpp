@@ -59,6 +59,8 @@ VerilogParser::parse_class_forward_declaration(
     const Token& start,
     std::string enclosing_scope) {
   SystemVerilogClassDeclaration declaration;
+  declaration.standard_revision = standard_revision_;
+  declaration.verilog_compatibility_profile = compatibility_profile_;
   declaration.enclosing_scope = std::move(enclosing_scope);
   declaration.is_forward_declaration = true;
   expect_keyword("class", false, "FSIM-SV-PARSE-256");
@@ -201,6 +203,8 @@ SystemVerilogClassMethod VerilogParser::parse_class_method(
     const bool is_extern,
     const std::string_view owner_identity) {
   SystemVerilogClassMethod method;
+  method.standard_revision = standard_revision_;
+  method.verilog_compatibility_profile = compatibility_profile_;
   method.kind = kind;
   method.visibility = visibility;
   method.is_static = is_static;
@@ -297,10 +301,19 @@ std::vector<Expression> VerilogParser::parse_constraint_block_expressions(
     std::function<Expression()> parse_constraint_item;
     std::function<Expression()> parse_constraint_set;
     const auto parse_plain_constraint = [&]() {
-        const auto soft = keyword("soft");
+        const auto soft = keyword("soft")
+            || (at(TokenKind::Identifier)
+                && current().text == "soft"
+                && at(TokenKind::Identifier, 1));
         std::optional<Token> soft_token;
-        if (soft)
+        if (soft) {
             soft_token = advance();
+            (void)require_standard(
+                "a soft constraint",
+                StandardRevision::SystemVerilog2012,
+                *soft_token,
+                "FSIM-SV-PARSE-349");
+        }
         auto expression = parse_expression();
         if (keyword("dist")) {
             const auto dist = advance();
@@ -558,6 +571,8 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
     const bool virtual_class,
     const bool interface_class) {
   SystemVerilogClassDeclaration declaration;
+  declaration.standard_revision = standard_revision_;
+  declaration.verilog_compatibility_profile = compatibility_profile_;
   declaration.enclosing_scope = std::move(enclosing_scope);
   declaration.is_virtual = virtual_class || interface_class;
   declaration.is_interface = interface_class;
@@ -615,7 +630,14 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
   if (match_keyword("extends")) {
     declaration.base = parse_base();
   }
-  if (match_keyword("implements")) {
+  if (match_keyword("implements")
+      || (at(TokenKind::Identifier)
+          && current().text == "implements" && (advance(), true))) {
+    (void)require_standard(
+        "an implements clause",
+        StandardRevision::SystemVerilog2012,
+        previous(),
+        "FSIM-SV-PARSE-348");
     do {
       declaration.implemented_interfaces.push_back(parse_base());
     } while (match(TokenKind::Comma));

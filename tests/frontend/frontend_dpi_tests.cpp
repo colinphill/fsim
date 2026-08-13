@@ -69,10 +69,33 @@ endmodule : dpi_top
       parsed.design.systemverilog_dpi_declarations.size() == 2,
       "compilation unit owns its DPI import and export");
 
+  const auto dpi_2005 = parse_verilog(
+      SourceText { "dpi-2005.sv",
+          "import \"DPI-C\" function int c_value();\n" },
+      StandardRevision::SystemVerilog2005);
+  const auto dpi_in_verilog = parse_verilog(
+      SourceText { "dpi-in-verilog.v",
+          "import \"DPI-C\" function integer c_value();\n" },
+      StandardRevision::Verilog2005);
+  require(
+      dpi_2005.ok()
+          && dpi_2005.design.systemverilog_dpi_declarations.size() == 1
+          && dpi_2005.design.systemverilog_dpi_declarations.front()
+                  .standard_revision
+              == StandardRevision::SystemVerilog2005
+          && !dpi_in_verilog.ok()
+          && std::ranges::any_of(dpi_in_verilog.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-351";
+              }),
+      "DPI starts in SystemVerilog-2005 and cannot leak into Verilog modes");
+
   const auto& unit_import =
       parsed.design.systemverilog_dpi_declarations.front();
   require(
       unit_import.direction == SystemVerilogDpiDirection::Import
+          && unit_import.standard_revision
+              == StandardRevision::SystemVerilog2017
           && unit_import.owner_kind
               == SystemVerilogDpiOwnerKind::CompilationUnit
           && unit_import.owner_identity == "$unit"

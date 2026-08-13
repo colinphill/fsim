@@ -1369,6 +1369,24 @@ virtual marker, interface name, modport, and parameter actuals in one canonical
 order, while enum and schema validation rejects malformed state before it can
 become executable.
 
+### Older Verilog and SystemVerilog revision identity
+
+Batch 167 treats the selected Verilog/SystemVerilog revision and compatibility
+profile as two typed, independent inputs. Preprocessing, parsing, analyzed
+sources and units, semantic dependency edges, specializations and native-cache
+keys retain both. The supported older revision set is Verilog-1995,
+Verilog-2001, Verilog-2001-noconfig and SystemVerilog-2005/2009/2012; the seven
+compatibility switches canonicalize separately and never promote the selected
+grammar or predefined service environment.
+
+Portable libraries and objects store source/include digests and per-unit
+revision/profile identity. Standalone designs add a complete ordered semantic
+unit profile table and validate it against object provenance before publication.
+The same identity projects into SimIR processes, checkpoints, debugger/VCD and
+public service records, so source hiding, cold/warm cache reuse and relocation
+cannot silently fall back to a current language default. Partial, missing,
+duplicate or inconsistent records are rejected transactionally.
+
 ## Runtime values
 
 The runtime distinguishes three logic domains:
@@ -2383,6 +2401,13 @@ reads return the issuing process's current pre-resolution slot while driver
 mutation remains invalid. Resolved signal metadata and values are visible
 through the same generation-safe C hierarchy.
 
+Batch 167 extends the size-gated object and safe-point records with owning
+semantic-unit/source identity, canonical language standard and compatibility
+profile. Descendants inherit the longest owning HDL scope; implementation cache
+keys and compiler-object names are not exposed. The C++ application view uses
+the same source-owned projection, and incomplete provenance never produces a
+partially populated public object.
+
 An append-only detailed safe-point callback reports scheduler phase or
 statement/call/wait/assertion/process-boundary kind, process handle,
 time/delta, instruction index, and source location. The original callback
@@ -2440,6 +2465,13 @@ completion runs, and lifecycle status. These commands own a lazily built
 CLI; they do not create another kernel. The same stateful adapter also exposes
 breakpoint, stepping, trace-selection, diagnostic-query, mutation, and
 synchronous callback commands over the common debugger and scheduler.
+
+`fsim::provenance PATH` returns the owning semantic unit and source plus the
+canonical standard and compatibility profile for an HDL scope or descendant.
+Ownership uses the longest matching scope, so nested instances cannot inherit
+a broader parent's profile accidentally. Project/build dictionaries preserve
+the same canonical source settings and do not expose cache implementation
+identity.
 
 CMake accepts a Tcl 9.0 development package at patchlevel 9.0.4 or newer.
 Older Tcl 8.6 packages, older Tcl 9.0 patchlevels, and other release series are

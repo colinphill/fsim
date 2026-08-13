@@ -5,11 +5,11 @@ namespace fsim::tests::elaboration {
 
 void test_vhdl_textio_lowering();
 
-void test_assertion_types_and_random_lowering() {
-const auto invalid_vhdl_assertion =
-        fsim::frontend::parse_text(
-            "invalid_assertion.vhd",
-            R"(
+void test_assertion_types_and_random_lowering()
+{
+    const auto invalid_vhdl_assertion = fsim::frontend::parse_text(
+        "invalid_assertion.vhd",
+        R"(
 entity invalid_assertion is
   port (gate : in std_logic);
 end entity;
@@ -21,20 +21,18 @@ begin
   end process;
 end architecture;
 )",
-            fsim::frontend::Language::Vhdl2008);
+        fsim::frontend::Language::Vhdl2008);
     assert(invalid_vhdl_assertion.ok());
-    const auto rejected_vhdl_assertion =
-        fsim::elaboration::elaborate(
-            invalid_vhdl_assertion.design,
-            "vhdl:work.invalid_assertion(rtl)");
+    const auto rejected_vhdl_assertion = fsim::elaboration::elaborate(
+        invalid_vhdl_assertion.design,
+        "vhdl:work.invalid_assertion(rtl)");
     assert(!rejected_vhdl_assertion.ok());
     assert(has_diagnostic(
         rejected_vhdl_assertion, "FSIM-ELAB-051"));
 
-    const auto concurrent_vhdl_assertion =
-        fsim::frontend::parse_text(
-            "concurrent_assertion.vhd",
-            R"(
+    const auto concurrent_vhdl_assertion = fsim::frontend::parse_text(
+        "concurrent_assertion.vhd",
+        R"(
 entity concurrent_assertion is
 end entity;
 architecture rtl of concurrent_assertion is
@@ -50,32 +48,30 @@ begin
   end process;
 end architecture;
 )",
-            fsim::frontend::Language::Vhdl2008);
+        fsim::frontend::Language::Vhdl2008);
     assert(concurrent_vhdl_assertion.ok());
-    const auto elaborated_concurrent_vhdl_assertion =
-        fsim::elaboration::elaborate(
-            concurrent_vhdl_assertion.design,
-            "vhdl:work.concurrent_assertion(rtl)");
+    const auto elaborated_concurrent_vhdl_assertion = fsim::elaboration::elaborate(
+        concurrent_vhdl_assertion.design,
+        "vhdl:work.concurrent_assertion(rtl)");
     assert(elaborated_concurrent_vhdl_assertion.ok());
     assert(
         elaborated_concurrent_vhdl_assertion.design
-            ->processes().size()
+            ->processes()
+            .size()
         == 2);
-    const auto& concurrent_assertion_process =
-        elaborated_concurrent_vhdl_assertion.design
-            ->processes().front();
+    const auto& concurrent_assertion_process = elaborated_concurrent_vhdl_assertion.design
+                                                   ->processes()
+                                                   .front();
     assert(
         concurrent_assertion_process.name
             == "concurrent_assertion.gate_check"
         && concurrent_assertion_process.static_sensitivity.size()
             == 1);
-    const auto concurrent_gate =
-        elaborated_concurrent_vhdl_assertion.design
-            ->find_signal("gate");
+    const auto concurrent_gate = elaborated_concurrent_vhdl_assertion.design
+                                     ->find_signal("gate");
     assert(concurrent_gate);
-    auto concurrent_assertion_interpreter =
-        elaborated_concurrent_vhdl_assertion.design
-            ->create_interpreter();
+    auto concurrent_assertion_interpreter = elaborated_concurrent_vhdl_assertion.design
+                                                ->create_interpreter();
     concurrent_assertion_interpreter->deposit_signal(
         *concurrent_gate,
         fsim::runtime::PackedLogic4::from_msb_string("1"));
@@ -85,7 +81,7 @@ end architecture;
     } catch (const fsim::runtime::simir::AssertionError& error) {
         saw_concurrent_assertion = true;
         assert(
-            std::string_view{error.what()}.find(
+            std::string_view { error.what() }.find(
                 "concurrent gate failed")
             != std::string_view::npos);
         assert(
@@ -93,10 +89,9 @@ end architecture;
     }
     assert(saw_concurrent_assertion);
 
-    const auto vector_assertion =
-        fsim::frontend::parse_text(
-            "vector_assertion.sv",
-            R"(
+    const auto vector_assertion = fsim::frontend::parse_text(
+        "vector_assertion.sv",
+        R"(
 module vector_assertion;
   initial begin
     assert (4'bx001);
@@ -104,15 +99,13 @@ module vector_assertion;
   end
 endmodule
 )",
-            fsim::frontend::Language::SystemVerilog2017);
+        fsim::frontend::Language::SystemVerilog2017);
     assert(vector_assertion.ok());
-    const auto elaborated_vector_assertion =
-        fsim::elaboration::elaborate(
-            vector_assertion.design,
-            "sv:work.vector_assertion");
+    const auto elaborated_vector_assertion = fsim::elaboration::elaborate(
+        vector_assertion.design,
+        "sv:work.vector_assertion");
     assert(elaborated_vector_assertion.ok());
-    auto vector_assertion_interpreter =
-        elaborated_vector_assertion.design->create_interpreter();
+    auto vector_assertion_interpreter = elaborated_vector_assertion.design->create_interpreter();
     std::vector<std::string> vector_assertion_reports;
     vector_assertion_interpreter->set_report_hook(
         [&vector_assertion_reports](
@@ -122,19 +115,18 @@ endmodule
             const fsim::runtime::simir::SourceLocation&,
             const fsim::runtime::SimulationTick,
             const std::uint64_t) {
-          assert(
-              severity
-              == fsim::runtime::simir::AssertionSeverity::error);
-          vector_assertion_reports.emplace_back(message);
+            assert(
+                severity
+                == fsim::runtime::simir::AssertionSeverity::error);
+            vector_assertion_reports.emplace_back(message);
         });
-    const auto vector_assertion_result =
-        vector_assertion_interpreter->run();
+    const auto vector_assertion_result = vector_assertion_interpreter->run();
     assert(
         vector_assertion_result.status
             == fsim::runtime::RunStatus::completed
         && vector_assertion_reports
-            == std::vector<std::string>{
-                "vector condition failed"});
+            == std::vector<std::string> {
+                "vector condition failed" });
 
     const auto dynamic_vhdl_reports = fsim::frontend::parse_text(
         "dynamic_reports.vhd",
@@ -160,26 +152,25 @@ end architecture;
         dynamic_vhdl_reports.design,
         "vhdl:work.dynamic_reports(rtl)");
     if (!dynamic_vhdl_result.ok()) {
-      for (const auto& diagnostic : dynamic_vhdl_result.diagnostics) {
-        std::cerr << diagnostic.code << ": "
-                  << diagnostic.message << '\n';
-      }
+        for (const auto& diagnostic : dynamic_vhdl_result.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
     }
     assert(dynamic_vhdl_result.ok());
-    const auto& dynamic_process =
-        dynamic_vhdl_result.design->processes().front();
+    const auto& dynamic_process = dynamic_vhdl_result.design->processes().front();
     assert(std::ranges::count_if(
                dynamic_process.operations,
                [](const fsim::runtime::simir::Operation& operation) {
-                 return fsim::runtime::simir::operation_holds<
-                     fsim::runtime::simir::StringReport>(operation);
+                   return fsim::runtime::simir::operation_holds<
+                       fsim::runtime::simir::StringReport>(operation);
                })
-           == 4);
-    auto dynamic_interpreter =
-        dynamic_vhdl_result.design->create_interpreter();
+        == 4);
+    auto dynamic_interpreter = dynamic_vhdl_result.design->create_interpreter();
     std::vector<std::pair<
         std::string,
-        fsim::runtime::simir::AssertionSeverity>> dynamic_events;
+        fsim::runtime::simir::AssertionSeverity>>
+        dynamic_events;
     dynamic_interpreter->set_report_hook(
         [&dynamic_events](
             const fsim::runtime::simir::ProcessId,
@@ -188,21 +179,21 @@ end architecture;
             const fsim::runtime::simir::SourceLocation& source,
             const fsim::runtime::SimulationTick,
             const std::uint64_t) {
-          assert(source.path == "dynamic_reports.vhd");
-          dynamic_events.emplace_back(message, severity);
+            assert(source.path == "dynamic_reports.vhd");
+            dynamic_events.emplace_back(message, severity);
         });
     const auto dynamic_run = dynamic_interpreter->run();
     assert(dynamic_run.status == fsim::runtime::RunStatus::completed);
     assert((dynamic_events
-            == std::vector<std::pair<
-                std::string,
-                fsim::runtime::simir::AssertionSeverity>>{
-                {"dynamic report",
-                 fsim::runtime::simir::AssertionSeverity::warning},
-                {"dynamic assertion",
-                 fsim::runtime::simir::AssertionSeverity::warning},
-                {"dynamic error",
-                 fsim::runtime::simir::AssertionSeverity::error}}));
+        == std::vector<std::pair<
+            std::string,
+            fsim::runtime::simir::AssertionSeverity>> {
+            { "dynamic report",
+                fsim::runtime::simir::AssertionSeverity::warning },
+            { "dynamic assertion",
+                fsim::runtime::simir::AssertionSeverity::warning },
+            { "dynamic error",
+                fsim::runtime::simir::AssertionSeverity::error } }));
 
     const auto invalid_vhdl_reports = fsim::frontend::parse_text(
         "invalid_reports.vhd",
@@ -218,10 +209,9 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid_vhdl_reports.ok());
-    const auto invalid_vhdl_report_result =
-        fsim::elaboration::elaborate(
-            invalid_vhdl_reports.design,
-            "vhdl:work.invalid_reports(rtl)");
+    const auto invalid_vhdl_report_result = fsim::elaboration::elaborate(
+        invalid_vhdl_reports.design,
+        "vhdl:work.invalid_reports(rtl)");
     assert(!invalid_vhdl_report_result.ok());
     assert(has_diagnostic(
         invalid_vhdl_report_result,
@@ -262,45 +252,44 @@ end architecture;
     const auto vhdl_file_result = fsim::elaboration::elaborate(
         vhdl_files.design, "vhdl:work.vhdl_files(rtl)");
     if (!vhdl_file_result.ok()) {
-      for (const auto& diagnostic : vhdl_file_result.diagnostics) {
-        std::cerr << diagnostic.code << ": "
-                  << diagnostic.message << '\n';
-      }
+        for (const auto& diagnostic : vhdl_file_result.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
     }
     assert(vhdl_file_result.ok());
-    const auto& vhdl_file_operations =
-        vhdl_file_result.design->processes().front().operations;
+    const auto& vhdl_file_operations = vhdl_file_result.design->processes().front().operations;
     const auto file_operation_count = [&](const auto& example) {
-      using Type = std::decay_t<decltype(example)>;
-      return std::ranges::count_if(
-          vhdl_file_operations,
-          [](const fsim::runtime::simir::Operation& operation) {
-            return fsim::runtime::simir::operation_holds<Type>(operation);
-          });
+        using Type = std::decay_t<decltype(example)>;
+        return std::ranges::count_if(
+            vhdl_file_operations,
+            [](const fsim::runtime::simir::Operation& operation) {
+                return fsim::runtime::simir::operation_holds<Type>(operation);
+            });
     };
     using namespace fsim::runtime::simir;
-    assert(file_operation_count(FileOpen{}) == 2);
-    assert(file_operation_count(FileEndOfFile{}) == 2);
-    assert(file_operation_count(FileScan{}) == 1);
-    assert(file_operation_count(FileWriteFormatted{}) == 1);
-    assert(file_operation_count(FileClose{}) >= 1);
+    assert(file_operation_count(FileOpen { }) == 2);
+    assert(file_operation_count(FileEndOfFile { }) == 2);
+    assert(file_operation_count(FileScan { }) == 1);
+    assert(file_operation_count(FileWriteFormatted { }) == 1);
+    assert(file_operation_count(FileClose { }) >= 1);
     assert(std::ranges::any_of(
         vhdl_file_operations,
         [](const Operation& operation) {
-          const auto* open = operation_get_if<FileOpen>(&operation);
-          return open != nullptr && open->vhdl && open->status.has_value();
+            const auto* open = operation_get_if<FileOpen>(&operation);
+            return open != nullptr && open->vhdl && open->status.has_value();
         }));
     assert(std::ranges::any_of(
         vhdl_file_operations,
         [](const Operation& operation) {
-          const auto* scan = operation_get_if<FileScan>(&operation);
-          return scan != nullptr && scan->require_assignments;
+            const auto* scan = operation_get_if<FileScan>(&operation);
+            return scan != nullptr && scan->require_assignments;
         }));
     assert(std::ranges::any_of(
         vhdl_file_operations,
         [](const Operation& operation) {
-          const auto* close = operation_get_if<FileClose>(&operation);
-          return close != nullptr && close->clear_handle;
+            const auto* close = operation_get_if<FileClose>(&operation);
+            return close != nullptr && close->clear_handle;
         }));
 
     const auto invalid_vhdl_files = fsim::frontend::parse_text(
@@ -330,10 +319,9 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid_vhdl_files.ok());
-    const auto invalid_vhdl_file_result =
-        fsim::elaboration::elaborate(
-            invalid_vhdl_files.design,
-            "vhdl:work.invalid_vhdl_files(rtl)");
+    const auto invalid_vhdl_file_result = fsim::elaboration::elaborate(
+        invalid_vhdl_files.design,
+        "vhdl:work.invalid_vhdl_files(rtl)");
     assert(!invalid_vhdl_file_result.ok());
     assert(has_diagnostic(
         invalid_vhdl_file_result, "FSIM-ELAB-VHFILE-004"));
@@ -369,28 +357,24 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(named_event_source.ok());
-    const auto named_event_design =
-        fsim::elaboration::elaborate(
-            named_event_source.design, "sv:work.named_event");
+    const auto named_event_design = fsim::elaboration::elaborate(
+        named_event_source.design, "sv:work.named_event");
     assert(named_event_design.ok());
-    const auto event_signal =
-        named_event_design.design->find_signal("fired");
+    const auto event_signal = named_event_design.design->find_signal("fired");
     assert(event_signal);
-    const auto named_event_interpreter =
-        named_event_design.design->create_interpreter();
+    const auto named_event_interpreter = named_event_design.design->create_interpreter();
     assert(
         named_event_interpreter->signal_value(*event_signal)
             .to_msb_string()
         == "0");
-    const auto& trigger_process =
-        named_event_design.design->processes().front();
+    const auto& trigger_process = named_event_design.design->processes().front();
     assert(
         std::count_if(
             trigger_process.operations.begin(),
             trigger_process.operations.end(),
             [](const fsim::runtime::simir::Operation& operation) {
-              return fsim::runtime::simir::operation_holds<
-                  fsim::runtime::simir::WriteBlocking>(operation);
+                return fsim::runtime::simir::operation_holds<
+                    fsim::runtime::simir::WriteBlocking>(operation);
             })
         == 1);
     assert(
@@ -398,10 +382,9 @@ endmodule
             trigger_process.operations.begin(),
             trigger_process.operations.end(),
             [](const fsim::runtime::simir::Operation& operation) {
-              const auto* delayed =
-                  fsim::runtime::simir::operation_get_if<fsim::runtime::simir::WriteAfter>(
-                      &operation);
-              return delayed != nullptr && delayed->delay == 2;
+                const auto* delayed = fsim::runtime::simir::operation_get_if<fsim::runtime::simir::WriteAfter>(
+                    &operation);
+                return delayed != nullptr && delayed->delay == 2;
             })
         == 1);
     assert(
@@ -409,19 +392,18 @@ endmodule
             trigger_process.operations.begin(),
             trigger_process.operations.end(),
             [](const fsim::runtime::simir::Operation& operation) {
-              return fsim::runtime::simir::operation_holds<
-                  fsim::runtime::simir::WriteUpdate>(operation);
+                return fsim::runtime::simir::operation_holds<
+                    fsim::runtime::simir::WriteUpdate>(operation);
             })
         == 1);
-    const auto& waiting_process =
-        named_event_design.design->processes().back();
+    const auto& waiting_process = named_event_design.design->processes().back();
     assert(
         std::count_if(
             waiting_process.operations.begin(),
             waiting_process.operations.end(),
             [](const fsim::runtime::simir::Operation& operation) {
-              return fsim::runtime::simir::operation_holds<
-                  fsim::runtime::simir::WaitOn>(operation);
+                return fsim::runtime::simir::operation_holds<
+                    fsim::runtime::simir::WaitOn>(operation);
             })
         == 1);
 
@@ -438,9 +420,8 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_event_source.ok());
-    const auto invalid_event_design =
-        fsim::elaboration::elaborate(
-            invalid_event_source.design, "sv:work.invalid_event");
+    const auto invalid_event_design = fsim::elaboration::elaborate(
+        invalid_event_source.design, "sv:work.invalid_event");
     assert(!invalid_event_design.ok());
     assert(has_diagnostic(invalid_event_design, "FSIM-ELAB-100"));
     assert(has_diagnostic(invalid_event_design, "FSIM-ELAB-101"));
@@ -465,17 +446,14 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(display_source.ok());
-    const auto display_design =
-        fsim::elaboration::elaborate(
-            display_source.design, "sv:work.display");
+    const auto display_design = fsim::elaboration::elaborate(
+        display_source.design, "sv:work.display");
     assert(display_design.ok());
-    const auto& display_operations =
-        display_design.design->processes().front().operations;
+    const auto& display_operations = display_design.design->processes().front().operations;
     std::vector<fsim::runtime::simir::Display> displays;
     for (const auto& operation : display_operations) {
-        if (const auto* display =
-                fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Display>(
-                    &operation)) {
+        if (const auto* display = fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Display>(
+                &operation)) {
             displays.push_back(*display);
         }
     }
@@ -493,9 +471,8 @@ endmodule
         && !displays[3].newline);
     std::vector<fsim::runtime::simir::MonitorInstall> monitors;
     for (const auto& operation : display_operations) {
-        if (const auto* monitor =
-                fsim::runtime::simir::operation_get_if<fsim::runtime::simir::MonitorInstall>(
-                    &operation)) {
+        if (const auto* monitor = fsim::runtime::simir::operation_get_if<fsim::runtime::simir::MonitorInstall>(
+                &operation)) {
             monitors.push_back(*monitor);
         }
     }
@@ -517,19 +494,17 @@ endmodule
         && monitor.values.front().prefix == "q=");
     std::vector<bool> monitor_controls;
     for (const auto& operation : display_operations) {
-        if (const auto* control =
-                fsim::runtime::simir::operation_get_if<fsim::runtime::simir::MonitorControl>(
-                    &operation)) {
+        if (const auto* control = fsim::runtime::simir::operation_get_if<fsim::runtime::simir::MonitorControl>(
+                &operation)) {
             monitor_controls.push_back(control->enabled);
         }
     }
     assert(
-        monitor_controls == std::vector<bool>({false, true}));
+        monitor_controls == std::vector<bool>({ false, true }));
 
-    const auto vhdl_record_source =
-        fsim::frontend::parse_text(
-            "record_execution.vhd",
-            R"(
+    const auto vhdl_record_source = fsim::frontend::parse_text(
+        "record_execution.vhd",
+        R"(
 entity record_execution is
 end entity;
 
@@ -563,15 +538,14 @@ begin
   equal_result <= result = source;
 end architecture;
 )",
-            fsim::frontend::Language::Vhdl2008);
+        fsim::frontend::Language::Vhdl2008);
     assert(vhdl_record_source.ok());
-    const auto vhdl_record_design =
-        fsim::elaboration::elaborate(
-            vhdl_record_source.design,
-            "vhdl:work.record_execution(rtl)");
+    const auto vhdl_record_design = fsim::elaboration::elaborate(
+        vhdl_record_source.design,
+        "vhdl:work.record_execution(rtl)");
     if (!vhdl_record_design.ok()) {
         for (const auto& diagnostic :
-             vhdl_record_design.diagnostics) {
+            vhdl_record_design.diagnostics) {
             std::cerr << diagnostic.code << ": "
                       << diagnostic.message << " at "
                       << diagnostic.span.begin.line << ":"
@@ -579,18 +553,14 @@ end architecture;
         }
     }
     assert(vhdl_record_design.ok());
-    const auto record_source_signal =
-        vhdl_record_design.design->find_signal("source");
-    const auto record_result_signal =
-        vhdl_record_design.design->find_signal("result");
-    const auto record_equal_signal =
-        vhdl_record_design.design->find_signal("equal_result");
+    const auto record_source_signal = vhdl_record_design.design->find_signal("source");
+    const auto record_result_signal = vhdl_record_design.design->find_signal("result");
+    const auto record_equal_signal = vhdl_record_design.design->find_signal("equal_result");
     assert(
         record_source_signal && record_result_signal
         && record_equal_signal);
-    const auto& record_source_info =
-        vhdl_record_design.design->signals().at(
-            *record_source_signal);
+    const auto& record_source_info = vhdl_record_design.design->signals().at(
+        *record_source_signal);
     assert(
         record_source_info.width == 9
         && record_source_info.source_domain
@@ -602,15 +572,13 @@ end architecture;
         && record_source_info.packed_members[1].lsb_offset == 1
         && record_source_info.packed_members[2].name == "flag"
         && record_source_info.packed_members[2].lsb_offset == 0);
-    auto vhdl_record_interpreter =
-        vhdl_record_design.design->create_interpreter();
+    auto vhdl_record_interpreter = vhdl_record_design.design->create_interpreter();
     assert(
         vhdl_record_interpreter
             ->signal_value(*record_source_signal)
             .to_msb_string()
         == "UUUU00000");
-    const auto vhdl_record_result =
-        vhdl_record_interpreter->run();
+    const auto vhdl_record_result = vhdl_record_interpreter->run();
     assert(
         vhdl_record_result.status
         == fsim::runtime::RunStatus::completed);
@@ -630,10 +598,9 @@ end architecture;
             .to_msb_string()
         == "0");
 
-    const auto vhdl_record_aggregate_source =
-        fsim::frontend::parse_text(
-            "record_aggregate_execution.vhd",
-            R"(
+    const auto vhdl_record_aggregate_source = fsim::frontend::parse_text(
+        "record_aggregate_execution.vhd",
+        R"(
 entity record_aggregate_execution is
 end entity;
 
@@ -667,15 +634,14 @@ begin
     (Data => "ULH-", Valid => true) /= source;
 end architecture;
 )",
-            fsim::frontend::Language::Vhdl2008);
+        fsim::frontend::Language::Vhdl2008);
     assert(vhdl_record_aggregate_source.ok());
-    const auto vhdl_record_aggregate_design =
-        fsim::elaboration::elaborate(
-            vhdl_record_aggregate_source.design,
-            "vhdl:work.record_aggregate_execution(rtl)");
+    const auto vhdl_record_aggregate_design = fsim::elaboration::elaborate(
+        vhdl_record_aggregate_source.design,
+        "vhdl:work.record_aggregate_execution(rtl)");
     if (!vhdl_record_aggregate_design.ok()) {
         for (const auto& diagnostic :
-             vhdl_record_aggregate_design.diagnostics) {
+            vhdl_record_aggregate_design.diagnostics) {
             std::cerr << diagnostic.code << ": "
                       << diagnostic.message << " at "
                       << diagnostic.span.begin.line << ":"
@@ -683,19 +649,14 @@ end architecture;
         }
     }
     assert(vhdl_record_aggregate_design.ok());
-    const auto aggregate_source_signal =
-        vhdl_record_aggregate_design.design->find_signal("source");
-    const auto aggregate_result_signal =
-        vhdl_record_aggregate_design.design->find_signal("result");
-    const auto aggregate_conditional_signal =
-        vhdl_record_aggregate_design.design->find_signal(
-            "conditional_result");
-    const auto aggregate_equal_signal =
-        vhdl_record_aggregate_design.design->find_signal(
-            "equal_result");
-    const auto aggregate_different_signal =
-        vhdl_record_aggregate_design.design->find_signal(
-            "different_result");
+    const auto aggregate_source_signal = vhdl_record_aggregate_design.design->find_signal("source");
+    const auto aggregate_result_signal = vhdl_record_aggregate_design.design->find_signal("result");
+    const auto aggregate_conditional_signal = vhdl_record_aggregate_design.design->find_signal(
+        "conditional_result");
+    const auto aggregate_equal_signal = vhdl_record_aggregate_design.design->find_signal(
+        "equal_result");
+    const auto aggregate_different_signal = vhdl_record_aggregate_design.design->find_signal(
+        "different_result");
     assert(
         aggregate_source_signal
         && aggregate_result_signal
@@ -704,7 +665,7 @@ end architecture;
         && aggregate_different_signal);
     std::size_t aggregate_insert_count = 0;
     for (const auto& process :
-         vhdl_record_aggregate_design.design->processes()) {
+        vhdl_record_aggregate_design.design->processes()) {
         aggregate_insert_count += static_cast<std::size_t>(
             std::count_if(
                 process.operations.begin(),
@@ -715,8 +676,7 @@ end architecture;
                 }));
     }
     assert(aggregate_insert_count == 14);
-    auto aggregate_interpreter =
-        vhdl_record_aggregate_design.design->create_interpreter();
+    auto aggregate_interpreter = vhdl_record_aggregate_design.design->create_interpreter();
     assert(
         aggregate_interpreter
             ->signal_value(*aggregate_source_signal)
@@ -752,10 +712,9 @@ end architecture;
             .to_msb_string()
         == "1");
 
-    const auto invalid_vhdl_record_aggregates =
-        fsim::frontend::parse_text(
-            "invalid_record_aggregate_execution.vhd",
-            R"(
+    const auto invalid_vhdl_record_aggregates = fsim::frontend::parse_text(
+        "invalid_record_aggregate_execution.vhd",
+        R"(
 entity invalid_record_aggregate_execution is
 end entity;
 
@@ -782,12 +741,11 @@ begin
   end process;
 end architecture;
 )",
-            fsim::frontend::Language::Vhdl2008);
+        fsim::frontend::Language::Vhdl2008);
     assert(invalid_vhdl_record_aggregates.ok());
-    const auto invalid_aggregate_design =
-        fsim::elaboration::elaborate(
-            invalid_vhdl_record_aggregates.design,
-            "vhdl:work.invalid_record_aggregate_execution(rtl)");
+    const auto invalid_aggregate_design = fsim::elaboration::elaborate(
+        invalid_vhdl_record_aggregates.design,
+        "vhdl:work.invalid_record_aggregate_execution(rtl)");
     const auto has_aggregate_diagnostic =
         [&](const std::string_view code) {
             return std::ranges::any_of(
@@ -805,10 +763,9 @@ end architecture;
         && has_aggregate_diagnostic("FSIM-ELAB-VHAGG-006")
         && has_aggregate_diagnostic("FSIM-ELAB-VHAGG-007"));
 
-    auto malformed_aggregate_source =
-        fsim::frontend::parse_text(
-            "malformed_record_aggregate_metadata.vhd",
-            R"(
+    auto malformed_aggregate_source = fsim::frontend::parse_text(
+        "malformed_record_aggregate_metadata.vhd",
+        R"(
 entity malformed_record_aggregate_metadata is
 end entity;
 architecture rtl of malformed_record_aggregate_metadata is
@@ -820,19 +777,18 @@ begin
   value <= ('0', '1');
 end architecture;
 )",
-            fsim::frontend::Language::Vhdl2008);
+        fsim::frontend::Language::Vhdl2008);
     assert(malformed_aggregate_source.ok());
-    auto& malformed_expression =
-        malformed_aggregate_source.design.units.back()
-            .concurrent_statements.front().value;
+    auto& malformed_expression = malformed_aggregate_source.design.units.back()
+                                     .concurrent_statements.front()
+                                     .value;
     assert(
         malformed_expression.kind
         == fsim::frontend::ExpressionKind::Aggregate);
     malformed_expression.aggregate_choices.pop_back();
-    const auto malformed_aggregate_design =
-        fsim::elaboration::elaborate(
-            malformed_aggregate_source.design,
-            "vhdl:work.malformed_record_aggregate_metadata(rtl)");
+    const auto malformed_aggregate_design = fsim::elaboration::elaborate(
+        malformed_aggregate_source.design,
+        "vhdl:work.malformed_record_aggregate_metadata(rtl)");
     assert(
         !malformed_aggregate_design.ok()
         && std::ranges::any_of(
@@ -842,10 +798,9 @@ end architecture;
                     == "FSIM-ELAB-VHAGG-002";
             }));
 
-    const auto package_record_source =
-        fsim::frontend::parse_text(
-            "package_record_hierarchy.vhd",
-            R"(
+    const auto package_record_source = fsim::frontend::parse_text(
+        "package_record_hierarchy.vhd",
+        R"(
 package Packet_Types is
   type Packet_T is record
     Data : std_logic_vector(3 downto 0);
@@ -892,15 +847,14 @@ begin
   equal_result <= result = source;
 end architecture;
 )",
-            fsim::frontend::Language::Vhdl2008);
+        fsim::frontend::Language::Vhdl2008);
     assert(package_record_source.ok());
-    const auto package_record_design =
-        fsim::elaboration::elaborate(
-            package_record_source.design,
-            "vhdl:work.package_record_hierarchy(rtl)");
+    const auto package_record_design = fsim::elaboration::elaborate(
+        package_record_source.design,
+        "vhdl:work.package_record_hierarchy(rtl)");
     if (!package_record_design.ok()) {
         for (const auto& diagnostic :
-             package_record_design.diagnostics) {
+            package_record_design.diagnostics) {
             std::cerr << diagnostic.code << ": "
                       << diagnostic.message << " at "
                       << diagnostic.span.begin.line << ":"
@@ -911,12 +865,9 @@ end architecture;
     assert(
         package_record_design.design->specializations().size()
         == 2);
-    const auto package_record_input =
-        package_record_design.design->find_signal("source");
-    const auto package_record_output =
-        package_record_design.design->find_signal("result");
-    const auto package_record_equal =
-        package_record_design.design->find_signal("equal_result");
+    const auto package_record_input = package_record_design.design->find_signal("source");
+    const auto package_record_output = package_record_design.design->find_signal("result");
+    const auto package_record_equal = package_record_design.design->find_signal("equal_result");
     assert(
         package_record_input && package_record_output
         && package_record_equal);
@@ -926,15 +877,13 @@ end architecture;
             .at(*package_record_input)
             .packed_members.size()
         == 2);
-    auto package_record_interpreter =
-        package_record_design.design->create_interpreter();
+    auto package_record_interpreter = package_record_design.design->create_interpreter();
     assert(
         package_record_interpreter
             ->signal_value(*package_record_input)
             .to_msb_string()
         == "UUUU0");
-    const auto package_record_run =
-        package_record_interpreter->run();
+    const auto package_record_run = package_record_interpreter->run();
     assert(
         package_record_run.status
         == fsim::runtime::RunStatus::completed);
@@ -954,10 +903,9 @@ end architecture;
             .to_msb_string()
         == "1");
 
-    const auto unknown_record_type =
-        fsim::frontend::parse_text(
-            "unknown_record_type.vhd",
-            R"(
+    const auto unknown_record_type = fsim::frontend::parse_text(
+        "unknown_record_type.vhd",
+        R"(
 entity unknown_record_type is
   port (value : in missing_packet_t);
 end entity;
@@ -968,21 +916,19 @@ architecture rtl of unknown_record_type is
 begin
 end architecture;
 )",
-            fsim::frontend::Language::Vhdl2008);
+        fsim::frontend::Language::Vhdl2008);
     assert(unknown_record_type.ok());
-    const auto rejected_unknown_record_type =
-        fsim::elaboration::elaborate(
-            unknown_record_type.design,
-            "vhdl:work.unknown_record_type(rtl)");
+    const auto rejected_unknown_record_type = fsim::elaboration::elaborate(
+        unknown_record_type.design,
+        "vhdl:work.unknown_record_type(rtl)");
     assert(!rejected_unknown_record_type.ok());
     assert(has_diagnostic(
         rejected_unknown_record_type,
         "FSIM-ELAB-VHTYPE-001"));
 
-    const auto missing_imported_record_type =
-        fsim::frontend::parse_text(
-            "missing_imported_record_type.vhd",
-            R"(
+    const auto missing_imported_record_type = fsim::frontend::parse_text(
+        "missing_imported_record_type.vhd",
+        R"(
 package Available_Types is
   type Packet_T is record
     value : bit;
@@ -996,21 +942,19 @@ architecture rtl of missing_imported_record_type is
 begin
 end architecture;
 )",
-            fsim::frontend::Language::Vhdl2008);
+        fsim::frontend::Language::Vhdl2008);
     assert(missing_imported_record_type.ok());
-    const auto rejected_missing_imported_record_type =
-        fsim::elaboration::elaborate(
-            missing_imported_record_type.design,
-            "vhdl:work.missing_imported_record_type(rtl)");
+    const auto rejected_missing_imported_record_type = fsim::elaboration::elaborate(
+        missing_imported_record_type.design,
+        "vhdl:work.missing_imported_record_type(rtl)");
     assert(!rejected_missing_imported_record_type.ok());
     assert(has_diagnostic(
         rejected_missing_imported_record_type,
         "FSIM-ELAB-PKG-003"));
 
-    const auto missing_selected_record_type =
-        fsim::frontend::parse_text(
-            "missing_selected_record_type.vhd",
-            R"(
+    const auto missing_selected_record_type = fsim::frontend::parse_text(
+        "missing_selected_record_type.vhd",
+        R"(
 package Selected_Types is
   type Packet_T is record
     value : bit;
@@ -1023,21 +967,19 @@ architecture rtl of missing_selected_record_type is
 begin
 end architecture;
 )",
-            fsim::frontend::Language::Vhdl2008);
+        fsim::frontend::Language::Vhdl2008);
     assert(missing_selected_record_type.ok());
-    const auto rejected_missing_selected_record_type =
-        fsim::elaboration::elaborate(
-            missing_selected_record_type.design,
-            "vhdl:work.missing_selected_record_type(rtl)");
+    const auto rejected_missing_selected_record_type = fsim::elaboration::elaborate(
+        missing_selected_record_type.design,
+        "vhdl:work.missing_selected_record_type(rtl)");
     assert(!rejected_missing_selected_record_type.ok());
     assert(has_diagnostic(
         rejected_missing_selected_record_type,
         "FSIM-ELAB-VHTYPE-004"));
 
-    const auto conflicting_record_types =
-        fsim::frontend::parse_text(
-            "conflicting_record_types.vhd",
-            R"(
+    const auto conflicting_record_types = fsim::frontend::parse_text(
+        "conflicting_record_types.vhd",
+        R"(
 package First_Types is
   type Packet_T is record
     Value : bit;
@@ -1057,65 +999,59 @@ architecture rtl of conflicting_record_types is
 begin
 end architecture;
 )",
-            fsim::frontend::Language::Vhdl2008);
+        fsim::frontend::Language::Vhdl2008);
     assert(conflicting_record_types.ok());
-    const auto rejected_conflicting_record_types =
-        fsim::elaboration::elaborate(
-            conflicting_record_types.design,
-            "vhdl:work.conflicting_record_types(rtl)");
+    const auto rejected_conflicting_record_types = fsim::elaboration::elaborate(
+        conflicting_record_types.design,
+        "vhdl:work.conflicting_record_types(rtl)");
     assert(!rejected_conflicting_record_types.ok());
     assert(has_diagnostic(
         rejected_conflicting_record_types,
         "FSIM-ELAB-VHTYPE-003"));
 
-    auto package_record_boundary =
-        package_record_source.design;
-    const auto package_record_sv_parent =
-        fsim::frontend::parse_text(
-            "package_record_parent.sv",
-            R"(
+    auto package_record_boundary = package_record_source.design;
+    const auto package_record_sv_parent = fsim::frontend::parse_text(
+        "package_record_parent.sv",
+        R"(
 module package_record_parent;
   logic [4:0] source;
   record_child child(.source(source));
 endmodule
 )",
-            fsim::frontend::Language::SystemVerilog2017);
+        fsim::frontend::Language::SystemVerilog2017);
     assert(package_record_sv_parent.ok());
     package_record_boundary.units.insert(
         package_record_boundary.units.end(),
         package_record_sv_parent.design.units.begin(),
         package_record_sv_parent.design.units.end());
     const std::vector<fsim::elaboration::Binding>
-        package_record_binding{
-            {"package_record_parent.child",
-             "vhdl:work.record_child(rtl)",
-             std::nullopt},
+        package_record_binding {
+            { "package_record_parent.child",
+                "vhdl:work.record_child(rtl)",
+                std::nullopt },
         };
-    const auto rejected_package_record_boundary =
-        fsim::elaboration::elaborate(
-            package_record_boundary,
-            "sv:work.package_record_parent",
-            package_record_binding);
+    const auto rejected_package_record_boundary = fsim::elaboration::elaborate(
+        package_record_boundary,
+        "sv:work.package_record_parent",
+        package_record_binding);
     assert(!rejected_package_record_boundary.ok());
     assert(has_diagnostic(
         rejected_package_record_boundary,
         "FSIM-ELAB-BIND-049"));
 
-    const auto invalid_monitor_source =
-        fsim::frontend::parse_text(
-            "invalid_monitor.sv",
-            R"(
+    const auto invalid_monitor_source = fsim::frontend::parse_text(
+        "invalid_monitor.sv",
+        R"(
 module invalid_monitor;
   logic q;
   initial $monitor("%b", q + 1'b1);
 endmodule
 )",
-            fsim::frontend::Language::SystemVerilog2017);
+        fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_monitor_source.ok());
-    const auto invalid_monitor_design =
-        fsim::elaboration::elaborate(
-            invalid_monitor_source.design,
-            "sv:work.invalid_monitor");
+    const auto invalid_monitor_design = fsim::elaboration::elaborate(
+        invalid_monitor_source.design,
+        "sv:work.invalid_monitor");
     assert(!invalid_monitor_design.ok());
     assert(
         has_diagnostic(
@@ -1227,44 +1163,27 @@ end architecture;
         }
     }
     assert(array_design.ok());
-    const auto array_source_signal =
-        array_design.design->find_signal("source");
-    const auto array_result_signal =
-        array_design.design->find_signal("result");
-    const auto array_logic_signal =
-        array_design.design->find_signal("logic_bus");
-    const auto array_local_signal =
-        array_design.design->find_signal("local_bits");
-    const auto array_positional_signal =
-        array_design.design->find_signal(
-            "aggregate_positional");
-    const auto array_named_signal =
-        array_design.design->find_signal("aggregate_named");
-    const auto array_equal_signal =
-        array_design.design->find_signal("aggregate_equal");
-    const auto attribute_left_signal =
-        array_design.design->find_signal("attribute_left");
-    const auto attribute_right_signal =
-        array_design.design->find_signal("attribute_right");
-    const auto attribute_length_signal =
-        array_design.design->find_signal("attribute_length");
-    const auto attribute_ascending_signal =
-        array_design.design->find_signal(
-            "attribute_ascending");
-    const auto range_order_signal =
-        array_design.design->find_signal("range_order");
-    const auto reverse_order_signal =
-        array_design.design->find_signal("reverse_order");
-    const auto attribute_aggregate_signal =
-        array_design.design->find_signal(
-            "attribute_aggregate");
-    const auto attribute_slice_signal =
-        array_design.design->find_signal(
-            "attribute_slice");
-    const auto dynamic_read_signal =
-        array_design.design->find_signal("dynamic_read");
-    const auto dynamic_result_signal =
-        array_design.design->find_signal("dynamic_result");
+    const auto array_source_signal = array_design.design->find_signal("source");
+    const auto array_result_signal = array_design.design->find_signal("result");
+    const auto array_logic_signal = array_design.design->find_signal("logic_bus");
+    const auto array_local_signal = array_design.design->find_signal("local_bits");
+    const auto array_positional_signal = array_design.design->find_signal(
+        "aggregate_positional");
+    const auto array_named_signal = array_design.design->find_signal("aggregate_named");
+    const auto array_equal_signal = array_design.design->find_signal("aggregate_equal");
+    const auto attribute_left_signal = array_design.design->find_signal("attribute_left");
+    const auto attribute_right_signal = array_design.design->find_signal("attribute_right");
+    const auto attribute_length_signal = array_design.design->find_signal("attribute_length");
+    const auto attribute_ascending_signal = array_design.design->find_signal(
+        "attribute_ascending");
+    const auto range_order_signal = array_design.design->find_signal("range_order");
+    const auto reverse_order_signal = array_design.design->find_signal("reverse_order");
+    const auto attribute_aggregate_signal = array_design.design->find_signal(
+        "attribute_aggregate");
+    const auto attribute_slice_signal = array_design.design->find_signal(
+        "attribute_slice");
+    const auto dynamic_read_signal = array_design.design->find_signal("dynamic_read");
+    const auto dynamic_result_signal = array_design.design->find_signal("dynamic_result");
     assert(
         array_source_signal && array_result_signal
         && array_logic_signal && array_local_signal
@@ -1279,20 +1198,17 @@ end architecture;
     bool found_dynamic_insert = false;
     bool found_dynamic_write = false;
     for (const auto& process :
-         array_design.design->processes()) {
+        array_design.design->processes()) {
         for (const auto& operation : process.operations) {
-            found_dynamic_extract =
-                found_dynamic_extract
+            found_dynamic_extract = found_dynamic_extract
                 || fsim::runtime::simir::operation_holds<
                     fsim::runtime::simir::DynamicExtract>(
                     operation);
-            found_dynamic_insert =
-                found_dynamic_insert
+            found_dynamic_insert = found_dynamic_insert
                 || fsim::runtime::simir::operation_holds<
                     fsim::runtime::simir::DynamicInsert>(
                     operation);
-            found_dynamic_write =
-                found_dynamic_write
+            found_dynamic_write = found_dynamic_write
                 || fsim::runtime::simir::operation_holds<
                     fsim::runtime::simir::
                         WriteUpdateDynamicSlice>(
@@ -1306,14 +1222,10 @@ end architecture;
     assert(found_dynamic_extract);
     assert(found_dynamic_insert);
     assert(found_dynamic_write);
-    const auto& array_source_info =
-        array_design.design->signals().at(*array_source_signal);
-    const auto& array_result_info =
-        array_design.design->signals().at(*array_result_signal);
-    const auto& array_logic_info =
-        array_design.design->signals().at(*array_logic_signal);
-    const auto& array_local_info =
-        array_design.design->signals().at(*array_local_signal);
+    const auto& array_source_info = array_design.design->signals().at(*array_source_signal);
+    const auto& array_result_info = array_design.design->signals().at(*array_result_signal);
+    const auto& array_logic_info = array_design.design->signals().at(*array_logic_signal);
+    const auto& array_local_info = array_design.design->signals().at(*array_local_signal);
     assert(
         array_source_info.vhdl_array
         && !array_source_info.vhdl_array->unconstrained
@@ -1343,8 +1255,7 @@ end architecture;
         && array_local_info.packed_range->left == -1
         && array_local_info.packed_range->right == 2
         && !array_local_info.packed_range->descending);
-    auto array_interpreter =
-        array_design.design->create_interpreter();
+    auto array_interpreter = array_design.design->create_interpreter();
     array_interpreter->deposit_signal(
         *array_source_signal,
         fsim::runtime::PackedLogic4::from_msb_string("1010"));
@@ -1353,75 +1264,74 @@ end architecture;
     assert(
         array_interpreter->signal_value(*array_result_signal)
             .to_msb_string()
-            == "1010");
+        == "1010");
     assert(
         array_interpreter->signal_value(*array_logic_signal)
             .to_msb_string()
-            == "1111Z0Z0");
+        == "1111Z0Z0");
     assert(
         array_interpreter->signal_value(*array_local_signal)
             .to_msb_string()
-            == "1010");
+        == "1010");
     assert(
         array_interpreter
             ->signal_value(*array_positional_signal)
             .to_msb_string()
-            == "1010");
+        == "1010");
     assert(
         array_interpreter->signal_value(*array_named_signal)
             .to_msb_string()
-            == "1010");
+        == "1010");
     assert(
         array_interpreter->signal_value(*array_equal_signal)
             .to_msb_string()
-            == "1");
+        == "1");
     assert(
         array_interpreter->signal_value(*attribute_left_signal)
             .to_msb_string()
-            == "00000000000000000000000000000111");
+        == "00000000000000000000000000000111");
     assert(
         array_interpreter->signal_value(*attribute_right_signal)
             .to_msb_string()
-            == "00000000000000000000000000000000");
+        == "00000000000000000000000000000000");
     assert(
         array_interpreter->signal_value(*attribute_length_signal)
             .to_msb_string()
-            == "00000000000000000000000000001000");
+        == "00000000000000000000000000001000");
     assert(
         array_interpreter
             ->signal_value(*attribute_ascending_signal)
             .to_msb_string()
-            == "0");
+        == "0");
     assert(
         array_interpreter->signal_value(*range_order_signal)
             .to_msb_string()
-            == "00000000011101001010000001001010");
+        == "00000000011101001010000001001010");
     assert(
         array_interpreter->signal_value(*reverse_order_signal)
             .to_msb_string()
-            == "00000000000000000011000000111001");
+        == "00000000000000000011000000111001");
     assert(
         array_interpreter
             ->signal_value(*attribute_aggregate_signal)
             .to_msb_string()
-            == "1111Z0ZH");
+        == "1111Z0ZH");
     assert(
         array_interpreter->signal_value(*attribute_slice_signal)
             .to_msb_string()
-            == "1111");
+        == "1111");
     assert(
         array_interpreter->signal_value(*dynamic_read_signal)
             .to_msb_string()
-            == "L");
+        == "L");
     assert(
         array_interpreter->signal_value(*dynamic_result_signal)
             .to_msb_string()
-            == "00H00000");
+        == "00H00000");
 
-    const auto invalid_array_source =
-        fsim::frontend::parse_text(
-            "invalid_vhdl_arrays.vhd",
-            R"(
+    const auto invalid_array_source = fsim::frontend::parse_text(
+        "invalid_vhdl_arrays.vhd",
+        R"(
 package Invalid_Array_Types is
   type A_T is array (natural range <>) of bit;
   type B_T is array (natural range <>) of bit;
@@ -1514,12 +1424,11 @@ begin
     port map (Value => B);
 end architecture;
 )",
-            fsim::frontend::Language::Vhdl2008);
+        fsim::frontend::Language::Vhdl2008);
     assert(invalid_array_source.ok());
-    const auto invalid_array_design =
-        fsim::elaboration::elaborate(
-            invalid_array_source.design,
-            "vhdl:work.invalid_arrays(rtl)");
+    const auto invalid_array_design = fsim::elaboration::elaborate(
+        invalid_array_source.design,
+        "vhdl:work.invalid_arrays(rtl)");
     assert(!invalid_array_design.ok());
     assert(
         !has_diagnostic(
@@ -1546,10 +1455,10 @@ end architecture;
         std::ranges::any_of(
             invalid_array_design.diagnostics,
             [](const auto& diagnostic) {
-              return diagnostic.code
-                      == "FSIM-ELAB-VHARRAYAGG-009"
-                  && diagnostic.message.find("contextual subtype")
-                      != std::string::npos;
+                return diagnostic.code
+                    == "FSIM-ELAB-VHARRAYAGG-009"
+                    && diagnostic.message.find("contextual subtype")
+                    != std::string::npos;
             }));
     assert(
         has_diagnostic(
@@ -1567,10 +1476,9 @@ end architecture;
         has_diagnostic(
             invalid_array_design, "FSIM-ELAB-BIND-056"));
 
-    const auto composite_array_layout =
-        fsim::frontend::parse_text(
-            "composite_array_layout.vhd",
-            R"(
+    const auto composite_array_layout = fsim::frontend::parse_text(
+        "composite_array_layout.vhd",
+        R"(
 entity Composite_Array_Layout is
 end entity;
 architecture rtl of Composite_Array_Layout is
@@ -1594,15 +1502,14 @@ architecture rtl of Composite_Array_Layout is
 begin
 end architecture;
 )",
-            fsim::frontend::Language::Vhdl2008);
+        fsim::frontend::Language::Vhdl2008);
     assert(composite_array_layout.ok());
-    const auto composite_array_design =
-        fsim::elaboration::elaborate(
-            composite_array_layout.design,
-            "vhdl:work.composite_array_layout(rtl)");
+    const auto composite_array_design = fsim::elaboration::elaborate(
+        composite_array_layout.design,
+        "vhdl:work.composite_array_layout(rtl)");
     if (!composite_array_design.ok()) {
         for (const auto& diagnostic :
-             composite_array_design.diagnostics) {
+            composite_array_design.diagnostics) {
             std::cerr << diagnostic.code << ": "
                       << diagnostic.message << '\n';
         }
@@ -1612,32 +1519,29 @@ end architecture;
         [&](const std::string_view name,
             const std::size_t width,
             const std::vector<std::uint64_t>& strides) {
-          const auto signal =
-              composite_array_design.design->find_signal(name);
-          assert(signal);
-          const auto& info =
-              composite_array_design.design->signals().at(*signal);
-          assert(info.width == width && info.vhdl_array);
-          assert(info.vhdl_array->flat_width == width);
-          assert(info.vhdl_array->dimensions.size() == strides.size());
-          for (std::size_t index = 0; index < strides.size(); ++index) {
-              assert(info.vhdl_array->dimensions[index].range);
-              assert(!info.vhdl_array->dimensions[index].null);
-              assert(
-                  info.vhdl_array->dimensions[index].stride
-                  == strides[index]);
-          }
+            const auto signal = composite_array_design.design->find_signal(name);
+            assert(signal);
+            const auto& info = composite_array_design.design->signals().at(*signal);
+            assert(info.width == width && info.vhdl_array);
+            assert(info.vhdl_array->flat_width == width);
+            assert(info.vhdl_array->dimensions.size() == strides.size());
+            for (std::size_t index = 0; index < strides.size(); ++index) {
+                assert(info.vhdl_array->dimensions[index].range);
+                assert(!info.vhdl_array->dimensions[index].null);
+                assert(
+                    info.vhdl_array->dimensions[index].stride
+                    == strides[index]);
+            }
         };
-    assert_layout("matrix", 6, {3, 1});
-    assert_layout("packed_rows", 8, {4});
-    assert_layout("nibbles", 8, {4});
-    assert_layout("cells", 4, {2});
-    assert_layout("window", 12, {4, 2});
+    assert_layout("matrix", 6, { 3, 1 });
+    assert_layout("packed_rows", 8, { 4 });
+    assert_layout("nibbles", 8, { 4 });
+    assert_layout("cells", 4, { 2 });
+    assert_layout("window", 12, { 4, 2 });
 
-    const auto composite_array_aggregates =
-        fsim::frontend::parse_text(
-            "composite_array_aggregates.vhd",
-            R"(
+    const auto composite_array_aggregates = fsim::frontend::parse_text(
+        "composite_array_aggregates.vhd",
+        R"(
 entity Composite_Array_Aggregates is
 end entity;
 architecture rtl of Composite_Array_Aggregates is
@@ -1670,12 +1574,11 @@ begin
      others => (Data => "01", Flag => false));
 end architecture;
 )",
-            fsim::frontend::Language::Vhdl2008);
+        fsim::frontend::Language::Vhdl2008);
     assert(composite_array_aggregates.ok());
-    const auto aggregate_design =
-        fsim::elaboration::elaborate(
-            composite_array_aggregates.design,
-            "vhdl:work.composite_array_aggregates(rtl)");
+    const auto aggregate_design = fsim::elaboration::elaborate(
+        composite_array_aggregates.design,
+        "vhdl:work.composite_array_aggregates(rtl)");
     if (!aggregate_design.ok()) {
         for (const auto& diagnostic : aggregate_design.diagnostics) {
             std::cerr << diagnostic.code << ": "
@@ -1683,52 +1586,45 @@ end architecture;
         }
     }
     assert(aggregate_design.ok());
-    const auto aggregate_positional =
-        aggregate_design.design->find_signal("positional");
-    const auto aggregate_named =
-        aggregate_design.design->find_signal("named");
-    const auto aggregate_ranged =
-        aggregate_design.design->find_signal("ranged");
-    const auto aggregate_cells =
-        aggregate_design.design->find_signal("cells");
-    const auto aggregate_nested =
-        aggregate_design.design->find_signal("nested");
+    const auto aggregate_positional = aggregate_design.design->find_signal("positional");
+    const auto aggregate_named = aggregate_design.design->find_signal("named");
+    const auto aggregate_ranged = aggregate_design.design->find_signal("ranged");
+    const auto aggregate_cells = aggregate_design.design->find_signal("cells");
+    const auto aggregate_nested = aggregate_design.design->find_signal("nested");
     assert(
         aggregate_positional && aggregate_named
         && aggregate_ranged && aggregate_cells
         && aggregate_nested);
-    auto composite_aggregate_interpreter =
-        aggregate_design.design->create_interpreter();
-    const auto composite_aggregate_result =
-        composite_aggregate_interpreter->run();
+    auto composite_aggregate_interpreter = aggregate_design.design->create_interpreter();
+    const auto composite_aggregate_result = composite_aggregate_interpreter->run();
     assert(
         composite_aggregate_result.status
         == fsim::runtime::RunStatus::completed);
     assert(
         composite_aggregate_interpreter
-                ->signal_value(*aggregate_positional)
-                .to_msb_string()
-            == "101010");
+            ->signal_value(*aggregate_positional)
+            .to_msb_string()
+        == "101010");
     assert(
         composite_aggregate_interpreter
-                ->signal_value(*aggregate_named)
-                .to_msb_string()
-            == "101000");
+            ->signal_value(*aggregate_named)
+            .to_msb_string()
+        == "101000");
     assert(
         composite_aggregate_interpreter
-                ->signal_value(*aggregate_ranged)
-                .to_msb_string()
-            == "111001");
+            ->signal_value(*aggregate_ranged)
+            .to_msb_string()
+        == "111001");
     assert(
         composite_aggregate_interpreter
-                ->signal_value(*aggregate_cells)
-                .to_msb_string()
-            == "110001");
+            ->signal_value(*aggregate_cells)
+            .to_msb_string()
+        == "110001");
     assert(
         composite_aggregate_interpreter
-                ->signal_value(*aggregate_nested)
-                .to_msb_string()
-            == "10000101");
+            ->signal_value(*aggregate_nested)
+            .to_msb_string()
+        == "10000101");
     assert(
         has_diagnostic(
             invalid_array_design,
@@ -1774,10 +1670,9 @@ end architecture;
             invalid_array_design,
             "FSIM-ELAB-VHARRAYATTR-003"));
 
-    auto malformed_array_aggregate =
-        fsim::frontend::parse_text(
-            "malformed_array_aggregate_metadata.vhd",
-            R"(
+    auto malformed_array_aggregate = fsim::frontend::parse_text(
+        "malformed_array_aggregate_metadata.vhd",
+        R"(
 entity Malformed_Array_Aggregate is
 end entity;
 architecture rtl of Malformed_Array_Aggregate is
@@ -1787,74 +1682,68 @@ begin
   Value <= (others => '0');
 end architecture;
 )",
-            fsim::frontend::Language::Vhdl2008);
+        fsim::frontend::Language::Vhdl2008);
     assert(malformed_array_aggregate.ok());
-    auto combined_others_aggregate =
-        malformed_array_aggregate;
-    auto& malformed_array_expression =
-        malformed_array_aggregate.design.units.back()
-            .concurrent_statements.front().value;
+    auto combined_others_aggregate = malformed_array_aggregate;
+    auto& malformed_array_expression = malformed_array_aggregate.design.units.back()
+                                           .concurrent_statements.front()
+                                           .value;
     malformed_array_expression
         .aggregate_choice_expressions.pop_back();
-    const auto malformed_array_design =
-        fsim::elaboration::elaborate(
-            malformed_array_aggregate.design,
-            "vhdl:work.malformed_array_aggregate(rtl)");
+    const auto malformed_array_design = fsim::elaboration::elaborate(
+        malformed_array_aggregate.design,
+        "vhdl:work.malformed_array_aggregate(rtl)");
     assert(
         !malformed_array_design.ok()
         && has_diagnostic(
             malformed_array_design,
             "FSIM-ELAB-VHARRAYAGG-002"));
-    auto& combined_others_expression =
-        combined_others_aggregate.design.units.back()
-            .concurrent_statements.front().value;
-    const auto combined_choice_span =
-        combined_others_expression.span;
+    auto& combined_others_expression = combined_others_aggregate.design.units.back()
+                                           .concurrent_statements.front()
+                                           .value;
+    const auto combined_choice_span = combined_others_expression.span;
     combined_others_expression
-        .aggregate_choice_expressions.front().push_back(
-            fsim::frontend::Expression{
+        .aggregate_choice_expressions.front()
+        .push_back(
+            fsim::frontend::Expression {
                 fsim::frontend::ExpressionKind::IntegerLiteral,
                 "0",
-                {},
-                combined_choice_span});
-    const auto combined_others_design =
-        fsim::elaboration::elaborate(
-            combined_others_aggregate.design,
-            "vhdl:work.malformed_array_aggregate(rtl)");
+                { },
+                combined_choice_span });
+    const auto combined_others_design = fsim::elaboration::elaborate(
+        combined_others_aggregate.design,
+        "vhdl:work.malformed_array_aggregate(rtl)");
     assert(
         !combined_others_design.ok()
         && has_diagnostic(
             combined_others_design,
             "FSIM-ELAB-VHARRAYAGG-008"));
 
-    const auto foreign_array_parent =
-        fsim::frontend::parse_text(
-            "foreign_array_parent.sv",
-            R"(
+    const auto foreign_array_parent = fsim::frontend::parse_text(
+        "foreign_array_parent.sv",
+        R"(
 module foreign_array_parent;
   logic [3:0] value;
   invalid_array_child child(.value(value));
 endmodule
 )",
-            fsim::frontend::Language::SystemVerilog2017);
+        fsim::frontend::Language::SystemVerilog2017);
     assert(foreign_array_parent.ok());
-    auto mixed_array_design =
-        invalid_array_source.design;
+    auto mixed_array_design = invalid_array_source.design;
     mixed_array_design.units.insert(
         mixed_array_design.units.end(),
         foreign_array_parent.design.units.begin(),
         foreign_array_parent.design.units.end());
     const std::vector<fsim::elaboration::Binding>
-        foreign_array_binding{
-            {
-                "foreign_array_parent.child",
+        foreign_array_binding {
+            { "foreign_array_parent.child",
                 "vhdl:work.invalid_array_child(rtl)",
-                std::nullopt}};
-    const auto rejected_foreign_array =
-        fsim::elaboration::elaborate(
-            mixed_array_design,
-            "sv:work.foreign_array_parent",
-            foreign_array_binding);
+                std::nullopt }
+        };
+    const auto rejected_foreign_array = fsim::elaboration::elaborate(
+        mixed_array_design,
+        "sv:work.foreign_array_parent",
+        foreign_array_binding);
     assert(
         !rejected_foreign_array.ok()
         && has_diagnostic(
@@ -1883,10 +1772,9 @@ endmodule
     assert(random_design.ok());
     std::vector<fsim::runtime::simir::RandomValue> random_operations;
     for (const auto& operation :
-         random_design.design->processes().front().operations) {
-        if (const auto* random =
-                fsim::runtime::simir::operation_get_if<fsim::runtime::simir::RandomValue>(
-                    &operation)) {
+        random_design.design->processes().front().operations) {
+        if (const auto* random = fsim::runtime::simir::operation_get_if<fsim::runtime::simir::RandomValue>(
+                &operation)) {
             random_operations.push_back(*random);
         }
     }
@@ -1907,76 +1795,84 @@ endmodule
         && random_operations[5].maximum
         && random_operations[5].minimum);
 
-    const auto invalid_random_source =
-        fsim::frontend::parse_text(
-            "invalid_random.sv",
-            R"(
+    const auto invalid_random_source = fsim::frontend::parse_text(
+        "invalid_random.sv",
+        R"(
 module invalid_random;
   logic [31:0] q;
   initial begin
     q = $urandom(1);
-    q = $urandom_range();
-    q = $urandom_range(1, 2, 3);
   end
 endmodule
 )",
-            fsim::frontend::Language::SystemVerilog2017);
+        fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_random_source.ok());
-    const auto invalid_random_design =
-        fsim::elaboration::elaborate(
-            invalid_random_source.design,
-            "sv:work.invalid_random");
+    const auto invalid_random_design = fsim::elaboration::elaborate(
+        invalid_random_source.design,
+        "sv:work.invalid_random");
     assert(!invalid_random_design.ok());
     assert(
         has_diagnostic(
             invalid_random_design, "FSIM-ELAB-104"));
 
-    const auto verilog_random_source =
-        fsim::frontend::parse_text(
-            "verilog_random.v",
-            R"(
+    const auto invalid_random_arity = fsim::frontend::parse_text(
+        "invalid_random_arity.sv",
+        R"(module invalid_random_arity;
+  logic [31:0] q;
+  initial begin
+    q = $urandom_range();
+    q = $urandom_range(1, 2, 3);
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(!invalid_random_arity.ok());
+    assert(std::ranges::count_if(
+               invalid_random_arity.diagnostics,
+               [](const auto& diagnostic) {
+                   return diagnostic.code == "FSIM-SV-SEM-075";
+               })
+        == 2);
+
+    const auto verilog_random_source = fsim::frontend::parse_text(
+        "verilog_random.v",
+        R"(
 module verilog_random;
   reg [31:0] q;
   initial q = $random;
 endmodule
 )",
-            fsim::frontend::Language::Verilog2005);
+        fsim::frontend::Language::Verilog2005);
     assert(verilog_random_source.ok());
-    const auto verilog_random_design =
-        fsim::elaboration::elaborate(
-            verilog_random_source.design,
-            "verilog:work.verilog_random");
+    const auto verilog_random_design = fsim::elaboration::elaborate(
+        verilog_random_source.design,
+        "verilog:work.verilog_random");
     assert(verilog_random_design.ok());
     assert(std::ranges::any_of(
         verilog_random_design.design->processes().front().operations,
         [](const auto& operation) {
-          const auto* random =
-              fsim::runtime::simir::operation_get_if<fsim::runtime::simir::RandomValue>(
-                  &operation);
-          return random
-              && random->kind
-                  == fsim::runtime::simir::RandomKind::random;
+            const auto* random = fsim::runtime::simir::operation_get_if<fsim::runtime::simir::RandomValue>(
+                &operation);
+            return random
+                && random->kind
+                == fsim::runtime::simir::RandomKind::random;
         }));
 
-    const auto invalid_verilog_random_source =
-        fsim::frontend::parse_text(
-            "invalid_verilog_random.v",
-            R"(
+    const auto invalid_verilog_random_source = fsim::frontend::parse_text(
+        "invalid_verilog_random.v",
+        R"(
 module invalid_verilog_random;
   reg [31:0] q;
   initial q = $urandom;
 endmodule
 )",
-            fsim::frontend::Language::Verilog2005);
-    assert(invalid_verilog_random_source.ok());
-    const auto invalid_verilog_random_design =
-        fsim::elaboration::elaborate(
-            invalid_verilog_random_source.design,
-            "verilog:work.invalid_verilog_random");
-    assert(!invalid_verilog_random_design.ok());
-    assert(
-        has_diagnostic(
-            invalid_verilog_random_design, "FSIM-ELAB-104"));
+        fsim::frontend::Language::Verilog2005);
+    assert(!invalid_verilog_random_source.ok());
+    assert(std::ranges::any_of(
+        invalid_verilog_random_source.diagnostics,
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PARSE-350";
+        }));
 }
 
 } // namespace fsim::tests::elaboration

@@ -832,6 +832,14 @@ void VerilogParser::parse_optional_signedness(Type& type)
         type.is_signed = true;
     } else if (match_keyword("unsigned")) {
         type.is_signed = false;
+    } else if (at(TokenKind::Identifier)
+        && (current().text == "signed" || current().text == "unsigned")) {
+        const auto signedness = advance();
+        (void)require_standard(
+            "net or variable signedness",
+            StandardRevision::Verilog2001,
+            signedness);
+        type.is_signed = signedness.text == "signed";
     }
 }
 

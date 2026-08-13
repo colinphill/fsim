@@ -47,6 +47,9 @@ constexpr bool valid_archive_enum(const T value) noexcept
     if constexpr (std::same_as<T, frontend::UnitKind>) {
         return value >= frontend::UnitKind::VhdlEntity
             && value <= frontend::UnitKind::SystemVerilogBind;
+    } else if constexpr (std::same_as<T, frontend::StandardRevision>) {
+        return value >= frontend::StandardRevision::Vhdl1987
+            && value <= frontend::StandardRevision::SystemVerilog2017;
     } else if constexpr (
         std::same_as<T, frontend::SystemVerilogConfigurationRuleKind>) {
         return value >= frontend::SystemVerilogConfigurationRuleKind::Instance

@@ -109,6 +109,7 @@ struct Session {
   std::vector<std::string> process_names;
   std::vector<VariableObject> variables;
   std::vector<DriverObject> drivers;
+  std::optional<fsim::app::VerilogScopeProvenance> query_provenance;
   std::vector<std::optional<std::size_t>> systemc_scope_by_object;
   std::vector<std::optional<std::size_t>> systemc_object_by_process;
   // Legacy SystemC object ordinals are retained solely as the v1 handle ABI

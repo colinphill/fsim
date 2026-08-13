@@ -87,6 +87,14 @@ literal to match the declared width exactly, preserves signedness and four-state
 `X`/`Z` planes, rejects unknown bits for two-state enums, and detects duplicate
 names or exact values without projecting through a host integer.
 
+Published HDL objects also carry Batch 167 provenance metadata: exact owning
+semantic-unit and source identities, the canonical Verilog-1995/2001/
+2001-noconfig or SystemVerilog-2005/2009/2012/2017 standard, and the independent
+compatibility profile. Child signals, ports, processes and scopes inherit their
+owning unit's record without exposing compiler/cache identities. The metadata
+uses size-gated append-only fields and an explicit provenance flag; a partial
+record is invalid rather than being published with inferred defaults.
+
 ## Time, callbacks, control, and system callables
 
 Time queries preserve 64-bit ticks, scaled-real conversion, time unit,

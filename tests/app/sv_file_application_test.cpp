@@ -95,7 +95,7 @@ fsim::project::Config make_config(
     config.run.max_deltas = 1000;
     fsim::project::SourceSet sources;
     sources.language = fsim::project::Language::system_verilog;
-    sources.standard = "2017";
+    sources.standard = "2005";
     sources.library = "work";
     sources.compilation_unit = "file";
     sources.files = { stable, source };
@@ -1339,5 +1339,31 @@ endmodule
         static_cast<void>(warm);
 #endif
     }
+
+    const auto later_service_source = directory.path / "later-service.sv";
+    write_text(
+        later_service_source,
+        "module later_service; logic value; int result; initial result = "
+        "$rose_gclk(value); endmodule\n");
+    fsim::project::Config later_service_config;
+    later_service_config.base_directory = directory.path;
+    later_service_config.project.name = "later-service";
+    later_service_config.project.top = "sv:work.later_service";
+    fsim::project::SourceSet later_service_sources;
+    later_service_sources.language = fsim::project::Language::system_verilog;
+    later_service_sources.standard = "2005";
+    later_service_sources.library = "work";
+    later_service_sources.files = { later_service_source };
+    later_service_config.source_sets.push_back(
+        std::move(later_service_sources));
+    fsim::diagnostic::Engine later_service_diagnostics;
+    const auto later_service_project = fsim::app::build_project(
+        later_service_config, later_service_diagnostics);
+    assert(!later_service_project);
+    assert(std::ranges::any_of(
+        later_service_diagnostics.diagnostics(),
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PARSE-350";
+        }));
     return 0;
 }

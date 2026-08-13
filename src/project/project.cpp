@@ -3,6 +3,7 @@
 #include "fsim/support/path.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cctype>
 #include <fstream>
@@ -856,7 +857,8 @@ class Parser {
       return;
     }
     if (key == "files" || key == "include_dirs" ||
-        key == "include_directories" || key == "defines") {
+        key == "include_directories" || key == "defines"
+        || key == "compatibility") {
       const auto values = string_array(value, key);
       if (!values.has_value()) {
         return;
@@ -870,6 +872,28 @@ class Parser {
         source_has_files_[context_index_] = true;
       } else if (key == "defines") {
         source_set.defines = *values;
+      } else if (key == "compatibility") {
+        for (const auto& item : *values) {
+          const auto canonical = parse_compatibility_switch(item);
+          if (!canonical) {
+            diagnostics_.error(
+                std::string(kValueCode),
+                "unsupported compatibility switch '" + item + "'",
+                value.span);
+            continue;
+          }
+          if (std::ranges::find(
+                  source_set.compatibility_switches, *canonical)
+              != source_set.compatibility_switches.end()) {
+            diagnostics_.error(
+                std::string(kDuplicateCode),
+                "duplicate compatibility switch '"
+                    + std::string { *canonical } + "'",
+                value.span);
+            continue;
+          }
+          source_set.compatibility_switches.emplace_back(*canonical);
+        }
       } else {
         source_set.include_directories.reserve(values->size());
         for (const auto& item : *values) {
@@ -1246,6 +1270,15 @@ class Parser {
         source_set.standard = default_standard(source_set.language);
       }
       validate_standard(source_set, index, document_span);
+      if (!source_set.compatibility_switches.empty()
+          && source_set.language != Language::verilog
+          && source_set.language != Language::system_verilog) {
+        diagnostics_.error(
+            std::string(kValueCode),
+            "[[source_set]] #" + std::to_string(index + 1)
+                + " compatibility switches are valid only for Verilog/SystemVerilog",
+            document_span);
+      }
       if (source_set.uvm_release != SystemVerilogUvmRelease::none
           && source_set.language != Language::system_verilog) {
         diagnostics_.error(
@@ -1617,6 +1650,36 @@ std::string_view to_string(const VhdlStandard standard) noexcept
     return "2008";
 }
 
+std::string_view to_string(const VerilogStandard standard) noexcept
+{
+    switch (standard) {
+    case VerilogStandard::verilog_1995:
+        return "1995";
+    case VerilogStandard::verilog_2001:
+        return "2001";
+    case VerilogStandard::verilog_2001_noconfig:
+        return "2001-noconfig";
+    case VerilogStandard::verilog_2005:
+        return "2005";
+    }
+    return "2005";
+}
+
+std::string_view to_string(const SystemVerilogStandard standard) noexcept
+{
+    switch (standard) {
+    case SystemVerilogStandard::systemverilog_2005:
+        return "2005";
+    case SystemVerilogStandard::systemverilog_2009:
+        return "2009";
+    case SystemVerilogStandard::systemverilog_2012:
+        return "2012";
+    case SystemVerilogStandard::systemverilog_2017:
+        return "2017";
+    }
+    return "2017";
+}
+
 std::string_view to_string(const Optimization optimization) noexcept
 {
     switch (optimization) {
@@ -1667,10 +1730,21 @@ std::optional<Language> parse_language(const std::string_view spelling) noexcept
         || normalized == "vhdl-2008") {
         return Language::vhdl;
     }
-    if (normalized == "verilog" || normalized == "verilog-2005" || normalized == "v") {
+    if (normalized == "verilog" || normalized == "v"
+        || normalized == "verilog-95" || normalized == "verilog-1995"
+        || normalized == "verilog-01" || normalized == "verilog-2001"
+        || normalized == "verilog-2001-noconfig"
+        || normalized == "verilog-05" || normalized == "verilog-2005") {
         return Language::verilog;
     }
-    if (normalized == "systemverilog" || normalized == "system-verilog" || normalized == "sv") {
+    if (normalized == "systemverilog" || normalized == "system-verilog"
+        || normalized == "sv" || normalized == "sv-05"
+        || normalized == "sv-2005" || normalized == "systemverilog-2005"
+        || normalized == "sv-09" || normalized == "sv-2009"
+        || normalized == "systemverilog-2009" || normalized == "sv-12"
+        || normalized == "sv-2012" || normalized == "systemverilog-2012"
+        || normalized == "sv-17" || normalized == "sv-2017"
+        || normalized == "systemverilog-2017") {
         return Language::system_verilog;
     }
     if (normalized == "systemc" || normalized == "sc") {
@@ -1706,6 +1780,60 @@ std::optional<VhdlStandard> parse_vhdl_standard(
     return std::nullopt;
 }
 
+std::optional<VerilogStandard> parse_verilog_standard(
+    const std::string_view spelling) noexcept
+{
+    const auto normalized = lowercase(spelling);
+    if (normalized == "95" || normalized == "1995"
+        || normalized == "v95" || normalized == "verilog-95"
+        || normalized == "verilog-1995") {
+        return VerilogStandard::verilog_1995;
+    }
+    if (normalized == "01" || normalized == "2001"
+        || normalized == "v2001" || normalized == "verilog-01"
+        || normalized == "verilog-2001") {
+        return VerilogStandard::verilog_2001;
+    }
+    if (normalized == "2001-noconfig"
+        || normalized == "v2001-noconfig"
+        || normalized == "verilog-2001-noconfig") {
+        return VerilogStandard::verilog_2001_noconfig;
+    }
+    if (normalized == "05" || normalized == "2005"
+        || normalized == "v2005" || normalized == "verilog-05"
+        || normalized == "verilog-2005") {
+        return VerilogStandard::verilog_2005;
+    }
+    return std::nullopt;
+}
+
+std::optional<SystemVerilogStandard> parse_systemverilog_standard(
+    const std::string_view spelling) noexcept
+{
+    const auto normalized = lowercase(spelling);
+    if (normalized == "05" || normalized == "2005"
+        || normalized == "sv-05" || normalized == "sv-2005"
+        || normalized == "systemverilog-2005") {
+        return SystemVerilogStandard::systemverilog_2005;
+    }
+    if (normalized == "09" || normalized == "2009"
+        || normalized == "sv-09" || normalized == "sv-2009"
+        || normalized == "systemverilog-2009") {
+        return SystemVerilogStandard::systemverilog_2009;
+    }
+    if (normalized == "12" || normalized == "2012"
+        || normalized == "sv-12" || normalized == "sv-2012"
+        || normalized == "systemverilog-2012") {
+        return SystemVerilogStandard::systemverilog_2012;
+    }
+    if (normalized == "17" || normalized == "2017"
+        || normalized == "sv-17" || normalized == "sv-2017"
+        || normalized == "systemverilog-2017") {
+        return SystemVerilogStandard::systemverilog_2017;
+    }
+    return std::nullopt;
+}
+
 std::string_view default_standard(const Language language) noexcept
 {
     switch (language) {
@@ -1733,19 +1861,13 @@ std::optional<std::string_view> canonical_standard(
         }
         break;
     case Language::verilog:
-        if (normalized == "2005") {
-            return "2005";
-        }
-        if (normalized == "2001") {
-            return "2001";
+        if (const auto standard = parse_verilog_standard(normalized)) {
+            return to_string(*standard);
         }
         break;
     case Language::system_verilog:
-        if (normalized == "2017") {
-            return "2017";
-        }
-        if (normalized == "2012") {
-            return "2012";
+        if (const auto standard = parse_systemverilog_standard(normalized)) {
+            return to_string(*standard);
         }
         break;
     case Language::systemc:
@@ -1755,6 +1877,63 @@ std::optional<std::string_view> canonical_standard(
         break;
     }
     return std::nullopt;
+}
+
+std::optional<std::string_view> parse_compatibility_switch(
+    const std::string_view spelling) noexcept
+{
+    auto normalized = lowercase(spelling);
+    std::ranges::replace(normalized, '_', '-');
+    constexpr std::array switches {
+        std::string_view { "keyword-profile" },
+        std::string_view { "implicit-net" },
+        std::string_view { "port-connection" },
+        std::string_view { "sizing" },
+        std::string_view { "lifetime" },
+        std::string_view { "scheduler-assertion" },
+        std::string_view { "configuration" },
+    };
+    const auto found = std::ranges::find(switches, normalized);
+    return found == switches.end()
+        ? std::nullopt
+        : std::optional<std::string_view> { *found };
+}
+
+std::string compatibility_profile(
+    const std::vector<std::string>& switches)
+{
+    if (switches.empty()) {
+        return "none";
+    }
+    std::vector<std::string_view> canonical;
+    canonical.reserve(switches.size());
+    for (const auto& spelling : switches) {
+        if (const auto parsed = parse_compatibility_switch(spelling)) {
+            canonical.push_back(*parsed);
+        }
+    }
+    constexpr std::array order {
+        std::string_view { "keyword-profile" },
+        std::string_view { "implicit-net" },
+        std::string_view { "port-connection" },
+        std::string_view { "sizing" },
+        std::string_view { "lifetime" },
+        std::string_view { "scheduler-assertion" },
+        std::string_view { "configuration" },
+    };
+    std::ranges::sort(canonical, [&](const auto left, const auto right) {
+        return std::ranges::find(order, left)
+            < std::ranges::find(order, right);
+    });
+    canonical.erase(std::unique(canonical.begin(), canonical.end()), canonical.end());
+    std::string result;
+    for (const auto item : canonical) {
+        if (!result.empty()) {
+            result.push_back(',');
+        }
+        result.append(item);
+    }
+    return result.empty() ? "none" : result;
 }
 
 std::optional<SystemVerilogUvmRelease> parse_systemverilog_uvm_release(

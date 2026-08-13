@@ -602,6 +602,25 @@ fsim_status_t fsim_session_get_object_info(
     const auto write_source_column =
         FSIM_STRUCT_CONTAINS(
             out_info->struct_size, fsim_object_info_t, source_column);
+    const auto write_provenance_unit = FSIM_STRUCT_CONTAINS(
+        out_info->struct_size, fsim_object_info_t, provenance_unit);
+    const auto write_provenance_source_path = FSIM_STRUCT_CONTAINS(
+        out_info->struct_size, fsim_object_info_t, provenance_source_path);
+    const auto write_provenance_language = FSIM_STRUCT_CONTAINS(
+        out_info->struct_size, fsim_object_info_t, provenance_language);
+    const auto write_provenance_standard = FSIM_STRUCT_CONTAINS(
+        out_info->struct_size, fsim_object_info_t, provenance_standard);
+    const auto write_provenance_profile = FSIM_STRUCT_CONTAINS(
+        out_info->struct_size, fsim_object_info_t,
+        provenance_compatibility_profile);
+    const auto write_provenance_unit_id = FSIM_STRUCT_CONTAINS(
+        out_info->struct_size, fsim_object_info_t, provenance_unit_id);
+    const auto write_provenance_source_id = FSIM_STRUCT_CONTAINS(
+        out_info->struct_size, fsim_object_info_t, provenance_source_id);
+    const auto write_provenance_source_line = FSIM_STRUCT_CONTAINS(
+        out_info->struct_size, fsim_object_info_t, provenance_source_line);
+    const auto write_provenance_source_column = FSIM_STRUCT_CONTAINS(
+        out_info->struct_size, fsim_object_info_t, provenance_source_column);
     if (write_source_path) {
       out_info->source_path = view("");
     }
@@ -611,6 +630,25 @@ fsim_status_t fsim_session_get_object_info(
     if (write_source_column) {
       out_info->source_column = 0;
     }
+    if (write_provenance_unit) out_info->provenance_unit = view("");
+    if (write_provenance_source_path) {
+      out_info->provenance_source_path = view("");
+    }
+    if (write_provenance_language) out_info->provenance_language = view("");
+    if (write_provenance_standard) out_info->provenance_standard = view("");
+    if (write_provenance_profile) {
+      out_info->provenance_compatibility_profile = view("");
+    }
+    if (write_provenance_unit_id) {
+      out_info->provenance_unit_id = std::numeric_limits<std::uint32_t>::max();
+    }
+    if (write_provenance_source_id) {
+      out_info->provenance_source_id
+          = std::numeric_limits<std::uint32_t>::max();
+    }
+    if (write_provenance_source_line) out_info->provenance_source_line = 0;
+    if (write_provenance_source_column) out_info->provenance_source_column = 0;
+    value.query_provenance.reset();
     const auto set_source =
         [&](const std::string_view path,
             const std::uint32_t line,
@@ -631,6 +669,49 @@ fsim_status_t fsim_session_get_object_info(
           }
           out_info->flags |= FSIM_OBJECT_FLAG_HAS_SOURCE;
         };
+    const auto set_provenance = [&](const std::string_view path) {
+      const bool requested = write_provenance_unit
+          || write_provenance_source_path || write_provenance_language
+          || write_provenance_standard || write_provenance_profile
+          || write_provenance_unit_id || write_provenance_source_id
+          || write_provenance_source_line || write_provenance_source_column;
+      if (!requested) return;
+      value.query_provenance
+          = value.simulation->verilog_scope_provenance(path);
+      if (!value.query_provenance) return;
+      const auto& provenance = *value.query_provenance;
+      if (write_provenance_unit) {
+        out_info->provenance_unit = view(provenance.semantic_unit);
+      }
+      if (write_provenance_source_path) {
+        out_info->provenance_source_path = view(provenance.source_path);
+      }
+      if (write_provenance_language) {
+        out_info->provenance_language = view(
+            provenance.language == fsim::semantic::Language::verilog
+                ? "verilog" : "systemverilog");
+      }
+      if (write_provenance_standard) {
+        out_info->provenance_standard = view(provenance.standard);
+      }
+      if (write_provenance_profile) {
+        out_info->provenance_compatibility_profile
+            = view(provenance.compatibility_profile);
+      }
+      if (write_provenance_unit_id) {
+        out_info->provenance_unit_id = provenance.unit.value();
+      }
+      if (write_provenance_source_id) {
+        out_info->provenance_source_id = provenance.source.value();
+      }
+      if (write_provenance_source_line) {
+        out_info->provenance_source_line = provenance.source_line;
+      }
+      if (write_provenance_source_column) {
+        out_info->provenance_source_column = provenance.source_column;
+      }
+      out_info->flags |= FSIM_OBJECT_FLAG_HAS_PROVENANCE;
+    };
     if (object == root_handle(value)) {
       const auto& design = value.simulation->design_ir();
       const auto name = has_synthetic_root(design)
@@ -642,6 +723,7 @@ fsim_status_t fsim_session_get_object_info(
       out_info->name = view(name);
       out_info->full_name = view(name);
       out_info->type_name = view("design");
+      set_provenance(name);
       return FSIM_STATUS_OK;
     }
     if (const auto systemc = object_systemc(value, object)) {
@@ -738,6 +820,7 @@ fsim_status_t fsim_session_get_object_info(
           value, design_object != nullptr ? design_object->source
                                           : process->source);
       set_source(source.path, source.line, source.column);
+      set_provenance(path);
       return FSIM_STATUS_OK;
     }
     if (const auto signal = object_signal(value, object)) {
@@ -771,6 +854,7 @@ fsim_status_t fsim_session_get_object_info(
       }
       const auto source = design_source(value, design_object->source);
       set_source(source.path, source.line, source.column);
+      set_provenance(design_object->path);
       return FSIM_STATUS_OK;
     }
     if (const auto process = object_process(value, object)) {
@@ -789,6 +873,7 @@ fsim_status_t fsim_session_get_object_info(
       out_info->type_name = view("process");
       const auto source = design_source(value, occurrence->source);
       set_source(source.path, source.line, source.column);
+      set_provenance(public_name);
       return FSIM_STATUS_OK;
     }
     if (const auto scope = object_scope(value, object)) {
@@ -809,6 +894,7 @@ fsim_status_t fsim_session_get_object_info(
       }
       set_source(
           info.source.path, info.source.line, info.source.column);
+      set_provenance(info.full_name);
       return FSIM_STATUS_OK;
     }
     if (const auto variable = object_variable(value, object)) {
@@ -832,6 +918,7 @@ fsim_status_t fsim_session_get_object_info(
       }
       set_source(
           info.source.path, info.source.line, info.source.column);
+      set_provenance(reference.full_name);
       return FSIM_STATUS_OK;
     }
     if (const auto driver = object_driver(value, object)) {
@@ -849,6 +936,7 @@ fsim_status_t fsim_session_get_object_info(
       out_info->type_name = view("driver");
       const auto source = design_source(value, process->source);
       set_source(source.path, source.line, source.column);
+      set_provenance(reference.full_name);
       return FSIM_STATUS_OK;
     }
     return FSIM_STATUS_INVALID_HANDLE;

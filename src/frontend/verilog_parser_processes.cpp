@@ -5,6 +5,9 @@
 
 namespace fsim::frontend {
 
+[[nodiscard]] std::optional<StandardRevision>
+verilog_system_service_standard(std::string_view name);
+
 [[maybe_unused]] constexpr std::string_view
     kRetiredCaseMatchPatternDiagnostic = "FSIM-SV-UNSUPPORTED-042";
 [[maybe_unused]] constexpr std::string_view
@@ -57,6 +60,11 @@ Process VerilogParser::parse_final()
                 && current().text == "final")
         ? advance()
         : expect_keyword("final", false, "FSIM-SV-PARSE-111");
+    (void)require_standard(
+        "a final process",
+        StandardRevision::SystemVerilog2005,
+        start,
+        "FSIM-SV-PARSE-347");
     current_procedural_names_.clear();
     current_procedural_types_.clear();
     Process process;
@@ -430,6 +438,11 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start)
         && at(TokenKind::Identifier, 1);
     const bool inline_variable = built_in_loop_type || named_loop_type;
     if (inline_variable) {
+        (void)require_standard(
+            "an inline procedural loop declaration",
+            StandardRevision::SystemVerilog2005,
+            current(),
+            "FSIM-SV-PARSE-347");
         if (language_ == Language::Verilog2005) {
             error(
                 current(), "FSIM-VERILOG-SEM-013",
@@ -486,6 +499,11 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start)
     if (match(TokenKind::PlusPlus)
         || match(TokenKind::MinusMinus)) {
         prefix_update = previous();
+        (void)require_standard(
+            "an increment or decrement loop update",
+            StandardRevision::SystemVerilog2005,
+            *prefix_update,
+            "FSIM-SV-PARSE-347");
     }
     const auto iteration_variable = expect_identifier("procedural loop iteration variable");
     statement.loop_update_target = Expression {
@@ -507,6 +525,11 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start)
     } else if (
         match(TokenKind::PlusPlus)
         || match(TokenKind::MinusMinus)) {
+        (void)require_standard(
+            "an increment or decrement loop update",
+            StandardRevision::SystemVerilog2005,
+            previous(),
+            "FSIM-SV-PARSE-347");
         update_operation = previous().kind == TokenKind::PlusPlus ? "+" : "-";
         update_operand = Expression {
             ExpressionKind::IntegerLiteral,
@@ -517,6 +540,11 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start)
     } else if (
         match(TokenKind::PlusAssign)
         || match(TokenKind::MinusAssign)) {
+        (void)require_standard(
+            "a compound loop update",
+            StandardRevision::SystemVerilog2005,
+            previous(),
+            "FSIM-SV-PARSE-347");
         update_operation = previous().kind == TokenKind::PlusAssign ? "+" : "-";
         update_operand = parse_expression();
     } else if (match(TokenKind::Assign)) {
@@ -868,12 +896,23 @@ void VerilogParser::parse_nonfatal_report_arguments(
 
 std::optional<Statement> VerilogParser::parse_statement()
 {
+    if (const auto required = verilog_system_service_standard(current().text)) {
+        (void)require_standard(
+            "the system service '" + current().text + "'", *required,
+            current(), "FSIM-SV-PARSE-350");
+    }
+    const auto require_sv2005 = [&](const std::string_view feature,
+                                    const Token& token) {
+        (void)require_standard(feature, StandardRevision::SystemVerilog2005,
+            token, "FSIM-SV-PARSE-347");
+    };
     if (match(TokenKind::ThinArrow)) {
         const auto start = previous();
         Statement statement;
         statement.kind = StatementKind::EventTrigger;
         if (match(TokenKind::Greater)) {
             statement.assignment_kind = AssignmentKind::NonBlocking;
+            require_sv2005("a nonblocking named-event trigger", previous());
             if (language_ == Language::Verilog2005) {
                 error(
                     previous(),
@@ -912,6 +951,13 @@ std::optional<Statement> VerilogParser::parse_statement()
     };
     if (is_case_qualifier()) {
         const auto qualifier_start = advance();
+        (void)require_standard(
+            "case qualifier '" + qualifier_start.text + "'",
+            qualifier_start.text == "unique0"
+                ? StandardRevision::SystemVerilog2009
+                : StandardRevision::SystemVerilog2005,
+            qualifier_start,
+            "FSIM-SV-PARSE-347");
         CaseQualifier qualifier = CaseQualifier::Unique;
         if (qualifier_start.text == "unique0") {
             qualifier = CaseQualifier::Unique0;
@@ -957,6 +1003,7 @@ std::optional<Statement> VerilogParser::parse_statement()
     }
     if (language_ == Language::SystemVerilog2017
         && match_keyword("foreach")) {
+        require_sv2005("a foreach loop", previous());
         return parse_procedural_foreach_statement(previous());
     }
     if (match_keyword("repeat")) {
@@ -967,6 +1014,7 @@ std::optional<Statement> VerilogParser::parse_statement()
     }
     if (language_ == Language::SystemVerilog2017
         && match_keyword("do")) {
+        require_sv2005("a do-while loop", previous());
         return parse_do_while_statement(previous());
     }
     if (match_keyword("forever")) {
@@ -975,6 +1023,7 @@ std::optional<Statement> VerilogParser::parse_statement()
     if (language_ == Language::SystemVerilog2017
         && (keyword("break") || keyword("continue"))) {
         const auto start = advance();
+        require_sv2005("a " + start.text + " statement", start);
         const auto is_break = start.text == "break";
         if (current_loop_depth_ == 0) {
             error(
@@ -996,6 +1045,7 @@ std::optional<Statement> VerilogParser::parse_statement()
     if (language_ == Language::SystemVerilog2017
         && match_keyword("return")) {
         const auto start = previous();
+        require_sv2005("a return statement", start);
         Statement statement;
         statement.kind = StatementKind::Return;
         if (!in_function_ && !in_task_) {
@@ -1020,6 +1070,7 @@ std::optional<Statement> VerilogParser::parse_statement()
     if (language_ == Language::SystemVerilog2017
         && match_keyword("wait_order")) {
         const auto start = previous();
+        require_sv2005("a wait_order statement", start);
         Statement statement;
         statement.kind = StatementKind::WaitOrder;
         expect(
@@ -1080,6 +1131,7 @@ std::optional<Statement> VerilogParser::parse_statement()
         Statement statement;
         if (match_keyword("fork")) {
             statement.kind = StatementKind::WaitFork;
+            require_sv2005("wait fork", start);
             if (language_ != Language::SystemVerilog2017) {
                 error(
                     start, "FSIM-SV-SEM-107",
@@ -1117,6 +1169,7 @@ std::optional<Statement> VerilogParser::parse_statement()
         Statement statement;
         if (match_keyword("fork")) {
             statement.kind = StatementKind::DisableFork;
+            require_sv2005("disable fork", start);
             if (language_ != Language::SystemVerilog2017) {
                 error(
                     start, "FSIM-SV-SEM-107",
@@ -1150,9 +1203,16 @@ std::optional<Statement> VerilogParser::parse_statement()
         statement.span = span_from(start, previous());
         return statement;
     }
-    if (language_ == Language::SystemVerilog2017
-        && match_keyword("assert")) {
+    if ((language_ == Language::SystemVerilog2017
+            && match_keyword("assert"))
+        || (at(TokenKind::Identifier)
+            && current().text == "assert" && (advance(), true))) {
         const auto start = previous();
+        (void)require_standard(
+            "an immediate assertion",
+            StandardRevision::SystemVerilog2005,
+            start,
+            "FSIM-SV-PARSE-348");
         Statement statement;
         statement.kind = StatementKind::Assert;
         expect(TokenKind::LeftParen, "'(' after assert",
@@ -2150,6 +2210,8 @@ std::optional<Statement> VerilogParser::parse_statement()
         if (match(TokenKind::PlusPlus)
             || match(TokenKind::MinusMinus)) {
             prefix_update = previous();
+            require_sv2005(
+                "an increment or decrement statement", *prefix_update);
         }
         Expression target = at(TokenKind::LeftBrace)
             ? parse_expression()
@@ -2165,6 +2227,8 @@ std::optional<Statement> VerilogParser::parse_statement()
             update_kind = ProceduralUpdateKind::Prefix;
         } else if (match(TokenKind::PlusPlus)
             || match(TokenKind::MinusMinus)) {
+            require_sv2005(
+                "an increment or decrement statement", previous());
             update_operation = previous().kind == TokenKind::PlusPlus ? "+" : "-";
             unit_update = true;
             update_kind = ProceduralUpdateKind::Postfix;
@@ -2206,6 +2270,7 @@ std::optional<Statement> VerilogParser::parse_statement()
                 }
             }(current().kind);
             if (compound_operation) {
+                require_sv2005("a compound assignment", current());
                 update_operation = *compound_operation;
                 update_kind = ProceduralUpdateKind::Compound;
                 advance();

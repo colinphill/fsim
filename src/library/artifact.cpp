@@ -319,6 +319,11 @@ std::string serialize_metadata(const Metadata& metadata) {
     if (!source.language.empty()) {
       output << "language = \"" << escape(source.language) << "\"\n";
     }
+    if (!source.standard.empty()) {
+      output << "standard = \"" << escape(source.standard) << "\"\n"
+             << "compatibility_profile = \""
+             << escape(source.compatibility_profile) << "\"\n";
+    }
     if (!source.artifact.empty()) {
       output << "artifact = \""
              << escape(fsim::support::path_to_utf8(source.artifact))
@@ -339,7 +344,10 @@ std::string serialize_metadata(const Metadata& metadata) {
     }
     output << "artifact = \""
            << escape(fsim::support::path_to_utf8(unit.artifact)) << "\"\n"
-           << "checksum = \"" << escape(unit.checksum) << "\"\n";
+           << "checksum = \"" << escape(unit.checksum) << "\"\n"
+           << "standard = \"" << escape(unit.standard) << "\"\n"
+           << "compatibility_profile = \""
+           << escape(unit.compatibility_profile) << "\"\n";
   }
   for (const auto& native : metadata.native_artifacts) {
     output << "\n[[native]]\n"
@@ -557,6 +565,10 @@ std::optional<Metadata> parse_metadata(
         source_entry.checksum = *text;
       } else if (key == "language") {
         source_entry.language = *text;
+      } else if (key == "standard") {
+        source_entry.standard = *text;
+      } else if (key == "compatibility_profile") {
+        source_entry.compatibility_profile = *text;
       } else {
         error(
             diagnostics, kSyntaxCode,
@@ -612,6 +624,10 @@ std::optional<Metadata> parse_metadata(
       unit.artifact = fsim::support::path_from_utf8(*text);
     } else if (key == "checksum") {
       unit.checksum = *text;
+    } else if (key == "standard") {
+      unit.standard = *text;
+    } else if (key == "compatibility_profile") {
+      unit.compatibility_profile = *text;
     } else {
       error(
           diagnostics, kSyntaxCode,
@@ -699,25 +715,49 @@ std::optional<Metadata> parse_metadata(
         || source_entry.language == "verilog"
         || source_entry.language == "systemverilog"
         || source_entry.language == "systemc";
+    const bool known_standard = source_entry.language == "systemc"
+        ? source_entry.standard.empty()
+        : std::ranges::any_of(
+              metadata.standards, [&](const LanguageStandard& standard) {
+                return standard.language == source_entry.language
+                    && standard.revision == source_entry.standard;
+              });
     const bool unique_payload = source_entry.artifact.empty()
         || payload_paths.insert(
             fsim::support::path_to_utf8(source_entry.artifact)).second;
     if (source_entry.logical_name.empty()
         || !source_names.insert(source_entry.logical_name).second
-        || (!no_text && !with_text) || !known_language || !unique_payload) {
+        || (!no_text && !with_text) || !known_language || !known_standard
+        || (source_entry.language != "systemc"
+            && (source_entry.compatibility_profile.empty()
+                || (source_entry.language == "vhdl"
+                    && source_entry.compatibility_profile == "none")))
+        || !unique_payload) {
       error(
           diagnostics, kValueCode,
-          "every [[source]] requires a unique logical_name and either no payload or a contained artifact with lowercase SHA-256 checksum",
+          "every [[source]] requires a unique logical_name, matching standard "
+          "and compatibility profile, and either no payload or a contained "
+          "artifact with lowercase SHA-256 checksum",
           source_name, document_line);
     }
   }
   for (const auto& unit : metadata.units) {
+    const bool known_standard = std::ranges::any_of(
+        metadata.standards, [&](const LanguageStandard& standard) {
+          return standard.language == unit.language
+              && standard.revision == unit.standard;
+        });
     if (unit.language.empty() || unit.kind.empty() || unit.name.empty()
         || !safe_relative_path(unit.artifact)
-        || !checksum_spelling(unit.checksum)) {
+        || !checksum_spelling(unit.checksum) || !known_standard
+        || unit.compatibility_profile.empty()
+        || (unit.language == "vhdl"
+            && unit.compatibility_profile == "none")) {
       error(
           diagnostics, kValueCode,
-          "every [[unit]] requires language, kind, name, a contained relative artifact path, and a lowercase SHA-256 checksum",
+          "every [[unit]] requires language, selected standard, compatibility "
+          "profile, kind, name, a contained relative artifact path, and a "
+          "lowercase SHA-256 checksum",
           source_name, document_line);
     }
   }

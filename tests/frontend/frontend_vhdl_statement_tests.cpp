@@ -1770,19 +1770,23 @@ module initializers(
 endmodule
 )",
         Language::SystemVerilog2017);
-    require(!sv.ok(), "SV defaults and initializers must be rejected");
+    require(!sv.ok(), "an unsupported SV port default must be rejected");
     bool port_default_sv = false;
-    bool declaration_initializer = false;
     for (const auto& diagnostic : sv.diagnostics) {
         port_default_sv = port_default_sv
             || diagnostic.code == "FSIM-SV-UNSUPPORTED-010";
-        declaration_initializer = declaration_initializer
-            || diagnostic.code == "FSIM-SV-UNSUPPORTED-011";
     }
     require(port_default_sv, "SV port default needs a targeted diagnostic");
+    const auto* sv_unit = sv.design.find(
+        UnitKind::VerilogModule, "initializers");
     require(
-        declaration_initializer,
-        "SV declaration initializer needs a targeted diagnostic");
+        sv_unit != nullptr && sv_unit->processes.size() == 1
+            && sv_unit->processes.front().name
+                == "$declaration_initializer_state"
+            && sv_unit->processes.front().statements.size() == 1
+            && sv_unit->processes.front().statements.front().value.text
+                == "1'b1",
+        "SV declaration initializers become explicit initial-process HIR");
 }
 
 void test_duplicate_declarations_are_rejected()

@@ -87,6 +87,386 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     commit or push implementation before Change 20. After that implementation
     commit, save and push the exact Batch 168 restart plan and clear context
     before Batch 168 implementation.
+18. Batch 167 Change 1 is complete in the intentionally dirty worktree. The
+    registered planning contract governs two 17-row active ledgers assigned
+    one-to-one to Changes 2-18. The standard-mode ledger spans all six older
+    revisions through selection, preprocessing, language semantics, services,
+    execution, persistence, public provenance, corpora and closure. The
+    compatibility ledger independently governs keyword-profile, implicit-net,
+    port-connection, sizing, lifetime, scheduler/assertion and configuration
+    switches at the same boundaries. Every row has exact existing owner paths;
+    missing, duplicate, reordered, misplaced or drifted ownership fails. Their
+    SHA-256 identities are
+    `4522bb8b618f79cd7c60cbe77c4842c891189450723a6f7278fbfa91ad37ebbf`
+    and
+    `4cb6f89b24176bb58715acab291128397345d5022445919b100f43e22dc0e549`.
+    The live baseline remains 2,236 diagnostics, 887 bounded sources and 332
+    authored test/control files while SPDX ownership advances to 1,032.
+    Preserve Change 1 and begin Change 2 without reset, commit, push, sanitizer
+    or hosted-CI inspection before Change 20.
+19. Batch 167 Change 2 is complete in the same intentionally dirty worktree.
+    Public typed Verilog-1995/2001/2001-noconfig/2005 and SystemVerilog-2005/
+    2009/2012/2017 identities now canonicalize documented manifest, source-set
+    and direct-CLI aliases; absent selection retains the Verilog-2005 and
+    SystemVerilog-2017 defaults. CLI help publishes the families, project
+    negatives retain source-owned diagnostics, and Tcl round-trips canonical
+    Verilog-2001-noconfig and SystemVerilog-2009 profiles. Debug and Release
+    project/application/Tcl slices pass 3/3 in 33.43 and 27.92 seconds. The
+    inventories preserve Change 2 with sixteen active rows and identities
+    `c3224bf29f50e3cac3dca089e0d4c28f4beefaead606d1d6716e6ed580908f8b`
+    and
+    `aada15d0b3dbf10667f4dbea4805987e87a10d1756ba63fb68a3ce2fea402354`.
+    Preserve Changes 1-2 and begin Change 3 without reset, commit, push,
+    sanitizer or hosted-CI inspection before Change 20.
+20. During Changes 1-19, run focused and dependent Debug validation only.
+    Release build/testing is not required until the final Change 20 batch
+    checks. Avoid header-only formatting edits that induce broad rebuilds;
+    format implementation hunks without churning otherwise unchanged public
+    headers. An in-progress Change 3 Release rebuild was stopped immediately
+    when this policy was recorded; its partial output is not qualification
+    evidence.
+21. Batch 167 Change 3 is complete in the same intentionally dirty worktree.
+    Typed revision identity now spans parse groups, checked roots/includes,
+    analyzed units, UDPs, class declarations/methods and mapped-library
+    provenance. Library metadata canonicalizes language/revision pairs.
+    `FSIM-FE-STANDARD-001` through `003` reject incompatible physical source or
+    include reuse, unit reanalysis and SystemVerilog package consumption at the
+    owning source boundary. Debug frontend/application/conformance/diagnostic/
+    source/inventory evidence passes 6/6 in 34.74 seconds. The inventories now
+    preserve Changes 2-3, retain fifteen active rows and have identities
+    `147c389b468f30b68b8e9f6846dfdf9c9a181dc2011a39a89770e0a9d07499d1`
+    and `e17ce02c674e79fa607d3373a6f1c4504f4fe45e50eb512d4f5b653d1147bc13`.
+    Preserve Changes 1-3 and begin Change 4 without reset, commit, push,
+    Release qualification, sanitizer or hosted-CI inspection before Change 20.
+22. Batch 167 Change 4 is complete in the same intentionally dirty worktree.
+    Manifest source sets and direct CLI compile selection canonicalize the seven
+    governed compatibility switches independently of the selected revision.
+    The profile now enters preprocessing compilation-unit, project,
+    semantic-dependency, specialization and LLVM persistent cache identities;
+    portable objects/designs round-trip it and object reload reconstructs the
+    source settings. Current formats needed no schema bump, and their existing
+    future-format rejection remains strict. Focused Debug project, design,
+    LLVM and artifact-phase tests pass 4/4; the LLVM owner takes 50.63 seconds
+    and the final artifact rerun 0.98 seconds. No Release qualification was
+    run. Both inventories preserve Changes 2-4, retain fourteen active rows and
+    have identities
+    `59b7716757a9424038f3620afb9bd158bfe8766c1ad31f29f7b56078a7e2abdd`
+    and `4682db49b6958e2ef1b775ed3e6617d20d8e0033bed43e7f8c183d21b86529f9`.
+    Preserve Changes 1-4 and begin Change 5 without reset, commit, push,
+    Release qualification, sanitizer or hosted-CI inspection before Change 20.
+23. Batch 167 Change 5 is complete in the same intentionally dirty worktree.
+    The typed selected revision now controls preprocessing and parser keyword
+    initialization. Roots/includes retain revision provenance; nested
+    `begin_keywords` regions cannot select a later set. SystemVerilog-only
+    directives, predefined macros, default arguments, token concatenation,
+    stringification, unbased literals, time-unit literals and string escapes
+    receive exact-span `FSIM-SV-PP-052` diagnostics in older modes, while a
+    Verilog-1995 include preserves an escaped identifier and exact 257-bit
+    literal. The required semantic header edit caused one 201-step eight-worker
+    Debug dependency rebuild, not formatting churn; it completed warning-clean.
+    The focused Debug frontend/diagnostic/source/inventory/preprocessing/
+    conformance slice passes 6/6 in 5.80 seconds. No Release qualification was
+    run. Both ledgers preserve Changes 2-5, retain thirteen active rows and
+    have identities
+    `b15afb11a3b959145bf180c1ea227bc86a5b35c7a21f23dcebdcc356f6ebf03f`
+    and
+    `d90a908343aafbd05b3040643d96fffee84d4f4f2c05e6f584dc1844114a5aae`.
+    Preserve Changes 1-5 and begin Change 6 without reset, commit, push,
+    Release qualification, sanitizer or hosted-CI inspection before Change 20.
+24. Batch 167 Change 6 is complete in the same intentionally dirty worktree.
+    Typed parser revision gates now cover Verilog-1995 non-ANSI versus
+    Verilog-2001 ANSI/parameter-port/signed/localparam/initializer forms,
+    Verilog-2005 `uwire`, SystemVerilog-2005 typed/interface/unpacked ports,
+    type parameters, lifetimes and program headers, SystemVerilog-2009 checker
+    headers, and SystemVerilog-2012 `nettype`. Later declaration words are
+    rejected at their owning token with `FSIM-SV-PARSE-346`; legal variable
+    initializers become explicit initial-process HIR while net initializers
+    remain continuous drivers. The inventory-owned aggregate application test
+    and independent conformance application both prove source-set revision
+    behavior. The focused Debug frontend/diagnostic/source/inventory/aggregate/
+    conformance slice passes 6/6 in 16.10 seconds. No Release qualification was
+    run. Both ledgers preserve Changes 2-6, retain twelve active rows and have
+    identities
+    `9377cbbe2eabc9262f41dabcaed79d594bb011f0cd4f06f0b6bb316678e64a02`
+    and
+    `ef23289e5b5ff204e5d78753834857b3074533d777da823595b3c5ff435e71ab`.
+    Preserve Changes 1-6 and begin Change 7 without reset, commit, push,
+    Release qualification, sanitizer or hosted-CI inspection before Change 20.
+25. Batch 167 Change 7 is complete in the same intentionally dirty worktree.
+    `FSIM-SV-PARSE-347` now gates Verilog-2001 operators/indexed selects/event
+    expressions and ANSI callable headers, SystemVerilog-2005 casts/patterns/
+    streaming/inside/wildcard and update/process/control forms, and the
+    SystemVerilog-2009 `unique0` boundary. Verilog-1995 retains exact
+    arbitrary-width four-state legacy expressions and processes. The
+    inventory-owned sizing application executes a Verilog-2001 257-bit power,
+    arithmetic-shift and indexed-select process in interpreter and compiled
+    engines and rejects a compound update under Verilog-1995. The source-policy
+    gate remains green after consolidating only the new implementation-local
+    checks; no public-header formatting churn was introduced. The focused Debug
+    frontend/diagnostic/source/inventory/execution slice passes 5/5 in 3.87
+    seconds. No Release qualification was run. Both ledgers preserve Changes
+    2-7, retain eleven active rows and have identities
+    `1c7f3908f73ada752e73b8c1cc578b47d26f90ad59b027793c82b6102462e98d`
+    and
+    `2ff1f65714064872944c60ad30552c7c1d5cae14c99e2482949235d427ecc3d3`.
+    Preserve Changes 1-7 and begin Change 8 without reset, commit, push,
+    Release qualification, sanitizer or hosted-CI inspection before Change 20.
+26. Batch 167 Change 8 is complete in the same intentionally dirty worktree.
+    `FSIM-SV-PARSE-348` now gates hierarchy, configuration, generate, bind,
+    assertion/coverage, class/constraint, interface/modport, package/import and
+    compilation-unit structure at owning tokens. Ordinary Verilog-2001 and
+    Verilog-2005 retain configurations; only `verilog-2001-noconfig` disables
+    them. SystemVerilog-2005, 2009 and 2012 structural introductions remain
+    separated, including `let`, checker, interface-class and `implements`
+    boundaries. Package, configuration and bind units retain typed revision
+    provenance. The inventory-owned hierarchy application executes a legal
+    Verilog-2001 configuration in interpreter and compiled engines and rejects
+    the same source under the no-config profile through the public project API.
+    No public header change or header-only formatting churn was introduced. The
+    focused Debug frontend/diagnostic/source/inventory/hierarchy slice passes
+    5/5 in 0.74 seconds. No Release qualification was run. Both ledgers preserve
+    Changes 2-8, retain ten active rows and have identities
+    `3c4817890c5384280203707abef5fd10d5013e70c4105f5a729a1f41cac59ed8`
+    and
+    `931af07dc4b28d58f778e8f3f36a185747bc8f0b3959f245ba2a2745889d6d30`.
+    Preserve Changes 1-8 and begin Change 9 without reset, commit, push,
+    Release qualification, sanitizer or hosted-CI inspection before Change 20.
+27. Batch 167 Change 9 is complete in the same intentionally dirty worktree.
+    `FSIM-SV-PARSE-349` now gates predefined SystemVerilog scopes, values,
+    synchronization types and standard methods, as well as 2009 property
+    operators and 2012 soft constraints, without consuming legal same-spelled
+    identifiers in older profiles. Verilog-1995 exact integer/time/real/reg
+    profiles and SystemVerilog-2005 exact integral/scalar/string/process/
+    container profiles have typed frontend evidence. The inventory-owned
+    conformance application runs explicitly as SystemVerilog-2005 through
+    interpreter and compiled O0/O2 engines; its public-API negative rejects
+    SystemVerilog predefined names under Verilog-2005. No public header change
+    or header-only formatting churn was introduced. The focused Debug frontend/
+    diagnostic/source/inventory/conformance slice passes 5/5 in 4.69 seconds.
+    No Release qualification was run. Both ledgers preserve Changes 2-9,
+    retain nine active rows and have identities
+    `0c0cf9eeb396591b40e9266ce7d10fddd432a3119375b19cd640103059d81858`
+    and
+    `0857b21e7a8f23300f8108d5fa0d776c5534c43042eccc36137b47a7b8ada231`.
+    Preserve Changes 1-9 and begin Change 10 without reset, commit, push,
+    Release qualification, sanitizer or hosted-CI inspection before Change 20.
+28. Batch 167 Change 10 is complete in the same intentionally dirty worktree.
+    `FSIM-SV-PARSE-350` gates revision-specific system services and the later
+    two-argument `$fopen` signature. The parser retains exact file, formatting,
+    random, time, coverage, introspection, severity and active/postponed
+    scheduling profiles across Verilog-1995/2001/2005 and
+    SystemVerilog-2005/2009. The inventory-owned file application executes its
+    complete corpus explicitly as SystemVerilog-2005 through interpreter and
+    compiled O0/O2 engines and rejects a 2009-only global sampled service
+    through the public project API. No public header change or header-only
+    formatting churn was introduced. The focused Debug frontend, diagnostic,
+    source, inventory, documentation and file-execution slice passes 6/6 in
+    3.06 seconds. No Release qualification was run. Both ledgers preserve
+    Changes 2-10, retain eight active rows and have identities
+    `3778e114b1a713559919ae212e73fc3d2beee5677ae4032a2888d11b4580e9ce`
+    and
+    `03966dbae7af1bff7195f7748d31bd5802ec5652f55dec89e1485c60528ebe27`.
+    Preserve Changes 1-10 and begin Change 11 without reset, commit, push,
+    Release qualification, sanitizer or hosted-CI inspection before Change 20.
+29. Batch 167 Change 11 is complete in the same intentionally dirty worktree.
+    `FSIM-SV-PARSE-351` rejects DPI declarations in Verilog profiles and every
+    accepted declaration retains its selected SystemVerilog revision. VPI
+    publication now carries exact Verilog-1995/2001/2001-noconfig/2005 and
+    SystemVerilog-2005/2009/2012/2017 identities while retaining ABI values
+    zero and one for the pre-existing Verilog-2005 and SystemVerilog-2017 enum
+    members. Unit revisions are captured before the parser workspace moves and
+    are resolved through canonical HIR identities. Runtime validation still
+    blocks SystemVerilog-only object kinds and descriptors under Verilog.
+    Application evidence preserves a 129-bit four-state Verilog-1995 value,
+    prevents later object leakage, and exercises SystemVerilog-2005 hierarchy,
+    traversal and assertion callbacks. The required public-header edits were
+    semantic only; no header formatting churn was introduced. The focused
+    Debug frontend, runtime, application, diagnostic, source, inventory and
+    documentation slice passes 7/7 in 0.81 seconds. No Release qualification
+    was run. Both ledgers preserve Changes 2-11 with seven active rows and
+    identities
+    `be7df34aa7dbbf2f3c7b9e452c3daa1ca2cc87ee22c00d38c114fce3da923783`
+    and
+    `e77dca4a6ee10e1403a6e2ee08b47cb773b9e32bbc15cdf06af8b7a552de958b`.
+    Preserve Changes 1-11 and begin Change 12 without reset, commit, push,
+    Release qualification, sanitizer or hosted-CI inspection before Change 20.
+30. Batch 167 Change 12 is complete in the same intentionally dirty worktree.
+    Canonical compatibility identity now reaches parser entry and each produced
+    Verilog/SystemVerilog design unit. `keyword-profile` selects only its
+    governed legacy keyword set, and `configuration` restores only the optional
+    Verilog-2001 configuration surface under the no-config revision. The full
+    seven-switch profile retains an exact 257-bit declaration through direct,
+    preprocessed and public project/application paths while still rejecting
+    later `nettype` grammar. The one required semantic design-unit header field
+    caused a warning-clean eight-worker Debug dependency rebuild; no header
+    formatting churn was introduced. The final focused Debug project,
+    frontend, application, diagnostic, source, inventory and documentation
+    slice passes 7/7 in 4.69 seconds. No Release qualification was run. Both
+    ledgers preserve Changes 2-12 with six active rows and identities
+    `bfce8ca1662041f1f38492f29f335c1c9b7a4915c2bd72967d4418222dccbc92`
+    and
+    `c0fe9e5be1e5607fffda1f84b828bee80149c753545f047ff4bba123c55ee95f`.
+    Preserve Changes 1-12 and begin Change 13 without reset, commit, push,
+    Release qualification, sanitizer or hosted-CI inspection before Change 20.
+31. Batch 167 Change 13 is complete in the same intentionally dirty worktree.
+    Library format 3, portable schema 10 and owning-unit schema 26 retain exact
+    language, revision and compatibility identity per source, design unit,
+    UDP, class, nested class and method. Object format 5 binds ordered source/
+    include checksums and unit profiles into its compilation digest. Design
+    format 8 records ordered unique Verilog/SystemVerilog semantic-unit
+    provenance matched to contributing objects and restores exact standalone
+    unit maps. Mapped libraries reconstruct distinct settings for each retained
+    revision/profile pair, including source-hidden units, and do not replace
+    archived identities with language-wide defaults. Stale, omitted, duplicate,
+    reordered and payload-incompatible identities reject before semantic
+    publication. The required semantic header additions caused one expected
+    eight-worker Debug dependency rebuild without formatting-only header churn.
+    The final library, object, design, application, diagnostic, source,
+    inventory and documentation Debug slice passes 9/9 in 29.87 seconds. No
+    Release qualification was run. Both ledgers preserve Changes 2-13 with five
+    active rows and identities
+    `9ae0d0fa0a8c270e8116a753b8a550a66f3601c1512d57318f9bcd5d342716c8`
+    and
+    `5304a4c918cf692109e485c1341a3a0add38ef9c65f0d3cc176e9ef250036c78`.
+    Preserve Changes 1-13 and begin Change 14 without reset, commit, push,
+    Release qualification, sanitizer or hosted-CI inspection before Change 20.
+32. Batch 167 Change 14 is complete in the same intentionally dirty worktree.
+    The typed-boundary matrix executes Verilog-1995/2001/2001-noconfig and
+    SystemVerilog-2005/2009/2012 with the full canonical seven-switch profile
+    through interpreter and LLVM O0/O2, VHDL-2008 and native SystemC. An
+    independent SystemVerilog-2017 `none`-profile root shares the design without
+    identity contamination; all six specialization-key sets remain distinct.
+    Exact 137-bit X/Z planes, specify timing, VHDL PSL observation, one-
+    nanosecond stop time, debugger values, VCD changes and signal-change order
+    agree between engines. Existing conversion and hierarchy evidence covers
+    signedness/state adapters, configurations and binds. No production or
+    public-header change was required. The final typed-boundary, mixed-
+    conversion, hierarchy, diagnostic, source, inventory and documentation
+    Debug slice passes 7/7 in 24.04 seconds. No Release qualification was run.
+    Both ledgers preserve Changes 2-14 with four active rows and identities
+    `e6089afd9632761a62ead0ad86feb7d979fcfae2e039c9b721710ea11679c5c0`
+    and
+    `155cac3a32046609f26cdf3fc321f0b37ecf1341fd26c3efbc2436dce6c6bfc8`.
+    Preserve Changes 1-14 and begin Change 15 without reset, commit, push,
+    Release qualification, sanitizer or hosted-CI inspection before Change 20.
+33. Batch 167 Change 15 is complete in the same intentionally dirty worktree.
+    A single canonical semantic projection now exposes owning unit/source,
+    language/revision and compatibility profile through the append-only C API,
+    C++, Tcl, debugger, VPI, detailed safe-point callbacks and filtered VCD
+    comments. Descendant lookup selects the longest owning scope. Compiler,
+    cache and specialization details remain absent from hierarchy discovery;
+    public standard-conflict diagnostics name both incompatible revisions and
+    profiles. Interpreter and LLVM O0/O2 evidence covers all six older modes,
+    exact public identities, callback lifetime, trace filtering, partial VPI
+    rejection and profile-conflict diagnostics. The required semantic header
+    additions caused one expected eight-worker Debug dependency rebuild without
+    formatting-only header churn. The final 11-test Debug slice passes, with
+    the application gate completing in 30.30 seconds and the corrected
+    catalog/documentation rerun passing 2/2 in 0.17 seconds. No Release
+    qualification was run. Both ledgers preserve Changes 2-15 with three active
+    rows and identities
+    `aaac248cd203dd166f1f333027d8da9a5a3e359a2f81280d436f769e9ac6188b`
+    and
+    `f3ff1fd961769697edfeed87c1a51770d29a9d71acc5bce3a96996856fb49a71`.
+    Preserve Changes 1-15 and begin Change 16 without reset, commit, push,
+    Release qualification, sanitizer or hosted-CI inspection before Change 20.
+34. Batch 167 Change 16 is complete in the same intentionally dirty worktree.
+    The existing format-5 object, format-8 design and portable state schemas
+    preserve revision/profile identity through direct non-project phases,
+    interpreter and LLVM, cold/warm native caches, checkpoint serialization/
+    replay and relocation. A new six-mode matrix covers Verilog-1995,
+    Verilog-2001, Verilog-2001-noconfig and SystemVerilog-2005/2009/2012 with
+    explicit `sizing`. It hides the original source and producer object before
+    standalone reload, compares exact semantic unit/source IDs, specialization
+    keys and checkpoint bytes, relocates the design, and repeats both engines.
+    The independent exact-width path retains 137-bit X/Z and signed values,
+    cache hits and filtered provenance VCD comments. Direct object builds and
+    standalone designs agree; partial, stale and omitted provenance reject at
+    their owning validation boundary. No production or header change was
+    needed. The final Debug slice passes 9/9 in 29.80 seconds and its focused
+    six-mode artifact gate passes in 1.12 seconds. No Release qualification was
+    run. Both ledgers preserve Changes 2-16 with two active rows and identities
+    `a436c2d76d0d8ef6da11f0a9b743c897111fde303301f1e684f96cccff68c77c`
+    and
+    `986d2088acf64c503f74c8f946c67099db4008f95d34059282c39ebad8924f69`.
+    Preserve Changes 1-16 and begin Change 17 without reset, commit, push,
+    Release qualification, sanitizer or hosted-CI inspection before Change 20.
+35. Batch 167 Change 17 is complete in the same intentionally dirty worktree.
+    Two authoritative TSV corpora publish ordered rows for all six older
+    revisions and all seven explicit compatibility switches. Every row binds
+    positive/negative source anchors, an exact diagnostic coordinate,
+    execution, arbitrary-width, include/profile provenance and artifact
+    mismatch evidence. The frontend asserts the six representative triples and
+    tests every switch independently with an exact 257-bit declaration and a
+    common later-grammar rejection. The registered inventory validates every
+    row and anchor. The final eight-test Debug slice passes; the corrected
+    diagnostic/inventory/documentation rerun passes 3/3 in 0.15 seconds. No
+    production header changed and no Release qualification was run. The mode
+    and compatibility ledgers preserve Changes 2-17 with one active row and
+    identities
+    `9627cda0c1a0d8e43e7f91061d0ea0cb1c67ca8620f344e9069b51c4eabc0bec`
+    and
+    `8fb74c03932536b3dc46cd8729cb10d8ac608da703b99292e19e86339b59cb08`;
+    the revision and switch corpora have identities
+    `8c3018215c3e8c7d1fdc90c275d2f3d3e4ee065956c8b205fb740a8d750981f7`
+    and
+    `34eca16ab78a6e2ab73f1e7d77cb36091fad5571b89f4ba5f8c512d69355a24a`.
+    Preserve Changes 1-17 and begin Change 18 without reset, commit, push,
+    Release qualification, sanitizer or hosted-CI inspection before Change 20.
+36. Batch 167 Change 18 is complete in the same intentionally dirty worktree.
+    A separate serial standard-mode closure matrix runs 16 inventory, frontend,
+    application, engine/cache, artifact/replay, mixed-language, public API,
+    runtime and platform/resource witnesses. It retains a 17-row stage ledger
+    and one nonempty verbose log per witness, and requires exact six-mode,
+    profile, 137-bit X/Z, engine, hidden-producer and resource transcript
+    tokens. The Debug matrix passes 16/16 in 76.52 seconds. No source/header
+    rebuild occurred; the MSVC Release contract was only a static configuration
+    audit, and no Release build or executable test ran. Both ledgers preserve
+    Changes 2-18 with zero active rows and identities
+    `21a05e4732aa8da8b546f2c7048ee2b5d51cdca4572114fb5c9946d4bfad8d3e`
+    and
+    `5e7a74d4f9c0af29e28c4d0b9b35b96a5c9df6482b53759633f80904812c5f6f`.
+    Preserve Changes 1-18 and begin Change 19 without reset, commit, push,
+    Release qualification, sanitizer or hosted-CI inspection before Change 20.
+37. Batch 167 Change 19 is complete in the same intentionally dirty worktree.
+    Diagnostics, language/feature support, architecture, VPI/public guidance,
+    evidence, inventories, closure registration and this handoff now describe
+    one bounded contract: 17+17 preserved rows with zero active obligations,
+    six revision and seven switch corpus rows, and 16 retained-log witnesses.
+    Compatibility switches remain explicit semantic choices, not historical
+    tool-emulation claims or later-grammar permission. The live baseline is
+    2,246 diagnostics, 887 bounded sources, 1,035 SPDX-owned files and 332
+    authored test/control files; the resulting VHDL/PSL closure digest is
+    `0a71ce9863b488172f80b02c4cd82bc989c440e02aea996504598d5a65540fee`.
+    The standard-mode runner and retained stage ledger identities are
+    `fc8807632dc82722d962cc789a31b2be7dbfd2a31436354a9be61351c1943046`
+    and
+    `4179ca05b19cd5c22782d9a959f8db8bebee02841085c4745a870f0d952c7672`.
+    The final static slice passes 10/10 in 0.98 seconds. CMake regeneration
+    induced no source rebuild, no header formatting changed, and no Release
+    build or executable test ran. Preserve Changes 1-19 and begin final Change
+    20 qualification without reset, commit, push, sanitizer or hosted-CI
+    inspection.
+38. Batch 167 Change 20 is complete. Fresh clean-first exact-LLVM 22.1.8 Debug
+    and Release eight-worker builds complete 781/781 steps warning-free in
+    11:55.31 and 9:36.37 at 5,030,336 and 2,254,716 KiB peak RSS with zero
+    swaps. Complete non-sanitized Debug and Release regressions pass 146/146 in
+    9:11.10 and 7:59.35 wall time, with CTest totals of 551.08 and 479.34
+    seconds, peak RSS of 3,781,532 and 3,750,768 KiB, and zero swaps. The first
+    clean Debug qualification exposed and closed a false SystemVerilog time-
+    literal rejection of legal Verilog `timescale` units, stale elaboration
+    fixtures that bypassed semantic system-function arity ownership, Verilog
+    library export/import metadata labeled as SystemVerilog, and a stale v1
+    feature-matrix digest. The focused repair set passes 13/13 before the full
+    reruns. Pinned clang-format 22.1.8 was limited to changed implementation and
+    test `.cpp` files; no public header formatting churn was introduced.
+    Release qualification was deferred to and run only for this final batch
+    check. Batch 167 runs neither sanitizer nor hosted-CI inspection. Final
+    post-documentation Debug and Release static/release slices pass 42/42 in
+    22.84 and 21.63 seconds and `git diff --check` is clean. Create and push the
+    sole accumulated Batch 167 implementation commit, then save and push the
+    exact expanded Batch 168 restart plan as a documentation-only precursor and
+    clear context before implementation.
 
 ## Batch 166 planned restart checkpoint - 2026-08-12
 

@@ -23,6 +23,89 @@ enum class VhdlStandard {
     Vhdl2008,
 };
 
+enum class StandardRevision {
+    Vhdl1987,
+    Vhdl1993,
+    Vhdl2000,
+    Vhdl2002,
+    Vhdl2008,
+    Verilog1995,
+    Verilog2001,
+    Verilog2001NoConfig,
+    Verilog2005,
+    SystemVerilog2005,
+    SystemVerilog2009,
+    SystemVerilog2012,
+    SystemVerilog2017,
+};
+
+[[nodiscard]] constexpr std::string_view to_string(
+    const StandardRevision standard) noexcept
+{
+    switch (standard) {
+    case StandardRevision::Vhdl1987:
+        return "vhdl-1987";
+    case StandardRevision::Vhdl1993:
+        return "vhdl-1993";
+    case StandardRevision::Vhdl2000:
+        return "vhdl-2000";
+    case StandardRevision::Vhdl2002:
+        return "vhdl-2002";
+    case StandardRevision::Vhdl2008:
+        return "vhdl-2008";
+    case StandardRevision::Verilog1995:
+        return "verilog-1995";
+    case StandardRevision::Verilog2001:
+        return "verilog-2001";
+    case StandardRevision::Verilog2001NoConfig:
+        return "verilog-2001-noconfig";
+    case StandardRevision::Verilog2005:
+        return "verilog-2005";
+    case StandardRevision::SystemVerilog2005:
+        return "systemverilog-2005";
+    case StandardRevision::SystemVerilog2009:
+        return "systemverilog-2009";
+    case StandardRevision::SystemVerilog2012:
+        return "systemverilog-2012";
+    case StandardRevision::SystemVerilog2017:
+        return "systemverilog-2017";
+    }
+    return "systemverilog-2017";
+}
+
+[[nodiscard]] constexpr std::string_view revision_string(
+    const StandardRevision standard) noexcept
+{
+    switch (standard) {
+    case StandardRevision::Vhdl1987:
+        return "1987";
+    case StandardRevision::Vhdl1993:
+        return "1993";
+    case StandardRevision::Vhdl2000:
+        return "2000";
+    case StandardRevision::Vhdl2002:
+        return "2002";
+    case StandardRevision::Vhdl2008:
+        return "2008";
+    case StandardRevision::Verilog1995:
+        return "1995";
+    case StandardRevision::Verilog2001:
+        return "2001";
+    case StandardRevision::Verilog2001NoConfig:
+        return "2001-noconfig";
+    case StandardRevision::Verilog2005:
+    case StandardRevision::SystemVerilog2005:
+        return "2005";
+    case StandardRevision::SystemVerilog2009:
+        return "2009";
+    case StandardRevision::SystemVerilog2012:
+        return "2012";
+    case StandardRevision::SystemVerilog2017:
+        return "2017";
+    }
+    return "2017";
+}
+
 [[nodiscard]] constexpr std::string_view to_string(
     const VhdlStandard standard) noexcept
 {

@@ -22,6 +22,7 @@ namespace {
 
 using fsim::runtime::SystemVerilogVpiCallbackEvent;
 using fsim::runtime::SystemVerilogVpiCallbackKind;
+using fsim::runtime::SystemVerilogVpiLanguage;
 using fsim::runtime::SystemVerilogVpiObjectInfo;
 using fsim::runtime::SystemVerilogVpiObjectKind;
 using fsim::runtime::SystemVerilogVpiObjectRegistry;
@@ -29,6 +30,11 @@ using fsim::runtime::SystemVerilogVpiStoredValue;
 
 constexpr std::size_t kWideWidth = 137;
 constexpr std::size_t kMemoryWidth = 71;
+
+static_assert(static_cast<unsigned>(SystemVerilogVpiLanguage::Verilog2005)
+    == 0U);
+static_assert(
+    static_cast<unsigned>(SystemVerilogVpiLanguage::SystemVerilog2017) == 1U);
 
 struct TemporaryDirectory {
     std::filesystem::path path;
@@ -242,7 +248,7 @@ void collect_hierarchy(
     config.run.max_deltas = 1'000;
     fsim::project::SourceSet sources;
     sources.language = fsim::project::Language::system_verilog;
-    sources.standard = "2017";
+    sources.standard = "2005";
     sources.library = "work";
     sources.files.push_back(source);
     config.source_sets.push_back(std::move(sources));
@@ -345,6 +351,22 @@ Capture execute(
         && default_signed && overridden_state && default_state && memory
         && memory_word_three && memory_word_two && memory_probe
         && strength_net);
+    const auto root_provenance = registry.type_info(root.value->handle);
+    const auto target_provenance = registry.type_info(target.value->handle);
+    assert(root_provenance && target_provenance);
+    assert(root_provenance.value->semantic_unit_id);
+    assert(root_provenance.value->source_id);
+    assert(root_provenance.value->semantic_unit == "work::vpi_app");
+    assert(root_provenance.value->standard == "verilog-2005");
+    assert(root_provenance.value->compatibility_profile == "none");
+    assert(!root_provenance.value->source_path.empty());
+    assert(root_provenance.value->source_line != 0U);
+    assert(target_provenance.value->semantic_unit
+        == root_provenance.value->semantic_unit);
+    assert(target_provenance.value->standard
+        == root_provenance.value->standard);
+    assert(target_provenance.value->compatibility_profile
+        == root_provenance.value->compatibility_profile);
     assert(root.value->kind == SystemVerilogVpiObjectKind::Root);
     assert(module.value->kind == SystemVerilogVpiObjectKind::Module
         && module.value->parent == root.value->handle);
@@ -885,6 +907,64 @@ Capture execute(
     return capture;
 }
 
+void test_verilog_1995_profile(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source)
+{
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "vpi-verilog-1995";
+    config.project.top = "verilog:work.legacy_vpi";
+    config.project.time_resolution = "1ns";
+    config.build.cache_path = directory / "cache-verilog-1995";
+    config.run.max_deltas = 1'000;
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::verilog;
+    sources.standard = "1995";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
+
+    auto project = build_project(config);
+    fsim::app::Simulation simulation { std::move(project),
+        config.run.max_deltas, fsim::app::SimulationEngine::interpreter };
+    auto& registry = simulation.systemverilog_vpi_objects();
+    const auto root = registry.find("legacy_vpi");
+    const auto value = registry.find("legacy_vpi.value");
+    assert(root && value);
+    const auto root_type = registry.type_info(root.value->handle);
+    const auto value_type = registry.type_info(value.value->handle);
+    assert(root_type && value_type);
+    assert(root_type.value->language == SystemVerilogVpiLanguage::Verilog1995
+        && value_type.value->language
+            == SystemVerilogVpiLanguage::Verilog1995
+        && value_type.value->width == 129
+        && value_type.value->category
+            == fsim::runtime::SystemVerilogVpiValueCategory::Logic4);
+
+    std::vector<SystemVerilogVpiObjectInfo> hierarchy { *root.value };
+    collect_hierarchy(registry, root.value->handle, hierarchy);
+    assert(std::ranges::none_of(hierarchy, [](const auto& object) {
+        return object.kind == SystemVerilogVpiObjectKind::Interface
+            || object.kind == SystemVerilogVpiObjectKind::Program
+            || object.kind == SystemVerilogVpiObjectKind::Package
+            || object.kind == SystemVerilogVpiObjectKind::Class
+            || object.kind == SystemVerilogVpiObjectKind::ClassProperty
+            || object.kind == SystemVerilogVpiObjectKind::Assertion;
+    }));
+    const auto run = simulation.run();
+    assert(run.status == fsim::runtime::RunStatus::stopped
+        && simulation.finished());
+    const auto snapshot = registry.snapshot_values();
+    assert(snapshot);
+    const auto& value_state = object_state(snapshot, value.value->handle);
+    assert(value_state.value);
+    const auto* packed = std::get_if<fsim::runtime::PackedLogic4>(
+        &value_state.value->payload);
+    assert(packed && packed->width() == 129
+        && packed->to_msb_string() == std::string(129, 'X'));
+}
+
 void test_systemverilog_metadata(
     const std::filesystem::path& directory,
     const std::filesystem::path& source)
@@ -904,6 +984,17 @@ void test_systemverilog_metadata(
     const auto payload = registry.find("vpi_metadata_pkg.packet.payload");
     assert(root && interface_instance && program_instance && package && packet
         && payload);
+    const auto has_2005_profile = [&](const fsim_vpi_handle_v1 handle) {
+        const auto type = registry.type_info(handle);
+        return type && type.value->language
+            == SystemVerilogVpiLanguage::SystemVerilog2005;
+    };
+    assert(has_2005_profile(root.value->handle)
+        && has_2005_profile(interface_instance.value->handle)
+        && has_2005_profile(program_instance.value->handle)
+        && has_2005_profile(package.value->handle)
+        && has_2005_profile(packet.value->handle)
+        && has_2005_profile(payload.value->handle));
     assert(root.value->kind == SystemVerilogVpiObjectKind::Root);
     assert(interface_instance.value->kind
         == SystemVerilogVpiObjectKind::Interface);
@@ -944,6 +1035,7 @@ void test_systemverilog_metadata(
             return object.kind == SystemVerilogVpiObjectKind::Assertion;
         });
     assert(assertion != hierarchy.end());
+    assert(has_2005_profile(assertion->handle));
     std::vector<fsim::runtime::SystemVerilogVpiAssertionEvent> events;
     const auto collect = [&](const SystemVerilogVpiCallbackEvent& event) {
         assert(event.assertion && event.object == assertion->handle);
@@ -990,6 +1082,20 @@ int main()
         / ("fsim-vpi-application-" + std::to_string(nonce))
     };
     std::filesystem::create_directories(temporary.path);
+    const auto legacy_source = temporary.path / "vpi-verilog-1995.v";
+    {
+        std::ofstream output(legacy_source, std::ios::binary);
+        output << R"(module legacy_vpi;
+  reg [128:0] value;
+  initial begin
+    value = {129{1'bx}};
+    #1 $finish;
+  end
+endmodule
+)";
+        assert(output.good());
+    }
+    test_verilog_1995_profile(temporary.path, legacy_source);
     const auto source = temporary.path / "vpi-application.v";
     const auto initial = make_bits({ 0, 68, 136 });
     const auto middle = make_bits({ 1, 37, 97, 135 });

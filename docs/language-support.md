@@ -2039,6 +2039,143 @@ artifacts, and native-cache reuse preserve the same state. Owning-unit schema
 2, DesignIR-state schema 2, and class-state schema 7 reject future or corrupt
 payloads before publication.
 
+### Older Verilog and SystemVerilog service profiles in v2
+
+Explicit Verilog-1995, Verilog-2001, Verilog-2001-noconfig and
+SystemVerilog-2005/2009/2012 selections retain their own predefined system
+task/function environment. Verilog-1995 keeps legacy display, monitoring,
+single-argument `$fopen`, memory-read, random and time services. Verilog-2001
+adds the bounded descriptor-input/positioning, plusarg, memory-write,
+format-to-variable and signed-conversion families, including the
+two-argument `$fopen` signature; Verilog-2005 adds `$clog2` and the supported
+mathematical family. SystemVerilog-2005 adds severity, sampled-value,
+coverage, packed/array introspection, string formatting, host-command and
+unsigned-random services. Global-clock sampled functions and extended
+assertion controls begin in SystemVerilog-2009.
+
+The parser records exact 32/64-bit integer, one-bit predicate, real, time and
+string result profiles before elaboration. Display/write operations remain in
+the active region while strobe/monitor operations retain postponed scheduling;
+severity and assertion-control identities lower unchanged. A later-only
+service or signature produces `FSIM-SV-PARSE-350` at the owning system name.
+Compatibility switches do not widen this service set or authorize a later
+signature.
+
+### Older DPI and VPI profiles in v2
+
+DPI import/export declarations begin in SystemVerilog-2005. Each declaration
+retains the selected standard revision; a Verilog selection rejects the DPI
+surface with `FSIM-SV-PARSE-351` even when `import` or `export` is otherwise an
+ordinary identifier in that keyword profile.
+
+Published VPI objects retain the exact Verilog-1995, Verilog-2001,
+Verilog-2001-noconfig, Verilog-2005, SystemVerilog-2005, SystemVerilog-2009,
+SystemVerilog-2012 or SystemVerilog-2017 identity of their owning unit.
+SystemVerilog-only packages, interfaces, programs, classes, class properties,
+assertions and descriptors cannot be registered under a Verilog identity.
+The original numeric identities for Verilog-2005 and SystemVerilog-2017 remain
+zero and one, respectively, so the expanded profile enum is append-only for
+existing ABI consumers. Exact packed widths, four-state values, hierarchy
+ownership, traversal order and callback behavior are unchanged. Compatibility
+switches do not manufacture a later DPI or VPI surface.
+
+### Older-mode compatibility defaults in v2
+
+The seven explicit Verilog/SystemVerilog compatibility switches are an
+independent, canonical dimension of the selected standard. Input aliases and
+order reduce to the fixed `keyword-profile`, `implicit-net`, `port-connection`,
+`sizing`, `lifetime`, `scheduler-assertion`, `configuration` order; `none`
+remains distinct. The exact profile enters preprocessing, parsing,
+analyzed-unit provenance and every project, semantic-dependency, specialization
+and native-cache identity.
+
+`keyword-profile` selects only the documented legacy keyword environment:
+Verilog-2005 uses the Verilog-2001 set, and SystemVerilog-2009/2012/2017 use the
+SystemVerilog-2005 set. `configuration` restores the optional Verilog-2001
+configuration keywords only for the explicit Verilog-2001-noconfig revision.
+The remaining switches name the established implicit-wire, omitted-port,
+parameter/expression-sizing, static-lifetime and active/postponed assertion
+scheduler compatibility defaults. They are provenance-bearing semantic choices
+and do not change the selected grammar or system-service revision.
+
+Compatibility switches compose by the fixed canonical order. A preprocessed
+token stream retains the same selected revision and exact profile at parser
+entry; a 257-bit declaration remains exact. Unknown switches and cross-family
+standards retain the source-owned `FSIM-PROJ-0007` diagnostic. Even the complete
+profile cannot admit a later `nettype` declaration, DPI surface, system service
+or VPI object. The selected revision remains the upper language boundary.
+
+Analyzed libraries and portable artifacts retain that boundary per source and
+owning unit rather than inferring it from a language-wide default. Library
+format 3 and portable schema 10 index the exact standard and compatibility
+profile beside each source checksum and unit payload; owning-unit schema 26
+retains the same identity inside modules, UDPs, classes, nested classes and
+methods. Object format 5 binds the ordered source/include digests and unit
+profiles into its compilation digest. Design format 8 adds an ordered,
+duplicate-free Verilog/SystemVerilog semantic-unit profile table matched to its
+object provenance. Loading rejects omitted, stale, reordered, duplicated or
+profile-incompatible records before publishing the restored semantic design.
+Mapped libraries reconstruct distinct source settings for every retained
+standard/profile pair, including source-hidden portable units, so consumer
+cache identity cannot collapse two analyzed profiles.
+
+The same exact identities survive execution boundaries. Each of the six older
+Verilog/SystemVerilog modes runs the complete canonical seven-switch profile
+through interpreter and LLVM O0/O2 while crossing VHDL-2008 and native SystemC
+instances. A separate SystemVerilog-2017 `none`-profile root executes in the
+same design without inheriting the older root's revision or switches. Exact
+137-bit four-state values, including X and Z planes, survive both language
+crossings and a Verilog specify path; VHDL PSL observation, one-nanosecond
+scheduling, debugger values and VCD changes remain identical between engines.
+Revision-distinct specialization keys prevent native-cache sharing across the
+six profiles. Existing mixed-conversion and hierarchy/configuration evidence
+continues to cover signed and unsigned extension, two-/four-state conversion,
+Boolean/integer adapters, configuration and bind selection.
+
+Public Batch 167 provenance joins every elaborated Verilog/SystemVerilog scope
+to its owning semantic unit and source, canonical revision and compatibility
+profile. The C++ simulation API, append-only C object and safe-point records,
+Tcl `fsim::provenance`, debugger `provenance`, VPI type metadata and VCD
+comments expose the same identity. Descendant objects inherit their owning
+scope identity; cache keys, compiler objects and other implementation details
+remain absent from hierarchy discovery. Partial VPI provenance is rejected.
+
+That public identity remains stable across the durable Batch 167 boundaries.
+Direct object builds, standalone design reload, interpreter and LLVM execution,
+cold/warm native caches, checkpoint serialization/replay and relocation report
+the same semantic unit/source IDs, canonical revision and compatibility
+profile after the original source and producer object paths are unavailable.
+The six-mode artifact matrix covers Verilog-1995, Verilog-2001,
+Verilog-2001-noconfig and SystemVerilog-2005/2009/2012 with an explicit
+`sizing` profile; a separate exact-width path retains 137-bit X/Z and signed
+values through the same boundaries and filtered VCD comments. Omitted, partial
+or object-inconsistent unit provenance rejects before a restored design is
+published.
+
+The authoritative Batch 167 corpora are published beside the inventories.
+`verilog_systemverilog_revision_corpus.tsv` assigns every older revision one
+positive parse witness, one negative witness with an exact diagnostic code and
+coordinate, and anchored execution, arbitrary-width, include provenance and
+artifact-mismatch evidence. The companion
+`verilog_systemverilog_compatibility_corpus.tsv` assigns the same evidence
+classes to each of the seven explicit switches. Its frontend witness exercises
+every switch independently: each retains its exact canonical profile and a
+257-bit declaration while rejecting later `nettype` grammar at
+`FSIM-SV-PARSE-346` 1:31. The registered inventory gate validates row order,
+diagnostic triples and every file/anchor pair so documentation-only claims
+cannot replace executable evidence.
+
+The serial `fsim.verilog-systemverilog-standard-mode-closure-matrix` composes
+those corpora with frontend and application conformance, six-mode mixed
+interpreter/LLVM O0/O2 execution, cold/warm caches, standalone artifacts,
+relocation/checkpoint replay, public C/C++/Tcl/VPI surfaces, runtime, and the
+MSVC/Windows/tool/resource contracts. It retains a stage ledger plus one
+verbose log for each of 16 witnesses. Exact transcript tokens bind all six
+revisions, the complete explicit profile, 137-bit X/Z values, mixed VHDL and
+SystemC, hidden artifact producers, cache reuse and the governed 6-GiB,
+delta-1000 and VCD-64 ceilings. A passing child exit without those transcript
+tokens cannot satisfy the matrix.
+
 ## v1 target
 
 ### VHDL-2008

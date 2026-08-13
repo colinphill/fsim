@@ -135,7 +135,7 @@ bool compile_object(
   metadata.standard = source_set.standard;
   metadata.compatibility_profile = source_set.language == project::Language::vhdl
       ? std::string { application_detail::vhdl_compatibility_profile() }
-      : std::string { "none" };
+      : project::compatibility_profile(source_set.compatibility_switches);
   metadata.library = source_set.library;
   metadata.compilation_unit = source_set.compilation_unit;
   metadata.uvm_release = std::string{project::to_string(source_set.uvm_release)};
@@ -202,7 +202,8 @@ bool compile_object(
     const auto checksum = support::Sha256::hex(
         support::Sha256::digest(*contents));
     metadata.sources.push_back({
-        support::path_to_utf8(logical), logical, checksum, metadata.language});
+        support::path_to_utf8(logical), logical, checksum, metadata.language,
+        metadata.standard, metadata.compatibility_profile});
     source_mappings.push_back({support::path_to_utf8(path),
                                support::path_to_utf8(logical)});
     payloads.push_back({logical, std::move(*contents)});
@@ -246,7 +247,7 @@ bool compile_object(
         unit.primary_name,
         unit.kind == frontend::UnitKind::VhdlArchitecture
             ? unit.name : std::string{},
-        path, checksum});
+        path, checksum, metadata.standard, metadata.compatibility_profile});
     payloads.push_back({path, std::move(*bytes)});
   }
   for (const auto& original : checked->parsed.udp_declarations) {
@@ -271,7 +272,8 @@ bool compile_object(
     metadata.units.push_back({
         declaration.language == frontend::Language::Verilog2005
             ? "verilog" : "systemverilog",
-        "primitive", declaration.name, {}, {}, path, checksum});
+        "primitive", declaration.name, {}, {}, path, checksum,
+        metadata.standard, metadata.compatibility_profile});
     payloads.push_back({path, std::move(*bytes)});
   }
   std::map<std::string, library::PortableSystemVerilogClassUnit> class_units;
@@ -307,7 +309,8 @@ bool compile_object(
     const auto checksum = support::Sha256::hex(
         support::Sha256::digest(*bytes));
     metadata.units.push_back({
-        "systemverilog", "class-unit", identity, {}, {}, path, checksum});
+        "systemverilog", "class-unit", identity, {}, {}, path, checksum,
+        metadata.standard, metadata.compatibility_profile});
     payloads.push_back({path, std::move(*bytes)});
   }
   if (metadata.units.empty()) {

@@ -243,18 +243,36 @@ void ApplicationTestFixture::test_non_project_cli() {
       "fsim", "check", "--lang", "vhdl-93", "--standard", "93",
       source_text.c_str()
   };
-  bool vhdl_standard_called = false;
+  const std::vector<const char*> verilog_standard_arguments {
+      "fsim", "check", "--lang", "verilog-2001-noconfig", "--standard",
+      "v2001-noconfig", source_text.c_str()
+  };
+  const std::vector<const char*> systemverilog_standard_arguments {
+      "fsim", "check", "--lang", "sv-2009", "--standard", "09",
+      source_text.c_str()
+  };
+  int standard_calls = 0;
   services.check =
       [&](const cli::Invocation& invocation,
           const project::Config& config,
           diagnostic::Engine&,
           std::ostream&,
           std::ostream&) {
-          vhdl_standard_called = true;
-          assert(invocation.language == project::Language::vhdl);
-          assert(invocation.standard == "93");
           assert(config.source_sets.size() == 1);
-          assert(config.source_sets.front().standard == "1993");
+          if (standard_calls == 0) {
+              assert(invocation.language == project::Language::vhdl);
+              assert(invocation.standard == "93");
+              assert(config.source_sets.front().standard == "1993");
+          } else if (standard_calls == 1) {
+              assert(invocation.language == project::Language::verilog);
+              assert(invocation.standard == "v2001-noconfig");
+              assert(config.source_sets.front().standard == "2001-noconfig");
+          } else {
+              assert(invocation.language == project::Language::system_verilog);
+              assert(invocation.standard == "09");
+              assert(config.source_sets.front().standard == "2009");
+          }
+          ++standard_calls;
           return 0;
       };
   services.compile =
@@ -275,7 +293,29 @@ void ApplicationTestFixture::test_non_project_cli() {
              static_cast<int>(vhdl_standard_arguments.size()),
              vhdl_standard_arguments.data(), services, output, error)
       == 0);
-  assert(vhdl_standard_called);
+  output.str({ });
+  error.str({ });
+  assert(cli::run(
+             static_cast<int>(verilog_standard_arguments.size()),
+             verilog_standard_arguments.data(), services, output, error)
+      == 0);
+  output.str({ });
+  error.str({ });
+  assert(cli::run(
+             static_cast<int>(systemverilog_standard_arguments.size()),
+             systemverilog_standard_arguments.data(), services, output, error)
+      == 0);
+  assert(standard_calls == 3);
+  assert(error.str().empty());
+  const std::vector<const char*> help_arguments { "fsim", "--help" };
+  output.str({ });
+  error.str({ });
+  assert(cli::run(
+             static_cast<int>(help_arguments.size()), help_arguments.data(),
+             services, output, error)
+      == 0);
+  assert(output.str().find("Verilog: 95/1995") != std::string::npos);
+  assert(output.str().find("SystemVerilog: 05/2005") != std::string::npos);
   assert(error.str().empty());
   output.str({ });
   error.str({ });
@@ -557,6 +597,34 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
   assert(object_build->design.roots() == std::vector<std::string>{"primary"});
   assert(!object_build->design.processes().empty());
   assert(object_build->design_ir.valid(object_build->semantics));
+  const auto object_provenance = app::verilog_scope_provenance(*object_build);
+  assert(!object_provenance.empty());
+  assert(std::ranges::all_of(
+      object_provenance, [](const auto& provenance) {
+        return provenance.language == semantic::Language::system_verilog
+            && provenance.standard == "systemverilog-2017"
+            && provenance.compatibility_profile == "none"
+            && !std::filesystem::path(provenance.source_path).is_absolute();
+      }));
+  assert(std::ranges::any_of(
+      object_provenance, [](const auto& provenance) {
+        return provenance.path == "primary"
+            && provenance.semantic_unit == "work::tb";
+      }));
+  const auto provenance_signature = [](const auto& provenance) {
+    std::vector<std::string> result;
+    result.reserve(provenance.size());
+    for (const auto& item : provenance) {
+      result.push_back(
+          item.path + "|" + item.semantic_unit + "|"
+          + std::to_string(item.unit.value()) + "|"
+          + std::to_string(item.source.value()) + "|" + item.source_path
+          + "|" + item.standard + "|" + item.compatibility_profile);
+    }
+    return result;
+  };
+  const auto object_provenance_signature =
+      provenance_signature(object_provenance);
   diagnostic::Engine state_diagnostics;
   const auto runtime_state = app::serialize_runtime_state(
       object_build->design, state_diagnostics);
@@ -629,8 +697,14 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
   assert(loaded_design->design_ir.valid(loaded_design->semantics));
   assert(loaded_design->artifact_identity
       == published_design_metadata->design_digest);
+  const auto loaded_provenance = app::verilog_scope_provenance(*loaded_design);
+  assert(provenance_signature(loaded_provenance)
+      == object_provenance_signature);
   app::Simulation standalone_simulation{
       std::move(*loaded_design), 1000, app::SimulationEngine::interpreter};
+  assert(provenance_signature(
+             standalone_simulation.verilog_scope_provenance())
+      == object_provenance_signature);
   const auto standalone_result = standalone_simulation.run();
   assert(standalone_result.status == runtime::RunStatus::stopped);
   assert(standalone_result.time == 3);
@@ -705,6 +779,8 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
   cold_design->cache_path = provenance_cache;
   app::Simulation cold_simulation{
       std::move(*cold_design), 1000, app::SimulationEngine::compiled};
+  assert(provenance_signature(cold_simulation.verilog_scope_provenance())
+      == object_provenance_signature);
   const auto cold_cache = cold_simulation.native_cache_statistics();
 #if defined(FSIM_HAS_LLVM)
   assert(cold_simulation.compiled_process_count() != 0);
@@ -723,6 +799,8 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
   warm_design->cache_path = provenance_cache;
   app::Simulation warm_simulation{
       std::move(*warm_design), 1000, app::SimulationEngine::compiled};
+  assert(provenance_signature(warm_simulation.verilog_scope_provenance())
+      == object_provenance_signature);
   const auto warm_cache = warm_simulation.native_cache_statistics();
 #if defined(FSIM_HAS_LLVM)
   assert(warm_cache.hits != 0);
@@ -738,6 +816,8 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
   debug_design->cache_path = provenance_cache;
   app::Simulation debug_simulation{
       std::move(*debug_design), 1000, app::SimulationEngine::debug};
+  assert(provenance_signature(debug_simulation.verilog_scope_provenance())
+      == object_provenance_signature);
   const auto debug_cache = debug_simulation.native_cache_statistics();
 #if defined(FSIM_HAS_LLVM)
   assert(debug_cache.misses != 0);

@@ -348,6 +348,7 @@ std::optional<project::Config> make_direct_config(
             continue;
         }
         source_set.standard = *canonical_standard;
+        source_set.compatibility_switches = invocation.compatibility_switches;
         source_set.library = invocation.library;
         source_set.compilation_unit = invocation.compilation_unit.value_or(
             invocation.command == Command::compile
@@ -493,6 +494,11 @@ void print_help(std::ostream& output, const std::string_view program)
         << "      --lang LANGUAGE      Language for every direct source file\n"
         << "      --standard VERSION   Standard for direct source files\n"
         << "                           VHDL: 87/1987, 93/1993, 00/2000, 02/2002, 08/2008\n"
+        << "                           Verilog: 95/1995, 01/2001, 2001-noconfig, 05/2005\n"
+        << "                           SystemVerilog: 05/2005, 09/2009, 12/2012, 17/2017\n"
+        << "      --compatibility NAME Explicit compatibility switch; repeatable\n"
+        << "                           keyword-profile, implicit-net, port-connection, sizing,\n"
+        << "                           lifetime, scheduler-assertion, configuration\n"
         << "      --uvm-release VERSION\n"
         << "                           Governed SystemVerilog UVM release: 1.2 or 2020.3.1\n"
         << "      --compilation-unit file|source-set\n"
@@ -691,6 +697,28 @@ std::optional<Invocation> parse_arguments(
           return std::nullopt;
         }
         invocation.standard = std::string(*value);
+      } else if (is_option(argument, "", "--compatibility")) {
+        const auto value = take_value(
+            index, argc, argv, argument, "--compatibility", diagnostics);
+        const auto canonical = value.has_value()
+            ? project::parse_compatibility_switch(*value)
+            : std::nullopt;
+        if (!canonical) {
+          argument_error(
+              diagnostics,
+              "--compatibility requires a supported switch name");
+          return std::nullopt;
+        }
+        if (std::ranges::find(
+                invocation.compatibility_switches, *canonical)
+            != invocation.compatibility_switches.end()) {
+          argument_error(
+              diagnostics,
+              "duplicate --compatibility switch '"
+                  + std::string { *canonical } + "'");
+          return std::nullopt;
+        }
+        invocation.compatibility_switches.emplace_back(*canonical);
       } else if (is_option(argument, "", "--uvm-release")) {
         const auto value = take_value(
             index, argc, argv, argument, "--uvm-release", diagnostics);
@@ -1204,6 +1232,14 @@ std::optional<Invocation> parse_arguments(
           "incremental SystemC compile/link commands");
       return std::nullopt;
     }
+    if (!invocation.compatibility_switches.empty()
+        && *invocation.language != project::Language::verilog
+        && *invocation.language != project::Language::system_verilog) {
+      argument_error(
+          diagnostics,
+          "--compatibility is available only for Verilog/SystemVerilog");
+      return std::nullopt;
+    }
     if (!valid_library_name(invocation.library)) {
       argument_error(
           diagnostics, "compile requires a safe logical-library name");
@@ -1236,6 +1272,7 @@ std::optional<Invocation> parse_arguments(
     }
     if (!invocation.objects.empty() || !invocation.systemc_plugins.empty()
         || invocation.language.has_value() || invocation.standard.has_value()
+        || !invocation.compatibility_switches.empty()
         || !invocation.tops.empty() || invocation.design.has_value()
         || !invocation.systemc_link_options.empty()
         || !invocation.systemc_libraries.empty()) {
@@ -1259,6 +1296,7 @@ std::optional<Invocation> parse_arguments(
     }
     if (!invocation.files.empty() || !invocation.systemc_plugins.empty()
         || invocation.language.has_value() || invocation.standard.has_value()
+        || !invocation.compatibility_switches.empty()
         || !invocation.include_directories.empty() || !invocation.defines.empty()
         || !invocation.systemc_compile_options.empty()
         || !invocation.tops.empty() || invocation.design.has_value()) {
@@ -1280,6 +1318,7 @@ std::optional<Invocation> parse_arguments(
     }
     if (!invocation.files.empty() || invocation.language.has_value()
         || invocation.standard.has_value()
+        || !invocation.compatibility_switches.empty()
         || !invocation.include_directories.empty()
         || !invocation.defines.empty() || invocation.design.has_value()
         || !invocation.library_mappings.empty()
@@ -1303,6 +1342,7 @@ std::optional<Invocation> parse_arguments(
         || !invocation.objects.empty() || !invocation.systemc_plugins.empty()
         || !invocation.tops.empty()
         || invocation.language.has_value() || invocation.standard.has_value()
+        || !invocation.compatibility_switches.empty()
         || !invocation.include_directories.empty()
         || !invocation.defines.empty() || !invocation.search_libraries.empty()
         || !invocation.library_mappings.empty()

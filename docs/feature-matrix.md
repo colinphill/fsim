@@ -1477,6 +1477,24 @@ machine-checked digests and retained 14-witness matrix result.
 | V2-SV-151-03 | Exact wide debugger, callback, VCD, C API, binary file/memory, `.fsimobj`, `.fsimdesign`, mapped/relocated `.fsimlib`, class/constraint-HIR, and native-cache service boundaries | execute | [wide file and debugger fixture](../tests/app/sv_file_application_test.cpp), [artifact profiles](../tests/app/application_test_artifact_phases.cpp) | [stale/malformed/corrupt/oversized rollback matrix](../tests/artifact), [file negatives](../tests/runtime/runtime_file_tests.cpp) | [arbitrary-width binary read](../src/runtime/simir_file_binary.cpp), [synchronized artifact codecs](../src/app/application_design_artifact_codec.cpp) | [fully compiled 137-bit LLVM O0/O2 file/cache differential](../tests/app/sv_file_application_test.cpp), [artifact relocation/cache differential](../tests/app/application_test_artifact_phases.cpp), [public API round trip](../tests/api/api_test.cpp) |
 | V2-SV-151-04 | Width, work, and storage limits plus malformed type/profile, unsupported formatted scan, lossy boundary, stale schema, corrupt publication, and oversized-line failures are cataloged and transactional | execute | [bounded positive matrix](../tests/elaboration/elaborator_sv_constant_test.cpp) | [negative and rollback matrix](../tests/elaboration/elaborator_sv_file_test.cpp), [artifact tests](../tests/artifact), [runtime file tests](../tests/runtime/runtime_file_tests.cpp) | [governed validation and transactional publication](../src/elaboration), [artifact writers](../src/library/portable_unit.cpp) | [fifteen-gate Batch 151 differential owners](../docs/implementation_plan_v2.md) |
 
+## Older Verilog and SystemVerilog selectable modes
+
+Batch 167 adds six explicit older revisions and seven independent compatibility
+switches without changing the Verilog-2005 or SystemVerilog-2017 defaults. The
+two 17-row inventories have zero active obligations. Their six-row revision and
+seven-row switch corpora freeze exact positive/negative, diagnostic, width,
+provenance and artifact evidence; the registered 16-witness serial matrix
+retains one log per witness. Compatibility switches are semantic choices, not
+claims of full historical tool emulation and not permission to use later
+grammar.
+
+| ID | Precisely bounded feature | Status | P+ | P- | E | R |
+|---|---|---|---|---|---|---|
+| V2-SV-167-01 | Verilog-1995, Verilog-2001, Verilog-2001-noconfig and SystemVerilog-2005/2009/2012 retain distinct parser, predefined-service, semantic-unit, specialization and cache identities | execute | [six-row positive corpus](../tests/feature_matrix/verilog_systemverilog_revision_corpus.tsv) | [six exact diagnostic triples](../tests/frontend/frontend_sv_conformance_tests.cpp) | [standard-indexed application analysis](../src/app/application_analysis.cpp) | [six-mode interpreter/LLVM O0/O2 mixed differential](../tests/app/typed_boundary_application_test.cpp) |
+| V2-SV-167-02 | `keyword-profile`, `implicit-net`, `port-connection`, `sizing`, `lifetime`, `scheduler-assertion`, and `configuration` canonicalize independently and never widen later grammar or packed widths | execute | [seven-row switch corpus](../tests/feature_matrix/verilog_systemverilog_compatibility_corpus.tsv) | [per-switch later-grammar rejection](../tests/frontend/frontend_sv_conformance_tests.cpp) | [canonical profile parsing and project ownership](../src/project/project.cpp) | [complete explicit-profile execution](../tests/app/typed_boundary_application_test.cpp) |
+| V2-SV-167-03 | Exact revision/profile provenance survives sources, includes, semantic units, public C/C++/Tcl/debugger/VPI/VCD views, objects, designs, cold/warm caches, checkpoints, source hiding and relocation | execute | [public provenance differential](../tests/api/api_test.cpp) | [partial/stale/omitted profile rejection](../tests/app/application_test_artifact_phases.cpp) | [portable object/design profile tables](../src/artifact/design.cpp) | [source-hidden six-mode artifact matrix](../tests/app/application_test_artifact_phases.cpp) |
+| V2-SV-167-04 | A serial retained-log closure composes all six revisions, seven switches, engines/caches, artifacts, mixed languages, public services, platform contracts and governed resource ceilings | execute | [inventory and runner contract](../cmake/CheckVerilogSystemVerilogStandardModeInventory.cmake) | [required transcript-token validation](../cmake/RunVerilogSystemVerilogStandardModeClosureMatrix.cmake) | [16 ordered witnesses](../tests/CMakeLists.txt) | [retained serial closure runner](../cmake/RunVerilogSystemVerilogStandardModeClosureMatrix.cmake) |
+
 ## Completed v1 feature groups
 
 | ID | Required feature group | Status | P+ | P- | E | R |

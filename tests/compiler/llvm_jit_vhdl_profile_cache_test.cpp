@@ -53,7 +53,13 @@ void test_vhdl_language_profile_cache_identity(
     materialize(make_process("2008", std::string { compatibility }), 1, 0);
     materialize(make_process("1993", std::string { compatibility }), 0, 1);
     materialize(make_process("2008", "changed-compatibility-profile"), 0, 1);
-    assert(cached_object_count(cache_directory) == 3U);
+    materialize(make_process("systemverilog-2017", "none"), 0, 1);
+    materialize(make_process("systemverilog-2009", "none"), 0, 1);
+    materialize(
+        make_process("systemverilog-2009", "implicit-net,sizing"), 0, 1);
+    materialize(
+        make_process("systemverilog-2009", "implicit-net,sizing"), 1, 0);
+    assert(cached_object_count(cache_directory) == 6U);
 }
 
 } // namespace fsim::tests::compiler

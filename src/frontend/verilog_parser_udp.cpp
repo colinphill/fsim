@@ -183,6 +183,8 @@ VerilogUdpDeclaration VerilogParser::parse_udp_declaration(
     const Token& start) {
   VerilogUdpDeclaration declaration;
   declaration.language = language_;
+  declaration.standard_revision = standard_revision_;
+  declaration.verilog_compatibility_profile = compatibility_profile_;
   declaration.time_unit = current_time_unit_;
   declaration.time_precision = current_time_precision_;
   const auto name = expect_identifier("UDP name");

@@ -46,7 +46,7 @@ int main() {
   metadata.roots.push_back({"primary", "sv:work.tb", "sv:work.tb"});
   metadata.bindings.push_back({"primary.child", std::nullopt, "std_logic"});
   metadata.objects.push_back({ checksum("metadata"), checksum("compilation"), "systemverilog",
-      "2017", "none", "work", {}, { checksum("unit") } });
+      "2009", "implicit-net,sizing", "work", {}, { checksum("unit") } });
   metadata.objects.push_back({
       checksum("vhdl-metadata"), checksum("vhdl-compilation"), "vhdl",
       "1993", "fsim-synopsys-ieee-compat-v2", "vhdl_work",
@@ -62,6 +62,8 @@ int main() {
         "ieee.std_logic_unsigned",
         "synopsys-legacy-ieee:1990-1992:fsim-synopsys-ieee-compat-v2",
         checksum("synopsys-unsigned-source")}}});
+  metadata.verilog_unit_provenance.push_back(
+      {0, "systemverilog", "2009", "implicit-net,sizing"});
   metadata.payloads = {
       {"runtime", "state/runtime.bin", checksum(state_bytes)},
       {"semantics", "state/semantics.bin", checksum(state_bytes)},
@@ -80,6 +82,54 @@ int main() {
   assert(fsim::artifact::deserialize_design_metadata(
       encoded, "design", decode_diagnostics) == metadata);
   assert(!decode_diagnostics.has_error());
+
+  auto changed_sv_revision = metadata;
+  changed_sv_revision.objects.front().standard = "2017";
+  assert(fsim::artifact::compute_design_digest(changed_sv_revision)
+      != metadata.design_digest);
+  auto changed_sv_compatibility = metadata;
+  changed_sv_compatibility.objects.front().compatibility_profile = "none";
+  assert(fsim::artifact::compute_design_digest(changed_sv_compatibility)
+      != metadata.design_digest);
+  auto changed_sv_unit_provenance = metadata;
+  changed_sv_unit_provenance.verilog_unit_provenance.front()
+      .compatibility_profile = "sizing";
+  assert(fsim::artifact::compute_design_digest(changed_sv_unit_provenance)
+      != metadata.design_digest);
+  changed_sv_unit_provenance.design_digest =
+      fsim::artifact::compute_design_digest(changed_sv_unit_provenance);
+  fsim::diagnostic::Engine stale_sv_unit_diagnostics;
+  assert(!fsim::artifact::deserialize_design_metadata(
+      fsim::artifact::serialize_design_metadata(changed_sv_unit_provenance),
+      "stale-verilog-unit-provenance", stale_sv_unit_diagnostics));
+  assert(stale_sv_unit_diagnostics.has_error());
+  auto invalid_sv_unit_provenance = metadata;
+  invalid_sv_unit_provenance.verilog_unit_provenance.front().standard
+      = "2017";
+  invalid_sv_unit_provenance.design_digest
+      = fsim::artifact::compute_design_digest(invalid_sv_unit_provenance);
+  fsim::diagnostic::Engine invalid_sv_unit_diagnostics;
+  assert(!fsim::artifact::deserialize_design_metadata(
+      fsim::artifact::serialize_design_metadata(invalid_sv_unit_provenance),
+      "invalid-verilog-unit-provenance", invalid_sv_unit_diagnostics));
+  assert(invalid_sv_unit_diagnostics.has_error());
+  auto partial_sv_unit_provenance = metadata;
+  partial_sv_unit_provenance.verilog_unit_provenance.front()
+      .compatibility_profile.clear();
+  partial_sv_unit_provenance.design_digest =
+      fsim::artifact::compute_design_digest(partial_sv_unit_provenance);
+  fsim::diagnostic::Engine partial_sv_unit_diagnostics;
+  assert(!fsim::artifact::deserialize_design_metadata(
+      fsim::artifact::serialize_design_metadata(partial_sv_unit_provenance),
+      "partial-verilog-unit-provenance", partial_sv_unit_diagnostics));
+  assert(partial_sv_unit_diagnostics.has_error());
+  auto future_format = metadata;
+  ++future_format.format;
+  fsim::diagnostic::Engine future_format_diagnostics;
+  assert(!fsim::artifact::deserialize_design_metadata(
+      fsim::artifact::serialize_design_metadata(future_format),
+      "future-standard-compatibility-design", future_format_diagnostics));
+  assert(future_format_diagnostics.has_error());
 
   auto changed_unit_provenance = metadata;
   changed_unit_provenance.vhdl_unit_provenance.front().standard = "2008";
@@ -107,7 +157,9 @@ int main() {
   auto format_one = metadata;
   format_one.format = 1;
   format_one.objects.erase(format_one.objects.begin() + 1);
+  format_one.objects.front().compatibility_profile = "none";
   format_one.vhdl_unit_provenance.clear();
+  format_one.verilog_unit_provenance.clear();
   format_one.unit_count = 1;
   format_one.uvm_release = "none";
   format_one.uvm_source_identity.clear();

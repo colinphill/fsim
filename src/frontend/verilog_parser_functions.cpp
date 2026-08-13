@@ -13,9 +13,19 @@ FunctionDeclaration VerilogParser::parse_function(
   FunctionDeclaration function;
   function.language = language_;
   if (match_keyword("automatic")) {
+    (void)require_standard(
+        "an automatic function",
+        StandardRevision::Verilog2001,
+        previous(),
+        "FSIM-SV-PARSE-347");
     function.automatic = true;
     function.lifetime_explicit = true;
   } else if (match_keyword("static")) {
+    (void)require_standard(
+        "an explicitly static function",
+        StandardRevision::SystemVerilog2005,
+        previous(),
+        "FSIM-SV-PARSE-347");
     function.lifetime_explicit = true;
   } else {
     function.automatic = default_automatic;
@@ -104,6 +114,7 @@ FunctionDeclaration VerilogParser::parse_function(
 
   std::vector<std::string> classic_header_arguments;
   if (match(TokenKind::LeftParen)) {
+    const auto header_open = previous();
     const bool classic_header =
         at(TokenKind::Identifier)
         && (at(TokenKind::Comma, 1)
@@ -124,6 +135,11 @@ FunctionDeclaration VerilogParser::parse_function(
         classic_header_arguments.push_back(argument_name.text);
       } while (match(TokenKind::Comma));
     } else {
+    (void)require_standard(
+        "an ANSI function header",
+        StandardRevision::Verilog2001,
+        header_open,
+        "FSIM-SV-PARSE-347");
     Type inherited_type;
     bool have_inherited_type = false;
     while (!at_end() && !at(TokenKind::RightParen)) {
@@ -466,9 +482,19 @@ TaskDeclaration VerilogParser::parse_task(
     const bool default_automatic) {
   TaskDeclaration task;
   if (match_keyword("automatic")) {
+    (void)require_standard(
+        "an automatic task",
+        StandardRevision::Verilog2001,
+        previous(),
+        "FSIM-SV-PARSE-347");
     task.automatic = true;
     task.lifetime_explicit = true;
   } else if (match_keyword("static")) {
+    (void)require_standard(
+        "an explicitly static task",
+        StandardRevision::SystemVerilog2005,
+        previous(),
+        "FSIM-SV-PARSE-347");
     task.lifetime_explicit = true;
   } else {
     task.automatic = default_automatic;
@@ -491,6 +517,7 @@ TaskDeclaration VerilogParser::parse_task(
 
   std::vector<std::string> classic_header_arguments;
   if (match(TokenKind::LeftParen)) {
+    const auto header_open = previous();
     const bool classic_header =
         at(TokenKind::Identifier)
         && (at(TokenKind::Comma, 1)
@@ -509,6 +536,11 @@ TaskDeclaration VerilogParser::parse_task(
         classic_header_arguments.push_back(argument_name.text);
       } while (match(TokenKind::Comma));
     } else {
+    (void)require_standard(
+        "an ANSI task header",
+        StandardRevision::Verilog2001,
+        header_open,
+        "FSIM-SV-PARSE-347");
     Type inherited_type;
     PortDirection inherited_direction{PortDirection::Input};
     bool have_inherited_formal = false;

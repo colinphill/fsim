@@ -638,6 +638,176 @@ files = ["project_config_test.cpp"]
         "VHDL standard-mode rejection is targeted and deterministic");
 }
 
+void test_verilog_systemverilog_standard_values()
+{
+    using fsim::project::SystemVerilogStandard;
+    using fsim::project::VerilogStandard;
+    const std::array verilog_aliases {
+        std::tuple { "95", "1995", VerilogStandard::verilog_1995 },
+        std::tuple { "verilog-1995", "1995", VerilogStandard::verilog_1995 },
+        std::tuple { "01", "2001", VerilogStandard::verilog_2001 },
+        std::tuple { "v2001", "2001", VerilogStandard::verilog_2001 },
+        std::tuple { "2001-noconfig", "2001-noconfig",
+            VerilogStandard::verilog_2001_noconfig },
+        std::tuple { "verilog-2001-noconfig", "2001-noconfig",
+            VerilogStandard::verilog_2001_noconfig },
+        std::tuple { "05", "2005", VerilogStandard::verilog_2005 },
+        std::tuple { "verilog-2005", "2005", VerilogStandard::verilog_2005 },
+    };
+    for (const auto& [spelling, canonical, identity] : verilog_aliases) {
+        fsim::diagnostic::Engine diagnostics;
+        const auto manifest = std::string { "schema = 2\n[project]\ntop = \"standard_mode\"\n"
+                                            "[[source_set]]\nlanguage = \"verilog\"\nstandard = \"" }
+            + spelling
+            + "\"\nfiles = [\"project_config_test.cpp\"]\n";
+        const auto config = fsim::project::parse(
+            manifest, "verilog-standard.toml",
+            std::filesystem::path { __FILE__ }.parent_path(), diagnostics);
+        check(
+            config && !diagnostics.has_error()
+                && config->source_sets.size() == 1
+                && config->source_sets[0].standard == canonical,
+            std::string { "Verilog standard alias is canonicalized: " }
+                + spelling);
+        check(
+            fsim::project::parse_verilog_standard(spelling) == identity
+                && fsim::project::to_string(identity) == canonical,
+            std::string { "Verilog standard identity round-trips: " }
+                + spelling);
+    }
+
+    const std::array systemverilog_aliases {
+        std::tuple { "05", "2005",
+            SystemVerilogStandard::systemverilog_2005 },
+        std::tuple { "systemverilog-2005", "2005",
+            SystemVerilogStandard::systemverilog_2005 },
+        std::tuple { "09", "2009",
+            SystemVerilogStandard::systemverilog_2009 },
+        std::tuple { "sv-2009", "2009",
+            SystemVerilogStandard::systemverilog_2009 },
+        std::tuple { "12", "2012",
+            SystemVerilogStandard::systemverilog_2012 },
+        std::tuple { "systemverilog-2012", "2012",
+            SystemVerilogStandard::systemverilog_2012 },
+        std::tuple { "17", "2017",
+            SystemVerilogStandard::systemverilog_2017 },
+        std::tuple { "sv-2017", "2017",
+            SystemVerilogStandard::systemverilog_2017 },
+    };
+    for (const auto& [spelling, canonical, identity] : systemverilog_aliases) {
+        fsim::diagnostic::Engine diagnostics;
+        const auto manifest = std::string { "schema = 2\n[project]\ntop = \"standard_mode\"\n"
+                                            "[[source_set]]\nlanguage = \"systemverilog\"\nstandard = \"" }
+            + spelling
+            + "\"\nfiles = [\"project_config_test.cpp\"]\n";
+        const auto config = fsim::project::parse(
+            manifest, "systemverilog-standard.toml",
+            std::filesystem::path { __FILE__ }.parent_path(), diagnostics);
+        check(
+            config && !diagnostics.has_error()
+                && config->source_sets.size() == 1
+                && config->source_sets[0].standard == canonical,
+            std::string { "SystemVerilog standard alias is canonicalized: " }
+                + spelling);
+        check(
+            fsim::project::parse_systemverilog_standard(spelling) == identity
+                && fsim::project::to_string(identity) == canonical,
+            std::string { "SystemVerilog standard identity round-trips: " }
+                + spelling);
+    }
+
+    check(
+        fsim::project::parse_language("Verilog-2001-noconfig")
+                == fsim::project::Language::verilog
+            && fsim::project::parse_language("SV-2009")
+                == fsim::project::Language::system_verilog
+            && fsim::project::default_standard(
+                   fsim::project::Language::verilog)
+                == "2005"
+            && fsim::project::default_standard(
+                   fsim::project::Language::system_verilog)
+                == "2017",
+        "explicit language profiles retain the Verilog-2005 and SystemVerilog-2017 defaults");
+    check(
+        !fsim::project::canonical_standard(
+            fsim::project::Language::verilog, "sv-2009")
+            && !fsim::project::canonical_standard(
+                fsim::project::Language::system_verilog, "verilog-1995")
+            && !fsim::project::parse_verilog_standard("1996")
+            && !fsim::project::parse_systemverilog_standard("2018"),
+        "cross-family and unknown Verilog/SystemVerilog standards are rejected");
+
+    const std::array rejected {
+        std::tuple { "verilog", "sv-2009" },
+        std::tuple { "systemverilog", "2018" },
+    };
+    for (const auto& [language, standard] : rejected) {
+        fsim::diagnostic::Engine diagnostics;
+        const auto manifest = std::string { "schema = 2\n[project]\ntop = \"standard_mode\"\n"
+                                            "[[source_set]]\nlanguage = \"" }
+            + language + "\"\nstandard = \"" + standard
+            + "\"\nfiles = [\"project_config_test.cpp\"]\n";
+        const auto config = fsim::project::parse(
+            manifest, "rejected-standard.toml",
+            std::filesystem::path { __FILE__ }.parent_path(), diagnostics);
+        check(
+            !config.has_value()
+                && std::ranges::any_of(
+                    diagnostics.diagnostics(), [&](const auto& diagnostic) {
+                        return diagnostic.message.find(
+                                   std::string { "unsupported standard '" }
+                                   + standard + "' for " + language)
+                            != std::string::npos;
+                    }),
+            std::string { "standard rejection is source-owned: " } + language + '/' + standard);
+    }
+}
+
+void test_verilog_systemverilog_compatibility_selection()
+{
+    fsim::diagnostic::Engine diagnostics;
+    const auto config = fsim::project::parse(
+        R"(schema = 2
+[project]
+top = "compatibility_mode"
+[[source_set]]
+language = "systemverilog"
+standard = "2009"
+compatibility = ["sizing", "implicit_net", "keyword-profile"]
+files = ["project_config_test.cpp"]
+)",
+        "compatibility.toml",
+        std::filesystem::path { __FILE__ }.parent_path(), diagnostics);
+    check(
+        config && !diagnostics.has_error()
+            && fsim::project::compatibility_profile(
+                   config->source_sets.front().compatibility_switches)
+                == "keyword-profile,implicit-net,sizing",
+        "compatibility switches canonicalize independently of revision and input order");
+    check(
+        fsim::project::parse_compatibility_switch("scheduler_assertion")
+                == "scheduler-assertion"
+            && !fsim::project::parse_compatibility_switch("future-switch"),
+        "compatibility switch aliases round-trip and unknown switches are rejected");
+
+    fsim::diagnostic::Engine invalid_diagnostics;
+    const auto invalid = fsim::project::parse(
+        R"(schema = 2
+[project]
+top = "invalid_compatibility"
+[[source_set]]
+language = "vhdl"
+compatibility = ["sizing"]
+files = ["project_config_test.cpp"]
+)",
+        "invalid-compatibility.toml",
+        std::filesystem::path { __FILE__ }.parent_path(),
+        invalid_diagnostics);
+    check(
+        !invalid && invalid_diagnostics.has_error(),
+        "compatibility switches reject cross-family selection");
+}
+
 } // namespace
 
 int main()
@@ -654,6 +824,8 @@ int main()
     test_delay_mode_values();
     test_uvm_release_values();
     test_vhdl_standard_values();
+    test_verilog_systemverilog_standard_values();
+    test_verilog_systemverilog_compatibility_selection();
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";
         return 1;

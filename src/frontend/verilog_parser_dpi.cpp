@@ -46,7 +46,9 @@ matching_right_parenthesis(
 
 bool VerilogParser::dpi_declaration_start(
     const std::string_view direction) const {
-  return keyword(direction) && at(TokenKind::StringLiteral, 1);
+  return (keyword(direction)
+             || (at(TokenKind::Identifier) && current().text == direction))
+      && at(TokenKind::StringLiteral, 1);
 }
 
 void VerilogParser::parse_dpi_declaration(
@@ -56,7 +58,11 @@ void VerilogParser::parse_dpi_declaration(
     const SystemVerilogDpiOwnerKind owner_kind,
     std::string owner_identity) {
   const auto diagnostics_before = diagnostics_.size();
+  (void)require_standard(
+      "a DPI declaration", StandardRevision::SystemVerilog2005, start,
+      "FSIM-SV-PARSE-351");
   SystemVerilogDpiDeclaration declaration;
+  declaration.standard_revision = standard_revision_;
   declaration.direction = direction;
   declaration.owner_kind = owner_kind;
   declaration.owner_identity = std::move(owner_identity);

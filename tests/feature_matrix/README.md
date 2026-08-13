@@ -46,6 +46,25 @@ provenance anchors. The registered 15-witness serial closure matrix retains
 one log per stage and covers interpreter/LLVM, artifacts/caches, relocation,
 public boundaries and platform/resource contracts.
 
+Batch 167's completed older-Verilog/SystemVerilog evidence contract is the composition
+of `verilog_systemverilog_standard_mode_inventory.tsv` and
+`verilog_systemverilog_compatibility_inventory.tsv`. Each contains 17 preserved and zero active obligations
+assigned one-to-one to Changes 2-18. The first spans Verilog-1995,
+Verilog-2001, Verilog-2001-noconfig, SystemVerilog-2005, SystemVerilog-2009 and
+SystemVerilog-2012 behavior. The second independently governs keyword-profile,
+implicit-net, port-connection, sizing, lifetime, scheduler/assertion and
+configuration switches so compatibility never silently enables a later
+standard. The six-row revision corpus and seven-row switch corpus bind exact
+positive/negative stages, diagnostic coordinates, execution, arbitrary-width,
+provenance and artifact anchors. The registered 16-witness serial matrix
+retains one log per witness and a 17-row stage ledger across engines, caches,
+artifacts, mixed languages, public services, platforms and resources. The
+mode, compatibility, revision-corpus and switch-corpus SHA-256 identities are
+`21a05e4732aa8da8b546f2c7048ee2b5d51cdca4572114fb5c9946d4bfad8d3e`,
+`5e7a74d4f9c0af29e28c4d0b9b35b96a5c9df6482b53759633f80904812c5f6f`,
+`8c3018215c3e8c7d1fdc90c275d2f3d3e4ee065956c8b205fb740a8d750981f7`, and
+`34eca16ab78a6e2ab73f1e7d77cb36091fad5571b89f4ba5f8c512d69355a24a`.
+
 ## Intended atomic layout
 
 New tests should use the stable feature ID from the matrix and keep one
@@ -100,6 +119,11 @@ These suites are the evidence currently referenced by the matrix:
 | [feature_matrix/verilog_gap_inventory.tsv](verilog_gap_inventory.tsv) | Authoritative Batch 164 IEEE 1364-2005 clause inventory with 34 supported rows, zero active residual rows, and three explicit SDF, removed TF/ACC, and informative-optional deferrals after Change 16 closed the mixed-language and public-boundary surface; every supported row has parser, analyzer, elaboration, runtime, positive, negative, execution, diagnostic, and resource ownership |
 | [feature_matrix/verilog_literal_width_inventory.tsv](verilog_literal_width_inventory.tsv) | Separate Batch 164 audit of every known Verilog literal-width cap and host-word assumption across lexical text, parsing, folding, materialization, runtime packed storage, LLVM, scalar/VPI host formats, memory files, traces, public boundaries, artifacts, and caches, now closed at 12 preserved paths, zero active obligations, and three governed physical boundaries after Change 17 proved exact artifact, checkpoint, relocation, replay, and native-cache identity |
 | [feature_matrix/verilog_release_closure.tsv](verilog_release_closure.tsv) | Authoritative Batch 164 execution closure mapping all 34 supported clause rows and 12 preserved width paths to 138 positive, negative, and execution witnesses across exactly 23 registered CTests and 17 governed direct, engine, cache, debugger, trace, artifact, checkpoint, multiple-root, VHDL, and SystemC stages under explicit 6 GiB, delta, trace, stage, and matrix limits |
+| [feature_matrix/verilog_systemverilog_standard_mode_inventory.tsv](verilog_systemverilog_standard_mode_inventory.tsv) | Batch 167's authoritative 17-row older-revision obligation ledger, preserving Changes 2-18 with zero active rows across Verilog-1995, Verilog-2001, Verilog-2001-noconfig, and SystemVerilog-2005/2009/2012 |
+| [feature_matrix/verilog_systemverilog_compatibility_inventory.tsv](verilog_systemverilog_compatibility_inventory.tsv) | Batch 167's independent 17-row ledger for the seven explicit keyword, implicit-net, port, sizing, lifetime, scheduler/assertion, and configuration compatibility switches; no row authorizes later grammar |
+| [feature_matrix/verilog_systemverilog_revision_corpus.tsv](verilog_systemverilog_revision_corpus.tsv) | Six ordered revision rows freezing positive/negative stages, exact diagnostic codes and coordinates, execution, arbitrary-width, include provenance, and artifact-mismatch anchors |
+| [feature_matrix/verilog_systemverilog_compatibility_corpus.tsv](verilog_systemverilog_compatibility_corpus.tsv) | Seven ordered switch rows freezing independent canonical selection, 257-bit preservation, later-grammar rejection, public provenance, execution, and artifact evidence |
+| [RunVerilogSystemVerilogStandardModeClosureMatrix.cmake](../../cmake/RunVerilogSystemVerilogStandardModeClosureMatrix.cmake) | Registered 16-witness serial retained-log closure across revisions/switches, interpreter/LLVM O0/O2, cold/warm caches, artifacts/replay, mixed VHDL/SystemC, C/C++/Tcl/VPI, MSVC/Windows, and governed resource contracts |
 | [feature_matrix/systemverilog_gap_inventory.tsv](systemverilog_gap_inventory.tsv) | Authoritative Batch 165 IEEE 1800-2017 clause inventory currently freezing 25 reviewed or closed supported families, five one-to-one active Changes 12-16 residual owners, and five explicit SDF, protected-envelope, FST, Accellera-SystemC/TLM/SCV, and legacy-PLI deferrals after timing-region closure |
 | [feature_matrix/systemverilog_literal_width_inventory.tsv](systemverilog_literal_width_inventory.tsv) | Separate Batch 165 audit of SystemVerilog bit-string, based-number, unbased-unsized and host-word assumptions across lexical text, folding, types, constraints, containers, both engines, DPI/VPI, mixed debugging, traces, artifacts and UVM; it freezes 17 preserved paths, four active removal obligations and four explicitly governed physical boundaries |
 | [app/sv_parameter_sizing_application_test.cpp](../app/sv_parameter_sizing_application_test.cpp) | Exact arbitrary-width self/context sizing and signedness, two-state casts and aggregate stores, lazy logical/conditional evaluation, concatenation/replication/streaming and dynamic selections, common-profile `inside`/`case inside`, wildcard equality, guarded/binding/tagged/structured `case matches`, and interpreter/LLVM O0/O2 cold/warm parity |

@@ -51,6 +51,9 @@ struct CallbackCounts {
     std::uint32_t scheduler_phase_mask { };
     fsim_object_t detailed_process { FSIM_INVALID_OBJECT };
     std::string detailed_path;
+    std::string provenance_unit;
+    std::string provenance_standard;
+    std::string provenance_profile;
     std::uint32_t detailed_line { };
     std::uint64_t detailed_instruction { UINT64_MAX };
     std::string manifest;
@@ -148,6 +151,27 @@ void safe_point_info(
         assert(info->source_path.size != 0);
         assert(info->source_line != 0);
         assert(info->source_column != 0);
+        const auto extension = std::filesystem::path(std::string(
+            info->source_path.data, info->source_path.size)).extension();
+        if (extension == ".sv" || extension == ".v") {
+            assert(info->provenance_unit.data != nullptr);
+            assert(info->provenance_unit.size != 0);
+            assert(info->provenance_source_path.size != 0);
+            assert(info->provenance_language.size != 0);
+            assert(info->provenance_standard.size != 0);
+            assert(info->provenance_compatibility_profile.size != 0);
+            assert(info->provenance_unit_id != UINT32_MAX);
+            assert(info->provenance_source_id != UINT32_MAX);
+            assert(info->provenance_source_line != 0);
+            state.provenance_unit.assign(
+                info->provenance_unit.data, info->provenance_unit.size);
+            state.provenance_standard.assign(
+                info->provenance_standard.data,
+                info->provenance_standard.size);
+            state.provenance_profile.assign(
+                info->provenance_compatibility_profile.data,
+                info->provenance_compatibility_profile.size);
+        }
         state.detailed_process = info->process;
         state.detailed_path.assign(
             info->source_path.data, info->source_path.size);
@@ -784,6 +808,25 @@ max_deltas = 1000
     assert(
         (child_instance_info.flags & FSIM_OBJECT_FLAG_HAS_SOURCE)
         == FSIM_OBJECT_FLAG_HAS_SOURCE);
+    assert(
+        (child_instance_info.flags & FSIM_OBJECT_FLAG_HAS_PROVENANCE)
+        == FSIM_OBJECT_FLAG_HAS_PROVENANCE);
+    assert(std::string(
+        child_instance_info.provenance_unit.data,
+        child_instance_info.provenance_unit.size) == "work::child");
+    assert(std::string(
+        child_instance_info.provenance_language.data,
+        child_instance_info.provenance_language.size) == "systemverilog");
+    assert(std::string(
+        child_instance_info.provenance_standard.data,
+        child_instance_info.provenance_standard.size)
+        == "systemverilog-2017");
+    assert(std::string(
+        child_instance_info.provenance_compatibility_profile.data,
+        child_instance_info.provenance_compatibility_profile.size) == "none");
+    assert(child_instance_info.provenance_unit_id != UINT32_MAX);
+    assert(child_instance_info.provenance_source_id != UINT32_MAX);
+    assert(child_instance_info.provenance_source_line != 0);
     std::vector<fsim_object_t> child_instance_children;
     assert(
         fsim_session_visit_children(
@@ -1502,6 +1545,9 @@ max_deltas = 1000
         == "tb.sv");
     assert(counts.detailed_line > 0);
     assert(counts.detailed_instruction != UINT64_MAX);
+    assert(counts.provenance_unit.starts_with("work::"));
+    assert(counts.provenance_standard == "systemverilog-2017");
+    assert(counts.provenance_profile == "none");
     assert(counts.reentry_attempted);
     assert(counts.reentry_status == FSIM_STATUS_UNAVAILABLE);
     assert(counts.callback_mutation_attempted);

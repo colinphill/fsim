@@ -104,12 +104,21 @@ void test_systemverilog_vpi_objects_and_errors() {
           && net_info.value->full_name == "top.u.value",
       "VPI lookup preserves exact kind, parent, simple, and full names");
 
+  fsim::runtime::SystemVerilogVpiTypeInfo provenance_type;
+  provenance_type.semantic_unit_id = 7U;
+  provenance_type.source_id = 11U;
+  provenance_type.semantic_unit = "work::escaped";
+  provenance_type.source_path = "logical/source.sv";
+  provenance_type.source_line = 7U;
+  provenance_type.source_column = 13U;
+  provenance_type.standard = "systemverilog-2009";
+  provenance_type.compatibility_profile = "keyword-profile";
   const auto escaped = first.create(SystemVerilogVpiObjectDescriptor{
       SystemVerilogVpiObjectKind::Module,
       root.value,
       "\\u.core ",
       SystemVerilogVpiSourceLocation{"logical/source.sv", 7, 13},
-      fsim::runtime::SystemVerilogVpiTypeInfo{},
+      provenance_type,
   });
   const auto escaped_leaf = first.create(
       SystemVerilogVpiObjectKind::Net, escaped.value, "leaf");
@@ -121,8 +130,23 @@ void test_systemverilog_vpi_objects_and_errors() {
           && escaped_info.value->source
           && escaped_info.value->source->file == "logical/source.sv"
           && escaped_info.value->source->line == 7
-          && escaped_info.value->source->column == 13,
+          && escaped_info.value->source->column == 13
+          && escaped_info.value->type
+          && escaped_info.value->type->semantic_unit == "work::escaped"
+          && first.lookup(escaped_leaf.value).value->type->semantic_unit
+              == "work::escaped",
       "VPI hierarchy normalizes escaped names and owns source metadata");
+  auto partial_provenance = provenance_type;
+  partial_provenance.compatibility_profile.clear();
+  require_vpi_state(
+      first.create(SystemVerilogVpiObjectDescriptor{
+          SystemVerilogVpiObjectKind::Module,
+          root.value,
+          "partial_provenance",
+          std::nullopt,
+          partial_provenance,
+      }).error == SystemVerilogVpiObjectError::InvalidType,
+      "VPI hierarchy rejects partial semantic-unit provenance");
   require_vpi_state(
       first.find("top.\\u.core ").value->handle == escaped.value
           && first.find("top.\\u.core .leaf").value->handle

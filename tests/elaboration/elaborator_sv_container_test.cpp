@@ -9,11 +9,12 @@
 
 namespace fsim::tests::elaboration {
 
-void test_systemverilog_container_lowering() {
-  using namespace fsim::runtime::simir;
-  const auto parsed = fsim::frontend::parse_text(
-      "container-lowering.sv",
-      R"(
+void test_systemverilog_container_lowering()
+{
+    using namespace fsim::runtime::simir;
+    const auto parsed = fsim::frontend::parse_text(
+        "container-lowering.sv",
+        R"(
 module container_lowering #(
     parameter int STATIC_LEFT = 3);
   typedef logic signed [31:0] key_t;
@@ -341,292 +342,272 @@ module container_lowering #(
   end
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(parsed.ok());
-  const auto elaborated = fsim::elaboration::elaborate(
-      parsed.design, "container_lowering");
-  if (!elaborated.ok()) {
-    for (const auto& diagnostic : elaborated.diagnostics) {
-      std::cerr << diagnostic.code << ": "
-                << diagnostic.message << '\n';
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(parsed.ok());
+    const auto elaborated = fsim::elaboration::elaborate(
+        parsed.design, "container_lowering");
+    if (!elaborated.ok()) {
+        for (const auto& diagnostic : elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
     }
-  }
-  assert(elaborated.ok());
-  assert(elaborated.design->container_objects().size() == 5);
-  const auto& process = elaborated.design->processes().front();
-  assert(process.container_register_count != 0);
-  assert(!process.debug_container_locals.empty());
-  assert(std::ranges::any_of(
-      process.operations,
-      [](const auto& operation) {
-        const auto* resize = fsim::runtime::simir::operation_get_if<ResizeContainer>(&operation);
-        return resize != nullptr && resize->initializer.has_value();
-      }));
-  assert(std::ranges::any_of(
-      process.operations,
-      [](const auto& operation) {
-        const auto* push = fsim::runtime::simir::operation_get_if<PushContainer>(&operation);
-        return push != nullptr && push->index.has_value();
-      }));
-  assert(std::ranges::any_of(
-      process.operations,
-      [](const auto& operation) {
-        return fsim::runtime::simir::operation_holds<ContainerExists>(operation);
-      }));
-  assert(std::ranges::any_of(
-      process.operations,
-      [](const auto& operation) {
-        return fsim::runtime::simir::operation_holds<TraverseContainer>(operation);
-      }));
-  assert(
-      std::ranges::count_if(
-          process.operations,
-          [](const auto& operation) {
-            return fsim::runtime::simir::operation_holds<
-                ContainerReduction>(operation);
-          })
-      >= 12);
-  assert(std::ranges::any_of(
-      process.operations,
-      [](const auto& operation) {
-        const auto* reduction =
-            fsim::runtime::simir::operation_get_if<ContainerReduction>(&operation);
-        if (reduction == nullptr
-            || reduction->transformation.empty()) {
-          return false;
-        }
-        const auto& graph = reduction->transformation;
-        return graph.back().value_kind
+    assert(elaborated.ok());
+    assert(elaborated.design->container_objects().size() == 5);
+    const auto& process = elaborated.design->processes().front();
+    assert(process.container_register_count != 0);
+    assert(!process.debug_container_locals.empty());
+    assert(std::ranges::any_of(
+        process.operations,
+        [](const auto& operation) {
+            const auto* resize = fsim::runtime::simir::operation_get_if<ResizeContainer>(&operation);
+            return resize != nullptr && resize->initializer.has_value();
+        }));
+    assert(std::ranges::any_of(
+        process.operations,
+        [](const auto& operation) {
+            const auto* push = fsim::runtime::simir::operation_get_if<PushContainer>(&operation);
+            return push != nullptr && push->index.has_value();
+        }));
+    assert(std::ranges::any_of(
+        process.operations,
+        [](const auto& operation) {
+            return fsim::runtime::simir::operation_holds<ContainerExists>(operation);
+        }));
+    assert(std::ranges::any_of(
+        process.operations,
+        [](const auto& operation) {
+            return fsim::runtime::simir::operation_holds<TraverseContainer>(operation);
+        }));
+    assert(
+        std::ranges::count_if(
+            process.operations,
+            [](const auto& operation) {
+                return fsim::runtime::simir::operation_holds<
+                    ContainerReduction>(operation);
+            })
+        >= 12);
+    assert(std::ranges::any_of(
+        process.operations,
+        [](const auto& operation) {
+            const auto* reduction = fsim::runtime::simir::operation_get_if<ContainerReduction>(&operation);
+            if (reduction == nullptr
+                || reduction->transformation.empty()) {
+                return false;
+            }
+            const auto& graph = reduction->transformation;
+            return graph.back().value_kind
                 == ContainerPredicateValueKind::element
-            && std::ranges::any_of(
-                graph,
-                [](const auto& node) {
-                  return node.operation
-                          == ContainerPredicateOperator::index
-                      && node.value_kind
-                          == ContainerPredicateValueKind::index;
-                })
-            && std::ranges::any_of(
-                graph,
-                [&](const auto& node) {
-                  return node.operation
-                          == ContainerPredicateOperator::conditional
-                      && node.value_kind
-                          == ContainerPredicateValueKind::element
-                      && node.left < graph.size()
-                      && node.right < graph.size()
-                      && node.third < graph.size();
-                });
-      }));
-  assert(
-      std::ranges::count_if(
-          process.operations,
-          [](const auto& operation) {
-            return fsim::runtime::simir::operation_holds<
-                OrderContainer>(operation);
-          })
-      >= 16);
-  assert(std::ranges::any_of(
-      process.operations,
-      [](const auto& operation) {
-        const auto* ordering =
-            fsim::runtime::simir::operation_get_if<OrderContainer>(&operation);
-        if (ordering == nullptr || ordering->key.empty()) {
-          return false;
-        }
-        const auto& graph = ordering->key;
-        return graph.back().value_kind
+                && std::ranges::any_of(
+                    graph,
+                    [](const auto& node) {
+                        return node.operation
+                            == ContainerPredicateOperator::index
+                            && node.value_kind
+                            == ContainerPredicateValueKind::index;
+                    })
+                && std::ranges::any_of(
+                    graph,
+                    [&](const auto& node) {
+                        return node.operation
+                            == ContainerPredicateOperator::conditional
+                            && node.value_kind
+                            == ContainerPredicateValueKind::element
+                            && node.left < graph.size()
+                            && node.right < graph.size()
+                            && node.third < graph.size();
+                    });
+        }));
+    assert(
+        std::ranges::count_if(
+            process.operations,
+            [](const auto& operation) {
+                return fsim::runtime::simir::operation_holds<
+                    OrderContainer>(operation);
+            })
+        >= 16);
+    assert(std::ranges::any_of(
+        process.operations,
+        [](const auto& operation) {
+            const auto* ordering = fsim::runtime::simir::operation_get_if<OrderContainer>(&operation);
+            if (ordering == nullptr || ordering->key.empty()) {
+                return false;
+            }
+            const auto& graph = ordering->key;
+            return graph.back().value_kind
                 == ContainerPredicateValueKind::element
-            && std::ranges::any_of(
-                graph,
-                [](const auto& node) {
-                  return node.operation
-                          == ContainerPredicateOperator::index
-                      && node.value_kind
-                          == ContainerPredicateValueKind::index;
-                })
-            && std::ranges::any_of(
-                graph,
-                [&](const auto& node) {
-                  return node.operation
-                          == ContainerPredicateOperator::conditional
-                      && node.left < graph.size()
-                      && node.right < graph.size()
-                      && node.third < graph.size();
-                });
-      }));
-  assert(
-      std::ranges::count_if(
-          process.operations,
-          [](const auto& operation) {
-            return fsim::runtime::simir::operation_holds<
-                LocateContainer>(operation);
-          })
-      >= 10);
-  assert(
-      std::ranges::count_if(
-          process.operations,
-          [](const auto& operation) {
-            const auto* locator =
-                fsim::runtime::simir::operation_get_if<LocateContainer>(&operation);
+                && std::ranges::any_of(
+                    graph,
+                    [](const auto& node) {
+                        return node.operation
+                            == ContainerPredicateOperator::index
+                            && node.value_kind
+                            == ContainerPredicateValueKind::index;
+                    })
+                && std::ranges::any_of(
+                    graph,
+                    [&](const auto& node) {
+                        return node.operation
+                            == ContainerPredicateOperator::conditional
+                            && node.left < graph.size()
+                            && node.right < graph.size()
+                            && node.third < graph.size();
+                    });
+        }));
+    assert(
+        std::ranges::count_if(
+            process.operations,
+            [](const auto& operation) {
+                return fsim::runtime::simir::operation_holds<
+                    LocateContainer>(operation);
+            })
+        >= 10);
+    assert(
+        std::ranges::count_if(
+            process.operations,
+            [](const auto& operation) {
+                const auto* locator = fsim::runtime::simir::operation_get_if<LocateContainer>(&operation);
+                return locator != nullptr
+                    && !locator->predicate.empty();
+            })
+        >= 7);
+    assert(std::ranges::any_of(
+        process.operations,
+        [](const auto& operation) {
+            const auto* locator = fsim::runtime::simir::operation_get_if<LocateContainer>(&operation);
             return locator != nullptr
-                && !locator->predicate.empty();
-          })
-      >= 7);
-  assert(std::ranges::any_of(
-      process.operations,
-      [](const auto& operation) {
-        const auto* locator =
-            fsim::runtime::simir::operation_get_if<LocateContainer>(&operation);
-        return locator != nullptr
-            && std::ranges::any_of(
-                locator->predicate,
-                [](const auto& node) {
-                  return node.operation
-                          == ContainerPredicateOperator::index
-                      && node.value_kind
-                          == ContainerPredicateValueKind::index;
-                })
-            && std::ranges::all_of(
-                locator->predicate,
-                [](const auto& node) {
-                  const bool result_node =
-                      node.operation
-                          >= ContainerPredicateOperator::equal;
-                  return !result_node
-                      || node.value_kind
-                          == ContainerPredicateValueKind::logical;
-                });
-      }));
-  std::vector<const LocateContainer*> predicate_locators;
-  for (const auto& operation : process.operations) {
-    if (const auto* locator =
-            fsim::runtime::simir::operation_get_if<LocateContainer>(&operation);
-        locator && !locator->predicate.empty()) {
-      predicate_locators.push_back(locator);
+                && std::ranges::any_of(
+                    locator->predicate,
+                    [](const auto& node) {
+                        return node.operation
+                            == ContainerPredicateOperator::index
+                            && node.value_kind
+                            == ContainerPredicateValueKind::index;
+                    })
+                && std::ranges::all_of(
+                    locator->predicate,
+                    [](const auto& node) {
+                        const bool result_node = node.operation
+                            >= ContainerPredicateOperator::equal;
+                        return !result_node
+                            || node.value_kind
+                            == ContainerPredicateValueKind::logical;
+                    });
+        }));
+    std::vector<const LocateContainer*> predicate_locators;
+    for (const auto& operation : process.operations) {
+        if (const auto* locator = fsim::runtime::simir::operation_get_if<LocateContainer>(&operation);
+            locator && !locator->predicate.empty()) {
+            predicate_locators.push_back(locator);
+        }
     }
-  }
-  const auto same_predicate =
-      [](const auto& left, const auto& right) {
-        return left.size() == right.size()
-            && std::ranges::equal(
-                left, right,
-                [](const auto& left_node,
-                   const auto& right_node) {
-                  return left_node.operation
-                          == right_node.operation
-                      && left_node.left == right_node.left
-                      && left_node.right == right_node.right
-                      && left_node.third == right_node.third
-                      && left_node.constant
-                          == right_node.constant
-                      && left_node.value_kind
-                          == right_node.value_kind;
-                });
-      };
-  std::vector<const ContainerReduction*> transformed_reductions;
-  for (const auto& operation : process.operations) {
-    if (const auto* reduction =
-            fsim::runtime::simir::operation_get_if<ContainerReduction>(&operation);
-        reduction && !reduction->transformation.empty()) {
-      transformed_reductions.push_back(reduction);
+    const auto same_predicate =
+        [](const auto& left, const auto& right) {
+            return left.size() == right.size()
+                && std::ranges::equal(
+                    left, right,
+                    [](const auto& left_node,
+                        const auto& right_node) {
+                        return left_node.operation
+                            == right_node.operation
+                            && left_node.left == right_node.left
+                            && left_node.right == right_node.right
+                            && left_node.third == right_node.third
+                            && left_node.constant
+                            == right_node.constant
+                            && left_node.value_kind
+                            == right_node.value_kind;
+                    });
+        };
+    std::vector<const ContainerReduction*> transformed_reductions;
+    for (const auto& operation : process.operations) {
+        if (const auto* reduction = fsim::runtime::simir::operation_get_if<ContainerReduction>(&operation);
+            reduction && !reduction->transformation.empty()) {
+            transformed_reductions.push_back(reduction);
+        }
     }
-  }
-  assert(transformed_reductions.size() >= 5);
-  assert(same_predicate(
-      transformed_reductions[1]->transformation,
-      transformed_reductions[2]->transformation));
-  bool spelling_independent = false;
-  for (std::size_t left = 0;
-       left < predicate_locators.size(); ++left) {
-    for (std::size_t right = left + 1U;
-         right < predicate_locators.size(); ++right) {
-      if (predicate_locators[left]->predicate.size() >= 7
-          && same_predicate(
-              predicate_locators[left]->predicate,
-              predicate_locators[right]->predicate)) {
-        spelling_independent = true;
-      }
+    assert(transformed_reductions.size() >= 5);
+    assert(same_predicate(
+        transformed_reductions[1]->transformation,
+        transformed_reductions[2]->transformation));
+    bool spelling_independent = false;
+    for (std::size_t left = 0;
+        left < predicate_locators.size(); ++left) {
+        for (std::size_t right = left + 1U;
+            right < predicate_locators.size(); ++right) {
+            if (predicate_locators[left]->predicate.size() >= 7
+                && same_predicate(
+                    predicate_locators[left]->predicate,
+                    predicate_locators[right]->predicate)) {
+                spelling_independent = true;
+            }
+        }
     }
-  }
-  assert(spelling_independent);
-  std::vector<const LocateContainer*> transformed_locators;
-  for (const auto& operation : process.operations) {
-    if (const auto* locator =
-            fsim::runtime::simir::operation_get_if<LocateContainer>(&operation);
-        locator && !locator->transformation.empty()) {
-      transformed_locators.push_back(locator);
+    assert(spelling_independent);
+    std::vector<const LocateContainer*> transformed_locators;
+    for (const auto& operation : process.operations) {
+        if (const auto* locator = fsim::runtime::simir::operation_get_if<LocateContainer>(&operation);
+            locator && !locator->transformation.empty()) {
+            transformed_locators.push_back(locator);
+        }
     }
-  }
-  assert(transformed_locators.size() >= 6);
-  assert(same_predicate(
-      transformed_locators[2]->transformation,
-      transformed_locators[3]->transformation));
-  std::vector<const OrderContainer*> keyed_orderings;
-  for (const auto& operation : process.operations) {
-    if (const auto* ordering =
-            fsim::runtime::simir::operation_get_if<OrderContainer>(&operation);
-        ordering && !ordering->key.empty()) {
-      keyed_orderings.push_back(ordering);
+    assert(transformed_locators.size() >= 6);
+    assert(same_predicate(
+        transformed_locators[2]->transformation,
+        transformed_locators[3]->transformation));
+    std::vector<const OrderContainer*> keyed_orderings;
+    for (const auto& operation : process.operations) {
+        if (const auto* ordering = fsim::runtime::simir::operation_get_if<OrderContainer>(&operation);
+            ordering && !ordering->key.empty()) {
+            keyed_orderings.push_back(ordering);
+        }
     }
-  }
-  assert(keyed_orderings.size() >= 3);
-  assert(same_predicate(
-      keyed_orderings[0]->key,
-      keyed_orderings[1]->key));
-  const auto values =
-      elaborated.design->container_objects()[0].id;
-  const auto pending =
-      elaborated.design->container_objects()[1].id;
-  const auto lookup =
-      elaborated.design->container_objects()[2].id;
-  const auto fixed_down =
-      elaborated.design->container_objects()[3].id;
-  const auto fixed_up =
-      elaborated.design->container_objects()[4].id;
-  auto interpreter = elaborated.design->create_interpreter();
-  const auto result = interpreter->run();
-  assert(
-      result.status == fsim::runtime::RunStatus::completed
-      && result.time == 3);
-  const auto& values_result =
-      interpreter->container_object_value(values);
-  const auto& pending_result =
-      interpreter->container_object_value(pending);
-  const auto& lookup_result =
-      interpreter->container_object_value(lookup);
-  const auto& fixed_down_result =
-      interpreter->container_object_value(fixed_down);
-  const auto& fixed_up_result =
-      interpreter->container_object_value(fixed_up);
-  assert(
-      values_result.elements.size() == 3
-      && values_result.elements[0].low_word().aval == 7
-      && pending_result.elements.size() == 2
-      && pending_result.elements[0].low_word().aval == 2
-      && pending_result.elements[1].low_word().aval == 4
-      && lookup_result.keys.size() == 1
-      && lookup_result.keys[0].low_word().aval
-          == UINT64_C(0xffffffff)
-      && lookup_result.elements[0].low_word().aval == 9
-      && fixed_down_result.type.fixed
-      && fixed_down_result.type.index_left == 3
-      && fixed_down_result.type.index_right == 1
-      && fixed_down_result.elements.size() == 3
-      && fixed_down_result.elements[0].low_word().aval == 0x33
-      && fixed_down_result.elements[1].low_word().aval == 0x44
-      && fixed_down_result.elements[2].low_word().aval == 0x11
-      && fixed_up_result.type.fixed
-      && fixed_up_result.type.index_left == -1
-      && fixed_up_result.type.index_right == 1
-      && fixed_up_result.elements[0].low_word().aval == 0xa
-      && fixed_up_result.elements[1].low_word().aval == 0
-      && fixed_up_result.elements[2].low_word().aval == 0xc);
+    assert(keyed_orderings.size() >= 3);
+    assert(same_predicate(
+        keyed_orderings[0]->key,
+        keyed_orderings[1]->key));
+    const auto values = elaborated.design->container_objects()[0].id;
+    const auto pending = elaborated.design->container_objects()[1].id;
+    const auto lookup = elaborated.design->container_objects()[2].id;
+    const auto fixed_down = elaborated.design->container_objects()[3].id;
+    const auto fixed_up = elaborated.design->container_objects()[4].id;
+    auto interpreter = elaborated.design->create_interpreter();
+    const auto result = interpreter->run();
+    assert(
+        result.status == fsim::runtime::RunStatus::completed
+        && result.time == 3);
+    const auto& values_result = interpreter->container_object_value(values);
+    const auto& pending_result = interpreter->container_object_value(pending);
+    const auto& lookup_result = interpreter->container_object_value(lookup);
+    const auto& fixed_down_result = interpreter->container_object_value(fixed_down);
+    const auto& fixed_up_result = interpreter->container_object_value(fixed_up);
+    assert(
+        values_result.elements.size() == 3
+        && values_result.elements[0].low_word().aval == 7
+        && pending_result.elements.size() == 2
+        && pending_result.elements[0].low_word().aval == 2
+        && pending_result.elements[1].low_word().aval == 4
+        && lookup_result.keys.size() == 1
+        && lookup_result.keys[0].low_word().aval
+            == UINT64_C(0xffffffff)
+        && lookup_result.elements[0].low_word().aval == 9
+        && fixed_down_result.type.fixed
+        && fixed_down_result.type.index_left == 3
+        && fixed_down_result.type.index_right == 1
+        && fixed_down_result.elements.size() == 3
+        && fixed_down_result.elements[0].low_word().aval == 0x33
+        && fixed_down_result.elements[1].low_word().aval == 0x44
+        && fixed_down_result.elements[2].low_word().aval == 0x11
+        && fixed_up_result.type.fixed
+        && fixed_up_result.type.index_left == -1
+        && fixed_up_result.type.index_right == 1
+        && fixed_up_result.elements[0].low_word().aval == 0xa
+        && fixed_up_result.elements[1].low_word().aval == 0
+        && fixed_up_result.elements[2].low_word().aval == 0xc);
 
-  const auto atomic_pattern_parsed =
-      fsim::frontend::parse_text(
-          "static-pattern-atomic.sv",
-          R"(
+    const auto atomic_pattern_parsed = fsim::frontend::parse_text(
+        "static-pattern-atomic.sv",
+        R"(
 module static_pattern_atomic;
   logic [7:0] target[2:0];
   logic [7:0] selected;
@@ -636,66 +617,60 @@ module static_pattern_atomic;
   end
 endmodule
 )",
-          fsim::frontend::Language::SystemVerilog2017);
-  assert(atomic_pattern_parsed.ok());
-  const auto atomic_pattern_elaborated =
-      fsim::elaboration::elaborate(
-          atomic_pattern_parsed.design,
-          "static_pattern_atomic");
-  assert(atomic_pattern_elaborated.ok());
-  const auto& atomic_process =
-      atomic_pattern_elaborated.design->processes().front();
-  const CopyContainerRegister* atomic_copy{};
-  std::size_t atomic_copy_position{};
-  std::size_t atomic_object_write_position{};
-  std::vector<std::size_t> atomic_element_writes;
-  for (std::size_t position = 0;
-       position < atomic_process.operations.size();
-       ++position) {
-    const auto& operation =
-        atomic_process.operations[position];
-    if (const auto* copy =
-            fsim::runtime::simir::operation_get_if<CopyContainerRegister>(&operation)) {
-      assert(atomic_copy == nullptr);
-      atomic_copy = copy;
-      atomic_copy_position = position;
-    } else if (
-        fsim::runtime::simir::operation_holds<ContainerWrite>(operation)) {
-      atomic_element_writes.push_back(position);
-    } else if (
-        fsim::runtime::simir::operation_holds<WriteContainerObject>(operation)) {
-      atomic_object_write_position = position;
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(atomic_pattern_parsed.ok());
+    const auto atomic_pattern_elaborated = fsim::elaboration::elaborate(
+        atomic_pattern_parsed.design,
+        "static_pattern_atomic");
+    assert(atomic_pattern_elaborated.ok());
+    const auto& atomic_process = atomic_pattern_elaborated.design->processes().front();
+    const CopyContainerRegister* atomic_copy { };
+    std::size_t atomic_copy_position { };
+    std::size_t atomic_object_write_position { };
+    std::vector<std::size_t> atomic_element_writes;
+    for (std::size_t position = 0;
+        position < atomic_process.operations.size();
+        ++position) {
+        const auto& operation = atomic_process.operations[position];
+        if (const auto* copy = fsim::runtime::simir::operation_get_if<CopyContainerRegister>(&operation)) {
+            assert(atomic_copy == nullptr);
+            atomic_copy = copy;
+            atomic_copy_position = position;
+        } else if (
+            fsim::runtime::simir::operation_holds<ContainerWrite>(operation)) {
+            atomic_element_writes.push_back(position);
+        } else if (
+            fsim::runtime::simir::operation_holds<WriteContainerObject>(operation)) {
+            atomic_object_write_position = position;
+        }
     }
-  }
-  assert(
-      atomic_copy != nullptr
-      && atomic_element_writes.size() == 3
-      && std::ranges::all_of(
-          atomic_element_writes,
-          [&](const auto position) {
-            const auto& write =
-                fsim::runtime::simir::operation_get<ContainerWrite>(
+    assert(
+        atomic_copy != nullptr
+        && atomic_element_writes.size() == 3
+        && std::ranges::all_of(
+            atomic_element_writes,
+            [&](const auto position) {
+                const auto& write = fsim::runtime::simir::operation_get<ContainerWrite>(
                     atomic_process.operations[position]);
-            return write.target == atomic_copy->source
-                && position < atomic_copy_position;
-          })
-      && atomic_copy->destination != atomic_copy->source
-      && atomic_object_write_position > atomic_copy_position
-      && atomic_copy->source
-          < atomic_process.container_register_types.size());
-  const auto& atomic_type =
-      atomic_process
-          .container_register_types[atomic_copy->source];
-  assert(
-      atomic_type.fixed
-      && atomic_type.element_width == 8
-      && !atomic_type.two_state
-      && atomic_type.index_left == 2
-      && atomic_type.index_right == 0);
+                return write.target == atomic_copy->source
+                    && position < atomic_copy_position;
+            })
+        && atomic_copy->destination != atomic_copy->source
+        && atomic_object_write_position > atomic_copy_position
+        && atomic_copy->source
+            < atomic_process.container_register_types.size());
+    const auto& atomic_type = atomic_process
+                                  .container_register_types[atomic_copy->source];
+    assert(
+        atomic_type.fixed
+        && atomic_type.element_width == 8
+        && !atomic_type.two_state
+        && atomic_type.index_left == 2
+        && atomic_type.index_right == 0);
 
-  const auto slice_parsed = fsim::frontend::parse_text(
-      "static-slices.sv",
-      R"(
+    const auto slice_parsed = fsim::frontend::parse_text(
+        "static-slices.sv",
+        R"(
 module static_slices;
   logic [7:0] down[5:0];
   logic [7:0] pair[1:0];
@@ -807,191 +782,177 @@ module static_slices;
   end
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(slice_parsed.ok());
-  const auto slice_elaborated =
-      fsim::elaboration::elaborate(
-          slice_parsed.design, "static_slices");
-  if (!slice_elaborated.ok()) {
-    for (const auto& diagnostic :
-         slice_elaborated.diagnostics) {
-      std::cerr << diagnostic.code << ": "
-                << diagnostic.message << '\n';
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(slice_parsed.ok());
+    const auto slice_elaborated = fsim::elaboration::elaborate(
+        slice_parsed.design, "static_slices");
+    if (!slice_elaborated.ok()) {
+        for (const auto& diagnostic :
+            slice_elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
     }
-  }
-  assert(slice_elaborated.ok());
-  assert(
-      slice_elaborated.design->container_objects().size()
-      == 5);
-  const auto& slice_process =
-      slice_elaborated.design->processes().front();
-  const auto has_selected_type =
-      [&](const std::int32_t left,
-          const std::int32_t right) {
-        return std::ranges::any_of(
-            slice_process.container_register_types,
-            [&](const auto& type) {
-              return type.fixed
-                  && type.element_width == 8
-                  && !type.two_state
-                  && !type.signed_elements
-                  && type.index_left == left
-                  && type.index_right == right;
-            });
-      };
-  assert(
-      has_selected_type(4, 3)
-      && has_selected_type(2, 1)
-      && has_selected_type(4, 2)
-      && has_selected_type(3, 1)
-      && has_selected_type(-1, 1));
-  assert(std::ranges::any_of(
-      slice_process.container_register_types,
-      [](const auto& type) {
-        return type.fixed
-            && type.element_width == 8
-            && type.two_state
-            && type.signed_elements
-            && type.index_left == 1
-            && type.index_right == 0;
-      }));
-  assert(
-      std::ranges::count_if(
-          slice_process.operations,
-          [](const auto& operation) {
-            return fsim::runtime::simir::operation_holds<
-                ContainerRead>(operation);
-          })
-      >= 13);
-  assert(
-      std::ranges::count_if(
-          slice_process.operations,
-          [](const auto& operation) {
-            return fsim::runtime::simir::operation_holds<
-                ContainerWrite>(operation);
-          })
-      >= 13);
-  auto slice_interpreter =
-      slice_elaborated.design->create_interpreter();
-  const auto slice_result = slice_interpreter->run();
-  assert(
-      slice_result.status
-          == fsim::runtime::RunStatus::completed
-      && slice_result.time == 0);
-  const auto& down_result =
-      slice_interpreter->container_object_value(
-          slice_elaborated.design->container_objects()[0].id);
-  const auto& pair_result =
-      slice_interpreter->container_object_value(
-          slice_elaborated.design->container_objects()[1].id);
-  const auto& up_result =
-      slice_interpreter->container_object_value(
-          slice_elaborated.design->container_objects()[2].id);
-  assert(
-      down_result.elements.size() == 6
-      && down_result.elements[0].low_word().aval == 0x55
-      && down_result.elements[1].low_word().aval == 0xa3
-      && down_result.elements[1].low_word().bval == 0x30
-      && down_result.elements[2].low_word().aval == 0x22
-      && down_result.elements[3].low_word().aval == 0x11
-      && down_result.elements[4].low_word().aval == 0x11
-      && down_result.elements[5].low_word().aval == 0x00
-      && pair_result.elements.size() == 2
-      && pair_result.elements[0].low_word().aval == 0x44
-      && pair_result.elements[1].low_word().aval == 0x33
-      && up_result.type.index_left == -2
-      && up_result.type.index_right == 3
-      && up_result.elements.size() == 6
-      && up_result.elements[1].low_word().aval == 0xa3
-      && up_result.elements[1].low_word().bval == 0x30
-      && up_result.elements[2].low_word().aval == 0x22
-      && up_result.elements[3].low_word().aval == 0x11);
+    assert(slice_elaborated.ok());
+    assert(
+        slice_elaborated.design->container_objects().size()
+        == 5);
+    const auto& slice_process = slice_elaborated.design->processes().front();
+    const auto has_selected_type =
+        [&](const std::int32_t left,
+            const std::int32_t right) {
+            return std::ranges::any_of(
+                slice_process.container_register_types,
+                [&](const auto& type) {
+                    return type.fixed
+                        && type.element_width == 8
+                        && !type.two_state
+                        && !type.signed_elements
+                        && type.index_left == left
+                        && type.index_right == right;
+                });
+        };
+    assert(
+        has_selected_type(4, 3)
+        && has_selected_type(2, 1)
+        && has_selected_type(4, 2)
+        && has_selected_type(3, 1)
+        && has_selected_type(-1, 1));
+    assert(std::ranges::any_of(
+        slice_process.container_register_types,
+        [](const auto& type) {
+            return type.fixed
+                && type.element_width == 8
+                && type.two_state
+                && type.signed_elements
+                && type.index_left == 1
+                && type.index_right == 0;
+        }));
+    assert(
+        std::ranges::count_if(
+            slice_process.operations,
+            [](const auto& operation) {
+                return fsim::runtime::simir::operation_holds<
+                    ContainerRead>(operation);
+            })
+        >= 13);
+    assert(
+        std::ranges::count_if(
+            slice_process.operations,
+            [](const auto& operation) {
+                return fsim::runtime::simir::operation_holds<
+                    ContainerWrite>(operation);
+            })
+        >= 13);
+    auto slice_interpreter = slice_elaborated.design->create_interpreter();
+    const auto slice_result = slice_interpreter->run();
+    assert(
+        slice_result.status
+            == fsim::runtime::RunStatus::completed
+        && slice_result.time == 0);
+    const auto& down_result = slice_interpreter->container_object_value(
+        slice_elaborated.design->container_objects()[0].id);
+    const auto& pair_result = slice_interpreter->container_object_value(
+        slice_elaborated.design->container_objects()[1].id);
+    const auto& up_result = slice_interpreter->container_object_value(
+        slice_elaborated.design->container_objects()[2].id);
+    assert(
+        down_result.elements.size() == 6
+        && down_result.elements[0].low_word().aval == 0x55
+        && down_result.elements[1].low_word().aval == 0xa3
+        && down_result.elements[1].low_word().bval == 0x30
+        && down_result.elements[2].low_word().aval == 0x22
+        && down_result.elements[3].low_word().aval == 0x11
+        && down_result.elements[4].low_word().aval == 0x11
+        && down_result.elements[5].low_word().aval == 0x00
+        && pair_result.elements.size() == 2
+        && pair_result.elements[0].low_word().aval == 0x44
+        && pair_result.elements[1].low_word().aval == 0x33
+        && up_result.type.index_left == -2
+        && up_result.type.index_right == 3
+        && up_result.elements.size() == 6
+        && up_result.elements[1].low_word().aval == 0xa3
+        && up_result.elements[1].low_word().bval == 0x30
+        && up_result.elements[2].low_word().aval == 0x22
+        && up_result.elements[3].low_word().aval == 0x11);
 
-  const auto atomic_slice_parsed =
-      fsim::frontend::parse_text(
-          "static-slice-atomic.sv",
-          R"(
+    const auto atomic_slice_parsed = fsim::frontend::parse_text(
+        "static-slice-atomic.sv",
+        R"(
 module static_slice_atomic;
   logic [7:0] target[3:0];
   initial target[1 +: 3] = target[2 -: 3];
 endmodule
 )",
-          fsim::frontend::Language::SystemVerilog2017);
-  assert(atomic_slice_parsed.ok());
-  const auto atomic_slice_elaborated =
-      fsim::elaboration::elaborate(
-          atomic_slice_parsed.design,
-          "static_slice_atomic");
-  assert(atomic_slice_elaborated.ok());
-  const auto& atomic_slice_process =
-      atomic_slice_elaborated.design->processes().front();
-  std::vector<std::size_t> atomic_slice_reads;
-  std::vector<std::size_t> atomic_slice_writes;
-  std::vector<std::pair<
-      std::size_t, const CopyContainerRegister*>>
-      atomic_slice_copies;
-  std::size_t atomic_slice_object_write{};
-  for (std::size_t position = 0;
-       position
-           < atomic_slice_process.operations.size();
-       ++position) {
-    const auto& operation =
-        atomic_slice_process.operations[position];
-    if (fsim::runtime::simir::operation_holds<ContainerRead>(operation)) {
-      atomic_slice_reads.push_back(position);
-    } else if (
-        fsim::runtime::simir::operation_holds<ContainerWrite>(operation)) {
-      atomic_slice_writes.push_back(position);
-    } else if (
-        const auto* copy =
-            fsim::runtime::simir::operation_get_if<CopyContainerRegister>(&operation)) {
-      atomic_slice_copies.emplace_back(position, copy);
-    } else if (
-        fsim::runtime::simir::operation_holds<WriteContainerObject>(
-            operation)) {
-      atomic_slice_object_write = position;
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(atomic_slice_parsed.ok());
+    const auto atomic_slice_elaborated = fsim::elaboration::elaborate(
+        atomic_slice_parsed.design,
+        "static_slice_atomic");
+    assert(atomic_slice_elaborated.ok());
+    const auto& atomic_slice_process = atomic_slice_elaborated.design->processes().front();
+    std::vector<std::size_t> atomic_slice_reads;
+    std::vector<std::size_t> atomic_slice_writes;
+    std::vector<std::pair<
+        std::size_t, const CopyContainerRegister*>>
+        atomic_slice_copies;
+    std::size_t atomic_slice_object_write { };
+    for (std::size_t position = 0;
+        position
+        < atomic_slice_process.operations.size();
+        ++position) {
+        const auto& operation = atomic_slice_process.operations[position];
+        if (fsim::runtime::simir::operation_holds<ContainerRead>(operation)) {
+            atomic_slice_reads.push_back(position);
+        } else if (
+            fsim::runtime::simir::operation_holds<ContainerWrite>(operation)) {
+            atomic_slice_writes.push_back(position);
+        } else if (
+            const auto* copy = fsim::runtime::simir::operation_get_if<CopyContainerRegister>(&operation)) {
+            atomic_slice_copies.emplace_back(position, copy);
+        } else if (
+            fsim::runtime::simir::operation_holds<WriteContainerObject>(
+                operation)) {
+            atomic_slice_object_write = position;
+        }
     }
-  }
-  assert(
-      atomic_slice_reads.size() == 9
-      && atomic_slice_writes.size() == 9
-      && atomic_slice_copies.size() == 2);
-  const auto [replacement_position, replacement_copy] =
-      atomic_slice_copies[0];
-  const auto [commit_position, commit_copy] =
-      atomic_slice_copies[1];
-  assert(
-      replacement_copy->destination
-          == commit_copy->source
-      && replacement_copy->source
-          == commit_copy->destination
-      && std::ranges::all_of(
-          atomic_slice_reads,
-          [&](const auto position) {
-            return position < replacement_position
-                || (position > replacement_position
-                    && position < commit_position);
-          })
-      && std::ranges::all_of(
-          atomic_slice_writes,
-          [&](const auto position) {
-            return position < commit_position;
-          })
-      && std::ranges::none_of(
-          atomic_slice_process.operations,
-          [&](const auto& operation) {
-            const auto* write =
-                fsim::runtime::simir::operation_get_if<ContainerWrite>(&operation);
-            return write != nullptr
-                && write->target
+    assert(
+        atomic_slice_reads.size() == 9
+        && atomic_slice_writes.size() == 9
+        && atomic_slice_copies.size() == 2);
+    const auto [replacement_position, replacement_copy] = atomic_slice_copies[0];
+    const auto [commit_position, commit_copy] = atomic_slice_copies[1];
+    assert(
+        replacement_copy->destination
+            == commit_copy->source
+        && replacement_copy->source
+            == commit_copy->destination
+        && std::ranges::all_of(
+            atomic_slice_reads,
+            [&](const auto position) {
+                return position < replacement_position
+                    || (position > replacement_position
+                        && position < commit_position);
+            })
+        && std::ranges::all_of(
+            atomic_slice_writes,
+            [&](const auto position) {
+                return position < commit_position;
+            })
+        && std::ranges::none_of(
+            atomic_slice_process.operations,
+            [&](const auto& operation) {
+                const auto* write = fsim::runtime::simir::operation_get_if<ContainerWrite>(&operation);
+                return write != nullptr
+                    && write->target
                     == commit_copy->destination;
-          })
-      && replacement_position < commit_position
-      && commit_position < atomic_slice_object_write);
+            })
+        && replacement_position < commit_position
+        && commit_position < atomic_slice_object_write);
 
-  const auto port_parsed = fsim::frontend::parse_text(
-      "container-ports.sv",
-      R"(
+    const auto port_parsed = fsim::frontend::parse_text(
+        "container-ports.sv",
+        R"(
 module static_port_leaf #(
     parameter int LEFT = 3,
     parameter int RIGHT = 0) (
@@ -1070,72 +1031,64 @@ module static_port_top;
   end
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(port_parsed.ok());
-  const auto port_elaborated = fsim::elaboration::elaborate(
-      port_parsed.design, "static_port_top");
-  if (!port_elaborated.ok()) {
-    for (const auto& diagnostic : port_elaborated.diagnostics) {
-      std::cerr << diagnostic.code << ": "
-                << diagnostic.message << '\n';
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(port_parsed.ok());
+    const auto port_elaborated = fsim::elaboration::elaborate(
+        port_parsed.design, "static_port_top");
+    if (!port_elaborated.ok()) {
+        for (const auto& diagnostic : port_elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
     }
-  }
-  assert(port_elaborated.ok());
-  assert(
-      port_elaborated.design->container_objects().size() == 4);
-  const auto paths =
-      port_elaborated.design->container_paths();
-  assert(
-      std::ranges::any_of(
-          paths,
-          [](const auto& path) {
-            return path.first
-                == "static_port_top.mid.source";
-          })
-      && std::ranges::any_of(
-          paths,
-          [](const auto& path) {
-            return path.first
-                == "static_port_top.mid.generated.child.result";
-          }));
-  const auto source_id =
-      port_elaborated.design->find_container(
-          "static_port_top.source");
-  const auto child_source_id =
-      port_elaborated.design->find_container(
-          "static_port_top.mid.generated.child.source");
-  assert(source_id && child_source_id);
-  assert(*source_id == *child_source_id);
-  auto port_interpreter =
-      port_elaborated.design->create_interpreter();
-  const auto port_result = port_interpreter->run();
-  assert(
-      port_result.status
-          == fsim::runtime::RunStatus::completed
-      && port_result.time == 2);
-  const auto result_id =
-      port_elaborated.design->find_container(
-          "static_port_top.result");
-  const auto shared_id =
-      port_elaborated.design->find_container(
-          "static_port_top.shared");
-  assert(result_id && shared_id);
-  const auto& result_value =
-      port_interpreter->container_object_value(*result_id);
-  const auto& shared_value =
-      port_interpreter->container_object_value(*shared_id);
-  assert(
-      result_value.elements[0].low_word().aval == 0x32
-      && result_value.elements[1].low_word().aval == 0x20
-      && result_value.elements[2].low_word().aval == 0x20
-      && result_value.elements[3].low_word().aval == 0x06
-      && shared_value.elements[0].low_word().aval == 0xa
-      && shared_value.elements[1].low_word().aval == 0
-      && shared_value.elements[2].low_word().aval == 0xc);
+    assert(port_elaborated.ok());
+    assert(
+        port_elaborated.design->container_objects().size() == 4);
+    const auto paths = port_elaborated.design->container_paths();
+    assert(
+        std::ranges::any_of(
+            paths,
+            [](const auto& path) {
+                return path.first
+                    == "static_port_top.mid.source";
+            })
+        && std::ranges::any_of(
+            paths,
+            [](const auto& path) {
+                return path.first
+                    == "static_port_top.mid.generated.child.result";
+            }));
+    const auto source_id = port_elaborated.design->find_container(
+        "static_port_top.source");
+    const auto child_source_id = port_elaborated.design->find_container(
+        "static_port_top.mid.generated.child.source");
+    assert(source_id && child_source_id);
+    assert(*source_id == *child_source_id);
+    auto port_interpreter = port_elaborated.design->create_interpreter();
+    const auto port_result = port_interpreter->run();
+    assert(
+        port_result.status
+            == fsim::runtime::RunStatus::completed
+        && port_result.time == 2);
+    const auto result_id = port_elaborated.design->find_container(
+        "static_port_top.result");
+    const auto shared_id = port_elaborated.design->find_container(
+        "static_port_top.shared");
+    assert(result_id && shared_id);
+    const auto& result_value = port_interpreter->container_object_value(*result_id);
+    const auto& shared_value = port_interpreter->container_object_value(*shared_id);
+    assert(
+        result_value.elements[0].low_word().aval == 0x32
+        && result_value.elements[1].low_word().aval == 0x20
+        && result_value.elements[2].low_word().aval == 0x20
+        && result_value.elements[3].low_word().aval == 0x06
+        && shared_value.elements[0].low_word().aval == 0xa
+        && shared_value.elements[1].low_word().aval == 0
+        && shared_value.elements[2].low_word().aval == 0xc);
 
-  const auto dynamic_port_parsed = fsim::frontend::parse_text(
-      "dynamic-container-ports.sv",
-      R"(
+    const auto dynamic_port_parsed = fsim::frontend::parse_text(
+        "dynamic-container-ports.sv",
+        R"(
 module dynamic_port_leaf #(
     parameter int LIMIT = 3,
     parameter type KEY = logic signed [3:0]) (
@@ -1242,77 +1195,69 @@ module dynamic_port_top;
   end
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(dynamic_port_parsed.ok());
-  const auto dynamic_port_elaborated =
-      fsim::elaboration::elaborate(
-          dynamic_port_parsed.design, "dynamic_port_top");
-  if (!dynamic_port_elaborated.ok()) {
-    for (const auto& diagnostic :
-         dynamic_port_elaborated.diagnostics) {
-      std::cerr << diagnostic.code << ": "
-                << diagnostic.message << '\n';
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(dynamic_port_parsed.ok());
+    const auto dynamic_port_elaborated = fsim::elaboration::elaborate(
+        dynamic_port_parsed.design, "dynamic_port_top");
+    if (!dynamic_port_elaborated.ok()) {
+        for (const auto& diagnostic :
+            dynamic_port_elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
     }
-  }
-  assert(dynamic_port_elaborated.ok());
-  assert(
-      dynamic_port_elaborated.design
-          ->container_objects().size() == 5);
-  const auto dynamic_source =
-      dynamic_port_elaborated.design->find_container(
-          "dynamic_port_top.source");
-  const auto nested_dynamic_source =
-      dynamic_port_elaborated.design->find_container(
-          "dynamic_port_top.mid.generated.child.source");
-  const auto dynamic_bounded =
-      dynamic_port_elaborated.design->find_container(
-          "dynamic_port_top.bounded");
-  assert(
-      dynamic_source && nested_dynamic_source
-      && *dynamic_source == *nested_dynamic_source
-      && dynamic_bounded);
-  const auto& bounded_info =
-      dynamic_port_elaborated.design->container_objects().at(
-          *dynamic_bounded);
-  assert(
-      bounded_info.type.queue
-      && bounded_info.type.maximum_elements
-      && *bounded_info.type.maximum_elements == 4);
-  auto dynamic_port_interpreter =
-      dynamic_port_elaborated.design->create_interpreter();
-  const auto dynamic_port_result =
-      dynamic_port_interpreter->run();
-  assert(
-      dynamic_port_result.status
-          == fsim::runtime::RunStatus::completed
-      && dynamic_port_result.time == 2);
-  const auto dynamic_result =
-      dynamic_port_elaborated.design->find_container(
-          "dynamic_port_top.result");
-  const auto dynamic_scores =
-      dynamic_port_elaborated.design->find_container(
-          "dynamic_port_top.scores");
-  const auto dynamic_work =
-      dynamic_port_elaborated.design->find_container(
-          "dynamic_port_top.work");
-  assert(dynamic_result && dynamic_scores && dynamic_work);
-  assert(
-      dynamic_port_interpreter
-              ->container_object_value(*dynamic_result)
-              .elements.size()
-          == 2
-      && dynamic_port_interpreter
-              ->container_object_value(*dynamic_scores)
-              .elements.size()
-          == 2
-      && dynamic_port_interpreter
-              ->container_object_value(*dynamic_work)
-              .elements.size()
-          == 3);
+    assert(dynamic_port_elaborated.ok());
+    assert(
+        dynamic_port_elaborated.design
+            ->container_objects()
+            .size()
+        == 5);
+    const auto dynamic_source = dynamic_port_elaborated.design->find_container(
+        "dynamic_port_top.source");
+    const auto nested_dynamic_source = dynamic_port_elaborated.design->find_container(
+        "dynamic_port_top.mid.generated.child.source");
+    const auto dynamic_bounded = dynamic_port_elaborated.design->find_container(
+        "dynamic_port_top.bounded");
+    assert(
+        dynamic_source && nested_dynamic_source
+        && *dynamic_source == *nested_dynamic_source
+        && dynamic_bounded);
+    const auto& bounded_info = dynamic_port_elaborated.design->container_objects().at(
+        *dynamic_bounded);
+    assert(
+        bounded_info.type.queue
+        && bounded_info.type.maximum_elements
+        && *bounded_info.type.maximum_elements == 4);
+    auto dynamic_port_interpreter = dynamic_port_elaborated.design->create_interpreter();
+    const auto dynamic_port_result = dynamic_port_interpreter->run();
+    assert(
+        dynamic_port_result.status
+            == fsim::runtime::RunStatus::completed
+        && dynamic_port_result.time == 2);
+    const auto dynamic_result = dynamic_port_elaborated.design->find_container(
+        "dynamic_port_top.result");
+    const auto dynamic_scores = dynamic_port_elaborated.design->find_container(
+        "dynamic_port_top.scores");
+    const auto dynamic_work = dynamic_port_elaborated.design->find_container(
+        "dynamic_port_top.work");
+    assert(dynamic_result && dynamic_scores && dynamic_work);
+    assert(
+        dynamic_port_interpreter
+                ->container_object_value(*dynamic_result)
+                .elements.size()
+            == 2
+        && dynamic_port_interpreter
+                ->container_object_value(*dynamic_scores)
+                .elements.size()
+            == 2
+        && dynamic_port_interpreter
+                ->container_object_value(*dynamic_work)
+                .elements.size()
+            == 3);
 
-  const auto expanded_static = fsim::frontend::parse_text(
-      "container-expanded-static.sv",
-      R"(
+    const auto expanded_static = fsim::frontend::parse_text(
+        "container-expanded-static.sv",
+        R"(
 module container_expanded_static;
   byte values[0:4096];
   initial begin
@@ -1324,33 +1269,31 @@ module container_expanded_static;
   end
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(expanded_static.ok());
-  const auto expanded_static_design =
-      fsim::elaboration::elaborate(
-          expanded_static.design, "container_expanded_static");
-  assert(expanded_static_design.ok());
-  auto expanded_static_interpreter =
-      expanded_static_design.design->create_interpreter();
-  assert(
-      expanded_static_interpreter->run().status
-      == fsim::runtime::RunStatus::completed);
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(expanded_static.ok());
+    const auto expanded_static_design = fsim::elaboration::elaborate(
+        expanded_static.design, "container_expanded_static");
+    assert(expanded_static_design.ok());
+    auto expanded_static_interpreter = expanded_static_design.design->create_interpreter();
+    assert(
+        expanded_static_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
 
-  const auto malformed_shuffle = fsim::frontend::parse_text(
-      "container-malformed-shuffle.sv",
-      "module container_malformed_shuffle; byte values[]; "
-      "initial values.shuffle(1); endmodule",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(!malformed_shuffle.ok());
-  assert(std::ranges::any_of(
-      malformed_shuffle.diagnostics,
-      [](const auto& diagnostic) {
-        return diagnostic.code == "FSIM-SV-SEM-081";
-      }));
+    const auto malformed_shuffle = fsim::frontend::parse_text(
+        "container-malformed-shuffle.sv",
+        "module container_malformed_shuffle; byte values[]; "
+        "initial values.shuffle(1); endmodule",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(!malformed_shuffle.ok());
+    assert(std::ranges::any_of(
+        malformed_shuffle.diagnostics,
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-081";
+        }));
 
-  const auto invalid = fsim::frontend::parse_text(
-      "container-invalid-lowering.sv",
-      R"(
+    const auto invalid = fsim::frontend::parse_text(
+        "container-invalid-lowering.sv",
+        R"(
 module container_invalid_lowering;
   typedef struct packed {
     logic [3:0] value;
@@ -1470,111 +1413,106 @@ module container_invalid_lowering;
   end
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(invalid.ok());
-  const auto rejected = fsim::elaboration::elaborate(
-      invalid.design, "container_invalid_lowering");
-  assert(!rejected.ok());
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVREDUCE-001"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVREDUCE-003"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVREDUCE-004"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVREDUCE-005"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVREDUCE-006"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVREDUCE-007"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVORDER-001"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVORDER-003"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVORDER-004"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVORDER-006"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVORDER-007"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVORDER-008"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVLOCATOR-001"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVLOCATOR-003"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVLOCATOR-004"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVLOCATOR-005"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVLOCATOR-006"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVLOCATOR-007"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVLOCATOR-008"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVFIND-001"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVFIND-003"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVFIND-004"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVFIND-005"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVFIND-006"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVFIND-007"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVFIND-008"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVCONTAINER-013"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVCONTAINER-018"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVCONTAINER-019"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVCONTAINER-009"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVCONTAINER-020"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVCONTAINER-021"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVCONTAINER-014"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVCONTAINER-023"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVMEMORY-003"));
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid.ok());
+    const auto rejected = fsim::elaboration::elaborate(
+        invalid.design, "container_invalid_lowering");
+    assert(!rejected.ok());
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVREDUCE-001"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVREDUCE-003"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVREDUCE-004"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVREDUCE-005"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVREDUCE-006"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVREDUCE-007"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVORDER-001"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVORDER-003"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVORDER-004"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVORDER-006"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVORDER-007"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVORDER-008"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVLOCATOR-001"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVLOCATOR-003"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVLOCATOR-004"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVLOCATOR-005"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVLOCATOR-006"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVLOCATOR-007"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVLOCATOR-008"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVFIND-001"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVFIND-003"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVFIND-004"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVFIND-005"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVFIND-006"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVFIND-007"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVFIND-008"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVCONTAINER-013"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVCONTAINER-018"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVCONTAINER-019"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVCONTAINER-009"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVCONTAINER-020"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVCONTAINER-021"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVCONTAINER-014"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVCONTAINER-023"));
+    assert(has_diagnostic(
+        rejected, "FSIM-ELAB-SVMEMORY-003"));
 
-  std::string oversized_predicate =
-      "module oversized_predicate; byte values[]; "
-      "byte result[$]; initial result = values.find() with (";
-  for (int value = 0; value < 17; ++value) {
-    if (value != 0) {
-      oversized_predicate += " || ";
+    std::string oversized_predicate = "module oversized_predicate; byte values[]; "
+                                      "byte result[$]; initial result = values.find() with (";
+    for (int value = 0; value < 17; ++value) {
+        if (value != 0) {
+            oversized_predicate += " || ";
+        }
+        oversized_predicate += "item == " + std::to_string(value);
     }
-    oversized_predicate +=
-        "item == " + std::to_string(value);
-  }
-  oversized_predicate += "); endmodule";
-  const auto oversized_parsed =
-      fsim::frontend::parse_text(
-          "container-predicate-oversized.sv",
-          oversized_predicate,
-          fsim::frontend::Language::SystemVerilog2017);
-  assert(oversized_parsed.ok());
-  const auto oversized_rejected =
-      fsim::elaboration::elaborate(
-          oversized_parsed.design, "oversized_predicate");
-  assert(
-      !oversized_rejected.ok()
-      && has_diagnostic(
-          oversized_rejected, "FSIM-ELAB-SVFIND-004"));
+    oversized_predicate += "); endmodule";
+    const auto oversized_parsed = fsim::frontend::parse_text(
+        "container-predicate-oversized.sv",
+        oversized_predicate,
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(oversized_parsed.ok());
+    const auto oversized_rejected = fsim::elaboration::elaborate(
+        oversized_parsed.design, "oversized_predicate");
+    assert(
+        !oversized_rejected.ok()
+        && has_diagnostic(
+            oversized_rejected, "FSIM-ELAB-SVFIND-004"));
 
-  const auto invalid_slices =
-      fsim::frontend::parse_text(
-          "static-slice-invalid.sv",
-          R"(
+    const auto invalid_slices = fsim::frontend::parse_text(
+        "static-slice-invalid.sv",
+        R"(
 module static_slice_invalid(
     input logic [7:0] input_fixed[3:0]);
   logic [7:0] down[3:0];
@@ -1621,58 +1559,57 @@ module static_slice_invalid(
   end
 endmodule
 )",
-          fsim::frontend::Language::SystemVerilog2017);
-  assert(invalid_slices.ok());
-  const auto rejected_slices =
-      fsim::elaboration::elaborate(
-          invalid_slices.design, "static_slice_invalid");
-  assert(!rejected_slices.ok());
-  assert(has_diagnostic(
-      rejected_slices, "FSIM-ELAB-SVSLICE-001"));
-  assert(has_diagnostic(
-      rejected_slices, "FSIM-ELAB-SVSLICE-002"));
-  assert(has_diagnostic(
-      rejected_slices, "FSIM-ELAB-SVSLICE-003"));
-  assert(has_diagnostic(
-      rejected_slices, "FSIM-ELAB-SVSLICE-004"));
-  assert(has_diagnostic(
-      rejected_slices, "FSIM-ELAB-SVSLICE-005"));
-  assert(has_diagnostic(
-      rejected_slices, "FSIM-ELAB-SVSLICE-006"));
-  assert(has_diagnostic(
-      rejected_slices, "FSIM-ELAB-031"));
-  assert(has_diagnostic(
-      rejected_slices, "FSIM-ELAB-SVPORT-009"));
-  assert(has_diagnostic(
-      rejected_slices, "FSIM-ELAB-SVQUERY-001"));
-  assert(has_diagnostic(
-      rejected_slices, "FSIM-ELAB-SVQUERY-002"));
-  assert(has_diagnostic(
-      rejected_slices, "FSIM-ELAB-SVREDUCE-001"));
-  assert(has_diagnostic(
-      rejected_slices, "FSIM-ELAB-SVLOCATOR-001"));
-  assert(has_diagnostic(
-      rejected_slices, "FSIM-ELAB-SVFIND-001"));
-  const auto leaked_iterator = fsim::frontend::parse_text(
-      "container-iterator-leak.sv",
-      "module container_iterator_leak; "
-      "int values[]; int located[$]; int result; "
-      "initial begin "
-      "located = values.find(entry) with (entry > 0); "
-      "result = entry; "
-      "end endmodule",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(
-      !leaked_iterator.ok()
-      && std::ranges::any_of(
-          leaked_iterator.diagnostics,
-          [](const auto& diagnostic) {
-            return diagnostic.code == "FSIM-SV-SEM-090";
-          }));
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_slices.ok());
+    const auto rejected_slices = fsim::elaboration::elaborate(
+        invalid_slices.design, "static_slice_invalid");
+    assert(!rejected_slices.ok());
+    assert(has_diagnostic(
+        rejected_slices, "FSIM-ELAB-SVSLICE-001"));
+    assert(has_diagnostic(
+        rejected_slices, "FSIM-ELAB-SVSLICE-002"));
+    assert(has_diagnostic(
+        rejected_slices, "FSIM-ELAB-SVSLICE-003"));
+    assert(has_diagnostic(
+        rejected_slices, "FSIM-ELAB-SVSLICE-004"));
+    assert(has_diagnostic(
+        rejected_slices, "FSIM-ELAB-SVSLICE-005"));
+    assert(has_diagnostic(
+        rejected_slices, "FSIM-ELAB-SVSLICE-006"));
+    assert(has_diagnostic(
+        rejected_slices, "FSIM-ELAB-031"));
+    assert(has_diagnostic(
+        rejected_slices, "FSIM-ELAB-SVPORT-009"));
+    assert(has_diagnostic(
+        rejected_slices, "FSIM-ELAB-SVQUERY-001"));
+    assert(has_diagnostic(
+        rejected_slices, "FSIM-ELAB-SVQUERY-002"));
+    assert(has_diagnostic(
+        rejected_slices, "FSIM-ELAB-SVREDUCE-001"));
+    assert(has_diagnostic(
+        rejected_slices, "FSIM-ELAB-SVLOCATOR-001"));
+    assert(has_diagnostic(
+        rejected_slices, "FSIM-ELAB-SVFIND-001"));
+    const auto leaked_iterator = fsim::frontend::parse_text(
+        "container-iterator-leak.sv",
+        "module container_iterator_leak; "
+        "int values[]; int located[$]; int result; "
+        "initial begin "
+        "located = values.find(entry) with (entry > 0); "
+        "result = entry; "
+        "end endmodule",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(
+        !leaked_iterator.ok()
+        && std::ranges::any_of(
+            leaked_iterator.diagnostics,
+            [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-090";
+            }));
 
-  const auto invalid_ports = fsim::frontend::parse_text(
-      "container-port-invalid.sv",
-      R"(
+    const auto invalid_ports = fsim::frontend::parse_text(
+        "container-port-invalid.sv",
+        R"(
 module bad_input(
     input logic [7:0] memory[3:0]);
   initial begin
@@ -1707,26 +1644,25 @@ module bad_port_top;
   input_forward forward(.memory(memory));
 endmodule
 )",
-      fsim::frontend::Language::SystemVerilog2017);
-  assert(invalid_ports.ok());
-  const auto rejected_ports = fsim::elaboration::elaborate(
-      invalid_ports.design, "bad_port_top");
-  assert(!rejected_ports.ok());
-  assert(has_diagnostic(
-      rejected_ports, "FSIM-ELAB-SVPORT-005"));
-  assert(has_diagnostic(
-      rejected_ports, "FSIM-ELAB-SVPORT-006"));
-  assert(has_diagnostic(
-      rejected_ports, "FSIM-ELAB-SVPORT-007"));
-  assert(has_diagnostic(
-      rejected_ports, "FSIM-ELAB-SVPORT-008"));
-  assert(has_diagnostic(
-      rejected_ports, "FSIM-ELAB-SVPORT-009"));
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_ports.ok());
+    const auto rejected_ports = fsim::elaboration::elaborate(
+        invalid_ports.design, "bad_port_top");
+    assert(!rejected_ports.ok());
+    assert(has_diagnostic(
+        rejected_ports, "FSIM-ELAB-SVPORT-005"));
+    assert(has_diagnostic(
+        rejected_ports, "FSIM-ELAB-SVPORT-006"));
+    assert(has_diagnostic(
+        rejected_ports, "FSIM-ELAB-SVPORT-007"));
+    assert(has_diagnostic(
+        rejected_ports, "FSIM-ELAB-SVPORT-008"));
+    assert(has_diagnostic(
+        rejected_ports, "FSIM-ELAB-SVPORT-009"));
 
-  const auto invalid_dynamic_ports =
-      fsim::frontend::parse_text(
-          "dynamic-container-port-invalid.sv",
-          R"(
+    const auto invalid_dynamic_ports = fsim::frontend::parse_text(
+        "dynamic-container-port-invalid.sv",
+        R"(
 module dynamic_input(input int value[]);
   initial value = new[1];
 endmodule
@@ -1786,8 +1722,6 @@ module bad_dynamic_port_top;
   initial begin
     query_result = $left(associative_value);
     query_result = $size(dynamic_value, 2);
-    query_result = $bits(dynamic_value, 1);
-    query_result = $dimensions(dynamic_value, 1);
     query_result = $size(item_t);
     fixed_value = '{1};
     bounded_value = '{1, 2, 3, 4};
@@ -1810,49 +1744,61 @@ module bad_dynamic_port_top;
   end
 endmodule
 )",
-          fsim::frontend::Language::SystemVerilog2017);
-  assert(invalid_dynamic_ports.ok());
-  const auto rejected_dynamic_ports =
-      fsim::elaboration::elaborate(
-          invalid_dynamic_ports.design,
-          "bad_dynamic_port_top");
-  assert(!rejected_dynamic_ports.ok());
-  assert(has_diagnostic(
-      rejected_dynamic_ports, "FSIM-ELAB-SVPORT-005"));
-  assert(has_diagnostic(
-      rejected_dynamic_ports, "FSIM-ELAB-SVPORT-006"));
-  assert(has_diagnostic(
-      rejected_dynamic_ports, "FSIM-ELAB-SVPORT-007"));
-  assert(has_diagnostic(
-      rejected_dynamic_ports, "FSIM-ELAB-SVPORT-008"));
-  assert(has_diagnostic(
-      rejected_dynamic_ports, "FSIM-ELAB-SVPORT-009"));
-  assert(has_diagnostic(
-      rejected_dynamic_ports, "FSIM-ELAB-SVQUERY-001"));
-  assert(has_diagnostic(
-      rejected_dynamic_ports, "FSIM-ELAB-SVQUERY-002"));
-  assert(has_diagnostic(
-      rejected_dynamic_ports, "FSIM-ELAB-SVQUERY-003"));
-  assert(has_diagnostic(
-      rejected_dynamic_ports, "FSIM-ELAB-SVQUERY-004"));
-  assert(has_diagnostic(
-      rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-001"));
-  assert(has_diagnostic(
-      rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-002"));
-  assert(has_diagnostic(
-      rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-003"));
-  assert(has_diagnostic(
-      rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-004"));
-  assert(has_diagnostic(
-      rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-005"));
-  assert(has_diagnostic(
-      rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-006"));
-  assert(has_diagnostic(
-      rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-007"));
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_dynamic_ports.ok());
+    const auto rejected_dynamic_ports = fsim::elaboration::elaborate(
+        invalid_dynamic_ports.design,
+        "bad_dynamic_port_top");
+    assert(!rejected_dynamic_ports.ok());
+    assert(has_diagnostic(
+        rejected_dynamic_ports, "FSIM-ELAB-SVPORT-005"));
+    assert(has_diagnostic(
+        rejected_dynamic_ports, "FSIM-ELAB-SVPORT-006"));
+    assert(has_diagnostic(
+        rejected_dynamic_ports, "FSIM-ELAB-SVPORT-007"));
+    assert(has_diagnostic(
+        rejected_dynamic_ports, "FSIM-ELAB-SVPORT-008"));
+    assert(has_diagnostic(
+        rejected_dynamic_ports, "FSIM-ELAB-SVPORT-009"));
+    assert(has_diagnostic(
+        rejected_dynamic_ports, "FSIM-ELAB-SVQUERY-002"));
+    const auto rejected_query_arity = fsim::frontend::parse_text(
+        "invalid-query-arity.sv",
+        R"(module invalid_query_arity;
+  int values[];
+  int result;
+  initial begin
+    result = $bits(values, 1);
+    result = $dimensions(values, 1);
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(!rejected_query_arity.ok());
+    assert(std::ranges::count_if(
+               rejected_query_arity.diagnostics,
+               [](const auto& diagnostic) {
+                   return diagnostic.code == "FSIM-SV-SEM-075";
+               })
+        == 2);
+    assert(has_diagnostic(
+        rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-001"));
+    assert(has_diagnostic(
+        rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-002"));
+    assert(has_diagnostic(
+        rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-003"));
+    assert(has_diagnostic(
+        rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-004"));
+    assert(has_diagnostic(
+        rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-005"));
+    assert(has_diagnostic(
+        rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-006"));
+    assert(has_diagnostic(
+        rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-007"));
 
-  const auto mixed_parent = fsim::frontend::parse_text(
-      "mixed-container-port.vhd",
-      R"(
+    const auto mixed_parent = fsim::frontend::parse_text(
+        "mixed-container-port.vhd",
+        R"(
 entity mixed_port_top is
 end entity;
 
@@ -1874,29 +1820,29 @@ begin
       \shared\ => \shared\);
 end architecture;
 )",
-      fsim::frontend::Language::Vhdl2008);
-  assert(mixed_parent.ok());
-  auto mixed_design = port_parsed.design;
-  mixed_design.units.insert(
-      mixed_design.units.end(),
-      mixed_parent.design.units.begin(),
-      mixed_parent.design.units.end());
-  const std::vector<fsim::elaboration::Binding> bindings{
-      {"mixed_port_top.child",
-       "sv:work.static_port_leaf",
-       std::nullopt}};
-  const auto mixed_rejected = fsim::elaboration::elaborate(
-      mixed_design,
-      "vhdl:work.mixed_port_top(rtl)",
-      bindings);
-  assert(!mixed_rejected.ok());
-  assert(has_diagnostic(
-      mixed_rejected, "FSIM-ELAB-SVPORT-004"));
+        fsim::frontend::Language::Vhdl2008);
+    assert(mixed_parent.ok());
+    auto mixed_design = port_parsed.design;
+    mixed_design.units.insert(
+        mixed_design.units.end(),
+        mixed_parent.design.units.begin(),
+        mixed_parent.design.units.end());
+    const std::vector<fsim::elaboration::Binding> bindings {
+        { "mixed_port_top.child",
+            "sv:work.static_port_leaf",
+            std::nullopt }
+    };
+    const auto mixed_rejected = fsim::elaboration::elaborate(
+        mixed_design,
+        "vhdl:work.mixed_port_top(rtl)",
+        bindings);
+    assert(!mixed_rejected.ok());
+    assert(has_diagnostic(
+        mixed_rejected, "FSIM-ELAB-SVPORT-004"));
 
-  const auto mixed_dynamic_parent =
-      fsim::frontend::parse_text(
-          "mixed-dynamic-container-port.vhd",
-          R"(
+    const auto mixed_dynamic_parent = fsim::frontend::parse_text(
+        "mixed-dynamic-container-port.vhd",
+        R"(
 entity mixed_dynamic_port_top is
 end entity;
 
@@ -1924,27 +1870,26 @@ begin
       work => work);
 end architecture;
 )",
-          fsim::frontend::Language::Vhdl2008);
-  assert(mixed_dynamic_parent.ok());
-  auto mixed_dynamic_design = dynamic_port_parsed.design;
-  mixed_dynamic_design.units.insert(
-      mixed_dynamic_design.units.end(),
-      mixed_dynamic_parent.design.units.begin(),
-      mixed_dynamic_parent.design.units.end());
-  const std::vector<fsim::elaboration::Binding>
-      dynamic_bindings{
-          {"mixed_dynamic_port_top.child",
-           "sv:work.dynamic_port_leaf",
-           std::nullopt}};
-  const auto mixed_dynamic_rejected =
-      fsim::elaboration::elaborate(
-          mixed_dynamic_design,
-          "vhdl:work.mixed_dynamic_port_top(rtl)",
-          dynamic_bindings);
-  assert(!mixed_dynamic_rejected.ok());
-  assert(has_diagnostic(
-      mixed_dynamic_rejected, "FSIM-ELAB-SVPORT-004"));
-
+        fsim::frontend::Language::Vhdl2008);
+    assert(mixed_dynamic_parent.ok());
+    auto mixed_dynamic_design = dynamic_port_parsed.design;
+    mixed_dynamic_design.units.insert(
+        mixed_dynamic_design.units.end(),
+        mixed_dynamic_parent.design.units.begin(),
+        mixed_dynamic_parent.design.units.end());
+    const std::vector<fsim::elaboration::Binding>
+        dynamic_bindings {
+            { "mixed_dynamic_port_top.child",
+                "sv:work.dynamic_port_leaf",
+                std::nullopt }
+        };
+    const auto mixed_dynamic_rejected = fsim::elaboration::elaborate(
+        mixed_dynamic_design,
+        "vhdl:work.mixed_dynamic_port_top(rtl)",
+        dynamic_bindings);
+    assert(!mixed_dynamic_rejected.ok());
+    assert(has_diagnostic(
+        mixed_dynamic_rejected, "FSIM-ELAB-SVPORT-004"));
 }
 
-}  // namespace fsim::tests::elaboration
+} // namespace fsim::tests::elaboration

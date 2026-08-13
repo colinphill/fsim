@@ -213,6 +213,213 @@ endmodule
     require(
         verilog.ok(),
         "IEEE 1364-2005 file services parse in Verilog mode");
+
+    const auto legacy_services = parse_verilog(
+        SourceText {
+            "legacy-services.v",
+            R"(module legacy_services;
+  integer handle;
+  integer result;
+  reg [7:0] memory [1:0];
+  initial begin : legacy_io
+    handle = $fopen("legacy.log");
+    result = $random;
+    result = $stime;
+    $fdisplay(handle, "%0d", result);
+    $strobe("%0d", result);
+    $readmemh("legacy.hex", memory);
+    $fclose(handle);
+    $finish;
+  end
+endmodule
+)" },
+        StandardRevision::Verilog1995);
+    require(
+        legacy_services.ok(),
+        "Verilog-1995 retains legacy file, formatting, random, time, memory, and control services");
+    const auto& legacy_block = legacy_services.design.units.front().processes.front().statements.front();
+    require(
+        legacy_block.statements.size() == 8,
+        "legacy services remain ordered");
+    require(
+        legacy_block.statements[1].value.call_result_width == 32
+            && legacy_block.statements[1].value.call_result_domain
+                == ValueDomain::Integer
+            && legacy_block.statements[1].value.call_result_signed,
+        "legacy random result profile remains exact");
+    require(
+        legacy_block.statements[2].value.call_result_width == 32
+            && legacy_block.statements[2].value.call_result_domain
+                == ValueDomain::Bit2,
+        "legacy time result profile remains exact");
+    require(
+        legacy_block.statements[3].kind
+                == StatementKind::FileDisplay
+            && !legacy_block.statements[3].output_postponed
+            && legacy_block.statements[4].kind == StatementKind::Display
+            && legacy_block.statements[4].output_postponed,
+        "legacy active/postponed scheduling profiles remain exact");
+
+    const auto later_file_services_in_1995 = parse_verilog(
+        SourceText {
+            "later-files-in-1995.v",
+            R"(module later_files_in_1995;
+  integer handle;
+  integer result;
+  reg [7:0] memory [1:0];
+  initial begin
+    handle = $fopen("later.log", "w");
+    result = $fgetc(handle);
+    result = $value$plusargs("value=%d", result);
+    $writememh("later.hex", memory);
+  end
+endmodule
+)" },
+        StandardRevision::Verilog1995);
+    const auto services_2001 = parse_verilog(
+        SourceText {
+            "services-2001.v",
+            R"(module services_2001;
+  integer handle;
+  integer result;
+  reg [7:0] memory [1:0];
+  initial begin
+    handle = $fopen("later.log", "w");
+    result = $fgetc(handle);
+    result = $value$plusargs("value=%d", result);
+    $writememh("later.hex", memory);
+  end
+endmodule
+)" },
+        StandardRevision::Verilog2001);
+    require(
+        !later_file_services_in_1995.ok()
+            && has_code(later_file_services_in_1995, "FSIM-SV-PARSE-350")
+            && services_2001.ok(),
+        "Verilog-2001 introduces later file signatures, input, plusarg, and memory-write services");
+
+    const auto math_2001 = parse_verilog(
+        SourceText {
+            "math-2001.v",
+            "module math_2001; real value; initial value = $ln(2.0); endmodule\n" },
+        StandardRevision::Verilog2001);
+    const auto math_2005 = parse_verilog(
+        SourceText {
+            "math-2005.v",
+            "module math_2005; real value; initial value = $ln(2.0); endmodule\n" },
+        StandardRevision::Verilog2005);
+    require(
+        !math_2001.ok() && has_code(math_2001, "FSIM-SV-PARSE-350")
+            && math_2005.ok(),
+        "Verilog-2005 introduces the mathematical system-function family");
+
+    const auto systemverilog_services = parse_verilog(
+        SourceText {
+            "systemverilog-services.sv",
+            R"(module systemverilog_services;
+  logic value;
+  int result;
+  string kind;
+  initial begin : system_services
+    result = $urandom();
+    result = $rose(value);
+    result = $get_coverage();
+    kind = $typename(value);
+    result = $system();
+    $error("error");
+    $fatal(0, "fatal");
+    $asserton;
+  end
+endmodule
+)" },
+        StandardRevision::SystemVerilog2005);
+    require(
+        systemverilog_services.ok(),
+        "SystemVerilog-2005 admits random, sampled, coverage, introspection, host, severity, and assertion-control services");
+    const auto& systemverilog_block = systemverilog_services.design.units.front()
+                                          .processes.front()
+                                          .statements.front();
+    require(
+        systemverilog_block.statements.size() == 8
+            && systemverilog_block.statements[0].value.call_result_width == 32
+            && !systemverilog_block.statements[0].value.call_result_signed
+            && systemverilog_block.statements[1].value.call_result_width == 1
+            && systemverilog_block.statements[2].value.call_result_width == 64
+            && systemverilog_block.statements[3].value.call_result_domain
+                == ValueDomain::String
+            && systemverilog_block.statements[4].value.call_result_width == 32
+            && systemverilog_block.statements[5].assertion_severity
+                == AssertionSeverity::Error
+            && systemverilog_block.statements[6].assertion_severity
+                == AssertionSeverity::Failure
+            && systemverilog_block.statements[7].assertion_control
+                == SystemVerilogAssertionControlKind::On,
+        "SystemVerilog service results, severity, and assertion-control profiles remain exact");
+
+    const auto introspection_in_verilog = parse_verilog(
+        SourceText {
+            "introspection-in-verilog.v",
+            R"(module introspection_in_verilog;
+  reg [7:0] value;
+  integer result;
+  initial begin
+    result = $bits(value);
+    result = $onehot(value);
+    result = $urandom_range(7);
+    result = $sformatf("%0d", result);
+  end
+endmodule
+)" },
+        StandardRevision::Verilog2005);
+    const auto introspection_2005 = parse_verilog(
+        SourceText {
+            "introspection-2005.sv",
+            R"(module introspection_2005;
+  logic [7:0] value;
+  int result;
+  string text;
+  initial begin : introspection
+    result = $bits(value);
+    result = $countones(value);
+    result = $onehot(value);
+    result = $urandom_range(7);
+    text = $sformatf("%0d", result);
+  end
+endmodule
+)" },
+        StandardRevision::SystemVerilog2005);
+    require(
+        !introspection_in_verilog.ok()
+            && has_code(introspection_in_verilog, "FSIM-SV-PARSE-350")
+            && introspection_2005.ok(),
+        "SystemVerilog-2005 introduces packed introspection, state-query, range-random, and string-format functions");
+    const auto& introspection_block = introspection_2005.design.units.front()
+                                          .processes.front()
+                                          .statements.front();
+    require(
+        introspection_block.statements[0].value.call_result_width == 32
+            && introspection_block.statements[1].value.call_result_width == 32
+            && introspection_block.statements[2].value.call_result_width == 1
+            && introspection_block.statements[3].value.call_result_width == 32
+            && introspection_block.statements[4].value.call_result_domain
+                == ValueDomain::String,
+        "SystemVerilog introspection, state-query, random, and formatting results retain exact profiles");
+
+    const auto global_services_2005 = parse_verilog(
+        SourceText {
+            "global-services-2005.sv",
+            "module global_services_2005; logic value; int result; initial begin result = $rose_gclk(value); $assertpasson; end endmodule\n" },
+        StandardRevision::SystemVerilog2005);
+    const auto global_services_2009 = parse_verilog(
+        SourceText {
+            "global-services-2009.sv",
+            "module global_services_2009; logic value; int result; initial begin result = $rose_gclk(value); $assertpasson; end endmodule\n" },
+        StandardRevision::SystemVerilog2009);
+    require(
+        !global_services_2005.ok()
+            && has_code(global_services_2005, "FSIM-SV-PARSE-350")
+            && global_services_2009.ok(),
+        "SystemVerilog-2009 introduces global-clock sampled functions and extended assertion controls");
 }
 
 } // namespace fsim::tests::frontend

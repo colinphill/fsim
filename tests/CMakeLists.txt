@@ -170,6 +170,13 @@ add_test(
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckVhdlStandardModeInventory.cmake"
 )
 add_test(
+  NAME fsim.verilog-systemverilog-standard-mode-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckVerilogSystemVerilogStandardModeInventory.cmake"
+)
+add_test(
   NAME fsim.vhdl-standard-mode-closure-matrix
   COMMAND
     "${CMAKE_COMMAND}"
@@ -177,6 +184,15 @@ add_test(
     "-DFSIM_BINARY_DIR=${CMAKE_BINARY_DIR}"
     "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/vhdl-standard-mode-closure-evidence"
     -P "${PROJECT_SOURCE_DIR}/cmake/RunVhdlStandardModeClosureMatrix.cmake"
+)
+add_test(
+  NAME fsim.verilog-systemverilog-standard-mode-closure-matrix
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    "-DFSIM_BINARY_DIR=${CMAKE_BINARY_DIR}"
+    "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/verilog-systemverilog-standard-mode-closure-evidence"
+    -P "${PROJECT_SOURCE_DIR}/cmake/RunVerilogSystemVerilogStandardModeClosureMatrix.cmake"
 )
 add_test(
   NAME fsim.verilog-gap-inventory
@@ -468,9 +484,20 @@ set_tests_properties(
   PROPERTIES LABELS "fast;vhdl;conformance;inventory;corpus;positive;negative;semantic;execution;diagnostics;width;packages;provenance;resources;cmake"
 )
 set_tests_properties(
+  fsim.verilog-systemverilog-standard-mode-inventory
+  PROPERTIES LABELS "fast;verilog;systemverilog;conformance;inventory;corpus;closure;positive;negative;semantic;execution;diagnostics;width;artifact;cache;mixed;provenance;resources;cmake"
+)
+set_tests_properties(
   fsim.vhdl-standard-mode-closure-matrix
   PROPERTIES
     LABELS "slow;vhdl;closure;release;positive;negative;llvm;artifact;cache;debug;trace;mixed;packages;provenance;portability;resources"
+    RUN_SERIAL TRUE
+    TIMEOUT 7200
+)
+set_tests_properties(
+  fsim.verilog-systemverilog-standard-mode-closure-matrix
+  PROPERTIES
+    LABELS "slow;verilog;systemverilog;closure;release;positive;negative;llvm;artifact;cache;debug;trace;mixed;provenance;portability;resources"
     RUN_SERIAL TRUE
     TIMEOUT 7200
 )

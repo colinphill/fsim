@@ -3,247 +3,453 @@
 
 namespace fsim::frontend {
 
+namespace {
+
+[[nodiscard]] std::optional<StandardRevision> structural_word_standard(
+    const std::string_view word) {
+  if (word == "config" || word == "generate" || word == "genvar") {
+    return StandardRevision::Verilog2001;
+  }
+  if (contains_word(
+          {"alias", "assert", "assume", "bind", "class", "clocking",
+           "constraint", "cover", "covergroup", "export", "extends",
+           "import", "interface", "modport", "package", "program",
+           "property", "restrict", "sequence", "typedef", "virtual"},
+          word)) {
+    return StandardRevision::SystemVerilog2005;
+  }
+  if (word == "checker" || word == "let") {
+    return StandardRevision::SystemVerilog2009;
+  }
+  if (word == "implements") {
+    return StandardRevision::SystemVerilog2012;
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] bool profile_has(
+    const std::string_view profile,
+    const std::string_view name) noexcept {
+  std::size_t offset = 0;
+  while (offset <= profile.size()) {
+    const auto separator = profile.find(',', offset);
+    const auto end = separator == std::string_view::npos
+        ? profile.size()
+        : separator;
+    if (profile.substr(offset, end - offset) == name) {
+      return true;
+    }
+    if (separator == std::string_view::npos) {
+      break;
+    }
+    offset = separator + 1;
+  }
+  return false;
+}
+
+[[nodiscard]] KeywordSet compatibility_keyword_set(
+    const StandardRevision revision,
+    const std::string_view profile) {
+  if (revision == StandardRevision::Verilog2001NoConfig
+      && profile_has(profile, "configuration")) {
+    return KeywordSet::Verilog2001;
+  }
+  if (!profile_has(profile, "keyword-profile")) {
+    return keyword_set_for_standard_revision(revision);
+  }
+  switch (revision) {
+  case StandardRevision::Verilog2005:
+    return KeywordSet::Verilog2001;
+  case StandardRevision::SystemVerilog2009:
+  case StandardRevision::SystemVerilog2012:
+  case StandardRevision::SystemVerilog2017:
+    return KeywordSet::SystemVerilog2005;
+  default:
+    return keyword_set_for_standard_revision(revision);
+  }
+}
+
+} // namespace
+
+[[nodiscard]] std::optional<StandardRevision>
+verilog_system_service_standard(const std::string_view name)
+{
+    if (contains_word(
+            { "$fflush", "$ferror", "$fgetc", "$fgets", "$fread",
+                "$fscanf", "$fseek", "$ftell", "$rewind", "$sscanf",
+                "$q_add", "$q_exam", "$q_full", "$q_initialize",
+                "$q_remove", "$sformat", "$signed", "$swrite", "$swriteb",
+                "$swriteh", "$swriteo", "$test$plusargs", "$ungetc",
+                "$unsigned", "$value$plusargs", "$writememb", "$writememh" },
+            name)) {
+        return StandardRevision::Verilog2001;
+    }
+    if (contains_word(
+            { "$acos", "$acosh", "$asin", "$asinh", "$atan", "$atan2",
+                "$atanh", "$ceil", "$clog2", "$cos", "$cosh", "$exp",
+                "$floor", "$hypot", "$ln", "$log10", "$pow", "$sin",
+                "$sinh", "$sqrt", "$tan", "$tanh" },
+            name)) {
+        return StandardRevision::Verilog2005;
+    }
+    if (contains_word(
+            { "$assertcontrol", "$assertkill", "$assertoff", "$asserton",
+                "$bits", "$bitstoshortreal", "$cast", "$changed",
+                "$countbits", "$countones", "$dimensions", "$error", "$exit",
+                "$fatal", "$fell", "$get_coverage", "$get_inst_coverage",
+                "$high", "$increment", "$info", "$isunknown", "$isunbounded",
+                "$left", "$low", "$onehot", "$onehot0", "$past", "$right",
+                "$rose", "$sampled", "$sformatf", "$shortrealtobits", "$size",
+                "$srandom", "$stable", "$system", "$typename",
+                "$unpacked_dimensions", "$urandom", "$urandom_range",
+                "$warning" },
+            name)) {
+        return StandardRevision::SystemVerilog2005;
+    }
+    if (contains_word(
+            { "$assertfailoff", "$assertfailon", "$assertnonvacuouson",
+                "$assertpassoff", "$assertpasson", "$assertvacuousoff",
+                "$changed_gclk", "$changing_gclk", "$falling_gclk",
+                "$fell_gclk", "$future_gclk", "$past_gclk", "$rising_gclk",
+                "$rose_gclk", "$stable_gclk", "$steady_gclk" },
+            name)) {
+        return StandardRevision::SystemVerilog2009;
+    }
+    return std::nullopt;
+}
+
 VerilogParser::VerilogParser(LexResult lexed, bool system_verilog)
+    : VerilogParser(
+          std::move(lexed),
+          system_verilog ? StandardRevision::SystemVerilog2017
+                         : StandardRevision::Verilog2005) {}
+
+VerilogParser::VerilogParser(
+    LexResult lexed,
+    const StandardRevision standard_revision)
+    : VerilogParser(
+          std::move(lexed), standard_revision, "none") {}
+
+VerilogParser::VerilogParser(
+    LexResult lexed,
+    const StandardRevision standard_revision,
+    std::string compatibility_profile)
     : ParserBase(std::move(lexed.tokens),
                  std::move(lexed.diagnostics)),
-      language_(system_verilog ? Language::SystemVerilog2017
-                               : Language::Verilog2005),
-      keyword_set_(
-          system_verilog ? KeywordSet::SystemVerilog2017
-                         : KeywordSet::Verilog2005) {}
+      language_(language_for_standard_revision(standard_revision)),
+      standard_revision_(standard_revision),
+      compatibility_profile_(std::move(compatibility_profile)),
+      keyword_set_(compatibility_keyword_set(
+          standard_revision, compatibility_profile_)) {}
 
 ParseResult VerilogParser::run() {
-  ParsedDesign design;
-  while (!at_end()) {
-      if (verilog_attribute_instance_start()) {
-          parse_verilog_attribute_instances();
-      } else if (time_declaration_start()) {
-          const auto declaration = advance();
-          parse_time_declaration(nullptr, declaration);
-      } else if (
-          match_keyword("module")
-          || match_keyword("macromodule")) {
-          compilation_unit_has_design_item_ = true;
-          design.units.push_back(parse_module(previous()));
-      } else if (match_keyword("extern")) {
-          compilation_unit_has_design_item_ = true;
-          const auto extern_token = previous();
-          UnitKind kind { UnitKind::VerilogModule };
-          Token declaration;
-          if (match_keyword("module") || match_keyword("macromodule")) {
-              declaration = previous();
-          } else if (match_keyword("interface")) {
-              kind = UnitKind::SystemVerilogInterface;
-              declaration = previous();
-          } else if (match_keyword("program")) {
-              kind = UnitKind::SystemVerilogProgram;
-              declaration = previous();
-          } else {
-              error(
-                  extern_token,
-                  "FSIM-SV-PARSE-353",
-                  "extern must introduce a module, interface, or program declaration");
-              skip_to_semicolon();
-              continue;
-          }
-          auto unit = parse_module(declaration, kind, true);
-          unit.span = cover(extern_token.span, unit.span);
-          design.units.push_back(std::move(unit));
-      } else if (match_keyword("config")) {
-          compilation_unit_has_design_item_ = true;
-          design.units.push_back(
-              parse_systemverilog_configuration(previous()));
-      } else if (match_keyword("bind")) {
-          compilation_unit_has_design_item_ = true;
-          design.units.push_back(make_systemverilog_bind_unit(
-              parse_systemverilog_bind(previous())));
-      } else if (match_keyword("interface")) {
-          compilation_unit_has_design_item_ = true;
-          const auto interface_token = previous();
-          if (match_keyword("class")) {
-              add_class_declaration(
-                  design.systemverilog_classes,
-                  parse_class(previous(), "$unit", false, true),
-                  interface_token);
-          } else {
-              design.units.push_back(parse_module(
-                  interface_token, UnitKind::SystemVerilogInterface));
-          }
-      } else if (match_keyword("program")) {
-          compilation_unit_has_design_item_ = true;
-          design.units.push_back(parse_module(
-              previous(), UnitKind::SystemVerilogProgram));
-      } else if (match_keyword("virtual")) {
-          compilation_unit_has_design_item_ = true;
-          const auto qualifier = previous();
-          if (match_keyword("class")) {
-              add_class_declaration(
-                  design.systemverilog_classes,
-                  parse_class(previous(), "$unit", true),
-                  qualifier);
-          } else {
-              error(
-                  qualifier,
-                  "FSIM-SV-PARSE-254",
-                  "compilation-unit 'virtual' must introduce a class");
-              skip_to_semicolon();
-          }
-      } else if (match_keyword("class")) {
-          compilation_unit_has_design_item_ = true;
-          const auto declaration = previous();
-          add_class_declaration(
-              design.systemverilog_classes,
-              parse_class(declaration, "$unit"),
-              declaration);
-      } else if (keyword("typedef") && keyword("class", 1)) {
-          compilation_unit_has_design_item_ = true;
-          const auto declaration = advance();
-          add_class_declaration(
-              design.systemverilog_classes,
-              parse_class_forward_declaration(declaration, "$unit"),
-              declaration);
-      } else if (match_keyword("function")) {
-          compilation_unit_has_design_item_ = true;
-          const auto declaration = previous();
-          if (compilation_unit_class_method_definition_start()) {
-              design.systemverilog_class_method_definitions.push_back(
-                  parse_class_out_of_block_method(
-                      declaration, SystemVerilogClassMethodKind::Function));
-          } else if (compilation_unit_dpi_export_definition_start(
-                         design.systemverilog_dpi_declarations,
-                         SystemVerilogDpiCallableKind::Function)) {
-              auto function = parse_function(declaration);
-              const bool duplicate = std::ranges::any_of(
-                                         design.functions,
-                                         [&](const FunctionDeclaration& existing) {
-                                             return existing.name == function.name;
-                                         })
-                  || std::ranges::any_of(
-                      design.tasks,
-                      [&](const TaskDeclaration& existing) {
-                          return existing.name == function.name;
-                      });
-              if (duplicate) {
-                  error(
-                      declaration,
-                      "FSIM-SV-SEM-228",
-                      "duplicate compilation-unit callable '"
-                          + function.name + "'");
-              } else {
-                  design.functions.push_back(std::move(function));
-              }
-          } else {
-              design.systemverilog_class_method_definitions.push_back(
-                  parse_class_out_of_block_method(
-                      declaration, SystemVerilogClassMethodKind::Function));
-          }
-      } else if (match_keyword("task")) {
-          compilation_unit_has_design_item_ = true;
-          const auto declaration = previous();
-          if (compilation_unit_class_method_definition_start()) {
-              design.systemverilog_class_method_definitions.push_back(
-                  parse_class_out_of_block_method(
-                      declaration, SystemVerilogClassMethodKind::Task));
-          } else if (compilation_unit_dpi_export_definition_start(
-                         design.systemverilog_dpi_declarations,
-                         SystemVerilogDpiCallableKind::Task)) {
-              auto task = parse_task(declaration);
-              const bool duplicate = std::ranges::any_of(
-                                         design.tasks,
-                                         [&](const TaskDeclaration& existing) {
-                                             return existing.name == task.name;
-                                         })
-                  || std::ranges::any_of(
-                      design.functions,
-                      [&](const FunctionDeclaration& existing) {
-                          return existing.name == task.name;
-                      });
-              if (duplicate) {
-                  error(
-                      declaration,
-                      "FSIM-SV-SEM-228",
-                      "duplicate compilation-unit callable '" + task.name + "'");
-              } else {
-                  design.tasks.push_back(std::move(task));
-              }
-          } else {
-              design.systemverilog_class_method_definitions.push_back(
-                  parse_class_out_of_block_method(
-                      declaration, SystemVerilogClassMethodKind::Task));
-          }
-      } else if (match_keyword("primitive")) {
-          compilation_unit_has_design_item_ = true;
-          auto declaration = parse_udp_declaration(previous());
-          const bool duplicate = std::ranges::any_of(
-                                     design.udp_declarations,
-                                     [&](const VerilogUdpDeclaration& existing) {
-                                         return existing.name == declaration.name;
-                                     })
-              || std::ranges::any_of(
-                  design.units, [&](const DesignUnit& existing) {
-                      return existing.name == declaration.name;
-                  });
-          if (duplicate) {
-              error(
-                  previous(),
-                  "FSIM-SV-SEM-135",
-                  "duplicate Verilog design declaration '"
-                      + declaration.name + "'");
-          } else {
-              design.udp_declarations.push_back(std::move(declaration));
-          }
-      } else if (match_keyword("package")) {
-          compilation_unit_has_design_item_ = true;
-          auto package = parse_package(previous());
-          auto& exports = package_constant_names_[package.name];
-          for (const auto& parameter : package.parameters) {
-              exports.insert(parameter.name);
-          }
-          design.units.push_back(std::move(package));
-      } else if (dpi_declaration_start("import")) {
-          compilation_unit_has_design_item_ = true;
-          const auto declaration = advance();
-          parse_dpi_declaration(
-              design.systemverilog_dpi_declarations,
-              declaration,
-              SystemVerilogDpiDirection::Import,
-              SystemVerilogDpiOwnerKind::CompilationUnit,
-              "$unit");
-      } else if (dpi_declaration_start("export")) {
-          compilation_unit_has_design_item_ = true;
-          const auto declaration = advance();
-          parse_dpi_declaration(
-              design.systemverilog_dpi_declarations,
-              declaration,
-              SystemVerilogDpiDirection::Export,
-              SystemVerilogDpiOwnerKind::CompilationUnit,
-              "$unit");
-      } else if (match_keyword("import")) {
-          compilation_unit_has_design_item_ = true;
-          parse_import_clause(
-              compilation_unit_imports_, previous());
-      } else if (at(TokenKind::Backtick)) {
-          parse_directive();
-      } else {
-          const auto unexpected = advance();
-          error(unexpected, "FSIM-SV-UNSUPPORTED-001",
-              "unsupported compilation-unit item '" + unexpected.text + "'");
-          skip_to_semicolon();
-      }
-  }
-  if (!keyword_stack_.empty()) {
-    error(
-        current(),
-        "FSIM-SV-PP-038",
-        "unterminated `begin_keywords region");
-    keyword_stack_.clear();
-  }
-  resolve_dpi_declarations(
-      design.systemverilog_dpi_declarations,
-      design.functions,
-      design.tasks);
-  normalize_udp_instances(design);
-  return ParseResult{std::move(design), std::move(diagnostics_)};
+    ParsedDesign design;
+    while (!at_end()) {
+        if (verilog_attribute_instance_start()) {
+            parse_verilog_attribute_instances();
+        } else if (time_declaration_start()) {
+            const auto declaration = advance();
+            parse_time_declaration(nullptr, declaration);
+        } else if (
+            match_keyword("module")
+            || match_keyword("macromodule")) {
+            compilation_unit_has_design_item_ = true;
+            design.units.push_back(parse_module(previous()));
+        } else if (match_keyword("extern")) {
+            compilation_unit_has_design_item_ = true;
+            const auto extern_token = previous();
+            UnitKind kind { UnitKind::VerilogModule };
+            Token declaration;
+            if (match_keyword("module") || match_keyword("macromodule")) {
+                declaration = previous();
+            } else if (match_keyword("interface")) {
+                kind = UnitKind::SystemVerilogInterface;
+                declaration = previous();
+            } else if (match_keyword("program")) {
+                kind = UnitKind::SystemVerilogProgram;
+                declaration = previous();
+            } else {
+                error(
+                    extern_token,
+                    "FSIM-SV-PARSE-353",
+                    "extern must introduce a module, interface, or program declaration");
+                skip_to_semicolon();
+                continue;
+            }
+            auto unit = parse_module(declaration, kind, true);
+            unit.span = cover(extern_token.span, unit.span);
+            design.units.push_back(std::move(unit));
+        } else if (match_keyword("config")) {
+            compilation_unit_has_design_item_ = true;
+            const auto config_token = previous();
+            if (standard_revision_ == StandardRevision::Verilog2001NoConfig
+                && !compatibility_enabled("configuration")) {
+                error(
+                    config_token,
+                    "FSIM-SV-PARSE-348",
+                    "configuration declarations are disabled by selected verilog-2001-noconfig; select verilog-2001 or verilog-2005");
+            } else {
+                (void)require_standard(
+                    "a configuration declaration",
+                    StandardRevision::Verilog2001,
+                    config_token,
+                    "FSIM-SV-PARSE-348");
+            }
+            design.units.push_back(
+                parse_systemverilog_configuration(config_token));
+        } else if (match_keyword("bind")) {
+            compilation_unit_has_design_item_ = true;
+            (void)require_standard(
+                "a bind directive", StandardRevision::SystemVerilog2005,
+                previous(), "FSIM-SV-PARSE-348");
+            design.units.push_back(make_systemverilog_bind_unit(
+                parse_systemverilog_bind(previous())));
+        } else if (match_keyword("interface")) {
+            compilation_unit_has_design_item_ = true;
+            const auto interface_token = previous();
+            (void)require_standard(
+                "an interface declaration",
+                StandardRevision::SystemVerilog2005,
+                interface_token,
+                "FSIM-SV-PARSE-348");
+            if (match_keyword("class")) {
+                (void)require_standard(
+                    "an interface class",
+                    StandardRevision::SystemVerilog2012,
+                    previous(),
+                    "FSIM-SV-PARSE-348");
+                add_class_declaration(
+                    design.systemverilog_classes,
+                    parse_class(previous(), "$unit", false, true),
+                    interface_token);
+            } else {
+                design.units.push_back(parse_module(
+                    interface_token, UnitKind::SystemVerilogInterface));
+            }
+        } else if (match_keyword("program")) {
+            compilation_unit_has_design_item_ = true;
+            (void)require_standard(
+                "a program declaration",
+                StandardRevision::SystemVerilog2005,
+                previous(),
+                "FSIM-SV-PARSE-348");
+            design.units.push_back(parse_module(
+                previous(), UnitKind::SystemVerilogProgram));
+        } else if (
+            at(TokenKind::Identifier) && current().text == "program") {
+            compilation_unit_has_design_item_ = true;
+            const auto program_token = advance();
+            (void)require_standard(
+                "a program declaration",
+                StandardRevision::SystemVerilog2005,
+                program_token,
+                "FSIM-SV-PARSE-348");
+            skip_to_semicolon();
+        } else if (match_keyword("virtual")) {
+            compilation_unit_has_design_item_ = true;
+            const auto qualifier = previous();
+            if (match_keyword("class")) {
+                add_class_declaration(
+                    design.systemverilog_classes,
+                    parse_class(previous(), "$unit", true),
+                    qualifier);
+            } else {
+                error(
+                    qualifier,
+                    "FSIM-SV-PARSE-254",
+                    "compilation-unit 'virtual' must introduce a class");
+                skip_to_semicolon();
+            }
+        } else if (match_keyword("class")) {
+            compilation_unit_has_design_item_ = true;
+            const auto declaration = previous();
+            (void)require_standard(
+                "a class declaration",
+                StandardRevision::SystemVerilog2005,
+                declaration,
+                "FSIM-SV-PARSE-348");
+            add_class_declaration(
+                design.systemverilog_classes,
+                parse_class(declaration, "$unit"),
+                declaration);
+        } else if (keyword("typedef") && keyword("class", 1)) {
+            compilation_unit_has_design_item_ = true;
+            const auto declaration = advance();
+            add_class_declaration(
+                design.systemverilog_classes,
+                parse_class_forward_declaration(declaration, "$unit"),
+                declaration);
+        } else if (match_keyword("function")) {
+            compilation_unit_has_design_item_ = true;
+            const auto declaration = previous();
+            if (compilation_unit_class_method_definition_start()) {
+                design.systemverilog_class_method_definitions.push_back(
+                    parse_class_out_of_block_method(
+                        declaration, SystemVerilogClassMethodKind::Function));
+            } else if (compilation_unit_dpi_export_definition_start(
+                           design.systemverilog_dpi_declarations,
+                           SystemVerilogDpiCallableKind::Function)) {
+                auto function = parse_function(declaration);
+                const bool duplicate = std::ranges::any_of(
+                                           design.functions,
+                                           [&](const FunctionDeclaration& existing) {
+                                               return existing.name == function.name;
+                                           })
+                    || std::ranges::any_of(
+                        design.tasks,
+                        [&](const TaskDeclaration& existing) {
+                            return existing.name == function.name;
+                        });
+                if (duplicate) {
+                    error(
+                        declaration,
+                        "FSIM-SV-SEM-228",
+                        "duplicate compilation-unit callable '"
+                            + function.name + "'");
+                } else {
+                    design.functions.push_back(std::move(function));
+                }
+            } else {
+                design.systemverilog_class_method_definitions.push_back(
+                    parse_class_out_of_block_method(
+                        declaration, SystemVerilogClassMethodKind::Function));
+            }
+        } else if (match_keyword("task")) {
+            compilation_unit_has_design_item_ = true;
+            const auto declaration = previous();
+            if (compilation_unit_class_method_definition_start()) {
+                design.systemverilog_class_method_definitions.push_back(
+                    parse_class_out_of_block_method(
+                        declaration, SystemVerilogClassMethodKind::Task));
+            } else if (compilation_unit_dpi_export_definition_start(
+                           design.systemverilog_dpi_declarations,
+                           SystemVerilogDpiCallableKind::Task)) {
+                auto task = parse_task(declaration);
+                const bool duplicate = std::ranges::any_of(
+                                           design.tasks,
+                                           [&](const TaskDeclaration& existing) {
+                                               return existing.name == task.name;
+                                           })
+                    || std::ranges::any_of(
+                        design.functions,
+                        [&](const FunctionDeclaration& existing) {
+                            return existing.name == task.name;
+                        });
+                if (duplicate) {
+                    error(
+                        declaration,
+                        "FSIM-SV-SEM-228",
+                        "duplicate compilation-unit callable '" + task.name + "'");
+                } else {
+                    design.tasks.push_back(std::move(task));
+                }
+            } else {
+                design.systemverilog_class_method_definitions.push_back(
+                    parse_class_out_of_block_method(
+                        declaration, SystemVerilogClassMethodKind::Task));
+            }
+        } else if (match_keyword("primitive")) {
+            compilation_unit_has_design_item_ = true;
+            auto declaration = parse_udp_declaration(previous());
+            const bool duplicate = std::ranges::any_of(
+                                       design.udp_declarations,
+                                       [&](const VerilogUdpDeclaration& existing) {
+                                           return existing.name == declaration.name;
+                                       })
+                || std::ranges::any_of(
+                    design.units, [&](const DesignUnit& existing) {
+                        return existing.name == declaration.name;
+                    });
+            if (duplicate) {
+                error(
+                    previous(),
+                    "FSIM-SV-SEM-135",
+                    "duplicate Verilog design declaration '"
+                        + declaration.name + "'");
+            } else {
+                design.udp_declarations.push_back(std::move(declaration));
+            }
+        } else if (match_keyword("package")) {
+            compilation_unit_has_design_item_ = true;
+            (void)require_standard(
+                "a package declaration",
+                StandardRevision::SystemVerilog2005,
+                previous(),
+                "FSIM-SV-PARSE-348");
+            auto package = parse_package(previous());
+            auto& exports = package_constant_names_[package.name];
+            for (const auto& parameter : package.parameters) {
+                exports.insert(parameter.name);
+            }
+            design.units.push_back(std::move(package));
+        } else if (dpi_declaration_start("import")) {
+            compilation_unit_has_design_item_ = true;
+            const auto declaration = advance();
+            parse_dpi_declaration(
+                design.systemverilog_dpi_declarations,
+                declaration,
+                SystemVerilogDpiDirection::Import,
+                SystemVerilogDpiOwnerKind::CompilationUnit,
+                "$unit");
+        } else if (dpi_declaration_start("export")) {
+            compilation_unit_has_design_item_ = true;
+            const auto declaration = advance();
+            parse_dpi_declaration(
+                design.systemverilog_dpi_declarations,
+                declaration,
+                SystemVerilogDpiDirection::Export,
+                SystemVerilogDpiOwnerKind::CompilationUnit,
+                "$unit");
+        } else if (match_keyword("import")) {
+            compilation_unit_has_design_item_ = true;
+            (void)require_standard(
+                "a package import",
+                StandardRevision::SystemVerilog2005,
+                previous(),
+                "FSIM-SV-PARSE-348");
+            parse_import_clause(
+                compilation_unit_imports_, previous());
+        } else if (at(TokenKind::Backtick)) {
+            parse_directive();
+        } else if (at(TokenKind::Identifier)
+            && structural_word_standard(current().text)) {
+            const auto later_structure = advance();
+            if (later_structure.text == "config"
+                && standard_revision_
+                    == StandardRevision::Verilog2001NoConfig
+                && !compatibility_enabled("configuration")) {
+                error(
+                    later_structure,
+                    "FSIM-SV-PARSE-348",
+                    "configuration declarations are disabled by selected verilog-2001-noconfig; select verilog-2001 or verilog-2005");
+            } else {
+                (void)require_standard(
+                    "structural form '" + later_structure.text + "'",
+                    *structural_word_standard(later_structure.text),
+                    later_structure,
+                    "FSIM-SV-PARSE-348");
+            }
+            skip_to_semicolon();
+        } else {
+            const auto unexpected = advance();
+            error(unexpected, "FSIM-SV-UNSUPPORTED-001",
+                "unsupported compilation-unit item '" + unexpected.text + "'");
+            skip_to_semicolon();
+        }
+    }
+    if (!keyword_stack_.empty()) {
+        error(
+            current(),
+            "FSIM-SV-PP-038",
+            "unterminated `begin_keywords region");
+        keyword_stack_.clear();
+    }
+    resolve_dpi_declarations(
+        design.systemverilog_dpi_declarations,
+        design.functions,
+        design.tasks);
+    normalize_udp_instances(design);
+    return ParseResult { std::move(design), std::move(diagnostics_) };
 }
 
 [[nodiscard]] bool VerilogParser::keyword(
@@ -275,6 +481,29 @@ bool VerilogParser::match_keyword(
   }
   advance();
   return true;
+}
+
+[[nodiscard]] bool VerilogParser::compatibility_enabled(
+    const std::string_view name) const noexcept {
+  return profile_has(compatibility_profile_, name);
+}
+
+bool VerilogParser::require_standard(
+    const std::string_view feature,
+    const StandardRevision required,
+    const Token& token,
+    const std::string_view diagnostic_code) {
+  if (keyword_set_rank(keyword_set_for_standard_revision(standard_revision_))
+      >= keyword_set_rank(keyword_set_for_standard_revision(required))) {
+    return true;
+  }
+  error(
+      token,
+      std::string(diagnostic_code),
+      std::string(feature) + " requires " + std::string(to_string(required))
+          + "; selected " + std::string(to_string(standard_revision_))
+          + ". Select that or a later standard revision, or rewrite the source form");
+  return false;
 }
 
 Token VerilogParser::expect_keyword(
@@ -691,6 +920,16 @@ void VerilogParser::parse_begin_keywords(
         version,
         "FSIM-SV-PP-036",
         "unsupported `begin_keywords version '" + spelling + "'");
+  } else if (keyword_set_rank(*parsed)
+             > keyword_set_rank(
+                 keyword_set_for_standard_revision(standard_revision_))) {
+    error(
+        version,
+        "FSIM-SV-PP-052",
+        "`begin_keywords version '" + spelling
+            + "' is later than selected "
+            + std::string(to_string(standard_revision_))
+            + "; select that or a later standard revision");
   } else {
     keyword_stack_.push_back(keyword_set_);
     keyword_set_ = *parsed;
@@ -1156,18 +1395,35 @@ DesignUnit VerilogParser::parse_module(
         : program_unit ? std::string_view { "program" }
                        : std::string_view { "module" };
     unit.language = language_;
+    unit.standard_revision = standard_revision_;
+    unit.verilog_compatibility_profile = compatibility_profile_;
     unit.systemverilog_imports = compilation_unit_imports_;
     active_package_imports_ = unit.systemverilog_imports;
     unit.default_nettype = current_default_nettype_;
     unit.is_cell = current_cell_define_;
     unit.systemverilog_extern = extern_declaration;
     update_unit_time(unit);
+    if (keyword("automatic") || keyword("static")
+        || (at(TokenKind::Identifier)
+            && (current().text == "automatic"
+                || current().text == "static"))) {
+        const auto lifetime = advance();
+        (void)require_standard(
+            std::string(unit_kind) + " lifetime '" + lifetime.text + "'",
+            StandardRevision::SystemVerilog2005,
+            lifetime);
+    }
     const auto name = expect_identifier(
         std::string { unit_kind } + " name");
     unit.name = name.text;
 
     if (match(TokenKind::Hash)) {
-        parse_parameter_port_list(unit, previous());
+        const auto hash = previous();
+        (void)require_standard(
+            "a module parameter port list",
+            StandardRevision::Verilog2001,
+            hash);
+        parse_parameter_port_list(unit, hash);
     }
 
     if (match(TokenKind::LeftParen)) {
@@ -1207,6 +1463,9 @@ DesignUnit VerilogParser::parse_module(
                 unit.verilog_defparams, previous());
         } else if (match_keyword("bind")) {
             module_has_non_time_item_ = true;
+            (void)require_standard(
+                "a bind directive", StandardRevision::SystemVerilog2005,
+                previous(), "FSIM-SV-PARSE-348");
             unit.systemverilog_binds.push_back(
                 parse_systemverilog_bind(previous()));
         } else if (dpi_declaration_start("import")) {
@@ -1229,6 +1488,9 @@ DesignUnit VerilogParser::parse_module(
                 unit.name);
         } else if (match_keyword("import")) {
             module_has_non_time_item_ = true;
+            (void)require_standard(
+                "a package import", StandardRevision::SystemVerilog2005,
+                previous(), "FSIM-SV-PARSE-348");
             parse_import_clause(
                 unit.systemverilog_imports, previous());
             active_package_imports_ = unit.systemverilog_imports;
@@ -1237,13 +1499,22 @@ DesignUnit VerilogParser::parse_module(
             parse_nettype(unit, previous());
         } else if (match_keyword("alias")) {
             module_has_non_time_item_ = true;
+            (void)require_standard(
+                "an alias statement", StandardRevision::SystemVerilog2005,
+                previous(), "FSIM-SV-PARSE-348");
             parse_alias_statement(unit, previous());
         } else if (match_keyword("let")) {
             module_has_non_time_item_ = true;
+            (void)require_standard(
+                "a let declaration", StandardRevision::SystemVerilog2009,
+                previous(), "FSIM-SV-PARSE-348");
             parse_let_declaration(unit, previous());
         } else if (match_keyword("typedef")) {
             module_has_non_time_item_ = true;
             const auto declaration = previous();
+            (void)require_standard(
+                "a typedef declaration", StandardRevision::SystemVerilog2005,
+                declaration, "FSIM-SV-PARSE-348");
             if (keyword("class")) {
                 add_class_declaration(
                     unit.systemverilog_classes,
@@ -1268,6 +1539,11 @@ DesignUnit VerilogParser::parse_module(
             module_has_non_time_item_ = true;
             const auto qualifier = previous();
             if (match_keyword("class")) {
+                (void)require_standard(
+                    "an interface class",
+                    StandardRevision::SystemVerilog2012,
+                    previous(),
+                    "FSIM-SV-PARSE-348");
                 add_class_declaration(
                     unit.systemverilog_classes,
                     parse_class(previous(), unit.name, false, true),
@@ -1282,12 +1558,18 @@ DesignUnit VerilogParser::parse_module(
         } else if (match_keyword("class")) {
             module_has_non_time_item_ = true;
             const auto declaration = previous();
+            (void)require_standard(
+                "a class declaration", StandardRevision::SystemVerilog2005,
+                declaration, "FSIM-SV-PARSE-348");
             add_class_declaration(
                 unit.systemverilog_classes,
                 parse_class(declaration, unit.name),
                 declaration);
         } else if (match_keyword("modport")) {
             module_has_non_time_item_ = true;
+            (void)require_standard(
+                "a modport declaration", StandardRevision::SystemVerilog2005,
+                previous(), "FSIM-SV-PARSE-348");
             if (!interface_unit) {
                 error(
                     previous(),
@@ -1299,6 +1581,9 @@ DesignUnit VerilogParser::parse_module(
             }
         } else if (match_keyword("clocking")) {
             module_has_non_time_item_ = true;
+            (void)require_standard(
+                "a clocking block", StandardRevision::SystemVerilog2005,
+                previous(), "FSIM-SV-PARSE-348");
             parse_clocking_block(unit, previous());
         } else if (match_keyword("default")) {
             module_has_non_time_item_ = true;
@@ -1317,6 +1602,10 @@ DesignUnit VerilogParser::parse_module(
             && current().text == "covergroup") {
             module_has_non_time_item_ = true;
             const auto declaration_start = advance();
+            (void)require_standard(
+                "a covergroup declaration",
+                StandardRevision::SystemVerilog2005,
+                declaration_start, "FSIM-SV-PARSE-348");
             add_covergroup_declaration(
                 unit.systemverilog_covergroups,
                 parse_covergroup_declaration(
@@ -1330,6 +1619,13 @@ DesignUnit VerilogParser::parse_module(
                 current().text)) {
             module_has_non_time_item_ = true;
             const auto declaration_start = advance();
+            (void)require_standard(
+                "an assertion declaration '" + declaration_start.text + "'",
+                declaration_start.text == "checker"
+                    ? StandardRevision::SystemVerilog2009
+                    : StandardRevision::SystemVerilog2005,
+                declaration_start,
+                "FSIM-SV-PARSE-348");
             const auto assertion_kind = declaration_start.text == "sequence"
                 ? SystemVerilogAssertionDeclarationKind::Sequence
                 : declaration_start.text == "property"
@@ -1369,6 +1665,11 @@ DesignUnit VerilogParser::parse_module(
                 advance();
             }
             const auto directive = advance();
+            (void)require_standard(
+                "a concurrent assertion",
+                StandardRevision::SystemVerilog2005,
+                directive,
+                "FSIM-SV-PARSE-348");
             const auto assertion_kind = directive.text == "assert"
                 ? SystemVerilogConcurrentAssertionKind::Assert
                 : directive.text == "assume"
@@ -1466,6 +1767,34 @@ DesignUnit VerilogParser::parse_module(
                 && current().text == "final")) {
             module_has_non_time_item_ = true;
             unit.processes.push_back(parse_final());
+        } else if (
+            at(TokenKind::Identifier)
+            && structural_word_standard(current().text)
+            && !keyword_reserved(keyword_set_, current().text)) {
+            module_has_non_time_item_ = true;
+            const auto later_structure = advance();
+            (void)require_standard(
+                "structural form '" + later_structure.text + "'",
+                *structural_word_standard(later_structure.text),
+                later_structure,
+                "FSIM-SV-PARSE-348");
+            skip_to_semicolon();
+        } else if (
+            at(TokenKind::Identifier)
+            && declaration_word_standard(current().text)
+            && !keyword_reserved(keyword_set_, current().text)) {
+            module_has_non_time_item_ = true;
+            const auto later_declaration = advance();
+            const auto required =
+                later_declaration.text == "automatic"
+                    || later_declaration.text == "static"
+                ? StandardRevision::SystemVerilog2005
+                : *declaration_word_standard(later_declaration.text);
+            (void)require_standard(
+                "declaration form '" + later_declaration.text + "'",
+                required,
+                later_declaration);
+            skip_to_semicolon();
         } else if (is_declaration_start() && !instance_start()) {
             module_has_non_time_item_ = true;
             parse_declaration(unit);
@@ -1501,17 +1830,29 @@ DesignUnit VerilogParser::parse_module(
             unit.processes.push_back(parse_initial());
         } else if (match_keyword("generate")) {
             module_has_non_time_item_ = true;
+            (void)require_standard(
+                "a generate region", StandardRevision::Verilog2001,
+                previous(), "FSIM-SV-PARSE-348");
             parse_generate_region(unit, previous());
         } else if (match_keyword("if")) {
             module_has_non_time_item_ = true;
+            (void)require_standard(
+                "a conditional generate", StandardRevision::Verilog2001,
+                previous(), "FSIM-SV-PARSE-348");
             unit.generate_regions.push_back(
                 parse_conditional_generate(previous()));
         } else if (match_keyword("for")) {
             module_has_non_time_item_ = true;
+            (void)require_standard(
+                "an iterative generate", StandardRevision::Verilog2001,
+                previous(), "FSIM-SV-PARSE-348");
             unit.generate_regions.push_back(
                 parse_iterative_generate(previous()));
         } else if (match_keyword("case")) {
             module_has_non_time_item_ = true;
+            (void)require_standard(
+                "a selection generate", StandardRevision::Verilog2001,
+                previous(), "FSIM-SV-PARSE-348");
             unit.generate_regions.push_back(
                 parse_selection_generate(previous()));
         } else if (instance_start()) {

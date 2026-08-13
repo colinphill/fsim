@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -12,11 +13,12 @@
 namespace fsim::frontend {
 
 inline constexpr std::string_view verilog_preprocessor_cache_version =
-    "fsim-verilog-preprocessor-v5";
+    "fsim-verilog-preprocessor-v6-standard-revision";
 
 struct PreprocessorOptions {
   std::vector<std::filesystem::path> include_directories;
   std::vector<std::string> defines;
+  std::optional<StandardRevision> standard_revision;
   std::size_t maximum_include_depth{64};
   std::size_t maximum_macro_expansion_depth{256};
 };
@@ -26,6 +28,7 @@ struct PreprocessorOptions {
 struct PreprocessedDependency {
   std::filesystem::path path;
   std::string contents;
+  StandardRevision standard_revision{StandardRevision::SystemVerilog2017};
 };
 
 struct PreprocessResult {
@@ -42,6 +45,7 @@ struct PreprocessedRoot {
   std::string contents;
   // Includes consumed while preprocessing this root, in first-use order.
   std::vector<PreprocessedDependency> dependencies;
+  StandardRevision standard_revision{StandardRevision::SystemVerilog2017};
 };
 
 struct PreprocessCompilationUnitResult {

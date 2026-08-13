@@ -873,6 +873,9 @@ void import_diagnostic(
 frontend::Language frontend_language(const project::Language language);
 frontend::VhdlStandard frontend_vhdl_standard(
     project::VhdlStandard standard);
+frontend::StandardRevision frontend_standard_revision(
+    project::Language language,
+    std::string_view standard);
 std::string_view vhdl_compatibility_profile() noexcept;
 
 struct ParseInput {
@@ -881,6 +884,9 @@ struct ParseInput {
     frontend::VhdlStandard vhdl_standard {
         frontend::VhdlStandard::Vhdl2008
     };
+    frontend::StandardRevision standard_revision {
+        frontend::StandardRevision::SystemVerilog2017
+    };
     std::string standard { "2017" };
     std::string library { "work" };
     std::size_t source_order { };
@@ -888,7 +894,11 @@ struct ParseInput {
 
 struct ParseGroup {
     frontend::Language language { frontend::Language::SystemVerilog2017 };
+    frontend::StandardRevision standard_revision {
+        frontend::StandardRevision::SystemVerilog2017
+    };
     std::string standard;
+    std::string compatibility_profile { "none" };
     std::vector<ParseInput> inputs;
     std::vector<std::filesystem::path> include_directories;
     std::vector<std::string> defines;
@@ -911,7 +921,8 @@ std::string compilation_unit_digest(
     const std::vector<frontend::PreprocessedRoot>& roots,
     const std::vector<frontend::PreprocessedDependency>& inputs,
     std::string_view language,
-    std::string_view standard);
+    std::string_view standard,
+    std::string_view compatibility_profile);
 
 ParsedSnapshot parse_group_snapshot(const ParseGroup& group);
 

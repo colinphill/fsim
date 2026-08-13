@@ -170,6 +170,37 @@ namespace {
             && descriptors_equal;
     }
 
+    constexpr bool valid_language(
+        const SystemVerilogVpiLanguage language) noexcept
+    {
+        switch (language) {
+        case SystemVerilogVpiLanguage::Verilog1995:
+        case SystemVerilogVpiLanguage::Verilog2001:
+        case SystemVerilogVpiLanguage::Verilog2001NoConfig:
+        case SystemVerilogVpiLanguage::Verilog2005:
+        case SystemVerilogVpiLanguage::SystemVerilog2005:
+        case SystemVerilogVpiLanguage::SystemVerilog2009:
+        case SystemVerilogVpiLanguage::SystemVerilog2012:
+        case SystemVerilogVpiLanguage::SystemVerilog2017:
+            return true;
+        }
+        return false;
+    }
+
+    constexpr bool systemverilog_language(
+        const SystemVerilogVpiLanguage language) noexcept
+    {
+        switch (language) {
+        case SystemVerilogVpiLanguage::SystemVerilog2005:
+        case SystemVerilogVpiLanguage::SystemVerilog2009:
+        case SystemVerilogVpiLanguage::SystemVerilog2012:
+        case SystemVerilogVpiLanguage::SystemVerilog2017:
+            return true;
+        default:
+            return false;
+        }
+    }
+
     bool valid_type(
         const SystemVerilogVpiObjectKind kind,
         const std::optional<SystemVerilogVpiTypeInfo>& candidate)
@@ -178,9 +209,7 @@ namespace {
             return false;
         }
         const auto& type = *candidate;
-        if (static_cast<unsigned>(type.language)
-                > static_cast<unsigned>(
-                    SystemVerilogVpiLanguage::SystemVerilog2017)
+        if (!valid_language(type.language)
             || static_cast<unsigned>(type.category)
                 > static_cast<unsigned>(SystemVerilogVpiValueCategory::Event)
             || static_cast<unsigned>(type.net_kind)
@@ -191,14 +220,28 @@ namespace {
                 > static_cast<unsigned>(SystemVerilogVpiLifetime::Automatic)) {
             return false;
         }
+        const bool has_provenance = type.semantic_unit_id.has_value()
+            || type.source_id.has_value() || !type.semantic_unit.empty()
+            || !type.source_path.empty() || !type.standard.empty()
+            || !type.compatibility_profile.empty();
+        if (has_provenance
+            && (!type.semantic_unit_id || !type.source_id
+                || type.semantic_unit.empty() || type.source_path.empty()
+                || type.standard.empty()
+                || type.compatibility_profile.empty()
+                || type.semantic_unit.size() > maximum_name_size
+                || type.source_path.size() > maximum_source_size
+                || type.standard.size() > maximum_name_size
+                || type.compatibility_profile.size() > maximum_name_size)) {
+            return false;
+        }
         const bool systemverilog_only = kind == SystemVerilogVpiObjectKind::Interface
             || kind == SystemVerilogVpiObjectKind::Program
             || kind == SystemVerilogVpiObjectKind::Package
             || kind == SystemVerilogVpiObjectKind::Class
             || kind == SystemVerilogVpiObjectKind::ClassProperty
             || kind == SystemVerilogVpiObjectKind::Assertion;
-        if (systemverilog_only
-            && type.language != SystemVerilogVpiLanguage::SystemVerilog2017) {
+        if (systemverilog_only && !systemverilog_language(type.language)) {
             return false;
         }
 
@@ -322,7 +365,7 @@ namespace {
             || descriptor_kind == SystemVerilogVpiDescriptorKind::Class
             || descriptor_kind == SystemVerilogVpiDescriptorKind::ClassHandle;
         if (descriptor_requires_systemverilog
-            && type.language != SystemVerilogVpiLanguage::SystemVerilog2017) {
+            && !systemverilog_language(type.language)) {
             return false;
         }
 
@@ -699,6 +742,32 @@ SystemVerilogVpiObjectRegistry::lookup_locked(
         return { { }, error };
     }
     const auto& record = records_[slot];
+    auto type = record.type;
+    if (type && type->semantic_unit.empty()) {
+        auto parent = record.parent;
+        while (parent != 0U) {
+            std::uint32_t parent_slot { };
+            if (resolve_object(parent, parent_slot)
+                != SystemVerilogVpiObjectError::None) {
+                break;
+            }
+            const auto& ancestor = records_[parent_slot];
+            if (ancestor.type && !ancestor.type->semantic_unit.empty()) {
+                type->language = ancestor.type->language;
+                type->semantic_unit_id = ancestor.type->semantic_unit_id;
+                type->source_id = ancestor.type->source_id;
+                type->semantic_unit = ancestor.type->semantic_unit;
+                type->source_path = ancestor.type->source_path;
+                type->source_line = ancestor.type->source_line;
+                type->source_column = ancestor.type->source_column;
+                type->standard = ancestor.type->standard;
+                type->compatibility_profile
+                    = ancestor.type->compatibility_profile;
+                break;
+            }
+            parent = ancestor.parent;
+        }
+    }
     return { SystemVerilogVpiObjectInfo {
                  handle,
                  record.parent,
@@ -706,7 +775,7 @@ SystemVerilogVpiObjectRegistry::lookup_locked(
                  record.name,
                  record.full_name,
                  record.source,
-                 record.type,
+                 std::move(type),
              },
         { } };
 }

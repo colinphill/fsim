@@ -14,7 +14,7 @@
 
 namespace fsim::artifact {
 
-inline constexpr std::uint32_t kDesignFormatVersion = 7;
+inline constexpr std::uint32_t kDesignFormatVersion = 8;
 inline constexpr std::string_view kDesignMetadataFilename = "fsim-design.bin";
 
 struct DesignRoot {
@@ -53,6 +53,16 @@ struct DesignVhdlUnitProvenance {
   friend bool operator==(
       const DesignVhdlUnitProvenance&,
       const DesignVhdlUnitProvenance&) = default;
+};
+
+struct DesignVerilogUnitProvenance {
+  std::uint32_t unit{};
+  std::string language;
+  std::string standard;
+  std::string compatibility_profile;
+  friend bool operator==(
+      const DesignVerilogUnitProvenance&,
+      const DesignVerilogUnitProvenance&) = default;
 };
 
 struct DesignPayload {
@@ -96,6 +106,7 @@ struct DesignMetadata {
   std::vector<DesignBinding> bindings;
   std::vector<DesignObjectInput> objects;
   std::vector<DesignVhdlUnitProvenance> vhdl_unit_provenance;
+  std::vector<DesignVerilogUnitProvenance> verilog_unit_provenance;
   std::vector<DesignSystemCPlugin> systemc_plugins;
   std::vector<DesignPayload> payloads;
   std::vector<std::string> specialization_cache_keys;

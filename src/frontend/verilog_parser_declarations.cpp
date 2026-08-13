@@ -103,6 +103,10 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
               || at(TokenKind::Identifier, 1));
       if (explicit_generic_interface || typed_interface) {
         const auto interface_start = current();
+        (void)require_standard(
+            "an interface-typed port",
+            StandardRevision::SystemVerilog2005,
+            interface_start);
         std::string interface_type;
         std::string modport;
         if (explicit_generic_interface) {
@@ -145,8 +149,22 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
       VerilogTypeSpec spec = inherited;
       bool declared_here = false;
       if (is_direction_keyword()) {
+        const auto direction_token = current();
+        (void)require_standard(
+            "an ANSI module-port declaration",
+            StandardRevision::Verilog2001,
+            direction_token);
         spec.direction = parse_direction();
         spec.type = default_port_net_type();
+        if (at(TokenKind::Identifier)
+            && declaration_word_standard(current().text)
+            && !keyword_reserved(keyword_set_, current().text)) {
+          const auto later_type = advance();
+          (void)require_standard(
+              "port type '" + later_type.text + "'",
+              *declaration_word_standard(later_type.text),
+              later_type);
+        }
         const bool explicit_variable = match_keyword("var");
         declared_here = true;
         const bool explicit_type =
@@ -182,6 +200,10 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
       }
       if (match(TokenKind::Assign)) {
         const auto initializer = previous();
+        (void)require_standard(
+            "an ANSI port default expression",
+            StandardRevision::SystemVerilog2005,
+            initializer);
         (void)parse_expression();
         error(
             initializer,
@@ -190,6 +212,10 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
             "frontend slice");
       }
       if (at(TokenKind::LeftBracket)) {
+        (void)require_standard(
+            "an unpacked port dimension",
+            StandardRevision::SystemVerilog2005,
+            current());
         (void)parse_optional_container_dimension(declaration.type);
       }
       const auto duplicate = std::find_if(
@@ -478,6 +504,9 @@ void VerilogParser::require_default_port_net_type(
 
 [[nodiscard]] bool VerilogParser::is_named_type_reference_start(
   const std::size_t offset) const  {
+  if (language_ != Language::SystemVerilog2017) {
+    return false;
+  }
   if (!at(TokenKind::Identifier, offset)
       || keyword_reserved(keyword_set_, current(offset).text)) {
     return false;
@@ -541,8 +570,14 @@ Type VerilogParser::parse_named_type() {
   type.named_type = name;
   type.named_type_span = span;
   if (name == "mailbox" || name == "semaphore") {
-    type.domain = ValueDomain::Bit2;
-    type.systemverilog_scalar = SystemVerilogScalarKind::Chandle;
+    if (require_standard(
+            "predefined type '" + name + "'",
+            StandardRevision::SystemVerilog2005,
+            first,
+            "FSIM-SV-PARSE-349")) {
+      type.domain = ValueDomain::Bit2;
+      type.systemverilog_scalar = SystemVerilogScalarKind::Chandle;
+    }
   }
   if (match(TokenKind::Hash)) {
     const auto hash = previous();
@@ -728,6 +763,13 @@ void VerilogParser::parse_event_declaration(
 
 void VerilogParser::parse_declaration(DesignUnit& unit) {
   const auto start = current();
+  if (keyword("automatic") || keyword("static")) {
+    const auto lifetime = advance();
+    (void)require_standard(
+        "an explicit variable lifetime",
+        StandardRevision::SystemVerilog2005,
+        lifetime);
+  }
   const bool package_variable =
       unit.kind == UnitKind::SystemVerilogPackage;
   const bool systemverilog_const =
@@ -837,6 +879,16 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     (void)parse_optional_container_dimension(declaration_type);
     std::optional<Expression> initializer;
     if (match(TokenKind::Assign)) {
+      const auto assignment = previous();
+      if (!contains_word(
+              {"wire", "tri", "tri0", "tri1", "wand", "triand",
+               "wor", "trior", "trireg", "supply0", "supply1"},
+              spec.type.spelling)) {
+        (void)require_standard(
+            "a variable declaration initializer",
+            StandardRevision::Verilog2001,
+            assignment);
+      }
       initializer = parse_expression();
     }
     const bool named_construction =
@@ -844,21 +896,6 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
         && initializer
         && initializer->kind == ExpressionKind::Call
         && initializer->text == "@sv-new";
-    if (initializer
-        && !package_variable
-        && declaration_type.domain != ValueDomain::String
-        && !declaration_type.systemverilog_container
-        && !named_construction
-        && spec.type.spelling != "wire"
-        && spec.type.systemverilog_net_type != "wire") {
-      error(
-          name,
-          "FSIM-SV-UNSUPPORTED-011",
-          "declaration initializers are not executable in this frontend "
-          "slice");
-      initializer.reset();
-    }
-
     if (package_variable
         || declaration_type.domain == ValueDomain::String
         || declaration_type.systemverilog_container
@@ -1016,6 +1053,20 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
       driver.verilog_drive_strength = drive_strength;
       driver.span = span_from(name, previous());
       unit.concurrent_statements.push_back(std::move(driver));
+    } else if (initializer) {
+      Statement assignment;
+      assignment.kind = StatementKind::Assignment;
+      assignment.assignment_kind = AssignmentKind::Blocking;
+      assignment.target = Expression{
+          ExpressionKind::Identifier, name.text, {}, name.span};
+      assignment.value = std::move(*initializer);
+      assignment.span = span_from(name, previous());
+      Process process;
+      process.kind = ProcessKind::Initial;
+      process.name = "$declaration_initializer_" + name.text;
+      process.statements.push_back(std::move(assignment));
+      process.span = process.statements.front().span;
+      unit.processes.push_back(std::move(process));
     }
     if (!match(TokenKind::Comma)) {
       break;
@@ -1469,6 +1520,14 @@ void VerilogParser::parse_gate_primitive(
 
 Process VerilogParser::parse_always() {
   const auto start = advance();
+  if (start.text == "always_ff" || start.text == "always_comb"
+      || start.text == "always_latch") {
+    (void)require_standard(
+        "process form '" + start.text + "'",
+        StandardRevision::SystemVerilog2005,
+        start,
+        "FSIM-SV-PARSE-347");
+  }
   current_procedural_names_.clear();
   current_procedural_types_.clear();
   Process process;

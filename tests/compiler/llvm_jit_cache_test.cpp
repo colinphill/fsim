@@ -2471,6 +2471,26 @@ void test_persistent_object_cache()
     test_vhdl_language_profile_cache_identity(
         root / "vhdl-language-profile");
 
+    const auto language_mode_key = [](
+        const std::string_view language,
+        const std::string_view standard,
+        const std::string_view compatibility) {
+        fsim::compiler::CacheKeyBuilder builder;
+        builder.add("cache-schema", "fsim-hdl-standard-compatibility-v1");
+        builder.add("language", language).add("standard", standard);
+        return builder.add("compatibility-profile", compatibility).finish();
+    };
+    const auto verilog_default = language_mode_key("verilog", "2005", "none");
+    const auto systemverilog_default = language_mode_key("systemverilog", "2017", "none");
+    const auto older_revision = language_mode_key("systemverilog", "2009", "none");
+    const auto compatibility_override = language_mode_key(
+        "systemverilog", "2009", "implicit-net,sizing");
+    assert(verilog_default != systemverilog_default);
+    assert(systemverilog_default != older_revision);
+    assert(older_revision != compatibility_override);
+    assert(compatibility_override == language_mode_key(
+        "systemverilog", "2009", "implicit-net,sizing"));
+
     std::filesystem::remove_all(root, error);
     assert(!error);
 }

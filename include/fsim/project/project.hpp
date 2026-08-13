@@ -29,6 +29,20 @@ enum class VhdlStandard : std::uint8_t {
     vhdl_2008,
 };
 
+enum class VerilogStandard : std::uint8_t {
+    verilog_1995,
+    verilog_2001,
+    verilog_2001_noconfig,
+    verilog_2005,
+};
+
+enum class SystemVerilogStandard : std::uint8_t {
+    systemverilog_2005,
+    systemverilog_2009,
+    systemverilog_2012,
+    systemverilog_2017,
+};
+
 enum class Optimization : std::uint8_t {
     o0,
     o1,
@@ -92,6 +106,7 @@ struct ProjectSection {
 struct SourceSet {
   Language language{Language::system_verilog};
   std::string standard;
+  std::vector<std::string> compatibility_switches;
   std::string library{"work"};
   std::vector<std::filesystem::path> file_patterns;
   std::vector<std::filesystem::path> files;
@@ -162,16 +177,27 @@ struct Config {
 
 [[nodiscard]] std::string_view to_string(Language language) noexcept;
 [[nodiscard]] std::string_view to_string(VhdlStandard standard) noexcept;
+[[nodiscard]] std::string_view to_string(VerilogStandard standard) noexcept;
+[[nodiscard]] std::string_view to_string(
+    SystemVerilogStandard standard) noexcept;
 [[nodiscard]] std::string_view to_string(Optimization optimization) noexcept;
 [[nodiscard]] std::string_view to_string(DelayMode mode) noexcept;
 [[nodiscard]] std::string_view to_string(SystemVerilogUvmRelease release) noexcept;
 [[nodiscard]] std::optional<Language> parse_language(std::string_view spelling) noexcept;
 [[nodiscard]] std::optional<VhdlStandard> parse_vhdl_standard(
     std::string_view spelling) noexcept;
+[[nodiscard]] std::optional<VerilogStandard> parse_verilog_standard(
+    std::string_view spelling) noexcept;
+[[nodiscard]] std::optional<SystemVerilogStandard>
+parse_systemverilog_standard(std::string_view spelling) noexcept;
 [[nodiscard]] std::string_view default_standard(Language language) noexcept;
 [[nodiscard]] std::optional<std::string_view> canonical_standard(
     Language language,
     std::string_view spelling) noexcept;
+[[nodiscard]] std::optional<std::string_view> parse_compatibility_switch(
+    std::string_view spelling) noexcept;
+[[nodiscard]] std::string compatibility_profile(
+    const std::vector<std::string>& switches);
 [[nodiscard]] std::optional<SystemVerilogUvmRelease>
 parse_systemverilog_uvm_release(std::string_view spelling) noexcept;
 [[nodiscard]] SystemVerilogUvmCompatibility

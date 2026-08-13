@@ -75,6 +75,9 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-FE-0003` | error | A parallel source-analysis task failed or produced no result. |
 | `FSIM-SEM-0001` | error | Source analysis or build normalization produced an internally invalid owning semantic projection. |
 | `FSIM-FE-CU-0001` | warning | A VHDL source set requested Verilog-style compilation-unit grouping; VHDL files remain independent analysis units. |
+| `FSIM-FE-STANDARD-001` | error | One physical root or included dependency is consumed under incompatible Verilog/SystemVerilog standard revisions. |
+| `FSIM-FE-STANDARD-002` | error | A Verilog/SystemVerilog design-unit identity is reanalyzed under a different standard revision. |
+| `FSIM-FE-STANDARD-003` | error | A SystemVerilog package is imported by a unit analyzed under a different standard revision. |
 | `FSIM-FE-VHORDER-001` | error | A VHDL architecture appears before its entity in manifest analysis order. |
 | `FSIM-FE-VHORDER-002` | error | A VHDL package body appears before its matching package declaration. |
 | `FSIM-FE-VHORDER-003` | error | A VHDL context reference names a context that has not yet been analyzed. |
@@ -133,12 +136,12 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 |---|---|---|
 | `FSIM-LIB-0001` | error | `fsim-library.toml` contains malformed or duplicate syntax. |
 | `FSIM-LIB-0002` | error | The directory uses an unsupported `.fsimlib` or portable-unit schema. |
-| `FSIM-LIB-0003` | error | Metadata contains an unsafe, incomplete, mismatched, duplicate, or otherwise invalid value. |
+| `FSIM-LIB-0003` | error | Metadata contains an unsafe, incomplete, mismatched, duplicate, reordered, or otherwise invalid source/unit provenance value. |
 | `FSIM-LIB-0004` | error | Mapped-library metadata cannot be opened or read. |
 | `FSIM-LIB-0005` | error | Transactional publication, payload validation, permissions, or atomic installation failed. |
 | `FSIM-LIB-0006` | error | A portable owning unit is malformed, incompatible, truncated, cyclic, excessively nested, contains an invalid scalar enumeration, or retains unmapped producer-absolute source provenance. |
 | `FSIM-LIB-0007` | error | Project-library export cannot revalidate a source, serialize a unit, reproduce a portable SystemC build, compile/read a native variant, or complete publication. |
-| `FSIM-LIB-0008` | error | A lazily selected mapped library, dependency, payload, unit identity, checksum, native admission, or consumer-cache installation failed. |
+| `FSIM-LIB-0008` | error | A lazily selected mapped library, dependency, payload, exact unit language/standard/compatibility identity, checksum, native admission, or consumer-cache installation failed. |
 
 ## VHDL frontend
 
@@ -647,6 +650,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-SV-PP-049` | error | A conditional directive embedded in a macro replacement is malformed or unmatched. |
 | `FSIM-SV-PP-050` | error | A macro replacement contains an unterminated conditional directive. |
 | `FSIM-SV-PP-051` | error | A special macro string contains a backtick that does not introduce an identifier. |
+| `FSIM-SV-PP-052` | error | A compiler directive, macro form, lexical token, or keyword region requires a later Verilog/SystemVerilog revision, or the selected revision belongs to the wrong language family. |
 
 ### Verilog/SystemVerilog syntax
 
@@ -897,6 +901,12 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-SV-PARSE-343` | error | A procedural continuous assignment is missing its terminating semicolon. |
 | `FSIM-SV-PARSE-344` | error | A procedural `deassign` statement is missing its terminating semicolon. |
 | `FSIM-SV-PARSE-345` | error | A concatenated assignment target is missing its closing brace. |
+| `FSIM-SV-PARSE-346` | error | A declaration, type, parameter, lifetime, port, initializer, or net-type form requires a later selected Verilog/SystemVerilog revision. |
+| `FSIM-SV-PARSE-347` | error | An expression, operator, cast/pattern, assignment, timing control, process, loop, task, or function form requires a later selected Verilog/SystemVerilog revision. |
+| `FSIM-SV-PARSE-348` | error | A hierarchy, configuration, generate, bind, assertion/coverage, class/constraint, interface/modport, package/import, or compilation-unit form requires a later selected Verilog/SystemVerilog revision, or configuration syntax is disabled by `verilog-2001-noconfig`. |
+| `FSIM-SV-PARSE-349` | error | A predefined scope, value, type, method, constraint operator, or assertion/property operator requires a later selected SystemVerilog revision. |
+| `FSIM-SV-PARSE-350` | error | A system task/function or a later service signature requires a later selected Verilog/SystemVerilog revision. |
+| `FSIM-SV-PARSE-351` | error | A DPI declaration requires a selected SystemVerilog revision. |
 | `FSIM-SV-PARSE-353` | error | An `extern` declaration is not followed by `module`, `interface`, or `program`. |
 | `FSIM-SV-PARSE-354` | error | An indexed bind target or configuration instance path has an unterminated index. |
 | `FSIM-SV-PARSE-355` | error | A SystemVerilog configuration name is missing its terminating semicolon. |
@@ -2305,16 +2315,16 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | Code | Severity | Meaning |
 |---|---|---|
 | `FSIM-ART-0001` | error | `.fsimobj` metadata has an unsupported, truncated, or trailing format/schema encoding. |
-| `FSIM-ART-0002` | error | `.fsimobj` metadata has an invalid language, library, path, unit index, checksum, or compilation digest. |
+| `FSIM-ART-0002` | error | `.fsimobj` metadata has an invalid language, standard, compatibility profile, source/unit index, path, checksum, or compilation digest. |
 | `FSIM-ART-0003` | error | `.fsimobj` metadata or payload publication/loading failed, including overwrite, staging, permissions, or exact-payload-set failures. |
 | `FSIM-ART-0004` | error | Explicit compilation is not one portable HDL source set, a checked source changed or became unreadable, or no owning unit was produced. |
-| `FSIM-ART-0005` | error | Ordered object loading found no input, corruption, duplicate/colliding identities, inconsistent library ownership, or an invalid restored semantic projection. |
+| `FSIM-ART-0005` | error | Ordered object loading found no input, corruption, duplicate/colliding identities, inconsistent library or language-profile ownership, or an invalid restored semantic projection. |
 | `FSIM-ART-VHDEP-001` | error | A portable object, design, or mapped-library artifact names a stale, unavailable, incomplete, or source-digest-mismatched compiler-supplied VHDL package dependency. |
 | `FSIM-ART-0010` | error | `.fsimdesign` metadata has an unsupported, truncated, trailing, or runtime-ABI-incompatible encoding. |
-| `FSIM-ART-0011` | error | `.fsimdesign` metadata has invalid roots, bindings, paths, checksums, object provenance, ordered VHDL semantic-unit provenance, counts, or design digest. |
+| `FSIM-ART-0011` | error | `.fsimdesign` metadata has invalid roots, bindings, paths, checksums, object provenance, ordered VHDL or Verilog/SystemVerilog semantic-unit provenance, counts, or design digest. |
 | `FSIM-ART-0012` | error | `.fsimdesign` publication/loading failed, including overwrite, staging, permissions, or exact-payload-set failures. |
 | `FSIM-ART-0013` | error | A runtime, semantic, or DesignIR state payload is malformed, excessive, structurally invalid, contains an invalid scalar enumeration, or contains a producer-absolute source path. |
-| `FSIM-ART-0014` | error | Standalone design publication, inspection, loading, projection validation, VHDL semantic-unit association, fixed-delay compatibility, or required-payload verification failed. |
+| `FSIM-ART-0014` | error | Standalone design publication, inspection, loading, projection validation, exact semantic-unit language-profile association, fixed-delay compatibility, or required-payload verification failed. |
 
 ## SystemC source compiler and plug-in validation
 
@@ -2405,3 +2415,49 @@ partial VHPI provenance is rejected by the typed runtime service, while
 compiler implementation packages remain absent from user hierarchy discovery.
 This surface adds no diagnostic spelling: source/unit identity and exact wide
 value/control evidence use the existing bounded public APIs.
+
+Batch 167 compatibility profiles use the existing source-owned project
+selection diagnostic for unknown switches and cross-family standards. Legal
+switches canonicalize independently of the selected revision; parser defaults
+retain their exact profile and do not authorize later grammar.
+Verilog-2001-noconfig continues to use the existing structural-standard
+diagnostic unless the explicit `configuration` switch restores only the
+optional 2001 configuration surface.
+
+Batch 167 public provenance adds no diagnostic code. Standard/profile
+conflicts retain the standard-conflict diagnostic family, whose messages name the
+canonical revisions and, for semantic-unit or package conflicts, both owning
+compatibility profiles. The public C/C++/Tcl/debugger/VPI/VCD records report
+the owning semantic unit and source without publishing compiler or cache
+implementation identities; incomplete VPI provenance is rejected as invalid
+typed metadata.
+
+Batch 167 durable provenance adds no diagnostic code. Existing object/design
+schema and consistency diagnostics reject a partial unit profile, a unit record
+whose revision/profile disagrees with its object, or a design that omits an
+owning Verilog/SystemVerilog semantic-unit record. These checks run before
+standalone design publication; source hiding, cold/warm cache reuse, checkpoint
+replay and relocation retain the original canonical identity rather than
+inferring a current default.
+
+Batch 167's published revision corpus freezes the representative negative
+coordinates as follows: Verilog-1995 uses the declaration-form diagnostic at
+1:21, Verilog-2001 the same diagnostic at 1:23, Verilog-2001-noconfig the
+structural-standard diagnostic at 2:1, SystemVerilog-2005 the same structural
+diagnostic at 1:21, SystemVerilog-2009 the declaration-form diagnostic at
+1:25, and SystemVerilog-2012 the expected-identifier diagnostic at 1:45. Every
+compatibility-switch row independently retains the declaration-form diagnostic
+at 1:31 for the common later-grammar rejection. The TSV is the authoritative
+mapping from those descriptions to the exact catalog codes.
+The inventory gate also requires each row's positive, execution,
+arbitrary-width, include/profile-provenance and artifact-mismatch anchors; a
+matching code or coordinate without the remaining evidence cannot satisfy the
+corpus.
+
+The Batch 167 serial closure matrix requires the corpus and diagnostic anchors
+in the same retained run as older-mode frontend/application behavior,
+interpreter/LLVM O0/O2 execution, cold/warm caches, artifacts and replay,
+public C/C++/Tcl/VPI services, mixed-language execution and platform/resource
+contracts. Its 16-row stage ledger and per-witness verbose logs are retained;
+the matrix rejects a successful child exit if the six-mode, profile, width,
+engine, artifact, hidden-producer or resource transcript tokens are absent.

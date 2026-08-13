@@ -12,8 +12,8 @@
 
 namespace fsim::library {
 
-inline constexpr std::uint32_t kFormatVersion = 2;
-inline constexpr std::uint32_t kPortableSchemaVersion = 9;
+inline constexpr std::uint32_t kFormatVersion = 3;
+inline constexpr std::uint32_t kPortableSchemaVersion = 10;
 inline constexpr std::string_view kMetadataFilename = "fsim-library.toml";
 
 struct LanguageStandard {
@@ -46,6 +46,8 @@ struct UnitIndexEntry {
   std::string architecture;
   std::filesystem::path artifact;
   std::string checksum;
+  std::string standard;
+  std::string compatibility_profile { "none" };
 
   friend bool operator==(const UnitIndexEntry&, const UnitIndexEntry&) = default;
 };
@@ -57,6 +59,8 @@ struct SourceIndexEntry {
   std::filesystem::path artifact;
   std::string checksum;
   std::string language;
+  std::string standard;
+  std::string compatibility_profile { "none" };
 
   friend bool operator==(const SourceIndexEntry&, const SourceIndexEntry&) = default;
 };

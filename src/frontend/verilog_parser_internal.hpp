@@ -352,6 +352,95 @@ enum class KeywordSet {
   SystemVerilog2017,
 };
 
+[[nodiscard]] inline Language language_for_standard_revision(
+    const StandardRevision standard) {
+  switch (standard) {
+    case StandardRevision::Verilog1995:
+    case StandardRevision::Verilog2001:
+    case StandardRevision::Verilog2001NoConfig:
+    case StandardRevision::Verilog2005:
+      return Language::Verilog2005;
+    case StandardRevision::SystemVerilog2005:
+    case StandardRevision::SystemVerilog2009:
+    case StandardRevision::SystemVerilog2012:
+    case StandardRevision::SystemVerilog2017:
+      return Language::SystemVerilog2017;
+    default:
+      return Language::Vhdl2008;
+  }
+}
+
+[[nodiscard]] inline KeywordSet keyword_set_for_standard_revision(
+    const StandardRevision standard) {
+  switch (standard) {
+    case StandardRevision::Verilog1995:
+      return KeywordSet::Verilog1995;
+    case StandardRevision::Verilog2001:
+      return KeywordSet::Verilog2001;
+    case StandardRevision::Verilog2001NoConfig:
+      return KeywordSet::Verilog2001NoConfig;
+    case StandardRevision::Verilog2005:
+      return KeywordSet::Verilog2005;
+    case StandardRevision::SystemVerilog2005:
+      return KeywordSet::SystemVerilog2005;
+    case StandardRevision::SystemVerilog2009:
+      return KeywordSet::SystemVerilog2009;
+    case StandardRevision::SystemVerilog2012:
+      return KeywordSet::SystemVerilog2012;
+    case StandardRevision::SystemVerilog2017:
+      return KeywordSet::SystemVerilog2017;
+    default:
+      return KeywordSet::SystemVerilog2017;
+  }
+}
+
+[[nodiscard]] inline unsigned keyword_set_rank(const KeywordSet set) {
+  switch (set) {
+    case KeywordSet::Verilog1995:
+      return 0;
+    case KeywordSet::Verilog2001:
+    case KeywordSet::Verilog2001NoConfig:
+      return 1;
+    case KeywordSet::Verilog2005:
+      return 2;
+    case KeywordSet::SystemVerilog2005:
+      return 3;
+    case KeywordSet::SystemVerilog2009:
+      return 4;
+    case KeywordSet::SystemVerilog2012:
+      return 5;
+    case KeywordSet::SystemVerilog2017:
+      return 6;
+  }
+  return 6;
+}
+
+[[nodiscard]] inline std::optional<StandardRevision>
+declaration_word_standard(const std::string_view word) {
+  if (word == "automatic" || word == "genvar" || word == "localparam"
+      || word == "signed" || word == "unsigned") {
+    return StandardRevision::Verilog2001;
+  }
+  if (word == "uwire") {
+    return StandardRevision::Verilog2005;
+  }
+  if (word == "bit" || word == "byte" || word == "chandle"
+      || word == "const" || word == "enum" || word == "int"
+      || word == "logic" || word == "longint" || word == "process"
+      || word == "shortint" || word == "shortreal" || word == "static"
+      || word == "string" || word == "struct" || word == "type"
+      || word == "typedef" || word == "union" || word == "var") {
+    return StandardRevision::SystemVerilog2005;
+  }
+  if (word == "untyped") {
+    return StandardRevision::SystemVerilog2009;
+  }
+  if (word == "interconnect" || word == "nettype") {
+    return StandardRevision::SystemVerilog2012;
+  }
+  return std::nullopt;
+}
+
 [[nodiscard]] inline bool contains_word(
     const std::initializer_list<std::string_view> words,
     const std::string_view word) {
@@ -503,6 +592,9 @@ enum class KeywordSet {
 class VerilogParser final : private detail::ParserBase {
  public:
   VerilogParser(LexResult lexed, bool system_verilog);
+  VerilogParser(LexResult lexed, StandardRevision standard_revision);
+  VerilogParser(LexResult lexed, StandardRevision standard_revision,
+      std::string compatibility_profile);
 
   ParseResult run();
 
@@ -519,6 +611,15 @@ class VerilogParser final : private detail::ParserBase {
   bool match_keyword(
       const std::string_view text,
       const bool case_insensitive = false);
+
+  [[nodiscard]] bool compatibility_enabled(
+      std::string_view name) const noexcept;
+
+  bool require_standard(
+      std::string_view feature,
+      StandardRevision required,
+      const Token& token,
+      std::string_view diagnostic_code = "FSIM-SV-PARSE-346");
 
   Token expect_keyword(
       const std::string_view word,
@@ -1078,6 +1179,8 @@ class VerilogParser final : private detail::ParserBase {
   Expression parse_postfix(Expression expression);
 
   Language language_;
+  StandardRevision standard_revision_;
+  std::string compatibility_profile_ { "none" };
   KeywordSet keyword_set_;
   std::vector<KeywordSet> keyword_stack_;
   std::unordered_set<std::string> non_ansi_ports_;

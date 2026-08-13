@@ -120,6 +120,91 @@ puts "vhdl-standard-profile-ok"
             != std::string::npos);
         assert(error.str().empty());
     }
+    const auto older_verilog_source = directory / "older-verilog.v";
+    const auto older_systemverilog_source = directory / "older-systemverilog.sv";
+    {
+        std::ofstream file(older_verilog_source);
+        file << "module older_verilog; endmodule\n";
+    }
+    {
+        std::ofstream file(older_systemverilog_source);
+        file << "module older_systemverilog; endmodule\n";
+    }
+    const auto older_verilog_manifest = directory / "older-verilog.toml";
+    {
+        std::ofstream file(older_verilog_manifest);
+        file
+            << "schema = 2\n"
+            << "[project]\n"
+            << "name = \"older-verilog\"\n"
+            << "top = \"verilog:work.older_verilog\"\n"
+            << "[[source_set]]\n"
+            << "language = \"verilog-2001-noconfig\"\n"
+            << "standard = \"v2001-noconfig\"\n"
+            << "files = [\"older-verilog.v\"]\n"
+            << "[[source_set]]\n"
+            << "language = \"sv-2009\"\n"
+            << "standard = \"09\"\n"
+            << "files = [\"older-systemverilog.sv\"]\n";
+    }
+    {
+        std::istringstream input;
+        std::ostringstream output;
+        std::ostringstream error;
+        const int result = run_cli(
+            {
+                "fsim",
+                "tcl",
+                "-p",
+                older_verilog_manifest.string(),
+                "-c",
+                R"tcl(
+set profiles [dict get [fsim::project] source_profiles]
+if {[llength $profiles] != 2} {error "bad source profile count"}
+set verilog [lindex $profiles 0]
+set systemverilog [lindex $profiles 1]
+if {[dict get $verilog language] ne "verilog" ||
+    [dict get $verilog standard] ne "2001-noconfig" ||
+    [dict get $verilog library] ne "work"} {
+  error "bad canonical Verilog source profile: $verilog"
+}
+if {[dict get $systemverilog language] ne "systemverilog" ||
+    [dict get $systemverilog standard] ne "2009" ||
+    [dict get $systemverilog library] ne "work"} {
+  error "bad canonical SystemVerilog source profile: $systemverilog"
+}
+set provenance [fsim::provenance]
+if {[llength $provenance] != 1} {error "bad provenance count"}
+set owner [lindex $provenance 0]
+if {[dict get $owner path] ne "older_verilog" ||
+    [dict get $owner library] ne "work" ||
+    [dict get $owner unit] ne "older_verilog" ||
+    [dict get $owner language] ne "verilog" ||
+    [dict get $owner standard] ne "verilog-2001-noconfig" ||
+    [dict get $owner compatibility_profile] ne "none" ||
+    [dict get $owner source_line] == 0} {
+  error "bad public provenance: $owner"
+}
+set selected [fsim::provenance older_verilog]
+if {$selected ne $provenance} {error "provenance selection mismatch"}
+set debug_provenance [fsim::debug provenance older_verilog]
+if {[string first "work:older_verilog" $debug_provenance] < 0 ||
+    [string first "verilog-2001-noconfig" $debug_provenance] < 0} {
+  error "bad debugger provenance: $debug_provenance"
+}
+puts "verilog-standard-profiles-ok"
+)tcl",
+            },
+            input, output, error);
+        if (result != 0) {
+            std::cerr << error.str();
+        }
+        assert(result == 0);
+        assert(
+            output.str().find("verilog-standard-profiles-ok")
+            != std::string::npos);
+        assert(error.str().empty());
+    }
     const auto display_source = directory / "display.sv";
     const auto display_manifest = directory / "display.toml";
     {

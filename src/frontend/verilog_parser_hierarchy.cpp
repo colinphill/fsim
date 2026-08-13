@@ -63,6 +63,8 @@ DesignUnit VerilogParser::make_systemverilog_bind_unit(
     DesignUnit unit;
     unit.kind = UnitKind::SystemVerilogBind;
     unit.language = language_;
+    unit.standard_revision = standard_revision_;
+    unit.verilog_compatibility_profile = compatibility_profile_;
     unit.name = "$bind$" + std::to_string(next_bind_unit_++);
     unit.systemverilog_imports = compilation_unit_imports_;
     unit.default_nettype = current_default_nettype_;
@@ -78,6 +80,8 @@ DesignUnit VerilogParser::parse_systemverilog_configuration(
     DesignUnit unit;
     unit.kind = UnitKind::SystemVerilogConfiguration;
     unit.language = language_;
+    unit.standard_revision = standard_revision_;
+    unit.verilog_compatibility_profile = compatibility_profile_;
     unit.systemverilog_imports = compilation_unit_imports_;
     unit.default_nettype = current_default_nettype_;
     unit.is_cell = current_cell_define_;

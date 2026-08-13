@@ -130,6 +130,9 @@ std::string make_cache_key(
     for (const auto& set : config.source_sets) {
         key.add("language", project::to_string(set.language));
         key.add("standard", set.standard);
+        key.add(
+            "compatibility-profile",
+            project::compatibility_profile(set.compatibility_switches));
         key.add("library", set.library);
         key.add("uvm-release", project::to_string(set.uvm_release));
         for (const auto& define : set.defines) {
@@ -388,7 +391,7 @@ make_specialization_cache_keys(
         compiler::CacheKeyBuilder key;
         key.add(
             "specialization-provenance-schema",
-            "fsim-specialization-provenance-v8-mapped-native");
+            "fsim-specialization-provenance-v9-standard-compatibility");
         key.add("fsim-version", version);
         key.add("standard-library", standard_library_cache_version);
         key.add(
@@ -474,6 +477,11 @@ make_specialization_cache_keys(
                 "semantic-dependency-standard",
                 dependency_settings->source_set->standard);
             key.add(
+                "semantic-dependency-compatibility-profile",
+                project::compatibility_profile(
+                    dependency_settings->source_set
+                        ->compatibility_switches));
+            key.add(
                 "semantic-dependency-library",
                 dependency_settings->source_set->library);
             key.add(
@@ -509,6 +517,10 @@ make_specialization_cache_keys(
             "language",
             project::to_string(settings->source_set->language));
         key.add("standard", settings->source_set->standard);
+        key.add(
+            "compatibility-profile",
+            project::compatibility_profile(
+                settings->source_set->compatibility_switches));
         key.add("library", settings->source_set->library);
         key.add(
             "compilation-unit",
@@ -754,6 +766,26 @@ std::unique_ptr<TraceState> attach_trace(
             throw std::overflow_error { "VCD timestamp scaling overflow" };
         }
         trace->writer->begin(simulation.now() * trace->tick_multiplier);
+        const auto verilog_provenance
+            = simulation.verilog_scope_provenance();
+        const auto verilog_comments
+            = simulation.verilog_provenance_comments();
+        for (std::size_t index = 0; index < verilog_provenance.size(); ++index) {
+            const auto& scope = verilog_provenance[index].path;
+            const auto selected_scope = config.run.trace_filters.empty()
+                || std::ranges::any_of(
+                    simulation.design_ir().objects(), [&](const auto& object) {
+                        return trace_selected(
+                                   config.run.trace_filters, object.path)
+                            && (object.path == scope
+                                || (object.path.size() > scope.size()
+                                    && object.path.starts_with(scope)
+                                    && object.path[scope.size()] == '.'));
+                    });
+            if (selected_scope) {
+                trace->writer->comment(verilog_comments[index]);
+            }
+        }
         for (const auto& comment : simulation.vhdl_provenance_comments()) {
             trace->writer->comment(comment);
         }

@@ -353,6 +353,40 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
               << simulation_.delta() << ", scope " << scope_ << '\n';
       return;
     }
+    if (command[0] == "provenance") {
+      if (command.size() > 2) {
+        output_ << "usage: provenance [PATH]\n";
+        return;
+      }
+      const auto show = [&](const VerilogScopeProvenance& provenance) {
+        output_ << provenance.path << " unit " << provenance.library << ':'
+                << provenance.unit_name << " source "
+                << provenance.source_path << ':' << provenance.source_line
+                << ':' << provenance.source_column << " language "
+                << (provenance.language == semantic::Language::verilog
+                        ? "verilog" : "systemverilog")
+                << " standard " << provenance.standard << " profile "
+                << provenance.compatibility_profile << '\n';
+      };
+      if (command.size() == 2) {
+        if (const auto provenance
+            = simulation_.verilog_scope_provenance(command[1])) {
+          show(*provenance);
+        } else {
+          output_ << "(no Verilog/SystemVerilog provenance for "
+                  << command[1] << ")\n";
+        }
+        return;
+      }
+      const auto provenance = simulation_.verilog_scope_provenance();
+      if (provenance.empty()) {
+        output_ << "(no Verilog/SystemVerilog provenance)\n";
+      }
+      for (const auto& item : provenance) {
+        show(item);
+      }
+      return;
+    }
     if (command[0] == "locals" && command.size() == 1) {
       show_locals();
       return;

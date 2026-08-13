@@ -45,6 +45,10 @@ struct Capture {
     std::vector<std::string> path_identities;
     std::string identity;
     std::vector<std::pair<std::string, std::string>> keys;
+    std::vector<std::pair<std::string, std::string>> unit_revisions;
+    std::vector<std::pair<std::string, std::string>> unit_profiles;
+    std::string public_standard;
+    std::string public_profile;
     fsim::app::NativeCacheStatistics native_cache;
     std::size_t compiled_processes { };
     std::size_t compiled_modules { };
@@ -242,6 +246,47 @@ endmodule
     assert(output.good());
 }
 
+void write_older_mode_source(const std::filesystem::path& source)
+{
+    std::ofstream output { source };
+    output << R"(`define BOUNDARY_SEED 4'b0001
+module typed_boundary_sv_top;
+  wire [3:0] seed;
+  wire result;
+  wire [136:0] wide_value;
+  wire [136:0] wide_result;
+  wire [136:0] timed_result;
+
+  assign seed = `BOUNDARY_SEED;
+  assign wide_value = {1'b1, 63'b0, 1'bx, 63'b0, 1'bz, 8'b10101010};
+  typed_boundary_vhdl_middle middle(
+    .value(seed),
+    .result(result),
+    .wide_value(wide_value),
+    .wide_result(wide_result)
+  );
+  typed_boundary_timing timing(
+    .source(wide_result),
+    .result(timed_result)
+  );
+
+  initial #1 $finish;
+endmodule
+
+module typed_boundary_timing(source, result);
+  input [136:0] source;
+  output [136:0] result;
+  wire [136:0] result;
+  specify
+    (source *> result) = 0;
+  endspecify
+  assign result = source;
+endmodule
+
+)";
+    assert(output.good());
+}
+
 void write_vhdl(const std::filesystem::path& source)
 {
     std::ofstream output { source };
@@ -330,21 +375,36 @@ fsim::project::Config make_config(
     const std::filesystem::path& sv_source,
     const std::filesystem::path& vhdl_source,
     const std::filesystem::path& systemc_source,
-    const fsim::project::Optimization optimization)
+    const fsim::project::Optimization optimization,
+    const fsim::project::Language hdl_language
+        = fsim::project::Language::system_verilog,
+    const std::string_view hdl_standard = "2017",
+    const std::vector<std::string>& compatibility_switches = { })
 {
     fsim::project::Config config;
     config.base_directory = directory;
-    config.project.name = "typed-boundary-matrix";
+    const auto hdl_name = std::string {
+        fsim::project::to_string(hdl_language) };
+    const auto profile = fsim::project::compatibility_profile(
+        compatibility_switches);
+    config.project.name = "typed-boundary-matrix-" + hdl_name + '-'
+        + std::string { hdl_standard } + '-' + profile;
+    const auto root_prefix = hdl_language == fsim::project::Language::verilog
+        ? "verilog:" : "sv:";
     config.project.tops = {
-        { "sv:work.typed_boundary_sv_top", "typed_boundary_sv_top" },
-        { "sv:work.typed_boundary_unrelated", "typed_boundary_unrelated" },
+        { root_prefix + std::string { "work.typed_boundary_sv_top" },
+            "typed_boundary_sv_top" },
+        { root_prefix + std::string { "work.typed_boundary_unrelated" },
+            "typed_boundary_unrelated" },
     };
     config.project.time_resolution = "1ns";
     config.build.optimization = optimization;
     config.build.cache_path = directory
-        / (optimization == fsim::project::Optimization::o0
-                ? "cache-o0"
-                : "cache-o2");
+        / ("cache-" + hdl_name + '-' + std::string { hdl_standard } + '-'
+            + profile
+            + (optimization == fsim::project::Optimization::o0
+                    ? "-o0"
+                    : "-o2"));
     config.run.max_deltas = 1000;
 
     fsim::project::SourceSet vhdl_sources;
@@ -356,8 +416,9 @@ fsim::project::Config make_config(
     config.source_sets.push_back(std::move(vhdl_sources));
 
     fsim::project::SourceSet sv_sources;
-    sv_sources.language = fsim::project::Language::system_verilog;
-    sv_sources.standard = "2017";
+    sv_sources.language = hdl_language;
+    sv_sources.standard = std::string { hdl_standard };
+    sv_sources.compatibility_switches = compatibility_switches;
     sv_sources.library = "work";
     sv_sources.compilation_unit = "file";
     sv_sources.files.push_back(sv_source);
@@ -482,6 +543,14 @@ Capture run_once(
             project->design.specializations()[index].instance,
             project->specialization_cache_keys[index]);
     }
+    for (const auto& [unit, revision] : project->verilog_unit_revisions) {
+        capture.unit_revisions.emplace_back(
+            unit, std::string { fsim::frontend::revision_string(revision) });
+    }
+    for (const auto& [unit, profile] :
+        project->verilog_unit_compatibility_profiles) {
+        capture.unit_profiles.emplace_back(unit, profile);
+    }
 
     const auto result_signal = project->design.find_signal(
         "typed_boundary_sv_top.result");
@@ -508,6 +577,21 @@ Capture run_once(
     const auto wide_trace = vcd.declare_signal(
         "typed_boundary_sv_top.timed_result", 137);
     vcd.begin(simulation.now());
+    const auto public_provenance = simulation.verilog_scope_provenance();
+    assert(!public_provenance.empty());
+    const auto top_provenance = simulation.verilog_scope_provenance(
+        "typed_boundary_sv_top.timed_result");
+    assert(top_provenance
+        && top_provenance->semantic_unit
+            == "work::typed_boundary_sv_top"
+        && top_provenance->source_path == sources[0].string()
+        && !top_provenance->standard.empty()
+        && !top_provenance->compatibility_profile.empty());
+    capture.public_standard = top_provenance->standard;
+    capture.public_profile = top_provenance->compatibility_profile;
+    for (const auto& comment : simulation.verilog_provenance_comments()) {
+        vcd.comment(comment);
+    }
     vcd.change(trace, simulation.read_signal(*result_signal));
     vcd.change(wide_trace, simulation.read_signal(*wide_signal));
     simulation.set_signal_change_hook(
@@ -535,10 +619,21 @@ Capture run_once(
         simulation, debugger_output, debugger_error
     };
     debugger.execute({ "show", "typed_boundary_sv_top.timed_result" });
+    debugger.execute(
+        { "provenance", "typed_boundary_sv_top.timed_result" });
     assert(debugger_error.str().empty());
     capture.debugger = debugger_output.str();
+    assert(capture.debugger.find(
+        top_provenance->library + ':' + top_provenance->unit_name)
+        != std::string::npos);
+    assert(capture.debugger.find(top_provenance->standard)
+        != std::string::npos);
     vcd.flush();
     capture.vcd = vcd_output.str();
+    assert(capture.vcd.find("fsim-verilog-scope") != std::string::npos);
+    assert(capture.vcd.find(
+        top_provenance->library + ':' + top_provenance->unit_name)
+        != std::string::npos);
     return capture;
 }
 
@@ -556,6 +651,97 @@ void compare_capture(const Capture& reference, const Capture& actual)
     assert(reference.path_identities == actual.path_identities);
     assert(reference.identity == actual.identity);
     assert(reference.keys == actual.keys);
+    assert(reference.unit_revisions == actual.unit_revisions);
+    assert(reference.unit_profiles == actual.unit_profiles);
+    assert(reference.public_standard == actual.public_standard);
+    assert(reference.public_profile == actual.public_profile);
+}
+
+void verify_older_mode_matrix(
+    const TemporaryDirectory& directory,
+    const std::filesystem::path& hdl_source,
+    const std::filesystem::path& vhdl_source,
+    const std::filesystem::path& systemc_source,
+    const std::array<std::filesystem::path, 3>& sources)
+{
+    struct Mode {
+        fsim::project::Language language;
+        std::string_view standard;
+    };
+    const std::array modes {
+        Mode { fsim::project::Language::verilog, "1995" },
+        Mode { fsim::project::Language::verilog, "2001" },
+        Mode { fsim::project::Language::verilog, "2001-noconfig" },
+        Mode { fsim::project::Language::system_verilog, "2005" },
+        Mode { fsim::project::Language::system_verilog, "2009" },
+        Mode { fsim::project::Language::system_verilog, "2012" },
+    };
+    const std::vector<std::string> compatibility_switches {
+        "configuration", "scheduler-assertion", "lifetime", "sizing",
+        "port-connection", "implicit-net", "keyword-profile"
+    };
+    const auto expected_profile = fsim::project::compatibility_profile(
+        compatibility_switches);
+    const auto unrelated_source = directory.path / "unrelated.sv";
+    {
+        std::ofstream output { unrelated_source };
+        output << "module typed_boundary_unrelated; logic untouched; "
+                  "assign untouched = 1'b1; endmodule\n";
+        assert(output.good());
+    }
+    write_older_mode_source(hdl_source);
+
+    for (const auto optimization : {
+             fsim::project::Optimization::o0,
+             fsim::project::Optimization::o2 }) {
+        std::vector<std::vector<std::pair<std::string, std::string>>>
+            observed_mode_keys;
+        for (const auto& mode : modes) {
+            auto config = make_config(
+                directory.path, hdl_source, vhdl_source, systemc_source,
+                optimization, mode.language, mode.standard,
+                compatibility_switches);
+            config.project.tops[1].target
+                = "sv:work.typed_boundary_unrelated";
+            fsim::project::SourceSet unrelated;
+            unrelated.language = fsim::project::Language::system_verilog;
+            unrelated.standard = "2017";
+            unrelated.library = "work";
+            unrelated.compilation_unit = "file";
+            unrelated.files.push_back(unrelated_source);
+            config.source_sets.push_back(std::move(unrelated));
+
+            const auto reference = run_once(
+                config, fsim::app::SimulationEngine::interpreter, sources);
+            const auto compiled = run_once(
+                config, fsim::app::SimulationEngine::compiled, sources);
+            compare_capture(reference, compiled);
+            assert(std::ranges::find(observed_mode_keys, reference.keys)
+                == observed_mode_keys.end());
+            observed_mode_keys.push_back(reference.keys);
+            assert(reference.value == "0");
+            assert(reference.wide_value == expected_wide_value());
+            assert(reference.result.status == fsim::runtime::RunStatus::stopped);
+            assert(reference.result.time == 1);
+            assert(reference.unit_revisions.size() == 3U);
+            assert(reference.unit_profiles.size() == 3U);
+            assert(reference.public_standard.ends_with(mode.standard));
+            assert(reference.public_profile == expected_profile);
+            for (const auto& [unit, revision] : reference.unit_revisions) {
+                assert(revision == (unit.ends_with("::typed_boundary_unrelated")
+                    ? "2017" : mode.standard));
+            }
+            for (const auto& [unit, profile] : reference.unit_profiles) {
+                assert(profile
+                    == (unit.ends_with("::typed_boundary_unrelated")
+                        ? "none" : expected_profile));
+            }
+#if defined(FSIM_HAS_LLVM)
+            assert(compiled.compiled_processes > 0);
+            assert(compiled.compiled_modules > 0);
+#endif
+        }
+    }
 }
 
 void verify_negative(const fsim::project::Config& config)
@@ -571,6 +757,42 @@ void verify_negative(const fsim::project::Config& config)
             return diagnostic.code == "FSIM-SC-A003"
                 || diagnostic.code == "FSIM-ELAB-BIND-0003";
         }));
+}
+
+void verify_public_profile_diagnostic(
+    const TemporaryDirectory& directory,
+    const std::filesystem::path& hdl_source,
+    const std::filesystem::path& vhdl_source,
+    const std::filesystem::path& systemc_source)
+{
+    auto config = make_config(
+        directory.path, hdl_source, vhdl_source, systemc_source,
+        fsim::project::Optimization::o2);
+    const auto source_set = std::ranges::find_if(
+        config.source_sets, [&](const auto& candidate) {
+            return std::ranges::find(candidate.files, hdl_source)
+                != candidate.files.end();
+        });
+    assert(source_set != config.source_sets.end());
+    auto duplicate = *source_set;
+    const auto duplicate_source = directory.path / "profile-duplicate.sv";
+    write_older_mode_source(duplicate_source);
+    duplicate.files = { duplicate_source };
+    duplicate.compatibility_switches = { "keyword-profile" };
+    config.source_sets.push_back(std::move(duplicate));
+    fsim::diagnostic::Engine diagnostics;
+    assert(!fsim::app::build_project(config, diagnostics));
+    const auto mismatch = std::ranges::find_if(
+        diagnostics.diagnostics(), [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-FE-STANDARD-002";
+        });
+    assert(mismatch != diagnostics.diagnostics().end());
+    assert(mismatch->message.find("typed_boundary_sv_top")
+            != std::string::npos
+        && mismatch->message.find("compatibility profile 'none'")
+            != std::string::npos
+        && mismatch->message.find("compatibility profile 'keyword-profile'")
+            != std::string::npos);
 }
 
 } // namespace
@@ -694,6 +916,11 @@ int main()
             == edited_reference.path_identities);
     }
 
+    verify_public_profile_diagnostic(
+        directory, sv_source, vhdl_source, systemc_source);
+    verify_older_mode_matrix(
+        directory, sv_source, vhdl_source, systemc_source, sources);
+
     std::cout
         << "FSIM-VERILOG-2005-PASS "
            "stages=direct/interpreter/llvm-o0/llvm-o2/cache-cold/cache-warm/"
@@ -704,5 +931,10 @@ int main()
            "stages=direct/interpreter/llvm-o0/llvm-o2/cache-cold/cache-warm/"
            "debug/vcd/multiple-root/uvm/mixed-vhdl/mixed-systemc/public-api "
            "resources=as6g/delta1000/vcd64 gaps=0 widths=129logic9\n";
+    std::cout
+        << "FSIM-OLDER-MODE-MIXED-PASS "
+           "modes=v1995/v2001/v2001-noconfig/sv2005/sv2009/sv2012 "
+           "profile=all-explicit stages=interpreter/llvm-o0/llvm-o2/"
+           "multiple-root/mixed-vhdl/mixed-systemc widths=137xz time=1ns\n";
     return 0;
 }

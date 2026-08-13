@@ -39,6 +39,140 @@ Simulation::vhdl_unit_provenance() const noexcept
     return impl_->built.vhdl_unit_provenance;
 }
 
+namespace {
+
+[[nodiscard]] std::optional<VerilogScopeProvenance>
+make_verilog_scope_provenance(
+    const BuiltProject& project,
+    const semantic::design::Specialization& specialization)
+{
+    if ((specialization.language != semantic::Language::verilog
+            && specialization.language != semantic::Language::system_verilog)
+        || specialization.unit.value() >= project.semantics.units().size()
+        || specialization.instance.value()
+            >= project.design_ir.instances().size()) {
+        return std::nullopt;
+    }
+    const auto& unit = project.semantics.units().at(
+        specialization.unit.value());
+    if (unit.language != specialization.language) {
+        return std::nullopt;
+    }
+    const auto identity = unit.library + "::" + unit.name;
+    const auto revision = project.verilog_unit_revisions.find(identity);
+    const auto profile
+        = project.verilog_unit_compatibility_profiles.find(identity);
+    if (revision == project.verilog_unit_revisions.end()
+        || profile == project.verilog_unit_compatibility_profiles.end()) {
+        return std::nullopt;
+    }
+
+    VerilogScopeProvenance result;
+    result.path = project.design_ir.instances().at(
+        specialization.instance.value()).path;
+    result.unit = unit.id;
+    result.source = unit.source;
+    result.language = unit.language;
+    result.library = unit.library;
+    result.unit_name = unit.name;
+    result.semantic_unit = identity;
+    result.standard = frontend::to_string(revision->second);
+    result.compatibility_profile = profile->second;
+    if (unit.source.value() < project.semantics.source_spans().size()) {
+        const auto& span = project.semantics.source_spans().at(
+            unit.source.value());
+        result.source_line = span.begin.line;
+        result.source_column = span.begin.column;
+        if (!span.logical_name.empty()) {
+            result.source_path = span.logical_name;
+        } else if (span.file.value()
+                   < project.semantics.source_files().size()) {
+            result.source_path = project.semantics.source_files().at(
+                span.file.value()).physical_name;
+        }
+    }
+    return result;
+}
+
+[[nodiscard]] bool verilog_scope_owns_path(
+    const std::string_view scope,
+    const std::string_view path) noexcept
+{
+    return path == scope
+        || (path.size() > scope.size() && path.starts_with(scope)
+            && path[scope.size()] == '.');
+}
+
+[[nodiscard]] std::string_view verilog_language_name(
+    const semantic::Language language) noexcept
+{
+    return language == semantic::Language::verilog
+        ? std::string_view { "verilog" }
+        : std::string_view { "systemverilog" };
+}
+
+} // namespace
+
+std::vector<VerilogScopeProvenance>
+verilog_scope_provenance(const BuiltProject& project)
+{
+    std::vector<VerilogScopeProvenance> result;
+    for (const auto& specialization : project.design_ir.specializations()) {
+        if (auto provenance = make_verilog_scope_provenance(
+                project, specialization)) {
+            result.push_back(std::move(*provenance));
+        }
+    }
+    std::ranges::sort(result, {}, &VerilogScopeProvenance::path);
+    return result;
+}
+
+std::optional<VerilogScopeProvenance> verilog_scope_provenance(
+    const BuiltProject& project,
+    const std::string_view path)
+{
+    std::optional<VerilogScopeProvenance> result;
+    for (const auto& specialization : project.design_ir.specializations()) {
+        auto provenance = make_verilog_scope_provenance(
+            project, specialization);
+        if (provenance && verilog_scope_owns_path(provenance->path, path)
+            && (!result || provenance->path.size() > result->path.size())) {
+            result = std::move(provenance);
+        }
+    }
+    return result;
+}
+
+std::vector<VerilogScopeProvenance>
+Simulation::verilog_scope_provenance() const
+{
+    return fsim::app::verilog_scope_provenance(impl_->built);
+}
+
+std::optional<VerilogScopeProvenance>
+Simulation::verilog_scope_provenance(const std::string_view path) const
+{
+    return fsim::app::verilog_scope_provenance(impl_->built, path);
+}
+
+std::vector<std::string> Simulation::verilog_provenance_comments() const
+{
+    std::vector<std::string> result;
+    for (const auto& provenance : verilog_scope_provenance()) {
+        std::ostringstream comment;
+        comment << "fsim-verilog-scope path=" << provenance.path
+                << " unit=" << provenance.library << ':'
+                << provenance.unit_name << " source="
+                << provenance.source.value() << " source_path="
+                << provenance.source_path << " language="
+                << verilog_language_name(provenance.language)
+                << " standard=" << provenance.standard << " profile="
+                << provenance.compatibility_profile;
+        result.push_back(std::move(comment).str());
+    }
+    return result;
+}
+
 std::string_view Simulation::time_resolution() const noexcept
 {
     return impl_->built.time_resolution;

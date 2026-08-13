@@ -43,13 +43,14 @@ fsim::library::Metadata example_metadata()
     metadata.dependencies = { "ieee_models", "common" };
     metadata.sources = {
         { "sources/00000000/stage.sv", "sources/00000000/stage.sv",
-            std::string(64, 'c'), "systemverilog" }
+            std::string(64, 'c'), "systemverilog", "2017", "none" }
     };
     metadata.units = {
         { "systemverilog", "module", "stage", { }, { },
-            "units/00000000.fsimir", std::string(64, 'a') },
+            "units/00000000.fsimir", std::string(64, 'a'), "2017", "none" },
         { "vhdl", "architecture", "rtl", "counter", "rtl",
-            "units/00000001.fsimir", std::string(64, 'b') }
+            "units/00000001.fsimir", std::string(64, 'b'), "2008",
+            "fsim-synopsys-ieee-compat-v2" }
     };
     metadata.native_artifacts = { { "llvm_object", "native/llvm/fixture.fobj", std::string(64, 'd'),
         1, 0, { }, "22.1.0", "x86_64-test", "e-m:e-p:64:64", "generic",
@@ -61,12 +62,12 @@ fsim::library::Metadata example_metadata()
 
 int main()
 {
-    static_assert(fsim::library::kOwningUnitSchemaVersion == 25);
-    static_assert(fsim::library::kPortableSchemaVersion == 9);
+    static_assert(fsim::library::kOwningUnitSchemaVersion == 26);
+    static_assert(fsim::library::kPortableSchemaVersion == 10);
     const auto expected = example_metadata();
     const auto serialized = fsim::library::serialize_metadata(expected);
     assert(serialized.starts_with(
-        "format = 2\nlibrary = \"vendor\"\nproducer = \"fsim 0.2.0-dev\"\n"));
+        "format = 3\nlibrary = \"vendor\"\nproducer = \"fsim 0.2.0-dev\"\n"));
     assert(serialized.find("[[dependency]]") != std::string::npos);
     assert(serialized.find("[[vhdl_package_dependency]]")
         != std::string::npos);
@@ -328,6 +329,9 @@ endmodule
     assert(restored_unit->library == "vendor");
     assert(restored_unit->compilation_unit_identity
         == "fixture-compilation-unit");
+    assert(restored_unit->standard_revision
+        == fsim::frontend::StandardRevision::SystemVerilog2017);
+    assert(restored_unit->verilog_compatibility_profile == "none");
     assert(restored_unit->name == "stage");
     assert(restored_unit->parameters.size() == 3);
     assert(restored_unit->parameters.front().vhdl_deferred);
@@ -803,11 +807,62 @@ endprimitive
     assert(
         restored_udp->library == "vendor"
         && restored_udp->name == "invert_udp"
-        && restored_udp->rows.size() == 3);
+        && restored_udp->rows.size() == 3
+        && restored_udp->standard_revision
+            == fsim::frontend::StandardRevision::Verilog2005
+        && restored_udp->verilog_compatibility_profile == "none");
     fsim::diagnostic::Engine udp_repeat_diagnostics;
     assert(fsim::library::serialize_portable_udp(
                *restored_udp, udp_repeat_diagnostics)
         == udp_bytes);
+    fsim::library::PortableSystemVerilogClassUnit class_unit;
+    class_unit.library = "vendor";
+    class_unit.compilation_unit_identity = "class-fixture";
+    fsim::frontend::SystemVerilogClassDeclaration class_declaration;
+    class_declaration.name = "portable_class";
+    class_declaration.canonical_identity = "vendor::portable_class";
+    class_declaration.library = "vendor";
+    class_declaration.compilation_unit_identity = "class-fixture";
+    class_declaration.standard_revision
+        = fsim::frontend::StandardRevision::SystemVerilog2009;
+    class_declaration.verilog_compatibility_profile = "implicit-net";
+    fsim::frontend::SystemVerilogClassMethod class_method;
+    class_method.name = "sample";
+    class_method.canonical_identity = "vendor::portable_class::sample";
+    class_method.library = "vendor";
+    class_method.compilation_unit_identity = "class-fixture";
+    class_method.standard_revision
+        = fsim::frontend::StandardRevision::SystemVerilog2009;
+    class_method.verilog_compatibility_profile = "implicit-net";
+    class_declaration.methods.push_back(class_method);
+    class_unit.declarations.push_back(class_declaration);
+    class_unit.method_definitions.push_back(class_method);
+    fsim::diagnostic::Engine class_write_diagnostics;
+    const auto class_bytes = fsim::library::serialize_portable_class_unit(
+        class_unit, class_write_diagnostics);
+    assert(class_bytes && !class_write_diagnostics.has_error());
+    fsim::diagnostic::Engine class_read_diagnostics;
+    const auto restored_class = fsim::library::deserialize_portable_class_unit(
+        *class_bytes, "units/portable-class.fsimclass",
+        class_read_diagnostics);
+    assert(restored_class && !class_read_diagnostics.has_error());
+    assert(
+        restored_class->declarations.front().standard_revision
+            == fsim::frontend::StandardRevision::SystemVerilog2009
+        && restored_class->declarations.front()
+                .verilog_compatibility_profile
+            == "implicit-net"
+        && restored_class->declarations.front().methods.front()
+                .standard_revision
+            == fsim::frontend::StandardRevision::SystemVerilog2009
+        && restored_class->declarations.front().methods.front()
+                .verilog_compatibility_profile
+            == "implicit-net"
+        && restored_class->method_definitions.front().standard_revision
+            == fsim::frontend::StandardRevision::SystemVerilog2009
+        && restored_class->method_definitions.front()
+                .verilog_compatibility_profile
+            == "implicit-net");
     auto trailing_udp = *udp_bytes;
     trailing_udp.push_back('\0');
     fsim::diagnostic::Engine trailing_udp_diagnostics;
@@ -937,8 +992,8 @@ endprimitive
 
     auto incompatible_text = serialized;
     incompatible_text.replace(
-        incompatible_text.find("format = 2"),
-        std::string { "format = 2" }.size(), "format = 99");
+        incompatible_text.find("format = 3"),
+        std::string { "format = 3" }.size(), "format = 99");
     fsim::diagnostic::Engine schema_diagnostics;
     assert(!fsim::library::parse_metadata(
         incompatible_text, "future.toml", schema_diagnostics));

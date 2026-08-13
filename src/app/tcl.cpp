@@ -942,6 +942,73 @@ int signals_command(
   return TCL_OK;
 }
 
+int provenance_command(
+    TclContext& context,
+    Tcl_Interp* interpreter,
+    const Tcl_Size argument_count,
+    Tcl_Obj* const arguments[]) {
+  if (argument_count < 1 || argument_count > 2) {
+    Tcl_WrongNumArgs(interpreter, 1, arguments, "?PATH?");
+    return TCL_ERROR;
+  }
+  if (!ensure_built(context, interpreter)) {
+    return TCL_ERROR;
+  }
+  std::vector<VerilogScopeProvenance> provenance;
+  const auto all_provenance = [&] {
+    return context.simulation
+        ? context.simulation->verilog_scope_provenance()
+        : fsim::app::verilog_scope_provenance(*context.built);
+  }();
+  if (argument_count == 2) {
+    const std::string_view path { Tcl_GetString(arguments[1]) };
+    const VerilogScopeProvenance* selected = nullptr;
+    for (const auto& candidate : all_provenance) {
+      const bool owns_path = path == candidate.path
+          || (path.size() > candidate.path.size()
+              && path.starts_with(candidate.path)
+              && path[candidate.path.size()] == '.');
+      if (owns_path
+          && (selected == nullptr
+              || candidate.path.size() > selected->path.size())) {
+        selected = &candidate;
+      }
+    }
+    if (selected != nullptr) {
+      provenance.push_back(*selected);
+    }
+  } else {
+    provenance = all_provenance;
+  }
+  Tcl_Obj* result = Tcl_NewListObj(0, nullptr);
+  for (const auto& item : provenance) {
+    Tcl_Obj* entry = Tcl_NewDictObj();
+    dict_put(interpreter, entry, "path", string_object(item.path));
+    dict_put(interpreter, entry, "unit_id", unsigned_object(item.unit.value()));
+    dict_put(
+        interpreter, entry, "source_id", unsigned_object(item.source.value()));
+    dict_put(interpreter, entry, "library", string_object(item.library));
+    dict_put(interpreter, entry, "unit", string_object(item.unit_name));
+    dict_put(
+        interpreter, entry, "source_path", string_object(item.source_path));
+    dict_put(
+        interpreter, entry, "source_line", unsigned_object(item.source_line));
+    dict_put(interpreter, entry, "source_column",
+        unsigned_object(item.source_column));
+    dict_put(interpreter, entry, "language",
+        string_object(item.language == semantic::Language::verilog
+                ? "verilog" : "systemverilog"));
+    dict_put(interpreter, entry, "standard", string_object(item.standard));
+    dict_put(interpreter, entry, "compatibility_profile",
+        string_object(item.compatibility_profile));
+    if (Tcl_ListObjAppendElement(interpreter, result, entry) != TCL_OK) {
+      return TCL_ERROR;
+    }
+  }
+  Tcl_SetObjResult(interpreter, result);
+  return TCL_OK;
+}
+
 std::optional<runtime::simir::SignalId> command_signal(
     TclContext& context,
     Tcl_Interp* interpreter,
@@ -1517,6 +1584,8 @@ int fsim_command(
         && command != "fsim::project"
         && command != "::fsim::signals"
         && command != "fsim::signals"
+        && command != "::fsim::provenance"
+        && command != "fsim::provenance"
         && command != "::fsim::read"
         && command != "fsim::read"
         && command != "::fsim::status"
@@ -1543,6 +1612,11 @@ int fsim_command(
     }
     if (command == "::fsim::signals" || command == "fsim::signals") {
       return signals_command(
+          context, interpreter, argument_count, arguments);
+    }
+    if (command == "::fsim::provenance"
+        || command == "fsim::provenance") {
+      return provenance_command(
           context, interpreter, argument_count, arguments);
     }
     if (command == "::fsim::read" || command == "fsim::read") {
@@ -1909,6 +1983,7 @@ int handle_tcl(
       "::fsim::check",
       "::fsim::build",
       "::fsim::signals",
+      "::fsim::provenance",
       "::fsim::read",
       "::fsim::deposit",
       "::fsim::force",

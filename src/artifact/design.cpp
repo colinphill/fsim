@@ -207,7 +207,9 @@ void write_digest_fields(Writer& writer, const DesignMetadata& metadata) {
             ? "fsim-design-provenance-v4-language-profile"
             : metadata.format < 7
             ? "fsim-design-provenance-v5-vhdl-package-dependencies"
-            : "fsim-design-provenance-v6-vhdl-unit-provenance");
+            : metadata.format < 8
+            ? "fsim-design-provenance-v6-vhdl-unit-provenance"
+            : "fsim-design-provenance-v7-verilog-unit-provenance");
     writer.u32(metadata.runtime_abi);
     writer.string(metadata.time_resolution);
     writer.string(metadata.delay_mode);
@@ -270,6 +272,14 @@ void write_digest_fields(Writer& writer, const DesignMetadata& metadata) {
       });
     });
   }
+  if (metadata.format >= 8) {
+    writer.sequence(metadata.verilog_unit_provenance, [&](const auto& unit) {
+      writer.u32(unit.unit);
+      writer.string(unit.language);
+      writer.string(unit.standard);
+      writer.string(unit.compatibility_profile);
+    });
+  }
   if (metadata.format >= 2) {
     writer.sequence(metadata.systemc_plugins, [&](const auto& plugin) {
       writer.string(plugin.logical_library);
@@ -303,6 +313,7 @@ bool validate(
     const std::string& source) {
     if ((metadata.format != 1 && metadata.format != 2 && metadata.format != 4
             && metadata.format != 5 && metadata.format != 6
+            && metadata.format != 7
             && metadata.format != kDesignFormatVersion)
         || metadata.runtime_abi != runtime_abi_version) {
         report(
@@ -367,8 +378,6 @@ bool validate(
           || object.standard.empty()
           || (metadata.format >= 5
               && (object.compatibility_profile.empty()
-                  || (object.language != "vhdl"
-                      && object.compatibility_profile != "none")
                   || (object.language == "vhdl"
                       && object.compatibility_profile == "none")))
           || !safe_name(object.library)
@@ -442,6 +451,37 @@ bool validate(
           diagnostics, kValueCode,
           "design VHDL unit provenance requires unique semantic units and "
           "complete revision, environment, profile, and package identities",
+          source);
+    }
+  }
+  std::set<std::uint32_t> verilog_units;
+  if (metadata.format >= 8
+      && !std::ranges::is_sorted(
+          metadata.verilog_unit_provenance, {},
+          &DesignVerilogUnitProvenance::unit)) {
+    report(
+        diagnostics, kValueCode,
+        "format-8 Verilog/SystemVerilog unit provenance must be ordered",
+        source);
+  }
+  for (const auto& unit : metadata.verilog_unit_provenance) {
+    const auto matching_object = std::ranges::find_if(
+        metadata.objects, [&](const auto& object) {
+          return object.language == unit.language
+              && object.standard == unit.standard
+              && object.compatibility_profile == unit.compatibility_profile;
+        });
+    if (metadata.format < 8 || unit.unit >= metadata.unit_count
+        || !verilog_units.insert(unit.unit).second
+        || (unit.language != "verilog"
+            && unit.language != "systemverilog")
+        || unit.standard.empty() || unit.compatibility_profile.empty()
+        || matching_object == metadata.objects.end()) {
+      report(
+          diagnostics, kValueCode,
+          "design Verilog/SystemVerilog unit provenance requires unique "
+          "semantic units and matching language, standard, and compatibility "
+          "object identities",
           source);
     }
   }
@@ -732,6 +772,14 @@ std::string serialize_design_metadata(const DesignMetadata& metadata) {
       });
     });
   }
+  if (metadata.format >= 8) {
+    writer.sequence(metadata.verilog_unit_provenance, [&](const auto& unit) {
+      writer.u32(unit.unit);
+      writer.string(unit.language);
+      writer.string(unit.standard);
+      writer.string(unit.compatibility_profile);
+    });
+  }
   if (metadata.format >= 2) {
     writer.sequence(metadata.systemc_plugins, [&](const auto& plugin) {
       writer.string(plugin.logical_library);
@@ -782,6 +830,7 @@ std::optional<DesignMetadata> deserialize_design_metadata(
   metadata.runtime_abi = *runtime_abi;
   if (metadata.format != 1 && metadata.format != 2 && metadata.format != 4
       && metadata.format != 5 && metadata.format != 6
+      && metadata.format != 7
       && metadata.format != kDesignFormatVersion) {
       report(
           diagnostics, kSchemaCode,
@@ -899,6 +948,16 @@ std::optional<DesignMetadata> deserialize_design_metadata(
                  return true;
                })) return false;
            metadata.vhdl_unit_provenance.push_back(std::move(unit));
+           return true;
+         }))
+      || (metadata.format >= 8 && !read_sequence([&] {
+           DesignVerilogUnitProvenance unit;
+           const auto unit_id = reader.u32();
+           if (!unit_id || !read_string(unit.language)
+               || !read_string(unit.standard)
+               || !read_string(unit.compatibility_profile)) return false;
+           unit.unit = *unit_id;
+           metadata.verilog_unit_provenance.push_back(std::move(unit));
            return true;
          }))
       || (metadata.format >= 2 && !read_sequence([&] {

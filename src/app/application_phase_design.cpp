@@ -499,6 +499,31 @@ bool publish_design_artifact(
         record.package_dependencies = provenance.package_dependencies;
         metadata.vhdl_unit_provenance.push_back(std::move(record));
     }
+    for (const auto& unit : project.semantics.units()) {
+        if (unit.language != semantic::Language::verilog
+            && unit.language != semantic::Language::system_verilog) {
+            continue;
+        }
+        const auto identity = unit.library + "::" + unit.name;
+        const auto revision = project.verilog_unit_revisions.find(identity);
+        const auto profile
+            = project.verilog_unit_compatibility_profiles.find(identity);
+        if (revision == project.verilog_unit_revisions.end()
+            || profile == project.verilog_unit_compatibility_profiles.end()
+            || profile->second.empty()) {
+            diagnostics.error(
+                "FSIM-ART-0014",
+                "standalone design publication requires complete per-unit "
+                "Verilog/SystemVerilog standard and compatibility provenance");
+            return false;
+        }
+        metadata.verilog_unit_provenance.push_back({
+            unit.id.value(),
+            unit.language == semantic::Language::verilog
+                ? "verilog" : "systemverilog",
+            std::string { frontend::revision_string(revision->second) },
+            profile->second });
+    }
     const auto add_payload = [&](
                                  const std::string_view kind,
                                  const std::filesystem::path& path,
@@ -785,6 +810,73 @@ std::optional<BuiltProject> load_design_artifact(
         provenance.package_dependencies = record.package_dependencies;
         vhdl_unit_provenance.push_back(std::move(provenance));
     }
+    std::map<std::string, frontend::StandardRevision, std::less<>>
+        verilog_unit_revisions;
+    std::map<std::string, std::string, std::less<>>
+        verilog_unit_compatibility_profiles;
+    std::size_t semantic_verilog_units{};
+    for (const auto& unit : semantics->units()) {
+        if (unit.language == semantic::Language::verilog
+            || unit.language == semantic::Language::system_verilog) {
+            ++semantic_verilog_units;
+        }
+    }
+    for (const auto& record : metadata->verilog_unit_provenance) {
+        if (record.unit >= semantics->units().size()) {
+            diagnostics.error(
+                "FSIM-ART-0014",
+                ".fsimdesign Verilog/SystemVerilog provenance references an "
+                "invalid semantic unit");
+            return std::nullopt;
+        }
+        const auto& unit = semantics->units()[record.unit];
+        const auto expected_language = unit.language
+                == semantic::Language::verilog
+            ? project::Language::verilog
+            : unit.language == semantic::Language::system_verilog
+            ? project::Language::system_verilog
+            : project::Language::systemc;
+        if ((record.language == "verilog")
+                != (expected_language == project::Language::verilog)
+            || (record.language == "systemverilog")
+                != (expected_language == project::Language::system_verilog)) {
+            diagnostics.error(
+                "FSIM-ART-0014",
+                ".fsimdesign Verilog/SystemVerilog provenance language does "
+                "not match its semantic unit");
+            return std::nullopt;
+        }
+        const auto canonical = project::canonical_standard(
+            expected_language, record.standard);
+        if (!canonical || record.compatibility_profile.empty()) {
+            diagnostics.error(
+                "FSIM-ART-0014",
+                ".fsimdesign Verilog/SystemVerilog provenance names an "
+                "unsupported standard or empty compatibility profile");
+            return std::nullopt;
+        }
+        const auto identity = unit.library + "::" + unit.name;
+        if (!verilog_unit_revisions.emplace(
+                identity,
+                application_detail::frontend_standard_revision(
+                    expected_language, *canonical)).second
+            || !verilog_unit_compatibility_profiles.emplace(
+                identity, record.compatibility_profile).second) {
+            diagnostics.error(
+                "FSIM-ART-0014",
+                ".fsimdesign contains duplicate Verilog/SystemVerilog unit "
+                "provenance");
+            return std::nullopt;
+        }
+    }
+    if (metadata->format >= 8
+        && metadata->verilog_unit_provenance.size()
+            != semantic_verilog_units) {
+        diagnostics.error(
+            "FSIM-ART-0014",
+            ".fsimdesign omits Verilog/SystemVerilog semantic-unit provenance");
+        return std::nullopt;
+    }
     const auto optimization = metadata->optimization == "O0"
         ? project::Optimization::o0
         : project::Optimization::o2;
@@ -807,7 +899,9 @@ std::optional<BuiltProject> load_design_artifact(
             metadata->uvm_source_identity },
         metadata->design_digest, std::move(*classes),
         std::move(*coverage), std::move(*uvm_state),
-        std::move(vhdl_unit_provenance)
+        std::move(vhdl_unit_provenance),
+        std::move(verilog_unit_revisions),
+        std::move(verilog_unit_compatibility_profiles)
     };
 }
 

@@ -1589,6 +1589,10 @@ struct SystemVerilogClassMethod {
     std::string canonical_identity;
     std::string library;
     std::string compilation_unit_identity;
+    StandardRevision standard_revision {
+        StandardRevision::SystemVerilog2017
+    };
+    std::string verilog_compatibility_profile { "none" };
     SystemVerilogClassMethodKind kind { SystemVerilogClassMethodKind::Function };
     Type return_type;
     std::vector<FunctionArgument> arguments;

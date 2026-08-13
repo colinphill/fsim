@@ -190,7 +190,7 @@ class Reader {
 
 std::string compilation_digest(const ObjectMetadata& metadata) {
   Writer writer;
-  writer.string("fsim-object-compilation-v4-vhdl-package-dependencies");
+  writer.string("fsim-object-compilation-v5-unit-language-provenance");
   writer.string(metadata.language);
   writer.string(metadata.standard);
   writer.string(metadata.compatibility_profile);
@@ -211,6 +211,8 @@ std::string compilation_digest(const ObjectMetadata& metadata) {
     writer.string(item.logical_name);
     writer.string(item.checksum);
     writer.string(item.language);
+    writer.string(item.standard);
+    writer.string(item.compatibility_profile);
   });
   writer.sequence(metadata.units, [&](const auto& item) {
     writer.string(item.language);
@@ -219,6 +221,8 @@ std::string compilation_digest(const ObjectMetadata& metadata) {
     writer.string(item.primary_name);
     writer.string(item.architecture);
     writer.string(item.checksum);
+    writer.string(item.standard);
+    writer.string(item.compatibility_profile);
   });
   return support::Sha256::hex(
       support::Sha256::digest(std::move(writer).take()));
@@ -239,8 +243,6 @@ bool validate_metadata(
       || metadata.language == "systemverilog";
   if (metadata.producer.empty() || !known_language || metadata.standard.empty()
       || metadata.compatibility_profile.empty()
-      || (metadata.language != "vhdl"
-          && metadata.compatibility_profile != "none")
       || (metadata.language == "vhdl"
           && metadata.compatibility_profile == "none")
       || !library_name(metadata.library)
@@ -290,11 +292,14 @@ bool validate_metadata(
         || !safe_relative_path(item.artifact)
         || !checksum_spelling(item.checksum)
         || item.language != metadata.language
+        || item.standard != metadata.standard
+        || item.compatibility_profile != metadata.compatibility_profile
         || !payload_paths.insert(path).second) {
       error(
           diagnostics, kValueCode,
           "object sources require unique relative logical/payload paths, "
-          "matching language, and lowercase SHA-256 checksums", source);
+          "matching language, standard, compatibility profile, and lowercase "
+          "SHA-256 checksums", source);
     }
   }
   for (const auto& item : metadata.units) {
@@ -302,11 +307,14 @@ bool validate_metadata(
     if (item.language != metadata.language || item.kind.empty()
         || item.name.empty() || !safe_relative_path(item.artifact)
         || !checksum_spelling(item.checksum)
+        || item.standard != metadata.standard
+        || item.compatibility_profile != metadata.compatibility_profile
         || !payload_paths.insert(path).second) {
       error(
           diagnostics, kValueCode,
-          "object units require matching language, identity, unique contained "
-          "payload, and lowercase SHA-256 checksum", source);
+          "object units require matching language, standard, compatibility "
+          "profile, identity, unique contained payload, and lowercase SHA-256 "
+          "checksum", source);
     }
   }
   if (metadata.sources.empty() || metadata.units.empty()) {
@@ -464,6 +472,8 @@ std::string serialize_object_metadata(const ObjectMetadata& metadata) {
     writer.path(item.artifact);
     writer.string(item.checksum);
     writer.string(item.language);
+    writer.string(item.standard);
+    writer.string(item.compatibility_profile);
   });
   writer.sequence(metadata.units, [&](const auto& item) {
     writer.string(item.language);
@@ -473,6 +483,8 @@ std::string serialize_object_metadata(const ObjectMetadata& metadata) {
     writer.string(item.architecture);
     writer.path(item.artifact);
     writer.string(item.checksum);
+    writer.string(item.standard);
+    writer.string(item.compatibility_profile);
   });
   return std::move(writer).take();
 }
@@ -568,7 +580,8 @@ std::optional<ObjectMetadata> deserialize_object_metadata(
     }
     auto artifact = canonical.path();
     if (!artifact.has_value() || !read_string(item.checksum)
-        || !read_string(item.language)) {
+        || !read_string(item.language) || !read_string(item.standard)
+        || !read_string(item.compatibility_profile)) {
       error(diagnostics, kSchemaCode, "truncated object source index", source_name);
       return std::nullopt;
     }
@@ -589,7 +602,9 @@ std::optional<ObjectMetadata> deserialize_object_metadata(
       return std::nullopt;
     }
     auto artifact = canonical.path();
-    if (!artifact.has_value() || !read_string(item.checksum)) {
+    if (!artifact.has_value() || !read_string(item.checksum)
+        || !read_string(item.standard)
+        || !read_string(item.compatibility_profile)) {
       error(diagnostics, kSchemaCode, "truncated object unit index", source_name);
       return std::nullopt;
     }

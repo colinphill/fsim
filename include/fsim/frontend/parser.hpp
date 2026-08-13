@@ -37,7 +37,21 @@ struct ParseResult {
 [[nodiscard]] ParseResult parse_verilog(SourceText source,
                                          bool system_verilog = true);
 [[nodiscard]] ParseResult parse_verilog(
+    SourceText source,
+    StandardRevision standard_revision);
+[[nodiscard]] ParseResult parse_verilog(
+    SourceText source,
+    StandardRevision standard_revision,
+    std::string_view compatibility_profile);
+[[nodiscard]] ParseResult parse_verilog(
     LexResult lexed,
     bool system_verilog = true);
+[[nodiscard]] ParseResult parse_verilog(
+    LexResult lexed,
+    StandardRevision standard_revision);
+[[nodiscard]] ParseResult parse_verilog(
+    LexResult lexed,
+    StandardRevision standard_revision,
+    std::string_view compatibility_profile);
 
 }  // namespace fsim::frontend

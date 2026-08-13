@@ -12,8 +12,14 @@
 namespace fsim::runtime {
 
 enum class SystemVerilogVpiLanguage {
-    Verilog2005,
-    SystemVerilog2017,
+    Verilog2005 = 0,
+    SystemVerilog2017 = 1,
+    Verilog1995 = 2,
+    Verilog2001 = 3,
+    Verilog2001NoConfig = 4,
+    SystemVerilog2005 = 5,
+    SystemVerilog2009 = 6,
+    SystemVerilog2012 = 7,
 };
 
 enum class SystemVerilogVpiValueCategory {
@@ -137,6 +143,14 @@ struct SystemVerilogVpiTypeInfo {
     bool is_constant { };
     std::shared_ptr<const SystemVerilogVpiTypeDescriptor> descriptor;
     std::optional<SystemVerilogVpiDriverRange> driver_range;
+    std::optional<std::uint32_t> semantic_unit_id;
+    std::optional<std::uint32_t> source_id;
+    std::string semantic_unit;
+    std::string source_path;
+    std::uint32_t source_line { };
+    std::uint32_t source_column { };
+    std::string standard;
+    std::string compatibility_profile;
 };
 
 } // namespace fsim::runtime

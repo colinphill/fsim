@@ -6,6 +6,9 @@
 
 namespace fsim::frontend {
 
+[[nodiscard]] std::optional<StandardRevision>
+verilog_system_service_standard(std::string_view name);
+
 DelayAlternative VerilogParser::parse_verilog_delay_alternative()
 {
     DelayAlternative alternative;
@@ -204,6 +207,11 @@ Expression VerilogParser::parse_lvalue()
             if (at(TokenKind::PlusColon)
                 || at(TokenKind::MinusColon)) {
                 const auto direction = advance();
+                (void)require_standard(
+                    "an indexed part-select",
+                    StandardRevision::Verilog2001,
+                    direction,
+                    "FSIM-SV-PARSE-347");
                 Expression width = parse_expression();
                 expect(TokenKind::RightBracket,
                     "']' after indexed part-select",
@@ -303,6 +311,11 @@ Expression VerilogParser::parse_expression(int minimum_precedence)
             && current().text == "inside"
             && membership_precedence >= minimum_precedence) {
             const auto inside = advance();
+            (void)require_standard(
+                "the inside membership operator",
+                StandardRevision::SystemVerilog2005,
+                inside,
+                "FSIM-SV-PARSE-347");
             if (language_ != Language::SystemVerilog2017) {
                 error(
                     inside,
@@ -366,6 +379,23 @@ Expression VerilogParser::parse_expression(int minimum_precedence)
         if (!operation || operation->precedence < minimum_precedence) {
             break;
         }
+        if (at(TokenKind::Power)
+            || at(TokenKind::ArithmeticShiftLeft)
+            || at(TokenKind::ArithmeticShiftRight)) {
+            (void)require_standard(
+                "operator '" + current().text + "'",
+                StandardRevision::Verilog2001,
+                current(),
+                "FSIM-SV-PARSE-347");
+        }
+        if (at(TokenKind::WildcardEqual)
+            || at(TokenKind::WildcardNotEqual)) {
+            (void)require_standard(
+                "a wildcard equality operator",
+                StandardRevision::SystemVerilog2005,
+                current(),
+                "FSIM-SV-PARSE-347");
+        }
         if (language_ != Language::SystemVerilog2017
             && (at(TokenKind::WildcardEqual)
                 || at(TokenKind::WildcardNotEqual))) {
@@ -399,6 +429,11 @@ Expression VerilogParser::parse_unary()
     if (match(TokenKind::PlusPlus)
         || match(TokenKind::MinusMinus)) {
         const auto operation = previous();
+        (void)require_standard(
+            "an increment or decrement expression",
+            StandardRevision::SystemVerilog2005,
+            operation,
+            "FSIM-SV-PARSE-347");
         if (language_ != Language::SystemVerilog2017) {
             error(
                 operation,
@@ -428,6 +463,11 @@ Expression VerilogParser::parse_primary()
 {
     if (keyword("tagged")) {
         const auto tagged = advance();
+        (void)require_standard(
+            "a tagged-union expression",
+            StandardRevision::SystemVerilog2005,
+            tagged,
+            "FSIM-SV-PARSE-347");
         const auto member = expect_identifier("tagged-union member name");
         if (at(TokenKind::Semicolon)
             || at(TokenKind::Comma)
@@ -456,6 +496,11 @@ Expression VerilogParser::parse_primary()
     }
     if (match(TokenKind::Apostrophe)) {
         const auto apostrophe = previous();
+        (void)require_standard(
+            "an assignment pattern",
+            StandardRevision::SystemVerilog2005,
+            apostrophe,
+            "FSIM-SV-PARSE-347");
         if (language_ != Language::SystemVerilog2017) {
             error(
                 apostrophe,
@@ -617,7 +662,23 @@ Expression VerilogParser::parse_primary()
             canonical += "::";
             canonical += expect_identifier("package-scoped name").text;
         }
+        if (canonical == "$unit" || canonical.starts_with("$unit::")
+            || canonical == "$root" || canonical.starts_with("$root::")
+            || canonical.starts_with("std::")
+            || canonical.starts_with("process::")
+            || canonical.starts_with("local::")) {
+            (void)require_standard(
+                "predefined scope '" + canonical + "'",
+                StandardRevision::SystemVerilog2005,
+                name,
+                "FSIM-SV-PARSE-349");
+        }
         if (match(TokenKind::Apostrophe)) {
+            (void)require_standard(
+                "a type cast",
+                StandardRevision::SystemVerilog2005,
+                name,
+                "FSIM-SV-PARSE-347");
             if (language_ != Language::SystemVerilog2017) {
                 error(
                     name,
@@ -645,6 +706,18 @@ Expression VerilogParser::parse_primary()
             { },
             cover(name.span, previous().span)
         };
+        if (const auto required = verilog_system_service_standard(canonical)) {
+            (void)require_standard(
+                "the system service '" + canonical + "'", *required, name,
+                "FSIM-SV-PARSE-350");
+        }
+        if (canonical == "new" && at(TokenKind::LeftBracket)) {
+            (void)require_standard(
+                "the predefined new operator",
+                StandardRevision::SystemVerilog2005,
+                name,
+                "FSIM-SV-PARSE-349");
+        }
         if (match(TokenKind::LeftParen)) {
             std::vector<Expression> arguments;
             std::vector<std::string> argument_names;
@@ -715,7 +788,13 @@ Expression VerilogParser::parse_primary()
                 cover(name.span, previous().span) };
             expression.call_argument_names = std::move(argument_names);
             if (canonical == "new") {
-                expression.text = "@sv-new";
+                if (require_standard(
+                        "the predefined new operator",
+                        StandardRevision::SystemVerilog2005,
+                        name,
+                        "FSIM-SV-PARSE-349")) {
+                    expression.text = "@sv-new";
+                }
             } else if (canonical == "$cast") {
                 expression.text = "@sv-dollar-cast";
             } else if (canonical == "type"
@@ -745,6 +824,11 @@ Expression VerilogParser::parse_primary()
                         name,
                         "FSIM-SV-SEM-075",
                         "$fopen requires a filename and optional text mode");
+                } else if (expression.operands.size() == 2U) {
+                    (void)require_standard(
+                        "the two-argument $fopen signature",
+                        StandardRevision::Verilog2001, name,
+                        "FSIM-SV-PARSE-350");
                 }
             } else if (canonical == "$fgets") {
                 require_file_call(2, "a string target and file handle");
@@ -782,6 +866,78 @@ Expression VerilogParser::parse_primary()
             } else if (canonical == "$value$plusargs") {
                 require_file_call(
                     2, "a format string and writable target");
+            } else if (canonical == "$random" || canonical == "$urandom") {
+                if (expression.operands.size() > 1U) {
+                    error(
+                        name,
+                        "FSIM-SV-SEM-075",
+                        canonical + " accepts at most one inout seed");
+                }
+                expression.call_result_width = 32;
+                expression.call_result_domain = ValueDomain::Integer;
+                expression.call_result_signed = canonical == "$random";
+            } else if (canonical == "$urandom_range") {
+                if (expression.operands.empty()
+                    || expression.operands.size() > 2U) {
+                    error(
+                        name,
+                        "FSIM-SV-SEM-075",
+                        "$urandom_range requires a maximum and optional minimum");
+                }
+                expression.call_result_width = 32;
+                expression.call_result_domain = ValueDomain::Integer;
+                expression.call_result_signed = false;
+            } else if (canonical == "$sformatf") {
+                if (expression.operands.empty()) {
+                    error(
+                        name,
+                        "FSIM-SV-SEM-075",
+                        "$sformatf requires a format expression");
+                }
+                expression.call_result_domain = ValueDomain::String;
+            } else if (canonical == "$onehot"
+                || canonical == "$onehot0"
+                || canonical == "$isunknown") {
+                require_file_call(1, "one packed expression");
+                expression.call_result_width = 1;
+                expression.call_result_domain = ValueDomain::Bit2;
+                expression.call_result_signed = false;
+            } else if (canonical == "$countbits") {
+                if (expression.operands.size() < 2U) {
+                    error(
+                        name,
+                        "FSIM-SV-SEM-075",
+                        "$countbits requires an expression and at least one control bit");
+                }
+                expression.call_result_width = 32;
+                expression.call_result_domain = ValueDomain::Bit2;
+                expression.call_result_signed = true;
+            } else if (canonical == "$signed" || canonical == "$unsigned") {
+                require_file_call(1, "one packed expression");
+                expression.call_result_signed = canonical == "$signed";
+            } else if (contains_word(
+                           { "$bits", "$clog2", "$countones", "$dimensions",
+                               "$unpacked_dimensions" },
+                           canonical)) {
+                require_file_call(1, "one expression or data type");
+                expression.call_result_width = 32;
+                expression.call_result_domain = ValueDomain::Bit2;
+                expression.call_result_signed = true;
+            } else if (contains_word(
+                           { "$high", "$increment", "$left", "$low", "$right",
+                               "$size" },
+                           canonical)) {
+                if (expression.operands.empty()
+                    || expression.operands.size() > 2U) {
+                    error(
+                        name,
+                        "FSIM-SV-SEM-075",
+                        canonical
+                            + " requires an array and optional dimension");
+                }
+                expression.call_result_width = 32;
+                expression.call_result_domain = ValueDomain::Bit2;
+                expression.call_result_signed = true;
             } else if (canonical == "$system") {
                 if (expression.operands.size() > 1U) {
                     error(
@@ -799,6 +955,7 @@ Expression VerilogParser::parse_primary()
                 expression.call_result_signed = true;
             } else if (canonical == "$typename") {
                 require_file_call(1, "one expression or data type");
+                expression.call_result_domain = ValueDomain::String;
             } else if (canonical == "$isunbounded") {
                 require_file_call(1, "one parameter or constant expression");
                 expression.call_result_width = 1;
@@ -932,14 +1089,38 @@ Expression VerilogParser::parse_primary()
                         = SystemVerilogScalarKind::ShortReal;
                 }
             }
+            if (contains_word(
+                    { "$fopen", "$fgets", "$fgetc", "$ungetc", "$feof",
+                        "$ferror", "$fscanf", "$sscanf", "$fread", "$fseek",
+                        "$ftell", "$rewind", "$test$plusargs",
+                        "$value$plusargs" },
+                    canonical)) {
+                expression.call_result_width = 32;
+                expression.call_result_domain = ValueDomain::Integer;
+                expression.call_result_signed = true;
+            }
             return parse_postfix(std::move(expression));
         }
         if (canonical == "null") {
+            if (!require_standard(
+                    "the predefined null value",
+                    StandardRevision::SystemVerilog2005,
+                    name,
+                    "FSIM-SV-PARSE-349")) {
+                return parse_postfix(std::move(expression));
+            }
             return Expression {
                 ExpressionKind::Call, "@sv-null", { }, name.span
             };
         }
         if (canonical == "new" && !at(TokenKind::LeftBracket)) {
+            if (!require_standard(
+                    "the predefined new operator",
+                    StandardRevision::SystemVerilog2005,
+                    name,
+                    "FSIM-SV-PARSE-349")) {
+                return parse_postfix(std::move(expression));
+            }
             return Expression {
                 ExpressionKind::Call, "@sv-new", { }, name.span
             };
@@ -948,7 +1129,11 @@ Expression VerilogParser::parse_primary()
             || canonical == "$time" || canonical == "$stime"
             || canonical == "$realtime") {
             expression.kind = ExpressionKind::Call;
-            if (canonical == "$time" || canonical == "$stime"
+            if (canonical == "$random" || canonical == "$urandom") {
+                expression.call_result_width = 32;
+                expression.call_result_domain = ValueDomain::Integer;
+                expression.call_result_signed = canonical == "$random";
+            } else if (canonical == "$time" || canonical == "$stime"
                 || canonical == "$realtime") {
                 expression.call_result_width
                     = canonical == "$stime" ? 32 : 64;
@@ -989,6 +1174,11 @@ Expression VerilogParser::parse_primary()
         if (at(TokenKind::ShiftLeft)
             || at(TokenKind::ShiftRight)) {
             const auto direction = advance();
+            (void)require_standard(
+                "a streaming concatenation",
+                StandardRevision::SystemVerilog2005,
+                direction,
+                "FSIM-SV-PARSE-347");
             if (language_ != Language::SystemVerilog2017) {
                 error(
                     direction,
@@ -1293,11 +1483,20 @@ Expression VerilogParser::parse_postfix(Expression expression)
                 }();
                 const bool known_container_receiver = receiver_type != nullptr
                     && receiver_type->systemverilog_container.has_value();
+                const bool known_string_receiver = receiver_type != nullptr
+                    && receiver_type->domain == ValueDomain::String;
                 const bool known_class_receiver = receiver_type != nullptr
                     && !known_container_receiver
                     && (!receiver_type->named_type.empty()
                         || !receiver_type
                             ->systemverilog_class_declaration.empty());
+                if (known_container_receiver || known_string_receiver) {
+                    (void)require_standard(
+                        "standard method '" + member.text + "'",
+                        StandardRevision::SystemVerilog2005,
+                        member,
+                        "FSIM-SV-PARSE-349");
+                }
                 const bool predicate_locator_candidate = member.text == "find"
                     || member.text == "find_index"
                     || member.text == "find_first"
@@ -1724,6 +1923,11 @@ Expression VerilogParser::parse_postfix(Expression expression)
             if (at(TokenKind::PlusColon)
                 || at(TokenKind::MinusColon)) {
                 const auto direction = advance();
+                (void)require_standard(
+                    "an indexed part-select",
+                    StandardRevision::Verilog2001,
+                    direction,
+                    "FSIM-SV-PARSE-347");
                 Expression width = parse_expression();
                 expect(TokenKind::RightBracket,
                     "']' after indexed part-select",
@@ -1778,6 +1982,11 @@ Expression VerilogParser::parse_postfix(Expression expression)
         } else if (match(TokenKind::PlusPlus)
             || match(TokenKind::MinusMinus)) {
             const auto operation = previous();
+            (void)require_standard(
+                "an increment or decrement expression",
+                StandardRevision::SystemVerilog2005,
+                operation,
+                "FSIM-SV-PARSE-347");
             if (language_ != Language::SystemVerilog2017) {
                 error(
                     operation,

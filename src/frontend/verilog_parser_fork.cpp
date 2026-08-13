@@ -29,6 +29,11 @@ Statement VerilogParser::parse_fork_statement(const Token& start) {
     statement.fork_join_kind = ForkJoinKind::All;
   } else if (current().text == "join_any") {
     advance();
+    (void)require_standard(
+        "join_any",
+        StandardRevision::SystemVerilog2005,
+        previous(),
+        "FSIM-SV-PARSE-347");
     statement.fork_join_kind = ForkJoinKind::Any;
     if (language_ != Language::SystemVerilog2017) {
       error(
@@ -37,6 +42,11 @@ Statement VerilogParser::parse_fork_statement(const Token& start) {
     }
   } else if (current().text == "join_none") {
     advance();
+    (void)require_standard(
+        "join_none",
+        StandardRevision::SystemVerilog2005,
+        previous(),
+        "FSIM-SV-PARSE-347");
     statement.fork_join_kind = ForkJoinKind::None;
     if (language_ != Language::SystemVerilog2017) {
       error(

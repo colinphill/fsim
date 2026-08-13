@@ -206,9 +206,14 @@ void ApplicationTestFixture::test_preprocessing_debug_and_cli()
         != std::string::npos);
     const auto exported_systemc_library = directory / "models-native.fsimlib";
     fsim::diagnostic::Engine systemc_export_diagnostics;
-    assert(fsim::app::export_library(
+    const auto systemc_exported = fsim::app::export_library(
         config, "models", exported_systemc_library,
-        systemc_export_diagnostics));
+        systemc_export_diagnostics);
+    if (!systemc_exported) {
+        fsim::diagnostic::print_text(
+            std::cerr, systemc_export_diagnostics);
+    }
+    assert(systemc_exported);
     fsim::diagnostic::Engine systemc_metadata_diagnostics;
     const auto systemc_metadata = fsim::library::load_metadata(
         exported_systemc_library, "models", systemc_metadata_diagnostics);
@@ -581,9 +586,10 @@ endmodule
         metadata.library = library_name;
         metadata.producer = "dependency-test";
         metadata.runtime_schema = 1;
+        metadata.standards = {{"systemverilog", "2017"}};
         metadata.dependencies = dependencies;
         metadata.units = { { "systemverilog", "module", "dummy", { }, { },
-            "units/dummy.fsimir", std::string(64, '0') } };
+            "units/dummy.fsimir", std::string(64, '0'), "2017", "none" } };
         std::ofstream output(
             artifact / fsim::library::kMetadataFilename, std::ios::binary);
         output << fsim::library::serialize_metadata(metadata);
@@ -1928,6 +1934,14 @@ trace_file = "wide-cli.vcd"
         + "z10101010";
     assert(wide_cli_vcd.find("$timescale 1ns $end") != std::string::npos);
     assert(wide_cli_vcd.find(wide_cli_expected) != std::string::npos);
+    assert(
+        wide_cli_vcd.find(
+            "fsim-verilog-scope path=wide_cli unit=work:wide_cli")
+        != std::string::npos);
+    assert(
+        wide_cli_vcd.find(
+            "language=systemverilog standard=systemverilog-2017 profile=none")
+        != std::string::npos);
 
     const auto scaled_manifest = directory / "scaled.toml";
     const auto scaled_trace = directory / "scaled.vcd";

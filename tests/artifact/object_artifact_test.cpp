@@ -47,10 +47,12 @@ int main() {
   metadata.include_roots = {"includes/00000000"};
   metadata.sources.push_back({
       "sources/child.sv", "sources/00000000/child.sv",
-      checksum(source_bytes), "systemverilog"});
+      checksum(source_bytes), "systemverilog", metadata.standard,
+      metadata.compatibility_profile});
   metadata.units.push_back({
       "systemverilog", "module", "child", {}, {},
-      "units/00000000.fsimir", checksum(unit_bytes)});
+      "units/00000000.fsimir", checksum(unit_bytes), metadata.standard,
+      metadata.compatibility_profile});
   metadata.compilation_digest =
       fsim::artifact::compute_object_compilation_digest(metadata);
 
@@ -68,7 +70,13 @@ int main() {
   vhdl_metadata.compatibility_profile = "fsim-synopsys-ieee-compat-v2";
   vhdl_metadata.uvm_release = "none";
   vhdl_metadata.sources.front().language = "vhdl";
+  vhdl_metadata.sources.front().standard = vhdl_metadata.standard;
+  vhdl_metadata.sources.front().compatibility_profile
+      = vhdl_metadata.compatibility_profile;
   vhdl_metadata.units.front().language = "vhdl";
+  vhdl_metadata.units.front().standard = vhdl_metadata.standard;
+  vhdl_metadata.units.front().compatibility_profile
+      = vhdl_metadata.compatibility_profile;
   vhdl_metadata.vhdl_package_dependencies = {{
       "1993", "ieee-1076-standard:1993:fsim-v1",
       "ieee.std_logic_unsigned",
@@ -113,6 +121,32 @@ int main() {
   assert(!fsim::artifact::deserialize_object_metadata(
       fsim::artifact::serialize_object_metadata(invalid_release),
       "invalid-release", invalid_release_diagnostics));
+  auto stale_source_profile = metadata;
+  stale_source_profile.sources.front().compatibility_profile
+      = "implicit-net";
+  stale_source_profile.compilation_digest =
+      fsim::artifact::compute_object_compilation_digest(stale_source_profile);
+  fsim::diagnostic::Engine stale_source_profile_diagnostics;
+  assert(!fsim::artifact::deserialize_object_metadata(
+      fsim::artifact::serialize_object_metadata(stale_source_profile),
+      "stale-source-profile", stale_source_profile_diagnostics));
+  auto omitted_unit_profile = metadata;
+  omitted_unit_profile.units.front().compatibility_profile.clear();
+  omitted_unit_profile.compilation_digest =
+      fsim::artifact::compute_object_compilation_digest(omitted_unit_profile);
+  fsim::diagnostic::Engine omitted_unit_profile_diagnostics;
+  assert(!fsim::artifact::deserialize_object_metadata(
+      fsim::artifact::serialize_object_metadata(omitted_unit_profile),
+      "omitted-unit-profile", omitted_unit_profile_diagnostics));
+  auto duplicate_source = metadata;
+  duplicate_source.sources.push_back(duplicate_source.sources.front());
+  duplicate_source.sources.back().artifact = "sources/duplicate.sv";
+  duplicate_source.compilation_digest =
+      fsim::artifact::compute_object_compilation_digest(duplicate_source);
+  fsim::diagnostic::Engine duplicate_source_diagnostics;
+  assert(!fsim::artifact::deserialize_object_metadata(
+      fsim::artifact::serialize_object_metadata(duplicate_source),
+      "duplicate-source", duplicate_source_diagnostics));
 
   const auto directory = std::filesystem::temp_directory_path()
       / ("fsim-object-artifact-test-"

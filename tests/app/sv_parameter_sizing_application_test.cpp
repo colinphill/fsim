@@ -343,6 +343,70 @@ void verify_capture(const Capture& capture) {
           "110" }));
 }
 
+void test_expression_revision_gates(
+    const std::filesystem::path& directory) {
+  const auto write = [](const std::filesystem::path& path,
+                        const std::string_view contents) {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    output << contents;
+    assert(output.good());
+  };
+  const auto v2001 = directory / "expression-mode-2001.v";
+  write(
+      v2001,
+      "module expression_mode_2001(input [31:0] a, output reg [3:0] q); "
+      "reg signed [256:0] wide; always @* begin wide = (a ** 2) >>> 1; "
+      "q = wide[7 +: 4]; end endmodule\n");
+  fsim::project::Config legal;
+  legal.base_directory = directory;
+  legal.project.top = "verilog:work.expression_mode_2001";
+  fsim::project::SourceSet source_set;
+  source_set.language = fsim::project::Language::verilog;
+  source_set.standard = "2001";
+  source_set.library = "work";
+  source_set.compilation_unit = "file";
+  source_set.files = {v2001};
+  legal.source_sets = {source_set};
+  legal.build.optimization = fsim::project::Optimization::o2;
+  legal.build.cache_path = directory / "expression-mode-cache";
+  legal.run.max_deltas = 100;
+  fsim::diagnostic::Engine legal_diagnostics;
+  const auto checked = fsim::app::check_project(legal, legal_diagnostics);
+  assert(checked && !legal_diagnostics.has_error());
+  assert(
+      checked->parsed.units.front().standard_revision
+      == fsim::frontend::StandardRevision::Verilog2001);
+  for (const auto engine : {
+           fsim::app::SimulationEngine::interpreter,
+           fsim::app::SimulationEngine::compiled}) {
+    fsim::diagnostic::Engine build_diagnostics;
+    auto project = fsim::app::build_project(legal, build_diagnostics);
+    assert(project && !build_diagnostics.has_error());
+    fsim::app::Simulation simulation{
+        std::move(*project), legal.run.max_deltas, engine};
+    const auto result = simulation.run();
+    assert(result.status == fsim::runtime::RunStatus::completed);
+  }
+
+  const auto v1995 = directory / "expression-mode-1995.v";
+  write(
+      v1995,
+      "module expression_mode_1995; reg [31:0] value; "
+      "initial value += 1; endmodule\n");
+  auto illegal = legal;
+  illegal.project.top = "verilog:work.expression_mode_1995";
+  illegal.source_sets.front().standard = "1995";
+  illegal.source_sets.front().files = {v1995};
+  fsim::diagnostic::Engine illegal_diagnostics;
+  assert(!fsim::app::check_project(illegal, illegal_diagnostics));
+  bool found_revision_diagnostic = false;
+  for (const auto& diagnostic : illegal_diagnostics.diagnostics()) {
+    found_revision_diagnostic = found_revision_diagnostic
+        || diagnostic.code == "FSIM-SV-PARSE-347";
+  }
+  assert(found_revision_diagnostic);
+}
+
 } // namespace
 
 int main() {
@@ -353,6 +417,7 @@ int main() {
       / ("fsim-sv-parameter-sizing-"
          + std::to_string(serial))};
   std::filesystem::create_directories(directory.path);
+  test_expression_revision_gates(directory.path);
   const auto child_source =
       directory.path / "parameter_children.sv";
   const auto source = directory.path / "parameter_sizing.sv";

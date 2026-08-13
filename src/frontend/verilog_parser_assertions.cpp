@@ -686,6 +686,8 @@ void VerilogParser::structure_property_expression(
     int parentheses { };
     int brackets { };
     int braces { };
+    const bool property_2009 = keyword_set_rank(keyword_set_)
+        >= keyword_set_rank(KeywordSet::SystemVerilog2009);
     for (std::size_t position = 0; position < tokens.size(); ++position) {
         const auto top_level = parentheses == 0 && brackets == 0 && braces == 0;
         const auto overlapped = position + 1U < tokens.size()
@@ -738,7 +740,16 @@ void VerilogParser::structure_property_expression(
             }
             return std::nullopt;
         }();
-        if (top_level && until_kind) {
+        if (top_level && until_kind
+            && (property_2009
+                || (position != 0U && position + 1U < tokens.size()))) {
+            if (position != 0U && position + 1U < tokens.size()) {
+                (void)require_standard(
+                    "property operator '" + tokens[position].text + "'",
+                    StandardRevision::SystemVerilog2009,
+                    tokens[position],
+                    "FSIM-SV-PARSE-349");
+            }
             if (position == 0U || position + 1U == tokens.size()) {
                 error(
                     tokens[position],
@@ -761,7 +772,15 @@ void VerilogParser::structure_property_expression(
         }
         if (top_level
             && (tokens[position].text == "nexttime"
-                || tokens[position].text == "s_nexttime")) {
+                || tokens[position].text == "s_nexttime")
+            && (property_2009 || position + 1U < tokens.size())) {
+            if (position + 1U < tokens.size()) {
+                (void)require_standard(
+                    "property operator '" + tokens[position].text + "'",
+                    StandardRevision::SystemVerilog2009,
+                    tokens[position],
+                    "FSIM-SV-PARSE-349");
+            }
             auto operand_start = position + 1U;
             SystemVerilogPropertyNexttime nexttime;
             nexttime.kind = tokens[position].text == "nexttime"
@@ -819,7 +838,17 @@ void VerilogParser::structure_property_expression(
             }
             return std::nullopt;
         }();
-        if (top_level && recurrence_kind) {
+        if (top_level && recurrence_kind
+            && (tokens[position].text == "always"
+                || property_2009 || position + 1U < tokens.size())) {
+            if (tokens[position].text != "always"
+                && position + 1U < tokens.size()) {
+                (void)require_standard(
+                    "property operator '" + tokens[position].text + "'",
+                    StandardRevision::SystemVerilog2009,
+                    tokens[position],
+                    "FSIM-SV-PARSE-349");
+            }
             auto operand_start = position + 1U;
             SystemVerilogPropertyRecurrence recurrence;
             recurrence.kind = *recurrence_kind;
@@ -865,7 +894,19 @@ void VerilogParser::structure_property_expression(
         }
         if (top_level
             && (tokens[position].text == "strong"
-                || tokens[position].text == "weak")) {
+                || tokens[position].text == "weak")
+            && (property_2009
+                || (position + 1U < tokens.size()
+                    && tokens[position + 1U].kind
+                        == TokenKind::LeftParen))) {
+            if (position + 1U < tokens.size()
+                && tokens[position + 1U].kind == TokenKind::LeftParen) {
+                (void)require_standard(
+                    "property operator '" + tokens[position].text + "'",
+                    StandardRevision::SystemVerilog2009,
+                    tokens[position],
+                    "FSIM-SV-PARSE-349");
+            }
             if (position + 1U >= tokens.size()
                 || tokens[position + 1U].kind != TokenKind::LeftParen) {
                 error(
@@ -899,7 +940,19 @@ void VerilogParser::structure_property_expression(
             || tokens[position].text == "reject_on"
             || tokens[position].text == "sync_accept_on"
             || tokens[position].text == "sync_reject_on";
-        if (top_level && abort_operator) {
+        if (top_level && abort_operator
+            && (property_2009
+                || (position + 1U < tokens.size()
+                    && tokens[position + 1U].kind
+                        == TokenKind::LeftParen))) {
+            if (position + 1U < tokens.size()
+                && tokens[position + 1U].kind == TokenKind::LeftParen) {
+                (void)require_standard(
+                    "property operator '" + tokens[position].text + "'",
+                    StandardRevision::SystemVerilog2009,
+                    tokens[position],
+                    "FSIM-SV-PARSE-349");
+            }
             if (position + 1U >= tokens.size()
                 || tokens[position + 1U].kind != TokenKind::LeftParen) {
                 error(

@@ -6,6 +6,11 @@ namespace fsim::frontend {
 std::vector<Sensitivity> VerilogParser::parse_sensitivity() {
   std::vector<Sensitivity> sensitivities;
   if (match(TokenKind::Star)) {
+    (void)require_standard(
+        "an implicit event expression '@*'",
+        StandardRevision::Verilog2001,
+        previous(),
+        "FSIM-SV-PARSE-347");
     sensitivities.push_back(
         Sensitivity{EdgeKind::Any, "*", previous().span, {}});
     return sensitivities;
@@ -28,6 +33,11 @@ std::vector<Sensitivity> VerilogParser::parse_sensitivity() {
   }
   expect(TokenKind::LeftParen, "'(' after '@'", "FSIM-SV-PARSE-014");
   if (match(TokenKind::Star)) {
+    (void)require_standard(
+        "an implicit event expression '@(*)'",
+        StandardRevision::Verilog2001,
+        previous(),
+        "FSIM-SV-PARSE-347");
     sensitivities.push_back(
         Sensitivity{EdgeKind::Any, "*", previous().span, {}});
     expect(TokenKind::RightParen, "')' after '@*'",

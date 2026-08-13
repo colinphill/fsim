@@ -117,6 +117,10 @@ std::optional<CheckedProject> check_project(
       continue;
     }
     const auto language = frontend_language(source_set.language);
+    const auto standard_revision = frontend_standard_revision(
+        source_set.language, source_set.standard);
+    const auto compatibility_profile =
+        project::compatibility_profile(source_set.compatibility_switches);
     auto vhdl_standard = frontend::VhdlStandard::Vhdl2008;
     if (source_set.language == project::Language::vhdl) {
         if (const auto selected = project::parse_vhdl_standard(source_set.standard)) {
@@ -134,42 +138,49 @@ std::optional<CheckedProject> check_project(
             source_set.defines.end());
         for (const auto& file : source_set.files) {
             group.inputs.push_back(
-                { file, language, vhdl_standard, source_set.standard,
+                { file, language, vhdl_standard, standard_revision,
+                    source_set.standard,
                     source_set.library, hdl_source_count++ });
         }
     };
     if (source_set.compilation_unit == "file"
         || source_set.language == project::Language::vhdl) {
-      for (const auto& file : source_set.files) {
-        ParseGroup group;
-        group.language = language;
-        group.standard = source_set.standard;
-        group.include_directories = source_set.include_directories;
-        group.defines = source_set.defines;
-        group.inputs.push_back(
-            { file, language, vhdl_standard, source_set.standard, source_set.library, hdl_source_count++ });
-        groups.push_back(std::move(group));
-      }
+        for (const auto& file : source_set.files) {
+            ParseGroup group;
+            group.language = language;
+            group.standard_revision = standard_revision;
+            group.standard = source_set.standard;
+            group.compatibility_profile = compatibility_profile;
+            group.include_directories = source_set.include_directories;
+            group.defines = source_set.defines;
+            group.inputs.push_back(
+                { file, language, vhdl_standard, standard_revision,
+                    source_set.standard, source_set.library, hdl_source_count++ });
+            groups.push_back(std::move(group));
+        }
     } else if (source_set.compilation_unit == "source-set") {
-      ParseGroup group;
-      group.language = language;
-      group.standard = source_set.standard;
-      append_files(group);
-      groups.push_back(std::move(group));
-    } else {
-      const auto key =
-          std::to_string(static_cast<unsigned>(language))
-          + '\n' + source_set.standard;
-      auto found = combined_groups.find(key);
-      if (found == combined_groups.end()) {
-        const auto index = groups.size();
         ParseGroup group;
         group.language = language;
+        group.standard_revision = standard_revision;
         group.standard = source_set.standard;
+        group.compatibility_profile = compatibility_profile;
+        append_files(group);
         groups.push_back(std::move(group));
-        found = combined_groups.emplace(key, index).first;
-      }
-      append_files(groups[found->second]);
+    } else {
+        const auto key = std::to_string(static_cast<unsigned>(language))
+            + '\n' + source_set.standard + '\n' + compatibility_profile;
+        auto found = combined_groups.find(key);
+        if (found == combined_groups.end()) {
+            const auto index = groups.size();
+            ParseGroup group;
+            group.language = language;
+            group.standard_revision = standard_revision;
+            group.standard = source_set.standard;
+            group.compatibility_profile = compatibility_profile;
+            groups.push_back(std::move(group));
+            found = combined_groups.emplace(key, index).first;
+        }
+        append_files(groups[found->second]);
     }
   }
   if (hdl_source_count == 0 && systemc_source_count == 0
@@ -388,103 +399,199 @@ std::optional<CheckedProject> check_project(
     (void)order;
     checked.hdl_sources.push_back(std::move(source));
   }
+  struct StandardUse {
+      std::filesystem::path path;
+      frontend::StandardRevision standard_revision;
+      bool root { };
+  };
+  std::vector<StandardUse> standard_uses;
+  const auto register_standard_use = [&](const std::filesystem::path& path,
+                                         const frontend::StandardRevision standard,
+                                         const bool root) {
+      const auto found = std::ranges::find_if(
+          standard_uses, [&](const StandardUse& use) {
+              return same_source_path(use.path, path);
+          });
+      if (found == standard_uses.end()) {
+          standard_uses.push_back({ path, standard, root });
+          return;
+      }
+      if (found->standard_revision == standard) {
+          found->root = found->root || root;
+          return;
+      }
+      diagnostics.error(
+          "FSIM-FE-STANDARD-001",
+          std::string { found->root || root ? "source" : "include dependency" }
+              + " '" + support::path_to_utf8(path)
+              + "' was already consumed as "
+              + std::string { frontend::to_string(found->standard_revision) }
+              + " and cannot be consumed as "
+              + std::string { frontend::to_string(standard) },
+          { support::path_to_utf8(path), { }, { } });
+  };
+  for (const auto& source : checked.hdl_sources) {
+      register_standard_use(
+          source.path, source.standard_revision, true);
+      for (const auto& dependency : source.dependencies) {
+          register_standard_use(
+              dependency.path, dependency.standard_revision, false);
+      }
+  }
   std::stable_sort(
       ordered_units.begin(),
       ordered_units.end(),
       [](const OrderedUnit& left, const OrderedUnit& right) {
-        return std::tie(left.source_order, left.unit_order)
-            < std::tie(right.source_order, right.unit_order);
+          return std::tie(left.source_order, left.unit_order)
+              < std::tie(right.source_order, right.unit_order);
       });
   std::stable_sort(
       ordered_udps.begin(),
       ordered_udps.end(),
       [](const OrderedUdp& left, const OrderedUdp& right) {
-        return std::tie(left.source_order, left.declaration_order)
-            < std::tie(right.source_order, right.declaration_order);
+          return std::tie(left.source_order, left.declaration_order)
+              < std::tie(right.source_order, right.declaration_order);
       });
   std::stable_sort(
       ordered_classes.begin(),
       ordered_classes.end(),
       [](const OrderedClass& left, const OrderedClass& right) {
-        return std::tie(left.source_order, left.declaration_order)
-            < std::tie(right.source_order, right.declaration_order);
+          return std::tie(left.source_order, left.declaration_order)
+              < std::tie(right.source_order, right.declaration_order);
       });
   std::stable_sort(
       ordered_class_methods.begin(),
       ordered_class_methods.end(),
       [](const OrderedClassMethod& left,
-         const OrderedClassMethod& right) {
-        return std::tie(left.source_order, left.declaration_order)
-            < std::tie(right.source_order, right.declaration_order);
+          const OrderedClassMethod& right) {
+          return std::tie(left.source_order, left.declaration_order)
+              < std::tie(right.source_order, right.declaration_order);
       });
-  std::map<std::string, frontend::VhdlStandard> known_units;
+  struct UnitProfile {
+      frontend::StandardRevision standard;
+      std::string compatibility_profile;
+  };
+  std::map<std::string, UnitProfile> known_units;
   checked.parsed.units.reserve(ordered_units.size());
   for (auto& ordered : ordered_units) {
-    const auto key = unit_key(ordered.unit);
-    const auto [known, inserted] = known_units.emplace(
-        key, ordered.unit.vhdl_standard);
-    if (!inserted) {
-        if (ordered.unit.language == frontend::Language::Vhdl2008
-            && known->second != ordered.unit.vhdl_standard) {
-            diagnostics.error(
-                "FSIM-FE-VHORDER-011",
-                "VHDL design unit '" + key + "' was already analyzed as "
-                    + std::string { frontend::to_string(known->second) }
-                    + " and cannot be reanalyzed as "
-                    + std::string {
-                        frontend::to_string(ordered.unit.vhdl_standard) },
-                span(ordered.unit.span));
-        }
-        report_vhdl_duplicate_design_unit(ordered.unit, diagnostics);
-        diagnostics.error(
-            "FSIM-FE-0002",
-            "duplicate design unit '" + key + "'",
-            span(ordered.unit.span));
-    } else {
-        checked.parsed.units.push_back(std::move(ordered.unit));
-    }
+      const auto key = unit_key(ordered.unit);
+      const auto [known, inserted] = known_units.emplace(
+          key,
+          UnitProfile { ordered.unit.standard_revision,
+              ordered.unit.verilog_compatibility_profile });
+      if (!inserted) {
+          if (known->second.standard != ordered.unit.standard_revision
+              && ordered.unit.language == frontend::Language::Vhdl2008) {
+              diagnostics.error(
+                  "FSIM-FE-VHORDER-011",
+                  "VHDL design unit '" + key + "' was already analyzed as "
+                      + std::string { frontend::revision_string(
+                          known->second.standard) }
+                      + " and cannot be reanalyzed as "
+                      + std::string { frontend::revision_string(
+                          ordered.unit.standard_revision) },
+                  span(ordered.unit.span));
+          } else if (known->second.standard
+                         != ordered.unit.standard_revision
+                     || known->second.compatibility_profile
+                         != ordered.unit.verilog_compatibility_profile) {
+              diagnostics.error(
+                  "FSIM-FE-STANDARD-002",
+                  "design unit '" + key + "' was already analyzed as "
+                      + std::string { frontend::to_string(
+                          known->second.standard) }
+                      + " with compatibility profile '"
+                      + known->second.compatibility_profile
+                      + "' and cannot be reanalyzed as "
+                      + std::string { frontend::to_string(
+                          ordered.unit.standard_revision) }
+                      + " with compatibility profile '"
+                      + ordered.unit.verilog_compatibility_profile + "'",
+                  span(ordered.unit.span));
+          }
+          report_vhdl_duplicate_design_unit(ordered.unit, diagnostics);
+          diagnostics.error(
+              "FSIM-FE-0002",
+              "duplicate design unit '" + key + "'",
+              span(ordered.unit.span));
+      } else {
+          checked.parsed.units.push_back(std::move(ordered.unit));
+      }
   }
   std::set<std::string> known_udps;
   checked.parsed.udp_declarations.reserve(ordered_udps.size());
   for (auto& ordered : ordered_udps) {
-    const auto library = ordered.declaration.library.empty()
-        ? std::string{"work"}
-        : ordered.declaration.library;
-    const auto key = "verilog:" + library + ":udp:"
-        + ordered.declaration.name;
-    if (!known_udps.insert(key).second) {
-      diagnostics.error(
-          "FSIM-FE-0002",
-          "duplicate design unit '" + key + "'",
-          span(ordered.declaration.span));
-    } else {
-      checked.parsed.udp_declarations.push_back(
-          std::move(ordered.declaration));
-    }
+      const auto library = ordered.declaration.library.empty()
+          ? std::string { "work" }
+          : ordered.declaration.library;
+      const auto key = "verilog:" + library + ":udp:"
+          + ordered.declaration.name;
+      if (!known_udps.insert(key).second) {
+          diagnostics.error(
+              "FSIM-FE-0002",
+              "duplicate design unit '" + key + "'",
+              span(ordered.declaration.span));
+      } else {
+          checked.parsed.udp_declarations.push_back(
+              std::move(ordered.declaration));
+      }
   }
   checked.parsed.systemverilog_classes.reserve(ordered_classes.size());
   for (auto& ordered : ordered_classes) {
-    checked.parsed.systemverilog_classes.push_back(
-        std::move(ordered.declaration));
+      checked.parsed.systemverilog_classes.push_back(
+          std::move(ordered.declaration));
   }
   checked.parsed.systemverilog_class_method_definitions.reserve(
       ordered_class_methods.size());
   for (auto& ordered : ordered_class_methods) {
-    checked.parsed.systemverilog_class_method_definitions.push_back(
-        std::move(ordered.method));
+      checked.parsed.systemverilog_class_method_definitions.push_back(
+          std::move(ordered.method));
   }
   if (!load_required_mapped_libraries(config, checked, diagnostics)) {
-    return std::nullopt;
+      return std::nullopt;
+  }
+  std::map<std::string, UnitProfile> package_standards;
+  for (const auto& unit : checked.parsed.units) {
+      if (unit.kind == frontend::UnitKind::SystemVerilogPackage) {
+          package_standards.insert_or_assign(
+              unit.name,
+              UnitProfile { unit.standard_revision,
+                  unit.verilog_compatibility_profile });
+      }
+  }
+  for (const auto& unit : checked.parsed.units) {
+      for (const auto& import : unit.systemverilog_imports) {
+          const auto package = package_standards.find(import.package);
+          if (package != package_standards.end()
+              && (package->second.standard != unit.standard_revision
+                  || package->second.compatibility_profile
+                      != unit.verilog_compatibility_profile)) {
+              diagnostics.error(
+                  "FSIM-FE-STANDARD-003",
+                  "SystemVerilog package '" + import.package
+                      + "' was analyzed as "
+                      + std::string { frontend::to_string(
+                          package->second.standard) }
+                      + " with compatibility profile '"
+                      + package->second.compatibility_profile + "'"
+                      + " but consuming unit '" + unit.name + "' uses "
+                      + std::string { frontend::to_string(
+                          unit.standard_revision) }
+                      + " with compatibility profile '"
+                      + unit.verilog_compatibility_profile + "'",
+                  span(import.span));
+          }
+      }
   }
   if (checked.parsed.units.empty()
       && checked.parsed.udp_declarations.empty()
       && checked.parsed.systemverilog_classes.empty()
       && checked.systemc_sources.empty()
       && checked.mapped_libraries.empty() && !diagnostics.has_error()) {
-    diagnostics.error(
-        "FSIM-FE-0001",
-        "the project contains no local or selected mapped design units");
-    return std::nullopt;
+      diagnostics.error(
+          "FSIM-FE-0001",
+          "the project contains no local or selected mapped design units");
+      return std::nullopt;
   }
   for (auto& unit : checked.parsed.units) {
       if (unit.language == frontend::Language::Vhdl2008) {

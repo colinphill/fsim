@@ -109,6 +109,69 @@ Capture run(
     return capture;
 }
 
+void test_revision_modes(const std::filesystem::path& directory)
+{
+    const auto source = directory / "hierarchy-revision-modes.v";
+    write_source(
+        source,
+        R"(
+module revision_top;
+  initial begin
+    #1;
+    $finish;
+  end
+endmodule
+
+config revision_cfg;
+  design work.revision_top;
+endconfig
+)");
+
+    fsim::project::Config legal;
+    legal.base_directory = directory;
+    legal.project.name = "sv-hierarchy-revision-modes";
+    legal.project.top = "sv:work.revision_cfg";
+    legal.project.time_resolution = "1ns";
+    legal.build.optimization = fsim::project::Optimization::o0;
+    legal.build.cache_path = directory / "hierarchy-revision-cache";
+    legal.run.max_deltas = 1000;
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::verilog;
+    sources.standard = "2001";
+    sources.library = "work";
+    sources.files.push_back(source);
+    legal.source_sets.push_back(std::move(sources));
+
+    fsim::diagnostic::Engine diagnostics;
+    auto reference_project = fsim::app::build_project(legal, diagnostics);
+    auto compiled_project = fsim::app::build_project(legal, diagnostics);
+    if (!reference_project || !compiled_project) {
+        print_diagnostics(diagnostics);
+    }
+    assert(reference_project && compiled_project);
+    fsim::app::Simulation reference(
+        std::move(*reference_project), 1000,
+        fsim::app::SimulationEngine::interpreter);
+    fsim::app::Simulation compiled(
+        std::move(*compiled_project), 1000,
+        fsim::app::SimulationEngine::compiled);
+    const auto reference_result = reference.run();
+    const auto compiled_result = compiled.run();
+    assert(reference_result.status == fsim::runtime::RunStatus::stopped);
+    assert(reference_result.status == compiled_result.status);
+    assert(reference_result.time == compiled_result.time);
+
+    auto disabled = legal;
+    disabled.project.name = "sv-hierarchy-revision-noconfig";
+    disabled.source_sets.front().standard = "2001-noconfig";
+    fsim::diagnostic::Engine disabled_diagnostics;
+    assert(!fsim::app::check_project(disabled, disabled_diagnostics));
+    assert(std::ranges::any_of(
+        disabled_diagnostics.diagnostics(), [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PARSE-348";
+        }));
+}
+
 void test_hierarchy(
     const std::filesystem::path& directory,
     const fsim::project::Optimization optimization)
@@ -257,6 +320,7 @@ int main()
         / ("fsim-sv-hierarchy-application-test-" + std::to_string(suffix))
     };
     std::filesystem::create_directories(directory.path);
+    test_revision_modes(directory.path);
     test_hierarchy(directory.path, fsim::project::Optimization::o0);
     test_hierarchy(directory.path, fsim::project::Optimization::o2);
     return 0;

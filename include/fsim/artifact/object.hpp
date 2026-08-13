@@ -13,7 +13,7 @@
 
 namespace fsim::artifact {
 
-inline constexpr std::uint32_t kObjectFormatVersion = 4;
+inline constexpr std::uint32_t kObjectFormatVersion = 5;
 inline constexpr std::string_view kObjectMetadataFilename = "fsim-object.bin";
 
 // One explicitly scripted HDL compilation unit. Paths stored here are

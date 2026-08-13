@@ -102,7 +102,12 @@ bool identity_matches(
       && indexed.kind == expected_kind(unit.kind)
       && indexed.name == unit.name
       && indexed.primary_name == unit.primary_name
-      && indexed.architecture == architecture;
+      && indexed.architecture == architecture
+      && indexed.standard == frontend::revision_string(unit.standard_revision)
+      && indexed.compatibility_profile
+          == (unit.language == frontend::Language::Vhdl2008
+                  ? unit.vhdl_compatibility_profile
+                  : unit.verilog_compatibility_profile);
 }
 
 bool identity_matches(
@@ -115,7 +120,49 @@ bool identity_matches(
       && indexed.kind == "primitive"
       && indexed.name == declaration.name
       && indexed.primary_name.empty()
-      && indexed.architecture.empty();
+      && indexed.architecture.empty()
+      && indexed.standard
+          == frontend::revision_string(declaration.standard_revision)
+      && indexed.compatibility_profile
+          == declaration.verilog_compatibility_profile;
+}
+
+bool class_provenance_matches(
+    const library::UnitIndexEntry& indexed,
+    const frontend::SystemVerilogClassDeclaration& declaration) {
+  if (indexed.standard
+          != frontend::revision_string(declaration.standard_revision)
+      || indexed.compatibility_profile
+          != declaration.verilog_compatibility_profile
+      || std::ranges::any_of(
+          declaration.methods, [&](const auto& method) {
+            return indexed.standard
+                    != frontend::revision_string(method.standard_revision)
+                || indexed.compatibility_profile
+                    != method.verilog_compatibility_profile;
+          })) {
+    return false;
+  }
+  return std::ranges::all_of(
+      declaration.nested_classes, [&](const auto& nested) {
+        return class_provenance_matches(indexed, nested);
+      });
+}
+
+bool class_unit_provenance_matches(
+    const library::UnitIndexEntry& indexed,
+    const library::PortableSystemVerilogClassUnit& unit) {
+  return std::ranges::all_of(
+             unit.declarations, [&](const auto& declaration) {
+               return class_provenance_matches(indexed, declaration);
+             })
+      && std::ranges::all_of(
+          unit.method_definitions, [&](const auto& method) {
+            return indexed.standard
+                    == frontend::revision_string(method.standard_revision)
+                && indexed.compatibility_profile
+                    == method.verilog_compatibility_profile;
+          });
 }
 
 std::filesystem::path object_source_root(
@@ -197,6 +244,22 @@ std::optional<CheckedProject> load_objects(
     }
     provenance.source_settings.language = *source_language;
     provenance.source_settings.standard = metadata->standard;
+    if ((*source_language == project::Language::verilog
+            || *source_language == project::Language::system_verilog)
+        && metadata->compatibility_profile != "none") {
+      std::size_t begin = 0;
+      while (begin <= metadata->compatibility_profile.size()) {
+        const auto end = metadata->compatibility_profile.find(',', begin);
+        const auto item = metadata->compatibility_profile.substr(
+            begin, end == std::string::npos
+                ? std::string::npos : end - begin);
+        if (!item.empty()) {
+          provenance.source_settings.compatibility_switches.push_back(item);
+        }
+        if (end == std::string::npos) break;
+        begin = end + 1;
+      }
+    }
     provenance.source_settings.library = metadata->library;
     provenance.source_settings.compilation_unit = metadata->compilation_unit;
     provenance.source_settings.uvm_release = *object_release;
@@ -251,7 +314,8 @@ std::optional<CheckedProject> load_objects(
         if (!unit || unit->library != metadata->library
             || indexed.language != "systemverilog"
             || indexed.name != unit->compilation_unit_identity
-            || unit->uvm_release != metadata->uvm_release) {
+            || unit->uvm_release != metadata->uvm_release
+            || !class_unit_provenance_matches(indexed, *unit)) {
           diagnostics.error(
               "FSIM-ART-0005",
               ".fsimobj class-unit identity does not match its index");

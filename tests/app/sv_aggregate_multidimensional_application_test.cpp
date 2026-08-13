@@ -1028,6 +1028,55 @@ void verify(
           != std::string::npos);
 }
 
+void test_declaration_revision_gates(
+    const std::filesystem::path& directory) {
+  const auto write = [](const std::filesystem::path& path,
+                        const std::string_view contents) {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    output << contents;
+    assert(output.good());
+  };
+  const auto v1995 = directory / "declarations-1995.v";
+  write(
+      v1995,
+      "module declarations_1995(a, q); input [3:0] a; output [3:0] q; "
+      "reg [3:0] q; always @(a) q = a; endmodule\n");
+  auto legal_1995 = make_config(
+      directory, v1995, fsim::project::Optimization::o0);
+  legal_1995.project.top = "verilog:work.declarations_1995";
+  legal_1995.source_sets.front().language =
+      fsim::project::Language::verilog;
+  legal_1995.source_sets.front().standard = "1995";
+  fsim::diagnostic::Engine legal_diagnostics;
+  const auto checked =
+      fsim::app::check_project(legal_1995, legal_diagnostics);
+  assert(checked && !legal_diagnostics.has_error());
+  assert(
+      checked->parsed.units.front().standard_revision
+      == fsim::frontend::StandardRevision::Verilog1995);
+
+  const auto rejected = directory / "declarations-rejected-1995.v";
+  write(
+      rejected,
+      "module declarations_rejected_1995(input signed [3:0] a); "
+      "reg state = 1'b0; endmodule\n");
+  auto illegal_1995 = make_config(
+      directory, rejected, fsim::project::Optimization::o0);
+  illegal_1995.project.top =
+      "verilog:work.declarations_rejected_1995";
+  illegal_1995.source_sets.front().language =
+      fsim::project::Language::verilog;
+  illegal_1995.source_sets.front().standard = "1995";
+  fsim::diagnostic::Engine illegal_diagnostics;
+  assert(!fsim::app::check_project(illegal_1995, illegal_diagnostics));
+  bool found_revision_diagnostic = false;
+  for (const auto& diagnostic : illegal_diagnostics.diagnostics()) {
+    found_revision_diagnostic = found_revision_diagnostic
+        || diagnostic.code == "FSIM-SV-PARSE-346";
+  }
+  assert(found_revision_diagnostic);
+}
+
 } // namespace
 
 int main() {
@@ -1038,6 +1087,7 @@ int main() {
       / ("fsim-sv-aggregate-multidimensional-"
          + std::to_string(nonce))};
   std::filesystem::create_directories(directory.path);
+  test_declaration_revision_gates(directory.path);
   const auto source = directory.path / "aggregate_multidimensional.sv";
   write_source(source, '9');
   for (const auto optimization : {

@@ -29,6 +29,7 @@ extern "C" {
 #define FSIM_OBJECT_FLAG_INITIALIZED UINT32_C(0x00000004)
 #define FSIM_OBJECT_FLAG_ENTERED UINT32_C(0x00000008)
 #define FSIM_OBJECT_FLAG_RESOLVED UINT32_C(0x00000010)
+#define FSIM_OBJECT_FLAG_HAS_PROVENANCE UINT32_C(0x00000020)
 
 typedef uint64_t fsim_session_t;
 typedef uint64_t fsim_object_t;
@@ -147,6 +148,16 @@ typedef struct fsim_object_info {
   fsim_string_view_t source_path;
   uint32_t source_line;
   uint32_t source_column;
+  /* Append-only semantic-owner provenance; cache/compiler details excluded. */
+  fsim_string_view_t provenance_unit;
+  fsim_string_view_t provenance_source_path;
+  fsim_string_view_t provenance_language;
+  fsim_string_view_t provenance_standard;
+  fsim_string_view_t provenance_compatibility_profile;
+  uint32_t provenance_unit_id;
+  uint32_t provenance_source_id;
+  uint32_t provenance_source_line;
+  uint32_t provenance_source_column;
 } fsim_object_info_t;
 
 typedef struct fsim_mapped_library_info {
@@ -207,6 +218,15 @@ typedef struct fsim_safe_point_info {
   fsim_string_view_t source_path;
   uint32_t source_line;
   uint32_t source_column;
+  fsim_string_view_t provenance_unit;
+  fsim_string_view_t provenance_source_path;
+  fsim_string_view_t provenance_language;
+  fsim_string_view_t provenance_standard;
+  fsim_string_view_t provenance_compatibility_profile;
+  uint32_t provenance_unit_id;
+  uint32_t provenance_source_id;
+  uint32_t provenance_source_line;
+  uint32_t provenance_source_column;
 } fsim_safe_point_info_t;
 
 typedef void (*fsim_safe_point_info_callback_t)(

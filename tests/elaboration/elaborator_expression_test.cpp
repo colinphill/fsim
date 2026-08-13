@@ -3,8 +3,9 @@
 
 namespace fsim::tests::elaboration {
 
-void test_case_and_expression_lowering() {
-const auto case_process = fsim::frontend::parse_text(
+void test_case_and_expression_lowering()
+{
+    const auto case_process = fsim::frontend::parse_text(
         "case_process.sv",
         R"(
 module case_process;
@@ -21,100 +22,84 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(case_process.ok());
-    const auto elaborated_case =
-        fsim::elaboration::elaborate(
-            case_process.design, "sv:work.case_process");
+    const auto elaborated_case = fsim::elaboration::elaborate(
+        case_process.design, "sv:work.case_process");
     assert(elaborated_case.ok());
-    const auto case_selector =
-        elaborated_case.design->find_signal("selector");
-    const auto case_result =
-        elaborated_case.design->find_signal("result");
+    const auto case_selector = elaborated_case.design->find_signal("selector");
+    const auto case_result = elaborated_case.design->find_signal("result");
     assert(case_selector && case_result);
     assert((
-        elaborated_case.design->processes().front()
-            .static_sensitivity
-        == std::vector<fsim::runtime::simir::Sensitivity>{
-            {*case_selector,
-             fsim::runtime::simir::EdgeKind::any}}));
+        elaborated_case.design->processes().front().static_sensitivity
+        == std::vector<fsim::runtime::simir::Sensitivity> {
+            { *case_selector,
+                fsim::runtime::simir::EdgeKind::any } }));
     const auto has_case_equality = std::any_of(
-        elaborated_case.design->processes().front()
-            .operations.begin(),
-        elaborated_case.design->processes().front()
-            .operations.end(),
+        elaborated_case.design->processes().front().operations.begin(),
+        elaborated_case.design->processes().front().operations.end(),
         [](const fsim::runtime::simir::Operation& operation) {
-            const auto* binary =
-                fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Binary>(
-                    &operation);
+            const auto* binary = fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Binary>(
+                &operation);
             return binary != nullptr
                 && binary->operation
-                    == fsim::runtime::simir::BinaryOperator::
-                        case_equal;
+                == fsim::runtime::simir::BinaryOperator::
+                    case_equal;
         });
     assert(has_case_equality);
 
     for (const auto& [keyword, expected_operator] :
-         std::array{
-             std::pair{
-                 std::string_view{"casez"},
-                 fsim::runtime::simir::BinaryOperator::casez_equal},
-             std::pair{
-                 std::string_view{"casex"},
-                 fsim::runtime::simir::BinaryOperator::casex_equal}}) {
-        const auto wildcard_case =
-            fsim::frontend::parse_text(
-                "wildcard_case.sv",
-                "module wildcard_case;\n"
-                "  logic [1:0] selector;\n"
-                "  logic result;\n"
-                "  always_comb "
-                    + std::string{keyword}
-                    + " (selector)\n"
-                      "    2'b0z: result = 1'b1;\n"
-                      "    default: result = 1'b0;\n"
-                      "  endcase\n"
-                      "endmodule\n",
-                fsim::frontend::Language::SystemVerilog2017);
+        std::array {
+            std::pair {
+                std::string_view { "casez" },
+                fsim::runtime::simir::BinaryOperator::casez_equal },
+            std::pair {
+                std::string_view { "casex" },
+                fsim::runtime::simir::BinaryOperator::casex_equal } }) {
+        const auto wildcard_case = fsim::frontend::parse_text(
+            "wildcard_case.sv",
+            "module wildcard_case;\n"
+            "  logic [1:0] selector;\n"
+            "  logic result;\n"
+            "  always_comb "
+                + std::string { keyword }
+                + " (selector)\n"
+                  "    2'b0z: result = 1'b1;\n"
+                  "    default: result = 1'b0;\n"
+                  "  endcase\n"
+                  "endmodule\n",
+            fsim::frontend::Language::SystemVerilog2017);
         assert(wildcard_case.ok());
-        const auto elaborated_wildcard_case =
-            fsim::elaboration::elaborate(
-                wildcard_case.design, "sv:work.wildcard_case");
+        const auto elaborated_wildcard_case = fsim::elaboration::elaborate(
+            wildcard_case.design, "sv:work.wildcard_case");
         assert(elaborated_wildcard_case.ok());
         assert(std::any_of(
-            elaborated_wildcard_case.design->processes().front()
-                .operations.begin(),
-            elaborated_wildcard_case.design->processes().front()
-                .operations.end(),
+            elaborated_wildcard_case.design->processes().front().operations.begin(),
+            elaborated_wildcard_case.design->processes().front().operations.end(),
             [&](const fsim::runtime::simir::Operation& operation) {
-                const auto* binary =
-                    fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Binary>(
-                        &operation);
+                const auto* binary = fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Binary>(
+                    &operation);
                 return binary != nullptr
                     && binary->operation == expected_operator;
             }));
     }
 
     auto malformed_case_design = case_process.design;
-    malformed_case_design.units.front().processes.front()
-        .statements.front().case_match_kind =
-        static_cast<fsim::frontend::CaseMatchKind>(255);
-    const auto rejected_matching_mode =
-        fsim::elaboration::elaborate(
-            malformed_case_design, "sv:work.case_process");
+    malformed_case_design.units.front().processes.front().statements.front().case_match_kind = static_cast<fsim::frontend::CaseMatchKind>(255);
+    const auto rejected_matching_mode = fsim::elaboration::elaborate(
+        malformed_case_design, "sv:work.case_process");
     assert(!rejected_matching_mode.ok());
     assert(has_diagnostic(
         rejected_matching_mode, "FSIM-ELAB-081"));
 
-    auto case_interpreter =
-        elaborated_case.design->create_interpreter();
+    auto case_interpreter = elaborated_case.design->create_interpreter();
     (void)case_interpreter->run();
     for (const auto& [selector_value, expected] :
-         std::vector<std::pair<std::string, std::string>>{
-             {"00", "00"},
-             {"01", "01"},
-             {"10", "01"},
-             {"x0", "10"},
-             {"z1", "11"},
-             {"11", "00"}}) {
+        std::vector<std::pair<std::string, std::string>> {
+            { "00", "00" },
+            { "01", "01" },
+            { "10", "01" },
+            { "x0", "10" },
+            { "z1", "11" },
+            { "11", "00" } }) {
         case_interpreter->deposit_signal(
             *case_selector,
             fsim::runtime::PackedLogic4::from_msb_string(
@@ -141,9 +126,8 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(mismatched_case.ok());
-    const auto rejected_case =
-        fsim::elaboration::elaborate(
-            mismatched_case.design, "sv:work.mismatched_case");
+    const auto rejected_case = fsim::elaboration::elaborate(
+        mismatched_case.design, "sv:work.mismatched_case");
     assert(!rejected_case.ok());
     assert(has_diagnostic(rejected_case, "FSIM-ELAB-063"));
 
@@ -168,64 +152,56 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(conditional_process.ok());
-    const auto elaborated_conditional =
-        fsim::elaboration::elaborate(
-            conditional_process.design,
-            "sv:work.conditional_process");
+    const auto elaborated_conditional = fsim::elaboration::elaborate(
+        conditional_process.design,
+        "sv:work.conditional_process");
     assert(elaborated_conditional.ok());
-    const auto conditional_select =
-        elaborated_conditional.design->find_signal("select");
-    const auto conditional_lhs =
-        elaborated_conditional.design->find_signal("lhs");
-    const auto conditional_rhs =
-        elaborated_conditional.design->find_signal("rhs");
-    const auto conditional_result =
-        elaborated_conditional.design->find_signal("result");
+    const auto conditional_select = elaborated_conditional.design->find_signal("select");
+    const auto conditional_lhs = elaborated_conditional.design->find_signal("lhs");
+    const auto conditional_rhs = elaborated_conditional.design->find_signal("rhs");
+    const auto conditional_result = elaborated_conditional.design->find_signal("result");
     assert(
         conditional_select && conditional_lhs
         && conditional_rhs && conditional_result);
     assert((
-        elaborated_conditional.design->processes().front()
-            .static_sensitivity
-        == std::vector<fsim::runtime::simir::Sensitivity>{
-            {*conditional_lhs,
-             fsim::runtime::simir::EdgeKind::any},
-            {*conditional_rhs,
-             fsim::runtime::simir::EdgeKind::any},
-            {*conditional_select,
-             fsim::runtime::simir::EdgeKind::any}}));
-    const auto& conditional_profiles =
-        elaborated_conditional.design->processes().front()
-            .expression_profiles;
+        elaborated_conditional.design->processes().front().static_sensitivity
+        == std::vector<fsim::runtime::simir::Sensitivity> {
+            { *conditional_lhs,
+                fsim::runtime::simir::EdgeKind::any },
+            { *conditional_rhs,
+                fsim::runtime::simir::EdgeKind::any },
+            { *conditional_select,
+                fsim::runtime::simir::EdgeKind::any } }));
+    const auto& conditional_profiles = elaborated_conditional.design->processes().front().expression_profiles;
     assert(std::ranges::any_of(
         conditional_profiles,
         [](const auto& profile) {
-          return profile.width == 4
-              && profile.sizing
-                  == fsim::runtime::simir::ExpressionSizingKind::
-                      context_determined
-              && profile.domain
-                  == fsim::runtime::simir::ExpressionValueDomain::
-                      four_state;
+            return profile.width == 4
+                && profile.sizing
+                == fsim::runtime::simir::ExpressionSizingKind::
+                    context_determined
+                && profile.domain
+                == fsim::runtime::simir::ExpressionValueDomain::
+                    four_state;
         }));
     const auto has_resolved_profile =
         [&](const bool is_signed,
             const fsim::runtime::simir::ExpressionValueDomain domain) {
-          return std::ranges::any_of(
-              elaborated_conditional.design->processes(),
-              [&](const auto& process) {
-                return std::ranges::any_of(
-                    process.expression_profiles,
-                    [&](const auto& profile) {
-                      return profile.width == 16
-                          && profile.is_signed == is_signed
-                          && profile.sizing
-                              == fsim::runtime::simir::
-                                  ExpressionSizingKind::
-                                      context_determined
-                          && profile.domain == domain;
-                    });
-              });
+            return std::ranges::any_of(
+                elaborated_conditional.design->processes(),
+                [&](const auto& process) {
+                    return std::ranges::any_of(
+                        process.expression_profiles,
+                        [&](const auto& profile) {
+                            return profile.width == 16
+                                && profile.is_signed == is_signed
+                                && profile.sizing
+                                == fsim::runtime::simir::
+                                    ExpressionSizingKind::
+                                        context_determined
+                                && profile.domain == domain;
+                        });
+                });
         };
     assert(has_resolved_profile(
         false,
@@ -233,8 +209,7 @@ endmodule
     assert(has_resolved_profile(
         true,
         fsim::runtime::simir::ExpressionValueDomain::four_state));
-    auto conditional_interpreter =
-        elaborated_conditional.design->create_interpreter();
+    auto conditional_interpreter = elaborated_conditional.design->create_interpreter();
     conditional_interpreter->deposit_signal(
         *conditional_lhs,
         fsim::runtime::PackedLogic4::from_msb_string("101z"));
@@ -259,7 +234,7 @@ endmodule
             ->signal_value(*conditional_result)
             .to_msb_string()
         == "101Z");
-    for (const auto unknown : {"x", "z"}) {
+    for (const auto unknown : { "x", "z" }) {
         conditional_interpreter->deposit_signal(
             *conditional_select,
             fsim::runtime::PackedLogic4::from_msb_string(unknown));
@@ -287,15 +262,13 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(sized_conditional.ok());
-    const auto elaborated_vector_condition =
-        fsim::elaboration::elaborate(
-            sized_conditional.design,
-            "sv:work.vector_condition");
+    const auto elaborated_vector_condition = fsim::elaboration::elaborate(
+        sized_conditional.design,
+        "sv:work.vector_condition");
     assert(elaborated_vector_condition.ok());
-    const auto elaborated_alternatives =
-        fsim::elaboration::elaborate(
-            sized_conditional.design,
-            "sv:work.mismatched_alternatives");
+    const auto elaborated_alternatives = fsim::elaboration::elaborate(
+        sized_conditional.design,
+        "sv:work.mismatched_alternatives");
     assert(elaborated_alternatives.ok());
 
     const auto comparison_process = fsim::frontend::parse_text(
@@ -330,35 +303,22 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(comparison_process.ok());
-    const auto elaborated_comparisons =
-        fsim::elaboration::elaborate(
-            comparison_process.design,
-            "sv:work.comparison_process");
+    const auto elaborated_comparisons = fsim::elaboration::elaborate(
+        comparison_process.design,
+        "sv:work.comparison_process");
     assert(elaborated_comparisons.ok());
-    const auto comparison_lhs =
-        elaborated_comparisons.design->find_signal("lhs");
-    const auto comparison_rhs =
-        elaborated_comparisons.design->find_signal("rhs");
-    const auto comparison_neq =
-        elaborated_comparisons.design->find_signal("neq");
-    const auto comparison_lt =
-        elaborated_comparisons.design->find_signal("lt");
-    const auto comparison_le =
-        elaborated_comparisons.design->find_signal("le");
-    const auto comparison_gt =
-        elaborated_comparisons.design->find_signal("gt");
-    const auto comparison_ge =
-        elaborated_comparisons.design->find_signal("ge");
-    const auto comparison_not =
-        elaborated_comparisons.design->find_signal("logical_not");
-    const auto comparison_case_eq =
-        elaborated_comparisons.design->find_signal("case_eq");
-    const auto comparison_case_neq =
-        elaborated_comparisons.design->find_signal("case_neq");
-    const auto comparison_wildcard_eq =
-        elaborated_comparisons.design->find_signal("wildcard_eq");
-    const auto comparison_wildcard_neq =
-        elaborated_comparisons.design->find_signal("wildcard_neq");
+    const auto comparison_lhs = elaborated_comparisons.design->find_signal("lhs");
+    const auto comparison_rhs = elaborated_comparisons.design->find_signal("rhs");
+    const auto comparison_neq = elaborated_comparisons.design->find_signal("neq");
+    const auto comparison_lt = elaborated_comparisons.design->find_signal("lt");
+    const auto comparison_le = elaborated_comparisons.design->find_signal("le");
+    const auto comparison_gt = elaborated_comparisons.design->find_signal("gt");
+    const auto comparison_ge = elaborated_comparisons.design->find_signal("ge");
+    const auto comparison_not = elaborated_comparisons.design->find_signal("logical_not");
+    const auto comparison_case_eq = elaborated_comparisons.design->find_signal("case_eq");
+    const auto comparison_case_neq = elaborated_comparisons.design->find_signal("case_neq");
+    const auto comparison_wildcard_eq = elaborated_comparisons.design->find_signal("wildcard_eq");
+    const auto comparison_wildcard_neq = elaborated_comparisons.design->find_signal("wildcard_neq");
     assert(
         comparison_lhs && comparison_rhs && comparison_neq
         && comparison_lt && comparison_le && comparison_gt
@@ -366,75 +326,72 @@ endmodule
         && comparison_case_eq && comparison_case_neq
         && comparison_wildcard_eq && comparison_wildcard_neq);
     assert(std::any_of(
-        elaborated_comparisons.design->processes().front()
-            .operations.begin(),
-        elaborated_comparisons.design->processes().front()
-            .operations.end(),
+        elaborated_comparisons.design->processes().front().operations.begin(),
+        elaborated_comparisons.design->processes().front().operations.end(),
         [](const fsim::runtime::simir::Operation& operation) {
-          const auto* binary =
-              fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Binary>(&operation);
-          return binary != nullptr
-              && binary->operation
-                  == fsim::runtime::simir::BinaryOperator::
-                      wildcard_equal;
+            const auto* binary = fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Binary>(&operation);
+            return binary != nullptr
+                && binary->operation
+                == fsim::runtime::simir::BinaryOperator::
+                    wildcard_equal;
         }));
-    auto comparison_interpreter =
-        elaborated_comparisons.design->create_interpreter();
+    auto comparison_interpreter = elaborated_comparisons.design->create_interpreter();
     const auto run_comparison =
         [&](const std::string_view lhs,
             const std::string_view rhs,
             const std::array<std::string_view, 10>& expected) {
-          comparison_interpreter->deposit_signal(
-              *comparison_lhs,
-              fsim::runtime::PackedLogic4::from_msb_string(lhs));
-          comparison_interpreter->deposit_signal(
-              *comparison_rhs,
-              fsim::runtime::PackedLogic4::from_msb_string(rhs));
-          (void)comparison_interpreter->run();
-          const std::array signals{
-              *comparison_neq,
-              *comparison_lt,
-              *comparison_le,
-              *comparison_gt,
-              *comparison_ge,
-              *comparison_not,
-              *comparison_case_eq,
-              *comparison_case_neq,
-              *comparison_wildcard_eq,
-              *comparison_wildcard_neq};
-          for (std::size_t index = 0; index < signals.size();
-               ++index) {
-            assert(
-                comparison_interpreter
-                    ->signal_value(signals[index])
-                    .to_msb_string()
-                == expected[index]);
-          }
+            comparison_interpreter->deposit_signal(
+                *comparison_lhs,
+                fsim::runtime::PackedLogic4::from_msb_string(lhs));
+            comparison_interpreter->deposit_signal(
+                *comparison_rhs,
+                fsim::runtime::PackedLogic4::from_msb_string(rhs));
+            (void)comparison_interpreter->run();
+            const std::array signals {
+                *comparison_neq,
+                *comparison_lt,
+                *comparison_le,
+                *comparison_gt,
+                *comparison_ge,
+                *comparison_not,
+                *comparison_case_eq,
+                *comparison_case_neq,
+                *comparison_wildcard_eq,
+                *comparison_wildcard_neq
+            };
+            for (std::size_t index = 0; index < signals.size();
+                ++index) {
+                assert(
+                    comparison_interpreter
+                        ->signal_value(signals[index])
+                        .to_msb_string()
+                    == expected[index]);
+            }
         };
     run_comparison(
         "0010", "0011",
-        {"1", "1", "1", "0", "0", "0", "0", "1", "0", "1"});
+        { "1", "1", "1", "0", "0", "0", "0", "1", "0", "1" });
     run_comparison(
         "0000", "0000",
-        {"0", "0", "1", "0", "1", "1", "1", "0", "1", "0"});
+        { "0", "0", "1", "0", "1", "1", "1", "0", "1", "0" });
     run_comparison(
         "00X0", "0011",
-        {"X", "X", "X", "X", "X", "X", "0", "1", "X", "X"});
+        { "X", "X", "X", "X", "X", "X", "0", "1", "X", "X" });
     run_comparison(
         "01X0", "0011",
-        {"X", "X", "X", "X", "X", "0", "0", "1", "X", "X"});
+        { "X", "X", "X", "X", "X", "0", "0", "1", "X", "X" });
     run_comparison(
         "00X0", "00X0",
-        {"X", "X", "X", "X", "X", "X", "1", "0", "1", "0"});
+        { "X", "X", "X", "X", "X", "X", "1", "0", "1", "0" });
     run_comparison(
         "01Z0", "01Z0",
-        {"X", "X", "X", "X", "X", "0", "1", "0", "1", "0"});
+        { "X", "X", "X", "X", "X", "0", "1", "0", "1", "0" });
     run_comparison(
         "00X0", "00Z0",
-        {"X", "X", "X", "X", "X", "X", "0", "1", "1", "0"});
+        { "X", "X", "X", "X", "X", "X", "0", "1", "1", "0" });
     run_comparison(
         "X101", "0001",
-        {"X", "X", "X", "X", "X", "0", "0", "1", "X", "X"});
+        { "X", "X", "X", "X", "X", "0", "0", "1", "X", "X" });
 
     const auto signed_comparison = fsim::frontend::parse_text(
         "signed_comparison.sv",
@@ -448,22 +405,17 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(signed_comparison.ok());
-    const auto elaborated_signed_comparison =
-        fsim::elaboration::elaborate(
-            signed_comparison.design,
-            "sv:work.signed_comparison");
+    const auto elaborated_signed_comparison = fsim::elaboration::elaborate(
+        signed_comparison.design,
+        "sv:work.signed_comparison");
     assert(elaborated_signed_comparison.ok());
-    const auto signed_comparison_lhs =
-        elaborated_signed_comparison.design->find_signal("lhs");
-    const auto signed_comparison_rhs =
-        elaborated_signed_comparison.design->find_signal("rhs");
-    const auto signed_comparison_result =
-        elaborated_signed_comparison.design->find_signal("result");
+    const auto signed_comparison_lhs = elaborated_signed_comparison.design->find_signal("lhs");
+    const auto signed_comparison_rhs = elaborated_signed_comparison.design->find_signal("rhs");
+    const auto signed_comparison_result = elaborated_signed_comparison.design->find_signal("result");
     assert(
         signed_comparison_lhs && signed_comparison_rhs
         && signed_comparison_result);
-    auto signed_comparison_interpreter =
-        elaborated_signed_comparison.design->create_interpreter();
+    auto signed_comparison_interpreter = elaborated_signed_comparison.design->create_interpreter();
     signed_comparison_interpreter->deposit_signal(
         *signed_comparison_lhs,
         fsim::runtime::PackedLogic4::from_msb_string("1111"));
@@ -477,10 +429,9 @@ endmodule
             .to_msb_string()
         == "1");
 
-    const auto systemverilog_power =
-        fsim::frontend::parse_text(
-            "systemverilog_power.sv",
-            R"(
+    const auto systemverilog_power = fsim::frontend::parse_text(
+        "systemverilog_power.sv",
+        R"(
 module systemverilog_power #(
   parameter int PARAMETER_POWER = 3 ** 4
 );
@@ -507,42 +458,38 @@ module systemverilog_power #(
   end
 endmodule
 )",
-            fsim::frontend::Language::SystemVerilog2017);
+        fsim::frontend::Language::SystemVerilog2017);
     assert(systemverilog_power.ok());
-    const auto elaborated_systemverilog_power =
-        fsim::elaboration::elaborate(
-            systemverilog_power.design,
-            "sv:work.systemverilog_power");
+    const auto elaborated_systemverilog_power = fsim::elaboration::elaborate(
+        systemverilog_power.design,
+        "sv:work.systemverilog_power");
     if (!elaborated_systemverilog_power.ok()) {
         for (const auto& diagnostic :
-             elaborated_systemverilog_power.diagnostics) {
+            elaborated_systemverilog_power.diagnostics) {
             std::cerr << diagnostic.code << ": "
                       << diagnostic.message << '\n';
         }
     }
     assert(elaborated_systemverilog_power.ok());
-    auto systemverilog_power_interpreter =
-        elaborated_systemverilog_power.design
-            ->create_interpreter();
-    const auto systemverilog_power_result =
-        systemverilog_power_interpreter->run();
+    auto systemverilog_power_interpreter = elaborated_systemverilog_power.design
+                                               ->create_interpreter();
+    const auto systemverilog_power_result = systemverilog_power_interpreter->run();
     assert(
         systemverilog_power_result.status
         == fsim::runtime::RunStatus::completed);
     for (const auto& [name, expected] :
-         std::initializer_list<
-             std::pair<std::string_view, std::string_view>>{
-             {"positive", "01010001"},
-             {"zero_exponent", "00000001"},
-             {"left_associative", "0000000001000000"},
-             {"negative_exponent", "00000000"},
-             {"minus_one_negative", "11111111"},
-             {"zero_negative", "XXXXXXXX"},
-             {"unknown_operand", "XXXXXXXX"},
-             {"parameter_power", "01010001"}}) {
-        const auto signal =
-            elaborated_systemverilog_power.design
-                ->find_signal(name);
+        std::initializer_list<
+            std::pair<std::string_view, std::string_view>> {
+            { "positive", "01010001" },
+            { "zero_exponent", "00000001" },
+            { "left_associative", "0000000001000000" },
+            { "negative_exponent", "00000000" },
+            { "minus_one_negative", "11111111" },
+            { "zero_negative", "XXXXXXXX" },
+            { "unknown_operand", "XXXXXXXX" },
+            { "parameter_power", "01010001" } }) {
+        const auto signal = elaborated_systemverilog_power.design
+                                ->find_signal(name);
         assert(signal);
         assert(
             systemverilog_power_interpreter
@@ -561,31 +508,26 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(power_context.ok());
-    const auto elaborated_power_context =
-        fsim::elaboration::elaborate(
-            power_context.design, "sv:work.power_context");
+    const auto elaborated_power_context = fsim::elaboration::elaborate(
+        power_context.design, "sv:work.power_context");
     assert(elaborated_power_context.ok());
-    const auto& power_profiles =
-        elaborated_power_context.design->processes().front()
-            .expression_profiles;
+    const auto& power_profiles = elaborated_power_context.design->processes().front().expression_profiles;
     assert(std::ranges::any_of(
         power_profiles,
         [](const auto& profile) {
-          return profile.source.path == "power_context.sv"
-              && profile.source.line == 4
-              && profile.width == 16
-              && !profile.is_signed
-              && profile.sizing
-                  == fsim::runtime::simir::ExpressionSizingKind::
-                      context_determined;
+            return profile.source.path == "power_context.sv"
+                && profile.source.line == 4
+                && profile.width == 16
+                && !profile.is_signed
+                && profile.sizing
+                == fsim::runtime::simir::ExpressionSizingKind::
+                    context_determined;
         }));
-    auto power_context_interpreter =
-        elaborated_power_context.design->create_interpreter();
+    auto power_context_interpreter = elaborated_power_context.design->create_interpreter();
     assert(
         power_context_interpreter->run().status
         == fsim::runtime::RunStatus::completed);
-    const auto power_context_result =
-        elaborated_power_context.design->find_signal("result");
+    const auto power_context_result = elaborated_power_context.design->find_signal("result");
     assert(power_context_result);
     assert(
         power_context_interpreter
@@ -611,33 +553,29 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(vhdl_power.ok());
-    const auto elaborated_vhdl_power =
-        fsim::elaboration::elaborate(
-            vhdl_power.design,
-            "vhdl:work.vhdl_power(rtl)");
+    const auto elaborated_vhdl_power = fsim::elaboration::elaborate(
+        vhdl_power.design,
+        "vhdl:work.vhdl_power(rtl)");
     if (!elaborated_vhdl_power.ok()) {
         for (const auto& diagnostic :
-             elaborated_vhdl_power.diagnostics) {
+            elaborated_vhdl_power.diagnostics) {
             std::cerr << diagnostic.code << ": "
                       << diagnostic.message << '\n';
         }
     }
     assert(elaborated_vhdl_power.ok());
-    auto vhdl_power_interpreter =
-        elaborated_vhdl_power.design->create_interpreter();
-    const auto vhdl_power_result =
-        vhdl_power_interpreter->run();
+    auto vhdl_power_interpreter = elaborated_vhdl_power.design->create_interpreter();
+    const auto vhdl_power_result = vhdl_power_interpreter->run();
     assert(
         vhdl_power_result.status
         == fsim::runtime::RunStatus::completed);
     for (const auto& [name, expected] :
-         std::initializer_list<
-             std::pair<std::string_view, std::string_view>>{
-             {"positive", "01010001"},
-             {"negative_base", "11111000"},
-             {"zero_exponent", "00000001"}}) {
-        const auto signal =
-            elaborated_vhdl_power.design->find_signal(name);
+        std::initializer_list<
+            std::pair<std::string_view, std::string_view>> {
+            { "positive", "01010001" },
+            { "negative_base", "11111000" },
+            { "zero_exponent", "00000001" } }) {
+        const auto signal = elaborated_vhdl_power.design->find_signal(name);
         assert(signal);
         assert(
             vhdl_power_interpreter
@@ -646,10 +584,9 @@ end architecture;
             == expected);
     }
 
-    const auto invalid_vhdl_power =
-        fsim::frontend::parse_text(
-            "invalid_vhdl_power.vhd",
-            R"(
+    const auto invalid_vhdl_power = fsim::frontend::parse_text(
+        "invalid_vhdl_power.vhd",
+        R"(
 entity invalid_vhdl_power is
 end entity;
 
@@ -659,20 +596,18 @@ begin
   result <= "00000010" ** (-1);
 end architecture;
 )",
-            fsim::frontend::Language::Vhdl2008);
+        fsim::frontend::Language::Vhdl2008);
     assert(invalid_vhdl_power.ok());
-    const auto rejected_vhdl_power =
-        fsim::elaboration::elaborate(
-            invalid_vhdl_power.design,
-            "vhdl:work.invalid_vhdl_power(rtl)");
+    const auto rejected_vhdl_power = fsim::elaboration::elaborate(
+        invalid_vhdl_power.design,
+        "vhdl:work.invalid_vhdl_power(rtl)");
     assert(!rejected_vhdl_power.ok());
     assert(has_diagnostic(
         rejected_vhdl_power, "FSIM-ELAB-091"));
 
-    const auto invalid_vhdl_conditional =
-        fsim::frontend::parse_text(
-            "invalid_vhdl_conditional.vhd",
-            R"(
+    const auto invalid_vhdl_conditional = fsim::frontend::parse_text(
+        "invalid_vhdl_conditional.vhd",
+        R"(
 entity invalid_vhdl_conditional is
 end entity;
 
@@ -683,12 +618,11 @@ begin
   result <= '1' when choose else '0';
 end architecture;
 )",
-            fsim::frontend::Language::Vhdl2008);
+        fsim::frontend::Language::Vhdl2008);
     assert(invalid_vhdl_conditional.ok());
-    const auto rejected_vhdl_conditional =
-        fsim::elaboration::elaborate(
-            invalid_vhdl_conditional.design,
-            "vhdl:work.invalid_vhdl_conditional(rtl)");
+    const auto rejected_vhdl_conditional = fsim::elaboration::elaborate(
+        invalid_vhdl_conditional.design,
+        "vhdl:work.invalid_vhdl_conditional(rtl)");
     assert(!rejected_vhdl_conditional.ok());
     assert(has_diagnostic(
         rejected_vhdl_conditional, "FSIM-ELAB-092"));
@@ -751,18 +685,15 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(signedness_casts.ok());
-    const auto elaborated_signedness_casts =
-        fsim::elaboration::elaborate(
-            signedness_casts.design,
-            "sv:work.signedness_casts");
+    const auto elaborated_signedness_casts = fsim::elaboration::elaborate(
+        signedness_casts.design,
+        "sv:work.signedness_casts");
     assert(elaborated_signedness_casts.ok());
-    const auto unsigned_cast_input =
-        elaborated_signedness_casts.design->find_signal(
-            "unsigned_value");
-    const auto signed_cast_input =
-        elaborated_signedness_casts.design->find_signal(
-            "signed_value");
-    const std::array signedness_cast_outputs{
+    const auto unsigned_cast_input = elaborated_signedness_casts.design->find_signal(
+        "unsigned_value");
+    const auto signed_cast_input = elaborated_signedness_casts.design->find_signal(
+        "signed_value");
+    const std::array signedness_cast_outputs {
         elaborated_signedness_casts.design->find_signal(
             "signed_less"),
         elaborated_signedness_casts.design->find_signal(
@@ -808,34 +739,31 @@ endmodule
         elaborated_signedness_casts.design->find_signal(
             "countbits_unknown"),
         elaborated_signedness_casts.design->find_signal(
-            "countbits_zero_x")};
+            "countbits_zero_x")
+    };
     assert(unsigned_cast_input && signed_cast_input);
     assert(std::ranges::all_of(
         signedness_cast_outputs,
         [](const auto signal) { return signal.has_value(); }));
-    const auto& signedness_operations =
-        elaborated_signedness_casts.design->processes().front()
-            .operations;
+    const auto& signedness_operations = elaborated_signedness_casts.design->processes().front().operations;
     assert(
         std::count_if(
             signedness_operations.begin(),
             signedness_operations.end(),
             [](const fsim::runtime::simir::Operation& operation) {
-              const auto* point =
-                  fsim::runtime::simir::operation_get_if<
-                      fsim::runtime::simir::DebugPoint>(
-                      &operation);
-              return point != nullptr
-                  && point->kind
-                      == fsim::runtime::simir::DebugPointKind::call
-                  && point->source.path == "signedness_casts.sv"
-                  && point->source.line != 0
-                  && point->source.column != 0;
+                const auto* point = fsim::runtime::simir::operation_get_if<
+                    fsim::runtime::simir::DebugPoint>(
+                    &operation);
+                return point != nullptr
+                    && point->kind
+                    == fsim::runtime::simir::DebugPointKind::call
+                    && point->source.path == "signedness_casts.sv"
+                    && point->source.line != 0
+                    && point->source.column != 0;
             })
         == 23);
-    auto signedness_cast_interpreter =
-        elaborated_signedness_casts.design
-            ->create_interpreter();
+    auto signedness_cast_interpreter = elaborated_signedness_casts.design
+                                           ->create_interpreter();
     signedness_cast_interpreter->deposit_signal(
         *unsigned_cast_input,
         fsim::runtime::PackedLogic4::from_msb_string("1111"));
@@ -843,7 +771,7 @@ endmodule
         *signed_cast_input,
         fsim::runtime::PackedLogic4::from_msb_string("0001"));
     (void)signedness_cast_interpreter->run();
-    const std::array<std::string_view, 23> expected_signedness_casts{
+    const std::array<std::string_view, 23> expected_signedness_casts {
         "1",
         "1",
         "1111",
@@ -866,10 +794,11 @@ endmodule
         "00000000000000000000000000000001",
         "00000000000000000000000000000010",
         "00000000000000000000000000000010",
-        "00000000000000000000000000000010"};
+        "00000000000000000000000000000010"
+    };
     for (std::size_t index = 0;
-         index < signedness_cast_outputs.size();
-         ++index) {
+        index < signedness_cast_outputs.size();
+        ++index) {
         assert(
             signedness_cast_interpreter
                 ->signal_value(*signedness_cast_outputs[index])
@@ -877,24 +806,27 @@ endmodule
             == expected_signedness_casts[index]);
     }
 
-    const auto invalid_signedness_cast =
-        fsim::frontend::parse_text(
-            "invalid_signedness_cast.sv",
-            R"(
+    const auto invalid_signedness_cast = fsim::frontend::parse_text(
+        "invalid_signedness_cast.sv",
+        R"(
 module invalid_signedness_cast;
   logic result;
   always_comb result = $signed();
 endmodule
 )",
-            fsim::frontend::Language::SystemVerilog2017);
-    assert(invalid_signedness_cast.ok());
-    const auto rejected_signedness_cast =
-        fsim::elaboration::elaborate(
-            invalid_signedness_cast.design,
-            "sv:work.invalid_signedness_cast");
-    assert(!rejected_signedness_cast.ok());
-    assert(has_diagnostic(
-        rejected_signedness_cast, "FSIM-ELAB-083"));
+        fsim::frontend::Language::SystemVerilog2017);
+    const auto has_frontend_diagnostic = [](
+                                             const fsim::frontend::ParseResult& result,
+                                             const std::string_view code) {
+        return std::ranges::any_of(
+            result.diagnostics,
+            [&](const auto& diagnostic) {
+                return diagnostic.code == code;
+            });
+    };
+    assert(!invalid_signedness_cast.ok());
+    assert(has_frontend_diagnostic(
+        invalid_signedness_cast, "FSIM-SV-SEM-075"));
 
     const auto invalid_isunknown = fsim::frontend::parse_text(
         "invalid_isunknown.sv",
@@ -905,14 +837,9 @@ module invalid_isunknown;
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
-    assert(invalid_isunknown.ok());
-    const auto rejected_isunknown =
-        fsim::elaboration::elaborate(
-            invalid_isunknown.design,
-            "sv:work.invalid_isunknown");
-    assert(!rejected_isunknown.ok());
-    assert(has_diagnostic(
-        rejected_isunknown, "FSIM-ELAB-084"));
+    assert(!invalid_isunknown.ok());
+    assert(has_frontend_diagnostic(
+        invalid_isunknown, "FSIM-SV-SEM-075"));
 
     const auto verilog_isunknown = fsim::frontend::parse_text(
         "verilog_isunknown.v",
@@ -923,14 +850,9 @@ module verilog_isunknown;
 endmodule
 )",
         fsim::frontend::Language::Verilog2005);
-    assert(verilog_isunknown.ok());
-    const auto rejected_verilog_isunknown =
-        fsim::elaboration::elaborate(
-            verilog_isunknown.design,
-            "sv:work.verilog_isunknown");
-    assert(!rejected_verilog_isunknown.ok());
-    assert(has_diagnostic(
-        rejected_verilog_isunknown, "FSIM-ELAB-084"));
+    assert(!verilog_isunknown.ok());
+    assert(has_frontend_diagnostic(
+        verilog_isunknown, "FSIM-SV-PARSE-350"));
 
     const auto invalid_bits = fsim::frontend::parse_text(
         "invalid_bits.sv",
@@ -941,13 +863,9 @@ module invalid_bits;
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
-    assert(invalid_bits.ok());
-    const auto rejected_bits =
-        fsim::elaboration::elaborate(
-            invalid_bits.design, "sv:work.invalid_bits");
-    assert(!rejected_bits.ok());
-    assert(has_diagnostic(
-        rejected_bits, "FSIM-ELAB-085"));
+    assert(!invalid_bits.ok());
+    assert(has_frontend_diagnostic(
+        invalid_bits, "FSIM-SV-SEM-075"));
 
     const auto verilog_bits = fsim::frontend::parse_text(
         "verilog_bits.v",
@@ -958,18 +876,13 @@ module verilog_bits;
 endmodule
 )",
         fsim::frontend::Language::Verilog2005);
-    assert(verilog_bits.ok());
-    const auto rejected_verilog_bits =
-        fsim::elaboration::elaborate(
-            verilog_bits.design, "sv:work.verilog_bits");
-    assert(!rejected_verilog_bits.ok());
-    assert(has_diagnostic(
-        rejected_verilog_bits, "FSIM-ELAB-085"));
+    assert(!verilog_bits.ok());
+    assert(has_frontend_diagnostic(
+        verilog_bits, "FSIM-SV-PARSE-350"));
 
-    const auto packed_array_queries =
-        fsim::frontend::parse_text(
-            "packed_array_queries.sv",
-            R"(
+    const auto packed_array_queries = fsim::frontend::parse_text(
+        "packed_array_queries.sv",
+        R"(
 module packed_array_queries;
   logic [7:4] descending;
   logic [2:5] ascending;
@@ -1005,14 +918,13 @@ module packed_array_queries;
   end
 endmodule
 )",
-            fsim::frontend::Language::SystemVerilog2017);
+        fsim::frontend::Language::SystemVerilog2017);
     assert(packed_array_queries.ok());
-    const auto elaborated_packed_array_queries =
-        fsim::elaboration::elaborate(
-            packed_array_queries.design,
-            "sv:work.packed_array_queries");
+    const auto elaborated_packed_array_queries = fsim::elaboration::elaborate(
+        packed_array_queries.design,
+        "sv:work.packed_array_queries");
     assert(elaborated_packed_array_queries.ok());
-    const std::array packed_query_names{
+    const std::array packed_query_names {
         "descending_left",
         "descending_right",
         "descending_low",
@@ -1026,24 +938,23 @@ endmodule
         "ascending_size",
         "ascending_increment",
         "dimensions",
-        "unpacked_dimensions"};
+        "unpacked_dimensions"
+    };
     std::array<
         std::optional<fsim::runtime::simir::SignalId>,
         14>
         packed_query_outputs;
     for (std::size_t index = 0;
-         index < packed_query_names.size();
-         ++index) {
-        packed_query_outputs[index] =
-            elaborated_packed_array_queries.design
-                ->find_signal(packed_query_names[index]);
+        index < packed_query_names.size();
+        ++index) {
+        packed_query_outputs[index] = elaborated_packed_array_queries.design
+                                          ->find_signal(packed_query_names[index]);
         assert(packed_query_outputs[index]);
     }
-    auto packed_query_interpreter =
-        elaborated_packed_array_queries.design
-            ->create_interpreter();
+    auto packed_query_interpreter = elaborated_packed_array_queries.design
+                                        ->create_interpreter();
     (void)packed_query_interpreter->run();
-    const std::array<std::uint32_t, 14> expected_packed_queries{
+    const std::array<std::uint32_t, 14> expected_packed_queries {
         7,
         4,
         4,
@@ -1057,10 +968,11 @@ endmodule
         4,
         std::numeric_limits<std::uint32_t>::max(),
         1,
-        0};
+        0
+    };
     for (std::size_t index = 0;
-         index < packed_query_outputs.size();
-         ++index) {
+        index < packed_query_outputs.size();
+        ++index) {
         assert(
             packed_query_interpreter
                 ->signal_value(*packed_query_outputs[index])
@@ -1069,44 +981,36 @@ endmodule
             == expected_packed_queries[index]);
     }
 
-    const auto invalid_packed_query =
-        fsim::frontend::parse_text(
-            "invalid_packed_query.sv",
-            R"(
+    const auto invalid_packed_query = fsim::frontend::parse_text(
+        "invalid_packed_query.sv",
+        R"(
 module invalid_packed_query;
   logic [3:0] value;
   logic signed [31:0] result;
   always_comb result = $left(value, 2);
 endmodule
 )",
-            fsim::frontend::Language::SystemVerilog2017);
+        fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_packed_query.ok());
-    const auto rejected_packed_query =
-        fsim::elaboration::elaborate(
-            invalid_packed_query.design,
-            "sv:work.invalid_packed_query");
+    const auto rejected_packed_query = fsim::elaboration::elaborate(
+        invalid_packed_query.design,
+        "sv:work.invalid_packed_query");
     assert(!rejected_packed_query.ok());
     assert(has_diagnostic(
         rejected_packed_query, "FSIM-ELAB-086"));
 
-    const auto invalid_dimensions =
-        fsim::frontend::parse_text(
-            "invalid_dimensions.sv",
-            R"(
+    const auto invalid_dimensions = fsim::frontend::parse_text(
+        "invalid_dimensions.sv",
+        R"(
 module invalid_dimensions;
   logic signed [31:0] result;
   always_comb result = $dimensions();
 endmodule
 )",
-            fsim::frontend::Language::SystemVerilog2017);
-    assert(invalid_dimensions.ok());
-    const auto rejected_dimensions =
-        fsim::elaboration::elaborate(
-            invalid_dimensions.design,
-            "sv:work.invalid_dimensions");
-    assert(!rejected_dimensions.ok());
-    assert(has_diagnostic(
-        rejected_dimensions, "FSIM-ELAB-090"));
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(!invalid_dimensions.ok());
+    assert(has_frontend_diagnostic(
+        invalid_dimensions, "FSIM-SV-SEM-075"));
 
     const auto invalid_onehot = fsim::frontend::parse_text(
         "invalid_onehot.sv",
@@ -1117,13 +1021,9 @@ module invalid_onehot;
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
-    assert(invalid_onehot.ok());
-    const auto rejected_onehot =
-        fsim::elaboration::elaborate(
-            invalid_onehot.design, "sv:work.invalid_onehot");
-    assert(!rejected_onehot.ok());
-    assert(has_diagnostic(
-        rejected_onehot, "FSIM-ELAB-087"));
+    assert(!invalid_onehot.ok());
+    assert(has_frontend_diagnostic(
+        invalid_onehot, "FSIM-SV-SEM-075"));
 
     const auto invalid_countones = fsim::frontend::parse_text(
         "invalid_countones.sv",
@@ -1134,14 +1034,9 @@ module invalid_countones;
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
-    assert(invalid_countones.ok());
-    const auto rejected_countones =
-        fsim::elaboration::elaborate(
-            invalid_countones.design,
-            "sv:work.invalid_countones");
-    assert(!rejected_countones.ok());
-    assert(has_diagnostic(
-        rejected_countones, "FSIM-ELAB-088"));
+    assert(!invalid_countones.ok());
+    assert(has_frontend_diagnostic(
+        invalid_countones, "FSIM-SV-SEM-075"));
 
     const auto invalid_countbits = fsim::frontend::parse_text(
         "invalid_countbits.sv",
@@ -1155,10 +1050,9 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_countbits.ok());
-    const auto rejected_countbits =
-        fsim::elaboration::elaborate(
-            invalid_countbits.design,
-            "sv:work.invalid_countbits");
+    const auto rejected_countbits = fsim::elaboration::elaborate(
+        invalid_countbits.design,
+        "sv:work.invalid_countbits");
     assert(!rejected_countbits.ok());
     assert(has_diagnostic(
         rejected_countbits, "FSIM-ELAB-089"));
@@ -1179,43 +1073,37 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(logical_process.ok());
-    const auto elaborated_logical =
-        fsim::elaboration::elaborate(
-            logical_process.design, "sv:work.logical_process");
+    const auto elaborated_logical = fsim::elaboration::elaborate(
+        logical_process.design, "sv:work.logical_process");
     assert(elaborated_logical.ok());
-    const auto logical_lhs =
-        elaborated_logical.design->find_signal("lhs");
-    const auto logical_rhs =
-        elaborated_logical.design->find_signal("rhs");
-    const auto logical_and =
-        elaborated_logical.design->find_signal("conjunction");
-    const auto logical_or =
-        elaborated_logical.design->find_signal("disjunction");
+    const auto logical_lhs = elaborated_logical.design->find_signal("lhs");
+    const auto logical_rhs = elaborated_logical.design->find_signal("rhs");
+    const auto logical_and = elaborated_logical.design->find_signal("conjunction");
+    const auto logical_or = elaborated_logical.design->find_signal("disjunction");
     assert(logical_lhs && logical_rhs && logical_and && logical_or);
-    auto logical_interpreter =
-        elaborated_logical.design->create_interpreter();
+    auto logical_interpreter = elaborated_logical.design->create_interpreter();
     const auto run_logical =
         [&](const std::string_view lhs,
             const std::string_view rhs,
             const std::string_view expected_and,
             const std::string_view expected_or) {
-          logical_interpreter->deposit_signal(
-              *logical_lhs,
-              fsim::runtime::PackedLogic4::from_msb_string(lhs));
-          logical_interpreter->deposit_signal(
-              *logical_rhs,
-              fsim::runtime::PackedLogic4::from_msb_string(rhs));
-          (void)logical_interpreter->run();
-          assert(
-              logical_interpreter
-                  ->signal_value(*logical_and)
-                  .to_msb_string()
-              == expected_and);
-          assert(
-              logical_interpreter
-                  ->signal_value(*logical_or)
-                  .to_msb_string()
-              == expected_or);
+            logical_interpreter->deposit_signal(
+                *logical_lhs,
+                fsim::runtime::PackedLogic4::from_msb_string(lhs));
+            logical_interpreter->deposit_signal(
+                *logical_rhs,
+                fsim::runtime::PackedLogic4::from_msb_string(rhs));
+            (void)logical_interpreter->run();
+            assert(
+                logical_interpreter
+                    ->signal_value(*logical_and)
+                    .to_msb_string()
+                == expected_and);
+            assert(
+                logical_interpreter
+                    ->signal_value(*logical_or)
+                    .to_msb_string()
+                == expected_or);
         };
     run_logical("0000", "X1", "0", "1");
     run_logical("00X0", "00", "0", "X");
@@ -1223,10 +1111,9 @@ endmodule
     run_logical("0010", "ZZ", "X", "1");
     run_logical("0010", "01", "1", "1");
 
-    const auto reduction_shift_process =
-        fsim::frontend::parse_text(
-            "reduction_shift_process.sv",
-            R"(
+    const auto reduction_shift_process = fsim::frontend::parse_text(
+        "reduction_shift_process.sv",
+        R"(
 module reduction_shift_process;
   logic [3:0] value;
   logic [2:0] amount;
@@ -1256,49 +1143,34 @@ module reduction_shift_process;
   end
 endmodule
 )",
-            fsim::frontend::Language::SystemVerilog2017);
+        fsim::frontend::Language::SystemVerilog2017);
     assert(reduction_shift_process.ok());
-    const auto elaborated_reduction_shift =
-        fsim::elaboration::elaborate(
-            reduction_shift_process.design,
-            "sv:work.reduction_shift_process");
+    const auto elaborated_reduction_shift = fsim::elaboration::elaborate(
+        reduction_shift_process.design,
+        "sv:work.reduction_shift_process");
     assert(elaborated_reduction_shift.ok());
-    const auto reduction_value =
-        elaborated_reduction_shift.design->find_signal("value");
-    const auto shift_amount =
-        elaborated_reduction_shift.design->find_signal("amount");
-    const auto reduced_and =
-        elaborated_reduction_shift.design->find_signal("reduced_and");
-    const auto reduced_or =
-        elaborated_reduction_shift.design->find_signal("reduced_or");
-    const auto reduced_xor =
-        elaborated_reduction_shift.design->find_signal("reduced_xor");
-    const auto reduced_nand =
-        elaborated_reduction_shift.design->find_signal("reduced_nand");
-    const auto reduced_nor =
-        elaborated_reduction_shift.design->find_signal("reduced_nor");
-    const auto reduced_xnor =
-        elaborated_reduction_shift.design->find_signal("reduced_xnor");
-    const auto reduced_xnor_alias =
-        elaborated_reduction_shift.design->find_signal(
-            "reduced_xnor_alias");
-    const auto xnor_value =
-        elaborated_reduction_shift.design->find_signal("xnor_value");
-    const auto xnor_value_alias =
-        elaborated_reduction_shift.design->find_signal(
-            "xnor_value_alias");
-    const auto shifted_left =
-        elaborated_reduction_shift.design->find_signal("shifted_left");
-    const auto shifted_right =
-        elaborated_reduction_shift.design->find_signal("shifted_right");
+    const auto reduction_value = elaborated_reduction_shift.design->find_signal("value");
+    const auto shift_amount = elaborated_reduction_shift.design->find_signal("amount");
+    const auto reduced_and = elaborated_reduction_shift.design->find_signal("reduced_and");
+    const auto reduced_or = elaborated_reduction_shift.design->find_signal("reduced_or");
+    const auto reduced_xor = elaborated_reduction_shift.design->find_signal("reduced_xor");
+    const auto reduced_nand = elaborated_reduction_shift.design->find_signal("reduced_nand");
+    const auto reduced_nor = elaborated_reduction_shift.design->find_signal("reduced_nor");
+    const auto reduced_xnor = elaborated_reduction_shift.design->find_signal("reduced_xnor");
+    const auto reduced_xnor_alias = elaborated_reduction_shift.design->find_signal(
+        "reduced_xnor_alias");
+    const auto xnor_value = elaborated_reduction_shift.design->find_signal("xnor_value");
+    const auto xnor_value_alias = elaborated_reduction_shift.design->find_signal(
+        "xnor_value_alias");
+    const auto shifted_left = elaborated_reduction_shift.design->find_signal("shifted_left");
+    const auto shifted_right = elaborated_reduction_shift.design->find_signal("shifted_right");
     assert(
         reduction_value && shift_amount && reduced_and
         && reduced_or && reduced_xor && reduced_nand
         && reduced_nor && reduced_xnor
         && reduced_xnor_alias && xnor_value
         && xnor_value_alias && shifted_left && shifted_right);
-    auto reduction_shift_interpreter =
-        elaborated_reduction_shift.design->create_interpreter();
+    auto reduction_shift_interpreter = elaborated_reduction_shift.design->create_interpreter();
     const auto run_reduction_shift =
         [&](const std::string_view value,
             const std::string_view amount,
@@ -1311,68 +1183,68 @@ endmodule
             const std::string_view expected_xnor_value,
             const std::string_view expected_left,
             const std::string_view expected_right) {
-          reduction_shift_interpreter->deposit_signal(
-              *reduction_value,
-              fsim::runtime::PackedLogic4::from_msb_string(value));
-          reduction_shift_interpreter->deposit_signal(
-              *shift_amount,
-              fsim::runtime::PackedLogic4::from_msb_string(amount));
-          (void)reduction_shift_interpreter->run();
-          assert(
-              reduction_shift_interpreter
-                  ->signal_value(*reduced_and)
-                  .to_msb_string()
-              == expected_and);
-          assert(
-              reduction_shift_interpreter
-                  ->signal_value(*reduced_or)
-                  .to_msb_string()
-              == expected_or);
-          assert(
-              reduction_shift_interpreter
-                  ->signal_value(*reduced_xor)
-                  .to_msb_string()
-              == expected_xor);
-          assert(
-              reduction_shift_interpreter
-                  ->signal_value(*reduced_nand)
-                  .to_msb_string()
-              == expected_nand);
-          assert(
-              reduction_shift_interpreter
-                  ->signal_value(*reduced_nor)
-                  .to_msb_string()
-              == expected_nor);
-          assert(
-              reduction_shift_interpreter
-                  ->signal_value(*reduced_xnor)
-                  .to_msb_string()
-              == expected_xnor);
-          assert(
-              reduction_shift_interpreter
-                  ->signal_value(*reduced_xnor_alias)
-                  .to_msb_string()
-              == expected_xnor);
-          assert(
-              reduction_shift_interpreter
-                  ->signal_value(*xnor_value)
-                  .to_msb_string()
-              == expected_xnor_value);
-          assert(
-              reduction_shift_interpreter
-                  ->signal_value(*xnor_value_alias)
-                  .to_msb_string()
-              == expected_xnor_value);
-          assert(
-              reduction_shift_interpreter
-                  ->signal_value(*shifted_left)
-                  .to_msb_string()
-              == expected_left);
-          assert(
-              reduction_shift_interpreter
-                  ->signal_value(*shifted_right)
-                  .to_msb_string()
-              == expected_right);
+            reduction_shift_interpreter->deposit_signal(
+                *reduction_value,
+                fsim::runtime::PackedLogic4::from_msb_string(value));
+            reduction_shift_interpreter->deposit_signal(
+                *shift_amount,
+                fsim::runtime::PackedLogic4::from_msb_string(amount));
+            (void)reduction_shift_interpreter->run();
+            assert(
+                reduction_shift_interpreter
+                    ->signal_value(*reduced_and)
+                    .to_msb_string()
+                == expected_and);
+            assert(
+                reduction_shift_interpreter
+                    ->signal_value(*reduced_or)
+                    .to_msb_string()
+                == expected_or);
+            assert(
+                reduction_shift_interpreter
+                    ->signal_value(*reduced_xor)
+                    .to_msb_string()
+                == expected_xor);
+            assert(
+                reduction_shift_interpreter
+                    ->signal_value(*reduced_nand)
+                    .to_msb_string()
+                == expected_nand);
+            assert(
+                reduction_shift_interpreter
+                    ->signal_value(*reduced_nor)
+                    .to_msb_string()
+                == expected_nor);
+            assert(
+                reduction_shift_interpreter
+                    ->signal_value(*reduced_xnor)
+                    .to_msb_string()
+                == expected_xnor);
+            assert(
+                reduction_shift_interpreter
+                    ->signal_value(*reduced_xnor_alias)
+                    .to_msb_string()
+                == expected_xnor);
+            assert(
+                reduction_shift_interpreter
+                    ->signal_value(*xnor_value)
+                    .to_msb_string()
+                == expected_xnor_value);
+            assert(
+                reduction_shift_interpreter
+                    ->signal_value(*xnor_value_alias)
+                    .to_msb_string()
+                == expected_xnor_value);
+            assert(
+                reduction_shift_interpreter
+                    ->signal_value(*shifted_left)
+                    .to_msb_string()
+                == expected_left);
+            assert(
+                reduction_shift_interpreter
+                    ->signal_value(*shifted_right)
+                    .to_msb_string()
+                == expected_right);
         };
     run_reduction_shift(
         "1111", "001", "1", "1", "0", "0", "0", "1",
@@ -1393,10 +1265,9 @@ endmodule
         "Z001", "100", "0", "1", "X", "1", "0", "X",
         "X100", "0000", "0000");
 
-    const auto arithmetic_process =
-        fsim::frontend::parse_text(
-            "arithmetic_process.sv",
-            R"(
+    const auto arithmetic_process = fsim::frontend::parse_text(
+        "arithmetic_process.sv",
+        R"(
 module arithmetic_process;
   logic [7:0] lhs;
   logic [7:0] rhs;
@@ -1416,67 +1287,64 @@ module arithmetic_process;
   end
 endmodule
 )",
-            fsim::frontend::Language::SystemVerilog2017);
+        fsim::frontend::Language::SystemVerilog2017);
     assert(arithmetic_process.ok());
-    const auto elaborated_arithmetic =
-        fsim::elaboration::elaborate(
-            arithmetic_process.design,
-            "sv:work.arithmetic_process");
+    const auto elaborated_arithmetic = fsim::elaboration::elaborate(
+        arithmetic_process.design,
+        "sv:work.arithmetic_process");
     assert(elaborated_arithmetic.ok());
-    const auto arithmetic_lhs =
-        elaborated_arithmetic.design->find_signal("lhs");
-    const auto arithmetic_rhs =
-        elaborated_arithmetic.design->find_signal("rhs");
-    const std::array arithmetic_outputs{
+    const auto arithmetic_lhs = elaborated_arithmetic.design->find_signal("lhs");
+    const auto arithmetic_rhs = elaborated_arithmetic.design->find_signal("rhs");
+    const std::array arithmetic_outputs {
         elaborated_arithmetic.design->find_signal("difference"),
         elaborated_arithmetic.design->find_signal("product"),
         elaborated_arithmetic.design->find_signal("quotient"),
         elaborated_arithmetic.design->find_signal("remainder"),
         elaborated_arithmetic.design->find_signal("positive"),
-        elaborated_arithmetic.design->find_signal("negative")};
+        elaborated_arithmetic.design->find_signal("negative")
+    };
     assert(arithmetic_lhs && arithmetic_rhs);
     assert(std::ranges::all_of(
         arithmetic_outputs,
         [](const auto& signal) {
-          return signal.has_value();
+            return signal.has_value();
         }));
-    auto arithmetic_interpreter =
-        elaborated_arithmetic.design->create_interpreter();
+    auto arithmetic_interpreter = elaborated_arithmetic.design->create_interpreter();
     const auto run_arithmetic =
         [&](const std::string_view lhs,
             const std::string_view rhs,
             const std::array<std::string_view, 6>& expected) {
-          arithmetic_interpreter->deposit_signal(
-              *arithmetic_lhs,
-              fsim::runtime::PackedLogic4::from_msb_string(lhs));
-          arithmetic_interpreter->deposit_signal(
-              *arithmetic_rhs,
-              fsim::runtime::PackedLogic4::from_msb_string(rhs));
-          (void)arithmetic_interpreter->run();
-          for (std::size_t index = 0;
-               index < arithmetic_outputs.size(); ++index) {
-            assert(
-                arithmetic_interpreter
-                    ->signal_value(*arithmetic_outputs[index])
-                    .to_msb_string()
-                == expected[index]);
-          }
+            arithmetic_interpreter->deposit_signal(
+                *arithmetic_lhs,
+                fsim::runtime::PackedLogic4::from_msb_string(lhs));
+            arithmetic_interpreter->deposit_signal(
+                *arithmetic_rhs,
+                fsim::runtime::PackedLogic4::from_msb_string(rhs));
+            (void)arithmetic_interpreter->run();
+            for (std::size_t index = 0;
+                index < arithmetic_outputs.size(); ++index) {
+                assert(
+                    arithmetic_interpreter
+                        ->signal_value(*arithmetic_outputs[index])
+                        .to_msb_string()
+                    == expected[index]);
+            }
         };
     run_arithmetic(
         "11001000",
         "00000111",
-        {"11000001", "01111000", "00011100",
-         "00000100", "11001000", "00111000"});
+        { "11000001", "01111000", "00011100",
+            "00000100", "11001000", "00111000" });
     run_arithmetic(
         "10X01000",
         "00000111",
-        {"XXXXXXXX", "XXXXXXXX", "XXXXXXXX",
-         "XXXXXXXX", "10X01000", "XXXXXXXX"});
+        { "XXXXXXXX", "XXXXXXXX", "XXXXXXXX",
+            "XXXXXXXX", "10X01000", "XXXXXXXX" });
     run_arithmetic(
         "11001000",
         "00000000",
-        {"11001000", "00000000", "XXXXXXXX",
-         "XXXXXXXX", "11001000", "00111000"});
+        { "11001000", "00000000", "XXXXXXXX",
+            "XXXXXXXX", "11001000", "00111000" });
 
     const auto signed_arithmetic = fsim::frontend::parse_text(
         "signed_arithmetic.sv",
@@ -1505,19 +1373,15 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(signed_arithmetic.ok());
-    const auto elaborated_signed_arithmetic =
-        fsim::elaboration::elaborate(
-            signed_arithmetic.design,
-            "sv:work.signed_arithmetic");
+    const auto elaborated_signed_arithmetic = fsim::elaboration::elaborate(
+        signed_arithmetic.design,
+        "sv:work.signed_arithmetic");
     assert(elaborated_signed_arithmetic.ok());
-    const auto signed_lhs =
-        elaborated_signed_arithmetic.design->find_signal("lhs");
-    const auto signed_rhs =
-        elaborated_signed_arithmetic.design->find_signal("rhs");
-    const auto unsigned_rhs =
-        elaborated_signed_arithmetic.design->find_signal(
-            "unsigned_rhs");
-    const std::array signed_outputs{
+    const auto signed_lhs = elaborated_signed_arithmetic.design->find_signal("lhs");
+    const auto signed_rhs = elaborated_signed_arithmetic.design->find_signal("rhs");
+    const auto unsigned_rhs = elaborated_signed_arithmetic.design->find_signal(
+        "unsigned_rhs");
+    const std::array signed_outputs {
         elaborated_signed_arithmetic.design->find_signal("sum"),
         elaborated_signed_arithmetic.design->find_signal(
             "difference"),
@@ -1528,55 +1392,56 @@ endmodule
             "remainder"),
         elaborated_signed_arithmetic.design->find_signal("less"),
         elaborated_signed_arithmetic.design->find_signal(
-            "mixed_less")};
+            "mixed_less")
+    };
     assert(signed_lhs && signed_rhs && unsigned_rhs);
     assert(std::ranges::all_of(
         signed_outputs,
         [](const auto& signal) {
-          return signal.has_value();
+            return signal.has_value();
         }));
-    auto signed_interpreter =
-        elaborated_signed_arithmetic.design->create_interpreter();
+    auto signed_interpreter = elaborated_signed_arithmetic.design->create_interpreter();
     const auto run_signed =
         [&](const std::string_view lhs,
             const std::string_view rhs,
             const std::string_view unsigned_value,
             const std::array<std::string_view, 7>& expected) {
-          signed_interpreter->deposit_signal(
-              *signed_lhs,
-              fsim::runtime::PackedLogic4::from_msb_string(lhs));
-          signed_interpreter->deposit_signal(
-              *signed_rhs,
-              fsim::runtime::PackedLogic4::from_msb_string(rhs));
-          signed_interpreter->deposit_signal(
-              *unsigned_rhs,
-              fsim::runtime::PackedLogic4::from_msb_string(
-                  unsigned_value));
-          (void)signed_interpreter->run();
-          for (std::size_t index = 0;
-               index < signed_outputs.size(); ++index) {
-            assert(
-                signed_interpreter
-                    ->signal_value(*signed_outputs[index])
-                    .to_msb_string()
-                == expected[index]);
-          }
+            signed_interpreter->deposit_signal(
+                *signed_lhs,
+                fsim::runtime::PackedLogic4::from_msb_string(lhs));
+            signed_interpreter->deposit_signal(
+                *signed_rhs,
+                fsim::runtime::PackedLogic4::from_msb_string(rhs));
+            signed_interpreter->deposit_signal(
+                *unsigned_rhs,
+                fsim::runtime::PackedLogic4::from_msb_string(
+                    unsigned_value));
+            (void)signed_interpreter->run();
+            for (std::size_t index = 0;
+                index < signed_outputs.size(); ++index) {
+                assert(
+                    signed_interpreter
+                        ->signal_value(*signed_outputs[index])
+                        .to_msb_string()
+                    == expected[index]);
+            }
         };
     run_signed(
         "11111011",
         "00000011",
         "00000001",
-        {"11111110", "11111000", "11110001",
-         "11111111", "11111110", "1", "0"});
+        { "11111110", "11111000", "11110001",
+            "11111111", "11111110", "1", "0" });
     run_signed(
         "00000101",
         "11111101",
         "11111111",
-        {"00000010", "00001000", "11110001",
-         "11111111", "00000010", "0", "1"});
+        { "00000010", "00001000", "11110001",
+            "11111111", "00000010", "0", "1" });
 }
 
-void test_systemverilog_membership_lowering() {
+void test_systemverilog_membership_lowering()
+{
     const auto parsed = fsim::frontend::parse_text(
         "membership_expression.sv",
         R"(
@@ -1646,9 +1511,9 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     if (!parsed.ok()) {
-      for (const auto& diagnostic : parsed.diagnostics) {
-        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
-      }
+        for (const auto& diagnostic : parsed.diagnostics) {
+            std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+        }
     }
     assert(parsed.ok());
     const auto elaborated = fsim::elaboration::elaborate(
@@ -1656,36 +1521,36 @@ endmodule
     assert(elaborated.ok());
     const auto& process = elaborated.design->processes().front();
     assert(std::ranges::count_if(
-        process.operations,
-        [](const fsim::runtime::simir::Operation& operation) {
-          const auto* binary =
-              fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Binary>(&operation);
-          return binary != nullptr
-              && binary->operation
-                  == fsim::runtime::simir::BinaryOperator::wildcard_equal;
-        }) >= 8);
+               process.operations,
+               [](const fsim::runtime::simir::Operation& operation) {
+                   const auto* binary = fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Binary>(&operation);
+                   return binary != nullptr
+                       && binary->operation
+                       == fsim::runtime::simir::BinaryOperator::wildcard_equal;
+               })
+        >= 8);
     assert(std::ranges::any_of(
         process.operations,
         [](const fsim::runtime::simir::Operation& operation) {
-          return fsim::runtime::simir::operation_holds<
-              fsim::runtime::simir::Branch>(operation);
+            return fsim::runtime::simir::operation_holds<
+                fsim::runtime::simir::Branch>(operation);
         }));
     const auto membership_calls = std::ranges::count_if(
         process.operations,
         [](const fsim::runtime::simir::Operation& operation) {
-          return fsim::runtime::simir::operation_holds<
-              fsim::runtime::simir::Call>(operation);
+            return fsim::runtime::simir::operation_holds<
+                fsim::runtime::simir::Call>(operation);
         });
     if (membership_calls != 4) {
-      std::cerr << "membership call count: " << membership_calls << '\n';
+        std::cerr << "membership call count: " << membership_calls << '\n';
     }
     assert(membership_calls == 4);
     auto interpreter = elaborated.design->create_interpreter();
     (void)interpreter->run();
     const auto value = [&](const std::string_view name) {
-      const auto signal = elaborated.design->find_signal(name);
-      assert(signal);
-      return interpreter->signal_value(*signal).to_msb_string();
+        const auto signal = elaborated.design->find_signal(name);
+        assert(signal);
+        return interpreter->signal_value(*signal).to_msb_string();
     };
     assert(value("exact_match") == "1");
     assert(value("range_match") == "1");
@@ -1733,7 +1598,8 @@ endmodule
         "FSIM-ELAB-SVMEMBER-004");
 }
 
-void test_systemverilog_case_inside_lowering() {
+void test_systemverilog_case_inside_lowering()
+{
     const auto parsed = fsim::frontend::parse_text(
         "case_inside.sv",
         R"(
@@ -1835,42 +1701,41 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     if (!parsed.ok()) {
-      for (const auto& diagnostic : parsed.diagnostics) {
-        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
-      }
+        for (const auto& diagnostic : parsed.diagnostics) {
+            std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+        }
     }
     assert(parsed.ok());
     const auto elaborated = fsim::elaboration::elaborate(
         parsed.design, "sv:work.case_inside");
     if (!elaborated.ok()) {
-      for (const auto& diagnostic : elaborated.diagnostics) {
-        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
-      }
+        for (const auto& diagnostic : elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+        }
     }
     assert(elaborated.ok());
     const auto& process = elaborated.design->processes().front();
     assert(std::ranges::any_of(
         process.operations,
         [](const fsim::runtime::simir::Operation& operation) {
-          const auto* binary =
-              fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Binary>(&operation);
-          return binary != nullptr
-              && binary->operation
-                  == fsim::runtime::simir::BinaryOperator::wildcard_equal;
+            const auto* binary = fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Binary>(&operation);
+            return binary != nullptr
+                && binary->operation
+                == fsim::runtime::simir::BinaryOperator::wildcard_equal;
         }));
     const auto case_calls = std::ranges::count_if(
         process.operations,
         [](const fsim::runtime::simir::Operation& operation) {
-          return fsim::runtime::simir::operation_holds<fsim::runtime::simir::Call>(
-              operation);
+            return fsim::runtime::simir::operation_holds<fsim::runtime::simir::Call>(
+                operation);
         });
     assert(case_calls == 4);
     auto interpreter = elaborated.design->create_interpreter();
     (void)interpreter->run();
     const auto value = [&](const std::string_view name) {
-      const auto signal = elaborated.design->find_signal(name);
-      assert(signal);
-      return interpreter->signal_value(*signal).to_msb_string();
+        const auto signal = elaborated.design->find_signal(name);
+        assert(signal);
+        return interpreter->signal_value(*signal).to_msb_string();
     };
     assert(value("exact_range") == "0001");
     assert(value("wildcard_choice") == "0010");
@@ -1917,8 +1782,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(malformed_parsed.ok());
     auto empty = malformed_parsed.design;
-    empty.units.front().processes.front().statements.front()
-        .case_alternatives.front().choices.clear();
+    empty.units.front().processes.front().statements.front().case_alternatives.front().choices.clear();
     const auto empty_result = fsim::elaboration::elaborate(
         empty, "sv:work.case_inside_malformed_hir");
     assert(!empty_result.ok());
@@ -1926,14 +1790,13 @@ endmodule
         empty_result, "FSIM-ELAB-SVCASEINSIDE-005"));
 
     auto malformed = malformed_parsed.design;
-    auto& malformed_case = malformed.units.front().processes.front()
-                               .statements.front();
-    malformed_case.case_alternatives.front().choices.front() =
-        fsim::frontend::Expression{
-            fsim::frontend::ExpressionKind::Call,
-            "@inside-range",
-            {},
-            malformed_case.span};
+    auto& malformed_case = malformed.units.front().processes.front().statements.front();
+    malformed_case.case_alternatives.front().choices.front() = fsim::frontend::Expression {
+        fsim::frontend::ExpressionKind::Call,
+        "@inside-range",
+        { },
+        malformed_case.span
+    };
     const auto malformed_result = fsim::elaboration::elaborate(
         malformed, "sv:work.case_inside_malformed_hir");
     assert(!malformed_result.ok());
@@ -1947,8 +1810,7 @@ endmodule
         fsim::frontend::Language::Verilog2005);
     assert(verilog_parsed.ok());
     auto wrong_language = verilog_parsed.design;
-    wrong_language.units.front().processes.front().statements.front()
-        .case_match_kind = fsim::frontend::CaseMatchKind::Inside;
+    wrong_language.units.front().processes.front().statements.front().case_match_kind = fsim::frontend::CaseMatchKind::Inside;
     const auto wrong_language_result = fsim::elaboration::elaborate(
         wrong_language, "sv:work.case_inside_wrong_language");
     assert(!wrong_language_result.ok());
@@ -1989,8 +1851,8 @@ end architecture;
              "FSIM-ELAB-VHATTR-004",
              "FSIM-ELAB-VHATTR-005",
              "FSIM-ELAB-VHATTR-006",
-             "FSIM-ELAB-VHATTR-007"}) {
-      assert(has_diagnostic(rejected_vhdl_attributes, code));
+             "FSIM-ELAB-VHATTR-007" }) {
+        assert(has_diagnostic(rejected_vhdl_attributes, code));
     }
 }
 

@@ -284,7 +284,12 @@ trace_filters = ["sink.*"]
       std::istreambuf_iterator<char>{trace_input},
       std::istreambuf_iterator<char>{}};
   assert(filtered_vcd.find("sink") != std::string::npos);
-  assert(filtered_vcd.find("source") == std::string::npos);
+  assert(
+      filtered_vcd.find("$scope module source $end")
+      == std::string::npos);
+  assert(
+      filtered_vcd.find("fsim-verilog-scope path=source ")
+      == std::string::npos);
 }
 
 } // namespace fsim::test

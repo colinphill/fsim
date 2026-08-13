@@ -99,6 +99,20 @@ std::optional<BuiltProject> build_checked_project(
     // semantic HIR is the durable boundary. Moving it out proves that no build,
     // cache, runtime, debugger, trace, or API result can retain an address into
     // CheckedProject's parser workspace.
+    std::map<std::string, frontend::StandardRevision, std::less<>>
+        verilog_unit_revisions;
+    std::map<std::string, std::string, std::less<>>
+        verilog_unit_compatibility_profiles;
+    for (const auto& unit : checked->parsed.units) {
+        if (unit.language == frontend::Language::Vhdl2008) {
+            continue;
+        }
+        const auto identity = unit.library + "::" + unit.name;
+        verilog_unit_revisions.insert_or_assign(
+            identity, unit.standard_revision);
+        verilog_unit_compatibility_profiles.insert_or_assign(
+            identity, unit.verilog_compatibility_profile);
+    }
     auto lowering_adapter = std::move(checked->parsed);
     std::vector<std::filesystem::path> systemc_plugins;
     std::vector<SystemCLibraryRegistry> systemc_registries;
@@ -467,7 +481,9 @@ std::optional<BuiltProject> build_checked_project(
         std::move(checked->objects),
         std::move(checked->systemverilog_uvm_provenance), { },
         std::move(checked->systemverilog_class_specializations),
-        std::move(systemverilog_coverage), std::nullopt, { }
+        std::move(systemverilog_coverage), std::nullopt, { },
+        std::move(verilog_unit_revisions),
+        std::move(verilog_unit_compatibility_profiles)
     };
     result.vhdl_unit_provenance = std::move(vhdl_provenance);
     return result;

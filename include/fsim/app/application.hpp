@@ -50,6 +50,7 @@
 #include <filesystem>
 #include <functional>
 #include <iosfwd>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -73,6 +74,9 @@ struct CheckedSource {
     struct Dependency {
         std::filesystem::path path;
         std::string content_digest;
+        frontend::StandardRevision standard_revision {
+            frontend::StandardRevision::SystemVerilog2017
+        };
     };
     /// Exact transitive preprocessing inputs, in deterministic first-use order.
     std::vector<Dependency> dependencies;
@@ -80,6 +84,9 @@ struct CheckedSource {
     std::string compilation_unit_digest;
     /// Optional consumer-local backing file for a relocatable logical path.
     std::filesystem::path backing_path;
+    frontend::StandardRevision standard_revision {
+        frontend::StandardRevision::SystemVerilog2017
+    };
 };
 
 struct SystemVerilogUvmProvenance {
@@ -112,6 +119,7 @@ struct CheckedProject {
         std::string library;
         std::filesystem::path directory;
         std::string metadata_digest;
+        std::vector<frontend::StandardRevision> standard_revisions;
         std::vector<library::VhdlPackageDependency> vhdl_package_dependencies;
         std::vector<std::string> unit_checksums;
         std::vector<project::SourceSet> source_settings;
@@ -169,6 +177,23 @@ struct VhdlUnitProvenance {
     std::vector<library::VhdlPackageDependency> package_dependencies;
 };
 
+/// Public owning-unit identity for an elaborated Verilog/SystemVerilog scope.
+/// Cache keys and compiler implementation objects are intentionally excluded.
+struct VerilogScopeProvenance {
+    std::string path;
+    semantic::UnitId unit { };
+    semantic::SourceSpanId source { };
+    semantic::Language language { semantic::Language::system_verilog };
+    std::string library;
+    std::string unit_name;
+    std::string semantic_unit;
+    std::string source_path;
+    std::uint32_t source_line { };
+    std::uint32_t source_column { };
+    std::string standard;
+    std::string compatibility_profile;
+};
+
 struct BuiltProject {
     elaboration::ElaboratedDesign design;
     /// Stable-ID elaborated hierarchy and executable metadata. The legacy
@@ -215,7 +240,18 @@ struct BuiltProject {
     std::optional<runtime::SystemVerilogUvmCheckpointArtifact>
         systemverilog_uvm_checkpoint;
     std::vector<VhdlUnitProvenance> vhdl_unit_provenance;
+    std::map<std::string, frontend::StandardRevision, std::less<>>
+        verilog_unit_revisions;
+    std::map<std::string, std::string, std::less<>>
+        verilog_unit_compatibility_profiles;
 };
+
+[[nodiscard]] std::vector<VerilogScopeProvenance>
+verilog_scope_provenance(const BuiltProject& project);
+[[nodiscard]] std::optional<VerilogScopeProvenance>
+verilog_scope_provenance(
+    const BuiltProject& project,
+    std::string_view path);
 
 /// Parse all HDL source files in deterministic manifest order. Independent
 /// compilation units may be analyzed concurrently; roots within a shared
@@ -584,6 +620,12 @@ public:
     vhdl_unit_provenance() const noexcept;
     [[nodiscard]] std::vector<std::string>
     vhdl_provenance_comments() const;
+    [[nodiscard]] std::vector<VerilogScopeProvenance>
+    verilog_scope_provenance() const;
+    [[nodiscard]] std::optional<VerilogScopeProvenance>
+    verilog_scope_provenance(std::string_view path) const;
+    [[nodiscard]] std::vector<std::string>
+    verilog_provenance_comments() const;
     [[nodiscard]] std::string_view time_resolution() const noexcept;
     [[nodiscard]] std::optional<runtime::simir::SignalId> find_signal(
         std::string_view path) const noexcept;

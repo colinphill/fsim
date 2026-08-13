@@ -254,34 +254,84 @@ frontend::VhdlStandard frontend_vhdl_standard(
     return frontend::VhdlStandard::Vhdl2008;
 }
 
+frontend::StandardRevision frontend_standard_revision(
+    const project::Language language,
+    const std::string_view standard)
+{
+    if (language == project::Language::vhdl) {
+        const auto selected = project::parse_vhdl_standard(standard);
+        switch (selected.value_or(project::VhdlStandard::vhdl_2008)) {
+        case project::VhdlStandard::vhdl_1987:
+            return frontend::StandardRevision::Vhdl1987;
+        case project::VhdlStandard::vhdl_1993:
+            return frontend::StandardRevision::Vhdl1993;
+        case project::VhdlStandard::vhdl_2000:
+            return frontend::StandardRevision::Vhdl2000;
+        case project::VhdlStandard::vhdl_2002:
+            return frontend::StandardRevision::Vhdl2002;
+        case project::VhdlStandard::vhdl_2008:
+            return frontend::StandardRevision::Vhdl2008;
+        }
+    }
+    if (language == project::Language::verilog) {
+        const auto selected = project::parse_verilog_standard(standard);
+        switch (selected.value_or(project::VerilogStandard::verilog_2005)) {
+        case project::VerilogStandard::verilog_1995:
+            return frontend::StandardRevision::Verilog1995;
+        case project::VerilogStandard::verilog_2001:
+            return frontend::StandardRevision::Verilog2001;
+        case project::VerilogStandard::verilog_2001_noconfig:
+            return frontend::StandardRevision::Verilog2001NoConfig;
+        case project::VerilogStandard::verilog_2005:
+            return frontend::StandardRevision::Verilog2005;
+        }
+    }
+    if (language == project::Language::system_verilog) {
+        const auto selected = project::parse_systemverilog_standard(standard);
+        switch (selected.value_or(
+            project::SystemVerilogStandard::systemverilog_2017)) {
+        case project::SystemVerilogStandard::systemverilog_2005:
+            return frontend::StandardRevision::SystemVerilog2005;
+        case project::SystemVerilogStandard::systemverilog_2009:
+            return frontend::StandardRevision::SystemVerilog2009;
+        case project::SystemVerilogStandard::systemverilog_2012:
+            return frontend::StandardRevision::SystemVerilog2012;
+        case project::SystemVerilogStandard::systemverilog_2017:
+            return frontend::StandardRevision::SystemVerilog2017;
+        }
+    }
+    return frontend::StandardRevision::SystemVerilog2017;
+}
+
 bool same_source_path(
     const std::filesystem::path& left,
-    const std::filesystem::path& right)  {
-  if (left.lexically_normal() == right.lexically_normal()) {
-    return true;
-  }
-  std::error_code left_error;
-  std::error_code right_error;
-  const auto canonical_left =
-      std::filesystem::weakly_canonical(left, left_error);
-  const auto canonical_right =
-      std::filesystem::weakly_canonical(right, right_error);
-  return !left_error && !right_error
-      && canonical_left == canonical_right;
+    const std::filesystem::path& right)
+{
+    if (left.lexically_normal() == right.lexically_normal()) {
+        return true;
+    }
+    std::error_code left_error;
+    std::error_code right_error;
+    const auto canonical_left = std::filesystem::weakly_canonical(left, left_error);
+    const auto canonical_right = std::filesystem::weakly_canonical(right, right_error);
+    return !left_error && !right_error
+        && canonical_left == canonical_right;
 }
 
 std::string compilation_unit_digest(
     const std::vector<frontend::PreprocessedRoot>& roots,
     const std::vector<frontend::PreprocessedDependency>& inputs,
     const std::string_view language,
-    const std::string_view standard)
+    const std::string_view standard,
+    const std::string_view compatibility_profile)
 {
     compiler::CacheKeyBuilder key;
     key.add(
         "compilation-unit-snapshot-schema",
-        "fsim-hdl-compilation-unit-v2");
+        "fsim-hdl-compilation-unit-v3-standard-compatibility");
     key.add("language", language);
     key.add("standard", standard);
+    key.add("compatibility-profile", compatibility_profile);
     for (const auto& root : roots) {
         key.add(
             "root-path",
@@ -302,17 +352,21 @@ std::string compilation_unit_digest(
 void assign_class_source_metadata(
     frontend::SystemVerilogClassDeclaration& declaration,
     const std::string_view library,
-    const std::string_view compilation_unit_identity) {
-  declaration.library = library;
-  declaration.compilation_unit_identity = compilation_unit_identity;
-  for (auto& method : declaration.methods) {
-    method.library = library;
-    method.compilation_unit_identity = compilation_unit_identity;
-  }
-  for (auto& nested : declaration.nested_classes) {
-    assign_class_source_metadata(
-        nested, library, compilation_unit_identity);
-  }
+    const std::string_view compilation_unit_identity,
+    const frontend::StandardRevision standard_revision)
+{
+    declaration.library = library;
+    declaration.compilation_unit_identity = compilation_unit_identity;
+    declaration.standard_revision = standard_revision;
+    for (auto& method : declaration.methods) {
+        method.library = library;
+        method.compilation_unit_identity = compilation_unit_identity;
+        method.standard_revision = standard_revision;
+    }
+    for (auto& nested : declaration.nested_classes) {
+        assign_class_source_metadata(
+            nested, library, compilation_unit_identity, standard_revision);
+    }
 }
 
 ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
@@ -321,6 +375,7 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
     frontend::PreprocessorOptions options;
     options.include_directories = group.include_directories;
     options.defines = group.defines;
+    options.standard_revision = group.standard_revision;
     std::vector<std::filesystem::path> paths;
     paths.reserve(group.inputs.size());
     for (const auto& input : group.inputs) {
@@ -335,7 +390,7 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
         group.language == frontend::Language::Verilog2005
             ? std::string_view { "verilog" }
             : std::string_view { "systemverilog" },
-        group.standard);
+        group.standard, group.compatibility_profile);
     snapshot.sources.reserve(preprocessed.roots.size());
     for (std::size_t root_index = 0;
          root_index < preprocessed.roots.size(); ++root_index) {
@@ -349,127 +404,130 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
           ? "verilog"
           : "systemverilog";
       source.standard = group.standard;
+      source.standard_revision = group.standard_revision;
       source.content_digest = support::Sha256::hex(
           support::Sha256::digest(root.contents));
       source.dependencies.reserve(root.dependencies.size());
       for (const auto& dependency : root.dependencies) {
-        source.dependencies.push_back({
-            dependency.path,
-            support::Sha256::hex(
-                support::Sha256::digest(dependency.contents))});
+          source.dependencies.push_back({ dependency.path,
+              support::Sha256::hex(
+                  support::Sha256::digest(dependency.contents)),
+              dependency.standard_revision });
       }
       source.compilation_unit_digest = unit_digest;
       snapshot.sources.push_back(std::move(source));
     }
     snapshot.result = frontend::parse_verilog(
         std::move(preprocessed.lexed),
-        group.language == frontend::Language::SystemVerilog2017);
+        group.standard_revision,
+        group.compatibility_profile);
     for (auto& unit : snapshot.result.design.units) {
-      const auto unit_source =
-          fsim::support::path_from_utf8(physical_source(unit.span));
-      auto source_order =
-          group.inputs.empty()
-              ? std::size_t{}
-              : group.inputs.front().source_order;
-      for (std::size_t root_index = 0;
-           root_index < snapshot.sources.size()
-           && root_index < group.inputs.size(); ++root_index) {
-        const auto& source = snapshot.sources[root_index];
-        if (same_source_path(source.path, unit_source)
-            || std::any_of(
-                source.dependencies.begin(),
-                source.dependencies.end(),
-                [&](const CheckedSource::Dependency& dependency) {
-                  return same_source_path(
-                      dependency.path, unit_source);
-                })) {
-          unit.library = group.inputs[root_index].library;
-          source_order =
-              group.inputs[root_index].source_order;
-          break;
+        const auto unit_source = fsim::support::path_from_utf8(physical_source(unit.span));
+        auto source_order = group.inputs.empty()
+            ? std::size_t { }
+            : group.inputs.front().source_order;
+        for (std::size_t root_index = 0;
+            root_index < snapshot.sources.size()
+            && root_index < group.inputs.size();
+            ++root_index) {
+            const auto& source = snapshot.sources[root_index];
+            if (same_source_path(source.path, unit_source)
+                || std::any_of(
+                    source.dependencies.begin(),
+                    source.dependencies.end(),
+                    [&](const CheckedSource::Dependency& dependency) {
+                        return same_source_path(
+                            dependency.path, unit_source);
+                    })) {
+                unit.library = group.inputs[root_index].library;
+                source_order = group.inputs[root_index].source_order;
+                break;
+            }
         }
-      }
-      unit.compilation_unit_identity = unit_digest;
-      if (unit.kind == frontend::UnitKind::SystemVerilogBind) {
-          unit.name = "$bind$" + unit_digest + unit.name;
-      }
-      for (auto& declaration : unit.systemverilog_classes) {
-        assign_class_source_metadata(
-            declaration, unit.library, unit_digest);
-      }
-      snapshot.unit_source_orders.push_back(source_order);
+        unit.compilation_unit_identity = unit_digest;
+        unit.standard_revision = group.standard_revision;
+        if (unit.kind == frontend::UnitKind::SystemVerilogBind) {
+            unit.name = "$bind$" + unit_digest + unit.name;
+        }
+        for (auto& declaration : unit.systemverilog_classes) {
+            assign_class_source_metadata(
+                declaration, unit.library, unit_digest, group.standard_revision);
+        }
+        snapshot.unit_source_orders.push_back(source_order);
     }
     for (auto& udp : snapshot.result.design.udp_declarations) {
-      const auto udp_source =
-          fsim::support::path_from_utf8(physical_source(udp.span));
-      auto source_order = group.inputs.empty()
-          ? std::size_t{}
-          : group.inputs.front().source_order;
-      for (std::size_t root_index = 0;
-           root_index < snapshot.sources.size()
-           && root_index < group.inputs.size(); ++root_index) {
-        const auto& source = snapshot.sources[root_index];
-        if (same_source_path(source.path, udp_source)
-            || std::ranges::any_of(
-                source.dependencies,
-                [&](const CheckedSource::Dependency& dependency) {
-                  return same_source_path(
-                      dependency.path, udp_source);
-                })) {
-          udp.library = group.inputs[root_index].library;
-          source_order = group.inputs[root_index].source_order;
-          break;
+        const auto udp_source = fsim::support::path_from_utf8(physical_source(udp.span));
+        auto source_order = group.inputs.empty()
+            ? std::size_t { }
+            : group.inputs.front().source_order;
+        for (std::size_t root_index = 0;
+            root_index < snapshot.sources.size()
+            && root_index < group.inputs.size();
+            ++root_index) {
+            const auto& source = snapshot.sources[root_index];
+            if (same_source_path(source.path, udp_source)
+                || std::ranges::any_of(
+                    source.dependencies,
+                    [&](const CheckedSource::Dependency& dependency) {
+                        return same_source_path(
+                            dependency.path, udp_source);
+                    })) {
+                udp.library = group.inputs[root_index].library;
+                source_order = group.inputs[root_index].source_order;
+                break;
+            }
         }
-      }
-      snapshot.udp_source_orders.push_back(source_order);
+        snapshot.udp_source_orders.push_back(source_order);
+        udp.standard_revision = group.standard_revision;
     }
     const auto source_metadata = [&](const frontend::SourceSpan& span) {
-      const auto declaration_source =
-          fsim::support::path_from_utf8(physical_source(span));
-      std::string library = group.inputs.empty()
-          ? std::string{"work"}
-          : group.inputs.front().library;
-      auto source_order = group.inputs.empty()
-          ? std::size_t{}
-          : group.inputs.front().source_order;
-      for (std::size_t root_index = 0;
-           root_index < snapshot.sources.size()
-           && root_index < group.inputs.size(); ++root_index) {
-        const auto& source = snapshot.sources[root_index];
-        if (same_source_path(source.path, declaration_source)
-            || std::ranges::any_of(
-                source.dependencies,
-                [&](const CheckedSource::Dependency& dependency) {
-                  return same_source_path(
-                      dependency.path, declaration_source);
-                })) {
-          library = group.inputs[root_index].library;
-          source_order = group.inputs[root_index].source_order;
-          break;
+        const auto declaration_source = fsim::support::path_from_utf8(physical_source(span));
+        std::string library = group.inputs.empty()
+            ? std::string { "work" }
+            : group.inputs.front().library;
+        auto source_order = group.inputs.empty()
+            ? std::size_t { }
+            : group.inputs.front().source_order;
+        for (std::size_t root_index = 0;
+            root_index < snapshot.sources.size()
+            && root_index < group.inputs.size();
+            ++root_index) {
+            const auto& source = snapshot.sources[root_index];
+            if (same_source_path(source.path, declaration_source)
+                || std::ranges::any_of(
+                    source.dependencies,
+                    [&](const CheckedSource::Dependency& dependency) {
+                        return same_source_path(
+                            dependency.path, declaration_source);
+                    })) {
+                library = group.inputs[root_index].library;
+                source_order = group.inputs[root_index].source_order;
+                break;
+            }
         }
-      }
-      return std::pair{std::move(library), source_order};
+        return std::pair { std::move(library), source_order };
     };
     for (auto& declaration :
-         snapshot.result.design.systemverilog_classes) {
-      auto [library, source_order] = source_metadata(declaration.span);
-      assign_class_source_metadata(
-          declaration, library, unit_digest);
-      snapshot.class_source_orders.push_back(source_order);
+        snapshot.result.design.systemverilog_classes) {
+        auto [library, source_order] = source_metadata(declaration.span);
+        assign_class_source_metadata(
+            declaration, library, unit_digest, group.standard_revision);
+        snapshot.class_source_orders.push_back(source_order);
     }
     for (auto& method :
-         snapshot.result.design.systemverilog_class_method_definitions) {
-      auto [library, source_order] = source_metadata(method.span);
-      method.library = std::move(library);
-      method.compilation_unit_identity = unit_digest;
-      snapshot.class_method_source_orders.push_back(source_order);
+        snapshot.result.design.systemverilog_class_method_definitions) {
+        auto [library, source_order] = source_metadata(method.span);
+        method.library = std::move(library);
+        method.compilation_unit_identity = unit_digest;
+        method.standard_revision = group.standard_revision;
+        snapshot.class_method_source_orders.push_back(source_order);
     }
     return snapshot;
   }
 
   ParsedSnapshot snapshot;
   if (group.inputs.empty()) {
-    return snapshot;
+      return snapshot;
   }
   const auto& input = group.inputs.front();
   CheckedSource source;
@@ -478,31 +536,33 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
       ? "vhdl"
       : "systemverilog";
   source.standard = input.standard;
+  source.standard_revision = input.standard_revision;
   std::ifstream stream(input.path, std::ios::binary);
   if (!stream) {
-    snapshot.result.diagnostics.push_back({
-        frontend::DiagnosticSeverity::Error,
-        "FSIM-FE-IO-001",
-        "unable to open source file",
-        {fsim::support::path_to_utf8(input.path), {}, {},
-         fsim::support::path_to_utf8(input.path), {}},
-        {},
-    });
-    return snapshot;
+      snapshot.result.diagnostics.push_back({
+          frontend::DiagnosticSeverity::Error,
+          "FSIM-FE-IO-001",
+          "unable to open source file",
+          { fsim::support::path_to_utf8(input.path), { }, { },
+              fsim::support::path_to_utf8(input.path), { } },
+          { },
+      });
+      return snapshot;
   }
-  std::string text{
+  std::string text {
       std::istreambuf_iterator<char>(stream),
-      std::istreambuf_iterator<char>()};
+      std::istreambuf_iterator<char>()
+  };
   if (!stream.good() && !stream.eof()) {
-    snapshot.result.diagnostics.push_back({
-        frontend::DiagnosticSeverity::Error,
-        "FSIM-FE-IO-002",
-        "failed while reading source file",
-        {fsim::support::path_to_utf8(input.path), {}, {},
-         fsim::support::path_to_utf8(input.path), {}},
-        {},
-    });
-    return snapshot;
+      snapshot.result.diagnostics.push_back({
+          frontend::DiagnosticSeverity::Error,
+          "FSIM-FE-IO-002",
+          "failed while reading source file",
+          { fsim::support::path_to_utf8(input.path), { }, { },
+              fsim::support::path_to_utf8(input.path), { } },
+          { },
+      });
+      return snapshot;
   }
   source.content_digest = support::Sha256::hex(
       support::Sha256::digest(text));
@@ -522,29 +582,34 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
           fsim::support::path_to_utf8(input.path), std::move(text) },
       input.language, input.vhdl_standard);
   for (auto& unit : snapshot.result.design.units) {
-    unit.library = input.library;
-    unit.compilation_unit_identity = source.compilation_unit_digest;
-    for (auto& declaration : unit.systemverilog_classes) {
-      assign_class_source_metadata(
-          declaration, input.library, source.compilation_unit_digest);
-    }
-    snapshot.unit_source_orders.push_back(input.source_order);
+      unit.library = input.library;
+      unit.compilation_unit_identity = source.compilation_unit_digest;
+      unit.standard_revision = input.standard_revision;
+      for (auto& declaration : unit.systemverilog_classes) {
+          assign_class_source_metadata(
+              declaration, input.library, source.compilation_unit_digest,
+              input.standard_revision);
+      }
+      snapshot.unit_source_orders.push_back(input.source_order);
   }
   for (auto& udp : snapshot.result.design.udp_declarations) {
-    udp.library = input.library;
-    snapshot.udp_source_orders.push_back(input.source_order);
+      udp.library = input.library;
+      udp.standard_revision = input.standard_revision;
+      snapshot.udp_source_orders.push_back(input.source_order);
   }
   for (auto& declaration :
-       snapshot.result.design.systemverilog_classes) {
-    assign_class_source_metadata(
-        declaration, input.library, source.compilation_unit_digest);
-    snapshot.class_source_orders.push_back(input.source_order);
+      snapshot.result.design.systemverilog_classes) {
+      assign_class_source_metadata(
+          declaration, input.library, source.compilation_unit_digest,
+          input.standard_revision);
+      snapshot.class_source_orders.push_back(input.source_order);
   }
   for (auto& method :
-       snapshot.result.design.systemverilog_class_method_definitions) {
-    method.library = input.library;
-    method.compilation_unit_identity = source.compilation_unit_digest;
-    snapshot.class_method_source_orders.push_back(input.source_order);
+      snapshot.result.design.systemverilog_class_method_definitions) {
+      method.library = input.library;
+      method.compilation_unit_identity = source.compilation_unit_digest;
+      method.standard_revision = input.standard_revision;
+      snapshot.class_method_source_orders.push_back(input.source_order);
   }
   snapshot.sources.push_back(std::move(source));
   return snapshot;

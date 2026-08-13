@@ -920,14 +920,57 @@ void invoke_safe_point(
     info.instruction = UINT64_MAX;
     info.kind = FSIM_SAFE_POINT_SCHEDULER;
     info.phase = FSIM_SCHEDULER_PHASE_UNKNOWN;
+    info.provenance_unit_id = UINT32_MAX;
+    info.provenance_source_id = UINT32_MAX;
+    std::optional<fsim::app::VerilogScopeProvenance> provenance;
     if (point != nullptr) {
       info.instruction = point->instruction;
       info.kind = convert_safe_point_kind(point->kind);
       info.source_path = view(point->source.path);
       info.source_line = point->source.line;
       info.source_column = point->source.column;
+      const auto occurrence = std::ranges::find_if(
+          session.simulation->design_ir().processes(),
+          [&](const auto& candidate) {
+            return candidate.runtime_index == point->process;
+          });
+      if (occurrence != session.simulation->design_ir().processes().end()) {
+        provenance = session.simulation->verilog_scope_provenance(
+            occurrence->name);
+      }
+      if (!provenance && point->process < session.process_names.size()) {
+        provenance = session.simulation->verilog_scope_provenance(
+            session.process_names.at(point->process));
+      }
+      if (!provenance && !point->source.path.empty()) {
+        const auto candidates
+            = session.simulation->verilog_scope_provenance();
+        const auto source_owner = std::ranges::find_if(
+            candidates, [&](const auto& candidate) {
+              return candidate.source_path == point->source.path
+                  || std::filesystem::path(candidate.source_path).filename()
+                      == std::filesystem::path(point->source.path).filename();
+            });
+        if (source_owner != candidates.end()) {
+          provenance = *source_owner;
+        }
+      }
     } else if (phase) {
       info.phase = convert_scheduler_phase(*phase);
+    }
+    if (provenance) {
+      info.provenance_unit = view(provenance->semantic_unit);
+      info.provenance_source_path = view(provenance->source_path);
+      info.provenance_language = view(
+          provenance->language == fsim::semantic::Language::verilog
+              ? "verilog" : "systemverilog");
+      info.provenance_standard = view(provenance->standard);
+      info.provenance_compatibility_profile
+          = view(provenance->compatibility_profile);
+      info.provenance_unit_id = provenance->unit.value();
+      info.provenance_source_id = provenance->source.value();
+      info.provenance_source_line = provenance->source_line;
+      info.provenance_source_column = provenance->source_column;
     }
     CallbackGuard guard{session};
     session.callbacks.safe_point_info(
