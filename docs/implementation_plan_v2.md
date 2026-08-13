@@ -8142,35 +8142,104 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 166 - Older VHDL standard modes
 
-- **Synopsys compatibility requirement:** provide compiler-supplied legacy
-  `ieee.std_logic_signed`, `ieee.std_logic_unsigned`,
-  `ieee.std_logic_arith`, and `ieee.std_logic_misc` packages. Keep their
-  non-standard Synopsys provenance explicit while preserving the historical
-  `ieee` logical-library names expected by existing designs. Implement their
-  declarations, overload resolution, arithmetic/comparison/conversion/shift/
-  reduction behavior, null and direction-sensitive vector rules, and
-  interactions with `std_logic_1164` and standard `numeric_std` without silent
-  ambiguity or host-word narrowing.
-- **Changes 1-4:** add explicit VHDL-87, VHDL-93, VHDL-2000, and VHDL-2002
-  modes, manifest/CLI selection, standard identity, cache keys, and diagnostics.
-- **Changes 5-8:** implement revision-specific tokens, grammar, declaration/type,
-  expression, association, subprogram, package, configuration, generate, and
-  statement legality.
-- **Changes 9-12:** provide revision-correct predefined environments, IEEE
-  library profiles, semantic defaults, protected/shared rules, and migration
-  diagnostics for newer constructs. Add revision-compatible source profiles
-  and executable bodies for the four legacy Synopsys packages, deterministic
-  selection beside `numeric_std`, and actionable diagnostics for ambiguous or
-  incompatible mixed-package use.
-- **Changes 13-16:** preserve revision identity through libraries, artifacts,
-  mixed boundaries, debugger, VHPI, relocation, caches, and non-project phases.
-- **Changes 17-19:** add standard-specific positive/negative corpora and
-  cross-platform/engine evidence, including package-specific compile,
-  overload, arbitrary-width execution, mixed-package, artifact/cache, and
-  provenance cases for all four Synopsys compatibility packages; update docs,
-  matrices, inventories, and handoff.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push once without hosted CI monitoring.
+- **Locked scope:** implement explicit VHDL-87, VHDL-93, VHDL-2000 and
+  VHDL-2002 modes plus compiler-supplied legacy Synopsys compatibility
+  packages. Preserve VHDL-2008 as the default and as the complete baseline.
+  Keep `ieee.std_logic_signed`, `ieee.std_logic_unsigned`,
+  `ieee.std_logic_arith` and `ieee.std_logic_misc` explicitly non-standard
+  while retaining the historical `ieee` logical-library names expected by
+  existing designs. No vector or numeric operation may narrow to a host word;
+  only explicit governed resource limits remain.
+- **Change 1:** freeze an authoritative standard-mode inventory covering every
+  revision-sensitive lexical, syntax, static-semantic, predefined-environment,
+  library, execution and persistence family for VHDL-87/93/2000/2002. Freeze a
+  separate Synopsys-package obligation ledger with exact declaration, body,
+  positive, negative, arbitrary-width, interaction, provenance and artifact
+  owners assigned one-to-one to Changes 2-18.
+- **Change 2:** add canonical VHDL-87/93/2000/2002 identities to public language
+  selection, project manifests, CLI and Tcl parsing, diagnostics and help. Keep
+  absent selection equivalent to VHDL-2008, reject unknown spellings, and make
+  every accepted alias round-trip to one canonical name.
+- **Change 3:** carry the selected revision through source registration,
+  parsing, analyzed units, dependencies, logical libraries and mixed-source
+  projects. Diagnose incompatible reanalysis or dependency use at the owning
+  source boundary instead of silently reinterpreting an existing unit.
+- **Change 4:** include revision and compatibility-package profile in object,
+  design and native-cache identity. Prove deterministic hits for identical
+  profiles, misses for every changed profile, schema rejection, stable
+  diagnostics and no VHDL-2008 cache regression.
+- **Change 5:** implement revision-correct reserved-word, identifier, literal,
+  delimiter and lexical-context profiles. Accept identifiers that predate a
+  later reserved word, reject later lexical forms in older modes with migration
+  diagnostics, and preserve source coordinates and arbitrary bit-string width.
+- **Change 6:** enforce revision-correct declarations, interfaces, type and
+  subtype forms, aliases, attributes, access/file declarations, aggregates and
+  staticness. Positive and negative cases must distinguish availability from
+  malformed syntax and retain exact composite bounds and direction.
+- **Change 7:** enforce revision-correct expression, name, association,
+  qualification, conversion, operator, subprogram and overload rules. Preserve
+  expected-type propagation, universal values, null ranges and arbitrary-width
+  signed/unsigned arithmetic without host-word fallback.
+- **Change 8:** enforce revision-correct package, context, configuration,
+  generate, process, sequential/concurrent statement and port-map rules.
+  Reject newer constructs with the selected standard and actionable migration
+  target while keeping legal older elaboration and execution unchanged.
+- **Change 9:** provide revision-correct predefined `std.standard`, `work` and
+  IEEE library environments, implicit visibility, universal/operator profiles,
+  time defaults and standard attributes. Freeze exact per-revision names and
+  overload sets so availability never leaks from VHDL-2008.
+- **Change 10:** implement the VHDL-93/2000/2002 evolution of shared variables,
+  protected types and protected-object calls with revision-correct legality,
+  exclusivity and scheduling. Prove deterministic interpreter/LLVM behavior,
+  diagnostics for illegal unprotected sharing and no deadlock or state leak.
+- **Change 11:** ship revision-compatible declarations and explicit provenance
+  for `ieee.std_logic_signed`, `ieee.std_logic_unsigned`,
+  `ieee.std_logic_arith` and `ieee.std_logic_misc`. Preserve historical package
+  names and profiles, deterministic selection beside `std_logic_1164` and
+  `numeric_std`, and actionable diagnostics when a package is unavailable or
+  incompatible with the selected revision.
+- **Change 12:** implement the four Synopsys package bodies: arithmetic,
+  comparison, conversion, shift and reduction overloads, null-vector and
+  ascending/descending-direction rules, unknown propagation and exact
+  arbitrary-width results. Diagnose genuinely ambiguous mixed-package use
+  without silently preferring Synopsys or standard `numeric_std` profiles.
+- **Change 13:** preserve the selected revision, predefined-environment identity
+  and Synopsys-package dependencies through analyzed libraries and portable
+  object/design artifacts. Prove standalone reload, schema mismatch, stale
+  dependency rejection and exact arbitrary-width package values.
+- **Change 14:** preserve revision-correct elaboration and interpreter/LLVM O0/
+  O2 execution across VHDL/SystemVerilog/SystemC boundaries and multiple roots.
+  Carry composite bounds, direction, Logic9 planes, time/delta ordering and
+  package-selected overload identity without conversion drift.
+- **Change 15:** expose revision and package provenance consistently through
+  diagnostics, debugger locals, activity, VCD and VHPI discovery/value/control
+  surfaces. Prove exact wide values and stable source/unit identities without
+  publishing compatibility implementation internals as user hierarchy.
+- **Change 16:** preserve revision/profile identity through cold/warm native
+  caches, relocation, checkpoints, replay and non-project compile/elaborate/
+  simulate phases. Prove deterministic invalidation and standalone behavior
+  after original sources and producer paths are removed.
+- **Change 17:** publish revision-indexed positive and negative corpora for all
+  four older standards. Each inventory row must own parse, semantic,
+  elaboration or execution evidence plus exact diagnostics and demonstrate
+  both an older legal construct and a rejected later construct where relevant.
+- **Change 18:** publish and run a serial retained-log cross-engine closure
+  matrix covering every revision and all four Synopsys packages, including
+  arbitrary-width operations, null/direction cases, mixed-package ambiguity,
+  artifacts/caches, relocation, public boundaries and cross-platform contracts
+  under explicit memory/work/time/trace ceilings.
+- **Change 19:** synchronize diagnostics, support tables, feature/evidence and
+  closure inventories, package provenance, public guides/tutorials,
+  architecture/API documents, counts, digests, installed/platform/resource/
+  release contracts and this restart handoff. Document Synopsys compatibility
+  as non-standard and physical ceilings as resources rather than language
+  legality limits.
+- **Change 20:** run fresh clean-first exact-LLVM Debug/Release eight-worker
+  builds, complete regressions and every release gate with retained timing/RSS/
+  swap/transcript evidence. This is a non-sanitizer, non-hosted-CI-monitoring
+  boundary. Commit and push the one accumulated Batch 166 implementation only
+  after all local gates pass, then save and push the exact Batch 167 restart
+  plan and clear context before implementation.
 
 ### Batch 167 - Older Verilog and SystemVerilog standard modes
 

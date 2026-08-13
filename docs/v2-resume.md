@@ -5,6 +5,88 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
+## Batch 166 planned restart checkpoint - 2026-08-12
+
+1. Start in `/home/colin/projects/fsim`, read this section and the authoritative
+   expanded Batch 166 allocation in `implementation_plan_v2.md`, and verify
+   branch `codex/v2` is clean and synchronized at Batch 165 implementation
+   `d62bfafea0ae778986d5df41e00030afe5f7b8f3` plus this documentation-only
+   Batch 166 planning checkpoint.
+2. This checkpoint implements the required pre-batch flow. Batch 166 is
+   expanded into exactly twenty changes without broadening its locked older-
+   VHDL-standard and Synopsys-package compatibility scope. No Batch 166
+   implementation file has changed; clear context after pushing this plan and
+   resume only from this section and the authoritative allocation.
+3. Preserve Batch 165's complete IEEE 1800-2017 residual-language and
+   arbitrary-width closure: frontend/HIR/DesignIR/SimIR, interpreter/LLVM,
+   DPI/VPI/UVM, mixed/public/debug/VCD boundaries, artifacts, checkpoints,
+   libraries, relocation, replay and caches at pushed commit `d62bfaf`.
+4. Batch 165's fresh clean-first exact-LLVM 22.1.8 Debug and Release
+   eight-worker builds complete 779 steps warning-free in 11:05.59 and 9:10.78
+   at 4,997,832 and 2,250,920 KiB peak RSS with zero swaps.
+5. Complete Debug and Release regressions pass 142/142 in 7:51.79 and 6:30.42
+   wall time, with CTest totals of 471.79 and 390.42 seconds, peak RSS of
+   3,788,408 and 3,793,688 KiB, and zero swaps. Final post-documentation
+   release-contract slices pass 34/34 in both configurations; exact Change 20
+   correction ranges pass the WebKit gate and repository whitespace is clean.
+6. Preserve the Change 20 validator repair: active-region program clocking
+   support and sampler processes legitimately retain `program_owner`; do not
+   restore the blanket reactive-region invariant. A fixture that executes
+   `$finish` correctly reports `RunStatus::stopped` while retaining exact
+   output. Direct live-state reconstruction and artifact round-trip must remain
+   green.
+7. The synchronized Batch 165 baseline is 2,228 production diagnostics, 885
+   bounded C/C++ sources, 1,021 SPDX-owned files, 330 authored test/control
+   files, 1,294 executable feature rows, 5,176 evidence cells, 617 exact
+   evidence paths and 144 runtime owners.
+8. SystemVerilog gap, literal-width and release-closure SHA-256 identities are
+   `a2f19c56e715ea0f8198a672d96d08d0d9accd8eb7569f16bc6e542fc294ff40`,
+   `f661b219e251e6369750ab406b19adf9c193cfb9570baaa0fdeab4f7984bad93`
+   and
+   `f4e8dcdfb60362544e6958449fa2a1e852cedcbba2ef6e929d5fb0a3aee1d124`.
+   Feature and canonical-evidence identities are
+   `b2c59a958173da718dacc8b02b4480e1a02efd4fcfed87f64a234ec4622d2e11`
+   and
+   `e4076a40c31945c3385495a1c3076b85518143712c89ea1fa3f629fffaac6120`.
+9. Batch 166 adds explicit VHDL-87, VHDL-93, VHDL-2000 and VHDL-2002 modes
+   while preserving VHDL-2008 as the default and complete baseline. Revision
+   identity must survive selection, source analysis, dependencies, libraries,
+   artifacts, caches, relocation, replay, public boundaries and mixed-language
+   execution.
+10. The compiler must supply the explicitly non-standard Synopsys
+    `ieee.std_logic_signed`, `ieee.std_logic_unsigned`,
+    `ieee.std_logic_arith` and `ieee.std_logic_misc` packages under their
+    historical logical-library names. Their declarations and executable bodies
+    must preserve arbitrary widths, null vectors, direction, unknowns and
+    deterministic overload behavior beside standard `numeric_std`.
+11. Changes 1-4 freeze the standard/package inventories, expose canonical
+    manifest/CLI/Tcl identities, carry source/library revision identity and key
+    artifacts/caches with deterministic mismatch diagnostics.
+12. Changes 5-8 close lexical, declaration/type, expression/association/
+    subprogram and package/configuration/generate/statement legality by
+    revision, with actionable newer-feature diagnostics.
+13. Changes 9-12 provide revision-correct predefined environments and
+    protected/shared semantics, then ship all four Synopsys package declaration
+    profiles and arbitrary-width executable bodies with explicit provenance
+    and mixed-package ambiguity handling.
+14. Changes 13-16 preserve every revision and compatibility profile through
+    libraries/artifacts, interpreter/LLVM/mixed execution, debugger/VHPI/VCD/
+    public surfaces, checkpoints, relocation, replay, caches and non-project
+    phases.
+15. Changes 17-19 publish standard-specific positive/negative corpora and a
+    retained-log cross-engine/package closure matrix, then synchronize public
+    documentation, diagnostics, inventories, counts, digests and release
+    contracts.
+16. Change 20 runs fresh clean-first exact-LLVM Debug/Release builds with at
+    least eight workers and 120-minute command timeouts, full regressions and
+    every release gate. Retain timing/RSS/swap/transcript evidence and create
+    the sole Batch 166 implementation commit/push only after all local gates
+    pass. Batch 166 is not a sanitizer or hosted-CI monitoring boundary.
+17. Accumulate Changes 1-20 in one intentionally dirty worktree. Do not reset,
+    commit or push implementation before Change 20. After that implementation
+    commit, save and push the exact Batch 167 restart plan and clear context
+    before Batch 167 implementation.
+
 ## Batch 165 planned restart checkpoint - 2026-08-11
 
 1. Start in `/home/colin/projects/fsim`, read this section and the authoritative
