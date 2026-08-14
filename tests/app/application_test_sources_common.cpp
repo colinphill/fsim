@@ -657,7 +657,8 @@ module class_top;
     copied = temporary;
     accumulated = temporary;
   endtask
-  initial begin
+)"
+            R"(  initial begin
     logic [136:0] wide_alias_local;
     logic [136:0] module_wide_alias_local;
     source_accumulator = 4;
