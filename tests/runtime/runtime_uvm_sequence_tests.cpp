@@ -1065,9 +1065,8 @@ void test_systemverilog_uvm_sequence_arbitration() {
   require(select().sequence == second,
           "dynamic relevance must admit a request without re-enqueueing");
   const auto throwing_relevance = service.enqueue_request(
-      {first, 100, true, [](const auto) {
+      {first, 100, true, [](const auto) -> bool {
          throw std::runtime_error{"relevance failure"};
-         return true;
        }});
   require_error(
       "FSIM-UVM-SEQ-008", [&] { (void)service.select_request(sequencer); },
@@ -1205,10 +1204,11 @@ void test_systemverilog_uvm_sequence_arbitration() {
           && user_candidates.back().sequence == third,
       "user arbitration must receive only relevant candidates in stable order");
   drain();
-  service.set_user_arbitration(sequencer, [](const auto) {
-    throw std::runtime_error{"user arbitration failure"};
-    return SystemVerilogUvmSequenceRequestHandle{};
-  });
+  service.set_user_arbitration(
+      sequencer,
+      [](const auto) -> SystemVerilogUvmSequenceRequestHandle {
+        throw std::runtime_error{"user arbitration failure"};
+      });
   (void)enqueue(first, 100);
   const auto before_user_failure = service.requests(sequencer);
   require_error(
