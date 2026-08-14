@@ -217,6 +217,71 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SDF-PORTABLE-002` | error | A portable SDF archive has a future format, invalid field, corrupt checksum, truncation, trailing bytes, or mapping-to-semantic-identity mismatch. |
 | `FSIM-SDF-PORTABLE-003` | error | A mapped library or portable design is missing a compatible SDF annotation payload or contains a payload incompatible with the selected design identity. |
 | `FSIM-SDF-PORTABLE-004` | error | Portable SDF archive encoding, decoding, or mapped-library loading exceeds a configured byte, record, string, or identity limit. |
+| `FSIM-SDF-VALUE-001` | error | SDF delay selection receives an empty/invalid exact value, invalid min/typ/max selector, zero/incompatible design time unit or simulation precision, or an invalid conversion-resource policy. |
+| `FSIM-SDF-VALUE-002` | error | The selected min, typ, or max component is absent from a partial SDF delay triple. |
+| `FSIM-SDF-VALUE-003` | error | Exact SDF scaling produces a negative effective delay; negative zero remains valid and retains its identity. |
+| `FSIM-SDF-VALUE-004` | error | Exact SDF delay/timescale conversion exceeds its governed decimal-digit or power-of-ten expansion limit or encounters noncanonical exact input. |
+| `FSIM-SDF-VALUE-005` | error | The exactly rounded SDF delay exceeds the simulator tick range. |
+| `FSIM-SDF-PLAN-001` | error | SDF target planning receives incomplete/stale IR, cell, mapping, summary, cell-type, language, count, or policy state. |
+| `FSIM-SDF-PLAN-002` | error | A resolved SDF annotation has no compatible elaborated timing target or has an empty/unsupported source or proposed value arity. |
+| `FSIM-SDF-PLAN-003` | error | Multiple resolved SDF annotations claim the same timing-target kind, identity, and construct ownership key. |
+| `FSIM-SDF-PLAN-004` | error | SDF target planning exceeds its configured annotation, values-per-annotation, or identity-byte limit. |
+| `FSIM-SDF-PATH-001` | error | SDF path application receives an incomplete/stale plan, missing/repeated specify target, changed source delays, invalid application mode, or zero resource limits. |
+| `FSIM-SDF-PATH-002` | error | An SDF IOPATH condition or edge qualifier is incompatible with its elaborated conditional/ifnone or edge-sensitive specify path. |
+| `FSIM-SDF-PATH-003` | error | An absolute IOPATH has an unsupported delay-list arity or an incremental IOPATH does not match the current source-delay profile. |
+| `FSIM-SDF-PATH-004` | error | SDF path application overflows simulator ticks or exceeds its configured path, value, or identity-byte limit. |
+| `FSIM-SDF-INTERCONNECT-001` | error | SDF net/port/device timing application receives an incomplete/stale plan, repeated target identity, or zero resource limit. |
+| `FSIM-SDF-INTERCONNECT-002` | error | An INTERCONNECT, PORT, MIPD, NETDELAY, or DEVICE endpoint is missing, ambiguous, stale, directionally incompatible, or outside supported Verilog/SystemVerilog objects. |
+| `FSIM-SDF-INTERCONNECT-003` | error | A net/port/device annotation has no absolute/increment application mode or uses an unsupported transition-delay arity. |
+| `FSIM-SDF-INTERCONNECT-004` | error | SDF net/port/device timing application exceeds its configured target, endpoint, driver-owner, value, or identity-byte limit. |
+| `FSIM-SDF-DELAY-MODE-001` | error | Ordered SDF delay-mode application receives no plan, an incomplete plan, too many plans, or a zero resource limit. |
+| `FSIM-SDF-DELAY-MODE-002` | error | An SDF path/net/port/device delay list does not have a governed 1, 2, 3, 6, or 12-value transition shape. |
+| `FSIM-SDF-DELAY-MODE-003` | error | Incremental SDF delay application has no current profile, uses an invalid mode, or carries stale before-values for a repeated target. |
+| `FSIM-SDF-DELAY-MODE-004` | error | Ordered SDF delay application overflows simulator ticks or exceeds its configured plan, step, or identity-byte limit. |
+| `FSIM-SDF-PRIMARY-CHECK-001` | error | Primary SDF timing-check application receives an incomplete plan, zero limits, or a missing, repeated, or kind-mismatched elaborated check. |
+| `FSIM-SDF-PRIMARY-CHECK-002` | error | A primary SDF timing check does not retain the exact elaborated reference and data event roles. |
+| `FSIM-SDF-PRIMARY-CHECK-003` | error | A primary timing-check annotation has stale or illegal signed limits, including a nonpositive setuphold/recrem combined window. |
+| `FSIM-SDF-PRIMARY-CHECK-004` | error | Primary SDF timing-check application exceeds its configured check, limit, or identity-byte boundary. |
+| `FSIM-SDF-SECONDARY-CHECK-001` | error | Secondary SDF timing-check application receives an incomplete plan, zero limits, or a missing, repeated, or kind-mismatched elaborated check. |
+| `FSIM-SDF-SECONDARY-CHECK-002` | error | A skew, timeskew, fullskew, width, period, or nochange annotation does not retain its exact elaborated event roles. |
+| `FSIM-SDF-SECONDARY-CHECK-003` | error | A secondary timing check has stale or incompatible signed limits, or a nochange start exceeds its end. |
+| `FSIM-SDF-SECONDARY-CHECK-004` | error | Secondary SDF timing-check application exceeds its configured check, limit, or identity-byte boundary. |
+| `FSIM-SDF-CONDITION-CHECK-001` | error | Conditional SDF timing application receives an incomplete plan or a missing, repeated, stale, or kind-mismatched timing check. |
+| `FSIM-SDF-CONDITION-CHECK-002` | error | SDF timing-check reference/data roles or edge qualifiers do not match the elaborated event controls. |
+| `FSIM-SDF-CONDITION-CHECK-003` | error | An SDF scalar or compound condition is absent, partial, or does not bind the exact elaborated condition-signal set. |
+| `FSIM-SDF-CONDITION-CHECK-004` | error | A conditional timing check has an illegal signed window, stale/nonscalar binding, or exceeds configured check, expression, signal, or identity limits. |
+| `FSIM-SDF-PULSE-001` | error | SDF pulse/RETAIN application receives an incomplete plan, invalid elaborated path profile, stale normalized node or target, or revision-incompatible global-pulse spelling. |
+| `FSIM-SDF-PULSE-002` | error | Targeted and global SDF pulse annotations conflict on the same elaborated specify path. |
+| `FSIM-SDF-PULSE-003` | error | A PATHPULSE, PATHPULSEPERCENT, or RETAIN threshold list has unsupported arity, duplicate ownership, or a reject value greater than its error value. |
+| `FSIM-SDF-PULSE-004` | error | Exact pulse-percentage conversion or pulse application exceeds its configured tick, path, transition-value, or identity-byte limit. |
+| `FSIM-SDF-PRECEDENCE-001` | error | SDF timing precedence receives an invalid command-selected delay policy or a zero effective-value or identity resource limit. |
+| `FSIM-SDF-PRECEDENCE-002` | error | The command-selected min/typ/max mode conflicts with the planned SDF value selection, or enabled pulse rejection targets disabled specify paths. |
+| `FSIM-SDF-PRECEDENCE-003` | error | SDF precedence finds an unsupported, missing, stale or mismatched specify-path, timing-check, delay-list or pulse/RETAIN source profile. |
+| `FSIM-SDF-PRECEDENCE-004` | error | Effective SDF precedence values or their immutable semantic identities exceed the configured resource limit. |
+| `FSIM-SDF-SCHEDULING-001` | error | SDF runtime scheduling receives missing or incomplete effective precedence, or a zero target, value, or identity resource limit. |
+| `FSIM-SDF-SCHEDULING-002` | error | Effective runtime timing values have missing, duplicate, inconsistent, or untyped indexes and cannot form one atomic scheduled target. |
+| `FSIM-SDF-SCHEDULING-003` | error | Runtime publication finds a stale, missing, incomplete, or invalid specify-path or timing-check source profile. |
+| `FSIM-SDF-SCHEDULING-004` | error | Runtime SDF scheduling exceeds its configured target, value, or semantic-identity resource limit. |
+| `FSIM-SDF-DRIVE-001` | error | SDF drive-state publication receives missing or incomplete scheduling, or a zero binding or identity resource limit. |
+| `FSIM-SDF-DRIVE-002` | error | An annotated path or propagated continuous driver references a missing process, signal, destination, or owned region. |
+| `FSIM-SDF-DRIVE-003` | error | SDF drive-state publication finds invalid switch endpoints or duplicate driver ownership. |
+| `FSIM-SDF-DRIVE-004` | error | SDF drive-state bindings or their immutable semantic identities exceed the configured resource limit. |
+| `FSIM-SDF-REANNOTATION-001` | error | SDF reannotation receives an incomplete baseline, file/cell scope or generation, matches no target, or attempts a runtime commit outside the annotation safe point. |
+| `FSIM-SDF-REANNOTATION-002` | error | Two SDF file/cell scopes annotate the same target with identical values at equal precedence. |
+| `FSIM-SDF-REANNOTATION-003` | error | SDF reannotation finds conflicting equal-precedence values, incompatible timing topology or an invalid effective timing design. |
+| `FSIM-SDF-REANNOTATION-004` | error | SDF reannotation exceeds its configured file, target, scope-byte or semantic-identity resource limit. |
+| `FSIM-SDF-CONTROL-001` | error | SDF control receives an invalid surface, phase, delay selection, empty input identity, missing elaborate/simulate input, or zero policy/resource limit. |
+| `FSIM-SDF-CONTROL-002` | error | SDF control repeats or conflicts on one source/root/cell input scope. |
+| `FSIM-SDF-CONTROL-003` | error | Annotation is requested during compile, or effective annotation phase, generation, or source/object provenance does not match the control request. |
+| `FSIM-SDF-CONTROL-004` | error | SDF control inputs, source bytes, bounded report entries, or immutable semantic identity exceed the configured resource limit. |
+| `FSIM-SDF-EFFECTIVE-001` | error | Effective SDF persistence receives incomplete identities, generation, policy, exact-value records, or producer-relative provenance. |
+| `FSIM-SDF-EFFECTIVE-002` | error | An effective SDF object, design, library, native-cache, or checkpoint archive has a stale schema, wrong artifact kind, malformed/truncated envelope, trailing data, or checksum corruption. |
+| `FSIM-SDF-EFFECTIVE-003` | error | Effective SDF persistence finds duplicate target ownership or a producer, policy, generation, target, or provenance identity incompatible with the consumer. |
+| `FSIM-SDF-EFFECTIVE-004` | error | Effective SDF persistence exceeds configured record, exact-value, owned-string, archive, or semantic-identity limits. |
+| `FSIM-SDF-OBSERVE-001` | error | SDF observability receives no effective targets or a target with incomplete kind, identity, source span, or before/after values. |
+| `FSIM-SDF-OBSERVE-002` | error | SDF observability repeats an annotated target identity and cannot publish stable debugger/VPI/VCD object IDs. |
+| `FSIM-SDF-OBSERVE-003` | error | A dynamic SDF observation references an unknown target, invalid callback region, nonmonotonic trace state, or mismatched before/after values. |
+| `FSIM-SDF-OBSERVE-004` | error | SDF observation objects, preallocated surface events, values, or stable identities exceed configured limits. |
 
 ## Precompiled library artifacts
 

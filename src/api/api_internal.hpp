@@ -3,6 +3,7 @@
 #include "fsim/api.h"
 
 #include "fsim/app/application.hpp"
+#include "fsim/app/sdf_control.hpp"
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/project/project.hpp"
 
@@ -92,6 +93,7 @@ struct Session {
   fsim_session_t handle{FSIM_INVALID_SESSION};
   fsim::diagnostic::Engine diagnostics;
   std::optional<fsim::project::Config> project;
+  std::shared_ptr<const fsim::app::SdfControlApplication> sdf_control;
   std::unique_ptr<fsim::app::Simulation> simulation;
   fsim_callbacks_t callbacks{};
   std::atomic_bool stop_requested{false};

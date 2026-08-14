@@ -510,6 +510,9 @@ struct VerilogSpecifyPathInfo {
     bool show_cancelled { };
     std::optional<runtime::SimulationTick> pulse_reject_limit;
     std::optional<runtime::SimulationTick> pulse_error_limit;
+    std::vector<runtime::SimulationTick> pulse_reject_delays;
+    std::vector<runtime::SimulationTick> pulse_error_delays;
+    std::vector<runtime::SimulationTick> retain_delays;
     frontend::Expression condition;
     frontend::Expression destination_data_source;
     bool conditional { };

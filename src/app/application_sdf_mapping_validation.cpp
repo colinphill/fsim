@@ -372,6 +372,10 @@ namespace {
         std::vector<Diagnostic>& diagnostics, const SourceSpan& span)
     {
         if (mapping.endpoints.empty()) {
+            if (mapping.construct_kind == SdfConstructKind::PathPulsePercent
+                && !mapping.target_instance_path.empty()) {
+                return true;
+            }
             diagnose(diagnostics, "FSIM-SDF-MAP-004",
                 "SDF annotation mapping has no consumed endpoint", span);
             return false;

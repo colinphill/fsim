@@ -1388,6 +1388,45 @@ public service records, so source hiding, cold/warm cache reuse and relocation
 cannot silently fall back to a current language default. Partial, missing,
 duplicate or inconsistent records are rejected transactionally.
 
+### SDF timing-application pipeline
+
+Batch 168 terminates at immutable normalized and resolved SDF records. Batch
+169 consumes those records through a transactional Verilog/SystemVerilog
+application pipeline:
+
+```text
+SDF IR -> exact value policy -> atomic target plan -> effective timing records
+       -> interpreter/LLVM scheduler -> stable public observation
+                         |
+                         +-> FSDFEFF artifacts/cache/checkpoint state
+```
+
+Target planning performs hierarchy and semantic validation once, before any
+runtime object changes. Path, interconnect/device, transition-list, timing-
+check, condition/notifier and pulse/retain applicators publish immutable
+records only after the complete request validates. Precedence and reannotation
+compose source delays, ordered SDF files, absolute replacement and incremental
+accumulation without partially mutating a live design.
+
+The runtime scheduler consumes precomputed tick values and target identities.
+Interpreter and LLVM share cancellation, same-time region and drive-state
+services, so no SDF parse, hierarchy search or rational conversion occurs on
+the event hot path. Disabled timing uses the original no-annotation identity.
+
+Control enters through the normalized CLI invocation, `fsim::sdf` Tcl command,
+append-only native C structures or direct C++ request. All four surfaces use
+one `SdfControlApplication` transaction and expose the same bounded summary,
+report and semantic generation. Effective state is serialized separately from
+the Batch 168 source payload in schema-1 `FSDFEFF` object, design, library,
+native-cache and checkpoint records.
+
+Observation catalogs stable path/check/violation objects during publication.
+Debugger, callback, internal-trace, VPI and VCD consumers record source spans,
+values, time, delta, scheduler region and order into preallocated storage.
+Disabled observation performs neither per-event lookup nor allocation. VHDL/
+VITAL timing objects and timing that crosses a VHDL boundary are not part of
+this pipeline until Batch 170.
+
 ## Runtime values
 
 The runtime distinguishes three logic domains:

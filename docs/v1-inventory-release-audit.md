@@ -296,7 +296,7 @@ authored test/control owners, conformance expectations, reviewed IEEE third-
 party bytes, and external provenance identities remain unchanged.
 
 v2 Batch 168 through Change 19 advances the synchronized live inventory to
-2,324 diagnostics, 925 bounded C/C++ sources, 1,083 SPDX-owned files, and 346
+2,389 diagnostics, 974 bounded C/C++ sources, 1,139 SPDX-owned files, and 363
 authored test/control files. Historical batch baselines above remain recorded
 at the point they were established; the table and machine gate carry the
 current release totals.

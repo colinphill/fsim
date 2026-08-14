@@ -2086,6 +2086,13 @@ public:
     [[nodiscard]] std::uint32_t add_module_path(ModulePath path);
     [[nodiscard]] std::uint32_t add_module_timing_check(
         ModuleTimingCheck check);
+    /// Atomically replace topology-compatible module-path and timing-check
+    /// timing. After start this is legal only from a scheduler safe-point hook.
+    /// Pending path writes and timing-check history retain their old state;
+    /// future events use the replacement timing.
+    void reannotate_module_timing(
+        std::span<const ModulePath> paths,
+        std::span<const ModuleTimingCheck> checks);
 
     /// Restrict all HDL file operations to paths below this root. Must be set
     /// before start; an empty root leaves file operations disabled.

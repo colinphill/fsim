@@ -428,6 +428,7 @@ struct Interpreter::Impl {
         SimulationTick target_time { };
         SimulationTick reject_limit { };
         SimulationTick error_limit { };
+        std::optional<SimulationTick> retain_delay;
         ModulePathPulseStyle pulse_style { ModulePathPulseStyle::onevent };
         bool show_cancelled { };
     };

@@ -1495,6 +1495,25 @@ grammar.
 | V2-SV-167-03 | Exact revision/profile provenance survives sources, includes, semantic units, public C/C++/Tcl/debugger/VPI/VCD views, objects, designs, cold/warm caches, checkpoints, source hiding and relocation | execute | [public provenance differential](../tests/api/api_test.cpp) | [partial/stale/omitted profile rejection](../tests/app/application_test_artifact_phases.cpp) | [portable object/design profile tables](../src/artifact/design.cpp) | [source-hidden six-mode artifact matrix](../tests/app/application_test_artifact_phases.cpp) |
 | V2-SV-167-04 | A serial retained-log closure composes all six revisions, seven switches, engines/caches, artifacts, mixed languages, public services, platform contracts and governed resource ceilings | execute | [inventory and runner contract](../cmake/CheckVerilogSystemVerilogStandardModeInventory.cmake) | [required transcript-token validation](../cmake/RunVerilogSystemVerilogStandardModeClosureMatrix.cmake) | [16 ordered witnesses](../tests/CMakeLists.txt) | [retained serial closure runner](../cmake/RunVerilogSystemVerilogStandardModeClosureMatrix.cmake) |
 
+## Verilog and SystemVerilog SDF application
+
+Batch 169 closes seventeen preserved rows for SDF 2.1/3.0/4.0 across
+Verilog-1995/2001/2001-noconfig/2005 and
+SystemVerilog-2005/2009/2012/2017. The canonical ledger is
+[`sdf_application_inventory.tsv`](../tests/feature_matrix/sdf_application_inventory.tsv)
+with SHA-256
+`47e7f5b95aae9f0e3df5cb4fcb4939255e1803f9c920081a47198e21b75f2754`.
+
+| ID | Precisely bounded feature | Status | P+ | P- | E | R |
+|---|---|---|---|---|---|---|
+| V2-SDF-169-01 | Exact min/typ/max value selection, atomic target plans, path/interconnect/device delays, governed lists and all twelve timing checks | execute | [Changes 2-8 tests](../tests/app) | [cataloged transactional negatives](diagnostics.md) | [application owners](../src/app) | [owned application corpus](../tests/app/sdf_application_corpus_test.cpp) |
+| V2-SDF-169-02 | Conditions, notifiers, negative checks, pulse/retain, precedence, shared scheduling/drive state and rollback-safe reannotation | execute | [Changes 9-14 tests](../tests/app) | [condition/pulse/reannotation negatives](../tests/app) | [runtime timing owners](../src/runtime) | [interpreter/LLVM corpus](../tests/app/sdf_application_corpus_test.cpp) |
+| V2-SDF-169-03 | CLI, Tcl, native C/C++ control, effective artifacts/cache/checkpoints and debugger/callback/trace/VPI/VCD observation | execute | [Changes 15-17 tests](../tests/app) | [phase/schema/resource negatives](diagnostics.md) | [control and persistence owners](../src/app) | [seven-stage retained-log closure](../cmake/RunSdfApplicationClosure.cmake) |
+| V2-SDF-169-04 | Standard-cell, primitive, interconnect, pulse and timing-check closure across engines, phases, artifacts, relocation, replay and Linux/Windows contracts | execute | [exact pass transcript](../tests/app/sdf_application_corpus_test.cpp) | [missing/mismatch/conflict/overflow/resource transcript](../tests/app/sdf_application_corpus_test.cpp) | [inventory gate](../cmake/CheckSdfApplicationInventory.cmake) | [release audit](v2-sdf-application-release-audit.md) |
+
+VHDL/VITAL SDF timing and timing paths crossing a VHDL boundary remain owned by
+Batch 170; these rows do not broaden that boundary.
+
 ## Completed v1 feature groups
 
 | ID | Required feature group | Status | P+ | P- | E | R |
@@ -1548,7 +1567,7 @@ They do not become supported when a permissive parser happens to consume them.
 |---|---|---|---|
 | D-VH-01 | VHDL | PSL, VHPI, VHDL-AMS, SDF, proprietary packages, and proprietary pragma semantics beyond the reviewed compatibility surface | deferred |
 | D-SV-01 | SystemVerilog | Remaining UVM policy classes and full 1.2/2020 conformance closure beyond the Batch 161 object/factory/config/report/phase/TLM/sequence/register boundary | deferred |
-| D-SV-02 | Verilog/SystemVerilog | SDF parsing and annotation | deferred |
+| D-SV-02 | Verilog/SystemVerilog | SDF parsing and annotation beyond the governed Batch 168/169 profiles and application surface | deferred |
 | D-SV-03 | SystemVerilog data model | Complete residual nested/tagged aggregate legality and cross-language dynamic string/aggregate/container profiles outside the governed Batch 152/164 surfaces | deferred |
 | D-SV-04 | SystemVerilog file and memory extensions | Standard descriptor aliases, unrestricted host paths, unbounded I/O, and memory-file operations on multidimensional, string-element, or unpacked-aggregate memories | deferred |
 | D-SV-05 | SystemVerilog procedural extensions | Runtime-variable/real delay expressions, edge-qualified general expressions in mixed event lists, runtime-selected force/release, simultaneous re-entry of one lexical fork site, nondeterministic container `shuffle`, nonlocal or suspending references, nested/nonintegral static locals, and suspending static tasks | deferred |
@@ -1561,11 +1580,13 @@ Deferred rows are not release blockers unless the v1 scope is explicitly
 changed and the row is promoted to a required section.
 
 The later v2 Batch 163 closure supersedes the broad `D-VH-01` PSL/VHPI
-deferral for its documented digital subset only. Batch 168 also supersedes the
-SDF parsing portions of `D-VH-01` and `D-SV-02`: SDF 2.1/3.0/4.0 parsing,
-normalization, mixed-language hierarchy resolution and portable persistence are
-implemented, while Batches 169-170 still own application to
-Verilog/SystemVerilog and VHDL/VITAL runtime timing. The authoritative
+deferral for its documented digital subset only. Batch 168 supersedes the SDF
+parsing portions of `D-VH-01` and `D-SV-02`, and Batch 169 supersedes the
+governed Verilog/SystemVerilog application portion: SDF 2.1/3.0/4.0 parsing,
+normalization, mixed-language hierarchy resolution, portable persistence and
+Verilog/SystemVerilog runtime timing application are implemented. Batch 170
+still owns VHDL/VITAL application and timing that crosses a VHDL boundary. The
+authoritative
 [`vhdl_psl_gap_inventory.tsv`](../tests/feature_matrix/vhdl_psl_gap_inventory.tsv)
 now contains 29 supported VHDL-2008/embedded-PSL rows, zero unresolved active
 rows, and four narrower deferrals; the 44-row

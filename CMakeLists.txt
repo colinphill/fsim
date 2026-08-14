@@ -912,6 +912,22 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_sdf_cell_resolution.cpp
       src/app/application_sdf_endpoint_resolution.cpp
       src/app/application_sdf_mapping_validation.cpp
+      src/app/application_sdf_value_policy.cpp
+      src/app/application_sdf_target_plan.cpp
+      src/app/application_sdf_path_timing.cpp
+      src/app/application_sdf_interconnect_timing.cpp
+      src/app/application_sdf_delay_modes.cpp
+      src/app/application_sdf_primary_timing_checks.cpp
+      src/app/application_sdf_secondary_timing_checks.cpp
+      src/app/application_sdf_condition_timing.cpp
+      src/app/application_sdf_pulse_timing.cpp
+      src/app/application_sdf_precedence.cpp
+      src/app/application_sdf_reannotation.cpp
+      src/app/application_sdf_control.cpp
+      src/app/application_sdf_effective_archive.cpp
+      src/app/application_sdf_observability.cpp
+      src/runtime/sdf_scheduling.cpp
+      src/runtime/sdf_drive_timing.cpp
       src/app/application_sdf_schema.cpp
       src/app/application_sdf_artifact_identity.cpp
   src/app/application_sdf_portable_archive.cpp

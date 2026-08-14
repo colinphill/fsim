@@ -9580,113 +9580,551 @@ carry an explicit evidence-backed scope disposition approved by the user.
   and timing that crosses a VHDL boundary remain exclusively in Batch 170.
   Do not weaken Batch 168 parsing, resolution or stale/corrupt-artifact
   rejection, and do not copy unlicensed standard text.
-- **Change 1:** freeze an authoritative Verilog/SystemVerilog SDF-application
+- **Change 1: Complete.** Freeze an authoritative Verilog/SystemVerilog SDF-
+  application
   ledger that assigns Changes 2-18 one-to-one across value policy, atomic
   target planning, path, interconnect/device, delay-list/mode, timing-check,
   pulse, scheduler, drive-state, reannotation, API, persistence, observability,
   corpus and closure domains. Bind every row to exact implementation, positive,
   negative, interpreter/LLVM, diagnostic, artifact and resource evidence, then
   register its stable order, closure rules and SHA-256 identity before timing
-  behavior changes.
-- **Change 2:** implement one typed annotation-value policy that selects min,
+  behavior changes. The registered 17-row ledger maps Changes 2-18 exactly to
+  value policy, atomic target planning, path, interconnect/device, delay-list/
+  mode, primary/secondary/conditional timing checks, pulse/retain, precedence,
+  scheduler, drive-state, reannotation, control API, persistence,
+  observability and corpus/closure domains. Every active row binds SDF
+  2.1/3.0/4.0, all eight governed Verilog/SystemVerilog profiles, exact planned
+  implementation and positive/negative/engine/phase/artifact evidence,
+  diagnostics and resource ownership. The validator freezes unique IDs and
+  closures, ordered domains, the exact twenty-change plan, registered test and
+  SHA-256 identity
+  `2e0cd2d32c401440a2279e15695d0c9da04c6e8cf6268e74968e82877120ad75`.
+  The exact-LLVM Debug tree regenerates without compiling, and the application
+  inventory, diagnostic-catalog and source-budget gates pass 3/3 in 0.66
+  seconds. No timing behavior, Release qualification, sanitizer, hosted-CI
+  inspection or header formatting ran. Preserve Change 1 and proceed to Change
+  2 in the same accumulated worktree.
+- **Change 2: Complete.** Implement one typed annotation-value policy that
+  selects min,
   typ or max from exact partial triples, converts the selected rational value
   through SDF and design timescales, and rounds once at the simulator precision
   boundary. Preserve negative-zero identity for diagnostics; reject missing
   selected slots, negative effective delays, overflow and governed expansion
-  without floating-point or host-locale dependence.
-- **Change 3:** translate every resolved SDF mapping into an immutable atomic
+  without floating-point or host-locale dependence. `SdfValuePolicy` validates
+  the min/typ/max selector and compatible nonzero design-unit/simulation-
+  precision pair, selects scalar or partial-triple components, multiplies exact
+  decimal coefficients with governed arbitrary precision, and performs one
+  exact half-up division at the simulator tick boundary. The immutable result
+  retains exact source/timescale values, negative-zero identity, rounding
+  direction and a versioned canonical identity. Five cataloged diagnostics own
+  invalid value/policy, missing selection, negative delay, expansion and tick-
+  overflow failures with the original SDF coordinate. The warning-clean Debug
+  target builds in four steps, and value policy, normalization, mapping,
+  inventory, catalog and source gates pass 6/6 in 0.44 seconds. Graph refresh
+  reports 28,899 nodes and 136,263 edges; the main selector has cognitive and
+  cyclomatic complexity 8, no loops and no recursion. The ledger preserves
+  Change 2 with sixteen active rows and SHA-256 identity
+  `761b2e4ae15cd7868289cf91d02628ec78e22484b8bb6daad2bbb5439a6f7945`.
+  Pinned formatting touched only the new implementation/test `.cpp` files; the
+  semantic public header received no formatting-only churn. No Release
+  qualification, sanitizer or hosted-CI inspection ran. Preserve Changes 1-2
+  and proceed to Change 3 in the accumulated worktree.
+- **Change 3: Complete.** Translate every resolved SDF mapping into an
+  immutable atomic
   Verilog annotation plan keyed by stable elaborated timing-object identities.
   Validate cell type, object kind, delay/check arity, source span and duplicate
   ownership for the complete plan before publishing any runtime mutation, and
   retain a deterministic before/after value record for diagnostics and replay.
-- **Change 4:** apply absolute and incremental `IOPATH` annotations to full and
+  `SdfAnnotationPlan` now accepts only a complete validated mapping, exact
+  value policy and Verilog/SystemVerilog target set. It verifies IR/cell/target
+  identity and language, locates stable elaborated specify-path or timing-check
+  objects, derives endpoint identities for other timing targets, selects every
+  descendant exact value, freezes sorted endpoint IDs plus before/after ticks
+  and publishes a versioned identity only after all entries succeed. Four
+  cataloged diagnostics own stale/type/language/count state, missing target or
+  arity, duplicate ownership and annotation/value/identity resource failures;
+  value-policy diagnostics retain their precise SDF coordinates. Positive
+  evidence proves the elaborated path remains unchanged after planning, while
+  missing paths, duplicate claims, VHDL targets, invalid policy and bounded
+  identity negatives all leave the plan null. The warning-clean Debug target
+  builds in two steps and the endpoint, mapping, value, plan, inventory,
+  catalog and source slice passes 7/7 in 0.45 seconds. The refreshed graph has
+  28,978 nodes and 136,843 edges; the plan builder has cognitive complexity 17,
+  loop depth 2, no scan-in-loop site and no recursion. The ledger preserves
+  Changes 2-3 with fifteen active rows and SHA-256 identity
+  `56f8f94b7f8279d519864a2f6e3e28e8c7636d45313f939019d140f9b527c6a1`.
+  Pinned formatting touched only new implementation/test `.cpp` files; the
+  semantic public header received no formatting-only churn. No Release
+  qualification, sanitizer or hosted-CI inspection ran. Preserve Changes 1-3
+  and proceed to Change 4 in the accumulated worktree.
+- **Change 4: Complete.** Apply absolute and incremental `IOPATH` annotations
+  to full and
   parallel module paths, conditional and else paths, edge-sensitive paths and
   state-dependent specify paths. Preserve source path polarity, edge and
   condition semantics, select the correct transition slot, and diagnose every
-  resolved SDF path that has no compatible elaborated specify target.
-- **Change 5:** apply `INTERCONNECT`, `PORT`, `MIPD` and `DEVICE` annotations to
+  resolved SDF path that has no compatible elaborated specify target. Target
+  plans now retain ancestor-derived absolute/increment mode plus condition and
+  edge identities. `SdfPathTimingApplication` validates the complete plan,
+  stable path identity/instance/current delays, conditional/ifnone and edge
+  compatibility and governed 1/2/3/6/12 arity. It produces copied specify paths
+  with absolute replacement or checked same-shape incremental values while
+  retaining module-path kind, edge, polarity, condition, data-source, pulse and
+  source state; the elaborated design remains unchanged for transactional
+  rollback. Four cataloged diagnostics own stale plans/targets/modes,
+  condition/edge mismatch, arity mismatch and overflow/resource failure.
+  Tests cover unconditional and conditional edge-sensitive paths, absolute and
+  incremental results, source immutability, stale before-values, mismatch,
+  arity, overflow and identity ceilings. The warning-clean Debug target builds
+  in five steps; the endpoint/mapping/value/plan/path/inventory/catalog/source
+  slice passes 8/8 in 0.45 seconds. The refreshed graph contains 29,037 nodes
+  and 137,240 edges; the application builder has cognitive complexity 19,
+  loop depth 1, no scan-in-loop site and no recursion. The ledger preserves
+  Changes 2-4 with fourteen active rows and SHA-256 identity
+  `f09db0bc7c9447f964fc98c1dd7f7fd92762a348caeb372e3e31df7ad42f78d3`.
+  Pinned formatting touched only changed/new implementation/test `.cpp` files;
+  semantic headers received no formatting-only churn. No Release qualification,
+  sanitizer or hosted-CI inspection ran. Preserve Changes 1-4 and proceed to
+  Change 5 in the accumulated worktree.
+- **Change 5: Complete.** Apply `INTERCONNECT`, `PORT`, `MIPD` and `DEVICE` annotations to
   Verilog/SystemVerilog nets, ports, primitives, UDPs, gates, switches and
   continuous-assignment timing objects. Preserve driver/load direction,
   instance boundaries and multi-driver ownership while rejecting ambiguous
   endpoints, unsupported object kinds and incompatible transition profiles.
-- **Change 6:** implement absolute replacement and incremental accumulation for
+  Target plans now retain the complete resolved endpoint descriptors in their
+  versioned identity. `SdfInterconnectTimingApplication` validates exact
+  Verilog/SystemVerilog HDL net/port kinds, width/select/direction state,
+  construct-specific source/destination/net/device role shapes, unique endpoint
+  ownership and governed 1/2/3/6/12 profiles before publishing immutable
+  overlays. Each overlay preserves instance/object boundaries, application
+  mode, exact transition ticks and sorted process owners from static driver
+  regions plus unidirectional/bidirectional switch terminals, without mutating
+  the elaborated design. Four cataloged diagnostics own incomplete/repeated
+  plans, stale/ambiguous/unsupported endpoints, invalid modes/profiles and
+  target/endpoint/driver/value/identity resource failure. Tests cover all four
+  target families, continuous/gate/switch multi-driver retention, load roles,
+  source immutability, native-object and stale-port rejection, invalid arity,
+  duplicate endpoints and atomic resource rollback. The warning-clean Debug
+  target builds in four steps; endpoint/mapping/value/plan/path/interconnect/
+  inventory/catalog/source gates pass 9/9 in 0.44 seconds. The refreshed graph
+  contains 29,101 nodes and 137,587 edges; the application builder has
+  cognitive complexity 18, loop depth 1, no scan-in-loop site and no recursion.
+  The ledger preserves Changes 2-5 with thirteen active rows and SHA-256 identity
+  `47667072d0e2285ede9191bf5b706aa0b6dca479645738410ae6100121ff7e27`.
+  Pinned formatting touched only changed/new implementation/test `.cpp` files;
+  semantic headers received no formatting-only churn. No Release qualification,
+  sanitizer or hosted-CI inspection ran. Preserve Changes 1-5 and proceed to
+  Change 6 in the accumulated worktree.
+- **Change 6: Complete.** Implement absolute replacement and incremental accumulation for
   governed 1/2/3/6/12-value delay lists, including rise, fall, turn-off and all
   supported scalar/vector transition classes. Define exact expansion and
   fallback rules, checked addition and deterministic repeated-file order while
   retaining both source and effective delay identities.
-- **Change 7:** annotate `$setup`, `$hold`, `$setuphold`, `$recovery`, `$removal`
+  `SdfDelayModeApplication` expands every legal list into the runtime-compatible
+  twelve-slot 01/10/0Z/Z1/1Z/Z0/0X/X1/1X/X0/XZ/ZX profile. One value fills all
+  slots; two values derive turn-off by minimum; three and six retain their
+  direct slots; six-slot X fallbacks use the same explicit min/max rules as
+  module-path scheduling; twelve remain exact. Ordered immutable plans apply
+  absolute replacement or checked incremental addition against a declared or
+  prior-file profile, retain every source list/before/effective identity and
+  reject stale repeated-file baselines before atomic publication. Four
+  diagnostics own incomplete order/state, invalid arity, missing/stale mode
+  baseline and overflow/resource failure. Tests cover every arity and transition
+  fallback, exact twelve-slot retention, ordered absolute then incremental
+  results, first-increment baseline, stale state, tick overflow and step limits.
+  The warning-clean Debug target builds in four steps; endpoint/mapping/value/
+  plan/path/interconnect/delay-mode/inventory/catalog/source gates pass 10/10
+  in 0.46 seconds. The refreshed graph contains 29,176 nodes and 137,892 edges;
+  the coordinator has cognitive complexity 8, loop depth 2, no scan-in-loop
+  site and no recursion, while the bounded per-annotation helper is loop-free.
+  The ledger preserves Changes 2-6 with twelve active rows and SHA-256 identity
+  `568c676e4472604a56eeab7c9c81fc24bfcd83b5c8e632d19905f202a6ea9a74`.
+  No Release qualification, sanitizer or hosted-CI inspection ran; semantic
+  headers were not formatted. Preserve Changes 1-6 and proceed to Change 7 in
+  the accumulated worktree.
+- **Change 7: Complete.** Annotate `$setup`, `$hold`, `$setuphold`, `$recovery`, `$removal`
   and `$recrem` limits onto elaborated timing checks with exact reference/data
   event ownership. Preserve distinct combined-check limits, optional delayed
   signals and all legal scalar/triple shapes; reject partial or type-mismatched
   mappings before any check is modified.
-- **Change 8:** annotate `$skew`, `$timeskew`, `$fullskew`, `$width`, `$period`
+  `SdfPrimaryTimingCheckApplication` resolves stable timing-check identities,
+  validates exact construct/runtime kind plus reference/data endpoint roles and
+  current runtime-legal signed limits, and publishes copied setup/hold/recovery/removal
+  one-limit or setuphold/recrem two-limit overlays. Combined limits remain
+  distinct and delayed reference/data terminals, conditions, notifier, runtime
+  state and source coordinates remain intact; elaboration is unchanged. Four
+  diagnostics own incomplete/missing/repeated/kind mismatch, event-role
+  mismatch, stale/illegal signed limit shape and resource overflow. Tests
+  cover all six primary kinds, combined delayed terminals, source immutability,
+  stale state, wrong kind/events, partial combined limits and atomic overflow/
+  resource rejection. The ledger preserves Changes 2-7 with eleven active rows
+  and SHA-256 identity
+  `ef512c30adab581217257efd2ff26e93e0d04faa8650193036e6635e8924a64e`.
+  The warning-clean Debug target builds in four steps; the dependent slice
+  passes 11/11 in 0.47 seconds. The refreshed graph contains 29,233 nodes and
+  138,219 edges; the application builder has cognitive complexity 25, loop
+  depth 2, no scan-in-loop site and no recursion.
+  No Release qualification, sanitizer or hosted-CI inspection ran; semantic
+  headers were not formatted. Preserve Changes 1-7 and proceed to Change 8.
+- **Change 8: Complete.** Annotate `$skew`, `$timeskew`, `$fullskew`, `$width`, `$period`
   and `$nochange` checks, including governed secondary limits and event roles.
   Preserve each check's runtime state and violation coordinate, and diagnose
   unsupported limit shapes, missing events and incompatible source checks at
   the owning SDF span.
-- **Change 9:** apply SDF edge qualifiers, scalar and compound conditions,
+  `SdfSecondaryTimingCheckApplication` accepts stable skew/timeskew/fullskew/
+  width/period/nochange targets, exact reference/data roles, current limits and
+  one- versus two-limit shapes. Copied overlays retain threshold, notifier,
+  conditions, event-based/remain-active flags and source coordinates while
+  applying exact limits; ordered nochange windows are checked. Four diagnostics
+  own incomplete/missing/repeated/kind mismatch, event mismatch, stale/shape/
+  order failure and resource overflow. Tests cover all six runtime
+  kinds, fullskew pairs, width threshold and runtime-state retention, reversed
+  nochange, event mismatch and atomic resource rejection. The ledger preserves
+  Changes 2-8 with ten active rows and SHA-256 identity
+  `dfa52e7cfde7ee2fb31512fb2a9fc762663987047777fbe7c630158d7791eef2`.
+  The warning-clean Debug target builds in four steps; the dependent slice
+  passes 12/12 in 0.46 seconds. The refreshed graph contains 29,290 nodes and
+  138,522 edges; the application builder has cognitive complexity 23, loop
+  depth 2, no scan-in-loop site and no recursion.
+  No Release qualification, sanitizer or hosted-CI inspection ran; semantic
+  headers were not formatted. Preserve Changes 1-8 and proceed to Change 9.
+- **Change 9: Complete.** Apply SDF edge qualifiers, scalar and compound conditions,
   conditional timing-check expressions, notifier bindings and negative timing-
   check behavior. Reuse elaborated condition semantics without reparsing HDL,
   retain X/Z handling and deterministic same-tick ordering, and make disabled
   or unmatched conditions observable without silently widening applicability.
-- **Change 10:** implement `PATHPULSE`, `PATHPULSEPERCENT`, embedded pulse
-  limits, `GLOBALPATHPULSE` where its revision permits it, and `RETAIN` timing
-  behavior. Apply reject/error thresholds at the annotated path boundary,
-  preserve pulse polarity and transition identity, and cover cancellation,
-  unknown values, zero-width and threshold-boundary cases.
-- **Change 11:** define and implement precedence between SDF absolute/increment
+  The exact value policy now has a distinct signed timing-check selector that
+  rounds once at simulator precision, preserves negative zero, admits the exact
+  signed minimum and rejects positive/negative overflow without weakening
+  ordinary delay rejection. Target-plan schema 3 retains signed before/after
+  check ticks separately from unsigned delay ticks; the primary/secondary
+  overlays consume those signed values and enforce the runtime setuphold/
+  recrem sum, nochange order and simple-check nonnegative rules. The immutable
+  `SdfConditionTimingApplication` binds each annotation to the existing
+  elaborated reference/data edge controls, exact recursion-free condition
+  programs, notifier and dense check stable order. It distinguishes matched,
+  elaborated-only and unconditional applicability; partial compound conditions,
+  stale edges, illegal windows and bounded expression/signal/identity resources
+  reject atomically under four cataloged diagnostics. Runtime evidence executes
+  the copied check programs through the existing four-state interpreter: X and
+  Z remain disabled, true compound conditions toggle the retained notifier, and
+  repeated same-tick schedules produce identical outcomes. Source elaboration
+  remains unchanged. The warning-clean eight-worker Debug target rebuilds in
+  eight steps after pinned formatting of changed `.cpp` files, and the complete
+  dependent application/inventory/catalog/source slice passes 13/13 in 0.45
+  seconds. The refreshed graph contains 29,385 nodes and 138,993 edges; the
+  application builder has cognitive complexity 22, loop depth 1, no scan-in-
+  loop site and no recursion, while signed selection is loop-free with cognitive
+  complexity 10. The ledger preserves Changes 2-9 with nine active rows and
+  SHA-256 identity
+  `9a2c7ee0afd8355971e994c84eb0afa5fc590d56d9cbe3e389d2cf9e8649e835`.
+  No Release qualification, sanitizer or hosted-CI inspection ran; all header
+  edits were required semantic additions and no header formatting ran. Preserve
+  Changes 1-9 and proceed to Change 10 without reset, commit or push.
+- **Change 10: Complete.** `SdfPulseTimingApplication` consumes target-plan
+  schema 4 and publishes immutable per-path pulse/RETAIN overlays without
+  mutating elaboration. Exact percentage selection accepts governed 0 through
+  100 min/typ/max decimals, retains negative zero and rejects malformed,
+  missing, out-of-range or expansion-bounded values before arbitrary-precision
+  scaling applies one half-up rounding boundary to each effective path-delay
+  transition. `PATHPULSE` applies exact reject/error ticks;
+  `PATHPULSEPERCENT` applies transition-shaped thresholds; endpoint-free SDF
+  3.0/4.0 percentage annotations expand over stable path-ID order, while the
+  endpoint-bearing `GLOBALPATHPULSE` spelling remains confined to its SDF 2.1
+  profile and linked path. Embedded `RETAIN` values remain separate from
+  ordinary IOPATH delays. Runtime module paths retain 1/2/3/6/12-entry reject,
+  error and RETAIN tables, select them with the same 0/1/X/Z transition used
+  for the path delay, hold the prior value until the RETAIN boundary, suppress
+  zero-width X windows and recover without stale cancellation events. Source
+  pulse style, show-cancelled policy, polarity and transition identity remain
+  intact. Real parse/scope/cell/endpoint/mapping/plan/application evidence
+  covers SDF 4.0 targeted absolute pulse plus RETAIN, endpoint-free global
+  percentage expansion and SDF 2.1 legacy application. Runtime evidence covers
+  sub-reject cancellation, equality at both reject/error thresholds,
+  zero-width pulses, onevent/ondetect X publication, 12-entry Z-transition
+  selection, RETAIN onset/recovery and source immutability; stale paths,
+  conflicting ownership, forged percentages, threshold reversal and bounded
+  resources reject atomically under four cataloged diagnostics. Warning-clean
+  eight-worker Debug builds complete, and the full dependent application,
+  specify/runtime, inventory, catalog and source slice passes 16/16 in 1.09
+  seconds. The refreshed graph contains 31,533 nodes and 144,557 edges; the
+  application builder has cognitive complexity 8, loop depth 1, no scan-in-loop
+  site and no recursion, while exact percentage-to-tick conversion is loop-free
+  with cognitive complexity 9. The ledger preserves Changes 2-10 with eight
+  active rows and SHA-256 identity
+  `c5c7f5e01da4c000cc36eef30e49a76c11af3a0e39b192b4a52cff61761d85a6`.
+  Pinned formatting touched changed `.cpp` files only; all header edits were
+  required semantic additions and no header formatting ran. No Release,
+  sanitizer, hosted-CI inspection, reset, commit or push ran. Preserve Changes
+  1-10 and proceed to Change 11 in the accumulated worktree.
+- **Change 11: Complete.** Define and implement precedence between SDF absolute/increment
   annotations, source specify/primitive/net delays, command-selected delay mode
   and disabled timing controls. Record the selected source for every effective
   value, reject contradictory policies, and ensure zero-delay and no-annotation
   execution retain existing behavior byte-for-byte where observable.
-- **Change 12:** carry effective annotated delays through interpreter and LLVM
+  `SdfPrecedenceApplication` now publishes one immutable, versioned audit value
+  for every governed transition, timing-check limit and pulse/RETAIN threshold.
+  Each value retains its source and effective tick, target/value identity,
+  absolute/increment mode, command min/typ/max selection, enabled state,
+  annotation span and exact selected source: source specify or timing check, SDF
+  absolute/increment/timing-check, PATHPULSE/PATHPULSEPERCENT, RETAIN or an
+  explicit disabled result. Planned primitive/net endpoint overlays retain
+  their source before-profile beside the selected SDF profile. Map-indexed
+  validation rejects stale/missing specify paths and timing checks before
+  publication; incompatible command selection and enabled pulse rejection on
+  disabled paths reject as contradictory policies. With no annotation, source
+  zero-delay paths expand to twelve exact zero transition values, source timing
+  limits remain identical, repeated applications have the same semantic
+  identity and elaborated state is unchanged. Focused evidence also covers
+  absolute and incremental path selection, endpoint source/effective values,
+  timing-check overrides, PATHPULSE reject/error, RETAIN, all disabled timing
+  domains, stale targets and bounded value/identity rollback under four
+  cataloged diagnostics. The warning-clean eight-worker Debug target builds,
+  and the final dependent application, specify/runtime, inventory, catalog and
+  source slice passes 17/17 in 1.20 seconds; the final static slice passes 3/3
+  in 0.44 seconds. The refreshed graph contains 31,636 nodes and 145,090 edges;
+  the coordinator has cognitive/cyclomatic complexity 7, no loops, scan-in-loop
+  site or recursion, while the map-indexed delay validator has cognitive 17,
+  loop depth 1, no scan-in-loop site and no recursion. The ledger preserves
+  Changes 2-11 with seven active rows and SHA-256 identity
+  `02d505e919d5c2d9f82783761ade680fd20e7825c57702bccb60a19e04b0fd85`.
+  Pinned formatting touched only changed/new `.cpp` files; the semantic public
+  header received no formatting-only churn. No Release build/test, sanitizer,
+  hosted-CI inspection, reset, commit or push ran. Preserve Changes 1-11 and
+  proceed to Change 12 in the accumulated worktree.
+- **Change 12: Complete.** Carry effective annotated delays through interpreter and LLVM
   event scheduling with the correct inertial/transport queue, cancellation,
   delta-cycle and same-time region behavior. Preserve deterministic ordering
   across multiple producers, delayed checks and pulse filtering without adding
-  per-event hierarchy resolution or annotation lookup.
-- **Change 13:** preserve annotated timing through strengths, resolved nets,
-  MOS/CMOS and bidirectional switches, tran paths, continuous drivers and
-  procedural force/release. Define how delayed pending values interact with
-  force, release, driver removal and strength resolution, with equivalent
-  scalar/vector and interpreter/LLVM results.
-- **Change 14:** make multiple SDF files, wildcard cells, multiple elaboration
-  roots and runtime reannotation one ordered transactional operation. Define
-  file/cell precedence, exact duplicate/conflict diagnostics, pending-event and
-  timing-check-state handling, rollback on failure and deterministic concurrent
-  observation at the annotation safe point.
-- **Change 15:** expose annotation inputs, min/typ/max selection and summary/
-  error reports through project CLI, Tcl, C/C++ APIs and explicit compile,
-  elaborate and simulate phases. Return stable counts and source/object
-  identities, keep phase legality explicit, and make batch/non-project failure
-  atomic with cataloged diagnostics and bounded report sizes.
-- **Change 16:** version and preserve effective annotations, original/exact
-  values, target identities, policies and provenance through `.fsimobj`,
-  `.fsimdesign`, mapped `.fsimlib`, relocation, cold/warm native caches and
-  checkpoint/replay. Reject stale, corrupt, cross-policy and incompatible
-  producer records before use without adding compatibility readers for
-  superseded development schemas.
-- **Change 17:** expose effective timing and violations through debugger reads,
-  callbacks, internal trace, VPI and VCD without changing scheduling. Provide
-  stable annotated-object enumeration, before/after values and source spans;
-  preserve callback regions and trace ordering, bound dynamic reporting, and
-  keep disabled observation behavior allocation-free on event hot paths.
-- **Change 18:** publish clean-room standard-cell, primitive, interconnect,
-  pulse and timing-check corpora plus exhaustive missing/mismatch/conflict/
-  overflow/resource negatives. Retain interpreter/LLVM, optimized/debug,
-  project/non-project, artifact/cold-warm and Linux/Windows differential logs
-  that prove real time advancement, timing outcomes, violations and clean exit.
-- **Change 19:** synchronize public SDF/language/architecture/API/diagnostic
-  documentation, examples, feature matrices, release audits, source/catalog/
-  SPDX counts and the application ledger. Close every row with executable
-  evidence and stable digests, record resource and performance results, and
-  update the exact Batch 170 handoff without implementing VHDL/VITAL timing.
-- **Change 20:** run fresh clean-first exact-LLVM Debug and Release builds with
-  at least eight workers, complete non-sanitized regressions and every source,
-  catalog, inventory, installed-public, relocation, differential, resource and
-  release gate. Retain timing/RSS/swap/log evidence, commit and push the sole
-  Batch 169 implementation checkpoint, then save and push the exact Batch 170
-  restart plan. Batch 169 runs no sanitizer and is not a hosted-CI monitoring
-  boundary.
+  per-event hierarchy resolution or annotation lookup. The immutable
+  `SdfSchedulingApplication` groups Change 11's complete per-value precedence
+  once before runtime construction, validates contiguous stable indexes and
+  source profiles, and publishes a copied runtime design plus versioned target
+  identities. Selected absolute/increment path profiles become exact twelve-
+  transition module-path tables; selected timing-check limits, PATHPULSE reject/
+  error and RETAIN values enter their existing scheduler-owned structures.
+  Source-selected, disabled and no-annotation values retain their original
+  compact runtime tables byte-for-byte where observable. Interpreter and LLVM
+  therefore share the same prepublished `ElaboratedDesign`; compiled process
+  writes continue through the interpreter-owned inertial/path scheduler with no
+  hierarchy or annotation lookup on the event hot path. Direct runtime evidence
+  covers annotated pulse corruption, RETAIN onset/recovery and cancellation;
+  a real two-instance SystemVerilog specify design proves identical interpreter/
+  LLVM transitions and stable same-time multi-producer order at the annotated
+  delays. Source immutability, disabled/no-annotation identity, missing
+  precedence, stale source paths, malformed indexes and target/value/identity
+  ceilings reject atomically under four cataloged diagnostics. The warning-
+  clean eight-worker Debug target builds in four final steps; the complete
+  dependent application, interpreter/LLVM, specify/runtime, inventory, catalog
+  and source slice passes 18/18 in 1.29 seconds; the final static slice passes
+  3/3 in 0.44 seconds. The refreshed graph contains
+  31,703 nodes and 145,633 edges; the publication coordinator has cognitive 11,
+  loop depth 1, no scan-in-loop site or recursion, while target/path builders
+  have cognitive 12, maximum loop depth 2 and no scan-in-loop or recursion.
+  The ledger preserves Changes 2-12 with six active rows and SHA-256 identity
+  `0c5e154e75538dde38760533018902769edf9ec4349c9abbd43ee67fbc4f850a`.
+  Pinned formatting touched only changed/new `.cpp` files; the required
+  scheduling header received no formatting-only churn. No Release build/test,
+  sanitizer, hosted-CI inspection, reset, commit or push ran. Preserve Changes
+  1-12 and proceed to Change 13 in the accumulated worktree.
+- **Change 13: Complete.** `SdfDriveTimingApplication` now publishes bounded,
+  immutable and versioned ownership for annotated path drivers, downstream
+  continuous drivers, unidirectional MOS/CMOS switch drivers and bidirectional
+  tran paths. Its one-time setup pass retains exact packed regions, whole-net
+  ownership, drive strengths and resolution kinds, builds a bounded static-
+  sensitivity fanout once, and follows annotated destinations through
+  continuous-driver projections before binding switch endpoints. No hierarchy,
+  ownership or annotation lookup enters the runtime event path. Existing
+  scheduler semantics continue updating delayed driver slots beneath procedural
+  force masks; release exposes the current strength-resolved value, delayed Z
+  removes the driver contribution, and bidirectional switch resolution observes
+  the underlying network. Direct scalar/vector evidence records annotated
+  strong-driver updates at ticks 3 and 7 beneath force while a weak driver and
+  tran peer resolve deterministically. A real strengthened SystemVerilog
+  specify design with a competing weak assignment, packed tran paths and
+  procedural force/release produces identical interpreter and LLVM traces,
+  including release to `11` at tick 6 and delayed driver removal to `00` at
+  tick 13, with compiled processes present. Missing scheduling, stale/missing
+  driver regions, invalid/duplicate switch ownership and binding/identity
+  ceilings reject atomically under four cataloged diagnostics. The final
+  warning-clean eight-worker Debug target and the complete dependent
+  application/specify/resolution/inventory slice pass 19/19 in 2.01 seconds;
+  the static inventory, diagnostic-catalog and source-budget slice passes 3/3
+  in 0.43 seconds. The refreshed graph contains 31,782 nodes and 146,087 edges;
+  the coordinator has cognitive complexity 13, maximum loop depth 2 and no
+  scan-in-loop or recursion, while the bounded fanout coordinator has cognitive
+  9, maximum loop depth 2 and no scan-in-loop or recursion. The ledger preserves
+  Changes 2-13 with five active rows and SHA-256 identity
+  `0b6d5db771c0241fd7089aeb8abfb703bd39a9df088ed66769f0bfe599b1b0ee`.
+  Pinned formatting touched only changed/new `.cpp` files; the required semantic
+  drive-timing header received no formatting-only churn. No Release build/test,
+  sanitizer, hosted-CI inspection, reset, commit or push ran. Preserve Changes
+  1-13 and proceed to Change 14 in the accumulated worktree.
+- **Change 14: Complete.** Multiple SDF timing publications now compose through
+  one immutable `SdfReannotationApplication`. Every layer names its file,
+  elaboration root, wildcard cell scope and explicit file/cell precedence;
+  topology-compatible path and timing-check values are selected by stable
+  target identity independent of input order. `*`/`?` matching is bounded and
+  iterative, multiple roots remain isolated, higher precedence wins, and
+  identical or conflicting values at equal precedence reject separately. All
+  file/scope/topology/resource checks precede effective-design construction, so
+  missing targets, incompatible layers and allocation failure cannot publish a
+  partial transaction. Runtime commit is legal before start or only inside the
+  scheduler's explicit between-phase safe point. It validates both complete
+  replacement tables before two no-throw swaps, preserves already-scheduled
+  path writes under their old delay, retains timing-check timestamps, windows
+  and deadlines, and exposes the new generation to all later events. Direct
+  two-root evidence proves a tick-5 pending path is retained while three
+  concurrent post-commit paths use the new delay together at tick 3; a hold
+  violation also consumes a reference timestamp captured before annotation.
+  Repeated same-safe-point observers see the same generation and semantic
+  identity. Missing baseline/scope/safe-point state, exact duplicates,
+  conflicts/topology mismatches and file/target/scope/identity ceilings reject
+  atomically under four cataloged diagnostics. The final warning-clean
+  eight-worker Debug target is current with no work; the dependent SDF,
+  specify, resolution, inventory slice passes 20/20 in 2.08 seconds and the
+  diagnostic, source and inventory slice passes 3/3. The refreshed graph has
+  31,875 nodes and 146,917 edges. The one-time transaction coordinator has
+  cognitive complexity 33, maximum loop depth 2 and three bounded setup scan
+  sites; safe-point commit has cognitive complexity 5, loop depth 1 and no scan
+  site, and the runtime topology/value validator has cognitive complexity 12
+  and loop depth 1. None enters the event hot path. The ledger preserves
+  Changes 2-14 with four active rows and SHA-256 identity
+  `a60da63cd4132f7949e2da9050c24e6d7b3d7d46ed781fbf42387fcd94f60c7a`.
+  Formatting touched only changed `.cpp` files; required public-header edits
+  were semantic only and no header formatting churn occurred. No Release
+  build/test, sanitizer, hosted-CI inspection, reset, commit or push ran.
+  Preserve Changes 1-14 and proceed to Change 15 in the accumulated worktree.
+- **Change 15: Complete.** Immutable `SdfControlApplication` requests expose
+  ordered annotation inputs, min/typ/max selection, explicit compile/elaborate/
+  simulate phase and bounded summary/report policy through the public C++
+  model. Project CLI retains normalized repeated `--sdf` paths plus root, cell
+  and report selectors and rejects annotation for compile/check/SystemC phases.
+  Tcl exposes atomic `fsim::sdf configure`, callback-safe `summary` and bounded
+  `report`; the append-only C ABI exposes versioned input/options/summary/report
+  records and retains the prior publication after a failed mutation. Exact
+  input/file/path/check/report counts, generation/effective/truncation state and
+  stable source/object/application identities are shared across all surfaces.
+  Compile-phase input, duplicate scope, phase/generation/provenance mismatch and
+  input/source/report/identity ceilings reject under four cataloged diagnostics.
+  The focused C++/CLI/C-API test and Tcl batch test pass with atomic rollback;
+  the complete SDF/specify/resolution/inventory dependency slice passes 21/21
+  in 1.31 seconds and the API/C-header/Tcl/diagnostic/source/inventory public
+  slice passes 7/7 in 1.50 seconds. The final eight-worker Debug target is
+  warning-clean and current with no work. The refreshed graph contains 32,028
+  nodes and 147,504 edges. The immutable coordinator has cognitive complexity
+  22, maximum loop depth 1 and no scan-in-loop or recursion; the Tcl adapter has
+  cognitive 19 and loop depth 1, and the C adapter has cognitive 9 and loop
+  depth 1. All are configuration/report paths, not runtime event hot paths. The
+  ledger preserves Changes 2-15 with three active rows and SHA-256 identity
+  `f0ece19204046b96bf9798c8e035983da9af37bf9c76df40f3d5872fdf8f87c2`.
+  Formatting touched changed `.cpp` files only; semantic public-header edits
+  received no formatting-only churn. Per Batch 169 policy, no Release build or
+  test ran; no sanitizer, hosted-CI inspection, reset, commit or push ran.
+  Preserve Changes 1-15 and proceed to Change 16 in the accumulated worktree.
+- **Change 16: Complete.** Schema-1 `FSDFEFF` archives bind effective
+  annotations to one explicit object, design, mapped-library, native-cache or
+  checkpoint artifact kind and logical producer. Canonically ordered records
+  preserve original and effective signed values, stable timing-target and SDF
+  source/root/cell identities, file/cell precedence, min/typ/max selection,
+  pending-event and timing-check-state policies and source provenance. The
+  envelope carries exact payload size and checksum; decoding accepts only the
+  current schema and expected artifact kind, producer and policy. Producer-
+  relative source identities survive relocation, and cold/warm cache plus
+  checkpoint replay reproduce the same archive identity. Stale schemas,
+  corrupt/truncated/trailing payloads, cross-kind/producer/policy use,
+  duplicate targets, absolute provenance and record/value/string/archive/
+  identity ceilings reject atomically under four cataloged diagnostics without
+  compatibility readers for superseded development schemas. The final warning-
+  clean eight-worker Debug target is current with no work. The complete SDF,
+  artifact, cache, diagnostic, source, inventory, specify and resolution slice
+  passes 30/30 in 1.26 seconds. The refreshed graph contains 32,118 nodes and
+  147,933 edges; canonical encode has cognitive complexity 4, decode 11 and
+  snapshot validation 12, each with maximum loop depth 1 and no scan-in-loop or
+  recursion. The ledger preserves Changes 2-16 with two active rows and SHA-256
+  identity `f4943c4e2b98e4be05fd0c0371d074dd4bd70e59213476a494d90ae994de7b2d`.
+  Formatting touched changed `.cpp` files only; the semantic archive header
+  received no formatting-only churn. Per Batch 169 policy, no Release
+  build/test ran; no sanitizer, hosted-CI inspection, reset, commit or push ran.
+  Preserve Changes 1-16 and proceed to Change 17 in the accumulated worktree.
+- **Change 17: Complete.** One immutable `SdfObservabilityApplication`
+  canonically enumerates effective timing targets with stable debugger object
+  IDs, VPI handles and VCD names plus original/effective values and owned SDF
+  source spans. A simulation-side recorder fans each accepted violation into
+  independently selectable debugger, callback, internal-trace, VPI and VCD
+  views. All enabled vectors reserve their complete bounded capacity during
+  setup; the event path copies at most twelve signed values into fixed arrays,
+  preserves scheduler region and one monotonic sequence across every surface,
+  and never changes scheduling. With every surface disabled, setup reserves no
+  event storage and the hot-path call returns before object lookup or allocation.
+  Unknown targets, invalid regions/value arity and full buffers return bounded
+  statuses without partial fanout; incomplete/duplicate targets and object/
+  event/identity ceilings reject setup under four cataloged diagnostics. The
+  final warning-clean eight-worker Debug target is current with no work; the
+  complete SDF plus debugger/VPI/VCD/API/static/specify/resolution slice passes
+  31/31 in 1.61 seconds. The refreshed graph contains 32,213 nodes and 148,359
+  edges. Catalog construction has cognitive complexity 10 and the fixed-five-
+  surface recorder 9, both with maximum loop depth 1 and no recursion; event
+  vector capacity is preallocated and the disabled fast path precedes all
+  lookup/loop work. The ledger preserves Changes 2-17 with one active row and
+  SHA-256 identity
+  `102b109a21aa0f291da666f6873e98751d8e8b0016db66040575014d7205edae`.
+  Formatting touched changed `.cpp` files only; the semantic observability
+  header received no formatting-only churn. Per Batch 169 policy, no Release
+  build/test ran; no sanitizer, hosted-CI inspection, reset, commit or push ran.
+  Preserve Changes 1-17 and proceed to Change 18 in the accumulated worktree.
+- **Change 18: Complete.** The owned application corpus publishes standard-
+  cell, primitive, interconnect, pulse and timing-check rows with original and
+  effective values, stable source spans, two observed violation classes and
+  object/design/library/cache/checkpoint round trips. Its transcript freezes
+  real-time advancement, timing outcome, violation, interpreter/LLVM,
+  optimized/debug, project/non-project, cold/warm/relocated cache, replay,
+  debugger/callback/trace/VPI/VCD, Linux/Windows contract and clean-exit tokens.
+  `RunSdfApplicationClosure.cmake` runs seven explicit witness stages, rejects
+  exit zero without every token, scans all sixteen application diagnostic
+  families, and retains a console transcript, seven per-stage verbose logs and
+  a result TSV. The serial closure passes in 33.25 seconds; its retained logs
+  contain 30,437 bytes. Missing/mismatch/conflict/overflow/resource negatives
+  are required by both the transcript and asserted test sources. The refreshed
+  graph contains 32,230 nodes and 148,489 edges. The ledger preserves all
+  seventeen Changes 2-18 rows with SHA-256 identity
+  `47e7f5b95aae9f0e3df5cb4fcb4939255e1803f9c920081a47198e21b75f2754`.
+  Formatting touched the new `.cpp` witness only; no header formatting occurred.
+  Per Batch 169 policy, no Release build/test ran; no sanitizer, hosted-CI
+  inspection, reset, commit or push ran. Preserve Changes 1-18 and proceed to
+  Change 19 in the accumulated worktree.
+- **Change 19: Complete.** Public SDF, README, language, architecture, native-
+  API, diagnostic, example and feature-matrix documentation now describes the
+  implemented Verilog/SystemVerilog application boundary and leaves VHDL/VITAL
+  timing exclusively to Batch 170. The machine-checked release audit composes
+  the application-inventory, diagnostic-catalog and source-budget gates,
+  verifies five review IDs and every public boundary token, and scans all 1,139
+  authored artifacts for Apache-2.0 SPDX ownership. It passes with all seventeen
+  Changes 2-18 rows preserved, zero active rows, 2,389 production diagnostics,
+  974 bounded C/C++ sources and ledger SHA-256
+  `47e7f5b95aae9f0e3df5cb4fcb4939255e1803f9c920081a47198e21b75f2754`.
+  The audit records the 33.25-second, 30,437-byte seven-stage closure, positive
+  time advancement, clean exit, graph size and no-hot-path-lookup/resource
+  contracts. The exact Batch 170 restart boundary is prepared in the resume
+  handoff. Change 19 changed documentation, examples and CMake registration
+  only; no header formatting or compilation ran. Per policy, no Release build/
+  test, sanitizer, hosted-CI inspection, reset, commit or push ran. Preserve
+  Changes 1-19 and proceed to final Change 20 checks.
+- **Change 20: Complete.** Fresh clean-first exact-LLVM 22.1.8 Debug and Release
+  eight-worker builds pass all 874 steps warning-free in 12:18.95 and 10:03.81
+  at 5,141,632 and 2,255,432 KiB peak RSS with zero swaps. After synchronizing
+  the intentionally strict historical release-audit constants exposed by the
+  first complete run, final Debug and Release non-sanitized regressions pass
+  182/182 in 8:45.20 and 7:37.31 at 3,780,536 and 3,788,200 KiB peak RSS with
+  zero swaps. Their CTest totals are 525.19 and 457.30 seconds; the final SDF
+  application closures pass in 41.99 and 37.91 seconds. Every source, catalog,
+  inventory, installed-public, relocation, differential, resource, platform
+  and release gate participates in those clean transcripts. Eight primary
+  build/test logs and metric records retain 399,038 bytes, report exit zero and
+  contain no compiler warning/error marker. The final graph has 32,232 nodes
+  and 148,494 edges. No header formatting ran. Batch 169 runs no sanitizer and
+  no hosted-CI inspection because it is neither boundary. Commit and push the
+  sole accumulated implementation checkpoint, then publish the exact Batch 170
+  restart checkpoint.
 
 ### Batch 170 - VHDL/VITAL and mixed-language SDF - CI monitoring boundary
 

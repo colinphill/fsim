@@ -83,6 +83,24 @@ closure. The ledger intentionally stops before timing application and has
 SHA-256 identity
 `5a4817053834c76fef49650d38b73957a4be5560c62d1eb0f8c72c7180340c4b`.
 
+Batch 169 starts with the independent 17-row
+`sdf_application_inventory.tsv` ledger. Rows map one-to-one to Changes 2-18
+across exact value selection, atomic target plans, Verilog/SystemVerilog path,
+interconnect, timing-check, pulse, scheduler, drive-state and reannotation
+behavior, public control, persistence, observability and executable closure.
+Changes 2-18 exact value-policy, atomic-target-plan, path-annotation,
+interconnect/device, delay-list/mode, primary/secondary timing-check and
+condition/notifier, pulse/RETAIN and effective-value precedence rows are
+preserved with runtime scheduling, drive-state propagation and transactional
+safe-point reannotation, public annotation control, effective-archive
+persistence, bounded public observability and executable corpus closure; all
+seventeen rows are preserved.
+Every row binds the exact SDF revisions, eight governed HDL profiles, planned
+implementation and evidence owners, engine/phase/artifact coverage,
+diagnostics and physical resource contracts without claiming VHDL/VITAL timing
+application reserved for Batch 170. The current SHA-256 identity is
+`47e7f5b95aae9f0e3df5cb4fcb4939255e1803f9c920081a47198e21b75f2754`.
+
 ## Intended atomic layout
 
 New tests should use the stable feature ID from the matrix and keep one
@@ -143,6 +161,7 @@ These suites are the evidence currently referenced by the matrix:
 | [feature_matrix/verilog_systemverilog_compatibility_corpus.tsv](verilog_systemverilog_compatibility_corpus.tsv) | Seven ordered switch rows freezing independent canonical selection, 257-bit preservation, later-grammar rejection, public provenance, execution, and artifact evidence |
 | [RunVerilogSystemVerilogStandardModeClosureMatrix.cmake](../../cmake/RunVerilogSystemVerilogStandardModeClosureMatrix.cmake) | Registered 16-witness serial retained-log closure across revisions/switches, interpreter/LLVM O0/O2, cold/warm caches, artifacts/replay, mixed VHDL/SystemC, C/C++/Tcl/VPI, MSVC/Windows, and governed resource contracts |
 | [feature_matrix/sdf_inventory.tsv](sdf_inventory.tsv) | Batch 168's authoritative 17-row SDF 2.1/3.0/4.0 obligation ledger assigning lexical, header, construct, adapter, normalization, immutable IR, hierarchy-resolution, schema/artifact, relocation/cache, corpus and closure ownership one-to-one to Changes 2-18 |
+| [feature_matrix/sdf_application_inventory.tsv](sdf_application_inventory.tsv) | Batch 169's authoritative 17-row SDF-to-Verilog/SystemVerilog timing-application ledger assigning exact values, atomic plans, path/interconnect/check/pulse/scheduler/drive/reannotation behavior, controls, persistence, observability and closure one-to-one to Changes 2-18 |
 | [feature_matrix/systemverilog_gap_inventory.tsv](systemverilog_gap_inventory.tsv) | Authoritative Batch 165 IEEE 1800-2017 clause inventory currently freezing 25 reviewed or closed supported families, five one-to-one active Changes 12-16 residual owners, and five explicit SDF, protected-envelope, FST, Accellera-SystemC/TLM/SCV, and legacy-PLI deferrals after timing-region closure |
 | [feature_matrix/systemverilog_literal_width_inventory.tsv](systemverilog_literal_width_inventory.tsv) | Separate Batch 165 audit of SystemVerilog bit-string, based-number, unbased-unsized and host-word assumptions across lexical text, folding, types, constraints, containers, both engines, DPI/VPI, mixed debugging, traces, artifacts and UVM; it freezes 17 preserved paths, four active removal obligations and four explicitly governed physical boundaries |
 | [app/sv_parameter_sizing_application_test.cpp](../app/sv_parameter_sizing_application_test.cpp) | Exact arbitrary-width self/context sizing and signedness, two-state casts and aggregate stores, lazy logical/conditional evaluation, concatenation/replication/streaming and dynamic selections, common-profile `inside`/`case inside`, wildcard equality, guarded/binding/tagged/structured `case matches`, and interpreter/LLVM O0/O2 cold/warm parity |

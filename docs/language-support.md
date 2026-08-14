@@ -2183,6 +2183,28 @@ SystemC, hidden artifact producers, cache reuse and the governed 6-GiB,
 delta-1000 and VCD-64 ceilings. A passing child exit without those transcript
 tokens cannot satisfy the matrix.
 
+### Verilog and SystemVerilog SDF timing application in v2
+
+Batch 169 applies the exact SDF 2.1/3.0/4.0 representation to every selectable
+Verilog/SystemVerilog frontend profile: Verilog-1995, Verilog-2001,
+Verilog-2001-noconfig, Verilog-2005 and SystemVerilog-2005/2009/2012/2017.
+Profile selection does not reinterpret SDF values or widen timing objects.
+
+The supported boundary includes absolute/increment `IOPATH`, `INTERCONNECT`,
+`PORT`, `MIPD`, `DEVICE`, governed transition lists, all twelve existing
+specify timing-check kinds, edge/condition/notifier/negative-check behavior,
+`PATHPULSE` and `RETAIN`. Effective timing has common interpreter/LLVM,
+optimized/debug, project/non-project, artifact/cache/checkpoint and public-
+observation evidence. CLI, Tcl, native C and source C++ controls publish one
+transactional request model.
+
+This is not a claim of VHDL/VITAL backannotation. SDF cells or timing paths
+whose target crosses a VHDL boundary remain rejected or deferred to Batch 170.
+The exact supported surface and evidence are recorded in
+[`sdf.md`](sdf.md) and the
+[`sdf_application_inventory.tsv`](../tests/feature_matrix/sdf_application_inventory.tsv)
+ledger.
+
 ## v1 target
 
 ### VHDL-2008

@@ -63,6 +63,53 @@ int main()
         assert(output.str().find("0.1.0-dev (C API 1)") != std::string::npos);
         assert(error.str().empty());
     }
+    {
+        std::istringstream input;
+        std::ostringstream output;
+        std::ostringstream error;
+        const int result = run_cli(
+            {
+                "fsim",
+                "tcl",
+                "-c",
+                R"tcl(
+set first [fsim::sdf configure alpha.sdf alpha u* max 2]
+if {[dict get $first inputs] != 1 || [dict get $first files] != 1} {
+  error "bad first SDF summary: $first"
+}
+set second [fsim::sdf configure beta.sdf beta u? max 2]
+if {[dict get $second inputs] != 2 ||
+    [dict get $second report_entries] != 2 ||
+    [dict get $second truncated] ||
+    [llength [fsim::sdf report]] != 2} {
+  error "bad bounded SDF report: $second"
+}
+set identity [dict get $second identity]
+if {![catch {fsim::sdf configure alpha.sdf alpha u* max 2} message]} {
+  error "duplicate SDF configuration succeeded"
+}
+set retained [fsim::sdf summary]
+if {[dict get $retained identity] ne $identity ||
+    [dict get $retained inputs] != 2} {
+  error "failed SDF configuration changed published control"
+}
+set diagnostics [fsim::diagnostics]
+if {[dict get [lindex $diagnostics end] code] ne "FSIM-SDF-CONTROL-002"} {
+  error "missing cataloged SDF control diagnostic: $diagnostics"
+}
+fsim::diagnostics clear
+puts "sdf-control-tcl-ok"
+)tcl",
+            },
+            input,
+            output,
+            error);
+        if (result != 0)
+            std::cerr << error.str();
+        assert(result == 0);
+        assert(output.str().find("sdf-control-tcl-ok") != std::string::npos);
+        assert(error.str().empty());
+    }
 
     const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
     const auto directory = std::filesystem::temp_directory_path()

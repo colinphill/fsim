@@ -145,6 +145,8 @@ public:
   [[nodiscard]] std::optional<SimulationTick>
   next_pending_time() const noexcept;
   [[nodiscard]] bool running() const noexcept;
+  /// True only while invoking the hook between two completed scheduler phases.
+  [[nodiscard]] bool at_safe_point() const noexcept;
   [[nodiscard]] SimulationTick now() const noexcept;
   [[nodiscard]] std::uint64_t delta() const noexcept;
   [[nodiscard]] std::optional<SchedulerPhase> current_phase() const noexcept;

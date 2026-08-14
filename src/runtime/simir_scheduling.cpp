@@ -1351,6 +1351,7 @@ bool Interpreter::Impl::route_module_path_update(
     std::vector<bool> show_cancelled(value.width());
     std::vector<std::optional<SimulationTick>> reject_limits(value.width());
     std::vector<std::optional<SimulationTick>> error_limits(value.width());
+    std::vector<std::optional<SimulationTick>> retain_delays(value.width());
     bool routed = false;
     const auto accumulated_delay = [&](
                                        const Logic4 before,
@@ -1502,8 +1503,18 @@ bool Interpreter::Impl::route_module_path_update(
                     routed_values[bit] = routed_value;
                     pulse_styles[bit] = path.pulse_style;
                     show_cancelled[bit] = path.show_cancelled;
-                    reject_limits[bit] = path.pulse_reject_limit;
-                    error_limits[bit] = path.pulse_error_limit;
+                    reject_limits[bit] = path.pulse_reject_delays.empty()
+                        ? path.pulse_reject_limit
+                        : module_path_transition_delay(transition_before,
+                              routed_value, path.pulse_reject_delays);
+                    error_limits[bit] = path.pulse_error_delays.empty()
+                        ? path.pulse_error_limit
+                        : module_path_transition_delay(transition_before,
+                              routed_value, path.pulse_error_delays);
+                    retain_delays[bit] = path.retain_delays.empty()
+                        ? std::nullopt
+                        : module_path_transition_delay(transition_before,
+                              routed_value, path.retain_delays);
                 }
                 routed = true;
             }
@@ -1556,7 +1567,7 @@ bool Interpreter::Impl::route_module_path_update(
             scheduler.cancel(pending->second.handle);
             if (corrupt) {
                 force_recovery = true;
-                const auto x_delay = negative_cancelled
+                auto x_delay = negative_cancelled
                     ? *new_target - now
                     : pending->second.pulse_style == ModulePathPulseStyle::ondetect
                     ? SimulationTick { }
@@ -1566,15 +1577,23 @@ bool Interpreter::Impl::route_module_path_update(
                 if (negative_cancelled) {
                     *selected[bit] = pending->second.target_time - now;
                 }
-                scheduler.schedule_after(
-                    x_delay, SchedulerPhase::update, orders[bit],
-                    [this, driver, signal, target_bit](Scheduler&) {
-                        stage_update_unrouted(
-                            driver,
-                            signal,
-                            PackedLogic4 { 1U, Logic4::x },
-                            target_bit);
-                    });
+                if (pending->second.retain_delay) {
+                    x_delay = *pending->second.retain_delay > pulse_width
+                        ? *pending->second.retain_delay - pulse_width
+                        : SimulationTick { };
+                }
+                if (!pending->second.retain_delay
+                    || x_delay < *selected[bit]) {
+                    scheduler.schedule_after(
+                        x_delay, SchedulerPhase::update, orders[bit],
+                        [this, driver, signal, target_bit](Scheduler&) {
+                            stage_update_unrouted(
+                                driver,
+                                signal,
+                                PackedLogic4 { 1U, Logic4::x },
+                                target_bit);
+                        });
+                }
             }
             pending_module_path_writes.erase(pending);
             if (rejected && driver_current.get(target_bit) == scalar.get(0)) {
@@ -1596,8 +1615,10 @@ bool Interpreter::Impl::route_module_path_update(
                 "simulation time overflow while scheduling module path"
             };
         }
-        const auto reject = reject_limits[bit].value_or(*selected[bit]);
-        const auto error = error_limits[bit].value_or(reject);
+        const auto reject = reject_limits[bit].value_or(
+            retain_delays[bit] ? SimulationTick { } : *selected[bit]);
+        const auto error = error_limits[bit].value_or(
+            retain_delays[bit] ? *selected[bit] : reject);
         auto [pending, inserted] = pending_module_path_writes.try_emplace(
             key,
             PendingModulePathWrite {
@@ -1607,6 +1628,7 @@ bool Interpreter::Impl::route_module_path_update(
                 now + *selected[bit],
                 reject,
                 error,
+                retain_delays[bit],
                 pulse_styles[bit],
                 show_cancelled[bit] });
         (void)inserted;

@@ -252,6 +252,9 @@ ElaboratedDesign::create_interpreter(
         runtime_path.show_cancelled = path.show_cancelled;
         runtime_path.pulse_reject_limit = path.pulse_reject_limit;
         runtime_path.pulse_error_limit = path.pulse_error_limit;
+        runtime_path.pulse_reject_delays = path.pulse_reject_delays;
+        runtime_path.pulse_error_delays = path.pulse_error_delays;
+        runtime_path.retain_delays = path.retain_delays;
         runtime_path.source = runtime::simir::SourceLocation {
             path.source.source_name,
             static_cast<std::uint32_t>(path.source.begin.line),

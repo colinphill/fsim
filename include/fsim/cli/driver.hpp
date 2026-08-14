@@ -4,6 +4,7 @@
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/project/project.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -70,6 +71,10 @@ struct Invocation {
   std::optional<std::string> duration;
   std::optional<std::uint64_t> max_deltas;
   std::optional<project::DelayMode> delay_mode;
+  std::vector<std::filesystem::path> sdf_files;
+  std::optional<std::string> sdf_root;
+  std::string sdf_cell{"*"};
+  std::optional<std::size_t> sdf_report_limit;
   std::optional<std::filesystem::path> trace_file;
   std::optional<std::uint64_t> seed;
   bool random_seed{false};

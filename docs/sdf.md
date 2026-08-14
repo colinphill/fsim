@@ -1,94 +1,147 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Standard Delay Format support
 
-Fsim's Batch 168 Standard Delay Format layer parses, normalizes, resolves and
-persists SDF without changing runtime timing behavior. Verilog/SystemVerilog
-timing application belongs to Batch 169 and VHDL/VITAL timing application
-belongs to Batch 170. An accepted Batch 168 annotation therefore contributes
-validated semantic and cache identity, not path delays or timing-check state in
-a simulation.
+Fsim accepts SDF 4.0 directly and SDF 2.1 and 3.0 through explicit revision
+adapters. Batch 168 owns parsing, exact normalization, hierarchy resolution and
+portable source identity. Batch 169 applies that immutable representation to
+Verilog-1995/2001/2001-noconfig/2005 and SystemVerilog-2005/2009/2012/2017
+timing. VHDL/VITAL targets and timing that crosses a VHDL boundary remain
+reserved for Batch 170.
 
-## Supported input profiles
+## Supported input and value policy
 
-The clean-room frontend accepts SDF 4.0 directly and SDF 2.1 and 3.0 through
-revision-specific adapters. It preserves ordered header spellings and values,
-exact signed decimal and `min:typ:max` values, exact timescale conversion,
-conditions, delay families, timing checks, timing-environment constructs and
-empty, exact or wildcard instance selectors. Revision adapters reject
-constructs, spellings, arities and ordering that do not belong to the selected
-profile.
+The clean-room frontend preserves ordered header values, exact signed decimal
+and partial `min:typ:max` values, timescales, conditions, delay families, timing
+checks, timing-environment constructs and empty, exact or wildcard instance
+selectors. Revision adapters reject constructs, spellings, arities and ordering
+that do not belong to the selected profile.
 
-Parsing produces stable cell and node identities rather than host-sized delay
-values. Normalization retains the source spelling and an exact canonical value;
-conversion to femtoseconds is checked for loss and overflow. Lexer, IR and
-resolution work is governed by explicit byte, token, nesting, node, mapping and
-identity limits. See the [diagnostic catalog](diagnostics.md#standard-delay-format-frontend)
-for the stable `FSIM-SDF-*` failure families.
+An application selects `min`, `typ` or `max`, converts the exact rational value
+through the SDF and design timescales and rounds once at the simulator-precision
+boundary. Missing selected slots, negative effective delays, arithmetic
+expansion and tick overflow fail transactionally. No floating-point or host-
+locale conversion participates in annotation identity.
 
-## Resolution contract
+## Verilog and SystemVerilog timing application
 
-An annotation is bound to an explicit elaborated-design root before cells are
-resolved. Exact names follow the owning language's case and hierarchy rules;
-wildcards select physical primitives only, and an empty selector denotes the
-bound root. Resolution supports Verilog/SystemVerilog, VHDL and native SystemC
-instances in one hierarchy.
+Before publication, each resolved mapping becomes an immutable target plan
+keyed by stable elaborated timing-object identities. Validation covers cell and
+object kind, delay/check arity, duplicate ownership, widths and source spans.
+The supported application surface is:
 
-The resolver maps cells, ports, nets, bit or part selections, interconnect
-endpoints, specify paths, timing checks and conditions to stable elaborated
-identities. Missing, ambiguous, duplicate, direction-incompatible or
-width-incompatible mappings fail before an annotation can be published. The
-result includes deterministic per-target and whole-annotation semantic
-identities and counts for delay, timing-check and timing-environment records.
+- absolute and incremental `IOPATH`, including parallel/full paths, polarity,
+  edges, conditions, `CONDELSE` and state dependence;
+- `INTERCONNECT`, `PORT`, `MIPD` and `DEVICE` delays for nets, ports,
+  primitives, UDPs, gates, switches and continuous assignments;
+- governed one-, two-, three-, six- and twelve-value transition lists;
+- `$setup`, `$hold`, `$setuphold`, `$recovery`, `$removal`, `$recrem`, `$skew`,
+  `$timeskew`, `$fullskew`, `$width`, `$period` and `$nochange` limits;
+- edge and conditional timing-check expressions, notifiers, negative checks,
+  `PATHPULSE`, percentage pulse controls and `RETAIN`; and
+- deterministic source/SDF precedence, multiple-file ordering and rollback-
+  safe reannotation.
 
-## C++ API boundary
+Interpreter and LLVM execution use the same precomputed effective timing
+records. Inertial and transport cancellation, same-time scheduler regions,
+strength/resolution state, switches, continuous drivers and force/release
+interactions therefore do not perform hierarchy lookup or value conversion on
+the event hot path. Disabling SDF preserves the original no-annotation timing
+identity and does not allocate observation records.
 
-The source-tree C++ interface is intentionally split by phase:
+## Command-line control
 
-- `fsim/frontend/sdf.hpp` provides `lex_sdf`, `parse_sdf`, `normalize_sdf` and
-  `lower_sdf_ir`, plus exact-value and immutable-IR types.
-- `fsim/app/sdf_annotation_scope.hpp`, `sdf_cell_resolution.hpp`,
-  `sdf_endpoint_resolution.hpp` and `sdf_mapping_validation.hpp` bind and
-  validate an annotation against an `ElaboratedDesign`.
-- `fsim/app/sdf_schema.hpp`, `sdf_artifact_identity.hpp` and
-  `sdf_portable_archive.hpp` encode checked schema, cache and portable-artifact
-  identity.
-- `fsim/app/sdf_phase_persistence.hpp` installs or restores a validated
-  portable annotation on a built project and publishes its design payload.
+SDF options are accepted only by phases that elaborate or simulate. `--sdf` is
+repeatable; its order establishes file precedence. `--sdf-root` selects the
+bound design root, `--sdf-cell` applies a cell glob, `--delay-mode` selects
+`min`, `typ` or `max`, and `--sdf-report-limit` bounds detailed report entries.
+For example:
 
-Every result carries diagnostics and reports success only when it has no error.
-Callers may tighten the default resource limits. These C++ headers are an
-internal/source integration surface in Batch 168; they are not part of the
-installed stable C API. There is not yet a command-line option that applies an
-SDF file to simulator timing. Batch 169 owns the Verilog/SystemVerilog CLI/API
-application flow and Batch 170 extends it to VHDL/VITAL.
+```sh
+fsim run --project fsim.toml --sdf cells.sdf --sdf-root tb \
+  --sdf-cell 'tb.dut.*' --delay-mode max --sdf-report-limit 256
+```
 
-## Portable format and cache identity
+The same controls are available to project `build`, `debug` and `tcl`, and to
+manifest-free `elaborate` and `simulate`. Selector/report options without an
+SDF input and SDF options on compile-only phases are rejected.
 
-The portable SDF payload begins with the `FSDFPORT` magic and schema version 1.
-It contains the exact `DesignSdfAnnotation` identity, its schema envelope,
-normalized cell/node records, resolved unit/object mappings and a checksum.
-Decode is resource-bounded and rejects bad magic, unsupported schema, truncation,
-trailing bytes, corruption and an expected-annotation mismatch before
-publication.
+## Tcl control
 
-Mapped `.fsimlib` entries and standalone `.fsimdesign` payloads use an `sdf:`
-semantic identity. Design publication also composes the annotation into native
-cache identity. The portable payload is sufficient for source-hidden and
-relocated reload; the original SDF path is not consulted after a successful
-load. Missing, stale or corrupt payloads reject instead of silently dropping the
-annotation. `.fsimobj` unit provenance remains separate from the design-level
-resolved mapping.
+`fsim::sdf configure SOURCE ROOT CELL_GLOB min|typ|max REPORT_LIMIT` appends one
+input and atomically publishes the resulting control request. `fsim::sdf
+summary` returns the effective input/file/path/check counts, generation,
+truncation state and semantic identity. `fsim::sdf report` returns the bounded
+input/path/timing-check detail list. Summary and report reads are safe inside a
+simulation callback; mutation remains phase checked.
+
+```tcl
+set summary [fsim::sdf configure cells.sdf tb {tb.dut.*} max 256]
+puts "SDF generation [dict get $summary generation]"
+foreach entry [fsim::sdf report] {
+  puts "[dict get $entry kind] [dict get $entry object]"
+}
+```
+
+Failed duplicate, phase, limit or resource validation retains the last
+published request and reports a cataloged `FSIM-SDF-CONTROL-*` diagnostic.
+
+## Native C and C++ APIs
+
+The installed C API in `fsim/api.h` adds append-only
+`fsim_sdf_input_t`, `fsim_sdf_options_t`, `fsim_sdf_summary_t` and
+`fsim_sdf_report_entry_t` structures. Configure with
+`fsim_session_configure_sdf`, read the immutable summary with
+`fsim_session_get_sdf_summary`, and enumerate bounded report entries with
+`fsim_session_get_sdf_report_entry`. Callers advertise every structure prefix
+with `struct_size` and `FSIM_API_VERSION`; invalid prefixes, enums, views,
+indices and phase transitions fail without replacing prior state.
+
+The source-tree C++ surface is split by ownership:
+
+- `fsim/frontend/sdf.hpp` parses and normalizes exact SDF input;
+- the `sdf_*resolution.hpp`, `sdf_mapping_validation.hpp` and
+  `sdf_target_plan.hpp` application headers bind stable targets;
+- the value, path, interconnect, delay-mode, timing-check, condition, pulse,
+  precedence, scheduling, drive and reannotation headers own effective timing;
+- `sdf_control.hpp` owns CLI/Tcl/C/C++ control summaries and reports;
+- `sdf_effective_archive.hpp` owns schema-1 `FSDFEFF` object, design, library,
+  native-cache and checkpoint payloads; and
+- `sdf_observability.hpp` exposes stable debugger, callback, internal-trace,
+  VPI and VCD timing/violation records.
+
+Every public result reports success only when it has no error diagnostic.
+Callers can tighten default resource and report limits but cannot widen a
+target or accept a partial mutation.
+
+## Persistence and observability
+
+The existing `FSDFPORT` payload retains normalized and resolved annotation
+identity. The `FSDFEFF` payload adds exact source and effective values, target
+identities, selected policy and provenance. Objects, designs, mapped libraries,
+cold/warm/relocated native caches and checkpoints reject bad magic, unsupported
+schema, truncation, trailing bytes, corruption and expected-identity mismatch
+before publication. A successful relocated reload does not consult the
+original SDF path.
+
+Effective paths, timing checks and violations have stable debugger IDs, VPI
+handles, VCD names, values, source spans, time, delta, scheduler region and
+source order. Debugger, callbacks, internal trace, VPI and VCD observe the same
+preallocated records without changing scheduling.
 
 ## Governed evidence
 
-Clean-room corpora under `tests/fixtures/sdf/corpus/` cover SDF 2.1, 3.0 and 4.0
-profiles plus exact Verilog, wildcard physical VHDL and native SystemC
-resolution. `fsim.application.sdf_corpus` emits the stable
-`FSIM-SDF-CORPUS-PASS` marker.
+The seventeen-row
+[`sdf_application_inventory.tsv`](../tests/feature_matrix/sdf_application_inventory.tsv)
+maps Changes 2-18 one-to-one and is checked by
+`fsim.sdf-application-inventory`. The `fsim.sdf-application-closure` test runs
+seven retained-log stages and requires the exact
+`FSIM-SDF-APPLICATION-CORPUS-PASS` transcript tokens independently of child
+exit status. Its owned standard-cell, primitive, interconnect, pulse and timing-
+check corpus covers interpreter/LLVM, optimized/debug, project/non-project,
+object/design/library/cache/checkpoint, relocation/replay, public observation,
+Linux/Windows contracts and cataloged negative/resource families.
 
-The `fsim.sdf-closure` test runs the frontend, adapters, normalization, IR,
-scope, cell/endpoint mapping, schema, portable artifacts, project/library/design
-reload, interpreter/LLVM, cold/warm/relocated cache and resource-portability
-evidence. It retains `console.log` and `result.txt` under
-`tests/sdf-closure-evidence/` in the selected build tree and requires the
-`FSIM-SDF-CLOSURE-PASS` marker independently of subprocess exit status.
+See the [diagnostic catalog](diagnostics.md#standard-delay-format-frontend),
+[feature matrix](feature-matrix.md) and
+[Batch 169 release audit](v2-sdf-application-release-audit.md) for the frozen
+boundaries and executable evidence.

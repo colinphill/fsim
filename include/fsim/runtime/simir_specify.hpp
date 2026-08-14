@@ -98,6 +98,9 @@ struct ModulePath {
     bool show_cancelled { };
     std::optional<SimulationTick> pulse_reject_limit;
     std::optional<SimulationTick> pulse_error_limit;
+    std::vector<SimulationTick> pulse_reject_delays;
+    std::vector<SimulationTick> pulse_error_delays;
+    std::vector<SimulationTick> retain_delays;
     bool full { };
     bool conditional { };
     bool ifnone { };

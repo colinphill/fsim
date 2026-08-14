@@ -583,6 +583,26 @@ std::uint32_t Interpreter::add_module_path(ModulePath path)
     if (!valid_delay_count) {
         throw std::invalid_argument("invalid SimIR module-path delay count");
     }
+    const auto valid_optional_delay_table = [](const auto& values) {
+        return values.empty() || values.size() == 1U || values.size() == 2U
+            || values.size() == 3U || values.size() == 6U
+            || values.size() == 12U;
+    };
+    if (!valid_optional_delay_table(path.pulse_reject_delays)
+        || !valid_optional_delay_table(path.pulse_error_delays)
+        || !valid_optional_delay_table(path.retain_delays)
+        || path.pulse_reject_delays.empty()
+            != path.pulse_error_delays.empty()
+        || path.pulse_reject_delays.size()
+            != path.pulse_error_delays.size()
+        || (!path.pulse_reject_delays.empty()
+            && !std::ranges::equal(path.pulse_reject_delays,
+                path.pulse_error_delays,
+                [](const auto reject, const auto error) {
+                    return reject <= error;
+                }))) {
+        throw std::invalid_argument("invalid SimIR module-path pulse tables");
+    }
     if (!path.full
         && (path.sources.size() != path.destinations.size()
             || !std::ranges::equal(
@@ -719,6 +739,165 @@ std::uint32_t Interpreter::add_module_timing_check(
     impl_->module_timing_checks.push_back(std::move(check));
     impl_->module_timing_check_states.emplace_back();
     return id;
+}
+
+void Interpreter::reannotate_module_timing(
+    const std::span<const ModulePath> paths,
+    const std::span<const ModuleTimingCheck> checks)
+{
+    if (impl_->started && !impl_->scheduler.at_safe_point()) {
+        throw std::logic_error {
+            "SimIR timing reannotation requires a scheduler safe point"
+        };
+    }
+    if (paths.size() != impl_->module_paths.size()
+        || checks.size() != impl_->module_timing_checks.size()) {
+        throw std::invalid_argument {
+            "SimIR timing reannotation changed timing topology"
+        };
+    }
+    const auto valid_delay_table = [](const auto& values) {
+        return values.size() == 1U || values.size() == 2U
+            || values.size() == 3U || values.size() == 6U
+            || values.size() == 12U;
+    };
+    const auto valid_optional_delay_table = [&](const auto& values) {
+        return values.empty() || valid_delay_table(values);
+    };
+    const auto same_expression = [](const ModulePathExpression& left,
+                                     const ModulePathExpression& right) {
+        return left.root == right.root && left.nodes.size() == right.nodes.size()
+            && std::ranges::equal(
+                left.nodes,
+                right.nodes,
+                [](const ModulePathExpressionNode& left_node,
+                    const ModulePathExpressionNode& right_node) {
+                    return left_node.operation == right_node.operation
+                        && left_node.operands == right_node.operands
+                        && left_node.constant == right_node.constant
+                        && left_node.terminal == right_node.terminal
+                        && left_node.binary == right_node.binary
+                        && left_node.logical == right_node.logical
+                        && left_node.shift == right_node.shift
+                        && left_node.reduction == right_node.reduction
+                        && left_node.width == right_node.width
+                        && left_node.is_signed == right_node.is_signed;
+                });
+    };
+    for (std::size_t index = 0; index < paths.size(); ++index) {
+        const auto& before = impl_->module_paths[index];
+        const auto& after = paths[index];
+        if (after.id != before.id || after.identity != before.identity
+            || after.sources != before.sources
+            || after.destinations != before.destinations
+            || after.drivers != before.drivers || after.full != before.full
+            || after.conditional != before.conditional
+            || after.ifnone != before.ifnone
+            || after.selection_group != before.selection_group
+            || after.source_edge != before.source_edge
+            || after.polarity != before.polarity
+            || after.pulse_style != before.pulse_style
+            || after.show_cancelled != before.show_cancelled
+            || !same_expression(after.condition, before.condition)
+            || !same_expression(after.data_source, before.data_source)
+            || !valid_delay_table(after.delays)
+            || !valid_optional_delay_table(after.pulse_reject_delays)
+            || !valid_optional_delay_table(after.pulse_error_delays)
+            || !valid_optional_delay_table(after.retain_delays)
+            || after.pulse_reject_delays.empty()
+                != after.pulse_error_delays.empty()
+            || after.pulse_reject_delays.size()
+                != after.pulse_error_delays.size()
+            || (!after.pulse_reject_delays.empty()
+                && !std::ranges::equal(
+                    after.pulse_reject_delays,
+                    after.pulse_error_delays,
+                    [](const auto reject, const auto error) {
+                        return reject <= error;
+                    }))
+            || after.pulse_reject_limit.has_value()
+                != after.pulse_error_limit.has_value()
+            || (after.pulse_reject_limit
+                && *after.pulse_reject_limit > *after.pulse_error_limit)) {
+            throw std::invalid_argument {
+                "SimIR timing reannotation changed path topology"
+            };
+        }
+    }
+    for (std::size_t index = 0; index < checks.size(); ++index) {
+        const auto& before = impl_->module_timing_checks[index];
+        const auto& after = checks[index];
+        if (after.id != before.id || after.identity != before.identity
+            || after.kind != before.kind
+            || after.reference.terminal != before.reference.terminal
+            || after.reference.edge != before.reference.edge
+            || after.reference.edge_descriptors
+                != before.reference.edge_descriptors
+            || !same_expression(
+                after.reference.condition, before.reference.condition)
+            || after.data.has_value() != before.data.has_value()
+            || (after.data
+                && (after.data->terminal != before.data->terminal
+                    || after.data->edge != before.data->edge
+                    || after.data->edge_descriptors
+                        != before.data->edge_descriptors
+                    || !same_expression(
+                        after.data->condition, before.data->condition)))
+            || after.notifier != before.notifier
+            || after.delayed_reference != before.delayed_reference
+            || after.delayed_data != before.delayed_data
+            || after.event_based != before.event_based
+            || after.remain_active != before.remain_active
+            || !same_expression(
+                after.timestamp_condition, before.timestamp_condition)
+            || !same_expression(
+                after.timecheck_condition, before.timecheck_condition)
+            || after.limits.size() != before.limits.size()) {
+            throw std::invalid_argument {
+                "SimIR timing reannotation changed timing-check topology"
+            };
+        }
+        const bool compound = after.kind == ModuleTimingCheckKind::setuphold
+            || after.kind == ModuleTimingCheckKind::recrem
+            || after.kind == ModuleTimingCheckKind::fullskew
+            || after.kind == ModuleTimingCheckKind::nochange;
+        bool valid_compound_sum = !compound;
+        if (after.limits.size() == 2U) {
+            const bool overflow = (after.limits[1] > 0
+                                      && after.limits[0]
+                                          > std::numeric_limits<
+                                                std::int64_t>::max()
+                                              - after.limits[1])
+                || (after.limits[1] < 0
+                    && after.limits[0]
+                        < std::numeric_limits<std::int64_t>::min()
+                            - after.limits[1]);
+            valid_compound_sum = !overflow
+                && after.limits[0] + after.limits[1] > 0;
+        }
+        if (((after.kind != ModuleTimingCheckKind::setuphold
+                 && after.kind != ModuleTimingCheckKind::recrem
+                 && after.kind != ModuleTimingCheckKind::nochange)
+                && std::ranges::any_of(
+                    after.limits,
+                    [](const std::int64_t limit) { return limit < 0; }))
+            || ((after.kind == ModuleTimingCheckKind::setuphold
+                    || after.kind == ModuleTimingCheckKind::recrem)
+                && !valid_compound_sum)
+            || (after.kind == ModuleTimingCheckKind::nochange
+                && after.limits[0] > after.limits[1])
+            || (after.threshold.has_value()
+                && after.kind != ModuleTimingCheckKind::width)) {
+            throw std::invalid_argument {
+                "SimIR timing reannotation has invalid timing-check values"
+            };
+        }
+    }
+    std::vector<ModulePath> replacement_paths(paths.begin(), paths.end());
+    std::vector<ModuleTimingCheck> replacement_checks(
+        checks.begin(), checks.end());
+    impl_->module_paths.swap(replacement_paths);
+    impl_->module_timing_checks.swap(replacement_checks);
 }
 
 void Interpreter::set_process_executor(

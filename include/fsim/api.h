@@ -110,6 +110,24 @@ typedef enum fsim_scheduler_phase {
     FSIM_SCHEDULER_PHASE_RE_UPDATE = 8
 } fsim_scheduler_phase_t;
 
+typedef enum fsim_sdf_delay_selection {
+  FSIM_SDF_DELAY_MINIMUM = 0,
+  FSIM_SDF_DELAY_TYPICAL = 1,
+  FSIM_SDF_DELAY_MAXIMUM = 2
+} fsim_sdf_delay_selection_t;
+
+typedef enum fsim_sdf_phase {
+  FSIM_SDF_PHASE_COMPILE = 0,
+  FSIM_SDF_PHASE_ELABORATE = 1,
+  FSIM_SDF_PHASE_SIMULATE = 2
+} fsim_sdf_phase_t;
+
+typedef enum fsim_sdf_report_kind {
+  FSIM_SDF_REPORT_INPUT = 0,
+  FSIM_SDF_REPORT_PATH = 1,
+  FSIM_SDF_REPORT_TIMING_CHECK = 2
+} fsim_sdf_report_kind_t;
+
 typedef struct fsim_session_options {
   uint32_t struct_size;
   uint32_t api_version;
@@ -171,6 +189,51 @@ typedef struct fsim_mapped_library_info {
   fsim_string_view_t native_kind;
   fsim_string_view_t native_fingerprint;
 } fsim_mapped_library_info_t;
+
+typedef struct fsim_sdf_input {
+  uint32_t struct_size;
+  uint32_t api_version;
+  fsim_string_view_t source_identity;
+  fsim_string_view_t root;
+  fsim_string_view_t cell_pattern;
+  uint64_t file_precedence;
+  uint64_t cell_precedence;
+} fsim_sdf_input_t;
+
+typedef struct fsim_sdf_options {
+  uint32_t struct_size;
+  uint32_t api_version;
+  fsim_sdf_delay_selection_t selection;
+  fsim_sdf_phase_t phase;
+  const fsim_sdf_input_t* inputs;
+  size_t input_count;
+  size_t report_limit;
+} fsim_sdf_options_t;
+
+typedef struct fsim_sdf_summary {
+  uint32_t struct_size;
+  uint32_t api_version;
+  size_t input_count;
+  size_t file_count;
+  size_t applied_path_count;
+  size_t applied_timing_check_count;
+  size_t report_entry_count;
+  size_t returned_report_entry_count;
+  uint64_t generation;
+  uint32_t effective;
+  uint32_t report_truncated;
+  fsim_string_view_t semantic_identity;
+} fsim_sdf_summary_t;
+
+typedef struct fsim_sdf_report_entry {
+  uint32_t struct_size;
+  uint32_t api_version;
+  fsim_sdf_report_kind_t kind;
+  uint32_t reserved;
+  fsim_string_view_t source_identity;
+  fsim_string_view_t object_identity;
+  fsim_string_view_t canonical_identity;
+} fsim_sdf_report_entry_t;
 
 #define FSIM_STRUCT_HEADER_SIZE \
   (offsetof(fsim_session_options_t, max_deltas))
@@ -268,6 +331,17 @@ FSIM_PUBLIC fsim_status_t fsim_session_load_project(
     const char* manifest_path);
 FSIM_PUBLIC fsim_status_t fsim_session_check(fsim_session_t session);
 FSIM_PUBLIC fsim_status_t fsim_session_build(fsim_session_t session);
+
+FSIM_PUBLIC fsim_status_t fsim_session_configure_sdf(
+    fsim_session_t session,
+    const fsim_sdf_options_t* options);
+FSIM_PUBLIC fsim_status_t fsim_session_get_sdf_summary(
+    fsim_session_t session,
+    fsim_sdf_summary_t* out_summary);
+FSIM_PUBLIC fsim_status_t fsim_session_get_sdf_report_entry(
+    fsim_session_t session,
+    size_t index,
+    fsim_sdf_report_entry_t* out_entry);
 
 FSIM_PUBLIC fsim_status_t fsim_session_root(
     fsim_session_t session,

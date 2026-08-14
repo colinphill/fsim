@@ -235,6 +235,312 @@ set_tests_properties(
 )
 
 add_executable(
+  fsim_sdf_value_policy_tests
+  app/sdf_value_policy_test.cpp
+)
+fsim_configure_test(fsim_sdf_value_policy_tests)
+target_link_libraries(
+  fsim_sdf_value_policy_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_value_policy
+  COMMAND fsim_sdf_value_policy_tests
+)
+set_tests_properties(
+  fsim.application.sdf_value_policy
+  PROPERTIES LABELS "fast;application;sdf;timing;value-policy;positive;negative;coordinates;resources"
+)
+
+add_executable(
+  fsim_sdf_target_plan_tests
+  app/sdf_target_plan_test.cpp
+)
+fsim_configure_test(fsim_sdf_target_plan_tests)
+target_link_libraries(
+  fsim_sdf_target_plan_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_target_plan
+  COMMAND fsim_sdf_target_plan_tests
+)
+set_tests_properties(
+  fsim.application.sdf_target_plan
+  PROPERTIES LABELS "fast;application;sdf;timing;target-plan;positive;negative;coordinates;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_path_timing_tests
+  app/sdf_path_timing_test.cpp
+)
+fsim_configure_test(fsim_sdf_path_timing_tests)
+target_link_libraries(
+  fsim_sdf_path_timing_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_path_timing
+  COMMAND fsim_sdf_path_timing_tests
+)
+set_tests_properties(
+  fsim.application.sdf_path_timing
+  PROPERTIES LABELS "fast;application;sdf;timing;iopath;specify;absolute;incremental;conditional;edge;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_interconnect_timing_tests
+  app/sdf_interconnect_timing_test.cpp
+)
+fsim_configure_test(fsim_sdf_interconnect_timing_tests)
+target_link_libraries(
+  fsim_sdf_interconnect_timing_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_interconnect_timing
+  COMMAND fsim_sdf_interconnect_timing_tests
+)
+set_tests_properties(
+  fsim.application.sdf_interconnect_timing
+  PROPERTIES LABELS "fast;application;sdf;timing;interconnect;port;mipd;device;drivers;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_delay_modes_tests
+  app/sdf_delay_modes_test.cpp
+)
+fsim_configure_test(fsim_sdf_delay_modes_tests)
+target_link_libraries(
+  fsim_sdf_delay_modes_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_delay_modes
+  COMMAND fsim_sdf_delay_modes_tests
+)
+set_tests_properties(
+  fsim.application.sdf_delay_modes
+  PROPERTIES LABELS "fast;application;sdf;timing;delay-list;absolute;incremental;transition;ordering;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_primary_timing_checks_tests
+  app/sdf_primary_timing_checks_test.cpp
+)
+fsim_configure_test(fsim_sdf_primary_timing_checks_tests)
+target_link_libraries(
+  fsim_sdf_primary_timing_checks_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_primary_timing_checks
+  COMMAND fsim_sdf_primary_timing_checks_tests
+)
+set_tests_properties(
+  fsim.application.sdf_primary_timing_checks
+  PROPERTIES LABELS "fast;application;sdf;timing;setup;hold;setuphold;recovery;removal;recrem;events;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_secondary_timing_checks_tests
+  app/sdf_secondary_timing_checks_test.cpp
+)
+fsim_configure_test(fsim_sdf_secondary_timing_checks_tests)
+target_link_libraries(
+  fsim_sdf_secondary_timing_checks_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_secondary_timing_checks
+  COMMAND fsim_sdf_secondary_timing_checks_tests
+)
+set_tests_properties(
+  fsim.application.sdf_secondary_timing_checks
+  PROPERTIES LABELS "fast;application;sdf;timing;skew;timeskew;fullskew;width;period;nochange;state;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_condition_timing_tests
+  app/sdf_condition_timing_test.cpp
+)
+fsim_configure_test(fsim_sdf_condition_timing_tests)
+target_link_libraries(
+  fsim_sdf_condition_timing_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_condition_timing
+  COMMAND fsim_sdf_condition_timing_tests
+)
+set_tests_properties(
+  fsim.application.sdf_condition_timing
+  PROPERTIES LABELS "fast;application;sdf;timing;conditions;edges;notifier;four-state;same-tick;negative;positive;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_pulse_timing_tests
+  app/sdf_pulse_timing_test.cpp
+)
+fsim_configure_test(fsim_sdf_pulse_timing_tests)
+target_link_libraries(
+  fsim_sdf_pulse_timing_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_pulse_timing
+  COMMAND fsim_sdf_pulse_timing_tests
+)
+set_tests_properties(
+  fsim.application.sdf_pulse_timing
+  PROPERTIES LABELS "fast;application;sdf;timing;pathpulse;percentage;global;retain;four-state;cancellation;threshold;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_precedence_tests
+  app/sdf_precedence_test.cpp
+)
+fsim_configure_test(fsim_sdf_precedence_tests)
+target_link_libraries(
+  fsim_sdf_precedence_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_precedence
+  COMMAND fsim_sdf_precedence_tests
+)
+set_tests_properties(
+  fsim.application.sdf_precedence
+  PROPERTIES LABELS "fast;application;sdf;timing;precedence;delay-mode;disable;pathpulse;retain;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_scheduling_tests
+  app/sdf_scheduling_test.cpp
+)
+fsim_configure_test(fsim_sdf_scheduling_tests)
+target_link_libraries(
+  fsim_sdf_scheduling_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_scheduling
+  COMMAND fsim_sdf_scheduling_tests
+)
+set_tests_properties(
+  fsim.application.sdf_scheduling
+  PROPERTIES LABELS "fast;application;sdf;timing;scheduler;interpreter;llvm;inertial;cancellation;delta;same-time;ordering;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_drive_timing_tests
+  app/sdf_drive_timing_test.cpp
+)
+fsim_configure_test(fsim_sdf_drive_timing_tests)
+target_link_libraries(
+  fsim_sdf_drive_timing_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_drive_timing
+  COMMAND fsim_sdf_drive_timing_tests
+)
+set_tests_properties(
+  fsim.application.sdf_drive_timing
+  PROPERTIES LABELS "fast;application;sdf;timing;driver;strength;resolved-net;switch;mos;cmos;tran;force;release;scalar;vector;interpreter;llvm;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_reannotation_tests
+  app/sdf_reannotation_test.cpp
+)
+fsim_configure_test(fsim_sdf_reannotation_tests)
+target_link_libraries(
+  fsim_sdf_reannotation_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_reannotation
+  COMMAND fsim_sdf_reannotation_tests
+)
+set_tests_properties(
+  fsim.application.sdf_reannotation
+  PROPERTIES LABELS "fast;application;sdf;timing;reannotation;multi-file;wildcard;multi-root;precedence;safe-point;pending-event;timing-check;ordering;positive;negative;atomic;rollback;resources"
+)
+
+add_executable(
+  fsim_sdf_control_tests
+  app/sdf_control_test.cpp
+)
+fsim_configure_test(fsim_sdf_control_tests)
+target_link_libraries(
+  fsim_sdf_control_tests
+  PRIVATE fsim_application fsim_cli fsim_api
+)
+add_test(
+  NAME fsim.application.sdf_control
+  COMMAND fsim_sdf_control_tests
+)
+set_tests_properties(
+  fsim.application.sdf_control
+  PROPERTIES LABELS "fast;application;sdf;control;cli;c-api;cpp-api;phase;report;identity;positive;negative;atomic;rollback;resources"
+)
+
+add_executable(
+  fsim_sdf_effective_archive_tests
+  app/sdf_effective_archive_test.cpp
+)
+fsim_configure_test(fsim_sdf_effective_archive_tests)
+target_link_libraries(
+  fsim_sdf_effective_archive_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_effective_archive
+  COMMAND fsim_sdf_effective_archive_tests
+)
+set_tests_properties(
+  fsim.application.sdf_effective_archive
+  PROPERTIES LABELS "fast;application;sdf;effective;archive;object;design;library;cache;checkpoint;replay;relocation;schema;checksum;policy;provenance;identity;positive;negative;atomic;rollback;resources"
+)
+
+add_executable(
+  fsim_sdf_observability_tests
+  app/sdf_observability_test.cpp
+)
+fsim_configure_test(fsim_sdf_observability_tests)
+target_link_libraries(
+  fsim_sdf_observability_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_observability
+  COMMAND fsim_sdf_observability_tests
+)
+set_tests_properties(
+  fsim.application.sdf_observability
+  PROPERTIES LABELS "fast;application;sdf;observability;debugger;callback;trace;vpi;vcd;region;ordering;source;identity;disabled;allocation;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_application_corpus_tests
+  app/sdf_application_corpus_test.cpp
+)
+fsim_configure_test(fsim_sdf_application_corpus_tests)
+target_link_libraries(
+  fsim_sdf_application_corpus_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_application_corpus
+  COMMAND fsim_sdf_application_corpus_tests
+)
+set_tests_properties(
+  fsim.application.sdf_application_corpus
+  PROPERTIES LABELS "fast;application;sdf;corpus;standard-cell;primitive;interconnect;pulse;timing-check;interpreter;llvm;project;non-project;artifact;cache;checkpoint;relocation;linux;windows;positive;negative;resources"
+)
+
+add_executable(
   fsim_sdf_schema_tests
   app/sdf_schema_test.cpp
 )
@@ -393,6 +699,20 @@ add_test(
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckSdfInventory.cmake"
 )
 add_test(
+  NAME fsim.sdf-application-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSdfApplicationInventory.cmake"
+)
+add_test(
+  NAME fsim.sdf-application-release-audit
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSdfApplicationReleaseAudit.cmake"
+)
+add_test(
   NAME fsim.sdf-closure
   COMMAND
     "${CMAKE_COMMAND}"
@@ -406,6 +726,22 @@ set_tests_properties(
   fsim.sdf-closure
   PROPERTIES
     LABELS "sdf;closure;negative;resources;artifact;cache;interpreter;llvm"
+    TIMEOUT 1200
+)
+add_test(
+  NAME fsim.sdf-application-closure
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/sdf-application-closure-evidence"
+    -P "${PROJECT_SOURCE_DIR}/cmake/RunSdfApplicationClosure.cmake"
+)
+set_tests_properties(
+  fsim.sdf-application-closure
+  PROPERTIES
+    LABELS "sdf;application;closure;corpus;negative;resources;artifact;cache;interpreter;llvm;linux;windows"
     TIMEOUT 1200
 )
 add_test(
@@ -722,6 +1058,10 @@ set_tests_properties(
 set_tests_properties(
   fsim.sdf-inventory
   PROPERTIES LABELS "fast;sdf;conformance;inventory;positive;negative;revision;coordinates;artifact;roundtrip;diagnostics;resources;cmake"
+)
+set_tests_properties(
+  fsim.sdf-application-inventory
+  PROPERTIES LABELS "fast;sdf;verilog;systemverilog;timing;inventory;positive;negative;interpreter;llvm;phase;artifact;diagnostics;resources;cmake"
 )
 set_tests_properties(
   fsim.vhdl-standard-mode-closure-matrix

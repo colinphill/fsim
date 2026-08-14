@@ -545,7 +545,10 @@ namespace {
         const SdfResolvedInstance& target,
         const elaboration::ElaboratedDesign& elaborated)
     {
-        if (resolved.construct_kind != SdfConstructKind::Iopath)
+        if (resolved.construct_kind != SdfConstructKind::Iopath
+            && resolved.construct_kind != SdfConstructKind::PathPulse
+            && resolved.construct_kind
+                != SdfConstructKind::PathPulsePercent)
             return;
         const elaboration::VerilogSpecifyPathInfo* match = nullptr;
         for (const auto& path : elaborated.verilog_specify_paths()) {
@@ -784,9 +787,12 @@ namespace {
             specs, condition_specs, node, context.children);
         auto condition_identity = node_condition_identity(
             node, context.ir, context.children, condition_specs);
+        const bool global_path_pulse
+            = node.kind == SdfConstructKind::PathPulsePercent
+            && specs.empty();
         if (specs.empty() && node.kind == SdfConstructKind::Device)
             specs = default_device_specs(target, context.candidates);
-        if (specs.empty()) {
+        if (specs.empty() && !global_path_pulse) {
             diagnose(context.diagnostics, "FSIM-SDF-ENDPOINT-004",
                 "SDF endpoint-bearing construct has no decodable endpoint",
                 node.span);
@@ -804,15 +810,19 @@ namespace {
         resolved.construct_kind = node.kind;
         resolved.target_instance_path = target.instance_path;
         resolved.condition_identity = std::move(condition_identity);
-        if (!resolve_primary_specs(resolved, specs, target,
-                context.candidates, context.elaborated, context.limits,
-                context.diagnostics, node.span, context.endpoint_count)) {
-            return false;
-        }
-        if (!resolve_condition_specs(resolved, condition_specs, target,
-                context.candidates, context.elaborated, context.limits,
-                context.diagnostics, node.span, context.endpoint_count)) {
-            return false;
+        if (!global_path_pulse) {
+            if (!resolve_primary_specs(resolved, specs, target,
+                    context.candidates, context.elaborated, context.limits,
+                    context.diagnostics, node.span,
+                    context.endpoint_count)) {
+                return false;
+            }
+            if (!resolve_condition_specs(resolved, condition_specs, target,
+                    context.candidates, context.elaborated, context.limits,
+                    context.diagnostics, node.span,
+                    context.endpoint_count)) {
+                return false;
+            }
         }
         link_specify_path(resolved, target, context.elaborated);
         link_timing_check(resolved, target, context.elaborated);
