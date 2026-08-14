@@ -357,7 +357,6 @@ int handle_systemc_compile(
   request.output = *invocation.artifact_output;
   request.settings = config.systemc;
   request.working_directory = config.base_directory;
-  request.scratch_directory = config.build.cache_path / "systemc-phase-scratch";
   if (!systemc::compile_incremental_object(request, diagnostics)) {
     return 1;
   }
@@ -381,7 +380,6 @@ int handle_systemc_link(
   request.logical_library = invocation.library;
   request.settings = config.systemc;
   request.working_directory = config.base_directory;
-  request.scratch_directory = config.build.cache_path / "systemc-phase-scratch";
   if (!systemc::link_incremental_plugin(request, diagnostics)) {
     return 1;
   }

@@ -30,7 +30,12 @@ DependencyScratchDirectory::~DependencyScratchDirectory()  {
 create_dependency_scratch_directory(
     const std::filesystem::path& cache_directory,
     std::error_code& error) {
-    const auto root = cache_directory / "systemc" / "dependency-scans";
+    (void)cache_directory;
+    const auto root = std::filesystem::temp_directory_path(error)
+        / "fsim-systemc-dependency-scans";
+    if (error) {
+        return std::nullopt;
+    }
     std::filesystem::create_directories(root, error);
     if (error) {
         return std::nullopt;

@@ -128,7 +128,6 @@ std::optional<BuiltProject> build_checked_project(
             compile_request.source = source;
             compile_request.settings = entry.request.settings;
             compile_request.working_directory = entry.request.working_directory;
-            compile_request.scratch_directory = entry.request.cache_directory / "systemc-phase-scratch";
             auto compiled = systemc::compile_incremental_object_cached(
                 std::move(compile_request), entry.request.cache_directory,
                 diagnostics);
@@ -142,7 +141,6 @@ std::optional<BuiltProject> build_checked_project(
         link_request.logical_library = entry.library;
         link_request.settings = entry.request.settings;
         link_request.working_directory = entry.request.working_directory;
-        link_request.scratch_directory = entry.request.cache_directory / "systemc-phase-scratch";
         auto linked = systemc::link_incremental_plugin_cached(
             std::move(link_request), entry.request.cache_directory, diagnostics);
         if (!linked.success) {
