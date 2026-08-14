@@ -893,8 +893,8 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
                 "expected 'to' or 'downto' in discrete subtype constraint");
         }
         auto right_expression = parse_expression();
-        const auto left = simple_integer_constant(left_expression);
-        const auto right = simple_integer_constant(right_expression);
+        const auto left = simple_vhdl_integer_constant(left_expression);
+        const auto right = simple_vhdl_integer_constant(right_expression);
         if (type.domain == ValueDomain::Integer) {
             type.integer_base_range = type.integer_range;
             type.integer_base_range_expression = type.integer_range_expression;
@@ -946,8 +946,8 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
         }
         if (type.vhdl_array_constraints.size() == 1) {
             const auto& constraint = type.vhdl_array_constraints.front();
-            const auto left = simple_integer_constant(constraint.left);
-            const auto right = simple_integer_constant(constraint.right);
+            const auto left = simple_vhdl_integer_constant(constraint.left);
+            const auto right = simple_vhdl_integer_constant(constraint.right);
             if (left && right) {
                 type.packed_range = PackedRange { *left, *right, constraint.descending };
             }

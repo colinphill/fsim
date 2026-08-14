@@ -420,8 +420,8 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
         legacy_scalar_array ? element_type.domain : ValueDomain::Unknown;
     if (legacy_scalar_array && first_dimension.constraint) {
       const auto &constraint = *first_dimension.constraint;
-      const auto left = simple_integer_constant(constraint.left);
-      const auto right = simple_integer_constant(constraint.right);
+      const auto left = simple_vhdl_integer_constant(constraint.left);
+      const auto right = simple_vhdl_integer_constant(constraint.right);
       if (left && right) {
         type.packed_range = PackedRange{*left, *right, constraint.descending};
       }

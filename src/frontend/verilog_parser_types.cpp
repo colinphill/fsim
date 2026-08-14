@@ -855,8 +855,8 @@ void VerilogParser::parse_optional_range(Type& type)
         auto right_expression = parse_expression();
         expect(TokenKind::RightBracket, "']' after packed range",
             "FSIM-SV-PARSE-006");
-        const auto left = simple_integer_constant(left_expression);
-        const auto right = simple_integer_constant(right_expression);
+        const auto left = simple_verilog_integer_constant(left_expression);
+        const auto right = simple_verilog_integer_constant(right_expression);
         if (left && right && concrete) {
             const auto width = PackedRange { *left, *right, *left >= *right }.width();
             constexpr auto maximum_width = static_cast<std::uint64_t>(
@@ -880,8 +880,8 @@ void VerilogParser::parse_optional_range(Type& type)
         return;
     }
     if (dimensions.size() == 1U) {
-        const auto left = simple_integer_constant(dimensions.front().left);
-        const auto right = simple_integer_constant(dimensions.front().right);
+        const auto left = simple_verilog_integer_constant(dimensions.front().left);
+        const auto right = simple_verilog_integer_constant(dimensions.front().right);
         if (left && right) {
             type.packed_range = PackedRange { *left, *right, *left >= *right };
         }
@@ -957,8 +957,8 @@ bool VerilogParser::parse_optional_container_dimension(Type& type)
                     "']' after static unpacked range",
                     "FSIM-SV-PARSE-158");
                 container.kind = SystemVerilogContainerKind::StaticArray;
-                const auto left_value = simple_integer_constant(left);
-                const auto right_value = simple_integer_constant(right);
+                const auto left_value = simple_verilog_integer_constant(left);
+                const auto right_value = simple_verilog_integer_constant(right);
                 if (left_value && right_value) {
                     container.static_range = PackedRange {
                         *left_value,
@@ -977,7 +977,7 @@ bool VerilogParser::parse_optional_container_dimension(Type& type)
                     TokenKind::RightBracket,
                     "']' after associative-array index type",
                     "FSIM-SV-PARSE-157");
-                if (const auto size = simple_integer_constant(left);
+                if (const auto size = simple_verilog_integer_constant(left);
                     size && *size > 0) {
                     container.kind = SystemVerilogContainerKind::StaticArray;
                     const auto right_value = *size - 1;

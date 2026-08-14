@@ -625,7 +625,7 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start)
             && statement.value.operands.size() == 2
             && (statement.value.text == "+"
                 || statement.value.text == "-")
-        ? simple_integer_constant(statement.value.operands[1])
+        ? simple_verilog_integer_constant(statement.value.operands[1])
         : std::nullopt;
     const bool supported_update = update_amount && *update_amount > 0
         && iteration_variable.text == statement.loop_variable

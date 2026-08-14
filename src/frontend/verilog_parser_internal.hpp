@@ -313,7 +313,7 @@ constant_output_number(const std::string_view spelling)
     return (negative ? "-" : "") + value->decimal_string();
 }
 
-[[nodiscard]] inline std::optional<std::int64_t> simple_integer_constant(
+[[nodiscard]] inline std::optional<std::int64_t> simple_verilog_integer_constant(
     const Expression& expression) {
   if (expression.kind == ExpressionKind::IntegerLiteral) {
     return decimal_i64(expression.text);
@@ -326,7 +326,7 @@ constant_output_number(const std::string_view spelling)
       && expression.operands.size() == 1
       && (expression.text == "+" || expression.text == "-")) {
     const auto magnitude =
-        simple_integer_constant(expression.operands.front());
+        simple_verilog_integer_constant(expression.operands.front());
     if (!magnitude) {
       return std::nullopt;
     }

@@ -23,14 +23,14 @@ using detail::decimal_u64;
 using detail::vhdl_name;
 
 [[nodiscard]] inline std::optional<std::int64_t>
-simple_integer_constant(const Expression &expression) {
+simple_vhdl_integer_constant(const Expression &expression) {
   if (expression.kind == ExpressionKind::IntegerLiteral) {
     return decimal_i64(expression.text);
   }
   if (expression.kind == ExpressionKind::Unary &&
       expression.operands.size() == 1 &&
       (expression.text == "+" || expression.text == "-")) {
-    const auto magnitude = simple_integer_constant(expression.operands.front());
+    const auto magnitude = simple_vhdl_integer_constant(expression.operands.front());
     if (!magnitude) {
       return std::nullopt;
     }
