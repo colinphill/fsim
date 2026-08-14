@@ -37,7 +37,7 @@ struct SdfAppliedConditionTiming {
     std::string canonical_identity;
 
     friend bool operator==(const SdfAppliedConditionTiming&,
-        const SdfAppliedConditionTiming&) = default;
+        const SdfAppliedConditionTiming&) = delete;
 };
 
 class SdfConditionTimingApplication final {

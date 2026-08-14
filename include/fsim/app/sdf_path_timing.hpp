@@ -23,7 +23,7 @@ struct SdfAppliedPathTiming {
     std::string canonical_identity;
 
     friend bool operator==(const SdfAppliedPathTiming&,
-        const SdfAppliedPathTiming&) = default;
+        const SdfAppliedPathTiming&) = delete;
 };
 
 class SdfPathTimingApplication final {

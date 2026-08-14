@@ -231,10 +231,11 @@ SdfControlResult apply_sdf_control(SdfControlRequest request,
     summary.generation = request.generation;
     summary.effective = effective != nullptr;
     if (effective) {
-        summary.applied_path_count = std::ranges::count_if(
-            effective->revisions(), [](const auto& revision) {
-                return !revision.timing_check;
-            });
+        summary.applied_path_count = static_cast<std::size_t>(
+            std::ranges::count_if(
+                effective->revisions(), [](const auto& revision) {
+                    return !revision.timing_check;
+                }));
         summary.applied_timing_check_count = effective->revisions().size()
             - summary.applied_path_count;
     }

@@ -900,6 +900,146 @@ void Interpreter::reannotate_module_timing(
     impl_->module_timing_checks.swap(replacement_checks);
 }
 
+void Interpreter::reannotate_vital_timing(
+    const std::span<const VitalTimingReannotation> annotations,
+    const bool reset_timing_state)
+{
+    if (impl_->started && !impl_->scheduler.at_safe_point()) {
+        throw std::logic_error {
+            "SimIR VITAL reannotation requires a scheduler safe point"
+        };
+    }
+    struct Replacement {
+        struct Definition {
+            InstructionIndex instruction { };
+            RegisterId target { };
+            SimulationTick value { };
+        };
+
+        Impl::ProcessState* process { };
+        InstructionIndex instruction { };
+        bool timing_check { };
+        std::array<SimulationTick, 6> values { };
+        std::size_t value_count { };
+        std::vector<Definition> definitions;
+    };
+    std::vector<Replacement> replacements;
+    replacements.reserve(annotations.size());
+    std::set<std::pair<ProcessId, InstructionIndex>> calls;
+    std::map<std::pair<ProcessId, InstructionIndex>,
+        std::pair<RegisterId, SimulationTick>>
+        definitions;
+    for (const auto& annotation : annotations) {
+        if (annotation.process >= impl_->processes.size()
+            || impl_->processes[annotation.process].program.id
+                != annotation.process
+            || annotation.instruction
+                >= impl_->processes[annotation.process]
+                    .program.operations.size()) {
+            throw std::invalid_argument {
+                "SimIR VITAL reannotation references a stale call"
+            };
+        }
+        if (!calls.emplace(annotation.process, annotation.instruction).second) {
+            throw std::invalid_argument {
+                "SimIR VITAL reannotation references a call more than once"
+            };
+        }
+        auto& process = impl_->processes[annotation.process];
+        const auto& operation
+            = process.program.operations[annotation.instruction];
+        if (annotation.timing_check) {
+            if (annotation.value_count != 4U
+                || operation_get_if<VitalTimingCheck>(&operation) == nullptr) {
+                throw std::invalid_argument {
+                    "SimIR VITAL reannotation changed timing-check topology"
+                };
+            }
+        } else {
+            const auto* delay = operation_get_if<VitalDelay>(&operation);
+            const auto expected = delay == nullptr
+                ? 0U
+                : delay->shape == VitalDelayShape::single
+                ? 1U
+                : delay->shape == VitalDelayShape::delay01 ? 2U
+                                                           : 6U;
+            if (delay == nullptr || annotation.value_count != expected) {
+                throw std::invalid_argument {
+                    "SimIR VITAL reannotation changed delay topology"
+                };
+            }
+        }
+        Replacement replacement { &process, annotation.instruction,
+            annotation.timing_check, annotation.values,
+            annotation.value_count, { } };
+        if (!annotation.timing_check) {
+            const auto* delay = operation_get_if<VitalDelay>(&operation);
+            std::unordered_map<RegisterId, InstructionIndex> retained;
+            for (InstructionIndex index = 0; index < annotation.instruction;
+                ++index) {
+                if (const auto* load = operation_get_if<LoadConstant>(
+                        &process.program.operations[index])) {
+                    retained[load->destination] = index;
+                } else if (const auto* extract = operation_get_if<Extract>(
+                               &process.program.operations[index])) {
+                    retained[extract->destination] = index;
+                }
+            }
+            const auto plan = [&](const RegisterId target,
+                                  const SimulationTick value) {
+                const auto found = retained.find(target);
+                if (found == retained.end()) {
+                    throw std::invalid_argument {
+                        "SimIR VITAL reannotation lost a static delay definition"
+                    };
+                }
+                const auto key
+                    = std::pair { annotation.process, found->second };
+                const auto [planned, inserted]
+                    = definitions.emplace(key, std::pair { target, value });
+                if (!inserted
+                    && (planned->second.first != target
+                        || planned->second.second != value)) {
+                    throw std::invalid_argument {
+                        "SimIR VITAL reannotation has conflicting static delay values"
+                    };
+                }
+                if (inserted) {
+                    replacement.definitions.push_back(
+                        { found->second, target, value });
+                }
+            };
+            for (std::size_t index = 0; index < annotation.value_count;
+                ++index) {
+                plan(delay->default_delays[index], annotation.values[index]);
+                for (const auto& path : delay->paths)
+                    plan(path.delays[index], annotation.values[index]);
+            }
+        }
+        replacements.push_back(std::move(replacement));
+    }
+    for (const auto& replacement : replacements) {
+        auto& operation
+            = replacement.process->program.operations[replacement.instruction];
+        if (replacement.timing_check) {
+            auto* check = operation_get_if<VitalTimingCheck>(&operation);
+            std::copy_n(replacement.values.begin(), 4U,
+                check->limits.begin());
+            if (reset_timing_state) {
+                replacement.process->vital_timing_states.erase(
+                    replacement.instruction);
+            }
+            continue;
+        }
+        for (const auto& definition : replacement.definitions) {
+            replacement.process->program.operations[definition.instruction]
+                = LoadConstant { definition.target,
+                      PackedLogic4::from_aval_bval(
+                          64U, definition.value, 0U) };
+        }
+    }
+}
+
 void Interpreter::set_process_executor(
     const ProcessId process,
     std::unique_ptr<ProcessExecutor> executor)

@@ -73,17 +73,20 @@ namespace {
         case ContainerElementKind::Packed:
         case ContainerElementKind::Scalar:
             std::ranges::copy_n(
-                source.elements.begin(), count, target.elements.begin());
+                source.elements.begin(), static_cast<std::ptrdiff_t>(count),
+                target.elements.begin());
             return;
         case ContainerElementKind::String:
             std::ranges::copy_n(
-                source.string_elements.begin(), count,
+                source.string_elements.begin(),
+                static_cast<std::ptrdiff_t>(count),
                 target.string_elements.begin());
             return;
         case ContainerElementKind::Container:
         case ContainerElementKind::Aggregate:
             std::ranges::copy_n(
-                source.nested_elements.begin(), count,
+                source.nested_elements.begin(),
+                static_cast<std::ptrdiff_t>(count),
                 target.nested_elements.begin());
             return;
         }

@@ -78,9 +78,13 @@ max_deltas = 1000
             diagnostic.api_version = FSIM_API_VERSION;
             if (fsim_session_get_diagnostic(session, index, &diagnostic)
                 == FSIM_STATUS_OK) {
-                std::cerr.write(diagnostic.code.data, diagnostic.code.size);
+                std::cerr.write(
+                    diagnostic.code.data,
+                    static_cast<std::streamsize>(diagnostic.code.size));
                 std::cerr << ": ";
-                std::cerr.write(diagnostic.message.data, diagnostic.message.size);
+                std::cerr.write(
+                    diagnostic.message.data,
+                    static_cast<std::streamsize>(diagnostic.message.size));
                 std::cerr << '\n';
             }
         }

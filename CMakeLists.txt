@@ -914,8 +914,23 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_sdf_mapping_validation.cpp
       src/app/application_sdf_value_policy.cpp
       src/app/application_sdf_target_plan.cpp
+      src/app/application_sdf_vital_target_plan.cpp
+      src/app/application_sdf_vital_path_timing.cpp
+      src/app/application_sdf_vital_models.cpp
+      src/app/application_sdf_vital_precedence.cpp
+      src/runtime/sdf_vital_scheduling.cpp
+      src/runtime/sdf_vital_timing_checks.cpp
+      src/app/application_sdf_vital_reannotation.cpp
       src/app/application_sdf_path_timing.cpp
       src/app/application_sdf_interconnect_timing.cpp
+      src/app/application_sdf_mixed_verilog.cpp
+      src/app/application_sdf_mixed_systemverilog.cpp
+      src/app/application_sdf_mixed_systemc.cpp
+      src/app/application_sdf_mixed_resolution.cpp
+      src/app/application_sdf_foreign_interfaces.cpp
+      src/app/application_sdf_vital_observability.cpp
+      src/app/application_sdf_vital_archive.cpp
+      src/app/application_sdf_vital_phases.cpp
       src/app/application_sdf_delay_modes.cpp
       src/app/application_sdf_primary_timing_checks.cpp
       src/app/application_sdf_secondary_timing_checks.cpp

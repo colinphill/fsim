@@ -10,10 +10,10 @@ namespace {
         if (!std::filesystem::exists(root)) {
             return 0;
         }
-        return std::ranges::count_if(
+        return static_cast<std::size_t>(std::ranges::count_if(
             std::filesystem::recursive_directory_iterator { root }, [](const auto& entry) {
                 return entry.is_regular_file() && entry.path().extension() == ".fobj";
-            });
+            }));
     }
 
 } // namespace

@@ -1631,8 +1631,8 @@ void substitute_parameters(
         const auto tag_width = tagged_union && !type.packed_members.empty()
             ? std::max<std::uint64_t>(
                   1U,
-                  std::bit_width(
-                      type.packed_members.size() - 1U))
+                  static_cast<std::uint64_t>(std::bit_width(
+                      type.packed_members.size() - 1U)))
             : 0U;
         if (!valid || total_width == 0
             || tag_width

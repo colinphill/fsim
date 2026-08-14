@@ -2094,6 +2094,22 @@ public:
         std::span<const ModulePath> paths,
         std::span<const ModuleTimingCheck> checks);
 
+    struct VitalTimingReannotation {
+        ProcessId process { };
+        InstructionIndex instruction { };
+        bool timing_check { };
+        std::array<SimulationTick, 6> values { };
+        std::size_t value_count { };
+    };
+
+    /// Atomically replace topology-compatible VITAL delay/check timing. After
+    /// start this is legal only from a scheduler safe-point hook. Pending
+    /// projected writes retain their scheduled time; timing-check state is
+    /// preserved unless reset_timing_state is requested.
+    void reannotate_vital_timing(
+        std::span<const VitalTimingReannotation> annotations,
+        bool reset_timing_state = false);
+
     /// Restrict all HDL file operations to paths below this root. Must be set
     /// before start; an empty root leaves file operations disabled.
     void set_file_root(std::filesystem::path root);

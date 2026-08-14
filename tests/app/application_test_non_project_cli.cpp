@@ -796,6 +796,8 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
       sdf_design, app::SimulationEngine::compiled);
   const auto sdf_warm = run_sdf_design(
       sdf_design, app::SimulationEngine::compiled);
+  static_cast<void>(sdf_cold);
+  static_cast<void>(sdf_warm);
 #if defined(FSIM_HAS_LLVM)
   assert(sdf_cold.misses != 0 && sdf_cold.stores != 0);
   assert(sdf_warm.hits != 0);
@@ -809,6 +811,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
       "SDF design relocation");
   const auto sdf_relocated = run_sdf_design(
       relocated_sdf_design, app::SimulationEngine::compiled);
+  static_cast<void>(sdf_relocated);
 #if defined(FSIM_HAS_LLVM)
   assert(sdf_relocated.hits != 0);
 #endif

@@ -53,6 +53,15 @@ fsim::elaboration::ElaboratedDesign make_design()
     add_signal("top.u.dst", false, frontend::PortDirection::Unknown);
     add_signal("top.u.Z", true, frontend::PortDirection::Output);
 
+    elaboration::SystemCNamedObjectInfo systemc_signal;
+    systemc_signal.kind = elaboration::SystemCNamedObjectKind::signal;
+    systemc_signal.native_handle = 41U;
+    systemc_signal.name = "top.u.sc_dst";
+    systemc_signal.parent = "top.u";
+    systemc_signal.type_name = "sc_signal<sc_logic>";
+    systemc_signal.signal = 1U;
+    state.systemc_objects.push_back(std::move(systemc_signal));
+
     runtime::simir::Process continuous;
     continuous.id = 0U;
     continuous.name = "top.u.continuous";
@@ -256,6 +265,23 @@ void test_endpoint_and_profile_rejection()
     require_diagnostic(result, "FSIM-SDF-INTERCONNECT-003");
 }
 
+void test_systemc_typed_endpoint()
+{
+    const auto design = make_design();
+    auto annotations = valid_annotations();
+    auto& destination = annotations.front().endpoints.back();
+    destination.object_kind
+        = fsim::app::SdfEndpointObjectKind::SystemCSignal;
+    destination.object_path = "top.u.sc_dst";
+    destination.language = fsim::app::SdfScopeRootLanguage::SystemC;
+    const auto result = fsim::app::apply_sdf_interconnect_timing(
+        make_plan(std::move(annotations)), design);
+    require(result.ok()
+            && result.application->find_target("interconnect:src:dst")
+                != nullptr,
+        "typed SystemC signals must retain interconnect timing");
+}
+
 void test_ambiguity_and_resource_rejection()
 {
     const auto design = make_design();
@@ -281,6 +307,7 @@ int main()
     try {
         test_all_endpoint_targets_and_driver_ownership();
         test_endpoint_and_profile_rejection();
+        test_systemc_typed_endpoint();
         test_ambiguity_and_resource_rejection();
     } catch (const std::exception& exception) {
         std::cerr << exception.what() << '\n';

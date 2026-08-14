@@ -1390,9 +1390,9 @@ duplicate or inconsistent records are rejected transactionally.
 
 ### SDF timing-application pipeline
 
-Batch 168 terminates at immutable normalized and resolved SDF records. Batch
-169 consumes those records through a transactional Verilog/SystemVerilog
-application pipeline:
+Batch 168 terminates at immutable normalized and resolved SDF records. Batches
+169-170 consume those records through one transactional Verilog/SystemVerilog/
+VHDL/VITAL and mixed-language application pipeline:
 
 ```text
 SDF IR -> exact value policy -> atomic target plan -> effective timing records
@@ -1423,9 +1423,11 @@ native-cache and checkpoint records.
 Observation catalogs stable path/check/violation objects during publication.
 Debugger, callback, internal-trace, VPI and VCD consumers record source spans,
 values, time, delta, scheduler region and order into preallocated storage.
-Disabled observation performs neither per-event lookup nor allocation. VHDL/
-VITAL timing objects and timing that crosses a VHDL boundary are not part of
-this pipeline until Batch 170.
+Disabled observation performs neither per-event lookup nor allocation. Batch
+170 adds structural VITAL target/model plans, exact reannotation, both
+directions of VHDL-Verilog/SystemVerilog/SystemC boundaries, VHPI/VPI timing
+objects, common observation and schema-1 portable phase/archive facades without
+adding parse or hierarchy work to the event hot path.
 
 ## Runtime values
 

@@ -87,7 +87,8 @@ std::optional<PackedLogic4> evaluate_systemverilog_packed_constant(
       == frontend::PackedAggregateKind::TaggedUnion;
   const auto tag_width = tagged
       ? std::max<std::size_t>(
-            1U, std::bit_width(type.packed_members.size() - 1U))
+            1U, static_cast<std::size_t>(
+                    std::bit_width(type.packed_members.size() - 1U)))
       : 0U;
   auto result = PackedLogic4(width, Logic4::zero);
   std::vector<bool> assigned(type.packed_members.size());

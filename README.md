@@ -50,7 +50,8 @@ The current tree contains:
 - clean-room SDF 4.0 parsing with explicit SDF 2.1/3.0 adapters, exact
   decimal/triple normalization, deterministic mixed-language hierarchy and
   endpoint resolution, checksummed persistence, and Verilog/SystemVerilog
-  timing application; VHDL/VITAL timing remains assigned to Batch 170;
+  plus VHDL/VITAL and mixed-language timing application, portable artifacts,
+  bounded foreign/debug observation and equivalent public phase controls;
 - hand-written VHDL-2008 and Verilog/SystemVerilog tokenizers and parsers for a
   deliberately small executable subset;
 - bounded VHDL package declarations with declaration-ordered scalar
@@ -922,6 +923,7 @@ build, run, VCD, hierarchy-navigation, breakpoint, and trace-selection steps.
 - [Diagnostic code catalog](docs/diagnostics.md)
 - [Standard Delay Format support](docs/sdf.md)
 - [Batch 169 SDF application release audit](docs/v2-sdf-application-release-audit.md)
+- [Batch 170 SDF/VITAL release audit](docs/v2-sdf-vital-release-audit.md)
 - [Language support and feature status](docs/language-support.md)
 - [Feature matrix and test evidence](docs/feature-matrix.md)
 - [v1 conformance provenance audit](docs/v1-conformance-audit.md)

@@ -18,6 +18,18 @@
 
 namespace fsim::test {
 
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+inline constexpr bool governed_process_uses_address_sanitizer = true;
+#else
+inline constexpr bool governed_process_uses_address_sanitizer = false;
+#endif
+#elif defined(__SANITIZE_ADDRESS__)
+inline constexpr bool governed_process_uses_address_sanitizer = true;
+#else
+inline constexpr bool governed_process_uses_address_sanitizer = false;
+#endif
+
 inline constexpr std::uint64_t governed_process_address_space_ceiling
     = 6ULL * 1024ULL * 1024ULL * 1024ULL;
 
@@ -31,6 +43,12 @@ inline constexpr std::uint64_t governed_process_address_space_ceiling
 
 inline void install_governed_process_address_space_ceiling()
 {
+    // ASan reserves a large virtual address range for shadow memory. Applying
+    // a finite RLIMIT_AS or job-object limit after startup makes its next
+    // internal mapping fail before the governed test workload can run.
+    if constexpr (governed_process_uses_address_sanitizer) {
+        return;
+    }
 #if defined(_WIN32)
     static HANDLE job = [] {
         const auto created = CreateJobObjectW(nullptr, nullptr);

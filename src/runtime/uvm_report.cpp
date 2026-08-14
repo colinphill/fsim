@@ -46,7 +46,8 @@ void append_escaped(
   constexpr std::array<char, 16> digits{
       '0', '1', '2', '3', '4', '5', '6', '7',
       '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
-  for (const unsigned char byte : value) {
+  for (const char raw_byte : value) {
+    const auto byte = static_cast<unsigned char>(raw_byte);
     switch (byte) {
     case '\\': append_checked(destination, "\\\\", maximum); break;
     case '"': append_checked(destination, "\\\"", maximum); break;

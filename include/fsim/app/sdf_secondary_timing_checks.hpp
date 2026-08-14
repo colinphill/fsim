@@ -25,7 +25,7 @@ struct SdfAppliedSecondaryTimingCheck {
     std::string canonical_identity;
 
     friend bool operator==(const SdfAppliedSecondaryTimingCheck&,
-        const SdfAppliedSecondaryTimingCheck&) = default;
+        const SdfAppliedSecondaryTimingCheck&) = delete;
 };
 
 class SdfSecondaryTimingCheckApplication final {

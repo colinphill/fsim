@@ -119,22 +119,47 @@ namespace {
         const auto* signal = find_signal(elaborated, endpoint.signal);
         const bool verilog = endpoint.language == SdfScopeRootLanguage::Verilog
             || endpoint.language == SdfScopeRootLanguage::SystemVerilog;
+        const bool mixed_vhdl = endpoint.language == SdfScopeRootLanguage::Vhdl
+            && endpoint.conversion && endpoint.conversion_peer;
+        const bool systemc = endpoint.language == SdfScopeRootLanguage::SystemC
+            && (endpoint.object_kind == SdfEndpointObjectKind::SystemCPort
+                || endpoint.object_kind
+                    == SdfEndpointObjectKind::SystemCSignal);
         const bool hdl_object
             = endpoint.object_kind == SdfEndpointObjectKind::HdlPort
             || endpoint.object_kind == SdfEndpointObjectKind::HdlNet;
+        const bool systemc_kind_matches = systemc
+            && std::ranges::any_of(elaborated.systemc_objects(),
+                [&](const auto& object) {
+                    const bool expected_kind
+                        = endpoint.object_kind
+                                == SdfEndpointObjectKind::SystemCPort
+                        ? object.kind
+                            == elaboration::SystemCNamedObjectKind::port
+                        : object.kind
+                                == elaboration::SystemCNamedObjectKind::signal
+                            || object.kind
+                                == elaboration::SystemCNamedObjectKind::export_object;
+                    return expected_kind && object.signal == endpoint.signal
+                        && object.name == endpoint.object_path;
+                });
         const bool kind_matches = signal
             && ((endpoint.object_kind == SdfEndpointObjectKind::HdlPort
                     && signal->is_port)
                 || (endpoint.object_kind == SdfEndpointObjectKind::HdlNet
-                    && !signal->is_port));
+                    && !signal->is_port)
+                || systemc_kind_matches);
         const bool direction_matches = signal
-            && (endpoint.object_kind != SdfEndpointObjectKind::HdlPort
+            && ((endpoint.object_kind != SdfEndpointObjectKind::HdlPort
+                    && !systemc)
+                || systemc
                 || (endpoint.direction != frontend::PortDirection::Unknown
                     && endpoint.direction == signal->direction));
         const bool select_matches = !endpoint.select
             || (endpoint.select->width != 0U
                 && endpoint.select->width <= endpoint.object_width);
-        if (!signal || !verilog || !hdl_object || !kind_matches
+        if (!signal || (!verilog && !mixed_vhdl && !systemc)
+            || (!hdl_object && !systemc) || !kind_matches
             || !direction_matches || endpoint.instance_path.empty()
             || endpoint.object_path.empty() || endpoint.object_width == 0U
             || endpoint.object_width != (signal ? signal->width : 0U)

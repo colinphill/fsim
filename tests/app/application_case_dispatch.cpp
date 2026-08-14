@@ -11,6 +11,11 @@ struct NamedApplicationCase {
 
 #if FSIM_APPLICATION_SHARD == 0
 int fsim_application_case_core();
+int fsim_application_case_core_simulation();
+int fsim_application_case_core_mixed();
+int fsim_application_case_core_multiple_roots();
+int fsim_application_case_core_preprocessing_cli();
+int fsim_application_case_core_non_project_cli();
 int fsim_application_case_specialization();
 int fsim_application_case_artifact_phases();
 int fsim_application_case_classes();
@@ -40,6 +45,12 @@ int fsim_application_case_resolution();
 
 constexpr NamedApplicationCase application_cases[] = {
     { "core", fsim_application_case_core },
+    { "core_simulation", fsim_application_case_core_simulation },
+    { "core_mixed", fsim_application_case_core_mixed },
+    { "core_multiple_roots", fsim_application_case_core_multiple_roots },
+    { "core_preprocessing_cli",
+        fsim_application_case_core_preprocessing_cli },
+    { "core_non_project_cli", fsim_application_case_core_non_project_cli },
     { "specialization", fsim_application_case_specialization },
     { "artifact_phases", fsim_application_case_artifact_phases },
     { "classes", fsim_application_case_classes },

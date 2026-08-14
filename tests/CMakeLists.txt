@@ -271,6 +271,96 @@ set_tests_properties(
 )
 
 add_executable(
+  fsim_sdf_vital_target_plan_tests
+  app/sdf_vital_target_plan_test.cpp
+)
+fsim_configure_test(fsim_sdf_vital_target_plan_tests)
+target_link_libraries(
+  fsim_sdf_vital_target_plan_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_vital_target_plan
+  COMMAND fsim_sdf_vital_target_plan_tests
+)
+set_tests_properties(
+  fsim.application.sdf_vital_target_plan
+  PROPERTIES LABELS "fast;application;sdf;vhdl;vital;timing;target-plan;positive;negative;coordinates;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_vital_models_tests
+  app/sdf_vital_models_test.cpp
+)
+fsim_configure_test(fsim_sdf_vital_models_tests)
+target_link_libraries(
+  fsim_sdf_vital_models_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_vital_models
+  COMMAND fsim_sdf_vital_models_tests
+)
+set_tests_properties(
+  fsim.application.sdf_vital_models
+  PROPERTIES LABELS "fast;application;sdf;vhdl;vital;timing;models;wrappers;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_vital_precedence_tests
+  app/sdf_vital_precedence_test.cpp
+)
+fsim_configure_test(fsim_sdf_vital_precedence_tests)
+target_link_libraries(
+  fsim_sdf_vital_precedence_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_vital_precedence
+  COMMAND fsim_sdf_vital_precedence_tests
+)
+set_tests_properties(
+  fsim.application.sdf_vital_precedence
+  PROPERTIES LABELS "fast;application;sdf;vhdl;vital;timing;precedence;selection;repeated;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_vital_scheduling_tests
+  app/sdf_vital_scheduling_test.cpp
+)
+fsim_configure_test(fsim_sdf_vital_scheduling_tests)
+target_link_libraries(
+  fsim_sdf_vital_scheduling_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_vital_scheduling
+  COMMAND fsim_sdf_vital_scheduling_tests
+)
+set_tests_properties(
+  fsim.application.sdf_vital_scheduling
+  PROPERTIES LABELS "application;sdf;vhdl;vital;timing;scheduler;transport;inertial;pulse;logic9;interpreter;llvm;delta;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_vital_timing_checks_tests
+  app/sdf_vital_timing_checks_test.cpp
+)
+fsim_configure_test(fsim_sdf_vital_timing_checks_tests)
+target_link_libraries(
+  fsim_sdf_vital_timing_checks_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_vital_timing_checks
+  COMMAND fsim_sdf_vital_timing_checks_tests
+)
+set_tests_properties(
+  fsim.application.sdf_vital_timing_checks
+  PROPERTIES LABELS "fast;application;sdf;vhdl;vital;timing;checks;setup-hold;recovery-removal;period-pulse;skew;violations;positive;negative;atomic;resources"
+)
+
+add_executable(
   fsim_sdf_path_timing_tests
   app/sdf_path_timing_test.cpp
 )
@@ -304,6 +394,169 @@ add_test(
 set_tests_properties(
   fsim.application.sdf_interconnect_timing
   PROPERTIES LABELS "fast;application;sdf;timing;interconnect;port;mipd;device;drivers;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_mixed_verilog_tests
+  app/sdf_mixed_verilog_test.cpp
+)
+fsim_configure_test(fsim_sdf_mixed_verilog_tests)
+target_link_libraries(
+  fsim_sdf_mixed_verilog_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_mixed_verilog
+  COMMAND fsim_sdf_mixed_verilog_tests
+)
+set_tests_properties(
+  fsim.application.sdf_mixed_verilog
+  PROPERTIES LABELS "fast;application;sdf;vhdl;verilog;mixed;timing;conversion;drivers;loads;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_mixed_systemverilog_tests
+  app/sdf_mixed_systemverilog_test.cpp
+)
+fsim_configure_test(fsim_sdf_mixed_systemverilog_tests)
+target_link_libraries(
+  fsim_sdf_mixed_systemverilog_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_mixed_systemverilog
+  COMMAND fsim_sdf_mixed_systemverilog_tests
+)
+set_tests_properties(
+  fsim.application.sdf_mixed_systemverilog
+  PROPERTIES LABELS "fast;application;sdf;vhdl;systemverilog;mixed;interface;program;class;assertion;package;region;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_mixed_systemc_tests
+  app/sdf_mixed_systemc_test.cpp
+)
+fsim_configure_test(fsim_sdf_mixed_systemc_tests)
+target_link_libraries(
+  fsim_sdf_mixed_systemc_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_mixed_systemc
+  COMMAND fsim_sdf_mixed_systemc_tests
+)
+set_tests_properties(
+  fsim.application.sdf_mixed_systemc
+  PROPERTIES LABELS "fast;application;sdf;vhdl;systemc;mixed;proxy;logic9;arbitrary-width;time;delta;channel;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_mixed_resolution_tests
+  app/sdf_mixed_resolution_test.cpp
+)
+fsim_configure_test(fsim_sdf_mixed_resolution_tests)
+target_link_libraries(
+  fsim_sdf_mixed_resolution_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_mixed_resolution
+  COMMAND fsim_sdf_mixed_resolution_tests
+)
+set_tests_properties(
+  fsim.application.sdf_mixed_resolution
+  PROPERTIES LABELS "fast;application;sdf;vhdl;verilog;systemverilog;systemc;mixed;multi-root;library;nested;direction;identity;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_foreign_interfaces_tests
+  app/sdf_foreign_interfaces_test.cpp
+)
+fsim_configure_test(fsim_sdf_foreign_interfaces_tests)
+target_link_libraries(
+  fsim_sdf_foreign_interfaces_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_foreign_interfaces
+  COMMAND fsim_sdf_foreign_interfaces_tests
+)
+set_tests_properties(
+  fsim.application.sdf_foreign_interfaces
+  PROPERTIES LABELS "fast;application;sdf;vhdl;verilog;systemverilog;mixed;vhpi;vpi;identity;enumeration;callback;control;disabled;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_vital_observability_tests
+  app/sdf_vital_observability_test.cpp
+)
+fsim_configure_test(fsim_sdf_vital_observability_tests)
+target_link_libraries(
+  fsim_sdf_vital_observability_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_vital_observability
+  COMMAND fsim_sdf_vital_observability_tests
+)
+set_tests_properties(
+  fsim.application.sdf_vital_observability
+  PROPERTIES LABELS "fast;application;sdf;vhdl;vital;mixed;debugger;callback;trace;vcd;pending-event;violation;time;delta;region;disabled;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_vital_archive_tests
+  app/sdf_vital_archive_test.cpp
+)
+fsim_configure_test(fsim_sdf_vital_archive_tests)
+target_link_libraries(
+  fsim_sdf_vital_archive_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_vital_archive
+  COMMAND fsim_sdf_vital_archive_tests
+)
+set_tests_properties(
+  fsim.application.sdf_vital_archive
+  PROPERTIES LABELS "fast;application;sdf;vhdl;vital;mixed;artifact;object;design;library;relocation;cache;checkpoint;replay;roundtrip;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_vital_phases_tests
+  app/sdf_vital_phases_test.cpp
+)
+fsim_configure_test(fsim_sdf_vital_phases_tests)
+target_link_libraries(
+  fsim_sdf_vital_phases_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_vital_phases
+  COMMAND fsim_sdf_vital_phases_tests
+)
+set_tests_properties(
+  fsim.application.sdf_vital_phases
+  PROPERTIES LABELS "fast;application;sdf;vhdl;vital;mixed;project;cli;tcl;c-api;cpp-api;non-project;cold;warm;relocated;interpreter;llvm;summary;positive;negative;atomic;resources"
+)
+
+add_executable(
+  fsim_sdf_vital_corpus_tests
+  app/sdf_vital_corpus_test.cpp
+)
+fsim_configure_test(fsim_sdf_vital_corpus_tests)
+target_link_libraries(
+  fsim_sdf_vital_corpus_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_vital_corpus
+  COMMAND fsim_sdf_vital_corpus_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sdf/vital"
+)
+set_tests_properties(
+  fsim.application.sdf_vital_corpus
+  PROPERTIES LABELS "fast;application;sdf;vhdl;vital;mixed-language;corpus;revision;standard-cell;primitive;state-table;memory;wrapper;verilog;systemverilog;systemc;interpreter;llvm;cold;warm;relocated;positive;artifact"
 )
 
 add_executable(
@@ -466,6 +719,24 @@ add_test(
 set_tests_properties(
   fsim.application.sdf_reannotation
   PROPERTIES LABELS "fast;application;sdf;timing;reannotation;multi-file;wildcard;multi-root;precedence;safe-point;pending-event;timing-check;ordering;positive;negative;atomic;rollback;resources"
+)
+
+add_executable(
+  fsim_sdf_vital_reannotation_tests
+  app/sdf_vital_reannotation_test.cpp
+)
+fsim_configure_test(fsim_sdf_vital_reannotation_tests)
+target_link_libraries(
+  fsim_sdf_vital_reannotation_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sdf_vital_reannotation
+  COMMAND fsim_sdf_vital_reannotation_tests
+)
+set_tests_properties(
+  fsim.application.sdf_vital_reannotation
+  PROPERTIES LABELS "fast;application;sdf;vital;reannotation;multi-file;wildcard;multi-root;generic;precedence;safe-point;pending-event;timing-check;ordering;positive;negative;atomic;rollback;resources"
 )
 
 add_executable(
@@ -706,11 +977,25 @@ add_test(
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckSdfApplicationInventory.cmake"
 )
 add_test(
+  NAME fsim.sdf-vital-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSdfVitalInventory.cmake"
+)
+add_test(
   NAME fsim.sdf-application-release-audit
   COMMAND
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckSdfApplicationReleaseAudit.cmake"
+)
+add_test(
+  NAME fsim.sdf-vital-release-audit
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSdfVitalReleaseAudit.cmake"
 )
 add_test(
   NAME fsim.sdf-closure
@@ -742,6 +1027,22 @@ set_tests_properties(
   fsim.sdf-application-closure
   PROPERTIES
     LABELS "sdf;application;closure;corpus;negative;resources;artifact;cache;interpreter;llvm;linux;windows"
+    TIMEOUT 1200
+)
+add_test(
+  NAME fsim.sdf-vital-closure
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/sdf-vital-closure-evidence"
+    -P "${PROJECT_SOURCE_DIR}/cmake/RunSdfVitalClosure.cmake"
+)
+set_tests_properties(
+  fsim.sdf-vital-closure
+  PROPERTIES
+    LABELS "sdf;vhdl;vital;mixed-language;closure;corpus;revision;positive;negative;ambiguity;mismatch;unsupported;overflow;resources;multiple-root;artifact;interpreter;llvm;linux;windows;retained-log"
     TIMEOUT 1200
 )
 add_test(
@@ -1062,6 +1363,14 @@ set_tests_properties(
 set_tests_properties(
   fsim.sdf-application-inventory
   PROPERTIES LABELS "fast;sdf;verilog;systemverilog;timing;inventory;positive;negative;interpreter;llvm;phase;artifact;diagnostics;resources;cmake"
+)
+set_tests_properties(
+  fsim.sdf-vital-inventory
+  PROPERTIES LABELS "fast;sdf;vhdl;vital;mixed-language;timing;inventory;positive;negative;interpreter;llvm;phase;artifact;diagnostics;resources;cmake"
+)
+set_tests_properties(
+  fsim.sdf-vital-release-audit
+  PROPERTIES LABELS "fast;sdf;vhdl;vital;mixed-language;release;audit;documentation;inventory;diagnostics;resources;license;portability"
 )
 set_tests_properties(
   fsim.vhdl-standard-mode-closure-matrix
@@ -1748,6 +2057,34 @@ if(TARGET fsim_application)
 
     fsim_add_application_case(
       0 core app/application_test.cpp fsim.application)
+    add_test(
+      NAME fsim.application.core_simulation
+      COMMAND fsim_application_tests core_simulation
+    )
+    add_test(
+      NAME fsim.application.core_mixed
+      COMMAND fsim_application_tests core_mixed
+    )
+    add_test(
+      NAME fsim.application.core_multiple_roots
+      COMMAND fsim_application_tests core_multiple_roots
+    )
+    add_test(
+      NAME fsim.application.core_preprocessing_cli
+      COMMAND fsim_application_tests core_preprocessing_cli
+    )
+    add_test(
+      NAME fsim.application.core_non_project_cli
+      COMMAND fsim_application_tests core_non_project_cli
+    )
+    set_tests_properties(
+      fsim.application.core_simulation
+      fsim.application.core_mixed
+      fsim.application.core_multiple_roots
+      fsim.application.core_preprocessing_cli
+      fsim.application.core_non_project_cli
+      PROPERTIES LABELS "application;core;sanitizer-isolation"
+    )
     fsim_add_application_case(
       0 specialization app/application_specialization_case.cpp
       fsim.application.specialization

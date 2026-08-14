@@ -6,7 +6,7 @@ adapters. Batch 168 owns parsing, exact normalization, hierarchy resolution and
 portable source identity. Batch 169 applies that immutable representation to
 Verilog-1995/2001/2001-noconfig/2005 and SystemVerilog-2005/2009/2012/2017
 timing. VHDL/VITAL targets and timing that crosses a VHDL boundary remain
-reserved for Batch 170.
+implemented by Batch 170 without widening the selected SDF or HDL revision.
 
 ## Supported input and value policy
 
@@ -47,6 +47,27 @@ strength/resolution state, switches, continuous drivers and force/release
 interactions therefore do not perform hierarchy lookup or value conversion on
 the event hot path. Disabling SDF preserves the original no-annotation timing
 identity and does not allocate observation records.
+
+## VHDL/VITAL and mixed-language timing application
+
+Batch 170 extends the same exact target/value pipeline to VHDL 87, 93, 2000,
+2002 and 2008 VITAL cells and to paths crossing VHDL-Verilog,
+VHDL-SystemVerilog and VHDL-SystemC boundaries in either direction. Structural
+call, port, generic, process and wrapper governance identifies standard cells,
+primitives, state tables and memory paths; model names are not guessed.
+
+VITAL delay and timing-check records retain source and effective values,
+min/typ/max selection, pending-transaction policy, timing-history policy,
+generation, root/library/path identity and provenance. Logic9 values, vector
+width/direction, resolved drivers, SystemVerilog scheduler regions and SystemC
+time/delta coordinates remain exact at mixed boundaries. Absolute/incremental
+precedence and safe-point reannotation either publish the complete new
+generation or retain the prior one.
+
+VHPI and VPI enumerate stable read-only timing objects and bounded callbacks.
+Debugger, callbacks, internal trace and VCD share deterministic effective,
+pending-transaction and violation events. Disabled observation returns before
+object lookup and cannot perturb scheduling.
 
 ## Command-line control
 
@@ -107,7 +128,13 @@ The source-tree C++ surface is split by ownership:
 - `sdf_effective_archive.hpp` owns schema-1 `FSDFEFF` object, design, library,
   native-cache and checkpoint payloads; and
 - `sdf_observability.hpp` exposes stable debugger, callback, internal-trace,
-  VPI and VCD timing/violation records.
+  VPI and VCD timing/violation records;
+- `sdf_vital_*` and `sdf_mixed_*` headers own structural VITAL models,
+  scheduling/checks, mixed boundaries, foreign interfaces and observation;
+- `sdf_vital_archive.hpp` retains effective VITAL/mixed state in every portable
+  form; and
+- `sdf_vital_phases.hpp` gives project, CLI, Tcl, C, C++ and non-project
+  phases equivalent summaries, archive identity and failures.
 
 Every public result reports success only when it has no error diagnostic.
 Callers can tighten default resource and report limits but cannot widen a
@@ -143,5 +170,7 @@ Linux/Windows contracts and cataloged negative/resource families.
 
 See the [diagnostic catalog](diagnostics.md#standard-delay-format-frontend),
 [feature matrix](feature-matrix.md) and
-[Batch 169 release audit](v2-sdf-application-release-audit.md) for the frozen
+[Batch 169 application audit](v2-sdf-application-release-audit.md),
+[Batch 170 SDF/VITAL audit](v2-sdf-vital-release-audit.md) and
+[mixed VITAL example](../examples/sdf_vital_mixed/README.md) for the frozen
 boundaries and executable evidence.

@@ -60,10 +60,10 @@ std::optional<RegisterId> Lowerer::lower_sv_packed_pattern(
     const bool tagged_union = expected_type.packed_aggregate
         == frontend::PackedAggregateKind::TaggedUnion;
     const auto tag_width = tagged_union
-        ? std::max<std::size_t>(
+      ? std::max<std::size_t>(
               1U,
-              std::bit_width(
-                  expected_type.packed_members.size() - 1U))
+              static_cast<std::size_t>(std::bit_width(
+                  expected_type.packed_members.size() - 1U)))
         : 0U;
     const auto destination = allocate_register(expected_width, expected_type.domain);
     process_.operations.emplace_back(LoadConstant {

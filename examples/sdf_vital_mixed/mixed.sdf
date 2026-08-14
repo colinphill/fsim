@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+(DELAYFILE
+  (SDFVERSION "4.0")
+  (DESIGN "mixed_top")
+  (TIMESCALE 1 ns)
+  (CELL
+    (CELLTYPE "vital_cell")
+    (INSTANCE mixed_top.u_vital)
+    (DELAY (ABSOLUTE (IOPATH A Z (1:2:3)))))
+)

@@ -53,10 +53,10 @@ build tree. The indexed graph contained 32,230 nodes and 148,489 edges.
 
 ## Catalog, source and license inventory
 
-The synchronized static gates cover exactly 2,389 emitted production
-diagnostic codes and 974 authored C/C++ sources under the 2,500-line hard
-limit with a 2,000-line refactor target. The Batch 169 authored artifact set
-contains 1,139 files, each with an Apache-2.0
+The synchronized static gates cover exactly 2,461 emitted production
+diagnostic codes and 1,020 authored C/C++ sources under the 2,500-line hard
+limit with a 2,000-line refactor target. The Batch 170 authored artifact set
+contains 1,205 files, each with an Apache-2.0
 SPDX notice. The repository `LICENSE` remains the reviewed Apache license.
 
 ## Final Change 20 evidence and handoff

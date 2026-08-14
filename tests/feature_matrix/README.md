@@ -101,6 +101,18 @@ diagnostics and physical resource contracts without claiming VHDL/VITAL timing
 application reserved for Batch 170. The current SHA-256 identity is
 `47e7f5b95aae9f0e3df5cb4fcb4939255e1803f9c920081a47198e21b75f2754`.
 
+Batch 170 starts with the independent 17-row `sdf_vital_inventory.tsv`
+ledger. Its rows assign Changes 2-18 exactly across VHDL/VITAL target plans,
+paths/checks/models, precedence, scheduling, negative checks, reannotation,
+VHDL-to-Verilog/SystemVerilog/SystemC boundaries, multiple-root resolution,
+foreign interfaces, observability, artifacts, phases, mixed corpora and
+closure negatives. Every row binds SDF 2.1/3.0/4.0, all supported VHDL modes,
+the governed Verilog/SystemVerilog profiles and the native SystemC boundary to
+planned implementation, positive/negative/engine/phase/artifact evidence,
+diagnostics and physical resource ownership. Change 2 target planning is
+preserved and sixteen rows remain active. The current SHA-256 identity is
+`59de8a2f5a0ff3dcd65a907a6355bbfd9952d75417650a6db89a0fab5f4ff095`.
+
 ## Intended atomic layout
 
 New tests should use the stable feature ID from the matrix and keep one

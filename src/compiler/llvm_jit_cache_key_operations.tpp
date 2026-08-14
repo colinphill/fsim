@@ -299,16 +299,13 @@ for (const auto& operation : process.operations) {
                 add_key_u64(builder, "rhs", value.rhs);
                 add_key_u64(
                     builder, "lhs-kind",
-                    static_cast<std::underlying_type_t<
-                        runtime::SystemVerilogScalarKind>>(value.lhs_kind));
+                    static_cast<std::uint64_t>(value.lhs_kind));
                 add_key_u64(
                     builder, "rhs-kind",
-                    static_cast<std::underlying_type_t<
-                        runtime::SystemVerilogScalarKind>>(value.rhs_kind));
+                    static_cast<std::uint64_t>(value.rhs_kind));
                 add_key_u64(
                     builder, "result-kind",
-                    static_cast<std::underlying_type_t<
-                        runtime::SystemVerilogScalarKind>>(value.result_kind));
+                    static_cast<std::uint64_t>(value.result_kind));
             } else if constexpr (std::is_same_v<
                                      OperationType,
                                      runtime::simir::SystemVerilogMath>) {
@@ -325,14 +322,10 @@ for (const auto& operation : process.operations) {
                 add_key_u64(builder, "second-width", value.second_width);
                 add_key_u64(
                     builder, "first-kind",
-                    static_cast<std::underlying_type_t<
-                        runtime::SystemVerilogScalarKind>>(
-                        value.first_kind));
+                    static_cast<std::uint64_t>(value.first_kind));
                 add_key_u64(
                     builder, "second-kind",
-                    static_cast<std::underlying_type_t<
-                        runtime::SystemVerilogScalarKind>>(
-                        value.second_kind));
+                    static_cast<std::uint64_t>(value.second_kind));
                 add_key_u64(
                     builder, "first-signed",
                     value.first_signed ? 1U : 0U);
@@ -1694,9 +1687,7 @@ for (const auto& operation : process.operations) {
                 add_key_u64(builder, "dynamic-source-width", value.source_width);
                 add_key_u64(
                     builder, "dynamic-source-kind",
-                    static_cast<std::underlying_type_t<
-                        runtime::SystemVerilogScalarKind>>(
-                        value.source_kind));
+                    static_cast<std::uint64_t>(value.source_kind));
                 add_key_u64(builder, "dynamic-source-signed", value.source_signed);
                 add_key_u64(
                     builder, "dynamic-rounding-quantum",

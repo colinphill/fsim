@@ -437,7 +437,12 @@ endmodule
         = run_engine(std::move(*project), app::SimulationEngine::interpreter);
     const auto compiled
         = run_engine(std::move(compiled_project), app::SimulationEngine::compiled);
-    require(compiled.compiled_processes > 0U
+#if defined(FSIM_HAS_LLVM)
+    const bool compiled_process_count_ok = compiled.compiled_processes > 0U;
+#else
+    const bool compiled_process_count_ok = compiled.compiled_processes == 0U;
+#endif
+    require(compiled_process_count_ok
             && compiled.changes == reference.changes
             && std::ranges::any_of(reference.changes, [](const auto& change) {
                    return std::get<0>(change) == 6U

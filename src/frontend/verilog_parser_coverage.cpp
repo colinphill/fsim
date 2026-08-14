@@ -1825,8 +1825,6 @@ void VerilogParser::structure_cross_bins(
                 "duplicate explicit cross bin name '" + statement[1].text + "'");
             continue;
         }
-        const auto selection = std::span<const Token> { statement }.subspan(
-            *assignment + 1U);
         SystemVerilogCoverageBin bin;
         bin.kind = keyword == "ignore_bins"
             ? SystemVerilogCoverageBinKind::Ignore

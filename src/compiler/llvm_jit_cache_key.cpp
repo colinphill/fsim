@@ -301,8 +301,7 @@ void add_container_type_key(
             runtime::simir::ContainerElementKind>>(type.element_kind));
     add_key_u64(
         builder, "container-scalar-kind",
-        static_cast<std::underlying_type_t<
-            runtime::SystemVerilogScalarKind>>(type.scalar_kind));
+        static_cast<std::uint64_t>(type.scalar_kind));
     add_key_u64(builder, "container-element-width", type.element_width);
     builder.add("container-element-nominal-type", type.element_nominal_type);
     add_key_u64(builder, "container-two-state", type.two_state ? 1U : 0U);

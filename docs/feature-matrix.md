@@ -1511,8 +1511,22 @@ with SHA-256
 | V2-SDF-169-03 | CLI, Tcl, native C/C++ control, effective artifacts/cache/checkpoints and debugger/callback/trace/VPI/VCD observation | execute | [Changes 15-17 tests](../tests/app) | [phase/schema/resource negatives](diagnostics.md) | [control and persistence owners](../src/app) | [seven-stage retained-log closure](../cmake/RunSdfApplicationClosure.cmake) |
 | V2-SDF-169-04 | Standard-cell, primitive, interconnect, pulse and timing-check closure across engines, phases, artifacts, relocation, replay and Linux/Windows contracts | execute | [exact pass transcript](../tests/app/sdf_application_corpus_test.cpp) | [missing/mismatch/conflict/overflow/resource transcript](../tests/app/sdf_application_corpus_test.cpp) | [inventory gate](../cmake/CheckSdfApplicationInventory.cmake) | [release audit](v2-sdf-application-release-audit.md) |
 
-VHDL/VITAL SDF timing and timing paths crossing a VHDL boundary remain owned by
-Batch 170; these rows do not broaden that boundary.
+These Batch 169 rows remain the Verilog/SystemVerilog base consumed by the
+Batch 170 VHDL/VITAL and mixed-language rows below.
+
+## VHDL/VITAL and mixed-language SDF application
+
+The canonical seventeen-row ledger is
+[`sdf_vital_inventory.tsv`](../tests/feature_matrix/sdf_vital_inventory.tsv),
+with zero active obligations and SHA-256
+`3e84f643e6df24090efb1161e0d6836847784268a139e3da3c2fda4568913c6f`.
+
+| ID | Precisely bounded feature | Status | P+ | P- | E | R |
+|---|---|---|---|---|---|---|
+| V2-SDF-170-01 | Structural VITAL targets, paths, primitives, state tables, memory paths, governed wrappers, precedence, exact delays/checks and safe-point reannotation | execute | [Changes 2-8 tests](../tests/app) | [model, shape, ownership and resource negatives](../tests/app/sdf_vital_models_test.cpp) | [VITAL application/runtime owners](../src/app) | [VITAL scheduling/check applications](../tests/app) |
+| V2-SDF-170-02 | Both directions of VHDL-Verilog, VHDL-SystemVerilog and VHDL-SystemC boundaries preserve Logic9, width, resolution, roots and scheduler coordinates | execute | [Changes 9-12 tests](../tests/app) | [type, direction, channel, root and resource negatives](diagnostics.md) | [mixed boundary owners](../src/app) | [multi-root resolution](../tests/app/sdf_mixed_resolution_test.cpp) |
+| V2-SDF-170-03 | VHPI/VPI, debugger/callback/trace/VCD, all portable artifacts and equivalent project/CLI/Tcl/C/C++/non-project phases expose immutable effective timing | execute | [Changes 13-16 tests](../tests/app) | [archive, observer, phase and resource negatives](diagnostics.md) | [foreign/observation/archive/phase owners](../src/app) | [36-case public phase matrix](../tests/app/sdf_vital_phases_test.cpp) |
+| V2-SDF-170-04 | Owned SDF/VHDL/Verilog/SystemVerilog/SystemC models cover 2,700 revision/model/direction/engine/phase cases with multiple-root, artifact, platform and retained-log closure | execute | [owned corpus](../tests/app/sdf_vital_corpus_test.cpp) | [five-family negative closure](../cmake/RunSdfVitalClosure.cmake) | [zero-active inventory gate](../cmake/CheckSdfVitalInventory.cmake) | [Batch 170 release audit](v2-sdf-vital-release-audit.md) |
 
 ## Completed v1 feature groups
 

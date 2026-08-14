@@ -1068,7 +1068,9 @@ endmodule
         && memory_declaration->type->container_form
             == fsim::semantic::sv::TypeForm::static_array);
     assert(memory_declaration->type->unpacked_dimensions.size() == 1);
+#if defined(FSIM_HAS_LLVM)
     const auto design_process_count = built->design.processes().size();
+#endif
     fsim::app::Simulation simulation {
         std::move(*built), design_config.run.max_deltas,
         fsim::app::SimulationEngine::interpreter
@@ -1099,6 +1101,7 @@ endmodule
                     ? "verilog-wide-o0-cache"
                     : "verilog-wide-o2-cache");
         for (const bool warm_cache : { false, true }) {
+            static_cast<void>(warm_cache);
             fsim::diagnostic::Engine compiled_diagnostics;
             auto compiled = fsim::app::build_project(
                 compiled_config, compiled_diagnostics);

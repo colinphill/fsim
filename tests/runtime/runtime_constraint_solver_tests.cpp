@@ -69,7 +69,9 @@ void test_systemverilog_constraint_solver()
         "integer",
         { 7, 9 },
         true));
-    const auto equals = [](const auto id, const std::uint64_t expected) {
+    const auto equals = [](
+        const SystemVerilogConstraintVariableId id,
+        const std::uint64_t expected) {
         return [=](const SystemVerilogConstraintAssignment& assignment) {
             if (!assignment.assigned(id)) {
                 return SystemVerilogConstraintClauseState::Undetermined;

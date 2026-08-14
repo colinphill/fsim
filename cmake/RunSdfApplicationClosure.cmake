@@ -17,7 +17,7 @@ file(WRITE "${FSIM_RESULT}" "stage\tstatus\tlog\n")
 
 set(FSIM_STAGES
   "corpus@@^fsim\\.application\\.sdf_application_corpus$"
-  "timing@@^fsim\\.application\\.sdf_(path_timing|interconnect_timing|delay_modes|primary_timing_checks|secondary_timing_checks|condition_timing|pulse_timing|precedence|scheduling|drive_timing|reannotation)$"
+  "timing@@^fsim\\.application\\.sdf_(path_timing|interconnect_timing|mixed_verilog|mixed_systemverilog|mixed_systemc|mixed_resolution|foreign_interfaces|vital_observability|vital_archive|vital_phases|delay_modes|primary_timing_checks|secondary_timing_checks|condition_timing|pulse_timing|precedence|scheduling|drive_timing|reannotation)$"
   "publication@@^fsim\\.application\\.sdf_(control|effective_archive|observability)$"
   "artifact@@^fsim\\.(library\\.artifact|artifact\\.(object|design)|cache)$"
   "public@@^fsim\\.(application\\.(specify|resolution|vpi|vcd_control)|api|api\\.c_header)$"
@@ -83,6 +83,14 @@ foreach(FSIM_INPUT IN ITEMS
     sdf_target_plan_test.cpp
     sdf_path_timing_test.cpp
     sdf_interconnect_timing_test.cpp
+    sdf_mixed_verilog_test.cpp
+    sdf_mixed_systemverilog_test.cpp
+    sdf_mixed_systemc_test.cpp
+    sdf_mixed_resolution_test.cpp
+    sdf_foreign_interfaces_test.cpp
+    sdf_vital_observability_test.cpp
+    sdf_vital_archive_test.cpp
+    sdf_vital_phases_test.cpp
     sdf_delay_modes_test.cpp
     sdf_primary_timing_checks_test.cpp
     sdf_secondary_timing_checks_test.cpp
@@ -103,6 +111,14 @@ foreach(FSIM_FAMILY IN ITEMS
     FSIM-SDF-PLAN-
     FSIM-SDF-PATH-
     FSIM-SDF-INTERCONNECT-
+    FSIM-SDF-MIXED-VERILOG-
+    FSIM-SDF-MIXED-SYSTEMVERILOG-
+    FSIM-SDF-MIXED-SYSTEMC-
+    FSIM-SDF-MIXED-RESOLUTION-
+    FSIM-SDF-FOREIGN-
+    FSIM-SDF-VITAL-OBSERVE-
+    FSIM-SDF-VITAL-ARCHIVE-
+    FSIM-SDF-VITAL-PHASE-
     FSIM-SDF-DELAY-MODE-
     FSIM-SDF-PRIMARY-CHECK-
     FSIM-SDF-SECONDARY-CHECK-
@@ -123,6 +139,6 @@ foreach(FSIM_FAMILY IN ITEMS
 endforeach()
 
 file(APPEND "${FSIM_CONSOLE}"
-  "FSIM-SDF-APPLICATION-CLOSURE-PASS stages=7 retained-logs=7 negatives=16 resources=governed\n")
+  "FSIM-SDF-APPLICATION-CLOSURE-PASS stages=7 retained-logs=7 negatives=23 resources=governed\n")
 message(STATUS
   "FSIM-SDF-APPLICATION-CLOSURE-PASS retained=${FSIM_OUTPUT_DIR}")

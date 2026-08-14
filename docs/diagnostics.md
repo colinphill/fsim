@@ -226,6 +226,46 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SDF-PLAN-002` | error | A resolved SDF annotation has no compatible elaborated timing target or has an empty/unsupported source or proposed value arity. |
 | `FSIM-SDF-PLAN-003` | error | Multiple resolved SDF annotations claim the same timing-target kind, identity, and construct ownership key. |
 | `FSIM-SDF-PLAN-004` | error | SDF target planning exceeds its configured annotation, values-per-annotation, or identity-byte limit. |
+| `FSIM-SDF-VITAL-PLAN-001` | error | VHDL/VITAL target planning receives incomplete or stale IR, cell, mapping, summary, cell-type, language, count, or limit state. |
+| `FSIM-SDF-VITAL-PLAN-002` | error | A resolved VHDL SDF cell has no unique elaborated entity, architecture, or configuration specialization binding. |
+| `FSIM-SDF-VITAL-PLAN-003` | error | A resolved VHDL SDF endpoint disagrees with its elaborated port/net identity, type, width, direction, select, or language boundary. |
+| `FSIM-SDF-VITAL-PLAN-004` | error | A VHDL/VITAL specialization has missing, duplicate, or inconsistent generic values and semantic identities. |
+| `FSIM-SDF-VITAL-PLAN-005` | error | Multiple resolved VHDL SDF mappings claim the same instance, node, and construct ownership key. |
+| `FSIM-SDF-VITAL-PLAN-006` | error | VHDL/VITAL target planning exceeds its configured target, port, generic, or identity-byte limit. |
+| `FSIM-SDF-VITAL-PATH-001` | error | VHDL/VITAL path planning receives an incomplete, stale, unsupported, or non-path/check target plan. |
+| `FSIM-SDF-VITAL-PATH-002` | error | A VHDL/VITAL target has no unique elaborated delay or timing-check call site within its specialization. |
+| `FSIM-SDF-VITAL-PATH-003` | error | A VHDL/VITAL call kind, endpoint role, edge, or condition is incompatible with the resolved SDF construct. |
+| `FSIM-SDF-VITAL-PATH-004` | error | A VHDL/VITAL path or timing-check annotation has empty, excessive, or incompatible selected-value arity. |
+| `FSIM-SDF-VITAL-PATH-005` | error | A VHDL/VITAL source delay/check value is not retained as a bounded static simulator tick. |
+| `FSIM-SDF-VITAL-PATH-006` | error | VHDL/VITAL path planning exceeds a record/identity limit or duplicates one stable call-site owner. |
+| `FSIM-SDF-VITAL-MODEL-001` | error | VHDL/VITAL model planning receives an incomplete or stale path, target, specialization, or limit identity. |
+| `FSIM-SDF-VITAL-MODEL-002` | error | A VHDL/VITAL model has missing, invalid, excessive, or inconsistent specialization process ownership. |
+| `FSIM-SDF-VITAL-MODEL-003` | error | A VHDL/VITAL model exposes an unsupported or ambiguous primitive, state-table, or memory-path structural shape. |
+| `FSIM-SDF-VITAL-MODEL-004` | error | A governed VHDL/VITAL wrapper registration is incomplete, unused, or disagrees with exact target port structure. |
+| `FSIM-SDF-VITAL-MODEL-005` | error | VHDL/VITAL model targets, wrapper registrations, or stable call-site records duplicate ownership. |
+| `FSIM-SDF-VITAL-MODEL-006` | error | VHDL/VITAL model planning exceeds its record, process, wrapper-port, or identity-byte limit. |
+| `FSIM-SDF-VITAL-PRECEDENCE-001` | error | VHDL/VITAL precedence receives an incomplete source plan, conflicting min/typ/max selection, or zero limits. |
+| `FSIM-SDF-VITAL-PRECEDENCE-002` | error | A repeated VHDL/VITAL annotation is stale or disagrees with its stable source call, before-value, arity, or selection identity. |
+| `FSIM-SDF-VITAL-PRECEDENCE-003` | error | A VITAL timing-generic value is incomplete, ambiguous, stale, or duplicates one call/value owner. |
+| `FSIM-SDF-VITAL-PRECEDENCE-004` | error | A VHDL/VITAL annotation has an unsupported absolute/increment mode or overflows its effective value. |
+| `FSIM-SDF-VITAL-PRECEDENCE-005` | error | A per-revision VHDL/VITAL annotation-disable control is stale, incomplete, or duplicated. |
+| `FSIM-SDF-VITAL-PRECEDENCE-006` | error | VHDL/VITAL precedence exceeds its revision, value, step, ownership, or identity-byte limit. |
+| `FSIM-SDF-VITAL-SCHEDULING-001` | error | SDF VITAL scheduling lacks complete precedence input or has zero resource limits. |
+| `FSIM-SDF-VITAL-SCHEDULING-002` | error | A VITAL delay call, process, instruction, source definition, shape, or ownership identity is stale or ambiguous. |
+| `FSIM-SDF-VITAL-SCHEDULING-003` | error | Effective VITAL delay values are missing, noncontiguous, negative, stale, or incompatible with the retained delay shape. |
+| `FSIM-SDF-VITAL-SCHEDULING-004` | error | A VITAL delay scheduling or transition policy is unsupported. |
+| `FSIM-SDF-VITAL-SCHEDULING-005` | error | Transactional VITAL delay publication cannot retain a complete valid runtime design. |
+| `FSIM-SDF-VITAL-SCHEDULING-006` | error | VITAL scheduled calls, values, or semantic identities exceed their configured resource limits. |
+| `FSIM-SDF-VITAL-CHECK-001` | error | SDF VITAL timing-check application lacks complete scheduling input or has zero resource limits. |
+| `FSIM-SDF-VITAL-CHECK-002` | error | A VITAL timing-check call, process, instruction, kind, arity, source limit, or ownership identity is stale or ambiguous. |
+| `FSIM-SDF-VITAL-CHECK-003` | error | Effective VITAL timing-check values are missing, noncontiguous, negative, or inconsistent with their source call. |
+| `FSIM-SDF-VITAL-CHECK-004` | error | A VITAL timing-check kind or policy is unsupported. |
+| `FSIM-SDF-VITAL-CHECK-005` | error | Transactional VITAL timing-check publication cannot retain a complete valid runtime design. |
+| `FSIM-SDF-VITAL-CHECK-006` | error | VITAL timing-check calls, values, or semantic identities exceed their configured resource limits. |
+| `FSIM-SDF-VITAL-REANNOTATION-001` | error | VITAL live reannotation input, scope, safe-point state, pending-transaction policy, or runtime commit is invalid. |
+| `FSIM-SDF-VITAL-REANNOTATION-002` | error | Equal-precedence VITAL reannotation layers select the same target and timing values. |
+| `FSIM-SDF-VITAL-REANNOTATION-003` | error | VITAL reannotation changes call topology, conflicts at equal precedence, or cannot publish atomically. |
+| `FSIM-SDF-VITAL-REANNOTATION-004` | error | VITAL reannotation files, targets, scope bytes, or semantic identities exceed configured resource limits. |
 | `FSIM-SDF-PATH-001` | error | SDF path application receives an incomplete/stale plan, missing/repeated specify target, changed source delays, invalid application mode, or zero resource limits. |
 | `FSIM-SDF-PATH-002` | error | An SDF IOPATH condition or edge qualifier is incompatible with its elaborated conditional/ifnone or edge-sensitive specify path. |
 | `FSIM-SDF-PATH-003` | error | An absolute IOPATH has an unsupported delay-list arity or an incremental IOPATH does not match the current source-delay profile. |
@@ -234,6 +274,38 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SDF-INTERCONNECT-002` | error | An INTERCONNECT, PORT, MIPD, NETDELAY, or DEVICE endpoint is missing, ambiguous, stale, directionally incompatible, or outside supported Verilog/SystemVerilog objects. |
 | `FSIM-SDF-INTERCONNECT-003` | error | A net/port/device annotation has no absolute/increment application mode or uses an unsupported transition-delay arity. |
 | `FSIM-SDF-INTERCONNECT-004` | error | SDF net/port/device timing application exceeds its configured target, endpoint, driver-owner, value, or identity-byte limit. |
+| `FSIM-SDF-MIXED-VERILOG-001` | error | Mixed VHDL/Verilog timing receives an incomplete interconnect application or zero resource limit. |
+| `FSIM-SDF-MIXED-VERILOG-002` | error | Mixed VHDL/Verilog timing has missing, stale, repeated, or ambiguous conversion ownership. |
+| `FSIM-SDF-MIXED-VERILOG-003` | error | A mixed boundary has incompatible direction, language, endpoint roles, resolved-value profile, or adapter topology. |
+| `FSIM-SDF-MIXED-VERILOG-004` | error | Mixed VHDL/Verilog timing exceeds its boundary, driver/load-owner, or identity-byte resource limit. |
+| `FSIM-SDF-MIXED-SYSTEMVERILOG-001` | error | Mixed SystemVerilog timing receives an incomplete mixed application, empty binding set, or zero resource limit. |
+| `FSIM-SDF-MIXED-SYSTEMVERILOG-002` | error | A mixed SystemVerilog endpoint has a stale boundary, missing identity, or duplicate owner. |
+| `FSIM-SDF-MIXED-SYSTEMVERILOG-003` | error | A mixed interface, program, class, assertion, or package endpoint lacks matching HIR ownership, widens its type, or changes event-region semantics. |
+| `FSIM-SDF-MIXED-SYSTEMVERILOG-004` | error | Mixed SystemVerilog timing exceeds its binding or identity-byte resource limit. |
+| `FSIM-SDF-MIXED-SYSTEMC-001` | error | Mixed SystemC timing receives an incomplete timing application, empty binding set, or zero resource limit. |
+| `FSIM-SDF-MIXED-SYSTEMC-002` | error | A mixed SystemC proxy has a stale/ambiguous target, object path, or duplicate owner. |
+| `FSIM-SDF-MIXED-SYSTEMC-003` | error | A mixed SystemC proxy has no supported typed signal adapter or changes its value width or time/delta sequence. |
+| `FSIM-SDF-MIXED-SYSTEMC-004` | error | Mixed SystemC timing exceeds its proxy, sample, value-bit, or identity-byte resource limit. |
+| `FSIM-SDF-MIXED-RESOLUTION-001` | error | Mixed resolution receives no source applications, too many sources, or zero resource limits. |
+| `FSIM-SDF-MIXED-RESOLUTION-002` | error | Multiple mixed sources claim the same root/library/direction-aware path and owner identity. |
+| `FSIM-SDF-MIXED-RESOLUTION-003` | error | A mixed source has an incomplete path, missing nested base, or invalid same-language direction. |
+| `FSIM-SDF-MIXED-RESOLUTION-004` | error | Mixed resolution exceeds its flattened-boundary or identity-byte resource limit. |
+| `FSIM-SDF-FOREIGN-001` | error | SDF foreign timing receives an incomplete VITAL/mixed application or zero resource limit. |
+| `FSIM-SDF-FOREIGN-002` | error | VHPI/VPI publication would create a duplicate stable timing-object identity. |
+| `FSIM-SDF-FOREIGN-003` | error | A foreign timing object has incomplete/stale identity or no effective timing values. |
+| `FSIM-SDF-FOREIGN-004` | error | SDF foreign timing exceeds its object, value, or identity-byte resource limit. |
+| `FSIM-SDF-VITAL-OBSERVE-001` | error | VITAL observability receives an incomplete foreign timing application or zero resource limit. |
+| `FSIM-SDF-VITAL-OBSERVE-002` | error | VITAL observability receives duplicate stable foreign timing-object identity. |
+| `FSIM-SDF-VITAL-OBSERVE-003` | error | A VITAL observed object or event has stale identity, invalid shape, or invalid time/delta/region order. |
+| `FSIM-SDF-VITAL-OBSERVE-004` | error | VITAL observability exceeds its object, event, value, or identity-byte resource limit. |
+| `FSIM-SDF-VITAL-ARCHIVE-001` | error | VITAL archive creation receives incomplete effective applications or zero resource limits. |
+| `FSIM-SDF-VITAL-ARCHIVE-002` | error | A VITAL archive has stale kind, schema, generation, semantic identity, or checksum. |
+| `FSIM-SDF-VITAL-ARCHIVE-003` | error | A VITAL archive has corrupt/incompatible framing, producer, policy, values, provenance, or source/effective shape. |
+| `FSIM-SDF-VITAL-ARCHIVE-004` | error | VITAL archive creation or decoding exceeds record, value, string, archive, or identity resource limits. |
+| `FSIM-SDF-VITAL-PHASE-001` | error | SDF VITAL phase execution receives an incomplete archive/control or zero resource limits. |
+| `FSIM-SDF-VITAL-PHASE-002` | error | SDF VITAL phase execution receives an unsupported surface, phase, engine, or artifact kind. |
+| `FSIM-SDF-VITAL-PHASE-003` | error | SDF VITAL phase execution cannot encode a compatible effective archive. |
+| `FSIM-SDF-VITAL-PHASE-004` | error | SDF VITAL phase archive or summary exceeds its configured resource limits. |
 | `FSIM-SDF-DELAY-MODE-001` | error | Ordered SDF delay-mode application receives no plan, an incomplete plan, too many plans, or a zero resource limit. |
 | `FSIM-SDF-DELAY-MODE-002` | error | An SDF path/net/port/device delay list does not have a governed 1, 2, 3, 6, or 12-value transition shape. |
 | `FSIM-SDF-DELAY-MODE-003` | error | Incremental SDF delay application has no current profile, uses an invalid mode, or carries stale before-values for a repeated target. |

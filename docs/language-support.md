@@ -240,9 +240,9 @@ four-state SimIR plus the common inertial scheduler, and preserve normalized
 table identity through `.fsimobj`, `.fsimdesign`, mapped `.fsimlib`, LLVM
 cache, debugger, callbacks, and VCD. UDP terminals are scalar and positional;
 specify timing is implemented by the common module-path and timing-check model
-described below. SDF parsing, normalization, resolution and portable
-persistence are implemented separately; timing application remains in Batches
-169-170.
+described below. SDF parsing, normalization, resolution, portable persistence
+and governed Verilog/SystemVerilog/VHDL/VITAL mixed timing application are
+implemented by Batches 168-170.
 Table and instance-array geometry use 256 MiB owning-storage budgets derived
 from materialized records rather than IEEE language-count ceilings.
 
@@ -256,9 +256,9 @@ signed compound windows, delayed reference/data signals, optional static
 flags, notifier updates, and persistent per-instance history. The same
 normalized state survives `.fsimobj`, `.fsimdesign`, mapped `.fsimlib`, native
 cache, interpreter/LLVM O0/O2, debugger, callbacks, and VCD paths. Clean-room
-SDF 2.1/3.0/4.0 parsing now resolves against these stable paths and checks and
-persists the immutable mapping; Batches 169-170 own its application to runtime
-timing. See [Standard Delay Format support](sdf.md) for the programmatic and
+SDF 2.1/3.0/4.0 parsing resolves against these stable paths and checks,
+persists the immutable mapping and applies it through the shared runtime
+timing services. See [Standard Delay Format support](sdf.md) for the programmatic and
 portable-format boundary.
 
 Verilog-2005 strength execution covers explicit zero/one drive pairs, pull and
@@ -434,8 +434,8 @@ not implicitly coerced into PSL Booleans. Signals produced by existing
 `VitalPathDelay` calls are visible at the same stable sampling boundary. Portable
 schema-17 library units preserve parsed PSL clocks, declarations, formals,
 defaults, properties, directives, tokens, and source spans without source
-reparse. SDF parsing/resolution/persistence is complete in Batch 168; Batch 170
-retains VHDL/VITAL timing-application ownership.
+reparse. SDF parsing/resolution/persistence and VHDL/VITAL mixed timing
+application are complete through Batch 170.
 
 Batch 163 Change 14 makes PSL execution occurrence-aware across multiple and
 mixed-language roots. Explicit `entity(architecture)` targets retain the named
@@ -1696,8 +1696,7 @@ state, object/design artifacts, and relocation independently of the source
 file. Representative configured vendor-style cell and memory models accept
 VITAL_LEVEL metadata, timing generics, extended identifiers, pragmas, and null
 path idioms without proprietary-name handling. SDF parsing, resolution and
-portable persistence are current; VHDL/VITAL timing application remains in
-Batch 170.
+portable persistence and governed VHDL/VITAL timing application are current.
 
 ### SystemVerilog arbitrary-width packed values in v2
 
@@ -2198,12 +2197,28 @@ optimized/debug, project/non-project, artifact/cache/checkpoint and public-
 observation evidence. CLI, Tcl, native C and source C++ controls publish one
 transactional request model.
 
-This is not a claim of VHDL/VITAL backannotation. SDF cells or timing paths
-whose target crosses a VHDL boundary remain rejected or deferred to Batch 170.
-The exact supported surface and evidence are recorded in
+Batch 170 adds governed VHDL/VITAL backannotation and both directions of
+VHDL-Verilog, VHDL-SystemVerilog and VHDL-SystemC timing paths. Structural
+model governance, not proprietary naming, bounds this support. The exact
+supported surface and evidence are recorded in
 [`sdf.md`](sdf.md) and the
 [`sdf_application_inventory.tsv`](../tests/feature_matrix/sdf_application_inventory.tsv)
 ledger.
+
+### VHDL/VITAL and mixed-language SDF application in v2
+
+SDF 2.1/3.0/4.0 applies to VHDL 87/93/2000/2002/2008 standard cells,
+primitives, state tables, memory paths and explicitly governed wrappers. Exact
+Logic9 values, widths, directions, resolved drivers, time/delta/region order,
+pending transactions and timing-check history survive both directions of every
+VHDL-Verilog/SystemVerilog/SystemC boundary. Project, CLI, Tcl, C, C++ and
+non-project controls report equivalent immutable summaries and failures.
+
+Effective state survives object/design/mapped-library/native-cache/checkpoint
+forms, source hiding and relocation. VHPI/VPI, debugger, callback, internal
+trace and VCD expose bounded stable timing objects without scheduler side
+effects. The exact 2,700-case owned corpus and retained-log closure are linked
+from the [Batch 170 audit](v2-sdf-vital-release-audit.md).
 
 ## v1 target
 

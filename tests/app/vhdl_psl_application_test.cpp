@@ -32,6 +32,18 @@
 
 namespace {
 
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+inline constexpr bool process_uses_address_sanitizer = true;
+#else
+inline constexpr bool process_uses_address_sanitizer = false;
+#endif
+#elif defined(__SANITIZE_ADDRESS__)
+inline constexpr bool process_uses_address_sanitizer = true;
+#else
+inline constexpr bool process_uses_address_sanitizer = false;
+#endif
+
 inline constexpr std::uint64_t process_address_space_ceiling
     = 6ULL * 1024ULL * 1024ULL * 1024ULL;
 
@@ -44,6 +56,9 @@ inline constexpr std::uint64_t process_address_space_ceiling
 
 void install_process_address_space_ceiling()
 {
+    if constexpr (process_uses_address_sanitizer) {
+        return;
+    }
 #if defined(_WIN32)
     static HANDLE job = [] {
         const auto created = CreateJobObjectW(nullptr, nullptr);
@@ -481,7 +496,12 @@ void verify(const Capture& capture, const bool compiled)
         == fsim::app::ConcurrentAssertionCoverageKind::restriction);
     assert(coverage("work:rtl:cover_response").kind
         == fsim::app::ConcurrentAssertionCoverageKind::cover);
+#if defined(FSIM_HAS_LLVM)
     assert((capture.compiled_processes != 0U) == compiled);
+#else
+    assert(capture.compiled_processes == 0U);
+    static_cast<void>(compiled);
+#endif
 }
 
 } // namespace
@@ -676,8 +696,15 @@ end architecture;
     assert(interpreter.waveform == debug.waveform);
     assert(interpreter.waveform == cold.waveform);
     assert(cold.waveform == warm.waveform);
+#if defined(FSIM_HAS_LLVM)
     assert(cold.cache.misses != 0U);
     assert(warm.cache.hits != 0U);
+#else
+    assert(cold.cache.hits == 0U && cold.cache.misses == 0U);
+    assert(cold.cache.stores == 0U);
+    assert(warm.cache.hits == 0U && warm.cache.misses == 0U);
+    assert(warm.cache.stores == 0U);
+#endif
 
     auto breakpoint_config = make_config(
         directory.path, source, fsim::project::Optimization::o0);
@@ -763,7 +790,14 @@ end architecture;
     assert(mapped_cold.debug_signature == cold.debug_signature);
     assert(mapped_cold.waveform == cold.waveform);
     assert(mapped_cold.attempts == mapped_warm.attempts);
+#if defined(FSIM_HAS_LLVM)
     assert(mapped_warm.cache.hits != 0U);
+#else
+    assert(mapped_cold.cache.hits == 0U && mapped_cold.cache.misses == 0U);
+    assert(mapped_cold.cache.stores == 0U);
+    assert(mapped_warm.cache.hits == 0U && mapped_warm.cache.misses == 0U);
+    assert(mapped_warm.cache.stores == 0U);
+#endif
 
     const auto run_design_artifact = [&] {
         fsim::diagnostic::Engine diagnostics;
@@ -786,7 +820,14 @@ end architecture;
     assert(design_cold.debug_signature == cold.debug_signature);
     assert(design_cold.waveform == cold.waveform);
     assert(design_cold.attempts == design_warm.attempts);
+#if defined(FSIM_HAS_LLVM)
     assert(design_warm.cache.hits != 0U);
+#else
+    assert(design_cold.cache.hits == 0U && design_cold.cache.misses == 0U);
+    assert(design_cold.cache.stores == 0U);
+    assert(design_warm.cache.hits == 0U && design_warm.cache.misses == 0U);
+    assert(design_warm.cache.stores == 0U);
+#endif
 
     fsim::diagnostic::Engine checkpoint_diagnostics;
     auto checkpoint_built = fsim::app::load_design_artifact(

@@ -249,7 +249,8 @@ SystemVerilogVpiValueReadResult read_systemverilog_vpi_value(
       }
       std::ranges::copy(logic->aval_words(), buffers.words.begin());
       std::ranges::copy(
-          logic->bval_words(), buffers.words.begin() + words);
+          logic->bval_words(),
+          buffers.words.begin() + static_cast<std::ptrdiff_t>(words));
       return result;
     }
 
@@ -269,7 +270,8 @@ SystemVerilogVpiValueReadResult read_systemverilog_vpi_value(
       }
       for (std::size_t plane = 0; plane < 4U; ++plane) {
         std::ranges::copy(
-            logic->plane(plane), buffers.words.begin() + plane * words);
+            logic->plane(plane), buffers.words.begin()
+                + static_cast<std::ptrdiff_t>(plane * words));
       }
       return result;
     }

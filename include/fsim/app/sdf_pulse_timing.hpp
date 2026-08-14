@@ -31,7 +31,7 @@ struct SdfAppliedPulseTiming {
     std::string canonical_identity;
 
     friend bool operator==(const SdfAppliedPulseTiming&,
-        const SdfAppliedPulseTiming&) = default;
+        const SdfAppliedPulseTiming&) = delete;
 };
 
 class SdfPulseTimingApplication final {

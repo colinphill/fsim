@@ -1395,9 +1395,13 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                             };
                         }
                         target.string_keys.insert(
-                            target.string_keys.begin() + at, sought);
+                            target.string_keys.begin()
+                                + static_cast<std::ptrdiff_t>(at),
+                            sought);
                         target.elements.insert(
-                            target.elements.begin() + at, source);
+                            target.elements.begin()
+                                + static_cast<std::ptrdiff_t>(at),
+                            source);
                     }
                     if (runtime::simir::container_value_storage_bytes(target)
                         > runtime::simir::maximum_container_storage_bytes) {
@@ -1423,9 +1427,12 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                             "owning-storage budget"
                         };
                     }
-                    target.keys.insert(target.keys.begin() + at, sought);
+                    target.keys.insert(
+                        target.keys.begin() + static_cast<std::ptrdiff_t>(at),
+                        sought);
                     target.elements.insert(
-                        target.elements.begin() + at, source);
+                        target.elements.begin() + static_cast<std::ptrdiff_t>(at),
+                        source);
                 }
                 return 0;
             }
@@ -1523,9 +1530,13 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                             };
                         }
                         target.string_keys.insert(
-                            target.string_keys.begin() + at, sought);
+                            target.string_keys.begin()
+                                + static_cast<std::ptrdiff_t>(at),
+                            sought);
                         target.string_elements.insert(
-                            target.string_elements.begin() + at, source);
+                            target.string_elements.begin()
+                                + static_cast<std::ptrdiff_t>(at),
+                            source);
                     }
                     if (runtime::simir::container_value_storage_bytes(target)
                         > runtime::simir::maximum_container_storage_bytes) {
@@ -1549,9 +1560,13 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                             "associative string array exceeds its owning-storage budget"
                         };
                     }
-                    target.keys.insert(target.keys.begin() + at, sought);
+                    target.keys.insert(
+                        target.keys.begin() + static_cast<std::ptrdiff_t>(at),
+                        sought);
                     target.string_elements.insert(
-                        target.string_elements.begin() + at, source);
+                        target.string_elements.begin()
+                            + static_cast<std::ptrdiff_t>(at),
+                        source);
                 }
                 return 0;
             }
@@ -1644,9 +1659,12 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                             "budget"
                         };
                     }
-                    target.keys.insert(target.keys.begin() + at, sought);
+                    target.keys.insert(
+                        target.keys.begin() + static_cast<std::ptrdiff_t>(at),
+                        sought);
                     target.nested_elements.insert(
-                        target.nested_elements.begin() + at,
+                        target.nested_elements.begin()
+                            + static_cast<std::ptrdiff_t>(at),
                         runtime::simir::default_container_value(
                             target.type.element_types.front()));
                 }
@@ -1754,9 +1772,12 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                             "associative aggregate exceeds its owning-storage budget"
                         };
                     }
-                    target.keys.insert(target.keys.begin() + at, sought);
+                    target.keys.insert(
+                        target.keys.begin() + static_cast<std::ptrdiff_t>(at),
+                        sought);
                     target.nested_elements.insert(
-                        target.nested_elements.begin() + at,
+                        target.nested_elements.begin()
+                            + static_cast<std::ptrdiff_t>(at),
                         runtime::simir::default_container_value(
                             aggregate_element_type(target.type)));
                 }
@@ -1872,9 +1893,13 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                             "associative aggregate exceeds its owning-storage budget"
                         };
                     }
-                    target.keys.insert(target.keys.begin() + target_at, sought);
+                    target.keys.insert(
+                        target.keys.begin()
+                            + static_cast<std::ptrdiff_t>(target_at),
+                        sought);
                     target.nested_elements.insert(
-                        target.nested_elements.begin() + target_at,
+                        target.nested_elements.begin()
+                            + static_cast<std::ptrdiff_t>(target_at),
                         runtime::simir::default_container_value(
                             aggregate_element_type(target.type)));
                 }
@@ -1920,12 +1945,16 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     }
                     if (aggregate) {
                         target.nested_elements.erase(
-                            target.nested_elements.begin() + at);
+                            target.nested_elements.begin()
+                                + static_cast<std::ptrdiff_t>(at));
                     } else if (string_element) {
                         target.string_elements.erase(
-                            target.string_elements.begin() + at);
+                            target.string_elements.begin()
+                                + static_cast<std::ptrdiff_t>(at));
                     } else {
-                        target.elements.erase(target.elements.begin() + at);
+                        target.elements.erase(
+                            target.elements.begin()
+                                + static_cast<std::ptrdiff_t>(at));
                     }
                 } else {
                     if (erase->string_index) {
@@ -1934,15 +1963,20 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                         if (at < target.string_keys.size()
                             && target.string_keys[at] == sought) {
                             target.string_keys.erase(
-                                target.string_keys.begin() + at);
+                                target.string_keys.begin()
+                                    + static_cast<std::ptrdiff_t>(at));
                             if (aggregate) {
                                 target.nested_elements.erase(
-                                    target.nested_elements.begin() + at);
+                                    target.nested_elements.begin()
+                                        + static_cast<std::ptrdiff_t>(at));
                             } else if (string_element) {
                                 target.string_elements.erase(
-                                    target.string_elements.begin() + at);
+                                    target.string_elements.begin()
+                                        + static_cast<std::ptrdiff_t>(at));
                             } else {
-                                target.elements.erase(target.elements.begin() + at);
+                                target.elements.erase(
+                                    target.elements.begin()
+                                        + static_cast<std::ptrdiff_t>(at));
                             }
                         }
                         return 0;
@@ -1951,12 +1985,17 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     const auto at = lower_key(target, sought);
                     if (at < target.keys.size()
                         && key_equal(target.keys[at], sought)) {
-                        target.keys.erase(target.keys.begin() + at);
+                        target.keys.erase(
+                            target.keys.begin()
+                                + static_cast<std::ptrdiff_t>(at));
                         if (aggregate) {
                             target.nested_elements.erase(
-                                target.nested_elements.begin() + at);
+                                target.nested_elements.begin()
+                                    + static_cast<std::ptrdiff_t>(at));
                         } else {
-                            target.elements.erase(target.elements.begin() + at);
+                            target.elements.erase(
+                                target.elements.begin()
+                                    + static_cast<std::ptrdiff_t>(at));
                         }
                     }
                 }
@@ -2166,7 +2205,9 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                         "queue insert index is out of range"
                     };
                 }
-                target.elements.insert(target.elements.begin() + at, source);
+                target.elements.insert(
+                    target.elements.begin() + static_cast<std::ptrdiff_t>(at),
+                    source);
             } else if (push->front) {
                 target.elements.insert(target.elements.begin(), source);
             } else {

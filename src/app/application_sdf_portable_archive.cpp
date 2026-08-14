@@ -136,8 +136,10 @@ namespace {
             if (!size || *size > remaining())
                 return std::nullopt;
             const auto count = static_cast<std::size_t>(*size);
-            std::vector<std::byte> result(bytes_.begin() + position_,
-                bytes_.begin() + position_ + count);
+            const auto begin = bytes_.begin()
+                + static_cast<std::ptrdiff_t>(position_);
+            std::vector<std::byte> result(
+                begin, begin + static_cast<std::ptrdiff_t>(count));
             position_ += count;
             return result;
         }

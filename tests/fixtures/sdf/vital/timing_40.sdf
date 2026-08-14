@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+(DELAYFILE
+  (SDFVERSION "4.0")
+  (DESIGN "fsim_vital_cell")
+  (TIMESCALE 1 ns)
+  (CELL
+    (CELLTYPE "fsim_vital_cell")
+    (INSTANCE *)
+    (DELAY (ABSOLUTE (IOPATH A Z (1:2:3)))))
+)

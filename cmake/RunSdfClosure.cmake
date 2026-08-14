@@ -14,7 +14,7 @@ file(WRITE "${FSIM_TRANSCRIPT}"
   "FSIM-SDF-CLOSURE-START revisions=2.1,3.0,4.0\n")
 
 set(FSIM_TEST_REGEX
-  "^fsim\\.(frontend\\.sdf.*|application\\.sdf_.*|application$|project$|library\\.artifact$|artifact\\.design$|diagnostics-catalog$|source-line-budget$|sdf-inventory$|resource-portability-contract$)")
+  "^fsim\\.(frontend\\.sdf.*|application\\.sdf_.*|application$|application\\.artifact_phases$|project$|library\\.artifact$|artifact\\.design$|diagnostics-catalog$|source-line-budget$|sdf-inventory$|resource-portability-contract$)")
 execute_process(
   COMMAND "${FSIM_CTEST_COMMAND}"
     --test-dir "${FSIM_BINARY_DIR}"

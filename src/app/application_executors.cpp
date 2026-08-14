@@ -584,10 +584,14 @@ void LlvmProcessExecutor::write_register(
     const auto offset = layout.register_word_offsets[id];
     if (kind == runtime::simir::ValueKind::logic9) {
         const auto words = (value.width() + 63U) / 64U;
-        std::ranges::fill_n(register_aval_.begin() + offset, words, 0U);
-        std::ranges::fill_n(register_bval_.begin() + offset, words, 0U);
-        std::ranges::fill_n(register_logic9_plane2_.begin() + offset, words, 0U);
-        std::ranges::fill_n(register_logic9_plane3_.begin() + offset, words, 0U);
+        const auto word_offset = static_cast<std::ptrdiff_t>(offset);
+        const auto word_count = static_cast<std::ptrdiff_t>(words);
+        std::ranges::fill_n(register_aval_.begin() + word_offset, word_count, 0U);
+        std::ranges::fill_n(register_bval_.begin() + word_offset, word_count, 0U);
+        std::ranges::fill_n(
+            register_logic9_plane2_.begin() + word_offset, word_count, 0U);
+        std::ranges::fill_n(
+            register_logic9_plane3_.begin() + word_offset, word_count, 0U);
         for (std::size_t bit = 0; bit < value.width(); ++bit) {
             const auto encoded = static_cast<std::uint8_t>(value.get_logic9(bit));
             const auto word = bit / 64U;

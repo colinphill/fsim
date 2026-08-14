@@ -149,7 +149,8 @@ Lowerer::lower_case_match_pattern(
             std::distance(type->packed_members.begin(), member));
         const auto member_width = member->width();
         const auto tag_width = std::max<std::size_t>(
-            1U, std::bit_width(type->packed_members.size() - 1U));
+            1U, static_cast<std::size_t>(
+                    std::bit_width(type->packed_members.size() - 1U)));
         if (!member_width || *member_width == 0U
             || *member_width > std::numeric_limits<std::uint32_t>::max()
             || member->lsb_offset > std::numeric_limits<std::uint32_t>::max()

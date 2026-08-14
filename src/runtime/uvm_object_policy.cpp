@@ -54,7 +54,8 @@ valid_printer(const SystemVerilogUvmPrinterKind kind) noexcept {
   constexpr char digits[] = "0123456789abcdef";
   std::string result;
   result.reserve(value.size());
-  for (const unsigned char character : value) {
+  for (const char raw_character : value) {
+    const auto character = static_cast<unsigned char>(raw_character);
     switch (character) {
     case '"':
       result += "\\\"";

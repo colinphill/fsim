@@ -228,7 +228,8 @@ struct ParsedDecimal {
         ? 1U
         : static_cast<std::uint32_t>(
             (used_words - 1U) * 64U
-            + 64U - std::countl_zero(words[used_words - 1U]));
+            + 64U - static_cast<std::size_t>(
+                        std::countl_zero(words[used_words - 1U])));
     const auto selected_width = explicit_width.value_or(
         std::max(
             std::uint32_t{32},

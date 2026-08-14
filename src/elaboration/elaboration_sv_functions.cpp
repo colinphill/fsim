@@ -412,7 +412,8 @@ private:
             const auto member_index = static_cast<std::size_t>(
                 std::distance(type->packed_members.begin(), member));
             const auto tag_width = std::max<std::size_t>(
-                1U, std::bit_width(type->packed_members.size() - 1U));
+                1U, static_cast<std::size_t>(
+                        std::bit_width(type->packed_members.size() - 1U)));
             if (selector.width < tag_width) {
                 error = "constant function tagged selector has no tag bits";
                 return std::nullopt;

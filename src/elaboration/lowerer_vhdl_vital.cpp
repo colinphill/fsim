@@ -894,7 +894,8 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_vital_expression(
           expression.span);
       return std::nullopt;
     }
-    const auto data_width = std::bit_width(expected_width) - 1U;
+    const auto data_width = static_cast<unsigned>(
+        std::bit_width(expected_width)) - 1U;
     const auto inferred_data_width = infer_width(*arguments[0]);
     if (!inferred_data_width || *inferred_data_width != data_width) {
       report(
