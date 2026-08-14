@@ -6,6 +6,14 @@ if(NOT DEFINED FSIM_SOURCE_DIR)
   message(FATAL_ERROR "FSIM_SOURCE_DIR is required")
 endif()
 
+function(fsim_normalized_text_sha256 path output_variable)
+  file(READ "${path}" contents)
+  string(REPLACE "\r\n" "\n" contents "${contents}")
+  string(REPLACE "\r" "\n" contents "${contents}")
+  string(SHA256 digest "${contents}")
+  set("${output_variable}" "${digest}" PARENT_SCOPE)
+endfunction()
+
 set(FSIM_MATRIX
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/systemverilog_release_closure.tsv")
 set(FSIM_GAPS
@@ -58,9 +66,9 @@ endif()
 
 file(READ "${FSIM_GAPS}" FSIM_GAP_CONTENTS)
 file(READ "${FSIM_WIDTHS}" FSIM_WIDTH_CONTENTS)
-file(SHA256 "${FSIM_GAPS}" FSIM_GAP_DIGEST)
-file(SHA256 "${FSIM_WIDTHS}" FSIM_WIDTH_DIGEST)
-file(SHA256 "${FSIM_MATRIX}" FSIM_MATRIX_DIGEST)
+fsim_normalized_text_sha256("${FSIM_GAPS}" FSIM_GAP_DIGEST)
+fsim_normalized_text_sha256("${FSIM_WIDTHS}" FSIM_WIDTH_DIGEST)
+fsim_normalized_text_sha256("${FSIM_MATRIX}" FSIM_MATRIX_DIGEST)
 set(FSIM_IDS)
 set(FSIM_WITNESS_TESTS)
 set(FSIM_CLAUSE_ROWS 0)

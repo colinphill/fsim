@@ -6,6 +6,14 @@ if(NOT DEFINED FSIM_SOURCE_DIR)
   message(FATAL_ERROR "FSIM_SOURCE_DIR is required")
 endif()
 
+function(fsim_normalized_text_sha256 path output_variable)
+  file(READ "${path}" contents)
+  string(REPLACE "\r\n" "\n" contents "${contents}")
+  string(REPLACE "\r" "\n" contents "${contents}")
+  string(SHA256 digest "${contents}")
+  set("${output_variable}" "${digest}" PARENT_SCOPE)
+endfunction()
+
 set(FSIM_MODE_INVENTORY
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/verilog_systemverilog_standard_mode_inventory.tsv")
 set(FSIM_COMPATIBILITY_INVENTORY
@@ -423,10 +431,13 @@ foreach(FSIM_INDEX RANGE 2 8)
   endforeach()
 endforeach()
 
-file(SHA256 "${FSIM_MODE_INVENTORY}" FSIM_MODE_SHA256)
-file(SHA256 "${FSIM_COMPATIBILITY_INVENTORY}" FSIM_COMPATIBILITY_SHA256)
-file(SHA256 "${FSIM_REVISION_CORPUS}" FSIM_REVISION_CORPUS_SHA256)
-file(SHA256 "${FSIM_COMPATIBILITY_CORPUS}" FSIM_COMPATIBILITY_CORPUS_SHA256)
+fsim_normalized_text_sha256("${FSIM_MODE_INVENTORY}" FSIM_MODE_SHA256)
+fsim_normalized_text_sha256(
+  "${FSIM_COMPATIBILITY_INVENTORY}" FSIM_COMPATIBILITY_SHA256)
+fsim_normalized_text_sha256(
+  "${FSIM_REVISION_CORPUS}" FSIM_REVISION_CORPUS_SHA256)
+fsim_normalized_text_sha256(
+  "${FSIM_COMPATIBILITY_CORPUS}" FSIM_COMPATIBILITY_CORPUS_SHA256)
 set(FSIM_DOCUMENTATION_TEXT)
 foreach(FSIM_DOCUMENT IN LISTS FSIM_DOCUMENTS)
   file(READ "${FSIM_DOCUMENT}" FSIM_DOCUMENT_TEXT)

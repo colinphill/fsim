@@ -581,10 +581,16 @@ Capture run_once(
     assert(!public_provenance.empty());
     const auto top_provenance = simulation.verilog_scope_provenance(
         "typed_boundary_sv_top.timed_result");
+    std::error_code source_path_error;
+    const bool source_path_matches = top_provenance
+        && std::filesystem::equivalent(
+            std::filesystem::path { top_provenance->source_path },
+            sources[0], source_path_error)
+        && !source_path_error;
     assert(top_provenance
         && top_provenance->semantic_unit
             == "work::typed_boundary_sv_top"
-        && top_provenance->source_path == sources[0].string()
+        && source_path_matches
         && !top_provenance->standard.empty()
         && !top_provenance->compatibility_profile.empty());
     capture.public_standard = top_provenance->standard;

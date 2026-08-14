@@ -147,7 +147,7 @@ endforeach()
 foreach(FSIM_JOB_POLICY IN ITEMS
     "windows-llvm22:"
     "bounded 900-second SystemC matrix and 1,200-second"
-    "timeout-minutes: 70"
+    "timeout-minutes: 120"
     "- MSVC"
     "- Clang"
     "- Debug"

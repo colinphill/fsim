@@ -6,6 +6,14 @@ if(NOT DEFINED FSIM_SOURCE_DIR)
   message(FATAL_ERROR "FSIM_SOURCE_DIR is required")
 endif()
 
+function(fsim_normalized_text_sha256 path output_variable)
+  file(READ "${path}" contents)
+  string(REPLACE "\r\n" "\n" contents "${contents}")
+  string(REPLACE "\r" "\n" contents "${contents}")
+  string(SHA256 digest "${contents}")
+  set("${output_variable}" "${digest}" PARENT_SCOPE)
+endfunction()
+
 set(FSIM_INVENTORY
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/sdf_vital_inventory.tsv")
 set(FSIM_PLAN "${FSIM_SOURCE_DIR}/docs/implementation_plan_v2.md")
@@ -19,7 +27,7 @@ endforeach()
 set(FSIM_EXPECTED_DIGEST
   "3e84f643e6df24090efb1161e0d6836847784268a139e3da3c2fda4568913c6f")
 set(FSIM_COMPLETED_CHANGE 18)
-file(SHA256 "${FSIM_INVENTORY}" FSIM_ACTUAL_DIGEST)
+fsim_normalized_text_sha256("${FSIM_INVENTORY}" FSIM_ACTUAL_DIGEST)
 if(NOT FSIM_ACTUAL_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "SDF VITAL inventory digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_ACTUAL_DIGEST}")

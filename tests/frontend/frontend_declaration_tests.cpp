@@ -758,26 +758,33 @@ endmodule
           return variable.name == "memory";
       });
   require(
-      memory != declaration_matrix->variables.end()
-          && memory->type.width() == 8
-          && memory->type.systemverilog_container
-          && memory->type.systemverilog_container->kind
-              == SystemVerilogContainerKind::StaticArray
-          && memory->type.systemverilog_container->static_range
-          && memory->type.systemverilog_container->static_range->left == 0
-          && memory->type.systemverilog_container->static_range->right == 3
-          && memory->type.systemverilog_container
-                  ->static_range_expressions.size()
-              == 1
-          && memory->type.systemverilog_container
-                  ->static_range_expressions[0]
-                  .left.text
-              == "257'h0"
-          && memory->type.systemverilog_container
-                  ->static_range_expressions[0]
-                  .right.text
+      memory != declaration_matrix->variables.end(),
+      "one-dimensional Verilog memory remains a variable");
+  require(
+      memory->type.width() == 8,
+      "one-dimensional Verilog memory retains its element width");
+  require(
+      memory->type.systemverilog_container.has_value(),
+      "one-dimensional Verilog memory retains its container HIR");
+  const auto& memory_container = *memory->type.systemverilog_container;
+  require(
+      memory_container.kind == SystemVerilogContainerKind::StaticArray,
+      "one-dimensional Verilog memory remains a static array");
+  require(
+      memory_container.static_range.has_value(),
+      "one-dimensional Verilog memory retains a concrete bound");
+  require(
+      memory_container.static_range->left == 0
+          && memory_container.static_range->right == 3,
+      "one-dimensional Verilog memory retains its evaluated bound");
+  require(
+      memory_container.static_range_expressions.size() == 1,
+      "one-dimensional Verilog memory retains one bound expression");
+  require(
+      memory_container.static_range_expressions[0].left.text == "257'h0"
+          && memory_container.static_range_expressions[0].right.text
               == "257'h3",
-      "one-dimensional Verilog memory retains element and wide bound HIR");
+      "one-dimensional Verilog memory retains its wide bound HIR");
   const auto scratch = std::ranges::find_if(
       declaration_matrix->signals,
       [](const auto& signal) {

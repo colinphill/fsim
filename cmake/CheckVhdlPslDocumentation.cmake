@@ -4,6 +4,14 @@ if(NOT DEFINED FSIM_SOURCE_DIR)
   message(FATAL_ERROR "FSIM_SOURCE_DIR is required")
 endif()
 
+function(fsim_normalized_text_sha256 path output_variable)
+  file(READ "${path}" contents)
+  string(REPLACE "\r\n" "\n" contents "${contents}")
+  string(REPLACE "\r" "\n" contents "${contents}")
+  string(SHA256 digest "${contents}")
+  set("${output_variable}" "${digest}" PARENT_SCOPE)
+endfunction()
+
 set(FSIM_DOCUMENTS
   README.md
   docs/architecture.md
@@ -56,8 +64,8 @@ set(FSIM_GAP
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/vhdl_psl_gap_inventory.tsv")
 set(FSIM_CLOSURE
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/vhdl_psl_release_closure.tsv")
-file(SHA256 "${FSIM_GAP}" FSIM_GAP_DIGEST)
-file(SHA256 "${FSIM_CLOSURE}" FSIM_CLOSURE_DIGEST)
+fsim_normalized_text_sha256("${FSIM_GAP}" FSIM_GAP_DIGEST)
+fsim_normalized_text_sha256("${FSIM_CLOSURE}" FSIM_CLOSURE_DIGEST)
 file(READ "${FSIM_SOURCE_DIR}/docs/vhdl-psl-closure-audit.md" FSIM_AUDIT)
 foreach(FSIM_DIGEST IN ITEMS "${FSIM_GAP_DIGEST}" "${FSIM_CLOSURE_DIGEST}")
   string(FIND "${FSIM_AUDIT}" "${FSIM_DIGEST}" FSIM_DIGEST_INDEX)

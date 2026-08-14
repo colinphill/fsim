@@ -42,7 +42,7 @@ endforeach()
 
 foreach(FSIM_EXACT_OUTPUT IN ITEMS
     "v1 portability audit: 11 hosted configurations plus one local sanitizer configuration, 5 four-worker build steps, 14 explicit platform files, 8 repair queues"
-    "five four-worker hosted builds, eight-link pool, compact Debug objects, 8 MiB Windows stacks"
+    "resource portability contract: five four-worker, 120-minute hosted jobs, eight-link pool, compact Debug objects, 8 MiB Windows stacks"
     "MSVC Debug contract: /bigobj covers every target and the common 8 MiB stack policy covers C/C++ test hosts"
     "MSVC Release contract: assertions stay live"
     "Windows LLVM contract: x64 MSVC ABI target"
@@ -56,15 +56,21 @@ foreach(FSIM_EXACT_OUTPUT IN ITEMS
 endforeach()
 
 file(READ "${FSIM_WORKFLOW}" FSIM_WORKFLOW_CONTENTS)
-foreach(FSIM_TIMEOUT IN ITEMS
-    "timeout-minutes: 20"
-    "timeout-minutes: 45"
-    "timeout-minutes: 70")
-  string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_TIMEOUT}" FSIM_TIMEOUT_INDEX)
-  if(FSIM_TIMEOUT_INDEX EQUAL -1)
-    message(FATAL_ERROR "hosted job lost bound: ${FSIM_TIMEOUT}")
-  endif()
-endforeach()
+string(REGEX MATCHALL
+  "timeout-minutes:[ ]*120([ \t\r\n]|$)"
+  FSIM_120_MINUTE_TIMEOUTS
+  "${FSIM_WORKFLOW_CONTENTS}")
+string(REGEX MATCHALL
+  "timeout-minutes:"
+  FSIM_HOSTED_TIMEOUTS
+  "${FSIM_WORKFLOW_CONTENTS}")
+list(LENGTH FSIM_120_MINUTE_TIMEOUTS FSIM_120_MINUTE_TIMEOUT_COUNT)
+list(LENGTH FSIM_HOSTED_TIMEOUTS FSIM_HOSTED_TIMEOUT_COUNT)
+if(NOT FSIM_HOSTED_TIMEOUT_COUNT EQUAL 5
+    OR NOT FSIM_120_MINUTE_TIMEOUT_COUNT EQUAL FSIM_HOSTED_TIMEOUT_COUNT)
+  message(FATAL_ERROR
+    "expected all five hosted job timeouts to be 120 minutes")
+endif()
 foreach(FSIM_COMPILER IN ITEMS
     "-DCMAKE_C_COMPILER=gcc"
     "-DCMAKE_CXX_COMPILER=g++"

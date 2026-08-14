@@ -4,6 +4,14 @@ if(NOT DEFINED FSIM_SOURCE_DIR)
   message(FATAL_ERROR "FSIM_SOURCE_DIR is required")
 endif()
 
+function(fsim_normalized_text_sha256 path output_variable)
+  file(READ "${path}" contents)
+  string(REPLACE "\r\n" "\n" contents "${contents}")
+  string(REPLACE "\r" "\n" contents "${contents}")
+  string(SHA256 digest "${contents}")
+  set("${output_variable}" "${digest}" PARENT_SCOPE)
+endfunction()
+
 set(FSIM_DOCUMENTS
   docs/verilog-2005.md
   docs/verilog-2005-tutorial.md
@@ -66,9 +74,9 @@ foreach(FSIM_INPUT IN ITEMS "${FSIM_GAP}" "${FSIM_WIDTH}" "${FSIM_CLOSURE}")
     message(FATAL_ERROR "Verilog documentation inventory is missing: ${FSIM_INPUT}")
   endif()
 endforeach()
-file(SHA256 "${FSIM_GAP}" FSIM_GAP_DIGEST)
-file(SHA256 "${FSIM_WIDTH}" FSIM_WIDTH_DIGEST)
-file(SHA256 "${FSIM_CLOSURE}" FSIM_CLOSURE_DIGEST)
+fsim_normalized_text_sha256("${FSIM_GAP}" FSIM_GAP_DIGEST)
+fsim_normalized_text_sha256("${FSIM_WIDTH}" FSIM_WIDTH_DIGEST)
+fsim_normalized_text_sha256("${FSIM_CLOSURE}" FSIM_CLOSURE_DIGEST)
 file(READ
   "${FSIM_SOURCE_DIR}/docs/verilog-2005-closure-audit.md"
   FSIM_AUDIT)
