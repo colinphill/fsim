@@ -497,11 +497,13 @@ SdfPortableArchiveDecodeResult decode_sdf_portable_archive(
         return result;
     }
     Reader reader(bytes, limits.max_string_bytes);
-    const auto version = reader.raw(magic) ? reader.u32() : std::nullopt;
+    const auto archive_version
+        = reader.raw(magic) ? reader.u32() : std::nullopt;
     artifact::DesignSdfAnnotation annotation;
     std::vector<SdfPortableNormalizedRecord> normalized;
     std::vector<SdfPortableMappingRecord> mappings;
-    if (!version || *version != SdfPortableArchiveSnapshot::schema_version
+    if (!archive_version
+        || *archive_version != SdfPortableArchiveSnapshot::schema_version
         || !read_annotation(reader, annotation)) {
         diagnose(result.diagnostics, "FSIM-SDF-PORTABLE-002",
             "portable SDF archive has invalid magic, version, or annotation");
