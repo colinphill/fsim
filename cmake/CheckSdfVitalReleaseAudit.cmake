@@ -53,7 +53,7 @@ foreach(FSIM_EXACT_OUTPUT IN ITEMS
     "SDF VITAL inventory passed: rows=17 preserved=17 active=0 digest=3e84f643e6df24090efb1161e0d6836847784268a139e3da3c2fda4568913c6f"
     "diagnostic catalog covers 2461 production codes"
     "Checked 1020 authored sources against the 2500-line hard limit with a 2000-line refactor target"
-    "resource portability contract: five four-worker hosted builds, eight-link pool, compact Debug objects, 8 MiB Windows stacks, bounded large-test timeouts, and scoped/SystemC phase traces are present")
+    "resource portability contract: five four-worker, 120-minute hosted jobs, eight-link pool, compact Debug objects, 8 MiB Windows stacks, bounded large-test timeouts, pinned Boost headers, and scoped/SystemC phase traces are present")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_EXACT_OUTPUT}"
     FSIM_OUTPUT_INDEX)
   if(FSIM_OUTPUT_INDEX EQUAL -1)
