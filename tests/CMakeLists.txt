@@ -1010,7 +1010,7 @@ add_test(
 set_tests_properties(
   fsim.sdf-closure
   PROPERTIES
-    LABELS "sdf;closure;negative;resources;artifact;cache;interpreter;llvm"
+    LABELS "sdf;closure;recursive-closure;negative;resources;artifact;cache;interpreter;llvm"
     TIMEOUT 1200
 )
 add_test(
@@ -1026,7 +1026,7 @@ add_test(
 set_tests_properties(
   fsim.sdf-application-closure
   PROPERTIES
-    LABELS "sdf;application;closure;corpus;negative;resources;artifact;cache;interpreter;llvm;linux;windows"
+    LABELS "sdf;application;closure;recursive-closure;corpus;negative;resources;artifact;cache;interpreter;llvm;linux;windows"
     TIMEOUT 1200
 )
 add_test(
@@ -1042,7 +1042,7 @@ add_test(
 set_tests_properties(
   fsim.sdf-vital-closure
   PROPERTIES
-    LABELS "sdf;vhdl;vital;mixed-language;closure;corpus;revision;positive;negative;ambiguity;mismatch;unsupported;overflow;resources;multiple-root;artifact;interpreter;llvm;linux;windows;retained-log"
+    LABELS "sdf;vhdl;vital;mixed-language;closure;recursive-closure;corpus;revision;positive;negative;ambiguity;mismatch;unsupported;overflow;resources;multiple-root;artifact;interpreter;llvm;linux;windows;retained-log"
     TIMEOUT 1200
 )
 add_test(
@@ -1375,14 +1375,14 @@ set_tests_properties(
 set_tests_properties(
   fsim.vhdl-standard-mode-closure-matrix
   PROPERTIES
-    LABELS "slow;vhdl;closure;release;positive;negative;llvm;artifact;cache;debug;trace;mixed;packages;provenance;portability;resources"
+    LABELS "slow;vhdl;closure;recursive-closure;release;positive;negative;llvm;artifact;cache;debug;trace;mixed;packages;provenance;portability;resources"
     RUN_SERIAL TRUE
     TIMEOUT 7200
 )
 set_tests_properties(
   fsim.verilog-systemverilog-standard-mode-closure-matrix
   PROPERTIES
-    LABELS "slow;verilog;systemverilog;closure;release;positive;negative;llvm;artifact;cache;debug;trace;mixed;provenance;portability;resources"
+    LABELS "slow;verilog;systemverilog;closure;recursive-closure;release;positive;negative;llvm;artifact;cache;debug;trace;mixed;provenance;portability;resources"
     RUN_SERIAL TRUE
     TIMEOUT 7200
 )
@@ -1401,7 +1401,7 @@ set_tests_properties(
 set_tests_properties(
   fsim.systemverilog-closure-matrix
   PROPERTIES
-    LABELS "slow;systemverilog;closure;release;positive;negative;llvm;artifact;cache;debug;trace;mixed;uvm;portability;resources"
+    LABELS "slow;systemverilog;closure;recursive-closure;release;positive;negative;llvm;artifact;cache;debug;trace;mixed;uvm;portability;resources"
     RUN_SERIAL TRUE
     TIMEOUT 7200
 )
@@ -1416,7 +1416,7 @@ set_tests_properties(
 set_tests_properties(
   fsim.verilog-closure-matrix
   PROPERTIES
-    LABELS "slow;verilog;closure;release;positive;negative;llvm;artifact;cache;debug;trace;mixed;portability;resources"
+    LABELS "slow;verilog;closure;recursive-closure;release;positive;negative;llvm;artifact;cache;debug;trace;mixed;portability;resources"
     RUN_SERIAL TRUE
     TIMEOUT 7200
 )

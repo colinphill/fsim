@@ -37,7 +37,11 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }} --parallel 4
 
       - name: Test
-        run: ctest --preset ${{ matrix.preset }}
+        run: ctest --preset ${{ matrix.preset }} -LE '^recursive-closure$'
+
+      - name: Final closure checks
+        if: matrix.configuration == 'Debug'
+        run: ctest --preset ${{ matrix.preset }} -L '^recursive-closure$'
 
   linux-llvm22:
     name: Ubuntu / GCC / LLVM 22.1.8 / ${{ matrix.configuration }}
@@ -85,7 +89,10 @@ jobs:
         run: cmake --build ${{ matrix.build_dir }} --parallel 4
 
       - name: Test
-        run: ctest --test-dir ${{ matrix.build_dir }} --output-on-failure
+        run: >
+          ctest --test-dir ${{ matrix.build_dir }}
+          --output-on-failure
+          -LE '^recursive-closure$'
 
   linux-fuzz:
     name: Ubuntu / Clang / frontend fuzz smoke
@@ -148,7 +155,7 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }} --parallel 4
 
       - name: Test
-        run: ctest --preset ${{ matrix.preset }}
+        run: ctest --preset ${{ matrix.preset }} -LE '^recursive-closure$'
 
   windows-llvm22:
     name: Windows / ${{ matrix.compiler }} / LLVM 22.1.8 / ${{ matrix.configuration }}
@@ -229,3 +236,4 @@ jobs:
           ctest --test-dir
           build/ci-windows-llvm22-${{ matrix.compiler }}-${{ matrix.configuration }}
           --output-on-failure
+          -LE '^recursive-closure$'

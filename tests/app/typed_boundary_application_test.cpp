@@ -400,8 +400,7 @@ fsim::project::Config make_config(
     config.project.time_resolution = "1ns";
     config.build.optimization = optimization;
     config.build.cache_path = directory
-        / ("cache-" + hdl_name + '-' + std::string { hdl_standard } + '-'
-            + profile
+        / ("cache-" + hdl_name + '-' + std::string { hdl_standard }
             + (optimization == fsim::project::Optimization::o0
                     ? "-o0"
                     : "-o2"));
