@@ -1085,6 +1085,53 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
    clean-first Debug/Release gates and one final commit/push. Preserve all
    retained logs and reject a zero-status trace tool if time/PASS/clean-exit or
    reader-equivalence evidence is absent.
+7. The live Batch 170 closeout is clean and synchronized at
+   `11d99f7596aeac3115a37c4bc690b3ad969fc435`. GitHub Actions run
+   `31821626675`, attempt 2, is green for all eleven jobs, including all six
+   Windows MSVC/clang-cl Debug/Release variants and the previously failing
+   `fsim.application.typed_boundaries` test 200. All five workflow job
+   timeouts are exactly 120 minutes. Recursive closure aggregators are labeled
+   separately, run once on Linux Debug and remain excluded only from the nine
+   ordinary duplicate matrix executions; all 198 direct tests still run in
+   every configuration.
+8. The public GTKWave documentation identifies its GPL-2.0 libfst source as
+   the principal implementation reference. Batch 171 therefore owns a clean-
+   room Apache-2.0 writer and bounded reader based on public observable format
+   behavior and independently authored fixtures. GTKWave/libfst may be an
+   optional external conformance oracle only; never copy, translate, link or
+   vendor that implementation.
+9. Change 1 freezes a seventeen-row ledger assigning Changes 2-18 exactly to
+   the format-neutral trace model, FST container/hierarchy writer, public
+   format selection, scalar/vector encoding, extended typed values, nine-state/
+   aggregate/strength encoding, ordered changes/aliases, mixed roots, dynamic
+   observation, selection/lifecycle, failure containment, public controls,
+   artifact/relocation state, deterministic compression, reader equivalence,
+   negative/resource/platform evidence and corpus/closure.
+10. Changes 2-4 refactor the VCD-specific attachment seam into one immutable
+    declaration/event model, implement the transactional clean-room FST
+    container and hierarchy writer, and add explicit `auto`/`vcd`/`fst`
+    selection while preserving existing VCD bytes and defaults.
+11. Changes 5-8 encode every supported vector/scalar, real/string/enum/physical,
+    Logic9/strength/aggregate/class/coverage/assertion value and exact initial/
+    later change without arbitrary width caps or same-time reordering.
+12. Changes 9-12 preserve multiple roots and mixed boundaries, callbacks and
+    dynamic values, selective/late tracing and immediate snapshots, then close
+    bounded buffering, flush/close and I/O/callback failure containment.
+13. Changes 13-16 expose consistent CLI/Tcl/C/C++/debugger/non-project controls,
+    preserve relocation-safe artifact/checkpoint identity, freeze deterministic
+    compression profiles and prove a bounded clean-room reader equivalent to
+    VCD and the internal trace.
+14. Changes 17-19 own exhaustive corrupt/I/O/resource/platform negatives, the
+    complete retained-log corpus/closure, public documentation, examples,
+    inventories, release evidence and the exact Batch 172 restart handoff.
+15. Change 20 alone runs the fresh clean-first exact-LLVM Debug and Release
+    eight-worker builds, complete non-sanitized regressions and every trace/
+    reader/resource/release gate under 120-minute command limits, then creates
+    the sole Batch 171 implementation commit/push without hosted-CI inspection.
+16. This documentation checkpoint expands the locked grouped allocation without
+    implementing Change 1. After it is committed and pushed, begin only with
+    the registered seventeen-row FST closure ledger; preserve it through
+    Changes 2-18 and accumulate Changes 1-19 in one recoverable worktree.
 
 ## Batch 168 planned restart checkpoint - 2026-08-13
 

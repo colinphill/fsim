@@ -10616,22 +10616,109 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 171 - FST tracing closure
 
-- **Changes 1-4:** add a deterministic FST writer and public trace-format
-  selection while preserving the existing trace model, hierarchy, aliases,
-  timescale, scopes, and stable IDs.
-- **Changes 5-8:** encode every supported scalar/vector/real/string/enum/
-  physical/aggregate/class/strength value, X/Z/nine-state semantics, aliases,
-  and changes without truncation.
-- **Changes 9-12:** support multiple roots, mixed boundaries, callbacks,
-  dynamic class/coverage/assertion values, selective tracing, late enablement,
-  flush/close, and failure containment.
-- **Changes 13-16:** integrate FST with CLI/Tcl/API/non-project simulation,
-  artifacts, relocation, deterministic compression settings, and cross-platform
-  byte identity where the format permits.
-- **Changes 17-19:** add FST reader-based equivalence against VCD and internal
-  traces, corrupt/I/O/resource negatives, docs, examples, inventories, and handoff.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push once without hosted CI monitoring.
+- **Locked scope:** add deterministic FST output for the complete existing trace
+  model without weakening or replacing VCD, internal-trace, debugger or callback
+  behavior. Implement the writer and bounded reader clean-room under Apache-2.0
+  from public format behavior and independently authored fixtures. GTKWave/libfst
+  is GPL-2.0 and may be used only as an optional external conformance oracle; do
+  not copy, translate, link or vendor its implementation. Do not broaden this
+  batch into a waveform GUI, database, parallel dump engine or the Accellera
+  SystemC signal/port inventory owned by Batch 172.
+- **Change 1:** freeze a seventeen-row FST closure ledger assigning Changes 2-18
+  one-to-one across the format-neutral trace model, container/hierarchy writer,
+  format selection, scalar/vector values, extended typed values, nine-state/
+  aggregate/strength values, ordered changes/aliases, mixed roots, dynamic
+  observation, selection/lifecycle, failure containment, public controls,
+  artifact/relocation state, deterministic compression, reader equivalence,
+  negative/resource/platform evidence and corpus/closure. Bind every row to
+  implementation, positive/negative, VCD/internal equivalence, phase/artifact,
+  diagnostic, platform and governed-resource owners before trace behavior
+  changes.
+- **Change 2:** introduce one immutable format-neutral trace declaration and
+  event model with stable scope, variable, alias, type, width, source, time,
+  delta, region and sequence identities. Refactor the existing VCD attachment
+  path to consume it while proving byte-identical VCD output and unchanged
+  disabled-trace cost.
+- **Change 3:** implement a clean-room deterministic FST container and hierarchy
+  writer with explicit schema/profile identity, fixed-endian fields, bounded
+  block sizes, exact timescale and start/end time, stable scope/variable/alias
+  handles, canonical metadata and transactional finalization. Reject unsupported
+  or incomplete declarations before publishing a file.
+- **Change 4:** add explicit `auto`/`vcd`/`fst` trace-format selection, extension
+  inference, writer construction and lifecycle state to the public project model
+  while preserving VCD as the default for existing manifests and `.vcd` paths.
+  Reject format/extension conflicts, unknown formats and unsafe output replacement
+  without leaving a partial trace.
+- **Change 5:** encode arbitrary-width bit and logic vectors plus SystemVerilog
+  bit/logic/reg, time and chandle scalar profiles with exact 0/1/X/Z state,
+  leading bits, empty/unknown intervals and no host-word-width truncation.
+- **Change 6:** encode real, shortreal, string, enum and VHDL physical/time values
+  with canonical type metadata and locale-independent payloads. Preserve NaN/
+  infinity/negative-zero bit identity where the source model exposes it and
+  reject values the governed FST profile cannot represent losslessly.
+- **Change 7:** encode VHDL Logic9, resolved strength, packed/unpacked aggregate,
+  dynamic class, container, coverage and assertion values through stable leaf
+  declarations plus explicit type/shape metadata. Preserve aliases and exact
+  arbitrary widths without flattening distinct logical owners onto one identity.
+- **Change 8:** encode initial snapshots and all later changes in deterministic
+  `(time, delta, region, sequence, stable-id)` order, preserving same-time
+  changes, aliases and late values without illegal collapse. Bound event counts,
+  timestamp growth and block expansion before mutation.
+- **Change 9:** publish canonical multiple-root and mixed Verilog/SystemVerilog/
+  VHDL/SystemC hierarchy, provenance and alias records from the existing design
+  and trace model. Preserve distinct roots, libraries, language boundaries and
+  stable signal ownership without runtime hierarchy lookup.
+- **Change 10:** route signal callbacks, UVM activity, dynamic class/container,
+  coverage, assertion and SDF-observation values through the format-neutral
+  recorder. Preserve time/delta/region/sequence correlation and contain callback
+  failure without dropping or partially fanning out an accepted record.
+- **Change 11:** implement selective tracing, debugger/Tcl add/remove, late
+  enablement with an immediate exact snapshot, disablement, repeated status and
+  deterministic declaration ownership for both VCD and FST. Prove unselected
+  signals do not emit changes and dynamic selection cannot reorder existing
+  records.
+- **Change 12:** implement bounded buffering, flush, close, destructor and I/O-
+  failure containment with one terminal status shared by project and non-project
+  runs. A failed write, full buffer, invalid lifecycle transition or close error
+  must retain diagnostics and never report a clean complete trace.
+- **Change 13:** expose format, output, selection, compression and lifecycle
+  controls consistently through CLI, Tcl, C/C++ APIs, debugger and explicit
+  non-project compile/elaborate/simulate phases. Preserve append-only ABI layout,
+  atomic configuration and callback-safe status/reporting.
+- **Change 14:** version and preserve trace configuration, declaration identity,
+  selected format/profile and relocation-safe output intent through object,
+  design, mapped-library, cache and checkpoint artifacts. Reject stale/corrupt/
+  future profiles, cross-format replay and source-hidden absolute-path leakage.
+- **Change 15:** implement explicit deterministic compression profiles with fixed
+  algorithm/version/window/block settings, canonical empty/small/large blocks and
+  byte identity across supported Linux and Windows hosts where the FST format
+  permits it. Record the reason and semantic digest wherever container bytes are
+  legitimately platform-independent but not byte-identical.
+- **Change 16:** implement a bounded clean-room FST reader for declarations,
+  hierarchy, aliases, metadata, timestamps and typed changes, then prove semantic
+  equivalence against VCD and the internal trace for every supported trace value
+  and lifecycle. Optional GTKWave/libfst tools may validate generated fixtures
+  but are not build or runtime dependencies.
+- **Change 17:** add exhaustive corrupt/truncated/trailing/unknown-block,
+  duplicate/stale identity, illegal time/order/value, I/O, allocation, block,
+  signal, value and event-limit negatives plus Linux/Windows portability and
+  deterministic-output differentials. Every failure must be bounded, diagnostic
+  and transactional.
+- **Change 18:** publish a clean-room complete-trace corpus and retained-log
+  closure covering both formats, all value families, aliases, mixed roots,
+  selective/late tracing, callbacks, project/non-project phases, artifacts,
+  relocation, compression, reader equivalence, negatives, PASS, time advancement
+  and clean close.
+- **Change 19:** synchronize README, tracing, language, architecture, API,
+  diagnostics, feature/evidence and release documentation; add a mixed-language
+  VCD/FST example, zero-active release audit, inventories, counts, digests and
+  the exact Batch 172 restart handoff.
+- **Change 20:** run fresh clean-first exact-LLVM Debug and Release eight-worker
+  builds, complete non-sanitized regressions, installed/relocation, trace,
+  reader-equivalence, resource and release gates with 120-minute command
+  timeouts. Retain timing/RSS/swap/log evidence, commit and push the accumulated
+  Batch 171 implementation once, and do not inspect hosted CI because this is
+  not a monitoring boundary.
 
 ### Batch 172 - Accellera SystemC 3.0.2, native TLM, and partitionable kernel bridge - CI monitoring boundary
 
