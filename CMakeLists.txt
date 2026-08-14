@@ -693,7 +693,10 @@ fsim_configure_library(fsim_runtime)
 add_library(fsim::elaboration ALIAS fsim_elaboration)
 fsim_configure_library(fsim_elaboration)
 target_link_libraries(
-  fsim_elaboration PUBLIC fsim_frontend fsim_runtime PRIVATE fsim_support)
+  fsim_elaboration
+  PUBLIC fsim_frontend fsim_runtime
+  PRIVATE fsim_boost_pfr_headers fsim_support
+)
 
 add_library(
   fsim_support
@@ -725,7 +728,10 @@ add_library(fsim_platform STATIC src/platform/dynamic_library.cpp)
 add_library(fsim::platform ALIAS fsim_platform)
 fsim_configure_library(fsim_platform)
 target_link_libraries(fsim_platform PRIVATE ${CMAKE_DL_LIBS})
-target_link_libraries(fsim_runtime PRIVATE fsim_platform fsim_support)
+target_link_libraries(
+  fsim_runtime
+  PRIVATE fsim_boost_pfr_headers fsim_platform fsim_support
+)
 
 add_library(fsim_systemc_headers INTERFACE)
 add_library(fsim::systemc_headers ALIAS fsim_systemc_headers)

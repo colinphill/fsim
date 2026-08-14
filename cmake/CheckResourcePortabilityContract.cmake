@@ -81,19 +81,21 @@ string(FIND
   "${FSIM_COVERAGE_CONTENTS}"
   "boost/multiprecision/cpp_int.hpp"
   FSIM_BOOST_CONSUMER_INDEX)
-string(FIND
-  "${FSIM_ROOT_CONTENTS}"
-  "PRIVATE fsim_boost_pfr_headers"
-  FSIM_BOOST_INCLUDE_INDEX)
-string(FIND
-  "${FSIM_FUZZ_CMAKE_CONTENTS}"
-  "PRIVATE fsim_boost_pfr_headers"
-  FSIM_FUZZ_BOOST_INCLUDE_INDEX)
+string(REGEX MATCHALL
+  "PRIVATE[ \t\r\n]+fsim_boost_pfr_headers"
+  FSIM_BOOST_INCLUDE_BINDINGS
+  "${FSIM_ROOT_CONTENTS}")
+string(REGEX MATCHALL
+  "PRIVATE[ \t\r\n]+fsim_boost_pfr_headers"
+  FSIM_FUZZ_BOOST_INCLUDE_BINDINGS
+  "${FSIM_FUZZ_CMAKE_CONTENTS}")
+list(LENGTH FSIM_BOOST_INCLUDE_BINDINGS FSIM_BOOST_INCLUDE_COUNT)
+list(LENGTH FSIM_FUZZ_BOOST_INCLUDE_BINDINGS FSIM_FUZZ_BOOST_INCLUDE_COUNT)
 if(FSIM_BOOST_CONSUMER_INDEX EQUAL -1
-    OR FSIM_BOOST_INCLUDE_INDEX EQUAL -1
-    OR FSIM_FUZZ_BOOST_INCLUDE_INDEX EQUAL -1)
+    OR NOT FSIM_BOOST_INCLUDE_COUNT EQUAL 5
+    OR NOT FSIM_FUZZ_BOOST_INCLUDE_COUNT EQUAL 1)
   message(FATAL_ERROR
-    "frontend Boost.Multiprecision consumer lost the pinned header target")
+    "Boost consumers lost a pinned header target binding")
 endif()
 foreach(FSIM_STACK_POLICY IN ITEMS
     "function(fsim_configure_test_platform target)"
