@@ -522,14 +522,14 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     compiler warning/error marker. The refreshed graph contains 32,232 nodes
     and 148,494 edges. No header formatting, sanitizer or hosted-CI inspection
     ran. The sole accumulated implementation checkpoint is
-    `BATCH169_IMPLEMENTATION_COMMIT`; the following documentation-only restart
+    `4c00c765105e32815816f3c25a490423c1603074`; the following documentation-only restart
     checkpoint records its exact hash and begins Batch 170.
 
 ## Batch 170 planned restart checkpoint - prepared 2026-08-13
 
 1. Batch 169 Change 20 is locally complete with the retained measurements in
    item 39. Start Batch 170 only after the sole Batch 169 implementation commit
-   `BATCH169_IMPLEMENTATION_COMMIT` and this documentation-only restart
+   `4c00c765105e32815816f3c25a490423c1603074` and this documentation-only restart
    checkpoint are pushed and branch `codex/v2` is clean and synchronized.
 2. Start in `/home/colin/projects/fsim`, read this section and the authoritative
    Batch 170 allocation in `implementation_plan_v2.md`, verify branch
