@@ -10,6 +10,11 @@ endif()
 # remain exclusive to the scheduled local ten-batch sanitizer preset.
 add_library(fsim_frontend_fuzz_subject STATIC ${FSIM_FRONTEND_SOURCES})
 fsim_configure_library(fsim_frontend_fuzz_subject)
+target_link_libraries(
+  fsim_frontend_fuzz_subject
+  PUBLIC fsim_semantic
+  PRIVATE fsim_boost_pfr_headers
+)
 target_compile_options(
   fsim_frontend_fuzz_subject
   PRIVATE

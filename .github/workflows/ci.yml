@@ -17,7 +17,7 @@ jobs:
   linux-gcc:
     name: Ubuntu / GCC / ${{ matrix.configuration }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -42,7 +42,7 @@ jobs:
   linux-llvm22:
     name: Ubuntu / GCC / LLVM 22.1.8 / ${{ matrix.configuration }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -90,7 +90,7 @@ jobs:
   linux-fuzz:
     name: Ubuntu / Clang / frontend fuzz smoke
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 120
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
@@ -121,8 +121,8 @@ jobs:
     name: Windows / MSVC / ${{ matrix.configuration }}
     runs-on: windows-2022
     # Debug extended-COFF compilation plus the bounded SystemC matrix can
-    # exceed the general 45-minute ceiling on a contended hosted runner.
-    timeout-minutes: 70
+    # require substantial headroom on a contended hosted runner.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:

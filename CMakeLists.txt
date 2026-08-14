@@ -453,7 +453,11 @@ set(
 add_library(fsim_frontend STATIC ${FSIM_FRONTEND_SOURCES})
 add_library(fsim::frontend ALIAS fsim_frontend)
 fsim_configure_library(fsim_frontend)
-target_link_libraries(fsim_frontend PUBLIC fsim_semantic)
+target_link_libraries(
+  fsim_frontend
+  PUBLIC fsim_semantic
+  PRIVATE fsim_boost_pfr_headers
+)
 
 add_library(
   fsim_runtime
