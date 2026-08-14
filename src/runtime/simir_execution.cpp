@@ -1592,7 +1592,11 @@ void Interpreter::Impl::execute(ProcessId id)
                         fail(process, error.what());
                     }
                     ++process.pc;
-                } else if constexpr (std::is_same_v<OperationType, WriteBlocking>) {
+                } else {
+                    // Restart template dispatch depth before MSVC reaches its
+                    // nested-block compiler limit on the full operation set.
+                    [&] {
+                if constexpr (std::is_same_v<OperationType, WriteBlocking>) {
                     auto value = get_register(process, op.source);
                     ++process.pc;
                     commit_driver(
@@ -2433,6 +2437,8 @@ void Interpreter::Impl::execute(ProcessId id)
                             sizeof(op) == 0,
                             "unhandled SimIR operation");
                     }
+                }
+                    }();
                 }
             },
             operation);
