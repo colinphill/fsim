@@ -11821,8 +11821,31 @@ carry an explicit evidence-backed scope disposition approved by the user.
   Release tree needs no rebuild; the exact affected slice passes 12/12 in 2.98
   seconds, the 408-file MSVC string audit remains below 16,000 bytes, all five
   hosted timeouts remain 120 minutes and `git diff --check` passes. Sanitizer
-  and Debug are intentionally not rerun. Push this repair and require every
-  replacement Windows job to complete before declaring Change 20 complete.
+  and Debug are intentionally not rerun. Repair `6b5ebd9` is pushed, and all
+  six replacement Windows jobs in run `31911554491` completed before the next
+  repair. Every build is warning-free and the former DLL/lock failures are
+  absent. The remaining matrix resolves to four audited causes: implicit
+  `/DWIN32` and `/D_WINDOWS` flags were opaque compile options instead of
+  cache-visible manifest defines; fsim-owned Windows targets inherited
+  SystemC's static `main()` launcher; upstream misclassified clang-cl as MinGW,
+  selecting QuickThreads and an `ar` merge instead of Windows Fibers and
+  `lib.exe`; and POSIX root-relative FST paths plus an 8 MiB Debug stack were
+  insufficient Windows contracts.
+
+  The current repair promotes default definitions into the manifest identity,
+  links fsim internals and generated plug-ins directly to the shared SystemC
+  core, makes the bridge fallback `sc_main` ELF-only, scopes `MSVC=TRUE` to the
+  governed upstream subdirectory for MSVC-compatible frontends, uses portable
+  temporary FST relocation roots and raises the uniform Windows test stack to
+  32 MiB. The eight-worker exact-LLVM Release rebuild completes 151 affected
+  steps. The exact prior-failure/contract slice passes 28/28 in 239.83 seconds,
+  and the three MSVC/Windows policy contracts pass. The obsolete per-application
+  8 MiB override is absent, and the composed SDF/VITAL, V1, public and
+  release-candidate audit slice passes 8/8. The 408-file string audit,
+  five 120-minute workflow timeouts and `git diff --check` remain clean.
+  Sanitizer and Debug were not rerun. Commit and push this repair, then require
+  every replacement Windows job to complete green before declaring Change 20
+  complete or starting Batch 173.
 
 ### Batch 173 - SCV 2.0.1 compatibility, recording, and verification closure - CI monitoring boundary
 

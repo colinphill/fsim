@@ -206,7 +206,7 @@ endif()
 foreach(FSIM_STACK_POLICY IN ITEMS
     "function(fsim_configure_test_platform target)"
     "CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL \"MSVC\""
-    "target_link_options(\${target} PRIVATE /STACK:8388608)")
+    "target_link_options(\${target} PRIVATE /STACK:33554432)")
   string(FIND "${FSIM_ROOT_CONTENTS}" "${FSIM_STACK_POLICY}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR "Windows test stack lost policy: ${FSIM_STACK_POLICY}")

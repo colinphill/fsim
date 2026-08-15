@@ -70,7 +70,7 @@ foreach(FSIM_ROOT_POLICY IN ITEMS
     "function(fsim_configure_test_platform target)"
     "CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL \"MSVC\""
     "add_compile_options(/bigobj)"
-    "target_link_options(\${target} PRIVATE /STACK:8388608)"
+  "target_link_options(\${target} PRIVATE /STACK:33554432)"
     "fsim_configure_test_platform(\${target})")
   string(FIND "${FSIM_ROOT_CONTENTS}" "${FSIM_ROOT_POLICY}" FSIM_POLICY_INDEX)
   if(FSIM_POLICY_INDEX EQUAL -1)

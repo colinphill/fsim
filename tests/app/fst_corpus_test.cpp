@@ -363,8 +363,10 @@ void verify_phase_artifact_and_relocation_closure()
         app::TraceArchiveKind::Design, app::TraceArchiveKind::Library,
         app::TraceArchiveKind::NativeCache,
         app::TraceArchiveKind::Checkpoint };
-    const std::filesystem::path producer { "/producer/build" };
-    const std::filesystem::path consumer { "/consumer/replay" };
+    const auto relocation_root
+        = std::filesystem::temp_directory_path() / "fsim-fst-corpus-relocation";
+    const auto producer = relocation_root / "producer" / "build";
+    const auto consumer = relocation_root / "consumer" / "replay";
     for (std::size_t index = 0U; index < surfaces.size(); ++index) {
         app::TraceControlRequest request;
         request.surface = surfaces[index];

@@ -189,6 +189,20 @@ void add_default_compiler_settings(project::SystemCSection& settings)
     settings.compile_options.insert(
         settings.compile_options.begin(), options.begin(), options.end());
 #endif
+#if defined(FSIM_SYSTEMC_DEFAULT_DEFINES)
+    std::string_view encoded_defines { FSIM_SYSTEMC_DEFAULT_DEFINES };
+    std::vector<std::string> defines;
+    while (!encoded_defines.empty()) {
+        const auto separator = encoded_defines.find('|');
+        defines.emplace_back(encoded_defines.substr(0U, separator));
+        if (separator == std::string_view::npos) {
+            break;
+        }
+        encoded_defines.remove_prefix(separator + 1U);
+    }
+    settings.defines.insert(
+        settings.defines.begin(), defines.begin(), defines.end());
+#endif
 }
 
 [[nodiscard]] std::string shared_library_filename()

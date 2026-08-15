@@ -405,9 +405,22 @@ macro(fsim_systemc_add_official_runtime archive work_root)
       "Do not install a SystemC target-architecture symlink" FORCE)
   set(SYSTEMC_UNITY_BUILD OFF CACHE BOOL "Disable SystemC unity build" FORCE)
   set(CMAKE_EXPORT_NO_PACKAGE_REGISTRY ON)
+
+  # Upstream uses the legacy MSVC boolean both to select Windows Fibers and to
+  # combine its sc_main launcher with the DLL import library through lib.exe.
+  # CMake leaves that boolean false for clang-cl even though clang-cl uses the
+  # MSVC frontend and object format, which otherwise misclassifies it as MinGW
+  # and produces an unusable launcher/runtime pair. Limit the compatibility
+  # override to the governed subdirectory and restore the parent value below.
+  set(FSIM_SYSTEMC_PARENT_MSVC "${MSVC}")
+  if(WIN32 AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    set(MSVC TRUE)
+  endif()
   add_subdirectory(
     "${FSIM_SYSTEMC_OFFICIAL_SOURCE_DIR}"
     "${CMAKE_BINARY_DIR}/_deps/fsim_systemc_3_0_2-build")
+  set(MSVC "${FSIM_SYSTEMC_PARENT_MSVC}")
+  unset(FSIM_SYSTEMC_PARENT_MSVC)
 
   if(NOT TARGET SystemC::systemc OR NOT TARGET systemc)
     message(FATAL_ERROR "official SystemC source did not define SystemC::systemc")

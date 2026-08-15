@@ -2482,6 +2482,55 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     Windows job on the replacement exact SHA before closing Batch 172 or
     starting Batch 173.
 
+44. Runtime-discovery repair `6b5ebd977f6e1f32e043ba85bbb2834bf81189bb`
+    is pushed, and replacement run `31911554491` completed every Windows job
+    before the next repair was prepared. All six builds are warning-free: the
+    clang-cl Debug and Release logs contain zero remaining upstream launcher
+    warnings, and no MSVC lane reports D9025 or an `NDEBUG`/`UNDEBUG` option
+    conflict. Plain and LLVM MSVC Release each fail the same twelve tests;
+    plain and LLVM MSVC Debug add eight stack-exhaustion crashes; clang-cl
+    Debug and Release each fail the same 26-test set after otherwise successful
+    builds. The old missing-DLL startup failure and `FSIM-SC-I004` lock failure
+    are absent. SDF/VITAL and all release audits pass.
+
+    The common compiler failures come from CMake's implicit `/DWIN32` and
+    `/D_WINDOWS` flags entering the opaque SystemC option list and being
+    correctly rejected by `FSIM-SC-C011`. The current repair promotes every
+    attached default `/D` or `-D` option into the manifest `defines` field,
+    adds `SC_WIN_DLL`, and leaves only ordinary options in `compile_options`,
+    so the platform inputs participate in cache identity. The installed and
+    Tcl version tests show that fsim's Windows targets also inherited
+    SystemC's static convenience launcher containing `main()`; internal fsim
+    targets and generated plug-ins now link the shared core/import target
+    directly, while native `sc_main` executables retain the official launcher.
+    The bridge's fallback `sc_main` remains ELF-only.
+
+    Upstream SystemC checks the legacy `MSVC` CMake boolean rather than the
+    frontend variant. Under clang-cl that selected MinGW QuickThreads and an
+    `ar`-based archive merge, explaining the direct-runtime segfault cluster.
+    The governed subdirectory now sees `MSVC=TRUE` only for an MSVC-compatible
+    frontend and the parent value is restored immediately afterward, selecting
+    Windows Fibers and `lib.exe` without modifying the byte-pinned source tree.
+    The Windows FST relocation corpus now constructs producer and consumer
+    roots beneath the platform temporary directory instead of using POSIX
+    root-relative spellings. The uniform MSVC-compatible test stack reserve is
+    raised from 8 MiB to 32 MiB for the Debug-only large-fixture crashes.
+
+    The exact-LLVM Release tree reconfigures and builds 151 affected compile/
+    link steps with eight workers. The exact 28-test prior-failure and contract
+    slice passes 28/28 in 239.83 seconds with fixture auto-expansion disabled;
+    this includes installed/Tcl relocation, FST, every direct/upstream SystemC
+    case, incremental/matrix, C API, VHDL/PSL and `typed_boundaries`. The MSVC
+    Debug, Release and Windows LLVM policy contracts then pass 3/3. After
+    removing the obsolete per-application 8 MiB override, the composed
+    SDF/VITAL, V1, public and release-candidate audit slice passes 8/8. The complete
+    408-file test-string audit remains below 16,000 bytes with a 14,622-byte
+    maximum; all five workflow timeouts remain 120 minutes and
+    `git diff --check` passes. Sanitizer and Debug were not rerun. Audit and
+    commit this ten-path implementation/contract repair plus documentation,
+    push it, then wait for every Windows job at the replacement exact SHA.
+    Do not close Batch 172 or begin Batch 173 until that matrix is green.
+
 ## Batch 173 planned restart checkpoint - after Batch 172 closeout
 
 1. Start in `/home/colin/projects/fsim`, read this section and Batch 173 in

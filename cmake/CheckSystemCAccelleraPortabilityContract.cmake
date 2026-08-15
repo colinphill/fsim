@@ -90,6 +90,8 @@ fsim_require_tokens(cmake/FsimSystemCAccellera.cmake
   "delete m_cor_pkg;"
   "cannot apply the governed SystemC process teardown fix"
   "CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL \"MSVC\""
+  "set(MSVC TRUE)"
+  "set(MSVC \"\${FSIM_SYSTEMC_PARENT_MSVC}\")"
   "!defined(__clang__)"
   "cannot apply the governed SystemC clang-cl template fix"
   "\"\${target}\" PRIVATE \"/FI\${patched_common_header}\" /W0"
@@ -121,6 +123,9 @@ fsim_require_tokens(src/systemc/accellera_compatibility.cpp
   "_GLIBCXX_RELEASE"
   "|bridge="
   "|stdlib=")
+fsim_require_tokens(src/systemc/accellera_runtime.cpp
+  "#if !defined(_WIN32)"
+  "sc_main(int, char*[])")
 fsim_require_tokens(src/systemc/plugin_compiler.cpp
   "accellera-runtime"
   "accellera-compatibility"
@@ -145,6 +150,10 @@ fsim_require_tokens(CMakeLists.txt
   "fsim_systemc_headers"
   "FSIM_SYSTEMC_PLUGIN_EXPORT_LIBRARY_PATH"
   "fsim_systemc_accellera_runtime"
+  "FSIM_SYSTEMC_INTERNAL_RUNTIME_TARGET"
+  "FSIM_SYSTEMC_DEFAULT_DEFINES"
+  "TARGET_LINKER_FILE:\${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}"
+  "/STACK:33554432"
   "WINDOWS_EXPORT_ALL_SYMBOLS ON")
 foreach(path IN ITEMS
     include/fsim/systemc.hpp

@@ -27,15 +27,17 @@
 #define FSIM_SYSTEMC_ACCELERA_EXPORT
 #endif
 
-// fsim owns process startup and never delegates it to SystemC's convenience
-// main(). The official shared library nevertheless retains the standard
-// sc_main reference, so provide one process-wide fallback. A native
-// executable that defines sc_main interposes this shared-library definition.
+// On ELF, the official shared library retains the standard sc_main reference,
+// so provide one process-wide fallback while fsim owns process startup. The
+// Windows shared core has no such reference; exporting sc_main there can steal
+// resolution from a native sc_main executable through its import library.
+#if !defined(_WIN32)
 extern "C" FSIM_SYSTEMC_ACCELERA_EXPORT int
 sc_main(int, char*[])
 {
     return 0;
 }
+#endif
 
 extern "C" FSIM_SYSTEMC_ACCELERA_EXPORT const char*
 fsim_systemc_accellera_version() noexcept

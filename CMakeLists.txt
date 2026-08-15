@@ -97,6 +97,17 @@ set(
 fsim_systemc_add_official_runtime(
   "${FSIM_SYSTEMC_3_0_2_ARCHIVE}" "${FSIM_SYSTEMC_WORK_ROOT}")
 
+# The Windows SystemC package deliberately exposes SystemC::systemc as a
+# static convenience launcher containing main(). fsim and its libraries own
+# their entrypoints, so they must consume only the shared core/import target.
+# Native sc_main executables continue to link SystemC::systemc explicitly.
+if(WIN32)
+  set(FSIM_SYSTEMC_INTERNAL_RUNTIME_TARGET
+      "${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}")
+else()
+  set(FSIM_SYSTEMC_INTERNAL_RUNTIME_TARGET SystemC::systemc)
+endif()
+
 add_library(
   fsim_systemc_accellera_runtime
   SHARED
@@ -120,7 +131,7 @@ target_include_directories(
 )
 target_link_libraries(
   fsim_systemc_accellera_runtime
-  PRIVATE SystemC::systemc
+  PRIVATE "${FSIM_SYSTEMC_INTERNAL_RUNTIME_TARGET}"
 )
 if(
   MSVC
@@ -366,7 +377,7 @@ function(fsim_configure_test_platform target)
     # default stack in both optimized and unoptimized MSVC-compatible builds.
     # Reserve address space uniformly so newly split or merged test hosts do
     # not silently lose the protection carried by an older executable.
-    target_link_options(${target} PRIVATE /STACK:8388608)
+    target_link_options(${target} PRIVATE /STACK:33554432)
   endif()
 endfunction()
 
@@ -775,7 +786,7 @@ target_include_directories(
 
 target_link_libraries(
   fsim_systemc_headers
-  INTERFACE SystemC::systemc
+  INTERFACE "${FSIM_SYSTEMC_INTERNAL_RUNTIME_TARGET}"
 )
 
 add_library(
@@ -789,7 +800,7 @@ add_library(
 )
 fsim_configure_library(fsim_systemc_plugin_exports)
 target_link_libraries(
-  fsim_systemc_plugin_exports PUBLIC SystemC::systemc
+  fsim_systemc_plugin_exports PUBLIC "${FSIM_SYSTEMC_INTERNAL_RUNTIME_TARGET}"
 )
 target_link_libraries(
   fsim_systemc_headers
@@ -825,21 +836,37 @@ fsim_configure_library(fsim_systemc)
 if(WIN32)
   set(FSIM_SYSTEMC_INSTALLED_ACCELERA_LINK_LIBRARY
       "${CMAKE_INSTALL_FULL_LIBDIR}/${CMAKE_IMPORT_LIBRARY_PREFIX}fsim_systemc_accellera_runtime${CMAKE_IMPORT_LIBRARY_SUFFIX}")
-  set(FSIM_SYSTEMC_INSTALLED_OFFICIAL_LINK_LIBRARY
-      "${CMAKE_INSTALL_FULL_LIBDIR}/${CMAKE_IMPORT_LIBRARY_PREFIX}systemc${CMAKE_IMPORT_LIBRARY_SUFFIX}")
 else()
   set(FSIM_SYSTEMC_INSTALLED_ACCELERA_LINK_LIBRARY
       "${CMAKE_INSTALL_FULL_LIBDIR}/${CMAKE_SHARED_LIBRARY_PREFIX}fsim_systemc_accellera_runtime${CMAKE_SHARED_LIBRARY_SUFFIX}")
-  set(FSIM_SYSTEMC_INSTALLED_OFFICIAL_LINK_LIBRARY
-      "${CMAKE_INSTALL_FULL_LIBDIR}/${CMAKE_SHARED_LIBRARY_PREFIX}systemc${CMAKE_SHARED_LIBRARY_SUFFIX}")
 endif()
+set(FSIM_SYSTEMC_INSTALLED_OFFICIAL_LINK_LIBRARY
+    "${CMAKE_INSTALL_FULL_LIBDIR}/$<TARGET_LINKER_FILE_NAME:${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}>")
 separate_arguments(
   FSIM_SYSTEMC_DEFAULT_COMPILE_OPTIONS
   NATIVE_COMMAND "${CMAKE_CXX_FLAGS}"
 )
+set(FSIM_SYSTEMC_DEFAULT_DEFINES)
+set(FSIM_SYSTEMC_FILTERED_COMPILE_OPTIONS)
+foreach(FSIM_SYSTEMC_DEFAULT_OPTION IN LISTS FSIM_SYSTEMC_DEFAULT_COMPILE_OPTIONS)
+  if(FSIM_SYSTEMC_DEFAULT_OPTION MATCHES "^[-/]D(.+)$")
+    list(APPEND FSIM_SYSTEMC_DEFAULT_DEFINES "${CMAKE_MATCH_1}")
+  else()
+    list(APPEND FSIM_SYSTEMC_FILTERED_COMPILE_OPTIONS
+         "${FSIM_SYSTEMC_DEFAULT_OPTION}")
+  endif()
+endforeach()
+if(WIN32)
+  list(APPEND FSIM_SYSTEMC_DEFAULT_DEFINES SC_WIN_DLL)
+endif()
+list(REMOVE_DUPLICATES FSIM_SYSTEMC_DEFAULT_DEFINES)
 list(
-  JOIN FSIM_SYSTEMC_DEFAULT_COMPILE_OPTIONS "|"
+  JOIN FSIM_SYSTEMC_FILTERED_COMPILE_OPTIONS "|"
   FSIM_SYSTEMC_DEFAULT_COMPILE_OPTIONS_ENCODED
+)
+list(
+  JOIN FSIM_SYSTEMC_DEFAULT_DEFINES "|"
+  FSIM_SYSTEMC_DEFAULT_DEFINES_ENCODED
 )
 target_compile_definitions(
   fsim_systemc
@@ -850,11 +877,12 @@ target_compile_definitions(
     FSIM_SYSTEMC_INSTALLED_UPSTREAM_HEADER_PATH="${CMAKE_INSTALL_FULL_INCLUDEDIR}"
     FSIM_SYSTEMC_DEFAULT_COMPILER="${CMAKE_CXX_COMPILER}"
     FSIM_SYSTEMC_DEFAULT_COMPILE_OPTIONS="${FSIM_SYSTEMC_DEFAULT_COMPILE_OPTIONS_ENCODED}"
+    FSIM_SYSTEMC_DEFAULT_DEFINES="${FSIM_SYSTEMC_DEFAULT_DEFINES_ENCODED}"
     FSIM_SYSTEMC_PLUGIN_EXPORT_LIBRARY_PATH="$<TARGET_FILE:fsim_systemc_plugin_exports>"
     FSIM_SYSTEMC_INSTALLED_PLUGIN_EXPORT_LIBRARY_PATH="${CMAKE_INSTALL_FULL_LIBDIR}/${CMAKE_STATIC_LIBRARY_PREFIX}fsim_systemc_plugin_exports${CMAKE_STATIC_LIBRARY_SUFFIX}"
     FSIM_SYSTEMC_ACCELERA_LIBRARY_PATH="$<TARGET_LINKER_FILE:fsim_systemc_accellera_runtime>"
     FSIM_SYSTEMC_INSTALLED_ACCELERA_LIBRARY_PATH="${FSIM_SYSTEMC_INSTALLED_ACCELERA_LINK_LIBRARY}"
-    FSIM_SYSTEMC_OFFICIAL_LIBRARY_PATH="$<TARGET_LINKER_FILE:SystemC::systemc>"
+    FSIM_SYSTEMC_OFFICIAL_LIBRARY_PATH="$<TARGET_LINKER_FILE:${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}>"
     FSIM_SYSTEMC_INSTALLED_OFFICIAL_LIBRARY_PATH="${FSIM_SYSTEMC_INSTALLED_OFFICIAL_LINK_LIBRARY}"
     FSIM_SYSTEMC_RUNTIME_IDENTITY="${FSIM_SYSTEMC_RUNTIME_IDENTITY}"
 )
