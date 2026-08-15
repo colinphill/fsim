@@ -56,6 +56,18 @@ enum class DelayMode : std::uint8_t {
   maximum,
 };
 
+enum class TraceFormat : std::uint8_t {
+  automatic,
+  vcd,
+  fst,
+};
+
+enum class TraceCompression : std::uint8_t {
+  automatic,
+  none,
+  deterministic,
+};
+
 // Canonical governed UVM source release. `none` preserves ordinary
 // SystemVerilog projects which do not opt into a governed UVM package.
 enum class SystemVerilogUvmRelease : std::uint8_t {
@@ -149,7 +161,11 @@ struct RunSection {
   std::uint64_t max_deltas{100'000};
   DelayMode delay_mode{DelayMode::typical};
   std::optional<std::filesystem::path> trace_file;
+  TraceFormat trace_format{TraceFormat::automatic};
+  TraceCompression trace_compression{TraceCompression::automatic};
   std::vector<std::string> trace_filters;
+  std::size_t trace_report_limit{4'096U};
+  bool trace_enabled{true};
 };
 
 struct SystemCSection {
@@ -182,6 +198,8 @@ struct Config {
     SystemVerilogStandard standard) noexcept;
 [[nodiscard]] std::string_view to_string(Optimization optimization) noexcept;
 [[nodiscard]] std::string_view to_string(DelayMode mode) noexcept;
+[[nodiscard]] std::string_view to_string(TraceFormat format) noexcept;
+[[nodiscard]] std::string_view to_string(TraceCompression compression) noexcept;
 [[nodiscard]] std::string_view to_string(SystemVerilogUvmRelease release) noexcept;
 [[nodiscard]] std::optional<Language> parse_language(std::string_view spelling) noexcept;
 [[nodiscard]] std::optional<VhdlStandard> parse_vhdl_standard(
@@ -203,6 +221,10 @@ parse_systemverilog_uvm_release(std::string_view spelling) noexcept;
 [[nodiscard]] SystemVerilogUvmCompatibility
 systemverilog_uvm_compatibility(SystemVerilogUvmRelease release) noexcept;
 [[nodiscard]] std::optional<DelayMode> parse_delay_mode(
+    std::string_view spelling) noexcept;
+[[nodiscard]] std::optional<TraceFormat> parse_trace_format(
+    std::string_view spelling) noexcept;
+[[nodiscard]] std::optional<TraceCompression> parse_trace_compression(
     std::string_view spelling) noexcept;
 
 // Parses, validates, and resolves a schema-2 fsim.toml. Relative paths are

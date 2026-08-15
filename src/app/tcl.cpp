@@ -1712,14 +1712,28 @@ namespace {
     {
         if (argument_count < 2) {
             Tcl_WrongNumArgs(
-                interpreter, 1, arguments, "add|remove SIGNAL | all|clear|list");
+                interpreter, 1, arguments,
+                "configure|disable|status|report|add|remove|all|clear|list");
             return TCL_ERROR;
         }
+        const auto apply_configuration
+            = [&](project::RunSection candidate)
+            -> std::shared_ptr<const TraceControlApplication> {
+            auto applied = apply_trace_control(trace_control_request(candidate,
+                TraceControlSurface::Tcl, TraceControlPhase::Simulate));
+            if (!applied.ok()) {
+                command_error(interpreter, applied.diagnostics.front().message);
+                return { };
+            }
+            publish_trace_control(*applied.application, context.config.run);
+            return applied.application;
+        };
         const std::string_view operation { Tcl_GetString(arguments[1]) };
         if (operation == "configure") {
             if (argument_count < 3) {
                 Tcl_WrongNumArgs(
-                    interpreter, 2, arguments, "FILE ?FILTER ...?");
+                    interpreter, 2, arguments,
+                    "FILE ?-format VALUE? ?-compression VALUE? ?-select GLOB? ?-report-limit COUNT? ?-lifecycle configured|disabled? ?FILTER ...?");
                 return TCL_ERROR;
             }
             if (context.simulation) {
@@ -1727,19 +1741,95 @@ namespace {
                     interpreter,
                     "trace output must be configured before simulation starts");
             }
+            auto candidate = context.config.run;
             std::filesystem::path path { Tcl_GetString(arguments[2]) };
             if (path.is_relative()) {
                 path = context.config.base_directory / path;
             }
-            context.config.run.trace_file = path.lexically_normal();
-            context.config.run.trace_filters.clear();
+            candidate.trace_file = path.lexically_normal();
+            candidate.trace_filters.clear();
+            candidate.trace_enabled = true;
             for (Tcl_Size index = 3; index < argument_count; ++index) {
-                context.config.run.trace_filters.emplace_back(
-                    Tcl_GetString(arguments[index]));
+                const std::string_view option { Tcl_GetString(arguments[index]) };
+                if (option == "-format") {
+                    if (++index >= argument_count) {
+                        return command_error(
+                            interpreter, "trace -format requires a value");
+                    }
+                    const auto parsed = project::parse_trace_format(
+                        Tcl_GetString(arguments[index]));
+                    if (!parsed) {
+                        return command_error(interpreter,
+                            "trace format must be auto, vcd, or fst");
+                    }
+                    candidate.trace_format = *parsed;
+                } else if (option == "-compression") {
+                    if (++index >= argument_count) {
+                        return command_error(interpreter,
+                            "trace -compression requires a value");
+                    }
+                    const auto parsed = project::parse_trace_compression(
+                        Tcl_GetString(arguments[index]));
+                    if (!parsed) {
+                        return command_error(interpreter,
+                            "trace compression must be auto, none, or deterministic");
+                    }
+                    candidate.trace_compression = *parsed;
+                } else if (option == "-select") {
+                    if (++index >= argument_count) {
+                        return command_error(
+                            interpreter, "trace -select requires a glob");
+                    }
+                    candidate.trace_filters.emplace_back(
+                        Tcl_GetString(arguments[index]));
+                } else if (option == "-report-limit") {
+                    if (++index >= argument_count) {
+                        return command_error(interpreter,
+                            "trace -report-limit requires a positive integer");
+                    }
+                    Tcl_WideInt limit = 0;
+                    if (Tcl_GetWideIntFromObj(
+                            interpreter, arguments[index], &limit)
+                            != TCL_OK
+                        || limit <= 0
+                        || static_cast<std::uint64_t>(limit)
+                            > std::numeric_limits<std::size_t>::max()) {
+                        return command_error(interpreter,
+                            "trace report limit must be a positive size");
+                    }
+                    candidate.trace_report_limit
+                        = static_cast<std::size_t>(limit);
+                } else if (option == "-lifecycle") {
+                    if (++index >= argument_count) {
+                        return command_error(interpreter,
+                            "trace -lifecycle requires configured or disabled");
+                    }
+                    const std::string_view lifecycle {
+                        Tcl_GetString(arguments[index])
+                    };
+                    if (lifecycle == "configured" || lifecycle == "enabled") {
+                        candidate.trace_enabled = true;
+                    } else if (lifecycle == "disabled" || lifecycle == "off") {
+                        candidate.trace_enabled = false;
+                    } else {
+                        return command_error(interpreter,
+                            "trace lifecycle must be configured or disabled");
+                    }
+                } else if (option.starts_with('-')) {
+                    return command_error(interpreter,
+                        "unknown trace configure option '"
+                            + std::string { option } + "'");
+                } else {
+                    candidate.trace_filters.emplace_back(option);
+                }
+            }
+            const auto application = apply_configuration(std::move(candidate));
+            if (!application) {
+                return TCL_ERROR;
             }
             return set_result(
                 interpreter,
-                fsim::support::path_to_utf8(*context.config.run.trace_file));
+                fsim::support::path_to_utf8(application->request().output));
         }
         if (operation == "disable" && argument_count == 2) {
             if (context.simulation) {
@@ -1747,22 +1837,88 @@ namespace {
                     interpreter,
                     "trace output must be disabled before simulation starts");
             }
-            context.config.run.trace_file.reset();
-            context.config.run.trace_filters.clear();
+            auto candidate = context.config.run;
+            candidate.trace_file.reset();
+            candidate.trace_filters.clear();
+            candidate.trace_enabled = false;
+            if (!apply_configuration(std::move(candidate))) {
+                return TCL_ERROR;
+            }
             return set_result(interpreter, "");
         }
-        if (operation == "status" && argument_count == 2) {
+        if ((operation == "status" || operation == "report")
+            && argument_count == 2) {
+            auto configured = apply_trace_control(trace_control_request(
+                context.config.run, TraceControlSurface::Tcl,
+                TraceControlPhase::Simulate));
+            if (!configured.ok()) {
+                return command_error(
+                    interpreter, configured.diagnostics.front().message);
+            }
+            if (operation == "report") {
+                Tcl_Obj* result = Tcl_NewListObj(0, nullptr);
+                const auto runtime_report = context.debugger
+                    ? context.debugger->trace_report()
+                    : std::span<const TraceControlReportEntry> { };
+                const auto report = runtime_report.empty()
+                    ? configured.application->report()
+                    : runtime_report;
+                for (const auto& entry : report) {
+                    Tcl_Obj* item = Tcl_NewDictObj();
+                    dict_put(interpreter, item, "kind",
+                        string_object(trace_control_entry_kind_name(entry.kind)));
+                    dict_put(interpreter, item, "name", string_object(entry.name));
+                    dict_put(interpreter, item, "value", string_object(entry.value));
+                    dict_put(interpreter, item, "identity",
+                        string_object(entry.canonical_identity));
+                    if (Tcl_ListObjAppendElement(interpreter, result, item)
+                        != TCL_OK) {
+                        return TCL_ERROR;
+                    }
+                }
+                Tcl_SetObjResult(interpreter, result);
+                return TCL_OK;
+            }
+            std::string runtime_status;
+            auto status = configured.application->status();
+            if (context.debugger) {
+                if (const auto live = context.debugger->trace_status()) {
+                    status = *live;
+                }
+                context.debug_output->str({ });
+                context.debug_output->clear();
+                context.debug_error->str({ });
+                context.debug_error->clear();
+                context.debugger->execute({ "trace", "status" });
+                const auto debug_error = context.debug_error->str();
+                if (!debug_error.empty()) {
+                    return command_error(interpreter, debug_error);
+                }
+                runtime_status = context.debug_output->str();
+                while (!runtime_status.empty()
+                    && (runtime_status.back() == '\n'
+                        || runtime_status.back() == '\r')) {
+                    runtime_status.pop_back();
+                }
+            }
             Tcl_Obj* result = Tcl_NewDictObj();
             dict_put(
                 interpreter,
                 result,
                 "file",
-                string_object(
-                    context.config.run.trace_file
-                        ? fsim::support::path_to_utf8(*context.config.run.trace_file)
-                        : std::string { }));
+                string_object(fsim::support::path_to_utf8(
+                    configured.application->request().output)));
+            dict_put(interpreter, result, "format",
+                string_object(project::to_string(
+                    status.effective_format)));
+            dict_put(interpreter, result, "compression",
+                string_object(project::to_string(
+                    status.effective_compression)));
+            dict_put(interpreter, result, "lifecycle",
+                string_object(trace_lifecycle_name(
+                    status.lifecycle)));
             Tcl_Obj* filters = Tcl_NewListObj(0, nullptr);
-            for (const auto& filter : context.config.run.trace_filters) {
+            for (const auto& filter : configured.application->request().selection) {
                 if (Tcl_ListObjAppendElement(
                         interpreter, filters, string_object(filter))
                     != TCL_OK) {
@@ -1770,6 +1926,16 @@ namespace {
                 }
             }
             dict_put(interpreter, result, "filters", filters);
+            dict_put(interpreter, result, "report_count",
+                Tcl_NewWideIntObj(static_cast<Tcl_WideInt>(
+                    status.report_entry_count)));
+            dict_put(interpreter, result, "report_truncated",
+                Tcl_NewBooleanObj(status.report_truncated));
+            dict_put(interpreter, result, "identity",
+                string_object(configured.application->semantic_identity()));
+            dict_put(
+                interpreter, result, "runtime",
+                string_object(runtime_status));
             Tcl_SetObjResult(interpreter, result);
             return TCL_OK;
         }

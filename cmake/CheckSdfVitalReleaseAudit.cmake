@@ -51,9 +51,9 @@ endforeach()
 
 foreach(FSIM_EXACT_OUTPUT IN ITEMS
     "SDF VITAL inventory passed: rows=17 preserved=17 active=0 digest=3e84f643e6df24090efb1161e0d6836847784268a139e3da3c2fda4568913c6f"
-    "diagnostic catalog covers 2461 production codes"
-    "Checked 1020 authored sources against the 2500-line hard limit with a 2000-line refactor target"
-    "resource portability contract: five four-worker, 120-minute hosted jobs, eight-link pool, compact Debug objects, 8 MiB Windows stacks, bounded large-test timeouts, pinned Boost headers, and scoped/SystemC phase traces are present")
+    "diagnostic catalog covers 2477 production codes"
+    "Checked 1056 authored sources against the 2500-line hard limit with a 2000-line refactor target"
+    "resource portability contract: five four-worker, 120-minute hosted jobs, eight-link pool, compact Debug objects, 8 MiB Windows stacks, bounded large-test and FST value/change/hierarchy storage, pinned Boost headers, and scoped/SystemC phase traces are present")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_EXACT_OUTPUT}"
     FSIM_OUTPUT_INDEX)
   if(FSIM_OUTPUT_INDEX EQUAL -1)
@@ -80,9 +80,9 @@ list(APPEND FSIM_AUTHORED_FILES
 list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX "/tests/fuzz/corpus/")
 list(REMOVE_DUPLICATES FSIM_AUTHORED_FILES)
 list(LENGTH FSIM_AUTHORED_FILES FSIM_AUTHORED_COUNT)
-if(NOT FSIM_AUTHORED_COUNT EQUAL 1205)
+if(NOT FSIM_AUTHORED_COUNT EQUAL 1252)
   message(FATAL_ERROR
-    "authored SDF VITAL inventory changed: expected 1205 files, found ${FSIM_AUTHORED_COUNT}")
+    "authored SDF VITAL inventory changed: expected 1252 files, found ${FSIM_AUTHORED_COUNT}")
 endif()
 foreach(FSIM_FILE IN LISTS FSIM_AUTHORED_FILES)
   file(READ "${FSIM_FILE}" FSIM_PREFIX LIMIT 4096)
@@ -137,4 +137,4 @@ foreach(FSIM_DOC_TOKEN IN ITEMS
 endforeach()
 
 message(STATUS
-  "SDF VITAL release audit: 17 rows, 2461 diagnostics, 1020 bounded sources, ${FSIM_AUTHORED_COUNT} SPDX-owned files")
+  "SDF VITAL release audit: 17 rows, 2477 diagnostics, 1056 bounded sources, ${FSIM_AUTHORED_COUNT} SPDX-owned files")

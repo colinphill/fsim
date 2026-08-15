@@ -1277,6 +1277,12 @@ end architecture;
     scalar_export_config.project.top = "sv:work.scalar_artifact";
     scalar_export_config.project.time_resolution = "1ns";
     scalar_export_config.build.cache_path = directory / "scalar-export-cache";
+    scalar_export_config.run.trace_file = directory / "scalar-artifact.fst";
+    scalar_export_config.run.trace_format = project::TraceFormat::fst;
+    scalar_export_config.run.trace_compression
+        = project::TraceCompression::none;
+    scalar_export_config.run.trace_filters = { "scalar_artifact.*" };
+    scalar_export_config.run.trace_enabled = true;
     auto scalar_library = directory / "scalar-artifact.fsimlib";
     diagnostic::Engine scalar_export_diagnostics;
     assert(app::export_library(
@@ -1314,6 +1320,12 @@ end architecture;
         if (!built)
             diagnostic::print_text(std::cerr, diagnostics);
         assert(built && built->mapped_libraries.size() == 1);
+        assert(built->trace_archive
+            && built->trace_archive->effective_format
+                == project::TraceFormat::fst
+            && built->trace_archive->output_intent == "scalar-artifact.fst"
+            && built->trace_archive->semantic_identity.find(
+                   support::path_to_utf8(directory)) == std::string::npos);
         ScalarLibraryCapture capture;
         capture.keys = built->specialization_cache_keys;
         assert(built->systemverilog_coverage.declarations.size() == 1);

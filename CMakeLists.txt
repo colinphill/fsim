@@ -578,6 +578,12 @@ add_library(
       src/runtime/simir_vital.cpp
       src/runtime/simir_vital_memory_path.cpp
       src/runtime/simir_state.cpp
+      src/runtime/fst_change_encoder.cpp
+      src/runtime/fst_compression.cpp
+      src/runtime/fst_reader.cpp
+      src/runtime/fst_value_encoder.cpp
+      src/runtime/fst_writer.cpp
+      src/runtime/trace_model.cpp
     src/runtime/vcd_writer.cpp
 )
 add_library(fsim::runtime ALIAS fsim_runtime)
@@ -992,6 +998,12 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_phase_compile.cpp
       src/app/application_phase_design.cpp
       src/app/application_phase_object.cpp
+      src/app/application_trace_archive.cpp
+      src/app/application_trace_api.cpp
+      src/app/application_trace_format.cpp
+      src/app/application_trace_control.cpp
+      src/app/application_trace_hierarchy.cpp
+      src/app/application_trace_observation.cpp
       src/app/application_run.cpp
       src/app/application_semantic.cpp
       src/app/application_constraint_lowering.cpp

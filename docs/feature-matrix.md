@@ -1528,6 +1528,20 @@ with zero active obligations and SHA-256
 | V2-SDF-170-03 | VHPI/VPI, debugger/callback/trace/VCD, all portable artifacts and equivalent project/CLI/Tcl/C/C++/non-project phases expose immutable effective timing | execute | [Changes 13-16 tests](../tests/app) | [archive, observer, phase and resource negatives](diagnostics.md) | [foreign/observation/archive/phase owners](../src/app) | [36-case public phase matrix](../tests/app/sdf_vital_phases_test.cpp) |
 | V2-SDF-170-04 | Owned SDF/VHDL/Verilog/SystemVerilog/SystemC models cover 2,700 revision/model/direction/engine/phase cases with multiple-root, artifact, platform and retained-log closure | execute | [owned corpus](../tests/app/sdf_vital_corpus_test.cpp) | [five-family negative closure](../cmake/RunSdfVitalClosure.cmake) | [zero-active inventory gate](../cmake/CheckSdfVitalInventory.cmake) | [Batch 170 release audit](v2-sdf-vital-release-audit.md) |
 
+## VCD and FST tracing
+
+The canonical seventeen-row Batch 171 ledger is
+[`fst_inventory.tsv`](../tests/feature_matrix/fst_inventory.tsv), with zero
+active obligations and normalized SHA-256
+`fa40e80a69015276a850de6f4f84355d93ec541c774a76003f2b1718d1eac248`.
+
+| ID | Precisely bounded feature | Status | P+ | P- | E | R |
+|---|---|---|---|---|---|---|
+| V2-FST-171-01 | One immutable format-neutral model drives byte-preserved VCD, deterministic FST and internal observers with stable hierarchy, alias, type, source and event identities | execute | [model and writer fixtures](../tests/runtime/trace_model_tests.cpp) | [declaration, lifecycle and publication negatives](../tests/runtime/fst_writer_tests.cpp) | [format-neutral model](../src/runtime/trace_model.cpp), [VCD adapter](../src/runtime/vcd_writer.cpp), [FST writer](../src/runtime/fst_writer.cpp) | [format and hierarchy application differential](../tests/app/trace_format_application_test.cpp), [mixed-root differential](../tests/app/trace_hierarchy_application_test.cpp) |
+| V2-FST-171-02 | Arbitrary-width packed values, real/string/enumeration, VHDL physical/time/Logic9, resolved strength and owner-qualified typed leaves preserve exact profile, shape, width, state and payload | execute | [value encoder matrix](../tests/runtime/fst_value_encoder_tests.cpp) | [profile, shape, width, metadata and resource rejection](../tests/runtime/fst_value_encoder_tests.cpp) | [typed value encoder](../src/runtime/fst_value_encoder.cpp), [ordered change encoder](../src/runtime/fst_change_encoder.cpp) | [complete 28-obligation corpus](../tests/app/fst_corpus_test.cpp) |
+| V2-FST-171-03 | Project, CLI, Tcl, debugger, native C, C++ and non-project phases share transactional format, compression, selection, lifecycle, status and report controls | execute | [public control matrix](../tests/app/trace_api_application_test.cpp) | [control and failure-containment matrix](../tests/app/trace_control_application_test.cpp) | [public control model](../src/app/application_trace_api.cpp) | [compile/elaborate/simulate and artifact differential](../tests/app/application_test_non_project_cli.cpp) |
+| V2-FST-171-04 | Trace identity persists through all five archive kinds, source hiding and relocation; deterministic compression is platform-independent and the bounded reader rejects all corrupt/resource profiles transactionally | execute | [archive and reader equivalence](../tests/app/trace_archive_application_test.cpp), [reader matrix](../tests/runtime/fst_reader_tests.cpp) | [every-prefix, checksum, identity, I/O and limit negatives](../tests/runtime/fst_reader_tests.cpp) | [archive codec](../src/app/application_trace_archive.cpp), [reader](../src/runtime/fst_reader.cpp), [compression](../src/runtime/fst_compression.cpp) | [retained four-log closure](../cmake/RunFstClosure.cmake), [Batch 171 release audit](v2-fst-release-audit.md) |
+
 ## Completed v1 feature groups
 
 | ID | Required feature group | Status | P+ | P- | E | R |

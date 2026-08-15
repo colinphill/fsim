@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_trace_control.hpp"
 #include "fsim/support/path.hpp"
 
 namespace fsim::app::application_detail {
@@ -1243,31 +1244,74 @@ void DebuggerSession::trace_command(const std::vector<std::string>& command)  {
       return;
     }
     if (command.size() == 2 && command[1] == "list") {
-      bool found = false;
-      for (const auto& signal : simulation_.design_ir().objects()) {
-        if (signal.kind != semantic::design::ObjectKind::signal
-            || signal.parent_object
-            || signal.runtime_index >= trace_->enabled.size()
-            || !trace_->enabled[signal.runtime_index]) {
-          continue;
-        }
-        found = true;
-        output_ << signal.path << '\n';
+      const auto status = trace_->selection->status();
+      for (const auto& owner : status.selected_owners) {
+        output_ << owner << '\n';
       }
-      if (!found) {
+      if (status.selected_owners.empty()) {
         output_ << "(no traced signals)\n";
+      }
+      return;
+    }
+    if (command.size() == 2 && command[1] == "status") {
+      const auto status = trace_->selection->status();
+      output_ << "format " << project::to_string(trace_->format)
+              << ", output " << support::path_to_utf8(trace_->output_path)
+              << ", compression "
+              << project::to_string(
+                     trace_->control->status().effective_compression)
+              << ", lifecycle "
+              << (trace_->terminal_status == TraceTerminalStatus::open
+                      ? "open"
+                      : trace_->terminal_status == TraceTerminalStatus::complete
+                      ? "complete"
+                      : "failed")
+              << ", declared " << status.declared
+              << ", selected " << status.selected
+              << ", generation " << status.generation << '\n';
+      return;
+    }
+    if (command.size() == 2 && command[1] == "report") {
+      for (const auto& entry : trace_->control->report()) {
+        output_ << trace_control_entry_kind_name(entry.kind) << ' '
+                << entry.name << '=' << entry.value << " identity="
+                << entry.canonical_identity << '\n';
+      }
+      return;
+    }
+    if (command.size() == 2 && command[1] == "flush") {
+      if (trace_->terminal_status == TraceTerminalStatus::complete) {
+        output_ << "trace already complete\n";
+      } else if (trace_->diagnostics
+                 && flush_trace(*trace_, *trace_->diagnostics)) {
+        output_ << "trace flushed\n";
+      } else {
+        error_ << (trace_->terminal_diagnostic.empty()
+                       ? "trace flush failed"
+                       : trace_->terminal_diagnostic)
+               << '\n';
+      }
+      return;
+    }
+    if (command.size() == 2 && command[1] == "close") {
+      if (!simulation_.finished()) {
+        error_ << "trace close requires a finished simulation\n";
+      } else if (trace_->diagnostics
+                 && finish_trace(*trace_, *trace_->diagnostics)) {
+        output_ << "trace complete\n";
+      } else {
+        error_ << (trace_->terminal_diagnostic.empty()
+                       ? "trace close failed"
+                       : trace_->terminal_diagnostic)
+               << '\n';
       }
       return;
     }
     if (command.size() == 2
         && (command[1] == "all" || command[1] == "clear")) {
       const auto enable = command[1] == "all";
-      for (const auto& signal : simulation_.design_ir().objects()) {
-        if (signal.kind == semantic::design::ObjectKind::signal
-            && !signal.parent_object) {
-          set_trace_enabled(
-              static_cast<SignalId>(signal.runtime_index), enable);
-        }
+      for (const auto signal : trace_->selection->declared_signals()) {
+        set_trace_enabled(signal, enable);
       }
       output_
           << (enable ? "tracing all signals\n" : "cleared trace selection\n");
@@ -1287,33 +1331,13 @@ void DebuggerSession::trace_command(const std::vector<std::string>& command)  {
       return;
     }
     output_ << "usage: trace add|remove SIGNAL | "
-               "trace all|clear|list\n";
+               "trace all|clear|list|status|report|flush|close\n";
   }
 
 void DebuggerSession::set_trace_enabled(const SignalId signal, const bool enable)  {
-    if (signal >= trace_->enabled.size()
-        || signal >= trace_->handles.size()
-        || trace_->handles[signal].empty()) {
-      throw std::logic_error{"debug trace signal is not declared"};
-    }
-    if (trace_->enabled[signal] == enable) {
-      return;
-    }
-    trace_->enabled[signal] = enable;
-    if (!enable) {
-      return;
-    }
-    if (simulation_.now()
-        > std::numeric_limits<SimulationTick>::max()
-              / trace_->tick_multiplier) {
-      throw std::overflow_error{"VCD timestamp scaling overflow"};
-    }
-    trace_->writer->set_time(
-        simulation_.now() * trace_->tick_multiplier);
-    if (!trace_->handles[signal].empty()) {
-      write_trace_signal_value(
-          *trace_, signal, simulation_.read_signal(signal));
-    }
+    static_cast<void>(trace_->selection->set_enabled(
+        signal, enable, simulation_.now(), simulation_.delta(),
+        simulation_.read_signal(signal), *trace_->observations));
   }
 
 void DebuggerSession::add_breakpoint(const std::vector<std::string>& command)  {
@@ -1921,7 +1945,7 @@ int handle_debug(
       });
   report_native_cache_failures(simulation, diagnostics);
   auto trace = attach_trace(simulation, config, diagnostics, true);
-  if (config.run.trace_file && !trace) {
+  if (config.run.trace_file && config.run.trace_enabled && !trace) {
     return 1;
   }
   install_interrupt_hook(simulation);
@@ -1947,8 +1971,8 @@ int handle_debug(
   print_debug_help(output);
   const auto status = run_debug_repl_impl(
       simulation, input, output, error_output, trace.get());
-  if (trace) {
-    trace->writer->flush();
+  if (trace && !finish_trace(*trace, diagnostics)) {
+    return 1;
   }
   return status;
 }

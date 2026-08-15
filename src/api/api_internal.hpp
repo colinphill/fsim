@@ -94,7 +94,10 @@ struct Session {
   fsim::diagnostic::Engine diagnostics;
   std::optional<fsim::project::Config> project;
   std::shared_ptr<const fsim::app::SdfControlApplication> sdf_control;
+  std::shared_ptr<const fsim::app::TraceControlApplication> trace_control;
+  std::optional<fsim::app::TraceLifecycle> trace_lifecycle_override;
   std::unique_ptr<fsim::app::Simulation> simulation;
+  std::unique_ptr<fsim::app::TraceRuntime> trace_runtime;
   fsim_callbacks_t callbacks{};
   std::atomic_bool stop_requested{false};
   std::atomic_bool external_stop_seen{false};

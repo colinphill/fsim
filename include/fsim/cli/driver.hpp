@@ -76,6 +76,10 @@ struct Invocation {
   std::string sdf_cell{"*"};
   std::optional<std::size_t> sdf_report_limit;
   std::optional<std::filesystem::path> trace_file;
+  std::optional<project::TraceFormat> trace_format;
+  std::optional<project::TraceCompression> trace_compression;
+  std::optional<std::size_t> trace_report_limit;
+  std::optional<bool> trace_enabled;
   std::optional<std::uint64_t> seed;
   bool random_seed{false};
   std::optional<std::uint32_t> jobs;

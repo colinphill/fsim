@@ -150,3 +150,64 @@ add_dependencies(
   fsim_vpi_reference_cpp_plugin)
 fsim_configure_test(fsim_runtime_tests)
 add_test(NAME fsim.runtime COMMAND fsim_runtime_tests)
+
+add_executable(fsim_trace_model_tests trace_model_tests.cpp)
+target_link_libraries(fsim_trace_model_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_trace_model_tests)
+add_test(NAME fsim.runtime.trace_model COMMAND fsim_trace_model_tests)
+set_tests_properties(
+  fsim.runtime.trace_model
+  PROPERTIES LABELS "fast;runtime;trace;vcd;model;positive;negative;equivalence"
+)
+
+add_executable(fsim_fst_writer_tests fst_writer_tests.cpp)
+target_link_libraries(fsim_fst_writer_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_fst_writer_tests)
+add_test(NAME fsim.runtime.fst_writer COMMAND fsim_fst_writer_tests)
+set_tests_properties(
+  fsim.runtime.fst_writer
+  PROPERTIES LABELS "fast;runtime;fst;writer;hierarchy;positive;negative;determinism"
+)
+
+add_executable(fsim_fst_compression_tests fst_compression_tests.cpp)
+target_link_libraries(fsim_fst_compression_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_fst_compression_tests)
+add_test(NAME fsim.runtime.fst_compression COMMAND fsim_fst_compression_tests)
+set_tests_properties(
+  fsim.runtime.fst_compression
+  PROPERTIES LABELS "fast;runtime;fst;compression;positive;negative;determinism;portability"
+)
+
+add_executable(fsim_fst_value_encoder_tests fst_value_encoder_tests.cpp)
+target_link_libraries(fsim_fst_value_encoder_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_fst_value_encoder_tests)
+add_test(
+  NAME fsim.runtime.fst_value_encoder
+  COMMAND fsim_fst_value_encoder_tests
+)
+set_tests_properties(
+  fsim.runtime.fst_value_encoder
+  PROPERTIES LABELS "fast;runtime;fst;value;positive;negative;equivalence;resource"
+)
+
+add_executable(fsim_fst_change_encoder_tests fst_change_encoder_tests.cpp)
+target_link_libraries(fsim_fst_change_encoder_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_fst_change_encoder_tests)
+add_test(
+  NAME fsim.runtime.fst_change_encoder
+  COMMAND fsim_fst_change_encoder_tests
+)
+set_tests_properties(
+  fsim.runtime.fst_change_encoder
+  PROPERTIES LABELS "fast;runtime;fst;change;positive;negative;determinism;resource"
+)
+
+add_executable(fsim_fst_reader_tests fst_reader_tests.cpp)
+target_link_libraries(fsim_fst_reader_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_fst_reader_tests)
+add_test(NAME fsim.runtime.fst_reader COMMAND fsim_fst_reader_tests)
+set_tests_properties(
+  fsim.runtime.fst_reader
+  PROPERTIES LABELS
+    "fast;runtime;fst;reader;value;positive;negative;equivalence;determinism;compression;metadata;alias;lifecycle;resource"
+)

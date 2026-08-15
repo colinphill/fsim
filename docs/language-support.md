@@ -2220,6 +2220,31 @@ trace and VCD expose bounded stable timing objects without scheduler side
 effects. The exact 2,700-case owned corpus and retained-log closure are linked
 from the [Batch 170 audit](v2-sdf-vital-release-audit.md).
 
+## VCD and FST tracing in v2
+
+Batch 171 closes deterministic FST output for the complete existing
+format-neutral trace model without replacing VCD. VCD remains the default;
+`.fst` extension inference or an explicit `fst` format selects the clean-room
+writer. Verilog, SystemVerilog, VHDL, and SystemC roots retain canonical
+hierarchy, logical library, source provenance, aliases, values, and exact
+time/delta/region/sequence order through both formats.
+
+FST supports arbitrary-width bit/logic/reg/time/chandle values, real,
+shortreal, realtime, embedded-byte strings, enums, VHDL physical/time and all
+nine Logic9 states. Resolved strength plus aggregate, class, container,
+coverage, and assertion observations use explicit typed leaves so shape,
+owner, width, and state are not lost. Project, CLI, Tcl, debugger, native C,
+C++, and non-project compile/elaborate/simulate controls share one
+transactional selection/lifecycle contract. Trace identity survives object,
+design, mapped-library, native-cache, and checkpoint forms plus source hiding
+and relocation.
+
+The bounded reader and negative corpus cover every prefix truncation,
+container/block/checksum/schema/identity/order/value failure, filesystem I/O,
+and every configured resource limit. The [tracing guide](tracing.md),
+[public API guide](api.md), and [Batch 171 audit](v2-fst-release-audit.md)
+define the exact supported surface and evidence.
+
 ## v1 target
 
 ### VHDL-2008

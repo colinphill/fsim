@@ -67,7 +67,8 @@ int main()
     const auto expected = example_metadata();
     const auto serialized = fsim::library::serialize_metadata(expected);
     assert(serialized.starts_with(
-        "format = 3\nlibrary = \"vendor\"\nproducer = \"fsim 0.2.0-dev\"\n"));
+        "format = 4\nlibrary = \"vendor\"\nproducer = \"fsim 0.2.0-dev\"\n"));
+    assert(serialized.find("trace_archive = \"\"") != std::string::npos);
     assert(serialized.find("[[dependency]]") != std::string::npos);
     assert(serialized.find("[[vhdl_package_dependency]]")
         != std::string::npos);
@@ -992,8 +993,8 @@ endprimitive
 
     auto incompatible_text = serialized;
     incompatible_text.replace(
-        incompatible_text.find("format = 3"),
-        std::string { "format = 3" }.size(), "format = 99");
+        incompatible_text.find("format = 4"),
+        std::string { "format = 4" }.size(), "format = 99");
     fsim::diagnostic::Engine schema_diagnostics;
     assert(!fsim::library::parse_metadata(
         incompatible_text, "future.toml", schema_diagnostics));

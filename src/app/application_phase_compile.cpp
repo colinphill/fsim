@@ -2,6 +2,7 @@
 #include "application_internal.hpp"
 
 #include "fsim/app/artifact_phase.hpp"
+#include "fsim/app/trace_archive.hpp"
 #include "fsim/artifact/object.hpp"
 #include "fsim/library/portable_unit.hpp"
 #include "fsim/support/path.hpp"
@@ -319,6 +320,26 @@ bool compile_object(
         "compilation produced no owning units for logical library '"
             + source_set.library + "'");
     return false;
+  }
+
+  if (config.run.trace_file && config.run.trace_enabled) {
+    auto request = trace_control_request(config.run,
+        TraceControlSurface::NonProjectCompile, TraceControlPhase::Compile);
+    auto control = apply_trace_control(std::move(request));
+    if (!control.ok()) {
+      for (const auto& diagnostic : control.diagnostics)
+        application_detail::import_diagnostic(diagnostics, diagnostic);
+      return false;
+    }
+    const auto snapshot = make_trace_archive_snapshot(
+        *control.application, config.base_directory);
+    auto archive = encode_trace_archive(snapshot, TraceArchiveKind::Object);
+    if (!archive.ok()) {
+      for (const auto& diagnostic : archive.diagnostics)
+        application_detail::import_diagnostic(diagnostics, diagnostic);
+      return false;
+    }
+    metadata.trace_archive = trace_archive_hex(archive.archive);
   }
 
   metadata.compilation_digest =

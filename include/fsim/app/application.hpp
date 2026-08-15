@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "fsim/app/trace_archive.hpp"
 #include "fsim/cli/driver.hpp"
 #include "fsim/elaboration/elaborator.hpp"
 #include "fsim/frontend/class_specialization.hpp"
@@ -156,6 +157,8 @@ struct CheckedProject {
     std::vector<ObjectProvenance> objects;
     SystemVerilogUvmProvenance systemverilog_uvm_provenance;
     std::size_t source_count { };
+    /// Relocation-safe trace policy restored from object or mapped-library input.
+    std::shared_ptr<const TraceArchiveSnapshot> trace_archive;
 };
 
 struct MappedLibraryProvenance {
@@ -248,6 +251,8 @@ struct BuiltProject {
         verilog_unit_compatibility_profiles;
     /// Validated immutable SDF state carried across non-project phase boundaries.
     std::vector<std::shared_ptr<const SdfPhaseArtifact>> sdf_phase_artifacts { };
+    /// Versioned trace policy carried across object/design/cache/checkpoint phases.
+    std::shared_ptr<const TraceArchiveSnapshot> trace_archive;
 };
 
 [[nodiscard]] std::vector<VerilogScopeProvenance>
@@ -967,6 +972,9 @@ public:
     DebuggerControl& operator=(const DebuggerControl&) = delete;
 
     void execute(const std::vector<std::string>& command);
+    [[nodiscard]] std::optional<TraceControlStatus> trace_status() const;
+    [[nodiscard]] std::span<const TraceControlReportEntry> trace_report()
+        const noexcept;
 
 private:
     struct Impl;

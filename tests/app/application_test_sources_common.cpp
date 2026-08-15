@@ -699,7 +699,8 @@ module class_top;
         WIDE_AMOUNT, source_wide_prior,
         source_wide_accumulator, wide_alias_local);
     source_wide_alias = wide_alias_local;
-    source_wide_recursive = source_object.wide_recurse(3, WIDE_SEED);
+)";
+  output << R"(    source_wide_recursive = source_object.wide_recurse(3, WIDE_SEED);
     source_wide_static_first = source_object.wide_remember(WIDE_SEED);
     source_wide_static_second = source_object.wide_remember(WIDE_AMOUNT);
     source_wide_task_accumulator = '0;

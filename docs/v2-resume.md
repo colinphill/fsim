@@ -1132,6 +1132,572 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     implementing Change 1. After it is committed and pushed, begin only with
     the registered seventeen-row FST closure ledger; preserve it through
     Changes 2-18 and accumulate Changes 1-19 in one recoverable worktree.
+17. Change 1 is complete in the accumulated worktree. The registered seventeen-
+    row `fst_inventory.tsv` ledger has zero preserved and seventeen active rows,
+    exact Changes 2-18 identities, all fifteen ownership fields and normalized
+    SHA-256
+    `2cfe6ce7bd004d8ca2eaab3ab761d88555ca287a415c49b7711371803b3b7875`.
+    The exact-LLVM Debug tree regenerated without compilation; the inventory,
+    diagnostics, source-budget, SDF/VITAL-inventory and resource-portability
+    gates passed 5/5 in 0.50 seconds. The refreshed graph contains 33,533 nodes
+    and 154,422 edges. No trace behavior, Release build/test, sanitizer,
+    hosted-CI inspection or header formatting ran. Preserve this ledger and
+    begin only Change 2's immutable format-neutral trace model and byte-identical
+    VCD refactor.
+18. Change 2 is complete in the same accumulated worktree. The immutable trace
+    model now owns deterministic scope, signal, alias, type, width and source
+    declarations plus exact time/delta/region/sequence event identities. The
+    VCD adapter consumes this model, repeated runtime paths become explicit
+    aliases, unknown/backward events reject and the disabled path still returns
+    before scaling, allocation or model construction. Exact legacy/model VCD
+    bytes, the full application trace path, scalar/time tracing, VCD controls,
+    runtime and static contracts give nine distinct focused Debug gates green;
+    recorded slices pass 7/7 in 0.69 seconds and 4/4 in 26.13 seconds. The ledger
+    is one preserved and sixteen active rows at SHA-256
+    `312e361c71faaeb482a668c5d20c37f4e6e08cf0d4b58f0ad2ee417a24b57bc7`;
+    the refreshed graph contains 33,670 nodes and 154,867 edges. No Release
+    build/test, sanitizer, hosted-CI inspection or header formatting ran. Keep
+    all Changes 1-2 dirty and begin only Change 3's transactional clean-room FST
+    container and hierarchy writer.
+19. Change 3 is complete in the accumulated worktree. The clean-room
+    `FstWriter` transactionally emits a standard header, readable initial frame,
+    geometry and deterministic stored-GZip hierarchy with canonical profile,
+    timescale, start/end, nested scopes and alias handles; bounded lifecycle,
+    time, count, name, frame, hierarchy and container failures publish nothing.
+    The installed independent `fst2vcd` oracle exits zero and reconstructs the
+    exact generated 1-bit/17-bit hierarchy and alias. Focused static/model/writer
+    gates pass 5/5 in 0.43 seconds and the runtime slice passes 3/3 in 0.03
+    seconds. The ledger is two preserved and fifteen active rows at SHA-256
+    `3597465db356c25372608d95bcaef1c10f0723ae3d7ae5049030367699f74831`;
+    the refreshed graph contains 33,725 nodes and 155,159 edges. No GTKWave code
+    or library is copied, linked or vendored, and no Release build/test,
+    sanitizer, hosted-CI inspection or header formatting ran. Keep Changes 1-3
+    dirty and begin only Change 4's explicit `auto`/`vcd`/`fst` selection,
+    extension inference and writer lifecycle.
+20. Change 4 is complete in the accumulated worktree. The public project model
+    owns canonical case-insensitive `auto`/`vcd`/`fst` selection; `.fst` is
+    inferred case-insensitively while every other automatic extension preserves
+    VCD, and explicit opposite known extensions or unknown manifest values
+    reject before touching output. Both writers consume the same immutable
+    declaration model. Successful run/debugger completion explicitly finalizes
+    a sibling-lock-owned staged trace, preserves and atomically replaces an
+    existing regular file, then releases the lock; failures abandon staging,
+    preserve prior output and never remove a foreign lock. Non-regular targets,
+    conflicting formats, an occupied lock and not-yet-supported typed
+    FST declarations are transactional negatives. FST output remains the
+    Change 3 declaration/initial-unknown profile until Changes 5-8 add values
+    and ordered events. Project, artifact, standalone-phase, trace-format,
+    VCD-control, scalar/time, model, writer and static gates pass 12/12 in 3.19
+    seconds. The ledger is three preserved and fourteen active rows at SHA-256
+    `74fff2fa5993653f189e146cb7cc06b5ab7db1e69a23efd93e6bb22285d29959`;
+    the refreshed graph contains 33,774 nodes and 155,778 edges. Pinned
+    formatting touched only the new implementation/application-test `.cpp`
+    files, semantic headers received no formatting-only churn and later FST
+    writer edits are isolated behind an incomplete declaration. No Release
+    build/test, sanitizer, hosted-CI inspection, reset, commit or push ran.
+    Keep Changes 1-4 dirty and begin only Change 5's arbitrary-width bit/logic/
+    reg/time/chandle value encoder.
+21. Change 5 is complete in the accumulated worktree. Immutable exact-width FST
+    payloads cover arbitrary-width bit/logic vectors, SystemVerilog bit/logic/
+    reg and exact 64-bit time/chandle profiles without host-word truncation.
+    Canonical MSB-first 0/1/x/z symbols preserve leading bits and X/Z state;
+    incompatible profiles, widths, Logic9 and lifecycle/alias misuse reject
+    before publication. The value block retains an all-X pre-observation bits
+    array, then emits deterministic initial-time one-bit, packed-binary or ASCII
+    four-state waves plus valid position/time tables only for observed values.
+    Unobserved values therefore keep an exact unknown interval, aliases keep the
+    primary handle and later changes remain assigned to Change 8. The installed
+    independent `fst2vcd` oracle reconstructs the exact representative `01xz`
+    value. Runtime tests generate 4,097- and 4,103-bit patterns rather than large
+    literals; project and standalone artifact-phase coverage exercises packed,
+    bit, time and chandle declarations and actual initial waves, while design-
+    artifact publication preserves a generated 257-bit four-state payload. A
+    complete test-literal audit split one pre-existing 17,106-byte raw string;
+    the largest remaining token or adjacent group is 14,617 bytes below the
+    conservative 16,000-byte MSVC threshold. The final focused Debug slice
+    passes 12/12 after eight-worker builds. The ledger is four preserved and
+    thirteen active rows at SHA-256
+    `dbbda0a76ae4de166d50aae7756ce3c8c45565f17c58c611696832486dfd3560`;
+    the refreshed graph contains 33,832 nodes and 156,209 edges, with encoder
+    cognitive complexity at most 8, loop depth one, no recursion and no nested
+    loops. Pinned formatting touched only the new encoder/encoder-test `.cpp`
+    files; semantic headers received no formatting-only churn. No Release
+    build/test, sanitizer, hosted-CI inspection, reset, commit or push ran. Keep
+    Changes 1-5 dirty and begin only Change 6's extended typed-value encoder.
+22. Change 6 is complete in the accumulated worktree. Canonical immutable FST
+    payloads now cover exact SystemVerilog real/shortreal/realtime special-bit
+    identities, arbitrary byte strings, enums and VHDL physical/time values
+    with length-prefixed language/type/literal/unit metadata. Non-lossless
+    unknown physical/time values, invalid or duplicate metadata, mismatched
+    profiles and governed string/type/member limits reject transactionally.
+    Standard typed variable and wave records, deterministic fixed-Huffman zlib
+    initial planes, backward-only alias handles, synthetic root scoping and
+    corrected handle-chain/scratch fields are accepted by the independent
+    installed `fst2vcd` oracle for baseline, isolated and combined typed
+    application files. Runtime, bounded test-reader, trace-model, application,
+    non-project phase, artifact, diagnostics, source, inventory and resource
+    evidence passes 11/11 in 1.12 seconds after eight-worker Debug builds. The
+    repeated MSVC test-string audit reports no token or adjacent group at
+    16,000 source bytes. The ledger is five preserved and twelve active rows at
+    SHA-256
+    `dbedc4dbd4d15b13fee810feb05fd810c12c49613b8b5b8669b8ffbea8794af9`;
+    the refreshed graph contains 33,938 nodes and 156,880 edges. Formatting
+    touched only new `.cpp` files and did not reformat headers. No Release
+    build/test, sanitizer, hosted-CI action or inspection, reset, commit or push
+    ran. Preserve Changes 1-6 dirty and begin only Change 7's Logic9,
+    resolved-strength, aggregate, class/container, coverage and assertion value
+    closure.
+23. Change 7 is complete in the accumulated worktree. Exact VHDL Logic9 uses a
+    canonical nine-literal type and portable four-bit state ordinals. A bounded
+    owner-qualified typed-leaf contract retains semantic kind, language, exact
+    arbitrary width, state policy, logical owner, leaf path and signed packed/
+    unpacked shape for aggregate, dynamic-class, container, coverage and
+    assertion values. Distinct logical owners no longer share a type identity
+    merely because their payload and shape match, while explicit aliases still
+    share only their target handle. The runtime VPI strength adapter emits
+    independent four-state value, strength-zero and strength-one leaves with all
+    eight drive ranks. Invalid profile/language/width/shape/state/owner/path and
+    64-dimension resource boundaries reject before publication. Encoder,
+    trace-model, writer, bounded reader, application, non-project phase,
+    artifact, diagnostics, source, inventory and resource evidence passes 11/11
+    in 1.73 seconds after eight-worker Debug builds. The MSVC test-string audit
+    reports no token or adjacent group at 16,000 source bytes. The ledger is six
+    preserved and eleven active rows at SHA-256
+    `82a35b512359c16e2552fd55e13ae0e695ba4b9f239a9e665f92826d355c5129`;
+    the refreshed graph contains 33,984 nodes and 157,229 edges. Formatting
+    touched only `.cpp` files and did not reformat semantic headers. No Release
+    build/test, sanitizer, hosted-CI action or inspection, reset, commit or push
+    ran. Preserve Changes 1-7 dirty and begin only Change 8's deterministic
+    initial-snapshot and later-change ordering/alias closure.
+24. Change 8 is complete in the same accumulated worktree. A bounded immutable
+    change transaction validates stable and unique ordering identities plus
+    event, unique-timestamp and cumulative typed-payload limits before sorting
+    once by `(time, delta, region, sequence, stable-id)`. The clean-room writer
+    validates every later value against its declaration and emits standard
+    per-handle sentinel chains whose packed timestamp deltas retain multiple
+    same-time values, late values and explicit alias sharing without collapse.
+    Application tracing couples each scaled format-neutral event to its next
+    value while keeping initial collection as the exact snapshot and preserving
+    VCD behavior. The bounded reader proves exact chain/time bytes; the installed
+    independent `fst2vcd` oracle reconstructs `x`, `0`, `z` at time 5, a second
+    signal at time 6 and the late `1` at time 7. Runtime, reader, application,
+    non-project phase, artifact, diagnostics, source and inventory evidence
+    passes 11/11 in 1.73 seconds after eight-worker Debug builds. The repeated
+    MSVC test-string audit has no token or adjacent group at 16,000 source bytes.
+    The ledger is seven preserved and ten active rows at SHA-256
+    `492d113a5c0ec6a4307852a0c0b3c9a6c3b34b952570f3b1d3dbbb5c27aa8d17`;
+    the refreshed graph contains 34,045 nodes and 157,618 edges. The local
+    resource contract is synchronized but was not run because it audits CI
+    workflow configuration; no CI work occurred. Formatting touched only
+    changed `.cpp` files and did not reformat semantic headers. No Release
+    build/test, sanitizer, hosted-CI action or inspection, reset, commit or push
+    ran. Preserve Changes 1-8 dirty and begin only Change 9's canonical multiple-
+    root and mixed-language hierarchy/provenance closure.
+25. Change 9 is complete in the same accumulated worktree. Application tracing
+    derives every root-qualified packed or string object path from its DesignIR
+    specialization occurrence and bounded parent chain, verifies the terminal
+    occurrence against the immutable design roots, and retains distinct
+    Verilog, SystemVerilog, VHDL and SystemC language, library and stable owner
+    identities without runtime hierarchy lookup. Exact duplicate path/signal
+    declarations collapse, while conflicting signals and invalid ownership
+    reject. The format-neutral model enforces root ownership for variables and
+    aliases. The writer emits versioned `fsim-trace-provenance-v1` sideband
+    records as standard FST miscellaneous-comment attributes and uses VHDL
+    architecture/block scope kinds plus stable owner components. The dedicated
+    mixed-root application test covers all four roots, a cross-root alias,
+    deterministic output and missing-root/library, cyclic-parent and empty-path
+    negatives. The installed independent `fst2vcd` oracle accepts the file and
+    reconstructs all roots, the VHDL architecture and the shared alias handle.
+    The final focused exact-LLVM Debug slice passes 13/13 in 24.96 seconds after
+    eight-worker builds, including `typed_boundaries` in 23.07 seconds. A
+    lexical audit of 40,831 tokens in all 383 test source files finds no string
+    token or adjacent group at 16,000 source bytes; the largest token is 14,622
+    source bytes with a 14,617-byte payload. The ledger is eight preserved and
+    nine active rows at SHA-256
+    `57d2c4191a503d578e63e073682dcfb13b3e1fe74d0738055f4b9a8c204ffa88`;
+    the refreshed graph contains 34,090 nodes and 157,958 edges. The local
+    resource contract is synchronized but was not run because it audits CI
+    workflow configuration; no CI work occurred. Formatting did not touch
+    semantic headers. No Release build/test, sanitizer, hosted-CI action or
+    inspection, reset, commit or push ran. Preserve Changes 1-9 dirty and begin
+    only Change 10's atomic dynamic-observation routing.
+26. Change 10 is complete in the same accumulated worktree. One bounded
+    format-neutral recorder validates complete multi-leaf signal, UVM,
+    dynamic-class, container, coverage, assertion and SDF transactions before
+    committing an immutable record with shared time/delta/region/sequence
+    identity. It commits before observer fanout, catches failures through
+    allocation-free `exception_ptr`, continues later observers, retains the
+    accepted record, and rejects reentrant append or observer mutation. A
+    contained writer failure becomes a terminal trace diagnostic rather than a
+    falsely clean partial output. Initial snapshots and live signal callbacks
+    use the recorder, and all seven formerly VCD-only UVM activity fields now
+    reach FST. Internal/FST records retain exact correlation while VCD preserves
+    its byte-compatible monotonic timestamp projection. The dedicated VCD/FST/
+    internal test covers all seven domains, exact typed leaves, atomic UVM
+    values, throwing/reentrant observers and enum, identity, declaration, width,
+    duplicate, count and resource negatives. The final focused exact-LLVM Debug
+    slice passes 11/11 in 24.01 seconds after eight-worker builds, including
+    VCD controls, non-project and artifact evidence and `typed_boundaries` in
+    22.22 seconds. The repeated lexical audit covers 40,850 tokens in all 384
+    test source files, finds no token or adjacent group at 16,000 source bytes,
+    and retains a 14,622-byte largest token with 14,617-byte payload. The ledger
+    is nine preserved and eight active rows at SHA-256
+    `aaaa338410f1db5d298430743c2d99b32fb87faa74cc4724c450ce9d0d47007c`;
+    the refreshed graph contains 34,157 nodes and 158,313 edges. The local
+    resource contract is synchronized but was not run because it audits CI
+    workflow configuration; no CI work occurred. Formatting touched only
+    changed `.cpp` files and did not reformat semantic headers. No Release
+    build/test, sanitizer, hosted-CI action or inspection, reset, commit or push
+    ran. Preserve Changes 1-10 dirty and begin only Change 11's selection and
+    lifecycle controls.
+27. Change 11 is complete in the same intentionally dirty worktree. A bounded
+    `TraceSelectionControl` validates unique runtime/trace/owner identities
+    against the immutable declaration model, sorts declared signals by
+    canonical owner and retains a non-mutating repeated status plus saturated
+    selection generation. The live hook rejects unselected values before
+    observation construction. Late debugger/Tcl enablement atomically accepts
+    the exact current value in Callback region before enabling; it checks every
+    retained record against backward insertion, and its exact time/delta
+    control barrier keeps immediately following debugger deposits append-only
+    while later scheduler coordinates retain their requested region. Disable,
+    repeated enable and repeated status emit nothing. Both writers receive the
+    same recorder transaction and all dynamic declarations remain frozen before
+    either writer begins. The dedicated test exercises real VCD and FST
+    debugger sessions, repeated deterministic FST bytes, an unselected FST
+    differential, zero VCD values for an unselected declaration, add/remove,
+    disable/re-enable, exact snapshots, status stability, ordering and bounded
+    identity/resource/record-limit negatives. The final exact-LLVM Debug slice
+    passes 14/14 in 24.26 seconds after eight-worker builds, including
+    `typed_boundaries` in 22.19 seconds. The MSVC lexical audit covers 40,945
+    string tokens and 39,864 adjacent groups in 385 test source files with zero
+    at 16,000 source bytes; the largest remains 14,622 source bytes with a
+    14,617-character payload. The ledger is ten preserved and seven active rows
+    at SHA-256
+    `4ae2064370ce723c2bfb656bc9ae666f6280f4ce07439336b6e099e4a64b4b97`;
+    the refreshed graph contains 34,214 nodes and 158,702 edges. The local
+    resource contract is synchronized but not run because it reads the hosted
+    workflow; no CI work occurred. Only new `.cpp` files were formatted, and
+    semantic headers were not reformatted. No Release build/test, sanitizer,
+    hosted-CI action or inspection, reset, commit or push ran. Preserve Changes
+    1-11 dirty and implement only Change 12's bounded buffering, flush/close,
+    destructor and terminal failure containment next.
+28. Change 12 is complete in the same intentionally dirty worktree. The FST
+    writer now applies one cumulative declaration/initial/change buffer budget,
+    retains a configuring/open/complete/failed status with the first terminal
+    failure and published-byte count, releases retained data on failure, and
+    rejects later work without replacing the original status. Flush validates
+    the destination without publishing; close freezes once and reports complete
+    only after the bounded container write and flush succeed. Full buffers,
+    invalid lifecycle transitions, close validation, sync failure, a partial
+    write and destructor abandonment therefore cannot publish or report a clean
+    trace. Application project, explicit non-project and debugger paths share
+    one open/complete/failed `TraceTerminalStatus`; the first callback/writer/
+    stream/publication/destructor failure emits one diagnostic, discards staging
+    and makes repeated finalization fail. Runtime tests cover all three buffer
+    classes, stable retry status, no-publication flush/destructor behavior and
+    I/O/close failures. A real staged FST publication failure produces exactly
+    one `FSIM-TRACE-0003`, preserves the replacement directory and removes its
+    lock. The 217-step incremental exact-LLVM Debug build is warning-clean; the
+    initial functional slice passes 7/7 in 22.52 seconds, the final artifact/
+    catalog/source/inventory/dependent slice passes 11/11 in 22.34 seconds and
+    the post-format application slice passes 3/3 in 22.28 seconds, with
+    `typed_boundaries` at 22.27 seconds. The ledger is eleven preserved and six
+    active rows at SHA-256
+    `b37f67231fc4367ae770c8c28f59de474863c3714310d5e0730cea101a7cae20`;
+    the refreshed graph contains 34,255 nodes and 158,925 edges. The resource
+    contract is synchronized but not run because it reads the hosted workflow;
+    no CI work occurred. Formatting touched only `.cpp` files, not semantic
+    headers. No Release build/test, sanitizer, hosted-CI action or inspection,
+    reset, commit or push ran. Preserve Changes 1-12 dirty and implement only
+    Change 13's consistent CLI/Tcl/C/C++/debugger/non-project controls next.
+29. Change 13 is complete in the same intentionally dirty worktree. One
+    immutable trace-control application owns output, auto/VCD/FST format,
+    auto/none compression, bounded ordered selection, configured/disabled
+    lifecycle, generation, status and canonical report identities across the
+    project model, CLI, Tcl, debugger, C/C++ APIs and explicit non-project
+    compile/elaborate/simulate phases. Invalid options, duplicate selections,
+    format conflicts and resource exhaustion leave the prior configuration
+    intact. Tcl and debugger surfaces expose live status/report plus flush and
+    terminal close; debugger traces finalize when simulation finishes. The
+    append-only C ABI attaches tracing before the design-loaded callback,
+    permits callback-safe status/report queries, rejects callback mutation,
+    closes before the finished callback and retains failed lifecycle state.
+    Evidence covers manifest and CLI values, Tcl rollback/live completion,
+    C-header linkage, relative paths, real FST publication, rebuild cleanup,
+    callback queries, terminal failure and idempotent close. Warning-clean
+    eight-worker Debug dependency builds complete up to 154 affected steps; the
+    final project, artifact, catalog, source, inventory, API, trace, Tcl,
+    non-project, VCD and typed-boundary slice passes 13/13 in 23.97 seconds,
+    with `typed_boundaries` in 21.88 seconds. The ledger is twelve preserved
+    and five active rows at SHA-256
+    `ad8658bcb440d9b058666abfa629983e0160784c5c646de11eb761d9891244fa`;
+    the refreshed graph contains 34,471 nodes and 159,781 edges. Central apply
+    and C configuration have cyclomatic complexity 9, loop depth one, no
+    recursion and no nested loops; runtime status is loop-free. Only the new
+    implementation/test `.cpp` files were formatted; semantic headers were not
+    reformatted. The resource contract was not run because it reads the hosted
+    workflow. No Release build/test, sanitizer, hosted-CI action or inspection,
+    reset, commit or push ran. Preserve Changes 1-13 dirty and implement only
+    Change 14's trace artifact and relocation persistence next.
+30. Change 14 is complete in the same intentionally dirty worktree. A bounded
+    fixed-endian `FSIMTRCE` envelope versions object, design, mapped-library,
+    native-cache and checkpoint trace profiles with artifact kind, schemas,
+    SHA-256 identity, immutable configuration/declaration state and a contained
+    relative output intent. Object format 6, design format 10 and library format
+    4 retain lowercase-hex archives; checked/built projects and cache admission
+    retain compatible profiles across phase/surface changes while rejecting
+    declaration, format or output-intent conflicts. Relocated and source-hidden
+    replay resolves beneath the consumer root or compatible explicit output and
+    never archives a producer absolute path. Direct and real artifact evidence
+    covers all five kinds, `.fsimobj`, `.fsimdesign`, relocated `.fsimlib`, cold/
+    warm cache identity, consumer FST publication, corrupt/future/stale/trailing/
+    cross-kind/cross-format/resource negatives and transactional nonpublication.
+    Final warning-clean eight-worker Debug builds complete 136 affected steps
+    plus a 14-step formatted-source refresh. The artifact, catalog, source,
+    inventory, API, archive, non-project, phase, typed-boundary and reader slice
+    passes 12/12 in 25.63 seconds, with `typed_boundaries` in 22.95 seconds. The
+    earlier complete MSVC test-string audit remains valid and all new literals
+    are short. The ledger is thirteen preserved and four active rows at SHA-256
+    `f1c569bedf2bcdfe4e56c46166730a1049d9b80bd35e4738a1c74c0b50fdb4df`;
+    the refreshed graph contains 34,573 nodes and 160,263 edges. Archive helpers
+    have cognitive complexity at most 9, loop depth one, no nested loops and no
+    recursion. Only the new archive implementation/test `.cpp` files were
+    formatted; semantic headers were not reformatted. The resource contract was
+    not run because it reads the hosted workflow. No Release build/test,
+    sanitizer, hosted-CI action or inspection, reset, commit or push ran.
+    Preserve Changes 1-14 dirty and implement only Change 15's deterministic
+    compression profiles next.
+31. Change 15 is complete in the same intentionally dirty worktree. Versioned
+    stored-GZip hierarchy and fixed-Huffman zlib initial-value profiles freeze
+    schema/algorithm version, 15-bit window, 65,535-byte blocks, 258-byte
+    matches and the 128-byte threshold. Every output append is bounded; GZip
+    header fields are canonical, and result records retain the profile,
+    semantic digest, byte digest and platform-byte-identity disposition.
+    Frozen empty/small/large vectors and 8,192-byte runs prove exact bytes
+    without a host compression library. Automatic FST control now resolves to
+    deterministic compression, explicit `none` remains a distinct raw-value
+    writer/archive/cache profile, and deterministic non-FST requests reject.
+    CLI, Tcl, C and C++ controls agree. Direct writer, non-project compile/
+    elaborate/simulate and artifact evidence proves the two profiles, byte-
+    identical interpreter/compiled FST replay and preserved compression
+    identity/digest/payload. The eight-worker Debug dependency build completes
+    278 steps and the partition refresh completes 30; the final focused slice
+    passes 16/16 in 25.93 seconds with `typed_boundaries` in 22.94 seconds. The
+    ledger is fourteen preserved and three active rows at SHA-256
+    `42754faae8567dfed4b49b76de941d7036a665b68fac00d010f2ab6c3af4795e`;
+    the refreshed graph contains 34,638 nodes and 160,660 edges. Compression
+    helpers have cognitive complexity at most 8, bounded loop depth at most
+    three, no scan-in-loop site and no recursion. Only the new compression
+    implementation/test `.cpp` files were formatted; semantic headers were not
+    reformatted. The resource contract was not run because it reads the hosted
+    workflow. No Release build/test, sanitizer, hosted-CI action or inspection,
+    reset, commit or push ran. Preserve Changes 1-15 dirty and implement only
+    Change 16's bounded clean-room reader next.
+32. Change 16 is complete in the same intentionally dirty worktree. The new
+    clean-room reader validates canonical profiles, stored-GZip hierarchy,
+    fixed-Huffman initial frames, geometry, scopes, forward aliases, exact
+    declaration/source metadata, timestamps, positions and typed wave chains
+    under explicit container/block/hierarchy/count/text/metadata/decoded-value
+    limits. It emits one transactional result with semantic digest or a stable
+    `FSIM-FST-READ-001` through `004` diagnostic. Reader fixtures cover every
+    supported bit/logic, scalar, real/string, extended VHDL and typed-leaf value
+    family, stored/deterministic equivalence, empty/initial/later/same-time
+    traces and forward aliases. Application evidence compares decoded FST
+    values with the same internal observation transactions and VCD output across
+    selective, late-snapshot and enable/disable lifecycle; non-project compiled/
+    interpreter output and design artifacts retain the same semantic digest.
+    A deterministic handle prepass fixes aliases encountered before their
+    target variable, and wave-chain boundaries are computed in linear time.
+    The eight-worker exact-LLVM Debug build completes 239 steps, followed by a
+    74-link post-refactor refresh without warnings. The final focused project,
+    artifact, catalog, source, inventory, trace, runtime and typed-boundary slice
+    passes 20/20 in 21.62 seconds, with `typed_boundaries` in 21.61 seconds. The
+    ledger is fifteen preserved and two active rows at SHA-256
+    `f2f262fb2c4ad8c69b28b4f15be71fcc0779d50dd46424955bf58741c2a4a102`;
+    the refreshed graph contains 34,853 nodes and 161,550 edges. Refactored
+    hierarchy/wave stages have cognitive complexity at most 12, loop depth at
+    most two, no scan-in-loop site and no recursion. No semantic header was
+    reformatted. The resource contract was not run because it reads the hosted
+    workflow; no Release build/test, sanitizer, hosted-CI action or inspection,
+    reset, commit or push ran. Preserve Changes 1-16 dirty and implement only
+    Change 17's exhaustive corrupt/resource/platform negatives next.
+33. Change 17 is complete in the same intentionally dirty worktree. The reader
+    now rejects every byte-prefix truncation plus corrupt headers, unknown or
+    trailing blocks, stored-GZip and fixed-zlib checksums, duplicate/stale
+    identities, invalid aliases/widths/timestamp order and malformed logic,
+    string, real and Logic9 values with one stable transactional
+    `FSIM-FST-READ-001` through `004` diagnostic. Streaming binary filesystem
+    input adds `FSIM-FST-READ-005`; overclaimed allocation sizes and every
+    container/block/hierarchy/scope/declaration/timestamp/event/decoded-value/
+    text/metadata limit reject before publication. The new local-only FST
+    portability contract requires fixed-width bounded decoding, binary
+    `std::filesystem` input, semantic phase/artifact differentials and no
+    platform-only I/O or libfst/zlib dependency. The complete eight-worker
+    exact-LLVM Debug dependency build completed 88 steps and the final reader
+    refactor relink completed 74 steps without warnings. The focused local slice
+    passes 19/19 in 23.03 seconds, with `typed_boundaries` in 23.03 seconds. The
+    MSVC test-string audit remains below 16,000 source bytes with a maximum of
+    14,622. The ledger is sixteen preserved and one active row at SHA-256
+    `1c7af13c2fb35a0eb8b58d7ebf234d5a221ed3aef1a94c3fd00d93a8067d3eaf`;
+    the refreshed graph contains 34,881 nodes and 161,815 edges. New file-read
+    helpers have cognitive complexity at most 7, loop depth one, no scan-in-loop
+    site and no recursion. No semantic header was reformatted. The resource
+    contract was not run because it reads the hosted workflow; no Release,
+    sanitizer, hosted CI, reset, commit or push ran. Preserve Changes 1-17 and
+    implement only Change 18's clean-room corpus and retained-log closure next.
+34. Change 18 is complete in the same intentionally dirty worktree. The new
+    Apache-2.0-owned 28-row complete-trace manifest and corpus executable cover
+    VCD plus stored/deterministic FST, every supported value family, forward
+    aliases, Verilog/SystemVerilog/VHDL/SystemC roots, exact repeated bytes,
+    semantic reader equivalence, ordered time 5/6/7, a truncation negative and
+    clean close. Project and non-project compile/elaborate/simulate controls
+    round-trip across object, design, library, native-cache and checkpoint
+    archives and restore under a relocated consumer root. The local
+    `fsim.fst-closure` gate retains four nonempty logs for corpus, selective/
+    callback lifecycle, phases/artifacts and negatives/portability, plus a PASS
+    console and result manifest. It does not invoke the workflow-reading
+    resource contract. The corpus target's four-step build is warning-clean;
+    standalone retained closure passes in 1.44 seconds and the final focused
+    slice passes 21/21 in 22.76 seconds with `typed_boundaries` in 22.76 seconds.
+    The MSVC test-string audit remains below 16,000 source bytes with a maximum
+    of 14,622. The FST ledger is now seventeen preserved and zero active rows at
+    SHA-256
+    `fa40e80a69015276a850de6f4f84355d93ec541c774a76003f2b1718d1eac248`;
+    the refreshed graph contains 34,904 nodes and 161,991 edges. New corpus
+    functions have cognitive complexity at most 11, loop depth at most two and
+    no recursion. No header was reformatted. No Release, sanitizer, hosted CI,
+    resource-contract, reset, commit or push action ran. Preserve Changes 1-18
+    and implement only Change 19's synchronized docs, zero-active audit,
+    regression de-duplication and exact Batch 172 handoff next.
+35. Change 19 is complete in the same intentionally dirty worktree. README,
+    dedicated tracing/API guides, language support, architecture, diagnostics
+    and feature evidence describe the complete format-neutral VCD/FST model,
+    values, mixed roots, public controls, artifacts, deterministic profiles,
+    reader and failure boundary. The three-language SystemVerilog -> SystemC ->
+    VHDL tutorial now has sibling VCD and deterministic-FST manifests; the FST
+    manifest checks three sources/five design units and runs to PASS at tick 3.
+    Its generated cache/waveform were removed after validation. The zero-active
+    release audit composes the FST inventory, diagnostic catalog, source budget,
+    local portability and regression de-duplication gates while deliberately
+    excluding the workflow-reading resource contract. Static evidence is 2,477
+    production diagnostics, 1,056 bounded sources, 1,252 Apache-2.0-owned files
+    and 510 test/control files. The ledger remains 17/17 preserved and zero
+    active at SHA-256
+    `fa40e80a69015276a850de6f4f84355d93ec541c774a76003f2b1718d1eac248`.
+    Merged regression keeps `fsim.application` as a 0.01-second compatibility
+    sentinel instead of rerunning eight already registered application phases;
+    all eight dedicated cases retain coverage, and the 223-test CTest inventory
+    has no exact duplicate command group. The dedicated cases, audit and
+    Windows-critical `typed_boundaries` slice pass 12/12 in 29.78 seconds. The
+    complete FST/docs/runtime slice passes 24/24 in 21.75 seconds, with
+    `typed_boundaries` in 21.75 seconds; the full Debug build is current and has
+    no work. The refreshed graph contains 34,907 nodes and 161,999 edges. No
+    header was reformatted. No Release, sanitizer, hosted CI, resource-contract,
+    reset, commit or push action ran. Preserve Changes 1-19 and begin only final
+    Change 20 local qualification next.
+
+36. Batch 171 Change 20 is locally complete under the current no-CI
+    instruction. Fresh clean-first exact-LLVM 22.1.8 Debug and Release builds
+    use eight workers, complete 1,886 and 957 steps warning-free in 13:41.44 and
+    11:49.39, peak at 6,978,100 and 2,258,620 KiB, report zero swaps and exit
+    zero. The final post-fix regressions select all 162 direct product
+    executables and pass 162/162 in 177.90 and 173.45 seconds; their peak
+    resident sets are 3,789,540 and 3,788,452 KiB with zero swaps. Debug and
+    Release `typed_boundaries` pass in 23.03 and 22.49 seconds, and both
+    `core_non_project_cli` and `systemc_matrix` pass after the inherited-trace
+    lifecycle and duplicate-path repairs. The stale root `phase.fst` from the
+    pre-fix failure was moved recoverably to
+    `/tmp/fsim-batch171-stale-phase-20260814-223203.fst`; neither repaired
+    focused tests nor either complete product regression recreates it.
+
+    Final qualification excludes all 61 `/usr/bin/cmake` policy, audit,
+    recursive-closure and workflow-contract tests under the user's no-CI
+    instruction, and does not use an earlier workflow-reading attempt as final
+    evidence. No sanitizer or hosted-CI action, inspection, restart or
+    monitoring runs. The repeated MSVC test-string audit remains below 16,000
+    source bytes with a 14,622-byte maximum. The refreshed graph has 34,907
+    nodes and 161,987 edges. Commit and push the one accumulated Batch 171
+    implementation checkpoint, then begin Batch 172 by expanding its grouped
+    allocation into exactly twenty changes and registering its ownership
+    ledger; do not inspect CI.
+
+## Batch 172 planned restart checkpoint - 2026-08-14
+
+1. Start in `/home/colin/projects/fsim`, read this section and the locked Batch
+   172 allocation in `docs/implementation_plan_v2.md`, then verify branch
+   `codex/v2` is clean and synchronized at the pushed Batch 171 closeout commit
+   recorded by Batch 171 Change 20 above. Do not use stale conversational state
+   as an implementation handoff.
+2. Preserve Batch 171's zero-active 17-row FST ledger at normalized SHA-256
+   `fa40e80a69015276a850de6f4f84355d93ec541c774a76003f2b1718d1eac248`,
+   the immutable format-neutral model, VCD byte contract, both FST compression
+   profiles, bounded reader, five archive kinds, 28-obligation corpus, four
+   retained closure logs and exact release audit.
+3. Preserve all Verilog-1995/2001/2001-noconfig/2005,
+   SystemVerilog-2005/2009/2012/2017, VHDL-87/93/2000/2002/2008 and current
+   SystemC-2023-subset identities through sources, phases, libraries,
+   artifacts, caches, relocation, replay, debugger, public APIs, VCD and FST.
+4. Batch 172 replaces the custom SystemC kernel with one shared official
+   Accellera SystemC 3.0.2 runtime per fsim process. It retains fsim's
+   frontend, artifact, compatibility, data-codec and execution-integration
+   seams; it must not retain a second scheduler, process/coroutine, event,
+   channel or datatype implementation beside the upstream runtime.
+5. Vendor only the official pinned source archive with license, notice, SBOM,
+   digest and offline-reproducible build evidence. Version installed headers,
+   plug-in ABI, artifacts and caches against the exact upstream source and
+   bridge revisions; no network access may be required after provenance is
+   frozen.
+6. Introduce one opaque `SystemCKernelBackend` session boundary. No upstream
+   pointer, coroutine, `sc_simcontext`, channel or socket object may cross it;
+   all construction, binding, input, advancement, dirty-output, activity,
+   reporting, transaction, inspection and snapshot messages use bounded stable
+   island/hierarchy/object/endpoint identities.
+7. The in-process backend uses the same transport-neutral protocol required by
+   a future worker. Deterministic order is time, delta, region, island and
+   sequence. Crash/disconnect containment and loopback equivalence are Batch
+   172 evidence; the partitioner and parallel scheduler remain post-v2.
+8. Synchronize Accellera evaluate/update/notification with fsim only at exact
+   safe points, batch dirty HDL/SystemC crossings, and preserve arbitrary-width
+   two-/four-/nine-state values through type-erased codecs without per-event
+   global handoffs.
+9. Support native TLM 1.0 and TLM 2.0 inside a SystemC island: FIFO and
+   transport interfaces, initiator/target sockets, blocking/nonblocking phases,
+   DMI, debug transport, generic payloads, quantum keeping and `tlm_utils`.
+   Direct native sockets co-locate; cross-island or HDL transactions remain an
+   explicit serialized bridge capability.
+10. Publish a complete stable inventory after binding for every supported
+    SystemC signal, port, export, clock, resolved channel and alias. Port paths
+    canonicalize to bound channels while retaining both names; post-update
+    dirty hooks feed internal trace, VCD and FST without dropped or reordered
+    values.
+11. Preserve selective tracing, late enablement with immediate snapshot,
+    bounded backpressure, flush/close, and debugger reads/writes at kernel safe
+    points. Record TLM as correlated transactions rather than fabricated signal
+    changes; unsupported custom channels are explicit and may use only a
+    documented observation adapter.
+12. Retain existing SystemC source, incremental-object, mapped-library,
+    multiple-root, multi-plug-in and mixed-language behavior. Add upstream
+    regressions/examples plus arbitrary-width, compiler/platform, teardown,
+    one-runtime, deterministic replay, disabled-observer, throughput, stack,
+    object-memory and complete signal/port visibility evidence.
+13. Before implementation, expand the locked grouped 1-20 allocation into
+    exactly twenty bounded changes and register an ownership ledger. Do not
+    begin semantic implementation from this planned checkpoint alone.
+14. Accumulate Changes 1-19 in one recoverable worktree. Use at least eight
+    workers, run focused dependent Debug gates, and avoid header formatting
+    changes that induce long rebuilds. Semantic header edits are allowed only
+    when required by the owning change.
+15. Release build testing is not required except during the final batch checks.
+    Change 20 alone owns the LLVM-disabled sanitizer, fresh full exact-LLVM
+    Debug/Release builds, installed/relocation/upstream/mixed/TLM/trace/debug/
+    protocol/resource/release gates and the sole implementation commit/push.
+16. The authoritative plan labels Batch 172 a CI monitoring boundary, but the
+    user's current instruction forbids CI work. Do not inspect, monitor,
+    restart, cancel or modify hosted CI unless the user explicitly reauthorizes
+    that work; continue all possible local implementation and validation.
+17. Batch 171 Change 20 must replace this planned handoff's closeout reference
+    with the exact synchronized commit and retained final-check evidence before
+    Batch 172 implementation begins.
 
 ## Batch 168 planned restart checkpoint - 2026-08-13
 

@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_trace_control.hpp"
+#include "application_trace_hierarchy.hpp"
+#include "application_trace_observation.hpp"
+#include "fsim/runtime/fst_value_encoder.hpp"
+#include "fsim/runtime/fst_writer.hpp"
 #include "fsim/support/path.hpp"
 
 namespace fsim::app::application_detail {
-
-TraceState::~TraceState()
-{
-    if (simulation && uvm_activity_observer != 0) {
-        simulation->remove_uvm_activity_hook(uvm_activity_observer);
-    }
-}
 
 HdlVcdState::~HdlVcdState()
 {
@@ -47,26 +45,21 @@ namespace {
         return result;
     }
 
-    [[nodiscard]] runtime::PackedBit2 trace_bits(
+    [[nodiscard]] runtime::PackedLogic4 trace_bits(
         const std::size_t width,
         const std::uint64_t value)
     {
-        runtime::PackedBit2 result(width);
-        result.words().front() = value;
-        return result;
+        return runtime::PackedLogic4::from_aval_bval(width, value, 0U);
     }
+
+    void write_trace_observation(
+        TraceState& state,
+        const TraceObservationRecord& record);
 
     void write_uvm_activity_trace_event(
         TraceState& state,
         const runtime::SystemVerilogUvmActivityEvent& event)
     {
-        if (event.time
-            > std::numeric_limits<SimulationTick>::max()
-                / state.tick_multiplier) {
-            throw std::overflow_error { "VCD timestamp scaling overflow" };
-        }
-        state.writer->set_time(std::max(
-            state.writer->time(), event.time * state.tick_multiplier));
         const std::array values {
             trace_bits(64, event.sequence),
             trace_bits(4, static_cast<std::uint8_t>(event.kind)),
@@ -76,9 +69,15 @@ namespace {
             trace_bits(64, stable_trace_hash(event.identity)),
             trace_bits(64, stable_trace_hash(event.detail))
         };
+        std::vector<TraceObservationValue> observed;
+        observed.reserve(values.size());
         for (std::size_t index = 0; index < values.size(); ++index) {
-            state.writer->change(state.uvm_activity_handles[index], values[index]);
+            observed.push_back({ state.uvm_activity_trace_ids[index], values[index], std::nullopt });
         }
+        static_cast<void>(state.observations->accept(
+            TraceObservationKind::Uvm, event.time, event.delta,
+            runtime::TraceRegion::Callback,
+            "uvm:" + event.identity, observed));
     }
 
 } // namespace
@@ -116,6 +115,11 @@ std::string make_cache_key(
     key.add(
         "uvm-source-identity",
         checked.systemverilog_uvm_provenance.source_identity);
+    if (checked.trace_archive) {
+        key.add("trace-profile", checked.trace_archive->semantic_identity);
+        key.add("trace-declarations",
+            checked.trace_archive->declaration_identity);
+    }
     std::vector<std::string> search_libraries;
     search_libraries.reserve(
         config.elaboration.search_libraries.size());
@@ -682,45 +686,165 @@ std::optional<VcdScale> vcd_scale(
     };
 }
 
+struct FstTraceType {
+    runtime::TraceTypeKind kind { runtime::TraceTypeKind::Packed };
+    runtime::SystemVerilogScalarKind scalar_kind {
+        runtime::SystemVerilogScalarKind::None
+    };
+    std::string canonical_metadata;
+};
+
+[[nodiscard]] FstTraceType fst_trace_type(
+    const elaboration::SignalInfo& signal,
+    const semantic::Language language)
+{
+    using runtime::SystemVerilogScalarKind;
+    if (signal.systemverilog_scalar != SystemVerilogScalarKind::None) {
+        FstTraceType result;
+        result.kind = runtime::TraceTypeKind::SystemVerilogScalar;
+        result.scalar_kind = signal.systemverilog_scalar;
+        if (signal.systemverilog_scalar == SystemVerilogScalarKind::ShortReal
+            || signal.systemverilog_scalar == SystemVerilogScalarKind::Real
+            || signal.systemverilog_scalar
+                == SystemVerilogScalarKind::Realtime) {
+            result.canonical_metadata = runtime::canonical_fst_systemverilog_real_type(
+                signal.systemverilog_scalar);
+        }
+        return result;
+    }
+
+    runtime::FstExtendedTypeMetadata metadata;
+    metadata.width = signal.width;
+    metadata.nominal_name = signal.nominal_type.empty()
+        ? signal.type_name
+        : signal.nominal_type;
+    if (language == semantic::Language::vhdl
+        && signal.source_domain == frontend::ValueDomain::Logic9) {
+        metadata.kind = runtime::FstExtendedTypeKind::VhdlLogic9;
+        metadata.language = runtime::FstTypeLanguage::Vhdl;
+        metadata.enumeration_literals = signal.enumeration_literals;
+        if (metadata.enumeration_literals.empty()) {
+            metadata.enumeration_literals = {
+                "'U'", "'X'", "'0'", "'1'", "'Z'",
+                "'W'", "'L'", "'H'", "'-'"
+            };
+        }
+        return {
+            runtime::TraceTypeKind::VhdlLogic9,
+            SystemVerilogScalarKind::None,
+            runtime::canonical_fst_type_metadata(metadata)
+        };
+    }
+    if (!signal.enumeration_literals.empty()
+        && signal.source_domain != frontend::ValueDomain::Logic9) {
+        metadata.kind = runtime::FstExtendedTypeKind::Enumeration;
+        metadata.language = language == semantic::Language::vhdl
+            ? runtime::FstTypeLanguage::Vhdl
+            : runtime::FstTypeLanguage::SystemVerilog;
+        metadata.four_state = language != semantic::Language::vhdl
+            && signal.source_domain == frontend::ValueDomain::Logic4;
+        metadata.enumeration_literals = signal.enumeration_literals;
+        return {
+            runtime::TraceTypeKind::Enumeration,
+            SystemVerilogScalarKind::None,
+            runtime::canonical_fst_type_metadata(metadata)
+        };
+    }
+    if (language == semantic::Language::vhdl && signal.vhdl_physical) {
+        metadata.kind = runtime::FstExtendedTypeKind::VhdlPhysical;
+        metadata.language = runtime::FstTypeLanguage::Vhdl;
+        for (const auto& unit : signal.vhdl_physical->units) {
+            if (!unit.scale_factor) {
+                throw std::invalid_argument(
+                    "FST VHDL physical type has an unresolved unit scale");
+            }
+            metadata.physical_units.push_back({ unit.name, *unit.scale_factor });
+        }
+        return {
+            runtime::TraceTypeKind::VhdlPhysical,
+            SystemVerilogScalarKind::None,
+            runtime::canonical_fst_type_metadata(metadata)
+        };
+    }
+    if (language == semantic::Language::vhdl
+        && (signal.nominal_type == "@builtin:time"
+            || (signal.nominal_type.empty() && signal.type_name == "time"))) {
+        metadata.kind = runtime::FstExtendedTypeKind::VhdlTime;
+        metadata.language = runtime::FstTypeLanguage::Vhdl;
+        return {
+            runtime::TraceTypeKind::VhdlTime,
+            SystemVerilogScalarKind::None,
+            runtime::canonical_fst_type_metadata(metadata)
+        };
+    }
+    return { };
+}
+
+[[nodiscard]] runtime::TraceSignalId add_fst_trace_variable(
+    runtime::TraceDeclarationBuilder& builder,
+    const std::string_view name,
+    const elaboration::SignalInfo& signal,
+    const semantic::Language language,
+    const runtime::TraceSourceMetadata& source)
+{
+    const auto type = fst_trace_type(signal, language);
+    return builder.add_typed_variable(
+        name, type.kind, signal.width, type.scalar_kind,
+        type.canonical_metadata, source);
+}
+
 std::unique_ptr<TraceState> attach_trace(
     Simulation& simulation,
     const project::Config& config,
     diagnostic::Engine& diagnostics,
-    const bool dynamic_selection)
+    const bool dynamic_selection,
+    std::shared_ptr<const TraceControlApplication> configured_application)
 {
-    if (!config.run.trace_file) {
+    if (!config.run.trace_file || !config.run.trace_enabled) {
         return nullptr;
     }
+    const auto format = resolve_trace_format(config.run, diagnostics);
+    if (!format) {
+        return nullptr;
+    }
+    const auto surface = config.manifest_path == std::filesystem::path { "<command-line>" }
+        ? TraceControlSurface::NonProjectSimulate
+        : TraceControlSurface::ProjectCli;
+    TraceControlResult configured;
+    if (configured_application) {
+        configured.application = std::move(configured_application);
+    } else {
+        configured = apply_trace_control(trace_control_request(
+            config.run, surface, TraceControlPhase::Simulate));
+    }
+    if (!configured.ok()) {
+        for (const auto& entry : configured.diagnostics) {
+            diagnostics.error(entry.code, entry.message);
+        }
+        return nullptr;
+    }
+    const auto& filters = configured.application->request().selection;
     const auto scale = vcd_scale(
         simulation.time_resolution(), diagnostics);
     if (!scale) {
         return nullptr;
     }
-    auto trace = std::make_unique<TraceState>();
-    std::error_code parent_error;
-    const auto parent = config.run.trace_file->parent_path();
-    if (!parent.empty()) {
-        std::filesystem::create_directories(parent, parent_error);
-    }
-    if (parent_error) {
-        diagnostics.error(
-            "FSIM-VCD-0001",
-            "cannot create trace directory: " + parent_error.message());
+    const auto fst_exponent = *format == project::TraceFormat::fst
+        ? fst_timescale_exponent(scale->timescale, diagnostics)
+        : std::optional<std::int8_t> { };
+    if (*format == project::TraceFormat::fst && !fst_exponent) {
         return nullptr;
     }
-    trace->stream.open(*config.run.trace_file, std::ios::binary | std::ios::trunc);
-    if (!trace->stream) {
-        diagnostics.error(
-            "FSIM-VCD-0002",
-            "cannot open trace file '"
-                + fsim::support::path_to_utf8(*config.run.trace_file)
-                + "'");
+    auto trace = std::make_unique<TraceState>();
+    trace->format = *format;
+    trace->control = std::move(configured.application);
+    if (!prepare_trace_output(
+            *trace, trace->control->request().output, diagnostics)) {
         return nullptr;
     }
     try {
         trace->tick_multiplier = scale->tick_multiplier;
-        trace->writer = std::make_unique<runtime::VcdWriter>(
-            trace->stream, scale->timescale);
+        runtime::TraceDeclarationBuilder declaration_builder;
         constexpr std::array<std::string_view, 7> activity_names {
             "sequence", "kind", "action", "root", "value",
             "identity_hash", "detail_hash"
@@ -728,18 +852,50 @@ std::unique_ptr<TraceState> attach_trace(
         constexpr std::array<std::size_t, 7> activity_widths {
             64, 4, 4, 64, 64, 64, 64
         };
+        std::array<runtime::TraceSignalId, 7> activity_ids { };
         for (std::size_t index = 0; index < activity_names.size(); ++index) {
-            trace->uvm_activity_handles[index] = trace->writer->declare_signal(
+            activity_ids[index] = declaration_builder.add_variable(
                 "__fsim.uvm.activity." + std::string { activity_names[index] },
-                activity_widths[index]);
+                activity_widths[index], runtime::SystemVerilogScalarKind::None,
+                runtime::TraceSourceKind::Uvm);
         }
+        trace->uvm_activity_trace_ids = activity_ids;
         trace->handles.resize(simulation.runtime_adapter().signals().size());
-        trace->enabled.resize(simulation.runtime_adapter().signals().size());
+        trace->signal_trace_ids.resize(
+            simulation.runtime_adapter().signals().size());
+        std::vector<std::vector<runtime::TraceSignalId>> declaration_ids(
+            simulation.runtime_adapter().signals().size());
+        std::vector<std::string> declaration_owners(
+            simulation.runtime_adapter().signals().size());
+        std::vector<bool> initially_selected(
+            simulation.runtime_adapter().signals().size());
+        std::map<std::string, SignalId> trace_signal_by_path;
+        std::map<std::uint64_t, const semantic::design::Object*>
+            fst_string_by_runtime;
+        struct StringTrace {
+            runtime::simir::StringObjectId object { };
+            runtime::TraceSignalId signal;
+            bool selected { };
+        };
+        std::vector<StringTrace> string_traces;
         trace->scalar_kinds.resize(
             simulation.runtime_adapter().signals().size(),
             runtime::SystemVerilogScalarKind::None);
         for (const auto& signal : simulation.runtime_adapter().signals()) {
             trace->scalar_kinds[signal.id] = signal.systemverilog_scalar;
+        }
+        if (*format == project::TraceFormat::fst) {
+            for (const auto& object : simulation.design_ir().objects()) {
+                if (object.kind != semantic::design::ObjectKind::string) {
+                    continue;
+                }
+                if (!fst_string_by_runtime.try_emplace(
+                                              object.runtime_index, &object)
+                        .second) {
+                    throw std::invalid_argument(
+                        "FST string trace has duplicate DesignIR ownership");
+                }
+            }
         }
         for (const auto& object : simulation.design_ir().objects()) {
             if (!design_object_is_signal_bearing(object)
@@ -749,59 +905,201 @@ std::unique_ptr<TraceState> attach_trace(
             }
             const auto signal_id = static_cast<SignalId>(object.runtime_index);
             const auto& signal = simulation.runtime_adapter().signals().at(signal_id);
-            const auto selected = trace_selected(config.run.trace_filters, object.path);
-            trace->enabled[signal.id] = trace->enabled[signal.id] || (selected && signal.width != 0);
+            const auto* specialization
+                = *format == project::TraceFormat::fst
+                ? &simulation.design_ir().specializations().at(
+                      object.specialization.value())
+                : nullptr;
+            const auto fst_object = specialization
+                ? std::optional { canonical_fst_trace_object(
+                      simulation.design_ir(), object) }
+                : std::nullopt;
+            const auto trace_path = fst_object
+                ? std::string_view { fst_object->path }
+                : std::string_view { object.path };
+            const auto [existing, inserted]
+                = trace_signal_by_path.try_emplace(
+                    std::string { trace_path }, signal_id);
+            if (!inserted) {
+                if (existing->second != signal_id) {
+                    throw std::invalid_argument(
+                        "trace hierarchy maps distinct signals to '"
+                        + std::string { trace_path } + "'");
+                }
+                continue;
+            }
+            const auto selected = trace_selected(
+                filters, trace_path);
+            initially_selected[signal.id]
+                = initially_selected[signal.id]
+                || (selected && signal.width != 0);
             if (signal.width != 0 && (dynamic_selection || selected)) {
-                trace->handles[signal.id].push_back(
-                    signal.systemverilog_scalar
-                            == runtime::SystemVerilogScalarKind::None
-                        ? trace->writer->declare_signal(object.path, signal.width)
-                        : trace->writer->declare_systemverilog_scalar(
-                              object.path, signal.systemverilog_scalar));
+                auto& primary = trace->signal_trace_ids[signal.id];
+                runtime::TraceSignalId declaration;
+                if (*format == project::TraceFormat::fst) {
+                    declaration = primary.value == 0
+                        ? add_fst_trace_variable(declaration_builder,
+                              fst_object->path, signal,
+                              specialization->language, fst_object->source)
+                        : declaration_builder.add_alias(
+                              fst_object->path, primary, fst_object->source);
+                } else {
+                    declaration = primary.value == 0
+                        ? declaration_builder.add_variable(object.path,
+                              signal.width, signal.systemverilog_scalar)
+                        : declaration_builder.add_alias(object.path, primary);
+                }
+                if (primary.value == 0) {
+                    primary = declaration;
+                    declaration_owners[signal.id] = trace_path;
+                }
+                declaration_ids[signal.id].push_back(declaration);
             }
         }
-        if (simulation.now()
-            > std::numeric_limits<SimulationTick>::max()
-                / trace->tick_multiplier) {
-            throw std::overflow_error { "VCD timestamp scaling overflow" };
-        }
-        trace->writer->begin(simulation.now() * trace->tick_multiplier);
-        const auto verilog_provenance
-            = simulation.verilog_scope_provenance();
-        const auto verilog_comments
-            = simulation.verilog_provenance_comments();
-        for (std::size_t index = 0; index < verilog_provenance.size(); ++index) {
-            const auto& scope = verilog_provenance[index].path;
-            const auto selected_scope = config.run.trace_filters.empty()
-                || std::ranges::any_of(
-                    simulation.design_ir().objects(), [&](const auto& object) {
-                        return trace_selected(
-                                   config.run.trace_filters, object.path)
-                            && (object.path == scope
-                                || (object.path.size() > scope.size()
-                                    && object.path.starts_with(scope)
-                                    && object.path[scope.size()] == '.'));
-                    });
-            if (selected_scope) {
-                trace->writer->comment(verilog_comments[index]);
+        if (*format == project::TraceFormat::fst) {
+            for (const auto& object : simulation.runtime_adapter().string_objects()) {
+                const auto design_object
+                    = fst_string_by_runtime.find(object.id);
+                if (design_object == fst_string_by_runtime.end()) {
+                    throw std::invalid_argument(
+                        "FST string trace lacks DesignIR ownership");
+                }
+                const auto fst_object = canonical_fst_trace_object(
+                    simulation.design_ir(), *design_object->second);
+                const auto selected = trace_selected(
+                    filters, fst_object.path);
+                if (!dynamic_selection && !selected) {
+                    continue;
+                }
+                string_traces.push_back({ object.id,
+                    declaration_builder.add_typed_variable(
+                        fst_object.path,
+                        runtime::TraceTypeKind::SystemVerilogString,
+                        0,
+                        runtime::SystemVerilogScalarKind::None,
+                        runtime::canonical_fst_string_type(),
+                        fst_object.source),
+                    selected });
             }
         }
-        for (const auto& comment : simulation.vhdl_provenance_comments()) {
-            trace->writer->comment(comment);
+        trace->declarations = std::make_unique<runtime::TraceDeclarationModel>(
+            std::move(declaration_builder).freeze());
+        std::vector<TraceSelectionDeclaration> selection_declarations;
+        selection_declarations.reserve(trace->signal_trace_ids.size());
+        for (std::size_t signal = 0;
+            signal < trace->signal_trace_ids.size(); ++signal) {
+            if (trace->signal_trace_ids[signal].value == 0U) {
+                continue;
+            }
+            selection_declarations.push_back(TraceSelectionDeclaration {
+                static_cast<SignalId>(signal),
+                trace->signal_trace_ids[signal],
+                declaration_owners[signal],
+                initially_selected[signal] });
         }
-        for (const auto& signal : simulation.runtime_adapter().signals()) {
-            if (trace->enabled[signal.id]) {
-                if (!trace->handles[signal.id].empty()) {
-                    write_trace_signal_value(
-                        *trace, signal.id, simulation.read_signal(signal.id));
+        trace->selection = std::make_unique<TraceSelectionControl>(
+            *trace->declarations, selection_declarations);
+        if (*format == project::TraceFormat::vcd) {
+            trace->writer = std::make_unique<runtime::VcdWriter>(
+                trace->stream, scale->timescale);
+            const auto declared_handles
+                = trace->writer->declare_model(*trace->declarations);
+            trace->declaration_handles = declared_handles;
+            for (std::size_t signal = 0; signal < declaration_ids.size(); ++signal) {
+                for (const auto declaration : declaration_ids[signal]) {
+                    trace->handles[signal].push_back(
+                        declared_handles.at(declaration.value - 1U));
+                }
+            }
+        } else {
+            const auto compression =
+                trace->control->status().effective_compression
+                        == project::TraceCompression::deterministic
+                    ? runtime::FstWriterCompression::Deterministic
+                    : runtime::FstWriterCompression::None;
+            trace->fst_writer = std::make_unique<runtime::FstWriter>(
+                trace->stream, *fst_exponent, runtime::FstWriterLimits { },
+                compression);
+            trace->fst_writer->declare(*trace->declarations);
+            for (std::size_t signal = 0; signal < declaration_ids.size(); ++signal) {
+                for (const auto declaration : declaration_ids[signal]) {
+                    trace->handles[signal].push_back(runtime::VcdSignal {
+                        static_cast<std::uint32_t>(declaration.value) });
                 }
             }
         }
+        trace->observations = std::make_unique<TraceObservationRecorder>(
+            *trace->declarations);
+        auto* state = trace.get();
+        static_cast<void>(trace->observations->add_observer(
+            [state](const auto& record) {
+                write_trace_observation(*state, record);
+            }));
+        if (simulation.now()
+            > std::numeric_limits<SimulationTick>::max()
+                / trace->tick_multiplier) {
+            throw std::overflow_error { "trace timestamp scaling overflow" };
+        }
+        if (*format == project::TraceFormat::vcd) {
+            trace->writer->begin(simulation.now() * trace->tick_multiplier);
+        } else {
+            trace->fst_writer->begin(
+                simulation.now() * trace->tick_multiplier);
+        }
+        if (*format == project::TraceFormat::vcd) {
+            const auto verilog_provenance
+                = simulation.verilog_scope_provenance();
+            const auto verilog_comments
+                = simulation.verilog_provenance_comments();
+            for (std::size_t index = 0; index < verilog_provenance.size(); ++index) {
+                const auto& scope = verilog_provenance[index].path;
+                const auto selected_scope = filters.empty()
+                    || std::ranges::any_of(
+                        simulation.design_ir().objects(), [&](const auto& object) {
+                            return trace_selected(
+                                       filters, object.path)
+                                && (object.path == scope
+                                    || (object.path.size() > scope.size()
+                                        && object.path.starts_with(scope)
+                                        && object.path[scope.size()] == '.'));
+                        });
+                if (selected_scope) {
+                    trace->writer->comment(verilog_comments[index]);
+                }
+            }
+            for (const auto& comment : simulation.vhdl_provenance_comments()) {
+                trace->writer->comment(comment);
+            }
+        }
+        for (const auto& signal : simulation.runtime_adapter().signals()) {
+            if (trace->selection->selected(signal.id)) {
+                if (!trace->handles[signal.id].empty()) {
+                    const std::array observed { TraceObservationValue {
+                        trace->signal_trace_ids[signal.id],
+                        simulation.read_signal(signal.id), signal.id } };
+                    static_cast<void>(trace->observations->accept(
+                        TraceObservationKind::Signal, simulation.now(),
+                        simulation.delta(), runtime::TraceRegion::Snapshot,
+                        "signal:" + std::to_string(signal.id), observed));
+                }
+            }
+        }
+        if (*format == project::TraceFormat::fst) {
+            for (const auto& string_trace : string_traces) {
+                if (string_trace.selected) {
+                    trace->fst_writer->set_initial_value(
+                        string_trace.signal,
+                        runtime::encode_fst_string(
+                            simulation.read_string_object(
+                                string_trace.object)));
+                }
+            }
+        }
+        trace->collecting_fst_initial_values = false;
         for (const auto& event : simulation.uvm_activity().events()) {
             write_uvm_activity_trace_event(*trace, event);
         }
         trace->simulation = &simulation;
-        auto* state = trace.get();
         trace->uvm_activity_observer = simulation.add_uvm_activity_hook(
             [state](const auto& event) {
                 write_uvm_activity_trace_event(*state, event);
@@ -811,21 +1109,24 @@ std::unique_ptr<TraceState> attach_trace(
                 const SignalId signal,
                 const PackedLogic4& value,
                 const SimulationTick time,
-                std::uint64_t) {
+                const std::uint64_t delta) {
                 if (signal < state->handles.size()
                     && !state->handles[signal].empty()
-                    && state->enabled[signal]) {
-                    if (time
-                        > std::numeric_limits<SimulationTick>::max()
-                            / state->tick_multiplier) {
-                        throw std::overflow_error { "VCD timestamp scaling overflow" };
-                    }
-                    state->writer->set_time(time * state->tick_multiplier);
-                    write_trace_signal_value(*state, signal, value);
+                    && state->selection->selected(signal)) {
+                    const std::array observed { TraceObservationValue {
+                        state->signal_trace_ids[signal], value, signal } };
+                    static_cast<void>(state->observations->accept(
+                        TraceObservationKind::Signal, time, delta,
+                        state->selection->observation_region(
+                            time, delta, runtime::TraceRegion::Active),
+                        "signal:" + std::to_string(signal), observed));
                 }
             });
     } catch (const std::exception& error) {
-        diagnostics.error("FSIM-VCD-0003", error.what());
+        fail_trace(*trace, error.what(), &diagnostics);
+        return nullptr;
+    } catch (...) {
+        fail_trace(*trace, "unknown trace attachment failure", &diagnostics);
         return nullptr;
     }
     return trace;
@@ -878,6 +1179,109 @@ void write_trace_signal_value(
 
 namespace {
 
+    [[nodiscard]] runtime::FstEncodedValue encode_trace_observation_value(
+        const TraceState& state,
+        const runtime::TraceSignalId signal,
+        const runtime::PackedLogic4& value)
+    {
+        const auto& variable = state.declarations->variable(signal);
+        const auto& type = state.declarations->type(variable.type);
+        switch (type.kind) {
+        case runtime::TraceTypeKind::Packed:
+            return runtime::encode_fst_logic_value(value);
+        case runtime::TraceTypeKind::SystemVerilogScalar:
+            if (type.scalar_kind
+                    == runtime::SystemVerilogScalarKind::ShortReal
+                || type.scalar_kind == runtime::SystemVerilogScalarKind::Real
+                || type.scalar_kind
+                    == runtime::SystemVerilogScalarKind::Realtime) {
+                const auto decoded
+                    = runtime::decode_systemverilog_scalar_payload(
+                        value, type.scalar_kind);
+                if (!decoded) {
+                    throw std::invalid_argument(
+                        "FST real value is not losslessly representable");
+                }
+                return runtime::encode_fst_systemverilog_real(decoded.value);
+            }
+            return runtime::encode_fst_systemverilog_scalar(
+                value, type.scalar_kind);
+        case runtime::TraceTypeKind::Enumeration:
+            return runtime::encode_fst_extended_value(
+                value, runtime::FstValueProfile::Enumeration,
+                type.canonical_metadata);
+        case runtime::TraceTypeKind::VhdlPhysical:
+            return runtime::encode_fst_extended_value(
+                value, runtime::FstValueProfile::VhdlPhysical,
+                type.canonical_metadata);
+        case runtime::TraceTypeKind::VhdlTime:
+            return runtime::encode_fst_extended_value(
+                value, runtime::FstValueProfile::VhdlTime,
+                type.canonical_metadata);
+        case runtime::TraceTypeKind::VhdlLogic9:
+            return runtime::encode_fst_extended_value(
+                value, runtime::FstValueProfile::VhdlLogic9,
+                type.canonical_metadata);
+        case runtime::TraceTypeKind::TypedLeaf:
+            return runtime::encode_fst_leaf_value(
+                value, type.canonical_metadata);
+        case runtime::TraceTypeKind::SystemVerilogString:
+            break;
+        }
+        throw std::invalid_argument(
+            "FST string declaration used the packed observation path");
+    }
+
+    void write_trace_observation(
+        TraceState& state,
+        const TraceObservationRecord& record)
+    {
+        for (const auto& observed : record.values) {
+            const runtime::TraceEvent event { observed.signal, record.time,
+                record.delta, record.region, record.sequence };
+            if (state.format == project::TraceFormat::fst) {
+                auto scaled_event = event;
+                if (scaled_event.time
+                    > std::numeric_limits<SimulationTick>::max()
+                        / state.tick_multiplier) {
+                    throw std::overflow_error(
+                        "trace timestamp scaling overflow");
+                }
+                scaled_event.time *= state.tick_multiplier;
+                const auto encoded = encode_trace_observation_value(
+                    state, observed.signal, observed.value);
+                if (state.collecting_fst_initial_values
+                    && record.region == runtime::TraceRegion::Snapshot) {
+                    state.fst_writer->set_initial_value(
+                        observed.signal, encoded);
+                } else {
+                    state.fst_writer->change(scaled_event, encoded);
+                }
+                continue;
+            }
+            if (record.kind == TraceObservationKind::Signal) {
+                state.writer->set_event(event, state.tick_multiplier);
+            } else {
+                if (record.time
+                    > std::numeric_limits<SimulationTick>::max()
+                        / state.tick_multiplier) {
+                    throw std::overflow_error(
+                        "trace timestamp scaling overflow");
+                }
+                state.writer->set_time(std::max(state.writer->time(),
+                    record.time * state.tick_multiplier));
+            }
+            if (observed.runtime_signal) {
+                write_trace_signal_value(
+                    state, observed.runtime_signal.value(), observed.value);
+            } else {
+                state.writer->change(
+                    state.declaration_handles.at(observed.signal.value - 1U),
+                    observed.value);
+            }
+        }
+    }
+
     void write_hdl_vcd_value(
         HdlVcdState& state,
         const runtime::simir::SignalId signal,
@@ -922,7 +1326,7 @@ namespace {
         const auto time = state.simulation->now();
         if (time > std::numeric_limits<SimulationTick>::max()
                 / state.tick_multiplier) {
-            throw std::overflow_error { "VCD timestamp scaling overflow" };
+            throw std::overflow_error { "trace timestamp scaling overflow" };
         }
         state.writer->set_time(time * state.tick_multiplier);
         state.writer->begin_checkpoint(command);
@@ -1719,6 +2123,45 @@ int run_built_project(
     if (built.entropy_seed) {
         output << "random seed " << built.seed << '\n';
     }
+    project::Config trace_config = config;
+    std::shared_ptr<const TraceControlApplication> archived_control;
+    if (built.trace_archive) {
+        auto consumer_root = config.base_directory;
+        if (config.run.trace_file && config.run.trace_enabled
+            && built.trace_archive->output_intent.parent_path().empty()) {
+            consumer_root = config.run.trace_file->parent_path();
+        }
+        auto restored = restore_trace_archive_control(
+            *built.trace_archive, consumer_root);
+        if (!restored.ok()) {
+            for (const auto& diagnostic : restored.diagnostics)
+                application_detail::import_diagnostic(diagnostics, diagnostic);
+            return 1;
+        }
+        if (config.run.trace_file && config.run.trace_enabled) {
+            const auto surface
+                = config.manifest_path == std::filesystem::path { "<command-line>" }
+                ? TraceControlSurface::NonProjectSimulate
+                : TraceControlSurface::ProjectCli;
+            auto current = apply_trace_control(trace_control_request(
+                config.run, surface, TraceControlPhase::Simulate));
+            if (!current.ok()) {
+                for (const auto& diagnostic : current.diagnostics)
+                    application_detail::import_diagnostic(diagnostics, diagnostic);
+                return 1;
+            }
+            const auto current_snapshot = make_trace_archive_snapshot(
+                *current.application, config.base_directory);
+            if (!trace_archive_profiles_compatible(
+                    current_snapshot, *built.trace_archive)) {
+                diagnostics.error("FSIM-TRACE-ARCHIVE-003",
+                    "simulation trace request conflicts with the archived design profile");
+                return 1;
+            }
+        }
+        archived_control = std::move(restored.application);
+        publish_trace_control(*archived_control, trace_config.run);
+    }
     Simulation simulation(
         std::move(built),
         config.run.max_deltas,
@@ -1752,16 +2195,17 @@ int run_built_project(
                    << "[FSIM-HDL-REPORT]: " << message << '\n';
         });
     report_native_cache_failures(simulation, diagnostics);
-    auto trace = attach_trace(simulation, config, diagnostics);
-    if (config.run.trace_file && !trace) {
+    auto trace = attach_trace(simulation, trace_config, diagnostics, false,
+        std::move(archived_control));
+    if (trace_config.run.trace_file && trace_config.run.trace_enabled && !trace) {
         return 1;
     }
     install_interrupt_hook(simulation);
     const InterruptSignalGuard interrupt_signal;
     try {
         const auto result = simulation.run(duration);
-        if (trace) {
-            trace->writer->flush();
+        if (trace && !finish_trace(*trace, diagnostics)) {
+            return 1;
         }
         output << "simulation "
                << (result.status == runtime::RunStatus::completed
@@ -1861,7 +2305,7 @@ void print_debug_help(std::ostream& output)
         << "          uvm [summary|phases|objections|tlm1|tlm2|all],\n"
         << "          vhdl [summary|scopes|objects|processes|psl|all],\n"
         << "          deposit SIGNAL VALUE, force SIGNAL VALUE, release SIGNAL,\n"
-        << "          trace add|remove SIGNAL, trace all|clear|list,\n"
+        << "          trace add|remove SIGNAL, trace all|clear|list|status|report|flush|close,\n"
         << "          locals, where, help, quit\n";
 }
 

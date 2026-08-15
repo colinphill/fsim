@@ -43,10 +43,31 @@ int main(void) {
   assert(FSIM_SCHEDULER_PHASE_OBSERVED == 6);
   assert(FSIM_SCHEDULER_PHASE_RE_INACTIVE == 7);
   assert(FSIM_SCHEDULER_PHASE_RE_UPDATE == 8);
+  assert(FSIM_TRACE_COMPRESSION_DETERMINISTIC == 2);
 
   assert(fsim_get_api_version() == FSIM_API_VERSION);
   assert(fsim_session_create(&options, &session) == FSIM_STATUS_OK);
   assert(session != FSIM_INVALID_SESSION);
+
+  fsim_trace_options_t trace = {0};
+  trace.struct_size = sizeof(trace);
+  trace.api_version = FSIM_API_VERSION;
+  trace.format = FSIM_TRACE_FORMAT_AUTO;
+  trace.compression = FSIM_TRACE_COMPRESSION_AUTO;
+  trace.lifecycle = FSIM_TRACE_LIFECYCLE_DISABLED;
+  trace.phase = FSIM_TRACE_PHASE_COMPILE;
+  trace.report_limit = 4;
+  assert(fsim_session_configure_trace(session, &trace) == FSIM_STATUS_OK);
+  fsim_trace_status_t trace_status = {0};
+  trace_status.struct_size = sizeof(trace_status);
+  trace_status.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_trace_status(session, &trace_status)
+      == FSIM_STATUS_OK);
+  assert(trace_status.lifecycle == FSIM_TRACE_LIFECYCLE_DISABLED);
+  assert(trace_status.report_entry_count == 4);
+  assert(fsim_session_flush_trace(session) == FSIM_STATUS_UNAVAILABLE);
+  assert(fsim_session_close_trace(session) == FSIM_STATUS_UNAVAILABLE);
   assert(fsim_session_destroy(session) == FSIM_STATUS_OK);
   return 0;
 }

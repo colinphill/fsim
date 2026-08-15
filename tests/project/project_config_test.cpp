@@ -102,7 +102,11 @@ duration = "20ns"
 max_deltas = 999
 delay_mode = "max"
 trace_file = "waves/out.vcd"
+trace_format = "vcd"
+trace_compression = "none"
 trace_filters = ["tb.*"]
+trace_report_limit = 17
+trace_enabled = false
 
 [systemc]
 compiler = "clang++"
@@ -174,6 +178,9 @@ libraries = ["m"]
         config->run.delay_mode == fsim::project::DelayMode::maximum,
         "maximum delay selection mode is parsed");
     check(
+        config->run.trace_format == fsim::project::TraceFormat::vcd,
+        "trace format is parsed");
+    check(
         config->build.cache_path == (workspace / "cache").lexically_normal(),
         "cache path is resolved relative to the manifest");
     check(
@@ -181,6 +188,14 @@ libraries = ["m"]
             std::optional<std::filesystem::path>(
                 (workspace / "waves" / "out.vcd").lexically_normal()),
         "trace path is resolved relative to the manifest");
+    check(
+        config->run.trace_compression
+            == fsim::project::TraceCompression::none,
+        "trace compression is retained");
+    check(
+        config->run.trace_report_limit == 17U,
+        "trace report limit is retained");
+    check(!config->run.trace_enabled, "trace lifecycle is retained");
   }
   std::error_code ignored;
   std::filesystem::remove_all(workspace, ignored);
@@ -540,6 +555,107 @@ delay_mode = "slow"
       "invalid manifest delay mode has a stable targeted diagnostic");
 }
 
+void test_trace_format_values() {
+  using Format = fsim::project::TraceFormat;
+  check(
+      fsim::project::RunSection{}.trace_format == Format::automatic,
+      "automatic is the deterministic default trace format");
+  check(
+      fsim::project::parse_trace_format("automatic") == Format::automatic
+          && fsim::project::parse_trace_format("VCD") == Format::vcd
+          && fsim::project::parse_trace_format("fst") == Format::fst
+          && fsim::project::to_string(Format::automatic) == "auto"
+          && fsim::project::to_string(Format::vcd) == "vcd"
+          && fsim::project::to_string(Format::fst) == "fst",
+      "trace-format aliases parse and serialize canonically");
+
+  fsim::diagnostic::Engine diagnostics;
+  const auto config = fsim::project::parse(
+      R"(schema = 2
+[project]
+top = "top"
+[run]
+trace_format = "wave"
+)",
+      "bad-trace-format.toml",
+      ".",
+      diagnostics);
+  check(!config.has_value(), "invalid manifest trace format is rejected");
+  check(
+      std::ranges::any_of(
+          diagnostics.diagnostics(),
+          [](const fsim::diagnostic::Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-PROJ-0007"
+                && diagnostic.message.find("trace_format")
+                    != std::string::npos;
+          }),
+      "invalid manifest trace format has a stable targeted diagnostic");
+
+  using Compression = fsim::project::TraceCompression;
+  check(
+      fsim::project::RunSection{}.trace_compression
+              == Compression::automatic
+          && fsim::project::parse_trace_compression("automatic")
+              == Compression::automatic
+          && fsim::project::parse_trace_compression("NONE")
+              == Compression::none
+          && fsim::project::parse_trace_compression("fixed")
+              == Compression::deterministic
+          && fsim::project::parse_trace_compression("fst-v1")
+              == Compression::deterministic
+          && fsim::project::to_string(Compression::automatic) == "auto"
+          && fsim::project::to_string(Compression::none) == "none"
+          && fsim::project::to_string(Compression::deterministic)
+              == "deterministic",
+      "trace-compression aliases parse and serialize canonically");
+
+  diagnostics.clear();
+  const auto bad_compression = fsim::project::parse(
+      R"(schema = 2
+[project]
+top = "top"
+[run]
+trace_compression = "host"
+)",
+      "bad-trace-compression.toml",
+      ".",
+      diagnostics);
+  check(!bad_compression.has_value(),
+      "invalid manifest trace compression is rejected");
+  check(
+      std::ranges::any_of(
+          diagnostics.diagnostics(),
+          [](const fsim::diagnostic::Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-PROJ-0007"
+                && diagnostic.message.find("trace_compression")
+                    != std::string::npos;
+          }),
+      "invalid trace compression has a stable targeted diagnostic");
+
+  diagnostics.clear();
+  const auto zero_report = fsim::project::parse(
+      R"(schema = 2
+[project]
+top = "top"
+[run]
+trace_report_limit = 0
+)",
+      "bad-trace-report.toml",
+      ".",
+      diagnostics);
+  check(!zero_report.has_value(),
+      "zero manifest trace report limit is rejected");
+  check(
+      std::ranges::any_of(
+          diagnostics.diagnostics(),
+          [](const fsim::diagnostic::Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-PROJ-0007"
+                && diagnostic.message.find("trace_report_limit")
+                    != std::string::npos;
+          }),
+      "zero trace report limit has a stable targeted diagnostic");
+}
+
 void test_uvm_release_values() {
   using Release = fsim::project::SystemVerilogUvmRelease;
   check(
@@ -822,6 +938,7 @@ int main()
     test_json_diagnostics_are_escaped();
     test_zero_time_resolution_is_rejected();
     test_delay_mode_values();
+    test_trace_format_values();
     test_uvm_release_values();
     test_vhdl_standard_values();
     test_verilog_systemverilog_standard_values();

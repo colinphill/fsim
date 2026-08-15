@@ -103,10 +103,10 @@ foreach(FSIM_EXPECTED IN ITEMS
     "artifact_provenance=checksum+identity"
     "platform_process_limit=POSIX+Windows"
     "installed_public_alias=fsim-vhdl"
-    "diagnostic_catalog=2461"
+    "diagnostic_catalog=2477"
     "vhdl_psl_diagnostics=19"
-    "bounded_authored_sources=1020"
-    "authored_test_controls=379"
+    "bounded_authored_sources=1056"
+    "authored_test_controls=392"
     "reviewed_max_cognitive_complexity=20"
     "reviewed_max_loop_depth=1"
     "reviewed_recursion=none"
@@ -154,9 +154,9 @@ foreach(FSIM_GATE IN ITEMS
 endforeach()
 foreach(FSIM_TOKEN IN ITEMS
     "33 rows split 29 supported, 0 unresolved, 4 deferred"
-    "diagnostic catalog covers 2461 production codes"
-    "Checked 1020 authored sources against the 2500-line hard limit"
-    "v1 conformance audit: 379 authored test/control files")
+    "diagnostic catalog covers 2477 production codes"
+    "Checked 1056 authored sources against the 2500-line hard limit"
+    "v1 conformance audit: 392 authored test/control files")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)
   if(FSIM_TOKEN_INDEX EQUAL -1)
     message(FATAL_ERROR
@@ -215,6 +215,6 @@ endforeach()
 
 message(STATUS
   "VHDL/PSL closure audit: 44 contracts, 17 governed stages, 29 supported "
-  "rows, 19 PSL diagnostics, 2461 catalog codes, 1020 bounded sources, "
+  "rows, 19 PSL diagnostics, 2477 catalog codes, 1056 bounded sources, "
   "363 test/control files, cognitive complexity 20, loop depth 1, no "
   "recursion, 195272 KiB observed RSS, 6 GiB ceiling, and zero unresolved rows")

@@ -13,7 +13,7 @@ VHDL / Verilog / SystemVerilog / SystemC
               /                 \
  reference interpreter       LLVM ORC JIT
               \                 /
-       deterministic runtime, debugger, VCD
+       deterministic runtime, debugger, VCD/FST
 ```
 
 ## Project status
@@ -912,7 +912,10 @@ fixtures and Windows execution evidence remain open.
 The [three-language hierarchy tutorial](examples/three_language_hierarchy/README.md)
 builds on that slice with a SystemVerilog top, a SystemC factory and method,
 and a VHDL child in one recursive hierarchy. It includes executable check,
-build, run, VCD, hierarchy-navigation, breakpoint, and trace-selection steps.
+build, run, VCD/FST, hierarchy-navigation, breakpoint, and trace-selection
+steps. VCD remains the default; the sibling FST manifest records the same
+canonical mixed-language declarations and events with deterministic portable
+compression.
 
 ## Design documents
 
@@ -921,6 +924,9 @@ build, run, VCD, hierarchy-navigation, breakpoint, and trace-selection steps.
 - [Implementation plan and progress](docs/implementation-plan.md)
 - [Deterministic cross-language semantics](docs/cross-language-semantics.md)
 - [Diagnostic code catalog](docs/diagnostics.md)
+- [VCD and FST tracing](docs/tracing.md)
+- [Public tracing API](docs/api.md)
+- [Batch 171 FST release audit](docs/v2-fst-release-audit.md)
 - [Standard Delay Format support](docs/sdf.md)
 - [Batch 169 SDF application release audit](docs/v2-sdf-application-release-audit.md)
 - [Batch 170 SDF/VITAL release audit](docs/v2-sdf-vital-release-audit.md)

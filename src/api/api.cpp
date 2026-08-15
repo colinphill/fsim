@@ -59,6 +59,128 @@ fsim_sdf_report_kind_t sdf_report_kind(
     return FSIM_SDF_REPORT_INPUT;
 }
 
+std::optional<fsim::project::TraceFormat> trace_format(
+    const fsim_trace_format_t value) noexcept
+{
+    switch (value) {
+    case FSIM_TRACE_FORMAT_AUTO:
+        return fsim::project::TraceFormat::automatic;
+    case FSIM_TRACE_FORMAT_VCD:
+        return fsim::project::TraceFormat::vcd;
+    case FSIM_TRACE_FORMAT_FST:
+        return fsim::project::TraceFormat::fst;
+    }
+    return std::nullopt;
+}
+
+fsim_trace_format_t trace_format(
+    const fsim::project::TraceFormat value) noexcept
+{
+    switch (value) {
+    case fsim::project::TraceFormat::automatic:
+        return FSIM_TRACE_FORMAT_AUTO;
+    case fsim::project::TraceFormat::vcd:
+        return FSIM_TRACE_FORMAT_VCD;
+    case fsim::project::TraceFormat::fst:
+        return FSIM_TRACE_FORMAT_FST;
+    }
+    return FSIM_TRACE_FORMAT_AUTO;
+}
+
+std::optional<fsim::project::TraceCompression> trace_compression(
+    const fsim_trace_compression_t value) noexcept
+{
+    switch (value) {
+    case FSIM_TRACE_COMPRESSION_AUTO:
+        return fsim::project::TraceCompression::automatic;
+    case FSIM_TRACE_COMPRESSION_NONE:
+        return fsim::project::TraceCompression::none;
+    case FSIM_TRACE_COMPRESSION_DETERMINISTIC:
+        return fsim::project::TraceCompression::deterministic;
+    }
+    return std::nullopt;
+}
+
+fsim_trace_compression_t trace_compression(
+    const fsim::project::TraceCompression value) noexcept
+{
+    switch (value) {
+    case fsim::project::TraceCompression::automatic:
+        return FSIM_TRACE_COMPRESSION_AUTO;
+    case fsim::project::TraceCompression::none:
+        return FSIM_TRACE_COMPRESSION_NONE;
+    case fsim::project::TraceCompression::deterministic:
+        return FSIM_TRACE_COMPRESSION_DETERMINISTIC;
+    }
+    return FSIM_TRACE_COMPRESSION_AUTO;
+}
+
+std::optional<fsim::app::TraceLifecycle> trace_lifecycle(
+    const fsim_trace_lifecycle_t value) noexcept
+{
+    switch (value) {
+    case FSIM_TRACE_LIFECYCLE_DISABLED:
+        return fsim::app::TraceLifecycle::Disabled;
+    case FSIM_TRACE_LIFECYCLE_CONFIGURED:
+        return fsim::app::TraceLifecycle::Configured;
+    case FSIM_TRACE_LIFECYCLE_OPEN:
+    case FSIM_TRACE_LIFECYCLE_COMPLETE:
+    case FSIM_TRACE_LIFECYCLE_FAILED:
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+fsim_trace_lifecycle_t trace_lifecycle(
+    const fsim::app::TraceLifecycle value) noexcept
+{
+    switch (value) {
+    case fsim::app::TraceLifecycle::Disabled:
+        return FSIM_TRACE_LIFECYCLE_DISABLED;
+    case fsim::app::TraceLifecycle::Configured:
+        return FSIM_TRACE_LIFECYCLE_CONFIGURED;
+    case fsim::app::TraceLifecycle::Open:
+        return FSIM_TRACE_LIFECYCLE_OPEN;
+    case fsim::app::TraceLifecycle::Complete:
+        return FSIM_TRACE_LIFECYCLE_COMPLETE;
+    case fsim::app::TraceLifecycle::Failed:
+        return FSIM_TRACE_LIFECYCLE_FAILED;
+    }
+    return FSIM_TRACE_LIFECYCLE_FAILED;
+}
+
+std::optional<fsim::app::TraceControlPhase> trace_phase(
+    const fsim_trace_phase_t value) noexcept
+{
+    switch (value) {
+    case FSIM_TRACE_PHASE_COMPILE:
+        return fsim::app::TraceControlPhase::Compile;
+    case FSIM_TRACE_PHASE_ELABORATE:
+        return fsim::app::TraceControlPhase::Elaborate;
+    case FSIM_TRACE_PHASE_SIMULATE:
+        return fsim::app::TraceControlPhase::Simulate;
+    }
+    return std::nullopt;
+}
+
+fsim_trace_report_kind_t trace_report_kind(
+    const fsim::app::TraceControlEntryKind value) noexcept
+{
+    switch (value) {
+    case fsim::app::TraceControlEntryKind::Output:
+        return FSIM_TRACE_REPORT_OUTPUT;
+    case fsim::app::TraceControlEntryKind::Format:
+        return FSIM_TRACE_REPORT_FORMAT;
+    case fsim::app::TraceControlEntryKind::Compression:
+        return FSIM_TRACE_REPORT_COMPRESSION;
+    case fsim::app::TraceControlEntryKind::Selection:
+        return FSIM_TRACE_REPORT_SELECTION;
+    case fsim::app::TraceControlEntryKind::Lifecycle:
+        return FSIM_TRACE_REPORT_LIFECYCLE;
+    }
+    return FSIM_TRACE_REPORT_OUTPUT;
+}
+
 } // namespace
 
 extern "C" {
@@ -188,8 +310,11 @@ fsim_status_t fsim_session_load_project(
         if (mutation_forbidden(value)) {
             return FSIM_STATUS_UNAVAILABLE;
         }
+        value.trace_runtime.reset();
         value.diagnostics.clear();
         value.project.reset();
+        value.trace_control.reset();
+        value.trace_lifecycle_override.reset();
         value.simulation.reset();
         value.scopes.clear();
         value.process_names.clear();
@@ -210,6 +335,17 @@ fsim_status_t fsim_session_load_project(
         } else if (!loaded->project.random_seed) {
             value.seed = loaded->project.seed;
         }
+        auto trace = fsim::app::apply_trace_control(
+            fsim::app::trace_control_request(loaded->run,
+                fsim::app::TraceControlSurface::CApi,
+                fsim::app::TraceControlPhase::Simulate));
+        if (!trace.ok()) {
+            for (const auto& entry : trace.diagnostics) {
+                value.diagnostics.error(entry.code, entry.message);
+            }
+            return FSIM_STATUS_COMPILE_ERROR;
+        }
+        value.trace_control = std::move(trace.application);
         value.project = std::move(loaded);
         return FSIM_STATUS_OK;
     });
@@ -239,6 +375,8 @@ fsim_status_t fsim_session_build(const fsim_session_t session)
         if (mutation_forbidden(value)) {
             return FSIM_STATUS_UNAVAILABLE;
         }
+        value.trace_runtime.reset();
+        value.trace_lifecycle_override.reset();
         value.diagnostics.clear();
         value.simulation.reset();
         value.scopes.clear();
@@ -260,7 +398,25 @@ fsim_status_t fsim_session_build(const fsim_session_t session)
         }
         value.simulation = std::make_unique<fsim::app::Simulation>(
             std::move(*built), value.max_deltas);
+        if (value.project->run.trace_file
+            && value.project->run.trace_enabled) {
+            value.trace_runtime = fsim::app::TraceRuntime::attach(
+                *value.simulation, *value.project, value.diagnostics, true,
+                value.trace_control);
+            if (!value.trace_runtime) {
+                value.trace_lifecycle_override
+                    = fsim::app::TraceLifecycle::Failed;
+                value.simulation.reset();
+                return FSIM_STATUS_RUNTIME_ERROR;
+            }
+            value.trace_control = value.trace_runtime->control_handle();
+        }
         if (!rebuild_debug_objects(value)) {
+            if (value.trace_runtime) {
+                value.trace_lifecycle_override
+                    = fsim::app::TraceLifecycle::Failed;
+            }
+            value.trace_runtime.reset();
             value.simulation.reset();
             value.diagnostics.error(
                 "FSIM-API-0004",
@@ -392,6 +548,170 @@ fsim_status_t fsim_session_get_sdf_report_entry(
         out_entry->object_identity = view(entry.object_identity);
         out_entry->canonical_identity = view(entry.canonical_identity);
         return FSIM_STATUS_OK;
+    });
+}
+
+fsim_status_t fsim_session_configure_trace(
+    const fsim_session_t session,
+    const fsim_trace_options_t* options)
+{
+    if (options == nullptr
+        || !valid_struct_header(
+            options->struct_size, options->api_version, sizeof(*options))
+        || !valid_sdf_view(options->output)
+        || (options->selections == nullptr && options->selection_count != 0U)) {
+        return FSIM_STATUS_INCOMPATIBLE_ABI;
+    }
+    const auto format = trace_format(options->format);
+    const auto compression = trace_compression(options->compression);
+    const auto lifecycle_value = trace_lifecycle(options->lifecycle);
+    const auto phase = trace_phase(options->phase);
+    if (!format || !compression || !lifecycle_value || !phase) {
+        return FSIM_STATUS_INVALID_ARGUMENT;
+    }
+    return with_session(session, [&](Session& value) {
+        if (mutation_forbidden(value) || value.simulation) {
+            return FSIM_STATUS_UNAVAILABLE;
+        }
+        fsim::app::TraceControlRequest request;
+        request.surface = fsim::app::TraceControlSurface::CApi;
+        request.phase = *phase;
+        request.output = fsim::support::path_from_utf8(
+            sdf_string(options->output));
+        if (!request.output.empty() && request.output.is_relative()
+            && value.project) {
+            request.output
+                = value.project->base_directory / request.output;
+        }
+        request.format = *format;
+        request.compression = *compression;
+        request.lifecycle = *lifecycle_value;
+        request.report_limit = options->report_limit;
+        request.generation = options->generation;
+        request.selection.reserve(options->selection_count);
+        for (std::size_t index = 0; index < options->selection_count; ++index) {
+            const auto selection = options->selections[index];
+            if (!valid_sdf_view(selection)) {
+                return FSIM_STATUS_INCOMPATIBLE_ABI;
+            }
+            request.selection.push_back(sdf_string(selection));
+        }
+        auto configured = fsim::app::apply_trace_control(std::move(request));
+        if (!configured.ok()) {
+            value.diagnostics.clear();
+            for (const auto& entry : configured.diagnostics) {
+                value.diagnostics.error(entry.code, entry.message);
+            }
+            return FSIM_STATUS_INVALID_ARGUMENT;
+        }
+        value.diagnostics.clear();
+        value.trace_control = std::move(configured.application);
+        value.trace_lifecycle_override.reset();
+        if (value.project) {
+            fsim::app::publish_trace_control(
+                *value.trace_control, value.project->run);
+        }
+        return FSIM_STATUS_OK;
+    });
+}
+
+fsim_status_t fsim_session_get_trace_status(
+    const fsim_session_t session,
+    fsim_trace_status_t* out_status)
+{
+    if (out_status == nullptr
+        || !valid_struct_header(out_status->struct_size,
+            out_status->api_version,
+            sizeof(*out_status))) {
+        return FSIM_STATUS_INCOMPATIBLE_ABI;
+    }
+    return with_session(session, [&](Session& value) {
+        if (!value.trace_control) {
+            return FSIM_STATUS_UNAVAILABLE;
+        }
+        auto status = value.trace_runtime
+            ? value.trace_runtime->status()
+            : value.trace_control->status();
+        if (value.trace_lifecycle_override) {
+            status.lifecycle = *value.trace_lifecycle_override;
+        }
+        out_status->requested_format = trace_format(status.requested_format);
+        out_status->effective_format = trace_format(status.effective_format);
+        out_status->requested_compression
+            = trace_compression(status.requested_compression);
+        out_status->effective_compression
+            = trace_compression(status.effective_compression);
+        out_status->lifecycle = trace_lifecycle(status.lifecycle);
+        out_status->reserved = 0U;
+        out_status->selection_count = status.selection_count;
+        out_status->report_entry_count = status.report_entry_count;
+        out_status->returned_report_entry_count
+            = status.returned_report_entry_count;
+        out_status->generation = status.generation;
+        out_status->report_truncated = status.report_truncated ? 1U : 0U;
+        out_status->reserved2 = 0U;
+        out_status->output = view(value.trace_control->report().front().value);
+        out_status->semantic_identity
+            = view(value.trace_control->semantic_identity());
+        return FSIM_STATUS_OK;
+    });
+}
+
+fsim_status_t fsim_session_get_trace_report_entry(
+    const fsim_session_t session,
+    const size_t index,
+    fsim_trace_report_entry_t* out_entry)
+{
+    if (out_entry == nullptr
+        || !valid_struct_header(out_entry->struct_size,
+            out_entry->api_version,
+            sizeof(*out_entry))) {
+        return FSIM_STATUS_INCOMPATIBLE_ABI;
+    }
+    return with_session(session, [&](Session& value) {
+        if (!value.trace_control
+            || index >= value.trace_control->report().size()) {
+            return FSIM_STATUS_UNAVAILABLE;
+        }
+        const auto& entry = value.trace_control->report()[index];
+        out_entry->kind = trace_report_kind(entry.kind);
+        out_entry->reserved = 0U;
+        out_entry->name = view(entry.name);
+        out_entry->value = view(entry.value);
+        out_entry->canonical_identity = view(entry.canonical_identity);
+        return FSIM_STATUS_OK;
+    });
+}
+
+fsim_status_t fsim_session_flush_trace(const fsim_session_t session)
+{
+    return with_session(session, [](Session& value) {
+        if (mutation_forbidden(value) || !value.trace_runtime) {
+            return FSIM_STATUS_UNAVAILABLE;
+        }
+        const auto lifecycle = value.trace_runtime->status().lifecycle;
+        if (lifecycle == fsim::app::TraceLifecycle::Complete) {
+            return FSIM_STATUS_STOPPED;
+        }
+        if (lifecycle == fsim::app::TraceLifecycle::Failed) {
+            return FSIM_STATUS_RUNTIME_ERROR;
+        }
+        return value.trace_runtime->flush(value.diagnostics)
+            ? FSIM_STATUS_OK
+            : FSIM_STATUS_RUNTIME_ERROR;
+    });
+}
+
+fsim_status_t fsim_session_close_trace(const fsim_session_t session)
+{
+    return with_session(session, [](Session& value) {
+        if (mutation_forbidden(value) || !value.trace_runtime
+            || !value.finished) {
+            return FSIM_STATUS_UNAVAILABLE;
+        }
+        return value.trace_runtime->close(value.diagnostics)
+            ? FSIM_STATUS_OK
+            : FSIM_STATUS_RUNTIME_ERROR;
     });
 }
 

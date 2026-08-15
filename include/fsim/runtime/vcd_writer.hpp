@@ -5,12 +5,14 @@
 #include "fsim/runtime/packed_value.hpp"
 #include "fsim/runtime/scheduler.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
+#include "fsim/runtime/trace_model.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <iosfwd>
 #include <memory>
 #include <string_view>
+#include <vector>
 
 namespace fsim::runtime {
 
@@ -41,6 +43,8 @@ public:
     [[nodiscard]] VcdSignal declare_systemverilog_scalar(
         std::string_view hierarchical_name,
         SystemVerilogScalarKind kind);
+    [[nodiscard]] std::vector<VcdSignal> declare_model(
+        const TraceDeclarationModel& model);
 
     /// Emit the header and position the dump at initial_time.
     void begin(SimulationTick initial_time = 0);
@@ -63,6 +67,7 @@ public:
 
     /// Advance the output timestamp. Time may remain equal but never decrease.
     void set_time(SimulationTick time);
+    void set_event(const TraceEvent& event, SimulationTick tick_multiplier = 1);
     void flush();
 
     [[nodiscard]] bool begun() const noexcept;

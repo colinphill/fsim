@@ -1045,9 +1045,61 @@ class Parser {
       }
       return;
     }
+    if (key == "trace_format") {
+      if (require_kind(value, Value::Kind::string, key, "a string")) {
+        const auto format = parse_trace_format(value.text);
+        if (format) {
+          config_.run.trace_format = *format;
+        } else {
+          diagnostics_.error(
+              std::string(kValueCode),
+              "[run].trace_format must be auto, vcd, or fst",
+              value.span);
+        }
+      }
+      return;
+    }
+    if (key == "trace_compression") {
+      if (require_kind(value, Value::Kind::string, key, "a string")) {
+        const auto compression = parse_trace_compression(value.text);
+        if (compression) {
+          config_.run.trace_compression = *compression;
+        } else {
+          diagnostics_.error(
+              std::string(kValueCode),
+              "[run].trace_compression must be auto, none, or deterministic",
+              value.span);
+        }
+      }
+      return;
+    }
     if (key == "trace_filters") {
       if (const auto filters = string_array(value, key)) {
         config_.run.trace_filters = *filters;
+      }
+      return;
+    }
+    if (key == "trace_report_limit") {
+      if (const auto limit = unsigned_integer(value, key)) {
+        if (*limit == 0U) {
+          diagnostics_.error(
+              std::string(kValueCode),
+              "[run].trace_report_limit must be positive",
+              value.span);
+        } else if (*limit > std::numeric_limits<std::size_t>::max()) {
+          diagnostics_.error(
+              std::string(kValueCode),
+              "[run].trace_report_limit is too large",
+              value.span);
+        } else {
+          config_.run.trace_report_limit = static_cast<std::size_t>(*limit);
+        }
+      }
+      return;
+    }
+    if (key == "trace_enabled") {
+      if (require_kind(value, Value::Kind::boolean, key, "a boolean")) {
+        config_.run.trace_enabled = value.boolean;
       }
       return;
     }
@@ -1707,6 +1759,30 @@ std::string_view to_string(const DelayMode mode) noexcept {
   return "typ";
 }
 
+std::string_view to_string(const TraceFormat format) noexcept {
+  switch (format) {
+    case TraceFormat::automatic:
+      return "auto";
+    case TraceFormat::vcd:
+      return "vcd";
+    case TraceFormat::fst:
+      return "fst";
+  }
+  return "auto";
+}
+
+std::string_view to_string(const TraceCompression compression) noexcept {
+  switch (compression) {
+    case TraceCompression::automatic:
+      return "auto";
+    case TraceCompression::none:
+      return "none";
+    case TraceCompression::deterministic:
+      return "deterministic";
+  }
+  return "auto";
+}
+
 std::string_view to_string(const SystemVerilogUvmRelease release) noexcept {
   switch (release) {
     case SystemVerilogUvmRelease::none:
@@ -1989,6 +2065,37 @@ std::optional<DelayMode> parse_delay_mode(
   }
   if (normalized == "max" || normalized == "maximum") {
     return DelayMode::maximum;
+  }
+  return std::nullopt;
+}
+
+std::optional<TraceFormat> parse_trace_format(
+    const std::string_view spelling) noexcept {
+  const auto normalized = lowercase(spelling);
+  if (normalized == "auto" || normalized == "automatic") {
+    return TraceFormat::automatic;
+  }
+  if (normalized == "vcd") {
+    return TraceFormat::vcd;
+  }
+  if (normalized == "fst") {
+    return TraceFormat::fst;
+  }
+  return std::nullopt;
+}
+
+std::optional<TraceCompression> parse_trace_compression(
+    const std::string_view spelling) noexcept {
+  const auto normalized = lowercase(spelling);
+  if (normalized == "auto" || normalized == "automatic") {
+    return TraceCompression::automatic;
+  }
+  if (normalized == "none" || normalized == "off") {
+    return TraceCompression::none;
+  }
+  if (normalized == "deterministic" || normalized == "fixed" ||
+      normalized == "fst-v1") {
+    return TraceCompression::deterministic;
   }
   return std::nullopt;
 }

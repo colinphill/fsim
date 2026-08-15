@@ -55,6 +55,10 @@
 #include <utility>
 #include <vector>
 
+namespace fsim::runtime {
+class FstWriter;
+}
+
 namespace fsim::app::application_detail {
 
 class VhdlPslExecution {
@@ -1106,19 +1110,65 @@ std::optional<VcdScale> vcd_scale(
     const std::string_view resolution,
     diagnostic::Engine& diagnostics);
 
+class TraceObservationRecorder;
+class TraceSelectionControl;
+
+enum class TraceTerminalStatus : std::uint8_t {
+    open,
+    complete,
+    failed
+};
+
 struct TraceState {
     ~TraceState();
 
     std::ofstream stream;
     std::unique_ptr<runtime::VcdWriter> writer;
+    std::unique_ptr<runtime::FstWriter> fst_writer;
+    std::unique_ptr<runtime::TraceDeclarationModel> declarations;
+    std::unique_ptr<TraceObservationRecorder> observations;
+    std::unique_ptr<TraceSelectionControl> selection;
+    std::shared_ptr<const TraceControlApplication> control;
     std::vector<std::vector<runtime::VcdSignal>> handles;
-    std::vector<bool> enabled;
+    std::vector<runtime::VcdSignal> declaration_handles;
+    std::vector<runtime::TraceSignalId> signal_trace_ids;
     std::vector<runtime::SystemVerilogScalarKind> scalar_kinds;
-    std::array<runtime::VcdSignal, 7> uvm_activity_handles { };
+    std::array<runtime::TraceSignalId, 7> uvm_activity_trace_ids { };
     Simulation* simulation { };
+    diagnostic::Engine* diagnostics { };
+    project::TraceFormat format { project::TraceFormat::vcd };
+    std::filesystem::path output_path;
+    std::filesystem::path lock_directory;
+    std::filesystem::path staging_path;
+    std::filesystem::path backup_path;
     std::uint64_t uvm_activity_observer { };
     SimulationTick tick_multiplier { 1 };
+    TraceTerminalStatus terminal_status { TraceTerminalStatus::open };
+    std::string terminal_diagnostic;
+    bool collecting_fst_initial_values { true };
+    bool terminal_diagnostic_reported { };
 };
+
+std::optional<project::TraceFormat> resolve_trace_format(
+    const project::RunSection& run,
+    diagnostic::Engine& diagnostics);
+
+std::optional<std::int8_t> fst_timescale_exponent(
+    std::string_view timescale,
+    diagnostic::Engine& diagnostics);
+
+bool prepare_trace_output(
+    TraceState& state,
+    const std::filesystem::path& output,
+    diagnostic::Engine& diagnostics);
+
+void fail_trace(
+    TraceState& state,
+    std::string_view message,
+    diagnostic::Engine* diagnostics) noexcept;
+
+bool flush_trace(TraceState& state, diagnostic::Engine& diagnostics);
+bool finish_trace(TraceState& state, diagnostic::Engine& diagnostics);
 
 struct HdlVcdState {
     ~HdlVcdState();
@@ -1176,16 +1226,12 @@ void attach_hdl_vcd_control(
     HdlVcdState& state,
     const std::filesystem::path& file_root);
 
-void write_trace_signal_value(
-    TraceState& state,
-    runtime::simir::SignalId signal,
-    const runtime::PackedLogic4& value);
-
 std::unique_ptr<TraceState> attach_trace(
     Simulation& simulation,
     const project::Config& config,
     diagnostic::Engine& diagnostics,
-    const bool dynamic_selection = false);
+    const bool dynamic_selection = false,
+    std::shared_ptr<const TraceControlApplication> configured = { });
 
 std::optional<SimulationTick> configured_duration(
     const project::Config& config,

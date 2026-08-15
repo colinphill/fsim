@@ -397,6 +397,31 @@ std::optional<BuiltProject> build_checked_project(
     if (!specialization_cache_keys) {
         return std::nullopt;
     }
+    if (config.run.trace_file && config.run.trace_enabled) {
+        const auto object_phase = !checked->objects.empty();
+        auto request = trace_control_request(config.run,
+            object_phase ? TraceControlSurface::NonProjectElaborate
+                         : TraceControlSurface::ProjectCli,
+            object_phase ? TraceControlPhase::Elaborate
+                         : TraceControlPhase::Simulate);
+        auto control = apply_trace_control(std::move(request));
+        if (!control.ok()) {
+            for (const auto& diagnostic : control.diagnostics)
+                application_detail::import_diagnostic(diagnostics, diagnostic);
+            return std::nullopt;
+        }
+        auto snapshot = make_trace_archive_snapshot(
+            *control.application, config.base_directory);
+        if (checked->trace_archive
+            && !trace_archive_profiles_compatible(
+                *checked->trace_archive, snapshot)) {
+            diagnostics.error("FSIM-TRACE-ARCHIVE-003",
+                "current trace request conflicts with archived object or library profile");
+            return std::nullopt;
+        }
+        checked->trace_archive = std::make_shared<const TraceArchiveSnapshot>(
+            std::move(snapshot));
+    }
     const auto key = make_cache_key(
         config,
         *checked,
@@ -481,9 +506,10 @@ std::optional<BuiltProject> build_checked_project(
         std::move(checked->systemverilog_class_specializations),
         std::move(systemverilog_coverage), std::nullopt, { },
         std::move(verilog_unit_revisions),
-        std::move(verilog_unit_compatibility_profiles)
+        std::move(verilog_unit_compatibility_profiles), { }, { }
     };
     result.vhdl_unit_provenance = std::move(vhdl_provenance);
+    result.trace_archive = std::move(checked->trace_archive);
     return result;
 }
 

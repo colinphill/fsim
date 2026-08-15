@@ -1483,6 +1483,8 @@ trace_filters = ["__none__"]
         "trace list\n"
         "trace add q\n"
         "trace list\n"
+        "trace status\n"
+        "trace status\n"
         "run 1ns\n"
         "trace remove q\n"
         "trace list\n"
@@ -1528,6 +1530,21 @@ trace_filters = ["__none__"]
         != std::string::npos);
     assert(
         cli_output.str().find("stopped tracing tb.q")
+        != std::string::npos);
+    const auto first_trace_status = cli_output.str().find(
+        "format vcd, output ");
+    assert(first_trace_status != std::string::npos);
+    assert(
+        cli_output.str().find(
+            "format vcd, output ", first_trace_status + 1U)
+        != std::string::npos);
+    const auto first_trace_profile = cli_output.str().find(
+        "compression none, lifecycle open, declared 3, selected 1");
+    assert(first_trace_profile != std::string::npos);
+    assert(
+        cli_output.str().find(
+            "compression none, lifecycle open, declared 3, selected 1",
+            first_trace_profile + 1U)
         != std::string::npos);
     std::ifstream debug_trace_stream(debug_trace);
     const std::string debug_vcd {

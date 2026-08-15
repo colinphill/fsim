@@ -200,6 +200,29 @@ std::optional<CheckedProject> load_objects(
               + support::path_to_utf8(object));
       return std::nullopt;
     }
+    if (!metadata->trace_archive.empty()) {
+      const auto archive = trace_archive_from_hex(metadata->trace_archive);
+      auto decoded = decode_trace_archive(
+          archive, TraceArchiveKind::Object);
+      if (archive.empty() || !decoded.ok()) {
+        for (const auto& diagnostic : decoded.diagnostics)
+          application_detail::import_diagnostic(diagnostics, diagnostic);
+        if (!diagnostics.has_error()) {
+          diagnostics.error("FSIM-TRACE-ARCHIVE-002",
+              ".fsimobj trace profile transport is malformed");
+        }
+        return std::nullopt;
+      }
+      if (checked.trace_archive
+          && !trace_archive_profiles_compatible(
+              *checked.trace_archive, decoded.snapshot)) {
+        diagnostics.error("FSIM-TRACE-ARCHIVE-003",
+            ".fsimobj inputs contain incompatible trace formats or profiles");
+        return std::nullopt;
+      }
+      checked.trace_archive = std::make_shared<const TraceArchiveSnapshot>(
+          std::move(decoded.snapshot));
+    }
     const auto object_release =
         project::parse_systemverilog_uvm_release(metadata->uvm_release);
     if (!object_release) {

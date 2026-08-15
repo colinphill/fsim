@@ -4,10 +4,13 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <limits>
 #include <ostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -130,6 +133,8 @@ struct VcdWriter::Impl {
   bool checkpoint_open{};
   SimulationTick current_time{};
   std::uint64_t byte_count{};
+  std::optional<TraceEvent> last_event;
+  std::unordered_set<std::uint64_t> trace_signals;
 
   void append(std::string_view value) {
     buffer.append(value);
@@ -305,6 +310,32 @@ VcdSignal VcdWriter::declare_systemverilog_scalar(
   return signal;
 }
 
+std::vector<VcdSignal> VcdWriter::declare_model(
+    const TraceDeclarationModel& model) {
+  std::vector<VcdSignal> result;
+  result.reserve(model.entries().size());
+  for (const auto& entry : model.entries()) {
+    if (!impl_->trace_signals.insert(entry.id.value).second) {
+      throw std::invalid_argument("duplicate trace model signal identity");
+    }
+    const TraceVariableDeclaration* variable = nullptr;
+    std::string_view hierarchical_name;
+    if (entry.kind == TraceDeclarationKind::Variable) {
+      variable = &model.variable(entry.id);
+      hierarchical_name = variable->hierarchical_name;
+    } else {
+      const auto& alias = model.alias(entry.id);
+      variable = &model.variable(alias.target);
+      hierarchical_name = alias.hierarchical_name;
+    }
+    const auto& type = model.type(variable->type);
+    result.push_back(type.kind == TraceTypeKind::SystemVerilogScalar
+        ? declare_systemverilog_scalar(hierarchical_name, type.scalar_kind)
+        : declare_signal(hierarchical_name, type.width));
+  }
+  return result;
+}
+
 void VcdWriter::begin(SimulationTick initial_time) {
   if (impl_->started) {
     throw std::logic_error("VCD writer has already begun");
@@ -466,6 +497,27 @@ void VcdWriter::set_time(SimulationTick time) {
   impl_->append(std::to_string(time));
   impl_->append("\n");
   impl_->current_time = time;
+}
+
+void VcdWriter::set_event(
+    const TraceEvent& event,
+    const SimulationTick tick_multiplier) {
+  if (!impl_->started) {
+    throw std::logic_error("VCD writer has not begun");
+  }
+  if (!impl_->trace_signals.contains(event.signal.value)) {
+    throw std::invalid_argument("trace event signal identity is not declared");
+  }
+  if (tick_multiplier == 0
+      || event.time > std::numeric_limits<SimulationTick>::max()
+          / tick_multiplier) {
+    throw std::overflow_error("VCD timestamp scaling overflow");
+  }
+  if (impl_->last_event && trace_event_precedes(event, *impl_->last_event)) {
+    throw std::invalid_argument("trace event order moved backwards");
+  }
+  impl_->last_event = event;
+  set_time(event.time * tick_multiplier);
 }
 
 void VcdWriter::flush() { impl_->flush(); }

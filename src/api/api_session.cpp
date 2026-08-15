@@ -1182,22 +1182,38 @@ fsim_status_t run_session(
       // a terminal HDL stop. The simulator's terminal lifecycle takes
       // precedence; only a genuinely nonterminal external stop is resumable.
       session.finished = session.simulation->finished() || !external;
+      const auto trace_ok = !session.finished || !session.trace_runtime
+          || session.trace_runtime->close(session.diagnostics);
       lifecycle(
           session,
           session.finished ? FSIM_LIFECYCLE_SIMULATION_FINISHED
                            : FSIM_LIFECYCLE_SIMULATION_STOPPED);
+      if (!trace_ok) {
+        return FSIM_STATUS_RUNTIME_ERROR;
+      }
       return FSIM_STATUS_STOPPED;
     }
     if (result.status == fsim::runtime::RunStatus::completed) {
       session.finished = true;
+      const auto trace_ok = !session.trace_runtime
+          || session.trace_runtime->close(session.diagnostics);
       lifecycle(session, FSIM_LIFECYCLE_SIMULATION_FINISHED);
+      if (!trace_ok) {
+        return FSIM_STATUS_RUNTIME_ERROR;
+      }
     } else {
       lifecycle(session, FSIM_LIFECYCLE_SIMULATION_STOPPED);
     }
     return FSIM_STATUS_OK;
   } catch (const fsim::runtime::simir::AssertionError& error) {
+    if (session.trace_runtime) {
+      session.trace_runtime->fail(session.diagnostics, error.what());
+    }
     return assertion_failure(session, error);
   } catch (const std::exception& error) {
+    if (session.trace_runtime) {
+      session.trace_runtime->fail(session.diagnostics, error.what());
+    }
     return runtime_failure(session, error);
   }
 }

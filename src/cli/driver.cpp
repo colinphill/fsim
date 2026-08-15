@@ -395,7 +395,19 @@ namespace {
         if (invocation.trace_file.has_value()) {
             config.run.trace_file = absolute_normalized(*invocation.trace_file);
         }
+        if (invocation.trace_format.has_value()) {
+            config.run.trace_format = *invocation.trace_format;
+        }
+        if (invocation.trace_compression.has_value()) {
+            config.run.trace_compression = *invocation.trace_compression;
+        }
         config.run.trace_filters = invocation.trace_filters;
+        if (invocation.trace_report_limit.has_value()) {
+            config.run.trace_report_limit = *invocation.trace_report_limit;
+        }
+        if (invocation.trace_enabled.has_value()) {
+            config.run.trace_enabled = *invocation.trace_enabled;
+        }
         if (invocation.seed.has_value()) {
             config.project.seed = *invocation.seed;
         }
@@ -451,8 +463,20 @@ namespace {
         if (invocation.trace_file.has_value()) {
             config.run.trace_file = absolute_normalized(*invocation.trace_file);
         }
+        if (invocation.trace_format.has_value()) {
+            config.run.trace_format = *invocation.trace_format;
+        }
+        if (invocation.trace_compression.has_value()) {
+            config.run.trace_compression = *invocation.trace_compression;
+        }
         if (!invocation.trace_filters.empty()) {
             config.run.trace_filters = invocation.trace_filters;
+        }
+        if (invocation.trace_report_limit.has_value()) {
+            config.run.trace_report_limit = *invocation.trace_report_limit;
+        }
+        if (invocation.trace_enabled.has_value()) {
+            config.run.trace_enabled = *invocation.trace_enabled;
         }
         if (invocation.seed.has_value()) {
             config.project.seed = *invocation.seed;
@@ -549,8 +573,13 @@ namespace {
             << "      --sdf-cell GLOB      Select cells within the root (default: *)\n"
             << "      --sdf-report-limit COUNT\n"
             << "                           Bound detailed SDF report entries\n"
-            << "      --trace PATH\n"
-            << "      --trace-filter GLOB  Trace selection for simulate; repeatable\n"
+            << "      --trace PATH          Trace output path (--trace-output alias)\n"
+            << "      --trace-format auto|vcd|fst\n"
+            << "      --trace-compression auto|none|deterministic\n"
+            << "      --trace-filter GLOB  Trace selection; repeatable (--trace-select alias)\n"
+            << "      --trace-lifecycle configured|disabled\n"
+            << "      --trace-report-limit COUNT\n"
+            << "                           Bound detailed trace report entries\n"
             << "      --cache PATH         Native cache for standalone simulate\n"
             << "      --file-root PATH     File-I/O root for standalone simulate\n"
             << "      --engine interpreter|compiled|debug\n"
@@ -1013,21 +1042,80 @@ std::optional<Invocation> parse_arguments(
                     return std::nullopt;
                 }
                 invocation.sdf_report_limit = static_cast<std::size_t>(number);
-            } else if (is_option(argument, "", "--trace")) {
-                const auto value = take_value(index, argc, argv, argument, "--trace", diagnostics);
+            } else if (is_option(argument, "", "--trace")
+                || is_option(argument, "", "--trace-output")) {
+                const auto name = argument.starts_with("--trace-output")
+                    ? "--trace-output"
+                    : "--trace";
+                const auto value = take_value(
+                    index, argc, argv, argument, name, diagnostics);
                 if (!value.has_value()) {
                     return std::nullopt;
                 }
                 invocation.trace_file = fsim::support::path_from_utf8(*value);
-            } else if (is_option(argument, "", "--trace-filter")) {
+            } else if (is_option(argument, "", "--trace-format")) {
                 const auto value = take_value(
-                    index, argc, argv, argument, "--trace-filter", diagnostics);
+                    index, argc, argv, argument, "--trace-format", diagnostics);
+                invocation.trace_format = value.has_value()
+                    ? project::parse_trace_format(*value)
+                    : std::nullopt;
+                if (!invocation.trace_format) {
+                    argument_error(
+                        diagnostics, "--trace-format must be auto, vcd, or fst");
+                    return std::nullopt;
+                }
+            } else if (is_option(argument, "", "--trace-compression")) {
+                const auto value = take_value(index, argc, argv, argument,
+                    "--trace-compression", diagnostics);
+                invocation.trace_compression = value.has_value()
+                    ? project::parse_trace_compression(*value)
+                    : std::nullopt;
+                if (!invocation.trace_compression) {
+                    argument_error(diagnostics,
+                        "--trace-compression must be auto, none, or deterministic");
+                    return std::nullopt;
+                }
+            } else if (is_option(argument, "", "--trace-filter")
+                || is_option(argument, "", "--trace-select")) {
+                const auto name = argument.starts_with("--trace-select")
+                    ? "--trace-select"
+                    : "--trace-filter";
+                const auto value = take_value(
+                    index, argc, argv, argument, name, diagnostics);
                 if (!value.has_value() || value->empty()) {
                     argument_error(
-                        diagnostics, "--trace-filter requires a non-empty glob");
+                        diagnostics, std::string { name }
+                            + " requires a non-empty glob");
                     return std::nullopt;
                 }
                 invocation.trace_filters.emplace_back(*value);
+            } else if (is_option(argument, "", "--trace-lifecycle")) {
+                const auto value = take_value(index, argc, argv, argument,
+                    "--trace-lifecycle", diagnostics);
+                if (value.has_value()
+                    && (*value == "configured" || *value == "enabled")) {
+                    invocation.trace_enabled = true;
+                } else if (value.has_value()
+                    && (*value == "disabled" || *value == "off")) {
+                    invocation.trace_enabled = false;
+                } else {
+                    argument_error(diagnostics,
+                        "--trace-lifecycle must be configured or disabled");
+                    return std::nullopt;
+                }
+            } else if (is_option(argument, "", "--trace-report-limit")) {
+                const auto value = take_value(index, argc, argv, argument,
+                    "--trace-report-limit", diagnostics);
+                std::uint64_t number = 0U;
+                if (!value.has_value() || !parse_unsigned(*value, number)
+                    || number == 0U
+                    || number > std::numeric_limits<std::size_t>::max()) {
+                    argument_error(diagnostics,
+                        "--trace-report-limit must be a nonzero size");
+                    return std::nullopt;
+                }
+                invocation.trace_report_limit
+                    = static_cast<std::size_t>(number);
             } else if (is_option(argument, "", "--engine")) {
                 const auto value = take_value(
                     index, argc, argv, argument, "--engine", diagnostics);
@@ -1280,6 +1368,36 @@ std::optional<Invocation> parse_arguments(
             "SDF annotation is available only during elaborate or simulate phases");
         return std::nullopt;
     }
+    const bool has_trace_option = invocation.trace_file.has_value()
+        || invocation.trace_format.has_value()
+        || invocation.trace_compression.has_value()
+        || !invocation.trace_filters.empty()
+        || invocation.trace_report_limit.has_value()
+        || invocation.trace_enabled.has_value();
+    const bool trace_phase = invocation.command == Command::build
+        || invocation.command == Command::run
+        || invocation.command == Command::debug
+        || invocation.command == Command::tcl
+        || invocation.command == Command::compile
+        || invocation.command == Command::elaborate
+        || invocation.command == Command::simulate;
+    if (has_trace_option && !trace_phase) {
+        argument_error(diagnostics,
+            "trace control is available only during compile, elaborate, or simulate phases");
+        return std::nullopt;
+    }
+    for (std::size_t index = 0; index < invocation.trace_filters.size(); ++index) {
+        if (std::ranges::find(invocation.trace_filters.begin(),
+                invocation.trace_filters.begin()
+                    + static_cast<std::ptrdiff_t>(index),
+                invocation.trace_filters[index])
+            != invocation.trace_filters.begin()
+                + static_cast<std::ptrdiff_t>(index)) {
+            argument_error(diagnostics,
+                "trace selections must be unique within one invocation");
+            return std::nullopt;
+        }
+    }
     if (!invocation.help && !invocation.version
         && invocation.command == Command::compile) {
         if (invocation.files.empty() || !invocation.language.has_value()
@@ -1316,7 +1434,6 @@ std::optional<Invocation> parse_arguments(
             || invocation.design.has_value() || invocation.duration.has_value()
             || invocation.max_deltas.has_value()
             || invocation.delay_mode.has_value()
-            || invocation.trace_file.has_value() || !invocation.trace_filters.empty()
             || invocation.seed.has_value() || invocation.random_seed
             || invocation.optimization.has_value() || invocation.engine.has_value()) {
             argument_error(
@@ -1389,7 +1506,6 @@ std::optional<Invocation> parse_arguments(
             || !invocation.library_mappings.empty()
             || !invocation.library_exports.empty() || invocation.duration.has_value()
             || invocation.max_deltas.has_value()
-            || invocation.trace_file.has_value() || !invocation.trace_filters.empty()
             || invocation.engine.has_value()) {
             argument_error(
                 diagnostics,
@@ -1431,10 +1547,10 @@ std::optional<Invocation> parse_arguments(
         && (invocation.artifact_output.has_value()
             || !invocation.objects.empty() || !invocation.systemc_plugins.empty()
             || invocation.design.has_value()
-            || invocation.engine.has_value() || !invocation.trace_filters.empty())) {
+            || invocation.engine.has_value())) {
         argument_error(
             diagnostics,
-            "--output, --object, --design, --engine, and --trace-filter are "
+            "--output, --object, --design, and --engine are "
             "available only with artifact-phase commands");
         return std::nullopt;
     }

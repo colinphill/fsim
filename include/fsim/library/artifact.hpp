@@ -12,7 +12,7 @@
 
 namespace fsim::library {
 
-inline constexpr std::uint32_t kFormatVersion = 3;
+inline constexpr std::uint32_t kFormatVersion = 4;
 inline constexpr std::uint32_t kPortableSchemaVersion = 10;
 inline constexpr std::string_view kMetadataFilename = "fsim-library.toml";
 
@@ -93,6 +93,7 @@ struct Metadata {
   std::string producer;
   std::uint32_t runtime_schema{};
   std::uint32_t portable_schema{kPortableSchemaVersion};
+  std::string trace_archive;
   std::vector<LanguageStandard> standards;
   std::vector<VhdlPackageDependency> vhdl_package_dependencies;
   std::vector<std::string> dependencies;

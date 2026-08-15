@@ -14,7 +14,7 @@
 
 namespace fsim::artifact {
 
-inline constexpr std::uint32_t kDesignFormatVersion = 9;
+inline constexpr std::uint32_t kDesignFormatVersion = 10;
 inline constexpr std::string_view kDesignMetadataFilename = "fsim-design.bin";
 
 struct DesignRoot {
@@ -119,6 +119,7 @@ struct DesignMetadata {
   std::string delay_mode;
   std::string optimization;
   std::string cache_key;
+  std::string trace_archive;
   std::string uvm_release{"none"};
   std::string uvm_source_identity;
   std::uint64_t seed{1};

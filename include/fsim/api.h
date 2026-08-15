@@ -235,6 +235,83 @@ typedef struct fsim_sdf_report_entry {
   fsim_string_view_t canonical_identity;
 } fsim_sdf_report_entry_t;
 
+typedef enum fsim_trace_format {
+  FSIM_TRACE_FORMAT_AUTO = 0,
+  FSIM_TRACE_FORMAT_VCD = 1,
+  FSIM_TRACE_FORMAT_FST = 2
+} fsim_trace_format_t;
+
+typedef enum fsim_trace_compression {
+  FSIM_TRACE_COMPRESSION_AUTO = 0,
+  FSIM_TRACE_COMPRESSION_NONE = 1,
+  FSIM_TRACE_COMPRESSION_DETERMINISTIC = 2
+} fsim_trace_compression_t;
+
+typedef enum fsim_trace_lifecycle {
+  FSIM_TRACE_LIFECYCLE_DISABLED = 0,
+  FSIM_TRACE_LIFECYCLE_CONFIGURED = 1,
+  FSIM_TRACE_LIFECYCLE_OPEN = 2,
+  FSIM_TRACE_LIFECYCLE_COMPLETE = 3,
+  FSIM_TRACE_LIFECYCLE_FAILED = 4
+} fsim_trace_lifecycle_t;
+
+typedef enum fsim_trace_phase {
+  FSIM_TRACE_PHASE_COMPILE = 0,
+  FSIM_TRACE_PHASE_ELABORATE = 1,
+  FSIM_TRACE_PHASE_SIMULATE = 2
+} fsim_trace_phase_t;
+
+typedef enum fsim_trace_report_kind {
+  FSIM_TRACE_REPORT_OUTPUT = 0,
+  FSIM_TRACE_REPORT_FORMAT = 1,
+  FSIM_TRACE_REPORT_COMPRESSION = 2,
+  FSIM_TRACE_REPORT_SELECTION = 3,
+  FSIM_TRACE_REPORT_LIFECYCLE = 4
+} fsim_trace_report_kind_t;
+
+typedef struct fsim_trace_options {
+  uint32_t struct_size;
+  uint32_t api_version;
+  fsim_trace_format_t format;
+  fsim_trace_compression_t compression;
+  fsim_trace_lifecycle_t lifecycle;
+  fsim_trace_phase_t phase;
+  fsim_string_view_t output;
+  const fsim_string_view_t* selections;
+  size_t selection_count;
+  size_t report_limit;
+  uint64_t generation;
+} fsim_trace_options_t;
+
+typedef struct fsim_trace_status {
+  uint32_t struct_size;
+  uint32_t api_version;
+  fsim_trace_format_t requested_format;
+  fsim_trace_format_t effective_format;
+  fsim_trace_compression_t requested_compression;
+  fsim_trace_compression_t effective_compression;
+  fsim_trace_lifecycle_t lifecycle;
+  uint32_t reserved;
+  size_t selection_count;
+  size_t report_entry_count;
+  size_t returned_report_entry_count;
+  uint64_t generation;
+  uint32_t report_truncated;
+  uint32_t reserved2;
+  fsim_string_view_t output;
+  fsim_string_view_t semantic_identity;
+} fsim_trace_status_t;
+
+typedef struct fsim_trace_report_entry {
+  uint32_t struct_size;
+  uint32_t api_version;
+  fsim_trace_report_kind_t kind;
+  uint32_t reserved;
+  fsim_string_view_t name;
+  fsim_string_view_t value;
+  fsim_string_view_t canonical_identity;
+} fsim_trace_report_entry_t;
+
 #define FSIM_STRUCT_HEADER_SIZE \
   (offsetof(fsim_session_options_t, max_deltas))
 #define FSIM_OBJECT_INFO_V1_SIZE \
@@ -342,6 +419,19 @@ FSIM_PUBLIC fsim_status_t fsim_session_get_sdf_report_entry(
     fsim_session_t session,
     size_t index,
     fsim_sdf_report_entry_t* out_entry);
+
+FSIM_PUBLIC fsim_status_t fsim_session_configure_trace(
+    fsim_session_t session,
+    const fsim_trace_options_t* options);
+FSIM_PUBLIC fsim_status_t fsim_session_get_trace_status(
+    fsim_session_t session,
+    fsim_trace_status_t* out_status);
+FSIM_PUBLIC fsim_status_t fsim_session_get_trace_report_entry(
+    fsim_session_t session,
+    size_t index,
+    fsim_trace_report_entry_t* out_entry);
+FSIM_PUBLIC fsim_status_t fsim_session_flush_trace(fsim_session_t session);
+FSIM_PUBLIC fsim_status_t fsim_session_close_trace(fsim_session_t session);
 
 FSIM_PUBLIC fsim_status_t fsim_session_root(
     fsim_session_t session,

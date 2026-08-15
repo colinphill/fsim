@@ -2418,6 +2418,37 @@ process locals. Richer local types and complete source metadata for deferred
 object and executable kinds remain open.
 The application analysis cache remains separate.
 
+## Format-neutral VCD and FST tracing
+
+Application tracing freezes one immutable declaration model before runtime.
+Stable scope, variable, alias, type, source, library, root, and owner identities
+feed VCD, FST, internal observers, debugger selection, and callbacks. Runtime
+events retain `(time, delta, region, sequence, stable-id)` order, so same-time
+changes and late snapshots are not collapsed by a format adapter. Disabled
+tracing exits before model construction and writer allocation.
+
+VCD remains the default and consumes the same model through its existing
+writer. The clean-room FST adapter owns transactional fixed-endian container,
+hierarchy, typed-value, change, and deterministic compression stages. It
+preserves arbitrary-width two-/four-state values, real/string/enumeration,
+VHDL physical/time/Logic9, resolved strength, and owner-qualified aggregate,
+class, container, coverage, and assertion leaves. Multiple Verilog,
+SystemVerilog, VHDL, and SystemC roots retain canonical hierarchy, provenance,
+libraries, and forward aliases.
+
+One `TraceControlApplication` validates project, CLI, Tcl, debugger, native C,
+C++, and manifest-free phase requests before publishing format, compression,
+selection, lifecycle, report, and semantic identity. Object, design,
+mapped-library, native-cache, and checkpoint archives store versioned trace
+snapshots with relocation-safe output intent. Staging, destination locks, and
+first-failure retention prevent partial replacement or a false complete state.
+
+The bounded clean-room reader streams binary filesystem input and rejects
+malformed, corrupt, stale, trailing, inconsistent, or over-limit data without
+publishing a partial trace. It has no zlib/libfst dependency. The complete
+contract and public entry points are documented in [VCD and FST tracing](tracing.md)
+and the [public tracing API](api.md).
+
 ## Debug and public API
 
 `include/fsim/api.h` defines opaque 64-bit session/object handles, versioned

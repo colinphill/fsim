@@ -459,6 +459,24 @@ bool export_library(
     metadata.library = std::string { logical_library };
     metadata.producer = std::string { "fsim " } + std::string { version };
     metadata.runtime_schema = 2;
+    if (config.run.trace_file && config.run.trace_enabled) {
+        auto control = apply_trace_control(trace_control_request(config.run,
+            TraceControlSurface::ProjectCli, TraceControlPhase::Simulate));
+        if (!control.ok()) {
+            for (const auto& diagnostic : control.diagnostics)
+                application_detail::import_diagnostic(diagnostics, diagnostic);
+            return false;
+        }
+        const auto snapshot = make_trace_archive_snapshot(
+            *control.application, config.base_directory);
+        auto archive = encode_trace_archive(snapshot, TraceArchiveKind::Library);
+        if (!archive.ok()) {
+            for (const auto& diagnostic : archive.diagnostics)
+                application_detail::import_diagnostic(diagnostics, diagnostic);
+            return false;
+        }
+        metadata.trace_archive = trace_archive_hex(archive.archive);
+    }
     std::set<std::pair<std::string, std::string>> standards;
     for (const auto& source_set : config.source_sets) {
         if (source_set.library == logical_library

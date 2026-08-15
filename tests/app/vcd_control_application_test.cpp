@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
 #include "fsim/app/design_artifact.hpp"
+#include "fsim/runtime/fst_reader.hpp"
+#include "fsim/runtime/fst_value_encoder.hpp"
+#include "fsim/runtime/fst_writer.hpp"
+#include "fsim/runtime/vcd_writer.hpp"
 
 #include <cassert>
 #include <chrono>
@@ -9,9 +13,61 @@
 #include <iostream>
 #include <iterator>
 #include <ranges>
+#include <sstream>
 #include <string>
+#include <vector>
 
 namespace {
+
+void test_fst_reader_vcd_equivalence()
+{
+    using namespace fsim::runtime;
+    TraceDeclarationBuilder builder;
+    const auto bit = builder.add_variable("top.bit", 1U);
+    const auto bus = builder.add_variable("top.bus", 4U);
+    const auto model = std::move(builder).freeze();
+    std::ostringstream vcd_text;
+    VcdWriter vcd { vcd_text };
+    const auto handles = vcd.declare_model(model);
+    vcd.begin(2U);
+    std::ostringstream fst_bytes(std::ios::binary);
+    FstWriter fst { fst_bytes };
+    fst.declare(model);
+    fst.begin(2U);
+    const auto emit = [&](const TraceSignalId signal,
+                          const SimulationTick time,
+                          const std::string_view value) {
+        const auto packed = PackedLogic4::from_msb_string(value);
+        const TraceEvent event {
+            signal, time, 0U, TraceRegion::Active, time
+        };
+        vcd.set_event(event);
+        vcd.change(handles.at(signal.value - 1U), packed);
+        fst.change(event, encode_fst_logic_value(packed));
+    };
+    emit(bit, 2U, "0");
+    emit(bus, 3U, "10xz");
+    emit(bit, 4U, "1");
+    vcd.flush();
+    fst.close(4U);
+
+    const auto read = read_fst(fst_bytes.str());
+    assert(read.ok());
+    assert(read.trace->initial_time == 2U);
+    assert(read.trace->final_time == 4U);
+    assert(read.trace->timestamps
+        == std::vector<SimulationTick>({ 2U, 3U, 4U }));
+    assert(read.trace->values.size() == 3U);
+    assert(read.trace->values[0].signal == bit);
+    assert(read.trace->values[0].payload == "0");
+    assert(read.trace->values[1].signal == bit);
+    assert(read.trace->values[1].payload == "1");
+    assert(read.trace->values[2].signal == bus);
+    assert(read.trace->values[2].payload == "10xz");
+    assert(vcd_text.str().find("#2") != std::string::npos);
+    assert(vcd_text.str().find("b10xz") != std::string::npos);
+    assert(vcd_text.str().find("#4") != std::string::npos);
+}
 
 struct TemporaryDirectory {
     std::filesystem::path path;
@@ -308,6 +364,7 @@ endmodule
 
 int main()
 {
+    test_fst_reader_vcd_equivalence();
     const auto nonce = std::chrono::steady_clock::now()
                            .time_since_epoch()
                            .count();

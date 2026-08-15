@@ -2529,7 +2529,28 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-RUN-DELTA-0001` | error | Simulation exceeded `max_deltas`; the message includes pending processes and recent signals. |
 | `FSIM-VCD-0001` | error | The trace output directory could not be created. |
 | `FSIM-VCD-0002` | error | The VCD trace file could not be opened. |
-| `FSIM-VCD-0003` | error | VCD declaration, value emission, timestamp scaling, or flushing failed. |
+| `FSIM-VCD-0003` | error | VCD declaration, immutable selection ownership, append-only late-snapshot/value emission, timestamp scaling, flushing, staged publication, or terminal lifecycle completion failed. The first terminal failure is retained and reported once; an incomplete trace is never reported as cleanly complete. |
+| `FSIM-TRACE-0001` | error | Trace-format selection conflicts with the output extension or the requested FST timescale cannot be represented exactly. |
+| `FSIM-TRACE-0002` | error | A trace destination, staging file, or exclusive output lock is unsafe or unavailable. |
+| `FSIM-TRACE-0003` | error | Trace declaration, canonical multiple-root hierarchy, language/library/owner provenance, structural alias identity, immutable selective-trace ownership, debugger/Tcl add/remove/status, append-only late snapshots and same-coordinate control-region barriers, typed-value metadata, exact real/string/enumeration/physical/Logic9 encoding, owner-qualified aggregate/class/container/coverage/assertion leaf shape, resolved-strength state/ranks, atomic signal/UVM/dynamic-class/container/coverage/assertion/SDF observation fanout, deterministic time/delta/region/sequence/stable-id ordering, same-time change retention, versioned fixed-window/block compression, semantic/byte digest identity, governed hierarchy/provenance/selection/observation/event/timestamp/payload/value/profile validation, bounded declaration/initial/change/compression buffering, callback containment, flush/write/close/destructor failure containment, lifecycle finalization, staged publication, or restoration failed without publishing a partial output. The first terminal failure and diagnostic are retained across repeated finalization attempts, and failed or abandoned traces never report clean completion. Values that the selected FST profile cannot represent losslessly are rejected before publication. |
+| `FSIM-TRACE-CONTROL-001` | error | Public trace configuration contains an invalid policy, lifecycle, output path, report limit, governed nonzero resource limit, or deterministic compression request for a non-FST format. |
+| `FSIM-TRACE-CONTROL-002` | error | The requested trace format conflicts with the configured output extension. |
+| `FSIM-TRACE-CONTROL-003` | error | A trace selection is empty, duplicated, individually oversized, or exceeds the governed aggregate selection-byte limit. |
+| `FSIM-TRACE-CONTROL-004` | error | Trace selection or report configuration exceeds its governed entry limit. |
+| `FSIM-TRACE-ARCHIVE-001` | error | A trace archive contains an invalid, stale, inconsistent, or duplicated profile, identity, selection, or declaration. |
+| `FSIM-TRACE-ARCHIVE-002` | error | A trace archive envelope or payload is malformed, corrupt, truncated, trailing, future, or belongs to another artifact kind. |
+| `FSIM-TRACE-ARCHIVE-003` | error | An archived trace format, profile, declaration selection, or relocation-safe output intent conflicts with the consuming request or another input artifact. |
+| `FSIM-TRACE-ARCHIVE-004` | error | A trace archive exceeds a governed collection, text, byte, or relocation-path limit. |
+| `FSIM-FST-READ-001` | error | An FST container is malformed, truncated, trailing, noncanonical, stale, or uses an unsupported clean-room profile. |
+| `FSIM-FST-READ-002` | error | FST header, hierarchy, alias, geometry, timestamp, wave-chain, or typed-value data is internally inconsistent. |
+| `FSIM-FST-READ-003` | error | FST input, decoded output, declaration, timestamp, value, text, metadata, or allocation use exceeds a governed reader limit. |
+| `FSIM-FST-READ-004` | error | A canonical FST GZip or zlib stream has an invalid header, block, checksum, size, history reference, or padding. |
+| `FSIM-FST-READ-005` | error | An FST input file cannot be opened or read completely. |
+
+The [VCD and FST tracing guide](tracing.md) groups format selection,
+transactional publication, public control/archive, and clean-room reader
+diagnostics by lifecycle. Reader failures publish no partial trace and retain
+one stable diagnostic from the five-code FST reader family.
 | `FSIM-CACHE-0001` | error | A parsed source could not be hashed or associated with its cache provenance. |
 | `FSIM-CACHE-0002` | warning | An unreadable or incompatible design-cache entry was discarded. |
 | `FSIM-CACHE-0003` | error | A design-cache entry could not be populated. |

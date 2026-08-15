@@ -53,8 +53,8 @@ endforeach()
 
 foreach(FSIM_EXACT_OUTPUT IN ITEMS
     "SDF application inventory passed: rows=17 preserved=17 active=0 revisions=SDF21,SDF30,SDF40 profiles=V1995,V2001,V2001NoConfig,V2005,SV2005,SV2009,SV2012,SV2017 digest=47e7f5b95aae9f0e3df5cb4fcb4939255e1803f9c920081a47198e21b75f2754"
-    "diagnostic catalog covers 2461 production codes"
-    "Checked 1020 authored sources against the 2500-line hard limit with a 2000-line refactor target")
+    "diagnostic catalog covers 2477 production codes"
+    "Checked 1056 authored sources against the 2500-line hard limit with a 2000-line refactor target")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_EXACT_OUTPUT}" FSIM_OUTPUT_INDEX)
   if(FSIM_OUTPUT_INDEX EQUAL -1)
     message(FATAL_ERROR
@@ -80,9 +80,9 @@ list(APPEND FSIM_AUTHORED_FILES
 list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX "/tests/fuzz/corpus/")
 list(REMOVE_DUPLICATES FSIM_AUTHORED_FILES)
 list(LENGTH FSIM_AUTHORED_FILES FSIM_AUTHORED_COUNT)
-if(NOT FSIM_AUTHORED_COUNT EQUAL 1205)
+if(NOT FSIM_AUTHORED_COUNT EQUAL 1252)
   message(FATAL_ERROR
-    "authored SDF application inventory changed: expected 1205 files, "
+    "authored SDF application inventory changed: expected 1252 files, "
     "found ${FSIM_AUTHORED_COUNT}")
 endif()
 foreach(FSIM_FILE IN LISTS FSIM_AUTHORED_FILES)
@@ -141,5 +141,5 @@ foreach(FSIM_DOC_TOKEN IN ITEMS
 endforeach()
 
 message(STATUS
-  "SDF application release audit: 17 rows, 2461 diagnostics, 1020 bounded sources, "
+  "SDF application release audit: 17 rows, 2477 diagnostics, 1056 bounded sources, "
   "${FSIM_AUTHORED_COUNT} SPDX-owned files")

@@ -4,15 +4,6 @@
 #include <iostream>
 #include <string_view>
 
-#if defined(__has_feature)
-#if __has_feature(address_sanitizer)
-#define FSIM_TEST_ASAN_ENABLED 1
-#endif
-#endif
-#if defined(__SANITIZE_ADDRESS__) && !defined(FSIM_TEST_ASAN_ENABLED)
-#define FSIM_TEST_ASAN_ENABLED 1
-#endif
-
 namespace {
 
 using ApplicationTest =
@@ -55,15 +46,16 @@ int fsim_application_case_core_non_project_cli() {
 }
 
 int main() {
-#if defined(FSIM_TEST_ASAN_ENABLED) && defined(FSIM_MERGED_APPLICATION_TESTS)
-  std::cerr << "application: phase-isolated sanitizer cases\n";
+#if defined(FSIM_MERGED_APPLICATION_TESTS)
+  // Each phase below is registered as its own selectable CTest case in merged
+  // builds. Keep the historical umbrella name as a cheap dispatcher sentinel
+  // without executing the same application coverage twice.
+  std::cerr << "application: partitioned cases registered separately\n";
 #else
-#if !defined(FSIM_MERGED_APPLICATION_TESTS)
   run_application_case("systemc integration",
       &fsim::test::ApplicationTestFixture::test_systemc_integration);
   run_application_case("systemc scheduling matrix",
       &fsim::test::ApplicationTestFixture::test_systemc_scheduling_matrix);
-#endif
   fsim_application_case_core_simulation();
   run_application_case("class simulation integration",
       &fsim::test::ApplicationTestFixture::test_class_simulation_integration);

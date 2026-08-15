@@ -104,9 +104,9 @@ For an explicitly scripted build of the same three source files using
 `.fsimobj`, `.fsimscobj`, `.fsimscplugin`, and `.fsimdesign`, follow the
 [manifest-free phase tutorial](../non_project_phases/README.md#add-an-incrementally-compiled-systemc-library).
 
-## 4. Record and inspect a VCD
+## 4. Record and inspect VCD or FST
 
-The manifest enables tracing with:
+The default manifest enables VCD tracing with:
 
 ```toml
 [run]
@@ -127,12 +127,30 @@ three_language_tb.u_bridge.u_vhdl.result
 ```
 
 The internal SystemC signal and the VHDL ports change in later deltas than the
-SV stimulus, making the two boundary crossings visible. To write elsewhere or
-select a narrower trace without editing the manifest, use a CLI override:
+SV stimulus, making the two boundary crossings visible.
+
+The sibling `fsim-fst.toml` manifest uses the same three-language sources and
+selection but records deterministic FST:
+
+```sh
+build/dev/fsim run \
+  -p examples/three_language_hierarchy/fsim-fst.toml -j 8
+```
+
+It writes `examples/three_language_hierarchy/three_language.fst`. The FST
+contains the same canonical mixed-language hierarchy, aliases, values, and
+ordered time changes as the VCD while using the deterministic portable
+compression profile. Use an FST-capable viewer or fsim's bounded reader to
+inspect it.
+
+To write elsewhere or select a narrower trace without editing either manifest,
+use CLI overrides. The output extension is sufficient for automatic format
+selection, or `--trace-format` can make the choice explicit:
 
 ```sh
 build/dev/fsim run -p examples/three_language_hierarchy/fsim.toml \
-  -j 8 --trace /tmp/three-language.vcd
+  -j 8 --trace /tmp/three-language.fst --trace-format fst \
+  --trace-compression deterministic --trace-filter 'three_language_tb.*'
 ```
 
 ## 5. Instrument an interactive debug run

@@ -410,6 +410,32 @@ bool load_required_mapped_libraries(
         if (!metadata.has_value()) {
             return false;
         }
+        if (!metadata->trace_archive.empty()) {
+            const auto archive = trace_archive_from_hex(
+                metadata->trace_archive);
+            auto decoded = decode_trace_archive(
+                archive, TraceArchiveKind::Library);
+            if (archive.empty() || !decoded.ok()) {
+                for (const auto& diagnostic : decoded.diagnostics)
+                    application_detail::import_diagnostic(
+                        diagnostics, diagnostic);
+                if (!diagnostics.has_error()) {
+                    diagnostics.error("FSIM-TRACE-ARCHIVE-002",
+                        ".fsimlib trace profile transport is malformed");
+                }
+                return false;
+            }
+            if (checked.trace_archive
+                && !trace_archive_profiles_compatible(
+                    *checked.trace_archive, decoded.snapshot)) {
+                diagnostics.error("FSIM-TRACE-ARCHIVE-003",
+                    "mapped libraries contain incompatible trace profiles");
+                return false;
+            }
+            checked.trace_archive
+                = std::make_shared<const TraceArchiveSnapshot>(
+                    std::move(decoded.snapshot));
+        }
         for (const auto& dependency : metadata->dependencies) {
             if (!self(self, dependency)) {
                 return false;

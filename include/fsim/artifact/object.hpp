@@ -13,7 +13,7 @@
 
 namespace fsim::artifact {
 
-inline constexpr std::uint32_t kObjectFormatVersion = 5;
+inline constexpr std::uint32_t kObjectFormatVersion = 6;
 inline constexpr std::string_view kObjectMetadataFilename = "fsim-object.bin";
 
 // One explicitly scripted HDL compilation unit. Paths stored here are
@@ -29,6 +29,7 @@ struct ObjectMetadata {
   std::string compilation_unit;
   std::string uvm_release{"none"};
   std::string compilation_digest;
+  std::string trace_archive;
   std::vector<std::string> defines;
   std::vector<std::filesystem::path> include_roots;
   std::vector<library::VhdlPackageDependency> vhdl_package_dependencies;

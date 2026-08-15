@@ -645,6 +645,26 @@ if {[fsim::trace remove tb.q] ne "stopped tracing tb.q"} {
 if {[fsim::trace all] ne "tracing all signals"} {
   error "trace all failed"
 }
+set trace_status_first [dict get [fsim::trace status] runtime]
+set trace_status_second [dict get [fsim::trace status] runtime]
+if {$trace_status_first ne $trace_status_second ||
+    ![string match "format vcd, output *, compression none, lifecycle open, declared *, selected *, generation *" \
+        $trace_status_first]} {
+  error "trace status is not stable: $trace_status_first / $trace_status_second"
+}
+set debugger_trace_report [fsim::debug trace report]
+if {![string match "output output=* identity=*" $debugger_trace_report] ||
+    [string first "lifecycle lifecycle=configured identity=" \
+        $debugger_trace_report] < 0} {
+  error "bad debugger trace report: $debugger_trace_report"
+}
+if {[fsim::trace flush] ne "trace flushed"} {
+  error "debugger trace flush failed"
+}
+if {![catch {fsim::trace close} early_close_error] ||
+    [string first "finished simulation" $early_close_error] < 0} {
+  error "debugger trace closed before simulation completion"
+}
 fsim::debug deposit tb.q 0
 if {[fsim::debug show tb.q] ne "tb.q = 0"} {
   error "debug deposit failed"
@@ -693,6 +713,15 @@ set absolute [fsim::debug run-until 2ns]
 if {[string first "simulation finished at time 2" $absolute] < 0} {
   error "absolute debug run failed: $absolute"
 }
+set completed_trace_status [fsim::trace status]
+if {[dict get $completed_trace_status lifecycle] ne "complete" ||
+    [string first "lifecycle complete" \
+        [dict get $completed_trace_status runtime]] < 0} {
+  error "debugger trace did not complete: $completed_trace_status"
+}
+if {[fsim::trace close] ne "trace complete"} {
+  error "completed debugger trace close was not idempotent"
+}
 
 # Rebuilding deliberately starts a fresh debugger session for step coverage.
 fsim::build
@@ -738,7 +767,11 @@ puts "debug-control-ok"
         }
         assert(
             output.str().find("debug-control-ok") != std::string::npos);
-        assert(error.str().empty());
+        if (!error.str().empty()) {
+            throw std::runtime_error(
+                "Tcl debugger emitted unexpected diagnostics:\n"
+                + error.str());
+        }
     }
     {
         const std::string callback_script = R"FSIM_TCL(
@@ -878,11 +911,32 @@ set loaded [fsim::project load $control_manifest]
 if {[dict get $loaded name] ne "tcl-control"} {
   error "valid project load failed"
 }
-set trace_path [fsim::trace configure runtime-debug.vcd tb.q]
+set trace_path [fsim::trace configure runtime-debug.fst \
+    -format fst -compression deterministic -select tb.q \
+    -report-limit 8 -lifecycle configured]
 set trace_status [fsim::trace status]
 if {[dict get $trace_status file] ne $trace_path ||
-    [dict get $trace_status filters] ne "tb.q"} {
+    [dict get $trace_status format] ne "fst" ||
+    [dict get $trace_status compression] ne "deterministic" ||
+    [dict get $trace_status lifecycle] ne "configured" ||
+    [dict get $trace_status filters] ne "tb.q" ||
+    [dict get $trace_status report_count] != 5 ||
+    [dict get $trace_status report_truncated]} {
   error "bad runtime trace configuration: $trace_status"
+}
+set trace_identity [dict get $trace_status identity]
+set trace_report [fsim::trace report]
+if {[llength $trace_report] != 5 ||
+    [dict get [lindex $trace_report 0] kind] ne "output" ||
+    [string length [dict get [lindex $trace_report 0] identity]] != 64} {
+  error "bad runtime trace report: $trace_report"
+}
+if {![catch {fsim::trace configure duplicate.fst \
+        -select tb.q -select tb.q} duplicate_error]} {
+  error "duplicate trace selection unexpectedly succeeded"
+}
+if {[dict get [fsim::trace status] identity] ne $trace_identity} {
+  error "failed trace configuration mutated the active control"
 }
 if {[fsim::trace list] ne "tb.q"} {
   error "runtime trace filter was not applied"

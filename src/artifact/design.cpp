@@ -340,12 +340,16 @@ void write_digest_fields(Writer& writer, const DesignMetadata& metadata) {
             ? "fsim-design-provenance-v6-vhdl-unit-provenance"
             : metadata.format < 9
             ? "fsim-design-provenance-v7-verilog-unit-provenance"
-            : "fsim-design-provenance-v8-sdf-identity");
+            : metadata.format < 10
+            ? "fsim-design-provenance-v8-sdf-identity"
+            : "fsim-design-provenance-v9-trace-profile");
     writer.u32(metadata.runtime_abi);
     writer.string(metadata.time_resolution);
     writer.string(metadata.delay_mode);
     writer.string(metadata.optimization);
     writer.string(metadata.cache_key);
+    if (metadata.format >= 10)
+        writer.string(metadata.trace_archive);
     if (metadata.format >= 4) {
         writer.string(metadata.uvm_release);
         writer.string(metadata.uvm_source_identity);
@@ -448,6 +452,7 @@ bool validate(
     if ((metadata.format != 1 && metadata.format != 2 && metadata.format != 4
             && metadata.format != 5 && metadata.format != 6
             && metadata.format != 7 && metadata.format != 8
+            && metadata.format != 9
             && metadata.format != kDesignFormatVersion)
         || metadata.runtime_abi != runtime_abi_version) {
         report(
@@ -459,6 +464,13 @@ bool validate(
           && metadata.delay_mode != "max")
       || (metadata.optimization != "O0" && metadata.optimization != "O2")
       || !checksum_spelling(metadata.cache_key)
+      || (metadata.format >= 10
+          && ((metadata.trace_archive.size() % 2U) != 0U
+              || !std::ranges::all_of(metadata.trace_archive,
+                  [](const char value) {
+                    return (value >= '0' && value <= '9')
+                        || (value >= 'a' && value <= 'f');
+                  })))
       || (metadata.format >= 4
           && (metadata.uvm_release != "none"
               && metadata.uvm_release != "1.2"
@@ -850,6 +862,9 @@ std::string serialize_design_metadata(const DesignMetadata& metadata) {
   writer.string(metadata.delay_mode);
   writer.string(metadata.optimization);
   writer.string(metadata.cache_key);
+  if (metadata.format >= 10) {
+    writer.string(metadata.trace_archive);
+  }
   if (metadata.format >= 4) {
     writer.string(metadata.uvm_release);
     writer.string(metadata.uvm_source_identity);
@@ -969,6 +984,7 @@ std::optional<DesignMetadata> deserialize_design_metadata(
   if (metadata.format != 1 && metadata.format != 2 && metadata.format != 4
       && metadata.format != 5 && metadata.format != 6
       && metadata.format != 7 && metadata.format != 8
+      && metadata.format != 9
       && metadata.format != kDesignFormatVersion) {
       report(
           diagnostics, kSchemaCode,
@@ -989,6 +1005,8 @@ std::optional<DesignMetadata> deserialize_design_metadata(
         || !read_string(metadata.delay_mode)
         || !read_string(metadata.optimization)
         || !read_string(metadata.cache_key)
+        || (metadata.format >= 10
+            && !read_string(metadata.trace_archive))
         || (metadata.format >= 4
             && (!read_string(metadata.uvm_release)
                 || !read_string(metadata.uvm_source_identity)))) {

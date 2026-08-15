@@ -190,13 +190,14 @@ class Reader {
 
 std::string compilation_digest(const ObjectMetadata& metadata) {
   Writer writer;
-  writer.string("fsim-object-compilation-v5-unit-language-provenance");
+  writer.string("fsim-object-compilation-v6-trace-profile");
   writer.string(metadata.language);
   writer.string(metadata.standard);
   writer.string(metadata.compatibility_profile);
   writer.string(metadata.library);
   writer.string(metadata.compilation_unit);
   writer.string(metadata.uvm_release);
+  writer.string(metadata.trace_archive);
   writer.sequence(metadata.defines, [&](const auto& item) {
     writer.string(item);
   });
@@ -252,6 +253,11 @@ bool validate_metadata(
           && metadata.uvm_release != "2020.3.1")
       || (metadata.uvm_release != "none"
           && metadata.language != "systemverilog")
+      || (metadata.trace_archive.size() % 2U != 0U)
+      || !std::ranges::all_of(metadata.trace_archive, [](const char value) {
+           return (value >= '0' && value <= '9')
+               || (value >= 'a' && value <= 'f');
+         })
       || !checksum_spelling(metadata.compilation_digest)) {
       error(
           diagnostics, kValueCode,
@@ -454,6 +460,7 @@ std::string serialize_object_metadata(const ObjectMetadata& metadata) {
   writer.string(metadata.compilation_unit);
   writer.string(metadata.uvm_release);
   writer.string(metadata.compilation_digest);
+  writer.string(metadata.trace_archive);
   writer.sequence(metadata.defines, [&](const auto& item) {
     writer.string(item);
   });
@@ -521,7 +528,8 @@ std::optional<ObjectMetadata> deserialize_object_metadata(
       || !read_string(metadata.library)
       || !read_string(metadata.compilation_unit)
       || !read_string(metadata.uvm_release)
-      || !read_string(metadata.compilation_digest)) {
+      || !read_string(metadata.compilation_digest)
+      || !read_string(metadata.trace_archive)) {
       error(diagnostics, kSchemaCode, "truncated .fsimobj metadata root", source_name);
       return std::nullopt;
   }

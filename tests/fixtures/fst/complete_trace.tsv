@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+id	domain	formats	obligation
+FST-CORPUS-001	packed-bit	VCD,FST	exact two-state vector
+FST-CORPUS-002	packed-logic	VCD,FST	exact four-state vector and later changes
+FST-CORPUS-003	real	FST	exact binary64 identity
+FST-CORPUS-004	shortreal	FST	exact binary32 identity
+FST-CORPUS-005	realtime	FST	exact realtime identity
+FST-CORPUS-006	time	FST	exact SystemVerilog time
+FST-CORPUS-007	chandle	FST	exact SystemVerilog chandle
+FST-CORPUS-008	string	FST	embedded NUL bytes
+FST-CORPUS-009	enumeration	FST	canonical literals and unknown state
+FST-CORPUS-010	vhdl-physical	FST	canonical units and exact payload
+FST-CORPUS-011	vhdl-time	FST	canonical VHDL time
+FST-CORPUS-012	vhdl-logic9	FST	all nine resolved states
+FST-CORPUS-013	resolved-state	FST	typed resolved state leaf
+FST-CORPUS-014	strength-zero	FST	typed strength-zero leaf
+FST-CORPUS-015	strength-one	FST	typed strength-one leaf
+FST-CORPUS-016	packed-aggregate	FST	typed packed aggregate leaf
+FST-CORPUS-017	unpacked-aggregate	FST	typed unpacked aggregate leaf
+FST-CORPUS-018	dynamic-class	FST	typed dynamic class leaf
+FST-CORPUS-019	container	FST	typed container leaf
+FST-CORPUS-020	coverage	FST	typed coverage leaf
+FST-CORPUS-021	assertion	FST	typed assertion leaf
+FST-CORPUS-022	alias	VCD,FST	forward mixed-root alias
+FST-CORPUS-023	mixed-roots	VCD,FST	Verilog SystemVerilog VHDL SystemC provenance
+FST-CORPUS-024	selection	VCD,FST	selective and late snapshot lifecycle
+FST-CORPUS-025	callbacks	VCD,FST	callback and dynamic observation fanout
+FST-CORPUS-026	phases	FST	project and non-project compile elaborate simulate
+FST-CORPUS-027	artifacts	FST	object design library cache checkpoint relocation
+FST-CORPUS-028	closure	VCD,FST	negative PASS time advancement and clean close

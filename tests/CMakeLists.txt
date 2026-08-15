@@ -888,7 +888,10 @@ set_tests_properties(
 
 add_executable(fsim_design_artifact_tests artifact/design_artifact_test.cpp)
 fsim_configure_test(fsim_design_artifact_tests)
-target_link_libraries(fsim_design_artifact_tests PRIVATE fsim_library)
+target_link_libraries(
+  fsim_design_artifact_tests
+  PRIVATE fsim_library fsim_runtime
+)
 add_test(NAME fsim.artifact.design COMMAND fsim_design_artifact_tests)
 set_tests_properties(
   fsim.artifact.design
@@ -982,6 +985,27 @@ add_test(
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckSdfVitalInventory.cmake"
+)
+add_test(
+  NAME fsim.fst-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckFstInventory.cmake"
+)
+add_test(
+  NAME fsim.application-regression-dedup-contract
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckApplicationTestDeduplication.cmake"
+)
+add_test(
+  NAME fsim.fst-release-audit
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckFstReleaseAudit.cmake"
 )
 add_test(
   NAME fsim.sdf-application-release-audit
@@ -1334,6 +1358,13 @@ add_test(
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckToolPortabilityContract.cmake"
 )
 add_test(
+  NAME fsim.fst-portability-contract
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckFstPortabilityContract.cmake"
+)
+add_test(
   NAME fsim.resource-portability-contract
   COMMAND
     "${CMAKE_COMMAND}"
@@ -1367,6 +1398,18 @@ set_tests_properties(
 set_tests_properties(
   fsim.sdf-vital-inventory
   PROPERTIES LABELS "fast;sdf;vhdl;vital;mixed-language;timing;inventory;positive;negative;interpreter;llvm;phase;artifact;diagnostics;resources;cmake"
+)
+set_tests_properties(
+  fsim.fst-inventory
+  PROPERTIES LABELS "fast;fst;vcd;trace;inventory;positive;negative;equivalence;phase;artifact;diagnostics;resources;cmake"
+)
+set_tests_properties(
+  fsim.application-regression-dedup-contract
+  PROPERTIES LABELS "fast;application;regression;deduplication;cmake"
+)
+set_tests_properties(
+  fsim.fst-release-audit
+  PROPERTIES LABELS "fast;fst;vcd;trace;release;audit;documentation;inventory;diagnostics;resources;license;portability"
 )
 set_tests_properties(
   fsim.sdf-vital-release-audit
@@ -1531,6 +1574,10 @@ set_tests_properties(
 set_tests_properties(
   fsim.tool-portability-contract
   PROPERTIES LABELS "fast;portability;windows;linux;api;cli;tcl;debugger;vcd;files;cmake"
+)
+set_tests_properties(
+  fsim.fst-portability-contract
+  PROPERTIES LABELS "fast;fst;reader;negative;determinism;portability;windows;linux;files;cmake"
 )
 set_tests_properties(
   fsim.resource-portability-contract
@@ -1990,6 +2037,162 @@ if(TARGET fsim_application)
         TIMEOUT 7200
     )
   endif()
+
+  add_executable(
+    fsim_trace_api_application_tests
+    app/trace_api_application_test.cpp
+  )
+  fsim_configure_test(fsim_trace_api_application_tests)
+  target_link_libraries(
+    fsim_trace_api_application_tests
+    PRIVATE fsim_application fsim_cli fsim_api
+  )
+  add_test(
+    NAME fsim.application.trace_api
+    COMMAND fsim_trace_api_application_tests
+  )
+  set_tests_properties(
+    fsim.application.trace_api
+    PROPERTIES LABELS "fast;trace;vcd;fst;api"
+  )
+
+  add_executable(
+    fsim_trace_archive_application_tests
+    app/trace_archive_application_test.cpp
+  )
+  fsim_configure_test(fsim_trace_archive_application_tests)
+  target_link_libraries(
+    fsim_trace_archive_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.trace_archive
+    COMMAND fsim_trace_archive_application_tests
+  )
+  set_tests_properties(
+    fsim.application.trace_archive
+    PROPERTIES LABELS "fast;trace;vcd;fst;artifact"
+  )
+
+  add_executable(
+    fsim_trace_format_application_tests
+    app/trace_format_application_test.cpp
+  )
+  fsim_configure_test(fsim_trace_format_application_tests)
+  target_link_libraries(
+    fsim_trace_format_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.trace_format
+    COMMAND fsim_trace_format_application_tests
+  )
+  set_tests_properties(
+    fsim.application.trace_format
+    PROPERTIES LABELS "fast;trace;vcd;fst;systemverilog"
+  )
+
+  add_executable(
+    fsim_trace_hierarchy_application_tests
+    app/trace_hierarchy_application_test.cpp
+  )
+  fsim_configure_test(fsim_trace_hierarchy_application_tests)
+  target_include_directories(
+    fsim_trace_hierarchy_application_tests
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/app"
+  )
+  target_link_libraries(
+    fsim_trace_hierarchy_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.trace_hierarchy
+    COMMAND fsim_trace_hierarchy_application_tests
+  )
+  set_tests_properties(
+    fsim.application.trace_hierarchy
+    PROPERTIES LABELS "fast;trace;vcd;fst;verilog;systemverilog;vhdl;systemc;mixed-language;hierarchy;provenance;alias"
+  )
+
+  add_executable(
+    fsim_trace_observation_application_tests
+    app/trace_observation_application_test.cpp
+  )
+  fsim_configure_test(fsim_trace_observation_application_tests)
+  target_include_directories(
+    fsim_trace_observation_application_tests
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/app"
+  )
+  target_link_libraries(
+    fsim_trace_observation_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.trace_observation
+    COMMAND fsim_trace_observation_application_tests
+  )
+  set_tests_properties(
+    fsim.application.trace_observation
+    PROPERTIES LABELS "fast;trace;vcd;fst;callbacks;uvm;class;container;coverage;assertion;sdf;atomic;negative"
+  )
+
+  add_executable(
+    fsim_trace_control_application_tests
+    app/trace_control_application_test.cpp
+  )
+  fsim_configure_test(fsim_trace_control_application_tests)
+  target_include_directories(
+    fsim_trace_control_application_tests
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/app"
+  )
+  target_link_libraries(
+    fsim_trace_control_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.trace_control
+    COMMAND fsim_trace_control_application_tests
+  )
+  set_tests_properties(
+    fsim.application.trace_control
+    PROPERTIES LABELS "fast;trace;vcd;fst;selection;debugger;tcl;snapshot;lifecycle;deterministic;negative"
+  )
+
+  add_executable(
+    fsim_fst_corpus_tests
+    app/fst_corpus_test.cpp
+  )
+  fsim_configure_test(fsim_fst_corpus_tests)
+  target_link_libraries(
+    fsim_fst_corpus_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.fst_corpus
+    COMMAND
+      fsim_fst_corpus_tests
+      "${PROJECT_SOURCE_DIR}/tests/fixtures/fst"
+  )
+  set_tests_properties(
+    fsim.application.fst_corpus
+    PROPERTIES LABELS "fast;trace;vcd;fst;corpus;reader;equivalence;values;alias;mixed-language;selection;callbacks;phase;artifact;relocation;compression;negative;lifecycle"
+  )
+  add_test(
+    NAME fsim.fst-closure
+    COMMAND
+      "${CMAKE_COMMAND}"
+      "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+      "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+      "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+      "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/fst-closure-evidence"
+      -P "${PROJECT_SOURCE_DIR}/cmake/RunFstClosure.cmake"
+  )
+  set_tests_properties(
+    fsim.fst-closure
+    PROPERTIES
+      LABELS "fast;fst;closure;corpus;retained-logs;vcd;reader;equivalence;phase;artifact;relocation;negative;portability"
+      TIMEOUT 7200
+  )
 
   option(
     FSIM_MERGE_APPLICATION_TESTS

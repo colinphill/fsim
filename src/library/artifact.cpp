@@ -293,7 +293,8 @@ std::string serialize_metadata(const Metadata& metadata) {
          << "library = \"" << escape(metadata.library) << "\"\n"
          << "producer = \"" << escape(metadata.producer) << "\"\n"
          << "runtime_schema = " << metadata.runtime_schema << '\n'
-         << "portable_schema = " << metadata.portable_schema << '\n';
+         << "portable_schema = " << metadata.portable_schema << '\n'
+         << "trace_archive = \"" << escape(metadata.trace_archive) << "\"\n";
   for (const auto& dependency : metadata.dependencies) {
     output << "\n[[dependency]]\n"
            << "library = \"" << escape(dependency) << "\"\n";
@@ -488,9 +489,15 @@ std::optional<Metadata> parse_metadata(
         } else {
           metadata.portable_schema = *number;
         }
-      } else if ((key == "library" || key == "producer")
+      } else if ((key == "library" || key == "producer"
+                     || key == "trace_archive")
                  && text.has_value()) {
-        (key == "library" ? metadata.library : metadata.producer) = *text;
+        if (key == "library")
+          metadata.library = *text;
+        else if (key == "producer")
+          metadata.producer = *text;
+        else
+          metadata.trace_archive = *text;
       } else {
         error(
             diagnostics, kSyntaxCode,
@@ -651,6 +658,15 @@ std::optional<Metadata> parse_metadata(
             + std::to_string(metadata.portable_schema)
             + "; this build supports schema "
             + std::to_string(kPortableSchemaVersion),
+        source_name, document_line);
+  }
+  if ((metadata.trace_archive.size() % 2U) != 0U
+      || !std::ranges::all_of(metadata.trace_archive, [](const char value) {
+           return (value >= '0' && value <= '9')
+               || (value >= 'a' && value <= 'f');
+         })) {
+    error(diagnostics, kValueCode,
+        "trace_archive must be empty or lowercase hexadecimal",
         source_name, document_line);
   }
   if (!library_name(metadata.library)) {

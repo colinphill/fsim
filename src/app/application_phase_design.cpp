@@ -633,6 +633,16 @@ bool publish_design_artifact(
     metadata.specialization_count = project.design.specializations().size();
     metadata.signal_count = project.design.signals().size();
     metadata.process_count = project.design.processes().size();
+    if (project.trace_archive) {
+        auto trace = encode_trace_archive(
+            *project.trace_archive, TraceArchiveKind::Design);
+        if (!trace.ok()) {
+            for (const auto& diagnostic : trace.diagnostics)
+                application_detail::import_diagnostic(diagnostics, diagnostic);
+            return false;
+        }
+        metadata.trace_archive = trace_archive_hex(trace.archive);
+    }
     metadata.design_digest = artifact::compute_design_digest(metadata);
     if (!append_sdf_phase_payloads(project, metadata, payloads, diagnostics))
         return false;
@@ -660,6 +670,23 @@ std::optional<BuiltProject> load_design_artifact(
     auto metadata = artifact::load_design_metadata(directory, diagnostics);
     if (!metadata) {
         return std::nullopt;
+    }
+    std::shared_ptr<const TraceArchiveSnapshot> trace_archive;
+    if (!metadata->trace_archive.empty()) {
+        const auto archive = trace_archive_from_hex(metadata->trace_archive);
+        auto decoded = decode_trace_archive(
+            archive, TraceArchiveKind::Design);
+        if (archive.empty() || !decoded.ok()) {
+            for (const auto& diagnostic : decoded.diagnostics)
+                application_detail::import_diagnostic(diagnostics, diagnostic);
+            if (!diagnostics.has_error()) {
+                diagnostics.error("FSIM-TRACE-ARCHIVE-002",
+                    ".fsimdesign trace profile transport is malformed");
+            }
+            return std::nullopt;
+        }
+        trace_archive = std::make_shared<const TraceArchiveSnapshot>(
+            std::move(decoded.snapshot));
     }
     for (const auto& object : metadata->objects) {
         if (!application_detail::validate_vhdl_package_dependencies(
@@ -917,10 +944,11 @@ std::optional<BuiltProject> load_design_artifact(
         std::move(*coverage), std::move(*uvm_state),
         std::move(vhdl_unit_provenance),
         std::move(verilog_unit_revisions),
-        std::move(verilog_unit_compatibility_profiles)
+        std::move(verilog_unit_compatibility_profiles), { }, { }
     };
     if (!restore_sdf_phase_artifacts(directory, *metadata, built, diagnostics))
         return std::nullopt;
+    built.trace_archive = std::move(trace_archive);
     return built;
 }
 
