@@ -75,6 +75,7 @@ if(FSIM_UVM_1_2_SOURCE_DIR AND FSIM_UVM_2020_3_1_SOURCE_DIR)
       "FSIM_TEST_UVM_2020_3_1_SOURCE_DIR=\"${FSIM_UVM_2020_3_1_SOURCE_DIR}\""
   )
 endif()
+
 add_test(NAME fsim.frontend COMMAND fsim_frontend_tests)
 
 add_executable(
@@ -890,7 +891,7 @@ add_executable(fsim_design_artifact_tests artifact/design_artifact_test.cpp)
 fsim_configure_test(fsim_design_artifact_tests)
 target_link_libraries(
   fsim_design_artifact_tests
-  PRIVATE fsim_library fsim_runtime
+  PRIVATE fsim_library fsim_runtime fsim_systemc
 )
 add_test(NAME fsim.artifact.design COMMAND fsim_design_artifact_tests)
 set_tests_properties(
@@ -994,6 +995,45 @@ add_test(
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckFstInventory.cmake"
 )
 add_test(
+  NAME fsim.systemc-accellera-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSystemCAccelleraInventory.cmake"
+)
+add_test(
+  NAME fsim.systemc-accellera-portability-contract
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSystemCAccelleraPortabilityContract.cmake"
+)
+add_test(
+  NAME fsim.systemc-upstream-provenance
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/tests/systemc/systemc_upstream_provenance_test.cmake"
+)
+add_test(
+  NAME fsim.systemc.accellera_closure
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/systemc-accellera-closure-evidence"
+    -DFSIM_DEDUPLICATED_CTEST=ON
+    -P "${PROJECT_SOURCE_DIR}/cmake/RunAccelleraSystemCClosure.cmake"
+)
+set_tests_properties(
+  fsim.systemc.accellera_closure
+  PROPERTIES
+    LABELS "systemc;accellera;tlm;closure;recursive-closure;retained-log;linux;windows"
+    TIMEOUT 7200
+)
+add_test(
   NAME fsim.application-regression-dedup-contract
   COMMAND
     "${CMAKE_COMMAND}"
@@ -1029,6 +1069,7 @@ add_test(
     "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
     "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
     "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/sdf-closure-evidence"
+    -DFSIM_DEDUPLICATED_CTEST=ON
     -P "${PROJECT_SOURCE_DIR}/cmake/RunSdfClosure.cmake"
 )
 set_tests_properties(
@@ -1045,6 +1086,7 @@ add_test(
     "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
     "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
     "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/sdf-application-closure-evidence"
+    -DFSIM_DEDUPLICATED_CTEST=ON
     -P "${PROJECT_SOURCE_DIR}/cmake/RunSdfApplicationClosure.cmake"
 )
 set_tests_properties(
@@ -1061,6 +1103,7 @@ add_test(
     "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
     "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
     "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/sdf-vital-closure-evidence"
+    -DFSIM_DEDUPLICATED_CTEST=ON
     -P "${PROJECT_SOURCE_DIR}/cmake/RunSdfVitalClosure.cmake"
 )
 set_tests_properties(
@@ -1076,6 +1119,7 @@ add_test(
     "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
     "-DFSIM_BINARY_DIR=${CMAKE_BINARY_DIR}"
     "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/vhdl-standard-mode-closure-evidence"
+    -DFSIM_DEDUPLICATED_CTEST=ON
     -P "${PROJECT_SOURCE_DIR}/cmake/RunVhdlStandardModeClosureMatrix.cmake"
 )
 add_test(
@@ -1085,6 +1129,7 @@ add_test(
     "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
     "-DFSIM_BINARY_DIR=${CMAKE_BINARY_DIR}"
     "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/verilog-systemverilog-standard-mode-closure-evidence"
+    -DFSIM_DEDUPLICATED_CTEST=ON
     -P "${PROJECT_SOURCE_DIR}/cmake/RunVerilogSystemVerilogStandardModeClosureMatrix.cmake"
 )
 add_test(
@@ -1115,6 +1160,7 @@ add_test(
     "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
     "-DFSIM_BINARY_DIR=${CMAKE_BINARY_DIR}"
     "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/systemverilog-closure-evidence"
+    -DFSIM_DEDUPLICATED_CTEST=ON
     -P "${PROJECT_SOURCE_DIR}/cmake/RunSystemVerilogClosureMatrix.cmake"
 )
 add_test(
@@ -1138,6 +1184,7 @@ add_test(
     "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
     "-DFSIM_BINARY_DIR=${CMAKE_BINARY_DIR}"
     "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/verilog-closure-evidence"
+    -DFSIM_DEDUPLICATED_CTEST=ON
     -P "${PROJECT_SOURCE_DIR}/cmake/RunVerilogClosureMatrix.cmake"
 )
 add_test(
@@ -1297,8 +1344,10 @@ add_test(
 )
 if(WIN32)
   set(FSIM_INSTALLED_API_LIBRARY_DIR "${CMAKE_INSTALL_BINDIR}")
+  set(FSIM_INSTALLED_SYSTEMC_RUNTIME_DIR "${CMAKE_INSTALL_BINDIR}")
 else()
   set(FSIM_INSTALLED_API_LIBRARY_DIR "${CMAKE_INSTALL_LIBDIR}")
+  set(FSIM_INSTALLED_SYSTEMC_RUNTIME_DIR "${CMAKE_INSTALL_LIBDIR}")
 endif()
 add_test(
   NAME fsim.installed-public-contract
@@ -1318,8 +1367,19 @@ add_test(
     "-DFSIM_ELAB_EXECUTABLE_NAME=$<TARGET_FILE_NAME:fsim-elab>"
     "-DFSIM_RUN_EXECUTABLE_NAME=$<TARGET_FILE_NAME:fsim-run>"
     "-DFSIM_API_LIBRARY_NAME=$<TARGET_FILE_NAME:fsim_api>"
-    "-DFSIM_SYSTEMC_LIBRARY_NAME=$<TARGET_FILE_NAME:fsim_systemc_support>"
+    "-DFSIM_SYSTEMC_PLUGIN_EXPORT_LIBRARY_NAME=$<TARGET_FILE_NAME:fsim_systemc_plugin_exports>"
+    "-DFSIM_SYSTEMC_ACCELERA_LIBRARY_NAME=$<TARGET_FILE_NAME:fsim_systemc_accellera_runtime>"
+    "-DFSIM_SYSTEMC_UPSTREAM_LIBRARY_NAME=$<TARGET_FILE_NAME:${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}>"
+    "-DFSIM_SYSTEMC_RUNTIME_DIR=${FSIM_INSTALLED_SYSTEMC_RUNTIME_DIR}"
+    "-DFSIM_SYSTEMC_SOURCE_ROOT=${FSIM_SYSTEMC_OFFICIAL_SOURCE_DIR}"
     "-DFSIM_API_LIBRARY_DIR=${FSIM_INSTALLED_API_LIBRARY_DIR}"
+    "-DFSIM_CMAKE_GENERATOR=${CMAKE_GENERATOR}"
+    "-DFSIM_CMAKE_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+    "-DFSIM_CMAKE_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+    "-DFSIM_CMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+    "-DFSIM_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+    "-DFSIM_CXX_FLAGS=${CMAKE_CXX_FLAGS}"
+    "-DFSIM_EXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckInstalledPublicContract.cmake"
 )
 add_test(
@@ -1402,6 +1462,18 @@ set_tests_properties(
 set_tests_properties(
   fsim.fst-inventory
   PROPERTIES LABELS "fast;fst;vcd;trace;inventory;positive;negative;equivalence;phase;artifact;diagnostics;resources;cmake"
+)
+set_tests_properties(
+  fsim.systemc-accellera-inventory
+  PROPERTIES LABELS "fast;systemc;accellera;tlm;backend;inventory;positive;negative;protocol;phase;artifact;diagnostics;resources;cmake"
+)
+set_tests_properties(
+  fsim.systemc-accellera-portability-contract
+  PROPERTIES LABELS "fast;systemc;accellera;compatibility;abi;cache;install;positive;negative;phase;artifact;diagnostics;resources;cmake"
+)
+set_tests_properties(
+  fsim.systemc-upstream-provenance
+  PROPERTIES LABELS "fast;systemc;accellera;upstream;provenance;license;sbom;offline;positive;negative;resources;cmake"
 )
 set_tests_properties(
   fsim.application-regression-dedup-contract
@@ -1698,10 +1770,406 @@ add_test(
   NAME fsim.elaboration.sv-container
   COMMAND fsim_sv_container_elaboration_tests)
 
-add_executable(fsim_systemc_header_tests systemc/systemc_header_test.cpp)
-fsim_configure_test(fsim_systemc_header_tests)
-target_link_libraries(fsim_systemc_header_tests PRIVATE fsim_systemc_headers)
-add_test(NAME fsim.systemc.header COMMAND fsim_systemc_header_tests)
+add_executable(
+  fsim_systemc_shared_runtime_tests
+  systemc/systemc_shared_runtime_test.cpp
+)
+fsim_configure_test(fsim_systemc_shared_runtime_tests)
+target_include_directories(
+  fsim_systemc_shared_runtime_tests
+  SYSTEM PRIVATE "${FSIM_SYSTEMC_OFFICIAL_SOURCE_DIR}/src"
+)
+target_compile_definitions(
+  fsim_systemc_shared_runtime_tests
+  PRIVATE
+    "FSIM_EXPECTED_SYSTEMC_RUNTIME_IDENTITY=\"${FSIM_SYSTEMC_RUNTIME_IDENTITY}\""
+)
+target_link_libraries(
+  fsim_systemc_shared_runtime_tests
+  PRIVATE fsim_systemc_accellera_runtime SystemC::systemc
+)
+add_test(
+  NAME fsim.systemc.shared_runtime
+  COMMAND fsim_systemc_shared_runtime_tests
+)
+set_tests_properties(
+  fsim.systemc.shared_runtime
+  PROPERTIES LABELS "fast;systemc;accellera;runtime;shared;identity;positive;negative"
+)
+
+add_executable(
+  fsim_systemc_compatibility_tests
+  systemc/systemc_compatibility_test.cpp
+)
+fsim_configure_test(fsim_systemc_compatibility_tests)
+target_link_libraries(
+  fsim_systemc_compatibility_tests PRIVATE fsim_systemc_headers
+)
+add_test(
+  NAME fsim.systemc.compatibility
+  COMMAND fsim_systemc_compatibility_tests
+)
+set_tests_properties(
+  fsim.systemc.compatibility
+  PROPERTIES
+    LABELS "fast;systemc;accellera;compatibility;abi;cache;positive;negative"
+)
+add_executable(
+  fsim_systemc_kernel_backend_protocol_tests
+  systemc/kernel_backend_protocol_test.cpp
+)
+fsim_configure_test(fsim_systemc_kernel_backend_protocol_tests)
+target_link_libraries(
+  fsim_systemc_kernel_backend_protocol_tests PRIVATE fsim_systemc
+)
+add_test(
+  NAME fsim.systemc.kernel_backend_protocol
+  COMMAND fsim_systemc_kernel_backend_protocol_tests
+)
+set_tests_properties(
+  fsim.systemc.kernel_backend_protocol
+  PROPERTIES
+    LABELS "fast;systemc;accellera;backend;protocol;identity;positive;negative;resources"
+)
+add_library(
+  fsim_test_accellera_session_plugin
+  MODULE
+  systemc/kernel_backend_session_plugin.cpp
+)
+target_compile_features(
+  fsim_test_accellera_session_plugin PRIVATE cxx_std_20
+)
+target_link_libraries(
+  fsim_test_accellera_session_plugin
+  PRIVATE fsim_systemc_plugin_exports
+)
+fsim_enable_warnings(fsim_test_accellera_session_plugin)
+set_target_properties(
+  fsim_test_accellera_session_plugin
+  PROPERTIES
+    PREFIX ""
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN YES
+)
+add_executable(
+  fsim_systemc_kernel_backend_session_tests
+  systemc/kernel_backend_session_test.cpp
+)
+fsim_configure_test(fsim_systemc_kernel_backend_session_tests)
+target_link_libraries(
+  fsim_systemc_kernel_backend_session_tests PRIVATE fsim_systemc
+)
+add_dependencies(
+  fsim_systemc_kernel_backend_session_tests
+  fsim_test_accellera_session_plugin
+)
+add_test(
+  NAME fsim.systemc.kernel_backend_session
+  COMMAND
+    fsim_systemc_kernel_backend_session_tests
+    "$<TARGET_FILE:fsim_test_accellera_session_plugin>"
+)
+set_tests_properties(
+  fsim.systemc.kernel_backend_session
+  PROPERTIES
+    LABELS "fast;systemc;accellera;backend;session;lifecycle;rollback;positive;negative;resources"
+)
+add_library(
+  fsim_test_accellera_execution_plugin
+  MODULE
+  systemc/kernel_backend_execution_plugin.cpp
+)
+target_compile_features(
+  fsim_test_accellera_execution_plugin PRIVATE cxx_std_20
+)
+target_link_libraries(
+  fsim_test_accellera_execution_plugin
+  PRIVATE fsim_systemc_plugin_exports
+)
+fsim_enable_warnings(fsim_test_accellera_execution_plugin)
+set_target_properties(
+  fsim_test_accellera_execution_plugin
+  PROPERTIES
+    PREFIX ""
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN YES
+)
+add_library(
+  fsim_test_accellera_value_codec_plugin
+  MODULE
+  systemc/kernel_backend_value_codec_plugin.cpp
+)
+target_compile_features(
+  fsim_test_accellera_value_codec_plugin PRIVATE cxx_std_20
+)
+target_link_libraries(
+  fsim_test_accellera_value_codec_plugin
+  PRIVATE fsim_systemc_plugin_exports
+)
+fsim_enable_warnings(fsim_test_accellera_value_codec_plugin)
+set_target_properties(
+  fsim_test_accellera_value_codec_plugin
+  PROPERTIES
+    PREFIX ""
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN YES
+)
+add_executable(
+  fsim_systemc_kernel_backend_execution_tests
+  systemc/kernel_backend_execution_test.cpp
+)
+fsim_configure_test(fsim_systemc_kernel_backend_execution_tests)
+target_link_libraries(
+  fsim_systemc_kernel_backend_execution_tests PRIVATE fsim_systemc
+)
+add_dependencies(
+  fsim_systemc_kernel_backend_execution_tests
+  fsim_test_accellera_execution_plugin
+  fsim_test_accellera_value_codec_plugin
+)
+add_test(
+  NAME fsim.systemc.kernel_backend_execution
+  COMMAND
+    fsim_systemc_kernel_backend_execution_tests
+    "$<TARGET_FILE:fsim_test_accellera_execution_plugin>"
+    "$<TARGET_FILE:fsim_test_accellera_value_codec_plugin>"
+)
+set_tests_properties(
+  fsim.systemc.kernel_backend_execution
+  PROPERTIES
+    LABELS "fast;systemc;accellera;backend;execution;ordering;rollback;positive;negative;resources"
+)
+add_executable(
+  fsim_systemc_kernel_backend_loopback_tests
+  systemc/kernel_backend_loopback_test.cpp
+)
+fsim_configure_test(fsim_systemc_kernel_backend_loopback_tests)
+target_link_libraries(
+  fsim_systemc_kernel_backend_loopback_tests PRIVATE fsim_systemc
+)
+add_dependencies(
+  fsim_systemc_kernel_backend_loopback_tests
+  fsim_test_accellera_execution_plugin
+)
+add_test(
+  NAME fsim.systemc.kernel_backend_loopback
+  COMMAND
+    fsim_systemc_kernel_backend_loopback_tests
+    "$<TARGET_FILE:fsim_test_accellera_execution_plugin>"
+)
+set_tests_properties(
+  fsim.systemc.kernel_backend_loopback
+  PROPERTIES
+    LABELS "fast;systemc;accellera;backend;loopback;protocol;replay;ordering;containment;positive;negative;resources"
+)
+add_executable(
+  fsim_systemc_kernel_backend_synchronization_tests
+  systemc/kernel_backend_synchronization_test.cpp
+)
+fsim_configure_test(fsim_systemc_kernel_backend_synchronization_tests)
+target_link_libraries(
+  fsim_systemc_kernel_backend_synchronization_tests PRIVATE fsim_systemc
+)
+add_dependencies(
+  fsim_systemc_kernel_backend_synchronization_tests
+  fsim_test_accellera_execution_plugin
+)
+add_test(
+  NAME fsim.systemc.kernel_backend_synchronization
+  COMMAND
+    fsim_systemc_kernel_backend_synchronization_tests
+    "$<TARGET_FILE:fsim_test_accellera_execution_plugin>"
+)
+set_tests_properties(
+  fsim.systemc.kernel_backend_synchronization
+  PROPERTIES
+    LABELS "fast;systemc;accellera;backend;synchronization;safe-point;mixed-language;ordering;containment;positive;negative;resources"
+)
+add_executable(
+  fsim_systemc_kernel_backend_value_codec_tests
+  systemc/kernel_backend_value_codec_test.cpp
+)
+fsim_configure_test(fsim_systemc_kernel_backend_value_codec_tests)
+target_link_libraries(
+  fsim_systemc_kernel_backend_value_codec_tests PRIVATE fsim_systemc
+)
+add_test(
+  NAME fsim.systemc.kernel_backend_value_codec
+  COMMAND fsim_systemc_kernel_backend_value_codec_tests
+)
+set_tests_properties(
+  fsim.systemc.kernel_backend_value_codec
+  PROPERTIES
+    LABELS "fast;systemc;accellera;backend;value;codec;wide;four-state;nine-state;enum;time;positive;negative;resources"
+)
+add_executable(
+  fsim_systemc_tlm1_backend_tests
+  systemc/tlm1_backend_test.cpp
+)
+fsim_configure_test(fsim_systemc_tlm1_backend_tests)
+target_link_libraries(
+  fsim_systemc_tlm1_backend_tests PRIVATE fsim_systemc
+)
+add_test(
+  NAME fsim.systemc.tlm1_backend
+  COMMAND fsim_systemc_tlm1_backend_tests
+)
+set_tests_properties(
+  fsim.systemc.tlm1_backend
+  PROPERTIES
+    LABELS "fast;systemc;accellera;backend;tlm;tlm1;fifo;blocking;nonblocking;transport;analysis;identity;protocol;positive;negative;resources"
+)
+add_executable(
+  fsim_systemc_tlm2_backend_tests
+  systemc/tlm2_backend_test.cpp
+)
+fsim_configure_test(fsim_systemc_tlm2_backend_tests)
+target_link_libraries(
+  fsim_systemc_tlm2_backend_tests PRIVATE fsim_systemc
+)
+add_test(
+  NAME fsim.systemc.tlm2_backend
+  COMMAND fsim_systemc_tlm2_backend_tests
+)
+set_tests_properties(
+  fsim.systemc.tlm2_backend
+  PROPERTIES
+    LABELS "fast;systemc;accellera;backend;tlm;tlm2;socket;blocking;nonblocking;dmi;debug;extensions;quantum;identity;protocol;positive;negative;resources"
+)
+add_executable(
+  fsim_systemc_kernel_backend_inventory_tests
+  systemc/kernel_backend_inventory_test.cpp
+)
+fsim_configure_test(fsim_systemc_kernel_backend_inventory_tests)
+target_link_libraries(
+  fsim_systemc_kernel_backend_inventory_tests PRIVATE fsim_systemc
+)
+add_test(
+  NAME fsim.systemc.kernel_backend_inventory
+  COMMAND fsim_systemc_kernel_backend_inventory_tests
+)
+set_tests_properties(
+  fsim.systemc.kernel_backend_inventory
+  PROPERTIES
+    LABELS "fast;systemc;accellera;backend;inventory;signal;buffer;clock;resolved;primitive;identity;protocol;positive;negative;resources"
+)
+add_executable(
+  fsim_systemc_kernel_backend_binding_inventory_tests
+  systemc/kernel_backend_binding_inventory_test.cpp
+)
+fsim_configure_test(fsim_systemc_kernel_backend_binding_inventory_tests)
+target_link_libraries(
+  fsim_systemc_kernel_backend_binding_inventory_tests PRIVATE fsim_systemc
+)
+add_test(
+  NAME fsim.systemc.kernel_backend_binding_inventory
+  COMMAND fsim_systemc_kernel_backend_binding_inventory_tests
+)
+set_tests_properties(
+  fsim.systemc.kernel_backend_binding_inventory
+  PROPERTIES
+    LABELS "fast;systemc;accellera;backend;inventory;port;export;hierarchy;multi-bind;mixed-language;alias;identity;protocol;positive;negative;resources"
+)
+add_executable(
+  fsim_systemc_kernel_backend_observation_tests
+  systemc/kernel_backend_observation_test.cpp
+)
+fsim_configure_test(fsim_systemc_kernel_backend_observation_tests)
+target_link_libraries(
+  fsim_systemc_kernel_backend_observation_tests PRIVATE fsim_systemc
+)
+add_test(
+  NAME fsim.systemc.kernel_backend_observation
+  COMMAND fsim_systemc_kernel_backend_observation_tests
+)
+set_tests_properties(
+  fsim.systemc.kernel_backend_observation
+  PROPERTIES
+    LABELS "fast;systemc;accellera;backend;debugger;safe-point;inventory;report;tlm;transaction;custom-channel;protocol;positive;negative;resources"
+)
+
+add_executable(
+  fsim_systemc_accellera_corpus_tests
+  systemc/accellera_systemc_corpus_test.cpp
+)
+fsim_configure_test(fsim_systemc_accellera_corpus_tests)
+target_link_libraries(
+  fsim_systemc_accellera_corpus_tests
+  PRIVATE fsim_systemc_accellera_runtime SystemC::systemc
+)
+add_test(
+  NAME fsim.systemc.accellera_corpus
+  COMMAND fsim_systemc_accellera_corpus_tests
+)
+set_tests_properties(
+  fsim.systemc.accellera_corpus
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "FSIM SystemC corpus PASS"
+    FAIL_REGULAR_EXPRESSION "Assertion failed;Fatal:;Error:"
+    LABELS "systemc;accellera;corpus;upstream;multiple-roots;arbitrary-width;port;export;channel;clock;event;tlm;tlm1;tlm2;throughput;memory;backpressure;teardown;positive;resources;linux;windows"
+)
+
+set(FSIM_SYSTEMC_UPSTREAM_CORPUS_ROOT
+  "${FSIM_SYSTEMC_OFFICIAL_SOURCE_DIR}")
+function(fsim_add_systemc_upstream_corpus_test target test_name source pass_regex)
+  set(upstream_source "${FSIM_SYSTEMC_UPSTREAM_CORPUS_ROOT}/${source}")
+  set_source_files_properties(
+    "${upstream_source}"
+    PROPERTIES COMPILE_DEFINITIONS "sc_main=fsim_systemc_upstream_entry"
+  )
+  add_executable(
+    "${target}"
+    "${upstream_source}"
+    systemc/accellera_upstream_sc_main.cpp
+  )
+  target_compile_features("${target}" PRIVATE cxx_std_20)
+  target_link_libraries(
+    "${target}" PRIVATE fsim_systemc_accellera_runtime SystemC::systemc
+  )
+  add_test(NAME "${test_name}" COMMAND "${target}")
+  set_tests_properties(
+    "${test_name}"
+    PROPERTIES
+      PASS_REGULAR_EXPRESSION "${pass_regex}"
+      FAIL_REGULAR_EXPRESSION "Assertion failed;Fatal:;Error:"
+      LABELS "systemc;accellera;upstream;corpus;positive;linux;windows"
+  )
+endfunction()
+
+fsim_add_systemc_upstream_corpus_test(
+  fsim_systemc_upstream_simple_fifo
+  fsim.systemc.upstream.simple_fifo
+  examples/sysc/simple_fifo/simple_fifo.cpp
+  "today!"
+)
+fsim_add_systemc_upstream_corpus_test(
+  fsim_systemc_upstream_event_list
+  fsim.systemc.upstream.event_list
+  tests/systemc/1666-2011-compliance/event_list/event_list.cpp
+  "Success"
+)
+fsim_add_systemc_upstream_corpus_test(
+  fsim_systemc_upstream_tlm_fifo
+  fsim.systemc.upstream.tlm_fifo
+  tests/tlm/tlm_fifo_get_if/tlm_fifo_get_if.cpp
+  "consumer get: 19"
+)
+
+add_test(
+  NAME fsim.systemc.shared-runtime-contract
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_TARGET_MANIFEST=${FSIM_SYSTEMC_RUNTIME_TARGET_MANIFEST}"
+    "-DFSIM_BRIDGE_LIBRARY=$<TARGET_FILE:fsim_systemc_accellera_runtime>"
+    "-DFSIM_UPSTREAM_LIBRARY=$<TARGET_FILE:${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}>"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSystemCSharedRuntime.cmake"
+)
+set_tests_properties(
+  fsim.systemc.shared-runtime-contract
+  PROPERTIES LABELS "fast;systemc;accellera;runtime;shared;targets;cmake;pkgconfig;install"
+)
 
 add_executable(
   fsim_systemc_abi_c_tests
@@ -1720,24 +2188,9 @@ fsim_enable_warnings(fsim_systemc_abi_c_tests)
 fsim_configure_test_platform(fsim_systemc_abi_c_tests)
 add_test(NAME fsim.systemc.abi-c COMMAND fsim_systemc_abi_c_tests)
 
-add_library(fsim_test_systemc_plugin MODULE systemc/sample_plugin.cpp)
-target_compile_features(fsim_test_systemc_plugin PRIVATE cxx_std_20)
-target_include_directories(
-  fsim_test_systemc_plugin
-  PRIVATE "${PROJECT_SOURCE_DIR}/include"
-)
-fsim_enable_warnings(fsim_test_systemc_plugin)
-set_target_properties(
-  fsim_test_systemc_plugin
-  PROPERTIES
-    PREFIX ""
-    CXX_VISIBILITY_PRESET hidden
-    VISIBILITY_INLINES_HIDDEN YES
-)
-
 function(fsim_configure_macro_systemc_plugin target)
   target_compile_features(${target} PRIVATE cxx_std_20)
-  target_link_libraries(${target} PRIVATE fsim_systemc_support)
+  target_link_libraries(${target} PRIVATE fsim_systemc_plugin_exports)
   fsim_enable_warnings(${target})
   set_target_properties(
     ${target}
@@ -1854,7 +2307,6 @@ add_test(
   NAME fsim.systemc.plugin
   COMMAND
     fsim_systemc_plugin_tests
-    "$<TARGET_FILE:fsim_test_systemc_plugin>"
     "$<TARGET_FILE:fsim_test_throwing_systemc_plugin>"
     "$<TARGET_FILE:fsim_test_error_systemc_plugin>"
     "$<TARGET_FILE:fsim_test_empty_systemc_plugin>"
@@ -1946,7 +2398,7 @@ target_link_libraries(fsim_systemc_matrix_tests PRIVATE fsim_systemc)
 add_test(NAME fsim.systemc.matrix COMMAND fsim_systemc_matrix_tests)
 set_tests_properties(
   fsim.systemc.matrix
-  PROPERTIES LABELS "systemc;compiler;cache;lifecycle;threads;portability"
+  PROPERTIES LABELS "systemc;compiler;cache;lifecycle;accellera;portability"
 )
 
 if(FSIM_WITH_LLVM)
@@ -2137,6 +2589,28 @@ if(TARGET fsim_application)
   )
 
   add_executable(
+    fsim_systemc_trace_application_tests
+    app/systemc_trace_application_test.cpp
+  )
+  fsim_configure_test(fsim_systemc_trace_application_tests)
+  target_include_directories(
+    fsim_systemc_trace_application_tests
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/app"
+  )
+  target_link_libraries(
+    fsim_systemc_trace_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.systemc_trace
+    COMMAND fsim_systemc_trace_application_tests
+  )
+  set_tests_properties(
+    fsim.application.systemc_trace
+    PROPERTIES LABELS "fast;systemc;accellera;trace;vcd;fst;dirty;post-update;selection;snapshot;alias;wide;backpressure;lifecycle"
+  )
+
+  add_executable(
     fsim_trace_control_application_tests
     app/trace_control_application_test.cpp
   )
@@ -2185,6 +2659,7 @@ if(TARGET fsim_application)
       "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
       "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
       "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/fst-closure-evidence"
+      -DFSIM_DEDUPLICATED_CTEST=ON
       -P "${PROJECT_SOURCE_DIR}/cmake/RunFstClosure.cmake"
   )
   set_tests_properties(
@@ -2576,6 +3051,11 @@ if(TARGET fsim_application)
       3 systemc_datatypes app/systemc_datatype_application_test.cpp
       fsim.application.systemc_datatypes fast systemc datatypes)
     fsim_add_application_case(
+      3 systemc_tlm1 app/systemc_tlm_application_test.cpp
+      fsim.application.systemc_tlm1
+      fast systemc accellera tlm tlm1 tlm2 fifo socket blocking nonblocking
+      dmi debug extensions quantum transport analysis cache)
+    fsim_add_application_case(
       3 mixed_conversions app/mixed_conversion_application_test.cpp
       fsim.application.mixed_conversions
       fast mixed-language conversions cache debugger vcd)
@@ -2591,7 +3071,7 @@ if(TARGET fsim_application)
     )
     set_tests_properties(
       fsim.application.systemc_matrix
-      PROPERTIES TIMEOUT 1200
+      PROPERTIES TIMEOUT 7200
     )
     set_tests_properties(
       fsim.application.sv_containers
@@ -3589,6 +4069,29 @@ set_tests_properties(
   )
 
   add_executable(
+    fsim_systemc_tlm1_application_tests
+    app/systemc_tlm_application_test.cpp
+  )
+  fsim_configure_test(fsim_systemc_tlm1_application_tests)
+  target_compile_definitions(
+    fsim_systemc_tlm1_application_tests
+    PRIVATE FSIM_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    fsim_systemc_tlm1_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.systemc_tlm1
+    COMMAND fsim_systemc_tlm1_application_tests
+  )
+  set_tests_properties(
+    fsim.application.systemc_tlm1
+    PROPERTIES
+      LABELS "fast;systemc;accellera;tlm;tlm1;tlm2;fifo;socket;blocking;nonblocking;dmi;debug;extensions;quantum;transport;analysis;cache"
+  )
+
+  add_executable(
     fsim_vhdl_integer_shift_application_tests
     app/vhdl_integer_shift_application_test.cpp
   )
@@ -3972,3 +4475,161 @@ set_tests_properties(
     )
   endif()
 endif()
+
+# Recursive closure drivers remain directly invokable when retained evidence is
+# requested. In an ordinary CTest regression their witnesses are fixtures, so
+# every underlying test executes once and the driver only records fixture
+# completion instead of starting nested CTest processes.
+set(FSIM_RECURSIVE_CLOSURE_TESTS
+  fsim.systemc.accellera_closure
+  fsim.sdf-closure
+  fsim.sdf-application-closure
+  fsim.sdf-vital-closure
+  fsim.vhdl-standard-mode-closure-matrix
+  fsim.verilog-systemverilog-standard-mode-closure-matrix
+  fsim.systemverilog-closure-matrix
+  fsim.verilog-closure-matrix
+  fsim.fst-closure)
+
+function(fsim_append_fixture_setup FSIM_TEST FSIM_FIXTURE)
+  if(TEST "${FSIM_TEST}")
+    set_property(
+      TEST "${FSIM_TEST}"
+      APPEND PROPERTY FIXTURES_SETUP "${FSIM_FIXTURE}")
+  endif()
+endfunction()
+
+function(fsim_require_fixture_witnesses FSIM_DRIVER FSIM_FIXTURE)
+  if(NOT TEST "${FSIM_DRIVER}")
+    return()
+  endif()
+  set_tests_properties(
+    "${FSIM_DRIVER}" PROPERTIES FIXTURES_REQUIRED "${FSIM_FIXTURE}")
+  foreach(FSIM_WITNESS IN LISTS ARGN)
+    fsim_append_fixture_setup("${FSIM_WITNESS}" "${FSIM_FIXTURE}")
+  endforeach()
+endfunction()
+
+function(fsim_require_fixture_regex FSIM_DRIVER FSIM_FIXTURE FSIM_REGEX)
+  if(NOT TEST "${FSIM_DRIVER}")
+    return()
+  endif()
+  set_tests_properties(
+    "${FSIM_DRIVER}" PROPERTIES FIXTURES_REQUIRED "${FSIM_FIXTURE}")
+  get_property(FSIM_REGISTERED_TESTS DIRECTORY PROPERTY TESTS)
+  foreach(FSIM_WITNESS IN LISTS FSIM_REGISTERED_TESTS)
+    list(FIND FSIM_RECURSIVE_CLOSURE_TESTS "${FSIM_WITNESS}"
+      FSIM_CLOSURE_INDEX)
+    if(FSIM_CLOSURE_INDEX EQUAL -1 AND FSIM_WITNESS MATCHES "${FSIM_REGEX}")
+      fsim_append_fixture_setup("${FSIM_WITNESS}" "${FSIM_FIXTURE}")
+    endif()
+  endforeach()
+endfunction()
+
+fsim_require_fixture_regex(
+  fsim.systemc.accellera_closure fsim_systemc_accellera_closure_witnesses
+  "^fsim\\.(systemc\\.(accellera_corpus|upstream\\.(simple_fifo|event_list|tlm_fifo)|shared_runtime|compatibility|kernel_backend_.*|tlm[12]_backend|shared-runtime-contract|abi-c|plugin|compiler|incremental|matrix)|systemc-accellera-(inventory|portability-contract)|systemc-upstream-provenance|systemc-portability-contract|installed-public-contract|resource-portability-contract|application\\.(systemc_trace|systemc_matrix|systemc_datatypes|systemc_tlm1|typed_boundaries|artifact_phases))$")
+fsim_require_fixture_regex(
+  fsim.sdf-closure fsim_sdf_closure_witnesses
+  "^fsim\\.(frontend\\.sdf.*|application\\.sdf_.*|application$|application\\.artifact_phases$|project$|library\\.artifact$|artifact\\.design$|diagnostics-catalog$|source-line-budget$|sdf-inventory$|resource-portability-contract$)")
+fsim_require_fixture_regex(
+  fsim.sdf-application-closure fsim_sdf_application_closure_witnesses
+  "^fsim\\.(application\\.(sdf_(application_corpus|path_timing|interconnect_timing|mixed_verilog|mixed_systemverilog|mixed_systemc|mixed_resolution|foreign_interfaces|vital_observability|vital_archive|vital_phases|delay_modes|primary_timing_checks|secondary_timing_checks|condition_timing|pulse_timing|precedence|scheduling|drive_timing|reannotation|control|effective_archive|observability)|specify|resolution|vpi|vcd_control)|library\\.artifact|artifact\\.(object|design)|cache|api|api\\.c_header|diagnostics-catalog|source-line-budget|sdf-application-inventory|resource-portability-contract)$")
+fsim_require_fixture_witnesses(
+  fsim.sdf-vital-closure fsim_sdf_vital_closure_witnesses
+  fsim.application.sdf_vital_corpus
+  fsim.application.sdf_vital_models
+  fsim.application.sdf_mixed_resolution
+  fsim.application.sdf_vital_archive
+  fsim.application.sdf_vital_phases
+  fsim.resource-portability-contract)
+fsim_require_fixture_witnesses(
+  fsim.vhdl-standard-mode-closure-matrix
+  fsim_vhdl_standard_mode_closure_witnesses
+  fsim.vhdl-standard-mode-inventory
+  fsim.frontend
+  fsim.application.vhdl_ieee_integration
+  fsim.application.vhdl_numeric
+  fsim.application.vhdl_logic9
+  fsim.application.artifact_phases
+  fsim.llvm
+  fsim.api
+  fsim.api.c_header
+  fsim.tcl.version-selection
+  fsim.msvc-debug-contract
+  fsim.msvc-release-contract
+  fsim.windows-llvm-contract
+  fsim.tool-portability-contract
+  fsim.resource-portability-contract)
+fsim_require_fixture_witnesses(
+  fsim.verilog-systemverilog-standard-mode-closure-matrix
+  fsim_verilog_systemverilog_standard_mode_closure_witnesses
+  fsim.verilog-systemverilog-standard-mode-inventory
+  fsim.frontend
+  fsim.application.sv_conformance
+  fsim.application.typed_boundaries
+  fsim.application.artifact_phases
+  fsim.llvm
+  fsim.application.vpi
+  fsim.application.tcl
+  fsim.api
+  fsim.api.c_header
+  fsim.runtime
+  fsim.msvc-debug-contract
+  fsim.msvc-release-contract
+  fsim.windows-llvm-contract
+  fsim.tool-portability-contract
+  fsim.resource-portability-contract)
+fsim_require_fixture_witnesses(
+  fsim.systemverilog-closure-matrix
+  fsim_systemverilog_closure_witnesses
+  fsim.semantic
+  fsim.application.systemverilog_hir
+  fsim.frontend
+  fsim.library.artifact
+  fsim.llvm
+  fsim.application.vpi
+  fsim.application.artifact_phases
+  fsim.application.classes
+  fsim.application.expressions
+  fsim.application.sv_containers
+  fsim.application.assertions
+  fsim.application.typed_boundaries
+  fsim.uvm-phase-tlm-matrix
+  fsim.runtime)
+fsim_require_fixture_witnesses(
+  fsim.verilog-closure-matrix fsim_verilog_closure_witnesses
+  fsim.application.systemverilog_hir
+  fsim.frontend
+  fsim.library.artifact
+  fsim.elaboration
+  fsim.llvm
+  fsim.application.vpi
+  fsim.application
+  fsim.application.specialization
+  fsim.application.artifact_phases
+  fsim.application.expressions
+  fsim.application.specify
+  fsim.application.fork
+  fsim.application.display
+  fsim.application.line_directives
+  fsim.application.transition_delays
+  fsim.application.procedural_assignments
+  fsim.application.resolution
+  fsim.application.ordering_interactions
+  fsim.application.sv_files
+  fsim.application.typed_boundaries
+  fsim.api
+  fsim.api.c_header
+  fsim.runtime)
+fsim_require_fixture_witnesses(
+  fsim.fst-closure fsim_fst_closure_witnesses
+  fsim.application.fst_corpus
+  fsim.application.trace_control
+  fsim.application.trace_observation
+  fsim.application.vcd_control
+  fsim.application.core_non_project_cli
+  fsim.application.trace_archive
+  fsim.artifact.design
+  fsim.runtime.fst_reader
+  fsim.fst-portability-contract)

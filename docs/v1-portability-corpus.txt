@@ -11,7 +11,7 @@ PORT-008|mixed typed boundary|interpreter+LLVM-O0+LLVM-O2+cold+warm+edit+debugge
 PORT-009|SystemC compiler cache|plugin+cold+warm+edit+abi|fsim.systemc.compiler|tests/systemc/plugin_compiler_test.cpp|concurrent.cache_key == first.cache_key
 PORT-010|SystemC lifecycle|plugin+interpreter+LLVM-O0+LLVM-O2+cold+warm+debugger|fsim.application.systemc_matrix|tests/app/application_test_systemc_scheduling.cpp|require_equivalent(warm, cold)
 PORT-011|JIT strict C ABI|abi+Debug+Release|fsim.jit-runtime-c|tests/compiler/jit_runtime_c_test.c|sizeof(fsim_jit_resume_result_v1) == 24
-PORT-012|SystemC strict C ABI|plugin+abi+Debug+Release|fsim.systemc.abi-c|tests/systemc/systemc_abi_c_test.c|FSIM_SYSTEMC_ABI_VERSION == 1u
+PORT-012|SystemC strict C ABI|plugin+abi+Debug+Release|fsim.systemc.abi-c|tests/systemc/systemc_abi_c_test.c|FSIM_SYSTEMC_ABI_VERSION == 3u
 PORT-013|public C API|api+abi+callback+path|fsim.api|tests/api/api_test.cpp|fsim-api-test-\xC3\xA9-
 PORT-014|CLI Tcl debugger VCD|api+path+debugger+vcd+files|fsim.application|tests/app/application_test_cli.cpp|unicode_invocation->files
 PORT-015|language file I/O|interpreter+LLVM-O0+LLVM-O2+cold+warm+edit+files|fsim.application.sv_files|tests/app/sv_file_application_test.cpp|cold.binary_word == warm.binary_word

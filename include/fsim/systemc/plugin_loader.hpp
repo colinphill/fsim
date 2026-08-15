@@ -18,7 +18,7 @@ public:
     Plugin& operator=(Plugin&&) = delete;
     Plugin(const Plugin&) = delete;
     Plugin& operator=(const Plugin&) = delete;
-    ~Plugin() = default;
+    ~Plugin();
 
     [[nodiscard]] static std::unique_ptr<Plugin> load(
         const std::filesystem::path& path,
@@ -44,8 +44,8 @@ private:
         std::unique_ptr<platform::DynamicLibrary> library);
 
     std::filesystem::path path_;
-    // Plug-ins may retain the host-table pointer after initialization. Keep a
-    // stable copy alive until after the dynamic library is unloaded.
+    // Plug-ins and the shared TLM runtime may retain host and type-info
+    // pointers after initialization. Keep both resources for process life.
     std::unique_ptr<fsim_sc_host_v1> host_;
     std::unique_ptr<platform::DynamicLibrary> library_;
 };

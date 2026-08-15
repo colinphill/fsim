@@ -10,7 +10,7 @@ set(FSIM_TEST_CMAKE "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
 set(FSIM_API_HEADER "${FSIM_SOURCE_DIR}/include/fsim/api.h")
 set(FSIM_SYSTEMC_HEADER "${FSIM_SOURCE_DIR}/include/fsim/systemc_abi.h")
 set(FSIM_SYSTEMC_PLUGIN_HEADER
-  "${FSIM_SOURCE_DIR}/include/fsim/systemc/plugin.hpp")
+  "${FSIM_SOURCE_DIR}/include/fsim/systemc/accellera.hpp")
 set(FSIM_MAIN "${FSIM_SOURCE_DIR}/src/main.cpp")
 set(FSIM_CLI "${FSIM_SOURCE_DIR}/src/cli/driver.cpp")
 set(FSIM_PATH_HEADER "${FSIM_SOURCE_DIR}/include/fsim/support/path.hpp")
@@ -69,8 +69,6 @@ foreach(FSIM_TARGET IN ITEMS fsim fsim-vhdl fsim-sv fsim-elab fsim-run)
   endif()
 endforeach()
 foreach(FSIM_SYSTEMC_FACADE IN ITEMS
-    "class hdl_module"
-    "SC_FSIM_HDL_MODULE"
     "SC_FSIM_EXPORT_AS"
     "make_factory_parameters")
   string(FIND
@@ -82,8 +80,19 @@ foreach(FSIM_SYSTEMC_FACADE IN ITEMS
       "public SystemC facade lost ${FSIM_SYSTEMC_FACADE}")
   endif()
 endforeach()
+foreach(FSIM_REMOVED_SYSTEMC_FACADE IN ITEMS
+    "class hdl_module"
+    "SC_FSIM_HDL_MODULE")
+  string(FIND
+    "${FSIM_SYSTEMC_PLUGIN_CONTENTS}"
+    "${FSIM_REMOVED_SYSTEMC_FACADE}"
+    FSIM_SYSTEMC_FACADE_INDEX)
+  if(NOT FSIM_SYSTEMC_FACADE_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "removed SystemC facade remains ${FSIM_REMOVED_SYSTEMC_FACADE}")
+  endif()
+endforeach()
 foreach(FSIM_HEADER IN ITEMS
-    "include/systemc"
     "include/fsim/api.h"
     "include/fsim/systemc.hpp"
     "include/fsim/systemc_abi.h"
@@ -93,7 +102,7 @@ foreach(FSIM_HEADER IN ITEMS
     message(FATAL_ERROR "install contract omits public header ${FSIM_HEADER}")
   endif()
 endforeach()
-foreach(FSIM_LIBRARY IN ITEMS fsim_api fsim_systemc_support)
+foreach(FSIM_LIBRARY IN ITEMS fsim_api fsim_systemc_plugin_exports)
   string(FIND "${FSIM_ROOT_CMAKE_CONTENTS}" "${FSIM_LIBRARY}" FSIM_LIBRARY_INDEX)
   if(FSIM_LIBRARY_INDEX EQUAL -1)
     message(FATAL_ERROR "install contract omits public library ${FSIM_LIBRARY}")
@@ -102,7 +111,7 @@ endforeach()
 
 foreach(FSIM_INVARIANT IN ITEMS
     "#define FSIM_API_VERSION UINT32_C(1)"
-    "#define FSIM_SYSTEMC_ABI_VERSION 1u")
+    "#define FSIM_SYSTEMC_ABI_VERSION 3u")
   string(FIND
     "${FSIM_API_CONTENTS}${FSIM_SYSTEMC_CONTENTS}"
     "${FSIM_INVARIANT}"
@@ -175,4 +184,4 @@ endforeach()
 
 message(STATUS
   "final public release audit protects 5 commands, 5 header groups, "
-  "2 libraries, Unicode install paths, API/ABI version 1, and CLI statuses")
+  "2 libraries, Unicode install paths, API version 1, SystemC ABI version 3, and CLI statuses")

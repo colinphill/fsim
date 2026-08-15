@@ -4,6 +4,7 @@
 #include "path_test_support.hpp"
 
 #include "fsim/runtime/vcd_writer.hpp"
+#include "fsim/systemc/kernel_backend_value_codec.hpp"
 #include "governed_process_limits.hpp"
 
 #include <algorithm>
@@ -11,6 +12,7 @@
 #include <cassert>
 #include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -59,6 +61,30 @@ std::string expected_wide_value()
 {
     return "1" + std::string(63, '0') + "X" + std::string(63, '0')
         + "Z10101010";
+}
+
+void verify_crossing_codec(const fsim::runtime::PackedLogic4& value)
+{
+    fsim::systemc::SystemCKernelValue crossing;
+    crossing.kind = fsim::systemc::SystemCKernelValueKind::logic4;
+    crossing.width = static_cast<std::uint32_t>(value.width());
+    crossing.range = { static_cast<std::int64_t>(value.width() - 1U), 0,
+        fsim::systemc::SystemCKernelRangeDirection::descending };
+    crossing.planes = {
+        std::vector<std::uint64_t>(
+            value.aval_words().begin(), value.aval_words().end()),
+        std::vector<std::uint64_t>(
+            value.bval_words().begin(), value.bval_words().end()),
+    };
+    fsim::diagnostic::Engine diagnostics;
+    const auto encoded = fsim::systemc::serialize_systemc_kernel_value(
+        crossing, { }, diagnostics);
+    assert(encoded && diagnostics.diagnostics().empty());
+    diagnostics = { };
+    assert(fsim::systemc::deserialize_systemc_kernel_value(
+               *encoded, { }, diagnostics)
+        == crossing);
+    assert(diagnostics.diagnostics().empty());
 }
 
 template <typename Id>
@@ -617,7 +643,9 @@ Capture run_once(
     capture.result = simulation.run();
     capture.psl_attempts = simulation.vhdl_psl_attempts();
     capture.value = simulation.read_signal(*result_signal).to_msb_string();
-    capture.wide_value = simulation.read_signal(*wide_signal).to_msb_string();
+    const auto crossing_value = simulation.read_signal(*wide_signal);
+    capture.wide_value = crossing_value.to_msb_string();
+    verify_crossing_codec(crossing_value);
     std::ostringstream debugger_output;
     std::ostringstream debugger_error;
     fsim::app::DebuggerControl debugger {
@@ -751,7 +779,7 @@ void verify_older_mode_matrix(
 
 void verify_negative(const fsim::project::Config& config)
 {
-    // FSIM-CONFORMANCE CF-MIX-FAIL-N01 source=SRC-FSIM expectation=FSIM-SC-A003-or-FSIM-ELAB-BIND-0003
+    // FSIM-CONFORMANCE CF-MIX-FAIL-N01 source=SRC-FSIM expectation=FSIM-ELAB-BIND-0003
     auto invalid = config;
     invalid.bindings.back().target = "systemc:models.missing_boundary_native";
     fsim::diagnostic::Engine diagnostics;
@@ -759,8 +787,7 @@ void verify_negative(const fsim::project::Config& config)
     assert(diagnostics.has_error());
     assert(std::ranges::any_of(
         diagnostics.diagnostics(), [](const auto& diagnostic) {
-            return diagnostic.code == "FSIM-SC-A003"
-                || diagnostic.code == "FSIM-ELAB-BIND-0003";
+            return diagnostic.code == "FSIM-ELAB-BIND-0003";
         }));
 }
 
@@ -851,6 +878,12 @@ int main()
             reference.psl_attempts.front().outcome
             == fsim::runtime::VhdlPslAttemptOutcome::pass);
         assert(reference.value == "0");
+        if (reference.wide_value != expected_wide_value()) {
+            std::cerr << "typed boundary wide result: "
+                      << reference.wide_value << '\n';
+            std::cerr << "typed boundary wide expected: "
+                      << expected_wide_value() << '\n';
+        }
         assert(reference.wide_value == expected_wide_value());
         assert(
             reference.debugger.find(expected_wide_value())

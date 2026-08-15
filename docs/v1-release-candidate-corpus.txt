@@ -2,17 +2,17 @@
 # Batch 130 Task 9 final release-candidate corpus.
 # Every required row is classified execute and owns nonempty P+/P-/E/R links.
 # matrix-rows: 1294
-# matrix-sha256: ee856dcd8f7af5c9835821eb480caa6a5e23022f563be49ef0352d3e8cb38f4d
+# matrix-sha256: bbef73769bca32d42b22fae66968b47bb4f15f59f51d8266353fbbb1f29db141
 # evidence-slots: 5176
-# evidence-paths: 617
-# evidence-sha256: e4076a40c31945c3385495a1c3076b85518143712c89ea1fa3f629fffaac6120
+# evidence-paths: 622
+# evidence-sha256: 4f3f7cfb428f6bac7bb6acd5f81b8176240ed7a0f19940da9880e2c3e41e8fb6
 # verilog-gap-sha256: 338b64ba883f6243d9f799d31c22f873e871a5977bbb9fc9c45ae3b5ea738c84
 # verilog-width-sha256: a1cef90f58dc984e69e1f6c35247090498553d4f8d10c57b1a1bcd2fc06aee05
 # verilog-closure-sha256: a80eea635da93dff681c7118cd3339e7b4bb679c83a2cf7137cc3eeccef6f39e
-# test-evidence-paths: 272
-# production-evidence-paths: 318
-# release-evidence-paths: 27
-# runtime-evidence-paths: 144
+# test-evidence-paths: 275
+# production-evidence-paths: 321
+# release-evidence-paths: 26
+# runtime-evidence-paths: 145
 # corpus-ctests: 36
 # required-status: execute
 #
@@ -129,3 +129,8 @@
 # runtime owners. SV-840 through SV-854 close the residual SystemVerilog-2017
 # language and integration rows; the separate 51-row closure matrix owns the
 # exact clause and arbitrary-width release witnesses.
+#
+# Batch 172 retains 1294 rows and 5176 evidence cells while replacing the
+# legacy SystemC facade with official Accellera ownership. The synchronized
+# evidence inventory now spans 622 exact paths (275 test, 321 production, 26
+# release) and 145 runtime owners; all rows remain classified execute.

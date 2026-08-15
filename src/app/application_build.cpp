@@ -152,7 +152,8 @@ std::optional<BuiltProject> build_checked_project(
             return std::nullopt;
         }
         auto registry = systemc::load_incremental_plugin(
-            linked.artifact, diagnostics);
+            linked.artifact, diagnostics,
+            plugin_metadata->compiler_fingerprint);
         if (!registry) {
             return std::nullopt;
         }

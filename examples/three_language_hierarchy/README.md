@@ -3,18 +3,17 @@
 
 This project is a runnable SystemVerilog, SystemC, and VHDL example. It uses
 automatic parent-plus-search-library resolution and executes every language
-in one recursively elaborated hierarchy:
+in one HDL-owned hierarchy:
 
 ```text
 three_language_tb                         SystemVerilog testbench
-└── u_bridge                              SystemC MixedBridge factory
-    ├── invert_for_vhdl                   SystemC method
-    ├── to_vhdl                           SystemC internal signal
-    └── u_vhdl                            VHDL logic_stage(rtl)
+├── u_bridge                              SystemC MixedBridge factory
+│   └── invert                            SystemC method
+└── u_vhdl                                VHDL logic_stage(rtl)
 ```
 
 The SV testbench drives `stimulus`. The SystemC method inverts it into the
-internal `to_vhdl` signal, and the VHDL stage inverts it again. The
+HDL-owned `bridge_value` signal, and the VHDL stage inverts it again. The
 `observed` value returned to SystemVerilog must therefore equal `stimulus`.
 The testbench checks all three transitions and prints `PASS` before calling
 `$finish`.
@@ -66,9 +65,10 @@ observe a cold build.
 
 ## 3. Understand target resolution
 
-The SystemVerilog source in `work` names `mixed_bridge`, matching the public
-factory alias exported by `SC_FSIM_EXPORT_AS` in logical library `models`.
-The manifest makes that library visible during unqualified elaboration:
+The SystemVerilog source in `work` names both `mixed_bridge` and `LogicStage`.
+They match the public factory alias exported by `SC_FSIM_EXPORT_AS` and the
+VHDL entity in logical library `models`. The manifest makes that library
+visible during unqualified elaboration:
 
 ```toml
 [elaboration]
@@ -80,20 +80,13 @@ resolves uniquely:
 
 ```text
 three_language_tb.u_bridge -> systemc:models.mixed_bridge
+three_language_tb.u_vhdl -> vhdl:models.LogicStage(rtl)
 ```
 
-`LogicStage` is declared with `SC_FSIM_HDL_MODULE`, so `MixedBridge` constructs
-it like another SystemC module and connects `u_vhdl.value(to_vhdl)` and
-`u_vhdl.result(result)` with ordinary port-binding syntax. The
-`SC_FSIM_EXPORT_AS(MixedBridge, "mixed_bridge")` declaration publishes the
-parent factory. `SC_FSIM_HDL_MODULE(LogicStage)` records `LogicStage` as the
-child implementation spelling. The SystemC parent is already in `models`, so
-that parent library is searched first; VHDL matching is case-insensitive and
-the unique entity supplies its `rtl` architecture:
-
-```text
-three_language_tb.u_bridge.u_vhdl -> vhdl:models.LogicStage(rtl)
-```
+`SC_FSIM_EXPORT_AS(MixedBridge, "mixed_bridge")` publishes the SystemC
+factory. The owning SystemVerilog hierarchy connects its result to the sibling
+VHDL instance. VHDL matching is case-insensitive and the unique entity supplies
+its `rtl` architecture. SystemC does not construct an HDL proxy child.
 
 Repeated `--search-library` options replace the manifest list for one command.
 An explicit full-path `[[binding]]` can still override either inferred target.
@@ -121,9 +114,9 @@ inspect it as text. Useful paths include:
 ```text
 three_language_tb.stimulus
 three_language_tb.observed
-three_language_tb.u_bridge.to_vhdl
-three_language_tb.u_bridge.u_vhdl.value
-three_language_tb.u_bridge.u_vhdl.result
+three_language_tb.bridge_value
+three_language_tb.u_vhdl.value
+three_language_tb.u_vhdl.result
 ```
 
 The internal SystemC signal and the VHDL ports change in later deltas than the
@@ -161,17 +154,17 @@ Start the debugger with the same project:
 build/dev/fsim debug -p examples/three_language_hierarchy/fsim.toml -j 8
 ```
 
-At the `(fsim)` prompt, these commands walk from the SV top through SystemC to
-VHDL, select two live trace signals, and stop when the result becomes `1`:
+At the `(fsim)` prompt, these commands inspect the HDL-owned SystemC and VHDL
+siblings, select two live trace signals, and stop when the result becomes `1`:
 
 ```text
 scopes
 scope u_bridge
 scopes
 signals
+scope ..
 scope u_vhdl
 signals
-scope ..
 scope ..
 break signal observed == 1
 trace clear
@@ -211,7 +204,7 @@ Other safe extensions are:
 
 - widen the ports consistently in all three sources;
 - add another `sc_signal` and `SC_METHOD` in `MixedBridge`;
-- add a VHDL generic and supply it with `u_vhdl.set_actual`; or
+- add a VHDL generic and supply it from the owning HDL hierarchy; or
 - add a SystemC factory parameter and pass it from the SV placeholder.
 
 Keep cross-language targets explicit in `fsim.toml`. If a width, encoding,

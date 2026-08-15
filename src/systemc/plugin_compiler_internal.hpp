@@ -94,6 +94,7 @@ void report_error(
 [[nodiscard]] HostToolchain infer_toolchain(const std::string& compiler);
 
 [[nodiscard]] std::string default_compiler();
+void add_default_compiler_settings(project::SystemCSection& settings);
 
 [[nodiscard]] std::string shared_library_filename();
 

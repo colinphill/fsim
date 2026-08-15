@@ -102,7 +102,7 @@ int main() {
     assert(!error);
     filesystem::copy_file(
         filesystem::path{FSIM_TEST_SOURCE_DIR}
-            / "tests/systemc/sample_plugin.cpp",
+            / "tests/systemc/macro_plugin.cpp",
         source,
         filesystem::copy_options::overwrite_existing,
         error);
@@ -133,25 +133,14 @@ int main() {
     auto old_registry = fsim::systemc::HierarchyRegistry::load(
         cold.library_path, load_error);
     assert(old_registry && load_error.empty());
-    assert(old_registry->has_elaboration_factory("bridge"));
-    assert(old_registry->has_elaboration_factory("fiber_bridge"));
+    assert(old_registry->has_factory("a_parameterized"));
+    assert(old_registry->has_factory("m_alias_one"));
     const auto bridge = old_registry->instantiate(
-        "bridge", "matrix.bridge", 0, load_error);
-    const auto fiber = old_registry->instantiate(
-        "fiber_bridge", "matrix.fiber", 0, load_error);
-    assert(bridge && fiber && load_error.empty());
-    const std::array roots{bridge->handle, fiber->handle};
+        "a_parameterized", "matrix.bridge", 0, load_error);
+    assert(bridge && load_error.empty());
+    const std::array roots{bridge->handle};
     old_registry->complete_elaboration(roots);
     old_registry->start_simulation(roots);
-#if defined(FSIM_HAS_BOOST_CONTEXT)
-    TestExecutionContext execution_context;
-    const auto suspended = old_registry->invoke_process(
-        fiber->processes.front().handle, execution_context);
-    assert(
-        suspended.kind
-        == fsim::systemc::MethodSuspendKind::wait_for);
-    assert(suspended.delay_ticks == 5);
-#endif
 
     append_text(source, "\n// matrix edit\n");
     diagnostics.clear();
@@ -196,7 +185,7 @@ int main() {
         current_library, load_error);
     assert(current_registry && load_error.empty());
     const auto current_bridge = current_registry->instantiate(
-        "bridge", "matrix.current", 0, load_error);
+        "a_parameterized", "matrix.current", 0, load_error);
     assert(current_bridge && load_error.empty());
     const std::array current_roots{current_bridge->handle};
     current_registry->complete_elaboration(current_roots);
@@ -204,10 +193,13 @@ int main() {
     current_registry->end_simulation(current_roots);
 
     old_registry.reset();
-    assert(!fsim::platform::DynamicLibrary::is_loaded(cold.library_path));
+    // Official SystemC/TLM keeps process-global callback and type_info
+    // registries. Content-addressed plug-in images therefore remain mapped
+    // after logical teardown so those entries never dangle.
+    assert(fsim::platform::DynamicLibrary::is_loaded(cold.library_path));
     assert(fsim::platform::DynamicLibrary::is_loaded(current_library));
     current_registry.reset();
-    assert(!fsim::platform::DynamicLibrary::is_loaded(current_library));
+    assert(fsim::platform::DynamicLibrary::is_loaded(current_library));
 
     const auto invalid_source = working / "invalid plugin.cpp";
     replace_text(

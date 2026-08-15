@@ -311,7 +311,7 @@ class CrossChannel final : public sc_core::sc_prim_channel {
     updates_.write(sc_dt::sc_uint<8>{update_count_});
     request_update();
     target_.write(9);
-    event_.notify();
+    event_.notify(sc_core::SC_ZERO_TIME);
   }
 
  private:
@@ -451,7 +451,7 @@ SC_MODULE(BoundPorts) {
   sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
   sc_core::sc_signal<sc_dt::sc_logic> value_channel{
       "value_channel", sc_dt::sc_logic{'0'}};
-  sc_core::sc_signal<sc_dt::sc_logic> inverted_channel{
+  sc_core::sc_signal<sc_dt::sc_logic, sc_core::SC_MANY_WRITERS> inverted_channel{
       "inverted_channel", sc_dt::sc_logic{'1'}};
 
   SC_CTOR(BoundPorts) {
@@ -499,7 +499,7 @@ SC_MODULE(NativeHierarchy) {
   sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
   sc_core::sc_signal<sc_dt::sc_logic> value_channel{
       "value_channel", sc_dt::sc_logic{'0'}};
-  sc_core::sc_signal<sc_dt::sc_logic> inverted_channel{
+  sc_core::sc_signal<sc_dt::sc_logic, sc_core::SC_MANY_WRITERS> inverted_channel{
       "inverted_channel", sc_dt::sc_logic{'1'}};
   NativeLeaf leaf;
 
@@ -538,7 +538,7 @@ SC_MODULE(ExportHierarchy) {
   sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
   sc_core::sc_signal<sc_dt::sc_logic> value_channel{
       "value_channel", sc_dt::sc_logic{'0'}};
-  sc_core::sc_signal<sc_dt::sc_logic> inverted_channel{
+  sc_core::sc_signal<sc_dt::sc_logic, sc_core::SC_MANY_WRITERS> inverted_channel{
       "inverted_channel", sc_dt::sc_logic{'1'}};
   sc_core::sc_export<
       sc_core::sc_signal_in_if<sc_dt::sc_logic>> value_endpoint{
@@ -569,60 +569,6 @@ SC_MODULE(ExportHierarchy) {
   }
 };
 
-struct MetadataInterface : sc_core::sc_interface {
-  static const char* fsim_kind() noexcept {
-    return "models.metadata_interface";
-  }
-  virtual unsigned inspect() const = 0;
-};
-
-struct MetadataChannel final
-    : sc_core::sc_prim_channel,
-      MetadataInterface {
-  explicit MetadataChannel(const char* name)
-      : sc_core::sc_prim_channel(
-            name, "models.metadata_channel") {}
-
-  unsigned inspect() const override { return 7; }
-};
-
-SC_MODULE(CustomMetadata) {
-  sc_core::sc_port<MetadataInterface> endpoint{"endpoint"};
-  sc_core::sc_export<MetadataInterface> exposed{"exposed"};
-  MetadataChannel channel{"channel"};
-
-  SC_CTOR(CustomMetadata) {}
-};
-
-SC_MODULE(CustomBindingFailure) {
-  sc_core::sc_port<MetadataInterface> endpoint{"endpoint"};
-  MetadataChannel channel{"channel"};
-
-  SC_CTOR(CustomBindingFailure) {
-    endpoint.bind(channel);
-  }
-};
-
-SC_MODULE(CustomUpdateFailure) {
-  MetadataChannel channel{"channel"};
-
-  SC_CTOR(CustomUpdateFailure) {
-    SC_METHOD(run);
-  }
-
-  void run() { channel.request_update(); }
-};
-
-SC_MODULE(CustomValueFailure) {
-  sc_core::sc_port<MetadataInterface> endpoint{"endpoint"};
-
-  SC_CTOR(CustomValueFailure) {
-    SC_METHOD(run);
-  }
-
-  void run() { (void)endpoint->inspect(); }
-};
-
 SC_MODULE(EventTickFailure) {
   sc_core::sc_event pulse{"pulse"};
 
@@ -647,15 +593,12 @@ SC_MODULE(NamedObjectMatrix) {
   sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
   sc_core::sc_signal<sc_dt::sc_logic> value_channel{
       "value_channel", sc_dt::sc_logic{'0'}};
-  sc_core::sc_signal<sc_dt::sc_logic> inverted_channel{
+  sc_core::sc_signal<sc_dt::sc_logic, sc_core::SC_MANY_WRITERS> inverted_channel{
       "inverted_channel", sc_dt::sc_logic{'1'}};
   sc_core::sc_export<sc_core::sc_signal_in_if<sc_dt::sc_logic>>
       value_endpoint{"value_endpoint"};
   sc_core::sc_export<sc_core::sc_signal_inout_if<sc_dt::sc_logic>>
       inverted_endpoint{"inverted_endpoint"};
-  sc_core::sc_port<MetadataInterface> custom_port{"custom_port"};
-  sc_core::sc_export<MetadataInterface> custom_export{"custom_export"};
-  MetadataChannel custom_channel{"custom_channel"};
   sc_core::sc_event pulse{"pulse"};
   NativeLeaf leaf;
   bool elaborated{};
@@ -743,8 +686,8 @@ struct LifecycleLeaf : sc_core::sc_module {
   }
 
   void end_of_simulation() override {
-    require_size(6);
-    events_.push_back(7);
+    require_size(7);
+    events_.push_back(8);
   }
 
  private:
@@ -794,8 +737,8 @@ SC_MODULE(LifecycleModule) {
   }
 
   void end_of_simulation() override {
-    require_size(7);
-    lifecycle_events.push_back(8);
+    require_size(6);
+    lifecycle_events.push_back(7);
   }
 
  private:
@@ -848,12 +791,6 @@ SC_MODULE(LifecycleSuspendFailure) {
 )";
   output << R"(
 namespace {
-void* create_model(void*, const char*, fsim_sc_handle_v1) {
-  return reinterpret_cast<void*>(0x1);
-}
-void destroy_model(void*, void*) {}
-void probe_update(void*) {}
-
 fsim_sc_status_v1 elaborate_port_direction_probe(
     void* user,
     const char*,
@@ -865,7 +802,6 @@ fsim_sc_status_v1 elaborate_port_direction_probe(
       || host->register_port == nullptr
       || host->register_native_module == nullptr
       || host->bind_port == nullptr
-      || host->register_primitive_channel == nullptr
       || host->register_signal == nullptr
       || host->register_export == nullptr
       || host->set_export_writable == nullptr
@@ -881,7 +817,6 @@ fsim_sc_status_v1 elaborate_port_direction_probe(
   fsim_sc_handle_v1 channel = 0;
   fsim_sc_handle_v1 read_export = 0;
   fsim_sc_handle_v1 write_export = 0;
-  static int channel_state = 0;
   const std::array<std::uint8_t, 2> initial{{0, 0}};
   const fsim_sc_value_view_v1 initial_view{
       sizeof(fsim_sc_value_view_v1),
@@ -906,12 +841,9 @@ fsim_sc_status_v1 elaborate_port_direction_probe(
       || host->register_port(
           host->context, child, "export_sink", FSIM_SC_INPUT,
           FSIM_SC_LOGIC4, 1, &export_input) != FSIM_SC_OK
-      || host->register_primitive_channel(
-          host->context, module, "channel", probe_update,
-          &channel_state, &channel) != FSIM_SC_OK
       || host->register_signal(
-          host->context, module, channel, "channel",
-          FSIM_SC_LOGIC4, 1, &initial_view) != FSIM_SC_OK
+          host->context, module, "channel",
+          FSIM_SC_LOGIC4, 1, &initial_view, &channel) != FSIM_SC_OK
       || host->register_export(
           host->context, module, "read_export", FSIM_SC_LOGIC4,
           1, &read_export) != FSIM_SC_OK
@@ -956,28 +888,21 @@ void destroy_port_direction_probe(void*, void* object) {
 }
 }
 
-SC_FSIM_HDL_MODULE(HdlBridgeChild) {
-  sc_core::sc_in<sc_dt::sc_logic> value{"value"};
-  sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
-
-  SC_CTOR(HdlBridgeChild) {}
-};
-
 SC_MODULE(HdlBridge) {
   sc_core::sc_in<sc_dt::sc_logic> value{"value"};
   sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
-  HdlBridgeChild u_hdl{"u_hdl"};
+  bool invert;
 
-  SC_CTOR(HdlBridge) {
-    u_hdl.set_actual(
-        "INVERT",
-        fsim::systemc::construction_value<int>("CHILD_INVERT"));
-    u_hdl.value(value);
-    u_hdl.inverted(inverted);
+  SC_CTOR(HdlBridge)
+      : invert(fsim::systemc::construction_value<bool>("CHILD_INVERT")) {
+    SC_METHOD(update);
+    sensitive << value;
   }
+
+  void update() { inverted.write(invert ? ~value.read() : value.read()); }
 };
 
-SC_MODULE(FiberThreads) {
+SC_MODULE(AccelleraThreads) {
   sc_core::sc_in<sc_dt::sc_logic> clock{"clock"};
   sc_core::sc_out<sc_dt::sc_lv<8>> count{"count"};
   sc_core::sc_out<sc_dt::sc_lv<8>> timed{"timed"};
@@ -988,7 +913,7 @@ SC_MODULE(FiberThreads) {
   sc_core::sc_event pulse{"pulse"};
   sc_core::sc_event absent{"absent"};
 
-  SC_CTOR(FiberThreads) {
+  SC_CTOR(AccelleraThreads) {
     SC_CTHREAD(clocked_run, clock.pos());
     SC_THREAD(timed_run);
     SC_METHOD(notify_run);
@@ -1077,18 +1002,8 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       || registrar->abi_version != FSIM_SYSTEMC_ABI_VERSION
       || host->struct_size < sizeof(fsim_sc_host_v1)
       || registrar->struct_size < sizeof(fsim_sc_registrar_v1)
-      || registrar->register_factory == nullptr
       || registrar->register_elaboration_factory == nullptr) {
     return FSIM_SC_ABI_MISMATCH;
-  }
-  const auto status = registrar->register_factory(
-      registrar->context,
-      "model",
-      create_model,
-      destroy_model,
-      nullptr);
-  if (status != FSIM_SC_OK) {
-    return status;
   }
   const auto direction_status =
       registrar->register_elaboration_factory(
@@ -1114,8 +1029,8 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
     return bridge_status;
   }
   const auto thread_status =
-      fsim::systemc::register_module_factory<FiberThreads>(
-          host, registrar, "fiber_threads");
+      fsim::systemc::register_module_factory<AccelleraThreads>(
+          host, registrar, "accellera_threads");
   if (thread_status != FSIM_SC_OK) {
     return thread_status;
   }
@@ -1268,33 +1183,6 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   if (invalid_deep_status != FSIM_SC_OK) {
     return invalid_deep_status;
   }
-  const auto metadata_status =
-      fsim::systemc::register_module_factory<CustomMetadata>(
-          host, registrar, "custom_metadata");
-  if (metadata_status != FSIM_SC_OK) {
-    return metadata_status;
-  }
-  const auto custom_binding_status =
-      fsim::systemc::register_module_factory<
-          CustomBindingFailure>(
-              host, registrar, "custom_binding_failure");
-  if (custom_binding_status != FSIM_SC_OK) {
-    return custom_binding_status;
-  }
-  const auto custom_update_status =
-      fsim::systemc::register_module_factory<
-      CustomUpdateFailure>(
-          host, registrar, "custom_update_failure");
-  if (custom_update_status != FSIM_SC_OK) {
-    return custom_update_status;
-  }
-  const auto custom_value_status =
-      fsim::systemc::register_module_factory<
-      CustomValueFailure>(
-          host, registrar, "custom_value_failure");
-  if (custom_value_status != FSIM_SC_OK) {
-    return custom_value_status;
-  }
   const auto tick_failure_status =
       fsim::systemc::register_module_factory<EventTickFailure>(
           host, registrar, "event_tick_failure");
@@ -1318,13 +1206,9 @@ systemc_boundary_source =
 {
   std::ofstream output(systemc_boundary_source);
   output << R"(
-module systemc_hdl_child #(
-  parameter INVERT = 1
-) (
-  input logic value,
-  output logic inverted
-);
-  assign inverted = INVERT ? ~value : value;
+module systemc_independent_root;
+  logic value;
+  initial value = 1'b0;
 endmodule
 
 module systemc_host #(
@@ -1460,7 +1344,7 @@ module systemc_thread_host;
   logic [7:0] static_count;
   logic [7:0] named_count;
   logic [7:0] timeout_count;
-  fiber_threads_placeholder u_threads(
+  accellera_threads_placeholder u_threads(
       .clock(clock),
       .count(count),
       .timed(timed),
@@ -1491,7 +1375,7 @@ module systemc_schedule_lifecycle_host;
   logic [7:0] channel_updates;
   logic [7:0] channel_event_count;
   logic [7:0] cross_updates;
-  fiber_threads_placeholder u_threads(
+  accellera_threads_placeholder u_threads(
       .clock(clock),
       .count(count),
       .timed(timed),
@@ -1549,7 +1433,7 @@ architecture rtl of systemc_thread_vhdl_host is
   signal named_count : std_logic_vector(7 downto 0);
   signal timeout_count : std_logic_vector(7 downto 0);
 begin
-  u_threads: fiber_threads_placeholder
+  u_threads: accellera_threads_placeholder
     port map (
       clock => clock,
       count => count,
@@ -1590,7 +1474,7 @@ architecture rtl of systemc_schedule_lifecycle_vhdl_host is
   signal channel_event_count : std_logic_vector(7 downto 0);
   signal cross_updates : std_logic_vector(7 downto 0);
 begin
-  u_threads: fiber_threads_placeholder
+  u_threads: accellera_threads_placeholder
     port map (
       clock => clock,
       count => count,

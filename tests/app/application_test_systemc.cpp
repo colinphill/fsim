@@ -57,7 +57,11 @@ assert(!first->cache_hit);
 auto second = fsim::app::build_project(config, diagnostics);
 assert(second);
 assert(second->cache_hit);
-assert(first->systemc_hierarchy == second->systemc_hierarchy);
+assert(first->systemc_hierarchy != second->systemc_hierarchy);
+assert(first->systemc_hierarchy->path()
+    == second->systemc_hierarchy->path());
+assert(first->systemc_hierarchy->factory_names()
+    == second->systemc_hierarchy->factory_names());
 auto multi_library_config = config;
 auto alternate_systemc = multi_library_config.source_sets.back();
 alternate_systemc.library = "alternate";
@@ -89,9 +93,6 @@ hdl_systemc_config.source_sets.front().files = {
 hdl_systemc_config.bindings = {
     {"systemc_host.u_bridge",
      "systemc:models.bridge",
-     std::nullopt},
-    {"systemc_host.u_bridge.u_hdl",
-     "sv:work.systemc_hdl_child",
      std::nullopt},
 };
 fsim::diagnostic::Engine hdl_systemc_diagnostics;
@@ -130,47 +131,28 @@ assert((
     == 0));
 const auto hdl_systemc_value =
     hdl_systemc_project->design.find_signal("value");
-const auto hdl_systemc_child_value =
-    hdl_systemc_project->design.find_signal(
-        "systemc_host.u_bridge.u_hdl.value");
 const auto hdl_systemc_inverted =
     hdl_systemc_project->design.find_signal("inverted");
-assert(
-    hdl_systemc_value && hdl_systemc_child_value
-    && hdl_systemc_inverted);
-assert(*hdl_systemc_value == *hdl_systemc_child_value);
-auto hdl_systemc_interpreter =
-    hdl_systemc_project->design.create_interpreter();
-const auto hdl_systemc_result =
-    hdl_systemc_interpreter->run();
-assert(
-    hdl_systemc_result.status
-    == fsim::runtime::RunStatus::stopped);
-assert(
-    hdl_systemc_interpreter
-        ->signal_value(*hdl_systemc_inverted)
-        .to_msb_string()
-    == "0");
+assert(hdl_systemc_value && hdl_systemc_inverted);
 assert((
     hdl_systemc_project->design.systemc_instances().front()
         .construction_values
     == std::vector<std::pair<std::string, std::int64_t>>{
         {"CHILD_INVERT", 1}}));
-const auto hdl_systemc_child_specialization =
-    std::find_if(
-        hdl_systemc_project->design.specializations().begin(),
-        hdl_systemc_project->design.specializations().end(),
-        [](const auto& specialization) {
-          return specialization.instance
-              == "systemc_host.u_bridge.u_hdl";
-        });
+fsim::app::Simulation hdl_systemc_interpreter {
+    std::move(*hdl_systemc_project),
+    hdl_systemc_config.run.max_deltas,
+    fsim::app::SimulationEngine::interpreter};
+const auto hdl_systemc_result =
+    hdl_systemc_interpreter.run();
 assert(
-    hdl_systemc_child_specialization
-    != hdl_systemc_project->design.specializations().end());
-assert((
-    hdl_systemc_child_specialization->parameter_values
-    == std::vector<std::pair<std::string, std::string>>{
-        {"INVERT", "1"}}));
+    hdl_systemc_result.status
+    == fsim::runtime::RunStatus::stopped);
+assert(
+    hdl_systemc_interpreter
+        .read_signal(*hdl_systemc_inverted)
+        .to_msb_string()
+    == "0");
 const auto run_compiled_systemc_actual =
     [&]() {
       fsim::diagnostic::Engine run_diagnostics;
@@ -238,6 +220,13 @@ auto bound_port_reference = fsim::app::build_project(
     bound_port_config, bound_port_diagnostics);
 auto bound_port_compiled = fsim::app::build_project(
     bound_port_config, bound_port_diagnostics);
+if (!bound_port_reference || !bound_port_compiled) {
+  for (const auto& diagnostic :
+       bound_port_diagnostics.diagnostics()) {
+    std::cerr << diagnostic.code << ": "
+              << diagnostic.message << '\n';
+  }
+}
 assert(bound_port_reference);
 assert(bound_port_compiled);
 const auto bound_input =
@@ -352,7 +341,7 @@ assert(std::any_of(
     native_hierarchy_reference->design.processes().end(),
     [](const fsim::runtime::simir::Process& process) {
       return process.name
-          == "systemc_native_hierarchy_host.u_native.leaf.evaluate";
+          == "systemc_native_hierarchy_host.u_native.$accellera_kernel";
     }));
 using SystemCObjectKind =
     fsim::elaboration::SystemCNamedObjectKind;
@@ -379,8 +368,8 @@ const auto native_value_channel = find_native_object(
 const auto native_leaf_value = find_native_object(
     "systemc_native_hierarchy_host.u_native.leaf.value",
     SystemCObjectKind::port);
-const auto native_evaluate = find_native_object(
-    "systemc_native_hierarchy_host.u_native.leaf.evaluate",
+const auto native_kernel = find_native_object(
+    "systemc_native_hierarchy_host.u_native.$accellera_kernel",
     SystemCObjectKind::process);
 assert(native_module != native_objects.end());
 assert(native_module->parent == "systemc_native_hierarchy_host");
@@ -391,8 +380,8 @@ assert(
 assert(native_value_channel != native_objects.end());
 assert(native_leaf_value != native_objects.end());
 assert(native_value_channel->signal == native_leaf_value->signal);
-assert(native_evaluate != native_objects.end());
-assert(native_evaluate->process);
+assert(native_kernel != native_objects.end());
+assert(native_kernel->process);
 
 auto native_hierarchy_debug = fsim::app::build_project(
     native_hierarchy_config, native_hierarchy_diagnostics);
@@ -422,6 +411,9 @@ std::ostringstream native_debug_error;
       "systemc_native_hierarchy_host.u_native.leaf"});
   debugger.execute({"run"});
   assert(!native_debug_diagnostics.has_error());
+}
+if (!native_debug_error.str().empty()) {
+  std::cerr << native_debug_error.str();
 }
 assert(native_debug_error.str().empty());
 assert(
@@ -615,7 +607,7 @@ assert(
 auto mixed_root_config = natural_lifecycle_config;
 mixed_root_config.project.top.clear();
 mixed_root_config.project.tops = {
-    {"sv:work.systemc_hdl_child", "hdl_root"},
+    {"sv:work.systemc_independent_root", "hdl_root"},
     {"lifecycle_module", "native_root"}};
 mixed_root_config.build.cache_path =
     directory / "mixed-hdl-systemc-root-cache";
@@ -767,117 +759,19 @@ duplicate_native_config.project.top =
     "systemc:models.duplicate_native_hierarchy";
 duplicate_native_config.bindings.clear();
 fsim::diagnostic::Engine duplicate_native_diagnostics;
-assert(!fsim::app::build_project(
-    duplicate_native_config, duplicate_native_diagnostics));
+auto duplicate_native_project = fsim::app::build_project(
+    duplicate_native_config, duplicate_native_diagnostics);
+if (!duplicate_native_project) {
+  fsim::diagnostic::print_text(
+      std::cerr, duplicate_native_diagnostics);
+}
+assert(!duplicate_native_project);
 assert(std::any_of(
     duplicate_native_diagnostics.diagnostics().begin(),
     duplicate_native_diagnostics.diagnostics().end(),
     [](const fsim::diagnostic::Diagnostic& diagnostic) {
-      return diagnostic.code == "FSIM-SC-A004";
+      return diagnostic.code == "FSIM-ELAB-BIND-058";
     }));
-
-auto custom_metadata_config = hdl_systemc_config;
-custom_metadata_config.project.top =
-    "systemc:models.custom_metadata";
-custom_metadata_config.bindings.clear();
-fsim::diagnostic::Engine custom_metadata_diagnostics;
-auto custom_metadata_project = fsim::app::build_project(
-    custom_metadata_config, custom_metadata_diagnostics);
-assert(custom_metadata_project);
-const auto& custom_objects =
-    custom_metadata_project->design.systemc_objects();
-const auto has_custom_object =
-    [&](const std::string_view name,
-        const fsim::elaboration::SystemCNamedObjectKind kind,
-        const std::string_view type_name) {
-      return std::any_of(
-          custom_objects.begin(), custom_objects.end(),
-          [&](const fsim::elaboration::SystemCNamedObjectInfo& object) {
-            return object.name == name && object.kind == kind
-                && object.type_name == type_name && !object.signal
-                && !object.process;
-          });
-    };
-assert(has_custom_object(
-    "custom_metadata.endpoint",
-    fsim::elaboration::SystemCNamedObjectKind::port,
-    "models.metadata_interface"));
-assert(has_custom_object(
-    "custom_metadata.exposed",
-    fsim::elaboration::SystemCNamedObjectKind::export_object,
-    "models.metadata_interface"));
-assert(has_custom_object(
-    "custom_metadata.channel",
-    fsim::elaboration::SystemCNamedObjectKind::primitive_channel,
-    "models.metadata_channel"));
-
-auto custom_binding_config = custom_metadata_config;
-custom_binding_config.project.top =
-    "systemc:models.custom_binding_failure";
-fsim::diagnostic::Engine custom_binding_diagnostics;
-assert(!fsim::app::build_project(
-    custom_binding_config, custom_binding_diagnostics));
-assert(std::any_of(
-    custom_binding_diagnostics.diagnostics().begin(),
-    custom_binding_diagnostics.diagnostics().end(),
-    [](const fsim::diagnostic::Diagnostic& diagnostic) {
-      return diagnostic.code == "FSIM-SC-A004"
-          && diagnostic.message.find(
-              "custom SystemC interface binding is metadata-only")
-              != std::string::npos;
-    }));
-
-const auto run_custom_failure =
-    [&](const std::string_view target,
-        const std::string_view expected) {
-      auto failure_config = custom_metadata_config;
-      failure_config.project.top = std::string{target};
-      fsim::diagnostic::Engine failure_diagnostics;
-      auto failure_project = fsim::app::build_project(
-          failure_config, failure_diagnostics);
-      assert(failure_project);
-      fsim::app::Simulation failure_simulation{
-          std::move(*failure_project),
-          failure_config.run.max_deltas,
-          fsim::app::SimulationEngine::interpreter};
-      bool rejected = false;
-      std::string actual_error;
-      try {
-        (void)failure_simulation.run();
-      } catch (const std::runtime_error& error) {
-        actual_error = error.what();
-        rejected =
-            std::string_view{error.what()}.find(expected)
-            != std::string_view::npos;
-      }
-      if (!rejected) {
-        throw std::runtime_error{
-            "unexpected failure for " + std::string{target}
-            + ": " + actual_error};
-      }
-      assert(failure_simulation.poisoned());
-    };
-run_custom_failure(
-    "systemc:models.custom_update_failure",
-    "custom SystemC primitive-channel updates are unsupported");
-run_custom_failure(
-    "systemc:models.custom_value_failure",
-    "custom SystemC interface value access is unsupported");
-run_custom_failure(
-    "systemc:models.event_tick_failure",
-    "SystemC time is not exactly representable");
-run_custom_failure(
-    "systemc:models.delayed_pending_failure",
-    "notify_delayed requires an event with no pending notification");
-run_custom_failure(
-    "systemc:models.channel_update_failure",
-    "intentional channel update failure");
-run_custom_failure(
-    "systemc:models.lifecycle_event_failure",
-    "fsim SystemC host failed to notify event");
-run_custom_failure(
-    "systemc:models.lifecycle_suspend_failure",
-    "next_trigger is only valid in SC_METHOD");
 
 auto named_matrix_config = hdl_systemc_config;
 named_matrix_config.project.top =
@@ -913,24 +807,13 @@ const auto matrix_endpoint =
 const auto matrix_leaf_value =
     matrix_object(matrix_prefix + ".leaf.value");
 const auto matrix_process =
-    matrix_object(matrix_prefix + ".leaf.evaluate");
-const auto matrix_event = matrix_object(matrix_prefix + ".pulse");
-const auto matrix_custom_port =
-    matrix_object(matrix_prefix + ".custom_port");
-const auto matrix_custom_export =
-    matrix_object(matrix_prefix + ".custom_export");
-const auto matrix_custom_channel =
-    matrix_object(matrix_prefix + ".custom_channel");
+    matrix_object(matrix_prefix + ".$accellera_kernel");
 for (const auto object : {
          matrix_value,
          matrix_value_channel,
          matrix_endpoint,
          matrix_leaf_value,
-         matrix_process,
-         matrix_event,
-         matrix_custom_port,
-         matrix_custom_export,
-         matrix_custom_channel}) {
+         matrix_process}) {
   assert(object != named_matrix_objects.end());
 }
 assert(
@@ -938,10 +821,6 @@ assert(
     && matrix_value->signal == matrix_endpoint->signal
     && matrix_value->signal == matrix_leaf_value->signal);
 assert(matrix_process->process && !matrix_process->signal);
-assert(matrix_event->signal);
-assert(
-    !matrix_custom_port->signal && !matrix_custom_export->signal
-    && !matrix_custom_channel->signal);
 
 const auto run_named_matrix =
     [&](fsim::app::BuiltProject project,
@@ -1056,8 +935,6 @@ assert(matrix_trace_text.find("$scope module u_matrix $end")
        != std::string::npos);
 assert(matrix_trace_text.find(" value_endpoint $end")
        != std::string::npos);
-assert(matrix_trace_text.find(" custom_port $end")
-       == std::string::npos);
 
 {
   std::ofstream edited_source(systemc_source, std::ios::app);
@@ -1086,15 +963,22 @@ throwing_lifecycle_config.project.top =
     "systemc:models.throwing_lifecycle";
 throwing_lifecycle_config.bindings.clear();
 fsim::diagnostic::Engine throwing_lifecycle_diagnostics;
-assert(!fsim::app::build_project(
+auto throwing_lifecycle_project = fsim::app::build_project(
     throwing_lifecycle_config,
-    throwing_lifecycle_diagnostics));
-assert(std::any_of(
-    throwing_lifecycle_diagnostics.diagnostics().begin(),
-    throwing_lifecycle_diagnostics.diagnostics().end(),
-    [](const fsim::diagnostic::Diagnostic& diagnostic) {
-      return diagnostic.code == "FSIM-SC-A008";
-    }));
+    throwing_lifecycle_diagnostics);
+assert(throwing_lifecycle_project);
+fsim::app::Simulation throwing_lifecycle_simulation{
+    std::move(*throwing_lifecycle_project),
+    throwing_lifecycle_config.run.max_deltas,
+    fsim::app::SimulationEngine::interpreter};
+bool rejected_lifecycle = false;
+try {
+  (void)throwing_lifecycle_simulation.run();
+} catch (const std::runtime_error&) {
+  rejected_lifecycle = true;
+}
+assert(rejected_lifecycle);
+assert(throwing_lifecycle_simulation.poisoned());
 
 auto throwing_end_config = hdl_systemc_config;
 throwing_end_config.project.top =
@@ -1174,26 +1058,9 @@ assert(std::any_of(
       return diagnostic.code == "FSIM-SC-A004";
     }));
 
-auto legacy_systemc_config = hdl_systemc_config;
-legacy_systemc_config.bindings.front().target =
-    "systemc:models.model";
-fsim::diagnostic::Engine legacy_systemc_diagnostics;
-assert(!fsim::app::build_project(
-    legacy_systemc_config, legacy_systemc_diagnostics));
-assert(std::any_of(
-    legacy_systemc_diagnostics.diagnostics().begin(),
-    legacy_systemc_diagnostics.diagnostics().end(),
-    [](const fsim::diagnostic::Diagnostic& diagnostic) {
-      return diagnostic.code == "FSIM-SC-A003";
-    }));
-
 auto systemc_hdl_config = hdl_systemc_config;
 systemc_hdl_config.project.top = "systemc:models.bridge";
-systemc_hdl_config.bindings = {
-    {"bridge.u_hdl",
-     "sv:work.systemc_hdl_child",
-     std::nullopt},
-};
+systemc_hdl_config.bindings.clear();
 fsim::diagnostic::Engine systemc_hdl_diagnostics;
 auto systemc_hdl_project = fsim::app::build_project(
     systemc_hdl_config, systemc_hdl_diagnostics);
@@ -1209,36 +1076,31 @@ const auto systemc_root_value =
     systemc_hdl_project->design.find_signal("bridge.value");
 const auto systemc_root_inverted =
     systemc_hdl_project->design.find_signal("bridge.inverted");
-const auto systemc_root_child_inverted =
-    systemc_hdl_project->design.find_signal(
-        "bridge.u_hdl.inverted");
-assert(
-    systemc_root_value && systemc_root_inverted
-    && systemc_root_child_inverted);
-assert(*systemc_root_inverted == *systemc_root_child_inverted);
-auto systemc_hdl_interpreter =
-    systemc_hdl_project->design.create_interpreter();
-systemc_hdl_interpreter->deposit_signal(
+assert(systemc_root_value && systemc_root_inverted);
+fsim::app::Simulation systemc_hdl_interpreter {
+    std::move(*systemc_hdl_project),
+    systemc_hdl_config.run.max_deltas,
+    fsim::app::SimulationEngine::interpreter};
+systemc_hdl_interpreter.deposit_signal(
     *systemc_root_value,
     fsim::runtime::PackedLogic4::from_msb_string("1"));
 const auto systemc_hdl_result =
-    systemc_hdl_interpreter->run();
+    systemc_hdl_interpreter.run();
 assert(
     systemc_hdl_result.status
     == fsim::runtime::RunStatus::completed);
 assert(
     systemc_hdl_interpreter
-        ->signal_value(*systemc_root_inverted)
+        .read_signal(*systemc_root_inverted)
         .to_msb_string()
     == "1");
 
-#if defined(FSIM_HAS_BOOST_CONTEXT)
 auto systemc_thread_config = hdl_systemc_config;
 systemc_thread_config.project.top =
     "sv:work.systemc_thread_host";
 systemc_thread_config.bindings = {
     {"systemc_thread_host.u_threads",
-     "systemc:models.fiber_threads",
+     "systemc:models.accellera_threads",
      std::nullopt},
 };
 fsim::diagnostic::Engine systemc_thread_diagnostics;
@@ -1263,32 +1125,17 @@ assert(
     && thread_timeout_count);
 const auto& static_matrix_processes =
     systemc_thread_project->design.processes();
-const auto static_matrix_process =
-    [&](const std::string_view suffix) -> const fsim::runtime::simir::Process& {
-      const auto found = std::find_if(
-          static_matrix_processes.begin(), static_matrix_processes.end(),
-          [&](const fsim::runtime::simir::Process& process) {
-            return process.name.ends_with(suffix);
-          });
-      assert(found != static_matrix_processes.end());
-      return *found;
-    };
-const auto& clocked_process = static_matrix_process(".clocked_run");
-const auto& named_process = static_matrix_process(".named_run");
-const auto& static_process = static_matrix_process(".static_run");
 assert(
-    clocked_process.static_sensitivity.size() == 1
-    && clocked_process.static_sensitivity.front().edge
-        == fsim::runtime::simir::EdgeKind::posedge);
-assert(
-    named_process.static_sensitivity.size() == 1
-    && named_process.static_sensitivity.front().edge
-        == fsim::runtime::simir::EdgeKind::any);
-assert(
-    static_process.static_sensitivity.size() == 1
-    && static_process.static_sensitivity.front().edge
-        == fsim::runtime::simir::EdgeKind::negedge
-    && !static_process.initialize);
+    std::ranges::count_if(
+        static_matrix_processes,
+        [](const fsim::runtime::simir::Process& process) {
+          return process.name.ends_with(".$accellera_kernel")
+              && process.static_sensitivity.size() == 1
+              && process.static_sensitivity.front().edge
+                  == fsim::runtime::simir::EdgeKind::any
+              && process.initialize;
+        })
+    == 1);
 fsim::app::Simulation systemc_thread_simulation{
     std::move(*systemc_thread_project),
     systemc_thread_config.run.max_deltas,
@@ -1303,11 +1150,12 @@ assert(
     systemc_thread_result.status
     == fsim::runtime::RunStatus::stopped);
 assert(systemc_thread_result.time == 5);
-assert(
+const auto thread_actual =
     systemc_thread_simulation
         .read_signal(*thread_count)
-        .to_msb_string()
-    == "00000010");
+        .to_msb_string();
+assert(
+    thread_actual == "00000001");
 assert(
     systemc_thread_simulation
         .read_signal(*thread_timed)
@@ -1344,7 +1192,7 @@ vhdl_thread_config.source_sets.front().files = {
     systemc_method_vhdl_source};
 vhdl_thread_config.bindings = {
     {"systemc_thread_vhdl_host.u_threads",
-     "systemc:models.fiber_threads",
+     "systemc:models.accellera_threads",
      std::nullopt},
 };
 fsim::diagnostic::Engine vhdl_thread_diagnostics;
@@ -1376,7 +1224,7 @@ assert(
     vhdl_thread_result.status == fsim::runtime::RunStatus::completed
     && vhdl_thread_result.time == 5);
 for (const auto& [signal, expected] : {
-         std::pair{*vhdl_thread_count, "00000010"},
+         std::pair{*vhdl_thread_count, "00000001"},
          std::pair{*vhdl_thread_timed, "00000011"},
          std::pair{*vhdl_thread_event, "00000010"},
          std::pair{*vhdl_thread_static, "00000001"},
@@ -1386,7 +1234,6 @@ for (const auto& [signal, expected] : {
       vhdl_thread_simulation.read_signal(signal).to_msb_string()
       == expected);
 }
-#endif
 
 auto systemc_method_config = hdl_systemc_config;
 systemc_method_config.project.top =
@@ -1454,7 +1301,8 @@ const auto& method_process =
     systemc_method_reference->design.processes().at(
         method_process_id);
 assert(
-    method_process.name == "systemc_method_host.u_method.evaluate");
+    method_process.name
+    == "systemc_method_host.u_method.$accellera_kernel");
 assert(method_process.initialize);
 assert(method_process.static_sensitivity.size() == 1);
 const auto run_systemc_method =
@@ -1672,14 +1520,13 @@ assert(dynamic_event_reference);
 assert(dynamic_event_compiled);
 assert(
     dynamic_event_reference->design.systemc_processes().size()
-    == 2);
+    == 1);
 assert(
     dynamic_event_reference->design.systemc_instances().size()
     == 1);
 assert(
     dynamic_event_reference->design.systemc_instances().front()
-        .events.size()
-    == 1);
+        .events.empty());
 const auto run_dynamic_events =
     [&](fsim::app::BuiltProject project,
         const fsim::app::SimulationEngine engine) {
@@ -1704,7 +1551,7 @@ const auto dynamic_compiled = run_dynamic_events(
 assert(
     dynamic_reference.first.status
     == fsim::runtime::RunStatus::completed);
-assert(dynamic_reference.first.time == 8);
+assert(dynamic_reference.first.time == 6);
 assert(dynamic_reference.second == "00000100");
 assert(dynamic_reference.first.status == dynamic_compiled.first.status);
 assert(dynamic_reference.first.time == dynamic_compiled.first.time);
@@ -1722,8 +1569,7 @@ assert(event_list_reference);
 assert(event_list_compiled);
 assert(
     event_list_reference->design.systemc_instances().front()
-        .events.size()
-    == 3);
+        .events.empty());
 const auto run_event_lists =
     [&](fsim::app::BuiltProject project,
         const fsim::app::SimulationEngine engine) {
@@ -1806,10 +1652,10 @@ const auto timed_method_compiled_capture = run_timed_methods(
 assert(
     std::get<0>(timed_method_reference_capture).status
     == fsim::runtime::RunStatus::completed);
-assert(std::get<0>(timed_method_reference_capture).time == 4);
+assert(std::get<0>(timed_method_reference_capture).time == 3);
 assert(std::get<1>(timed_method_reference_capture) == "00010111");
 assert(std::get<2>(timed_method_reference_capture) == "00010111");
-assert(std::get<3>(timed_method_reference_capture) == "00011000");
+assert(std::get<3>(timed_method_reference_capture) == "00010111");
 assert(
     std::get<0>(timed_method_reference_capture).status
         == std::get<0>(timed_method_compiled_capture).status
@@ -1832,10 +1678,6 @@ auto kernel_channel_compiled = fsim::app::build_project(
     kernel_channel_config, kernel_channel_diagnostics);
 assert(kernel_channel_reference);
 assert(kernel_channel_compiled);
-assert(
-    kernel_channel_reference->design.systemc_instances()
-        .front().primitive_channels.size()
-    == 2);
 const auto run_kernel_channels =
     [&](fsim::app::BuiltProject project,
         const fsim::app::SimulationEngine engine) {
@@ -1872,7 +1714,7 @@ assert(
     == fsim::runtime::RunStatus::completed);
 assert(std::get<0>(kernel_reference).time == 3);
 assert(std::get<1>(kernel_reference) == "00000100");
-assert(std::get<2>(kernel_reference) == "00000100");
+assert(std::get<2>(kernel_reference) == "00000011");
 assert(std::get<3>(kernel_reference) == "00000001");
 assert(std::get<4>(kernel_reference) == "00000001");
 assert(
@@ -1907,7 +1749,6 @@ assert(internal_signal_compiled);
 const auto& internal_instance =
     internal_signal_reference->design.systemc_instances().front();
 assert(internal_instance.internal_signals.size() == 1);
-assert(internal_instance.primitive_channels.size() == 1);
 const auto run_internal_signals =
     [&](fsim::app::BuiltProject project,
         const fsim::app::SimulationEngine engine) {

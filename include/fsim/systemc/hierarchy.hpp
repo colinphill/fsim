@@ -28,25 +28,6 @@ struct PortDescription {
     fsim_sc_handle_v1 bound_object{};
 };
 
-struct ForeignPortDescription {
-    std::string name;
-    fsim_sc_port_direction_v1 direction{FSIM_SC_INPUT};
-    fsim_sc_value_encoding_v1 encoding{FSIM_SC_BIT2};
-    std::uint32_t width{};
-    fsim_sc_handle_v1 object{};
-    fsim_sc_handle_v1 handle{};
-};
-
-struct ForeignChildDescription {
-    fsim_sc_handle_v1 handle{};
-    std::string name;
-    std::vector<std::pair<std::string, std::int64_t>>
-        construction_actuals;
-    std::vector<ForeignPortDescription> ports;
-    bool module_facade{};
-    std::string implementation;
-};
-
 struct ConstructionParameterDescription {
     std::string name;
     fsim_sc_construction_type_v1 type{
@@ -62,31 +43,9 @@ struct SensitivityDescription {
 struct ProcessDescription {
     fsim_sc_handle_v1 handle{};
     std::string name;
-    fsim_sc_process_kind_v1 kind{FSIM_SC_METHOD};
     fsim_sc_process_entry_v1 entry{};
     void* user{};
     std::vector<SensitivityDescription> sensitivity;
-    bool initialize{true};
-};
-
-struct EventDescription {
-    fsim_sc_handle_v1 handle{};
-    std::string name;
-};
-
-struct PrimitiveChannelDescription {
-    fsim_sc_handle_v1 handle{};
-    std::string name;
-    fsim_sc_channel_update_v1 update{};
-    void* user{};
-    std::string kind{"sc_prim_channel"};
-};
-
-struct MetadataObjectDescription {
-    fsim_sc_handle_v1 handle{};
-    std::string name;
-    fsim_sc_metadata_category_v1 category{FSIM_SC_METADATA_PORT};
-    std::string kind;
 };
 
 struct InternalSignalDescription {
@@ -122,13 +81,9 @@ struct ModuleDescription {
     std::vector<std::pair<std::string, std::int64_t>>
         construction_values;
     std::vector<PortDescription> ports;
-    std::vector<ForeignChildDescription> foreign_children;
     std::vector<ProcessDescription> processes;
-    std::vector<EventDescription> events;
-    std::vector<PrimitiveChannelDescription> primitive_channels;
     std::vector<InternalSignalDescription> internal_signals;
     std::vector<ExportDescription> exports;
-    std::vector<MetadataObjectDescription> metadata_objects;
     std::vector<ModuleDescription> native_children;
     LifecycleDescription lifecycle;
 };
@@ -138,8 +93,6 @@ enum class HierarchyObjectKind : std::uint8_t {
     port,
     foreign_child,
     process,
-    event,
-    primitive_channel,
     signal,
     export_object,
 };
@@ -185,11 +138,10 @@ public:
 
     [[nodiscard]] static std::unique_ptr<HierarchyRegistry> load(
         const std::filesystem::path& path,
-        std::string& error);
+        std::string& error,
+        bool isolated_kernel = false);
 
     [[nodiscard]] bool has_factory(std::string_view name) const noexcept;
-    [[nodiscard]] bool has_elaboration_factory(
-        std::string_view name) const noexcept;
     [[nodiscard]] std::size_t factory_count() const noexcept;
     [[nodiscard]] std::vector<std::string> factory_names() const;
     [[nodiscard]] bool owns_handle(fsim_sc_handle_v1 handle) const noexcept;
@@ -245,18 +197,13 @@ public:
 
     /// Invoke end_of_simulation once in reverse root order.
     void end_simulation(
-        std::span<const fsim_sc_handle_v1> roots);
+        std::span<const fsim_sc_handle_v1> roots,
+        std::uint64_t current_time = 0);
 
     /// Invoke or resume a registered SystemC process with host reads/writes
     /// redirected to the supplied common-kernel execution context.
     [[nodiscard]] MethodSuspendResult invoke_process(
         fsim_sc_handle_v1 process,
-        runtime::simir::ProcessExecutionContext& context);
-
-    /// Invoke a registered primitive-channel update inside the supplied
-    /// common-kernel update-phase context.
-    void invoke_primitive_channel(
-        fsim_sc_handle_v1 channel,
         runtime::simir::ProcessExecutionContext& context);
 
     [[nodiscard]] const std::filesystem::path& path() const noexcept;

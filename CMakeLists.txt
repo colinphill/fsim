@@ -33,9 +33,9 @@ include(CTest)
 include(cmake/FsimWarnings.cmake)
 include(cmake/FsimDebugFootprint.cmake)
 include(cmake/FsimDependencies.cmake)
-include(cmake/FsimBoostContext.cmake)
 include(cmake/FsimTcl.cmake)
 include(cmake/FsimUvmSources.cmake)
+include(cmake/FsimSystemCAccellera.cmake)
 
 option(FSIM_BUILD_TESTS "Build fsim's unit and integration tests" ${BUILD_TESTING})
 option(FSIM_BUILD_FUZZERS "Build Clang/libFuzzer targets" OFF)
@@ -47,13 +47,6 @@ set(
   "LLVM backend selection: AUTO discovers LLVM 22.1.8, ON requires it, OFF disables it"
 )
 set_property(CACHE FSIM_LLVM_MODE PROPERTY STRINGS AUTO ON OFF)
-set(
-  FSIM_SYSTEMC_FIBER_MODE
-  "AUTO"
-  CACHE STRING
-  "SystemC fiber selection: AUTO discovers Boost.Context 1.91.0, ON requires it, OFF disables it"
-)
-set_property(CACHE FSIM_SYSTEMC_FIBER_MODE PROPERTY STRINGS AUTO ON OFF)
 set(
   FSIM_TCL_MODE
   "AUTO"
@@ -87,6 +80,88 @@ set(
   "Predownloaded exact UVM 2020.3.1 archive for FSIM_UVM_SOURCE_MODE=ARCHIVE"
 )
 fsim_uvm_configure_sources()
+
+set(
+  FSIM_SYSTEMC_3_0_2_ARCHIVE
+  "${PROJECT_SOURCE_DIR}/third_party/systemc-3.0.2/systemc-3.0.2.tar.gz"
+  CACHE FILEPATH
+  "Offline official Accellera SystemC 3.0.2 source archive"
+)
+fsim_systemc_validate_archive("${FSIM_SYSTEMC_3_0_2_ARCHIVE}")
+set(
+  FSIM_SYSTEMC_WORK_ROOT
+  "${CMAKE_BINARY_DIR}/_deps/fsim_systemc_3_0_2"
+  CACHE PATH
+  "Isolated extraction and manifest root for official SystemC 3.0.2"
+)
+fsim_systemc_add_official_runtime(
+  "${FSIM_SYSTEMC_3_0_2_ARCHIVE}" "${FSIM_SYSTEMC_WORK_ROOT}")
+
+add_library(
+  fsim_systemc_accellera_runtime
+  SHARED
+  src/systemc/accellera_runtime.cpp
+  src/systemc/accellera_compatibility.cpp
+)
+add_library(
+  fsim::systemc_accellera_runtime
+  ALIAS fsim_systemc_accellera_runtime
+)
+target_compile_features(fsim_systemc_accellera_runtime PRIVATE cxx_std_20)
+target_compile_definitions(
+  fsim_systemc_accellera_runtime
+  PRIVATE
+    "FSIM_SYSTEMC_RUNTIME_IDENTITY=\"${FSIM_SYSTEMC_RUNTIME_IDENTITY}\""
+)
+target_include_directories(
+  fsim_systemc_accellera_runtime
+  PRIVATE "${PROJECT_SOURCE_DIR}/include"
+  SYSTEM PRIVATE "${FSIM_SYSTEMC_OFFICIAL_SOURCE_DIR}/src"
+)
+target_link_libraries(
+  fsim_systemc_accellera_runtime
+  PRIVATE SystemC::systemc
+)
+if(
+  MSVC
+  OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+)
+  target_link_options(
+    fsim_systemc_accellera_runtime
+    INTERFACE /INCLUDE:fsim_systemc_accellera_runtime_identity
+  )
+else()
+  target_link_options(
+    fsim_systemc_accellera_runtime
+    INTERFACE "LINKER:-u,fsim_systemc_accellera_runtime_identity"
+  )
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(
+      fsim_systemc_accellera_runtime
+      INTERFACE "LINKER:--no-as-needed"
+    )
+  endif()
+endif()
+set_target_properties(
+  fsim_systemc_accellera_runtime
+  PROPERTIES
+    VERSION "${FSIM_SYSTEMC_VERSION}"
+    SOVERSION 3
+)
+if(NOT WIN32)
+  set_target_properties(
+    fsim_systemc_accellera_runtime
+    PROPERTIES INSTALL_RPATH "$ORIGIN"
+  )
+  set(CMAKE_INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+endif()
+fsim_enable_warnings(fsim_systemc_accellera_runtime)
+fsim_configure_debug_footprint(fsim_systemc_accellera_runtime)
+
+# Targets created below all carry the same process-wide Accellera runtime
+# dependency. Upstream itself was created first, so the dependency cannot form
+# a private or recursive runtime copy.
+link_libraries(fsim_systemc_accellera_runtime)
 
 string(TOUPPER "${FSIM_LLVM_MODE}" FSIM_LLVM_MODE_NORMALIZED)
 if(NOT FSIM_LLVM_MODE_NORMALIZED MATCHES "^(AUTO|ON|OFF)$")
@@ -136,23 +211,9 @@ else()
   message(STATUS "fsim LLVM backend disabled by FSIM_LLVM_MODE=OFF")
 endif()
 
-string(
-  TOUPPER
-  "${FSIM_SYSTEMC_FIBER_MODE}"
-  FSIM_SYSTEMC_FIBER_MODE_NORMALIZED
-)
-if(NOT FSIM_SYSTEMC_FIBER_MODE_NORMALIZED MATCHES "^(AUTO|ON|OFF)$")
-  message(
-    FATAL_ERROR
-    "FSIM_SYSTEMC_FIBER_MODE must be AUTO, ON, or OFF "
-    "(received '${FSIM_SYSTEMC_FIBER_MODE}')"
-  )
-endif()
-
 # Portable owning-unit serialization uses Boost.PFR only as a compile-time
 # aggregate field enumerator. It contributes no runtime ABI and field order is
-# fixed by the fsim portable schema, so any installed PFR is sufficient. Fall
-# back to the same checksum-pinned Boost source used by SystemC fibers.
+# fixed by the fsim portable schema, so any installed PFR is sufficient.
 find_path(FSIM_BOOST_PFR_INCLUDE_DIR boost/pfr/core.hpp)
 if(NOT FSIM_BOOST_PFR_INCLUDE_DIR)
   include(FetchContent)
@@ -181,59 +242,6 @@ target_include_directories(
   fsim_boost_pfr_headers
   SYSTEM INTERFACE "${FSIM_BOOST_PFR_INCLUDE_DIR}"
 )
-
-set(FSIM_WITH_SYSTEMC_FIBERS OFF)
-if(NOT FSIM_SYSTEMC_FIBER_MODE_NORMALIZED STREQUAL "OFF")
-  find_package(
-    Boost ${FSIM_BOOST_VERSION}
-    EXACT
-    CONFIG
-    QUIET
-    COMPONENTS context
-  )
-  if(NOT Boost_FOUND OR NOT TARGET Boost::context)
-    include(FetchContent)
-    string(
-      REPLACE "." "_"
-      FSIM_BOOST_ARCHIVE_VERSION
-      "${FSIM_BOOST_VERSION}"
-    )
-    FetchContent_Declare(
-      fsim_boost
-      URL
-        "https://archives.boost.io/release/${FSIM_BOOST_VERSION}/source/boost_${FSIM_BOOST_ARCHIVE_VERSION}.tar.bz2"
-      URL_HASH
-        "SHA256=${FSIM_BOOST_SOURCE_SHA256}"
-      DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-    )
-    message(
-      STATUS
-      "Boost.Context ${FSIM_BOOST_VERSION} was not found; "
-      "fetching the pinned Boost source archive"
-    )
-    FetchContent_MakeAvailable(fsim_boost)
-    if(WIN32)
-      enable_language(ASM_MASM)
-    else()
-      enable_language(ASM)
-    endif()
-    fsim_add_fetched_boost_context("${fsim_boost_SOURCE_DIR}")
-  endif()
-  if(TARGET Boost::context)
-    set(FSIM_WITH_SYSTEMC_FIBERS ON)
-    message(
-      STATUS
-      "fsim SystemC fibers: Boost.Context ${FSIM_BOOST_VERSION}"
-    )
-  else()
-    message(
-      FATAL_ERROR
-      "Boost.Context ${FSIM_BOOST_VERSION} did not provide Boost::context"
-    )
-  endif()
-else()
-  message(STATUS "fsim SystemC fibers disabled by FSIM_SYSTEMC_FIBER_MODE=OFF")
-endif()
 
 string(TOUPPER "${FSIM_TCL_MODE}" FSIM_TCL_MODE_NORMALIZED)
 if(NOT FSIM_TCL_MODE_NORMALIZED MATCHES "^(AUTO|ON|OFF)$")
@@ -749,25 +757,27 @@ target_include_directories(
     "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
 )
 
-add_library(
-  fsim_systemc_support
-  STATIC
-    src/systemc/systemc_api.cpp
-    src/systemc/systemc_core.cpp
-    src/systemc/systemc_exports.cpp
-    src/systemc/systemc_foreign.cpp
+target_link_libraries(
+  fsim_systemc_headers
+  INTERFACE SystemC::systemc
 )
-add_library(fsim::systemc_support ALIAS fsim_systemc_support)
-fsim_configure_library(fsim_systemc_support)
-target_include_directories(
-  fsim_systemc_support
-  PUBLIC
-    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
-    "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
+
+add_library(
+  fsim_systemc_plugin_exports
+  STATIC
+    src/systemc/systemc_exports.cpp
+)
+add_library(
+  fsim::systemc_plugin_exports
+  ALIAS fsim_systemc_plugin_exports
+)
+fsim_configure_library(fsim_systemc_plugin_exports)
+target_link_libraries(
+  fsim_systemc_plugin_exports PUBLIC SystemC::systemc
 )
 target_link_libraries(
   fsim_systemc_headers
-  INTERFACE fsim_systemc_support
+  INTERFACE fsim_systemc_plugin_exports
 )
 
 add_library(
@@ -777,6 +787,17 @@ add_library(
     src/systemc/hierarchy_callbacks.cpp
     src/systemc/incremental_artifact.cpp
     src/systemc/incremental_compiler.cpp
+    src/systemc/kernel_backend_execution.cpp
+    src/systemc/kernel_backend_loopback.cpp
+    src/systemc/kernel_backend_protocol.cpp
+    src/systemc/kernel_backend_session.cpp
+    src/systemc/kernel_backend_synchronization.cpp
+    src/systemc/kernel_backend_value_codec.cpp
+    src/systemc/tlm1_backend.cpp
+    src/systemc/tlm2_backend.cpp
+    src/systemc/kernel_backend_inventory.cpp
+    src/systemc/kernel_backend_binding_inventory.cpp
+    src/systemc/kernel_backend_observation.cpp
     src/systemc/plugin_compiler.cpp
     src/systemc/plugin_compiler_common.cpp
     src/systemc/plugin_compiler_dependencies.cpp
@@ -785,28 +806,41 @@ add_library(
 )
 add_library(fsim::systemc ALIAS fsim_systemc)
 fsim_configure_library(fsim_systemc)
-set(FSIM_SYSTEMC_FIBER_IDENTITY "disabled")
-if(FSIM_WITH_SYSTEMC_FIBERS)
-  if(DEFINED FSIM_BOOST_CONTEXT_IMPLEMENTATION)
-    set(
-      FSIM_SYSTEMC_FIBER_IDENTITY
-      "boost-${FSIM_BOOST_VERSION}-${FSIM_BOOST_CONTEXT_IMPLEMENTATION}"
-    )
-  else()
-    set(
-      FSIM_SYSTEMC_FIBER_IDENTITY
-      "boost-${FSIM_BOOST_VERSION}-installed"
-    )
-  endif()
+if(WIN32)
+  set(FSIM_SYSTEMC_INSTALLED_ACCELERA_LINK_LIBRARY
+      "${CMAKE_INSTALL_FULL_LIBDIR}/${CMAKE_IMPORT_LIBRARY_PREFIX}fsim_systemc_accellera_runtime${CMAKE_IMPORT_LIBRARY_SUFFIX}")
+  set(FSIM_SYSTEMC_INSTALLED_OFFICIAL_LINK_LIBRARY
+      "${CMAKE_INSTALL_FULL_LIBDIR}/${CMAKE_IMPORT_LIBRARY_PREFIX}systemc${CMAKE_IMPORT_LIBRARY_SUFFIX}")
+else()
+  set(FSIM_SYSTEMC_INSTALLED_ACCELERA_LINK_LIBRARY
+      "${CMAKE_INSTALL_FULL_LIBDIR}/${CMAKE_SHARED_LIBRARY_PREFIX}fsim_systemc_accellera_runtime${CMAKE_SHARED_LIBRARY_SUFFIX}")
+  set(FSIM_SYSTEMC_INSTALLED_OFFICIAL_LINK_LIBRARY
+      "${CMAKE_INSTALL_FULL_LIBDIR}/${CMAKE_SHARED_LIBRARY_PREFIX}systemc${CMAKE_SHARED_LIBRARY_SUFFIX}")
 endif()
+separate_arguments(
+  FSIM_SYSTEMC_DEFAULT_COMPILE_OPTIONS
+  NATIVE_COMMAND "${CMAKE_CXX_FLAGS}"
+)
+list(
+  JOIN FSIM_SYSTEMC_DEFAULT_COMPILE_OPTIONS "|"
+  FSIM_SYSTEMC_DEFAULT_COMPILE_OPTIONS_ENCODED
+)
 target_compile_definitions(
   fsim_systemc
   PRIVATE
     FSIM_SYSTEMC_HEADER_PATH="${PROJECT_SOURCE_DIR}/include"
     FSIM_SYSTEMC_INSTALLED_HEADER_PATH="${CMAKE_INSTALL_FULL_INCLUDEDIR}"
-    FSIM_SYSTEMC_SUPPORT_LIBRARY_PATH="$<TARGET_FILE:fsim_systemc_support>"
-    FSIM_SYSTEMC_INSTALLED_SUPPORT_LIBRARY_PATH="${CMAKE_INSTALL_FULL_LIBDIR}/${CMAKE_STATIC_LIBRARY_PREFIX}fsim_systemc_support${CMAKE_STATIC_LIBRARY_SUFFIX}"
-    FSIM_SYSTEMC_FIBER_IDENTITY="${FSIM_SYSTEMC_FIBER_IDENTITY}"
+    FSIM_SYSTEMC_UPSTREAM_HEADER_PATH="${FSIM_SYSTEMC_OFFICIAL_SOURCE_DIR}/src"
+    FSIM_SYSTEMC_INSTALLED_UPSTREAM_HEADER_PATH="${CMAKE_INSTALL_FULL_INCLUDEDIR}"
+    FSIM_SYSTEMC_DEFAULT_COMPILER="${CMAKE_CXX_COMPILER}"
+    FSIM_SYSTEMC_DEFAULT_COMPILE_OPTIONS="${FSIM_SYSTEMC_DEFAULT_COMPILE_OPTIONS_ENCODED}"
+    FSIM_SYSTEMC_PLUGIN_EXPORT_LIBRARY_PATH="$<TARGET_FILE:fsim_systemc_plugin_exports>"
+    FSIM_SYSTEMC_INSTALLED_PLUGIN_EXPORT_LIBRARY_PATH="${CMAKE_INSTALL_FULL_LIBDIR}/${CMAKE_STATIC_LIBRARY_PREFIX}fsim_systemc_plugin_exports${CMAKE_STATIC_LIBRARY_SUFFIX}"
+    FSIM_SYSTEMC_ACCELERA_LIBRARY_PATH="$<TARGET_LINKER_FILE:fsim_systemc_accellera_runtime>"
+    FSIM_SYSTEMC_INSTALLED_ACCELERA_LIBRARY_PATH="${FSIM_SYSTEMC_INSTALLED_ACCELERA_LINK_LIBRARY}"
+    FSIM_SYSTEMC_OFFICIAL_LIBRARY_PATH="$<TARGET_LINKER_FILE:SystemC::systemc>"
+    FSIM_SYSTEMC_INSTALLED_OFFICIAL_LIBRARY_PATH="${FSIM_SYSTEMC_INSTALLED_OFFICIAL_LINK_LIBRARY}"
+    FSIM_SYSTEMC_RUNTIME_IDENTITY="${FSIM_SYSTEMC_RUNTIME_IDENTITY}"
 )
 target_link_libraries(
   fsim_systemc
@@ -818,18 +852,6 @@ target_link_libraries(
     fsim_object_cache
     fsim_runtime
 )
-if(FSIM_WITH_SYSTEMC_FIBERS)
-  target_link_libraries(fsim_systemc PRIVATE Boost::context)
-  target_compile_definitions(
-    fsim_systemc
-    PUBLIC FSIM_HAS_BOOST_CONTEXT=1
-  )
-  target_compile_definitions(
-    fsim_elaboration
-    PUBLIC FSIM_HAS_BOOST_CONTEXT=1
-  )
-endif()
-
 add_library(fsim_api SHARED src/api/api.cpp src/api/api_session.cpp)
 add_library(fsim::api ALIAS fsim_api)
 fsim_configure_library(fsim_api)
@@ -1004,6 +1026,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_trace_control.cpp
       src/app/application_trace_hierarchy.cpp
       src/app/application_trace_observation.cpp
+      src/app/application_systemc_trace.cpp
       src/app/application_run.cpp
       src/app/application_semantic.cpp
       src/app/application_constraint_lowering.cpp
@@ -1104,6 +1127,9 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/main.cpp")
   endforeach()
 endif()
 
+set(FSIM_SYSTEMC_RUNTIME_TARGET_MANIFEST
+    "${CMAKE_BINARY_DIR}/systemc-accellera-targets.txt")
+
 if(FSIM_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
@@ -1113,11 +1139,9 @@ if(FSIM_BUILD_FUZZERS)
   add_subdirectory(tests/fuzz)
 endif()
 
-install(
-  FILES
-    include/systemc
-  DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-)
+fsim_systemc_write_runtime_target_manifest(
+  "${FSIM_SYSTEMC_RUNTIME_TARGET_MANIFEST}")
+
 install(
   FILES
     include/fsim/api.h
@@ -1149,7 +1173,10 @@ if(FSIM_WITH_BUNDLED_TCL)
   )
 endif()
 install(
-  TARGETS fsim_api fsim_systemc_support
+  TARGETS
+    fsim_api
+    fsim_systemc_plugin_exports
+    fsim_systemc_accellera_runtime
   ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
   LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"

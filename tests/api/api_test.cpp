@@ -1993,10 +1993,40 @@ max_deltas = 1000
 
     const auto find_systemc = [&](const char* path) {
         fsim_object_t object = FSIM_INVALID_OBJECT;
-        assert(
-            fsim_session_find_object(
-                systemc_session, text(path), &object)
-            == FSIM_STATUS_OK);
+        const auto status = fsim_session_find_object(
+            systemc_session, text(path), &object);
+        if (status != FSIM_STATUS_OK) {
+            fsim_object_t diagnostic_root = FSIM_INVALID_OBJECT;
+            std::vector<fsim_object_t> diagnostic_pending;
+            if (fsim_session_root(systemc_session, &diagnostic_root)
+                == FSIM_STATUS_OK) {
+                diagnostic_pending.push_back(diagnostic_root);
+                std::cerr << "missing SystemC API object '" << path
+                          << "'; hierarchy:";
+                for (std::size_t index = 0;
+                     index < diagnostic_pending.size(); ++index) {
+                    const auto child_object = diagnostic_pending[index];
+                    fsim_object_info_t child_info { };
+                    child_info.struct_size = sizeof(child_info);
+                    child_info.api_version = FSIM_API_VERSION;
+                    if (fsim_session_get_object_info(
+                            systemc_session, child_object, &child_info)
+                        == FSIM_STATUS_OK) {
+                        std::cerr << " "
+                                  << std::string_view {
+                                         child_info.full_name.data,
+                                         child_info.full_name.size };
+                    }
+                    (void)fsim_session_visit_children(
+                        systemc_session,
+                        child_object,
+                        collect_object,
+                        &diagnostic_pending);
+                }
+                std::cerr << "\n";
+            }
+        }
+        assert(status == FSIM_STATUS_OK);
         assert(object != FSIM_INVALID_OBJECT);
         return object;
     };
@@ -2018,24 +2048,31 @@ max_deltas = 1000
     const auto input = find_systemc("named.input");
     const auto child = find_systemc("named.child");
     const auto state = find_systemc("named.child.state");
-    const auto pulse = find_systemc("named.child.pulse");
-    const auto metadata = find_systemc("named.child.metadata");
     const auto view_object = find_systemc("named.child.view");
-    const auto run = find_systemc("named.child.run");
+    const auto kernel = find_systemc("named.$accellera_kernel");
+    fsim_object_t removed_legacy_object = FSIM_INVALID_OBJECT;
+    for (const auto* legacy_path : {
+             "named.child.pulse",
+             "named.child.metadata",
+             "named.child.run",
+         }) {
+        assert(
+            fsim_session_find_object(
+                systemc_session,
+                text(legacy_path),
+                &removed_legacy_object)
+            == FSIM_STATUS_INVALID_HANDLE);
+    }
     assert(systemc_info(input).kind == FSIM_OBJECT_PORT);
     assert(systemc_info(input).parent == systemc_root);
     assert(systemc_info(child).kind == FSIM_OBJECT_SCOPE);
     assert(systemc_info(child).parent == systemc_root);
     assert(systemc_info(state).kind == FSIM_OBJECT_SIGNAL);
     assert(systemc_info(state).parent == child);
-    assert(systemc_info(pulse).kind == FSIM_OBJECT_EVENT);
-    assert(systemc_info(pulse).parent == child);
-    assert(systemc_info(metadata).kind == FSIM_OBJECT_CHANNEL);
-    assert(systemc_info(metadata).parent == child);
     assert(systemc_info(view_object).kind == FSIM_OBJECT_EXPORT);
     assert(systemc_info(view_object).parent == child);
-    assert(systemc_info(run).kind == FSIM_OBJECT_PROCESS);
-    assert(systemc_info(run).parent == child);
+    assert(systemc_info(kernel).kind == FSIM_OBJECT_PROCESS);
+    assert(systemc_info(kernel).parent == systemc_root);
     assert(state != view_object);
 
     std::vector<fsim_object_t> systemc_root_children;
@@ -2052,6 +2089,9 @@ max_deltas = 1000
     assert(
         std::ranges::find(systemc_root_children, child)
         != systemc_root_children.end());
+    assert(
+        std::ranges::find(systemc_root_children, kernel)
+        != systemc_root_children.end());
     std::vector<fsim_object_t> systemc_child_objects;
     assert(
         fsim_session_visit_children(
@@ -2060,8 +2100,8 @@ max_deltas = 1000
             collect_object,
             &systemc_child_objects)
         == FSIM_STATUS_OK);
-    assert(systemc_child_objects.size() == 5);
-    for (const auto object : { state, pulse, metadata, view_object, run }) {
+    assert(systemc_child_objects.size() == 2);
+    for (const auto object : { state, view_object }) {
         assert(
             std::ranges::find(systemc_child_objects, object)
             != systemc_child_objects.end());
@@ -2082,14 +2122,6 @@ max_deltas = 1000
             &systemc_required)
         == FSIM_STATUS_OK);
     assert(std::string_view { systemc_value } == "1");
-    assert(
-        fsim_session_read_value(
-            systemc_session,
-            metadata,
-            systemc_value,
-            sizeof(systemc_value),
-            &systemc_required)
-        == FSIM_STATUS_INVALID_HANDLE);
     assert(
         fsim_session_destroy(systemc_session)
         == FSIM_STATUS_OK);

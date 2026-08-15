@@ -46,26 +46,6 @@ struct ExternalPort {
     std::uint64_t bound_object { };
 };
 
-struct ForeignPort {
-    std::string name;
-    frontend::Type type;
-    frontend::PortDirection direction {
-        frontend::PortDirection::Unknown
-    };
-    std::uint64_t object { };
-    std::uint64_t handle { };
-};
-
-struct ForeignChild {
-    std::uint64_t handle { };
-    std::string name;
-    std::vector<std::pair<std::string, std::int64_t>>
-        construction_actuals;
-    std::vector<ForeignPort> ports;
-    bool module_facade { };
-    std::string implementation;
-};
-
 struct ExternalSensitivity {
     std::uint64_t object { };
     // Store untrusted ABI metadata as an integer so validation can inspect an
@@ -76,29 +56,9 @@ struct ExternalSensitivity {
 struct ExternalProcess {
     std::uint64_t handle { };
     std::string name;
-    fsim_sc_process_kind_v1 kind { FSIM_SC_METHOD };
     fsim_sc_process_entry_v1 entry { };
     void* user { };
     std::vector<ExternalSensitivity> sensitivity;
-    bool initialize { true };
-};
-
-struct ExternalEvent {
-    std::uint64_t handle { };
-    std::string name;
-};
-
-struct ExternalPrimitiveChannel {
-    std::uint64_t handle { };
-    std::string name;
-    std::string kind { "sc_prim_channel" };
-};
-
-struct ExternalMetadataObject {
-    std::uint64_t handle { };
-    std::string name;
-    fsim_sc_metadata_category_v1 category { FSIM_SC_METADATA_PORT };
-    std::string kind;
 };
 
 struct ExternalInternalSignal {
@@ -127,13 +87,9 @@ struct SystemCInstanceDescription {
     std::vector<std::pair<std::string, std::int64_t>>
         construction_values;
     std::vector<ExternalPort> ports;
-    std::vector<ForeignChild> foreign_children;
     std::vector<ExternalProcess> processes;
-    std::vector<ExternalEvent> events;
-    std::vector<ExternalPrimitiveChannel> primitive_channels;
     std::vector<ExternalInternalSignal> internal_signals;
     std::vector<ExternalExport> exports;
-    std::vector<ExternalMetadataObject> metadata_objects;
     std::vector<SystemCInstanceDescription> native_children;
     // Canonical typed construction values supplied by the authoritative HDL
     // specialization path. Kept trailing for source compatibility with

@@ -105,16 +105,17 @@ foreach(FSIM_COMPILER_POLICY IN ITEMS
     message(FATAL_ERROR "SystemC compiler lost key policy: ${FSIM_COMPILER_POLICY}")
   endif()
 endforeach()
-string(FIND "${FSIM_INCREMENTAL_CONTENTS}"
-  "argv.emplace_back(\"/link\")" FSIM_INCREMENTAL_LINK_INDEX)
-string(FIND "${FSIM_INCREMENTAL_CONTENTS}"
-  "argv.push_back(\"/WHOLEARCHIVE:" FSIM_INCREMENTAL_WHOLE_INDEX)
-if(FSIM_INCREMENTAL_LINK_INDEX EQUAL -1
-    OR FSIM_INCREMENTAL_WHOLE_INDEX EQUAL -1
-    OR FSIM_INCREMENTAL_WHOLE_INDEX LESS FSIM_INCREMENTAL_LINK_INDEX)
-  message(FATAL_ERROR
-    "Incremental SystemC link lost post-/link /WHOLEARCHIVE ordering")
-endif()
+foreach(FSIM_LEGACY_WHOLE_ARCHIVE IN ITEMS
+    "/WHOLEARCHIVE:"
+    "-Wl,--whole-archive"
+    "-Wl,--no-whole-archive")
+  string(FIND "${FSIM_INCREMENTAL_CONTENTS}"
+    "${FSIM_LEGACY_WHOLE_ARCHIVE}" FSIM_INDEX)
+  if(NOT FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "Incremental SystemC link still imports the legacy support archive wholesale")
+  endif()
+endforeach()
 foreach(FSIM_COMMAND_POLICY IN ITEMS
     "msvc_runtime_option()"
     "-fPIC"
@@ -140,9 +141,8 @@ foreach(FSIM_INCREMENTAL_POLICY IN ITEMS
     "CompilerCommand command"
     "run_process(command)"
     "/sourceDependencies"
-    "/WHOLEARCHIVE:"
     "/INCREMENTAL:NO"
-    "-Wl,--whole-archive"
+    "accellera_runtime"
     "inputs_unchanged"
     "compiler_fingerprint")
   string(FIND
@@ -170,15 +170,35 @@ if(FSIM_INDEX EQUAL -1)
   message(FATAL_ERROR "SystemC facade lost callback exception containment")
 endif()
 foreach(FSIM_C_EVIDENCE IN ITEMS
-    "FSIM_SYSTEMC_ABI_VERSION == 1u"
-    "offsetof(fsim_sc_host_v1, mark_hdl_module)"
-    "offsetof(fsim_sc_host_v1, set_hdl_module_actual)"
+    "FSIM_SYSTEMC_ABI_VERSION == 3u"
+    "offsetof(fsim_sc_host_v1, current_time_femtoseconds)"
+    "offsetof(fsim_sc_host_v1, wait_for_input_or_native_activity)"
     "host.struct_size = (uint32_t)sizeof(host)"
     "registrar.struct_size = (uint32_t)sizeof(registrar)")
   string(FIND "${FSIM_ABI_TEST_CONTENTS}" "${FSIM_C_EVIDENCE}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR "strict SystemC C test lost evidence: ${FSIM_C_EVIDENCE}")
   endif()
+endforeach()
+foreach(FSIM_REMOVED_LEGACY_TOKEN IN ITEMS
+    "mark_hdl_module"
+    "set_hdl_module_actual"
+    "set_hdl_module_implementation"
+    "SC_FSIM_HDL_MODULE")
+  foreach(FSIM_REMOVED_LEGACY_PATH IN ITEMS
+      include/fsim/systemc_abi.h
+      include/fsim/systemc/accellera.hpp
+      tests/systemc/systemc_abi_c_test.c)
+    file(READ
+      "${FSIM_SOURCE_DIR}/${FSIM_REMOVED_LEGACY_PATH}"
+      FSIM_REMOVED_LEGACY_CONTENTS)
+    string(FIND "${FSIM_REMOVED_LEGACY_CONTENTS}"
+      "${FSIM_REMOVED_LEGACY_TOKEN}" FSIM_INDEX)
+    if(NOT FSIM_INDEX EQUAL -1)
+      message(FATAL_ERROR
+        "legacy SystemC facade token remains: ${FSIM_REMOVED_LEGACY_TOKEN}")
+    endif()
+  endforeach()
 endforeach()
 
 string(FIND

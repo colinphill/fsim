@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 module three_language_tb;
   logic stimulus;
+  logic bridge_value;
   logic observed;
 
-  // The public SystemC factory resolves through the configured models search
-  // library. That factory finds its inferred VHDL child in models as well.
+  // The HDL hierarchy owns both cross-language children. The public SystemC
+  // factory and the VHDL entity resolve through the models search library.
   mixed_bridge u_bridge (
     .source(stimulus),
+    .result(bridge_value)
+  );
+  LogicStage u_vhdl (
+    .value(bridge_value),
     .result(observed)
   );
 

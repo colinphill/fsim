@@ -1,197 +1,107 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# SystemC subset and plug-in model
+# SystemC integration and plug-in model
 
 ## Compatibility statement
 
-fsim's SystemC support is an IEEE 1666-2023-inspired source subset. It is not
-the Accellera kernel and does not claim source completeness, binary
-compatibility, or ABI compatibility with an Accellera SystemC installation.
+fsim executes SystemC models with the official Accellera SystemC kernel. The
+former fsim-defined SystemC facade, Boost.Context scheduler, custom event and
+primitive-channel execution callbacks, and legacy foreign-child interface are
+not supported. SystemC processes, events, signals, channels, lifecycle hooks,
+and TLM activity retain their Accellera semantics.
 
-The repository currently supplies the source facade, native plug-in ABI,
-dynamic loader, a manifest-driven host compiler with a persistent plug-in
-cache, and typed factory construction integrated into common hierarchy
-elaboration. A project build collects the configured SystemC sources into one
-shared library, loads it, constructs the requested factory instances, and
-retains their native objects for the design lifetime. Common-kernel SystemC
-execution now covers statically sensitive `SC_METHOD` callbacks, dynamic
-time/event and OR/AND-list `next_trigger` with timed event/list timeouts, named-event
-notification/replacement/cancellation, strict `notify_delayed`, port updates,
-registered primitive-channel update callbacks, and kernel-backed module-local
-`sc_signal` objects. Typed port-to-signal bindings enter the same DesignIR
-alias graph, including across an HDL/SystemC instance boundary.
-Constructor-time native SystemC child members elaborate recursively and may
-bind their ports directly to parent signals or ports. Module lifecycle
-callbacks execute at deterministic common-kernel boundaries. Standard typed
-signal interfaces and exports retain hierarchy metadata while resolving to
-common signals. Common DesignIR, the C API, debugger, and production VCD now
-retain every supported named module, foreign child, port, process, event,
-primitive channel, signal, and export; value aliases remain distinct hierarchy
-objects over one dense signal identity. `SC_THREAD` and `SC_CTHREAD` use
-Boost.Context fibers on the single simulation thread. Bounded custom-interface
-and custom primitive-channel kinds are retained as metadata-only objects; their
-common-kernel values, binding, and asynchronous updates are rejected
-explicitly.
+The fsim boundary is a versioned C ABI used to construct model roots, expose
+typed HDL-facing ports, and synchronize the Accellera kernel with the common
+mixed-language scheduler. It is not the Accellera library ABI and does not make
+independently built SystemC binaries portable between SystemC installations or
+toolchains. fsim compiles configured model sources against its selected
+Accellera build and loads the resulting shared library.
 
-Native port binding is single-target and direction checked: child inputs may
-chain to parent inputs or inouts, child outputs to parent outputs or inouts,
-and child inouts only to parent inouts. Width and state encoding must match,
-signal targets must belong to the same or direct parent module, port/export
-targets must belong to the direct parent, and every native-child port must be
-bound when common elaboration begins. Root factory ports remain external design
-ports and HDL-connected factory ports follow the ordinary mixed-language alias
-rules.
+## Source model
 
-Typed exports carry an append-only read/write capability bit. Read-only
-`sc_signal_in_if<T>` exports may bind a compatible signal or another readable
-export and may feed input ports; writable `sc_signal_inout_if<T>` exports and
-output/inout ports require a writable target throughout the chain. Legacy ABI
-plug-ins which predate the capability callback retain their original
-read/write-capable interpretation.
-
-## Source inclusion
-
-Supported code includes either header:
+SystemC sources include the official header and fsim's bridge helpers:
 
 ```cpp
 #include <systemc>
-// or
-#include <fsim/systemc.hpp>
+#include <fsim/systemc/accellera.hpp>
 ```
 
-The forwarding `<systemc>` header resolves to fsim's implementation when the
-fsim include directory appears first.
+`<fsim/systemc.hpp>` remains a convenience include for this same official
+integration. It does not provide a separate kernel or datatype implementation.
 
-The current facade defines:
+Models use ordinary Accellera constructs, including `SC_METHOD`, `SC_THREAD`,
+`SC_CTHREAD`, `sc_event`, `sc_signal`, `sc_prim_channel`, standard ports and
+exports, lifecycle callbacks, datatypes, TLM-1, and TLM-2. Native child modules
+and objects remain owned by the Accellera hierarchy. fsim inventories that
+hierarchy after construction and maps supported boundary ports to DesignIR;
+it does not reimplement internal SystemC objects in the common kernel.
 
-- `sc_core::sc_time`, `sc_time_unit`, and `SC_ZERO_TIME`;
-- `sc_core::sc_event`, `wait`, and `next_trigger`;
-- `sc_core::sc_event_or_list` and `sc_event_and_list` expressions;
-- `sc_core::sc_module`, `sc_module_name`, `sc_sensitive`, and
-  `sc_gen_unique_name`;
-- `sc_core::sc_object` name, basename, kind, and parent identity for the
-  supported module, port, export, signal, primitive-channel, event, and process
-  objects;
-- declaration-ordered facade child traversal, hierarchy-domain-scoped
-  `sc_find_object`, top-level enumeration, and copied common-registry object
-  metadata/child/path lookup by stable native handles;
-- `sc_core::sc_interface`, `sc_export<IF>`, `sc_signal<T>`, `sc_in<T>`,
-  `sc_out<T>`, and `sc_inout<T>`;
-- metadata-only `sc_port<IF>` and unsupported-interface `sc_export<IF>`
-  registration, with an optional stable `IF::fsim_kind()` label;
-- `sc_core::sc_prim_channel` registration and deduplicated
-  `request_update()`;
-- derived metadata-only primitive channels with an explicit kind supplied to
-  the protected `(name, kind)` constructor;
-- positive/negative edge event finders for input and inout sensitivity;
-- `SC_MODULE`, `SC_CTOR`, `SC_HAS_PROCESS`, `SC_METHOD`, `SC_THREAD`, and
-  `SC_CTHREAD`;
-- `sc_dt::sc_logic`, `sc_bv<N>`, `sc_lv<N>`, `sc_uint<N>`, and `sc_int<N>`.
-
-`sc_bv` and `sc_lv` support arbitrary positive compile-time widths.
-`sc_uint` and `sc_int` support widths 1 through 64. The implemented datatype
-slice includes checked mutable bit selection, binary rendering, vector/integer
-construction, width-preserving bitwise and shift operations, reductions, and
-wrapping fixed-width integer arithmetic. `sc_logic` and `sc_lv` propagate
-four-state unknowns through bitwise operations; conversion of an `sc_lv`
-containing `X` or `Z` to an integer is rejected. Signed right shift is
-arithmetic, vector shifts insert zeroes, and division or remainder by zero is
-rejected. Concatenation/range proxies, mixed-width result typing, arbitrary
-precision integer types, and the complete Accellera datatype overload set are
-not part of this bounded slice.
-
-Outside an fsim elaboration/process host, `sc_signal` retains a deliberately
-local standalone behavior useful for compiling and testing plug-ins. A
-module-local `sc_signal` constructed by a registered factory instead attaches
-typed value metadata to its primitive-channel handle and enters the common
-kernel.
-
-The supported scheduling and lifecycle surface has a combined SystemVerilog
-and VHDL closure matrix across interpreter and LLVM O0/O2 execution, cache
-reuse/edit provenance, debugger/VCD observation, callback containment, and
-teardown. Arbitrary custom value transport, binding, or asynchronous update
-behavior remains outside this subset and is rejected explicitly.
-
-## Bidirectional mixed-language hierarchy
-
-SystemC is not a leaf-only integration. A VHDL component/direct instance or a
-Verilog/SystemVerilog module instance may bind explicitly to
-`systemc:PLUGIN.FACTORY`. In the reverse direction, a SystemC module factory may
-construct an HDL-backed module facade and bind its typed ports during
-elaboration; an `fsim.toml` binding for that full instance path then selects a
-`vhdl:LIBRARY.ENTITY(ARCHITECTURE)` or `sv:LIBRARY.MODULE` target.
-
-Facade-based modules declare the reverse direction with
-`SC_FSIM_HDL_MODULE` and use ordinary SystemC construction and binding syntax:
+Factories are exported declaratively:
 
 ```cpp
-SC_FSIM_HDL_MODULE(LogicStage) {
-    sc_core::sc_in<sc_dt::sc_logic> value{"value"};
-    sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
-
-    SC_CTOR(LogicStage) {}
-};
-
 SC_MODULE(Bridge) {
     sc_core::sc_in<sc_dt::sc_logic> value{"value"};
     sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
-    LogicStage u_hdl{"u_hdl"};
 
     SC_CTOR(Bridge) {
-        u_hdl.value(value);
-        u_hdl.inverted(inverted);
+        SC_METHOD(evaluate);
+        sensitive << value;
+    }
+
+    void evaluate() {
+        inverted.write(~value.read());
     }
 };
 
 SC_FSIM_EXPORT_AS(Bridge, "bridge");
 ```
 
-For a SystemC instance named `top.u_bridge`, the child above has hierarchy path
-`top.u_bridge.u_hdl`. A manifest binding for that exact path chooses its VHDL
-or Verilog/SystemVerilog implementation. The proxy's `sc_in`, `sc_out`, and
-`sc_inout` members infer encoding, width, and direction normally and may bind
-to a parent port, supported signal, or signal-interface export. The proxy is
-visible as a module with those ports at the selected HDL path; there is no
-hidden child level. Processes, lifecycle overrides, events, channels, exports,
-nested modules, and internal signals are invalid inside an HDL proxy. The
-legacy `hdl_instance::bind_*` surface remains available but is deprecated.
+Any number of `SC_FSIM_EXPORT` or `SC_FSIM_EXPORT_AS` declarations may appear
+across one model image. Public names are sorted before registration, duplicate
+names reject the whole registration transaction, and distinct aliases of one
+module type are permitted. A factory may expose ordered construction
+parameters with `make_factory_parameters`; constructors read their canonical
+values with `construction_value<T>`.
 
-Both directions are now elaborated recursively into the same `DesignIR`. The
-common elaborator assigns hierarchy/object/process IDs, checks every port and
-conversion, detects recursive instantiation, and applies the same explicit
-resolver policy. A SystemC parent may therefore contain an HDL child which
-contains another bound SystemC child. Any language may be the project top.
+## Mixed-language hierarchy
 
-Construction parameters are being implemented bidirectionally. Factories can
-now register ordered integer, natural, positive, Boolean, or bit parameter
-schemas with optional defaults, and module constructors read their canonical
-values with `fsim::systemc::construction_value<T>(name)`. Registry construction
-validates missing, unknown, duplicate, and subtype-invalid values
-transactionally. The common hierarchy walk now evaluates an HDL parameter
-override or VHDL generic map in its parent specialization, applies the
-parent-language association/name rules, validates the selected schema, and
-only then constructs the SystemC module and checks its resulting ports.
-Conversely, `hdl_module::set_actual(name, value)` supplies immutable signed
-scalar actuals for its manifest-selected
-HDL target. The append-only native ABI carries those values into ordinary
-VHDL-generic or Verilog/SystemVerilog-parameter specialization and cache
-identity, with duplicate/unknown actual diagnostics. Both boundary directions
-therefore use immutable canonical construction values in the bounded scalar
-subset.
-This covers VHDL→SystemC, SV→SystemC, SystemC→VHDL, and SystemC→SV alongside
-the ordinary VHDL↔SV directions; SystemC is a peer hierarchy language rather
-than a leaf-only foreign model.
+A VHDL, Verilog, or SystemVerilog instance may select a SystemC factory with a
+`systemc:PLUGIN.FACTORY` manifest binding. Ports use ordinary official
+Accellera typed construction and binding syntax. SystemC source does not
+declare HDL proxy children; compose such children in the owning HDL hierarchy.
 
-The SystemC-facing ABI exposes this through an elaboration factory plus
-append-only host callbacks for registered ports, HDL-module markers, and
-construction actuals. Factory, module, port, and foreign-child identities are opaque
-64-bit handles; no C++ or internal IR layout crosses the boundary. It does not
-permit arbitrary HDL creation after simulation starts. Cross-language binding
-is never inferred from a C++ type or unqualified name.
+The bridge validates direction, encoding, width, hierarchy ownership, and
+complete binding before simulation. Supported port, signal-interface, and
+export chains resolve to one DesignIR signal at the HDL boundary. SystemC
+internals remain native Accellera objects. Construction parameters and HDL
+generic/parameter actuals are immutable inputs to elaboration and artifact
+identity. Dynamic cross-language hierarchy creation after simulation starts is
+not supported.
 
-## Plug-in compilation
+## Kernel synchronization
+
+Each SystemC root owns an Accellera simulation context. Before entering the
+kernel, fsim publishes current HDL boundary inputs. The bridge advances the
+native kernel to the common scheduler's current femtosecond time, lets native
+delta cycles settle, publishes changed boundary outputs, and reports the next
+native timed activity. The common scheduler then waits for either an HDL input
+change or that native activity.
+
+`SC_THREAD` and `SC_CTHREAD` suspension therefore uses the Accellera process
+implementation. `wait`, `next_trigger`, notification replacement and
+cancellation, channel update ordering, `sc_signal` update semantics, and
+lifecycle ordering are not translated into fsim-defined callbacks. Immediate
+event notification during the Accellera update phase remains illegal; models
+must request a delta notification with `notify(SC_ZERO_TIME)` there.
+
+Interpreter and LLVM execution share the same bridge. Debugger, trace, C/C++,
+CLI, Tcl, object, design, mapped-library, and checkpoint surfaces observe
+stable boundary identities while transient Accellera object addresses and
+callbacks are rebound for each fresh session.
+
+## Plug-in compilation and cache
 
 Each schema-1 manifest may select a C++ compiler and pass include directories,
-defines, compile options, link options, and libraries:
+definitions, compile options, link options, and libraries:
 
 ```toml
 [systemc]
@@ -203,60 +113,27 @@ link_options = []
 libraries = []
 ```
 
-The current driver invokes the selected GCC, Clang, MSVC, or clang-cl
-executable directly with an argument vector. It does not concatenate a shell
-command and does not perform shell expansion. The versioned fingerprint
-records ordered source paths/content, include paths, definitions, raw options,
-libraries, the resolved compiler path and binary, relevant compiler/toolset
-environment, host target and shared-library format, runtime and SystemC ABI,
-C++20 source contract, CRT mode, and selected fiber backend. Path-addressed
-linked libraries are content-hashed. GCC-like toolchains emit makefile
-dependencies; MSVC-compatible toolchains emit `/sourceDependencies` JSON.
-Both paths content-hash the complete readable source/include/system-header
-closure. MSVC module IFCs, PCH images, and imported header units are included,
-and malformed or unavailable JSON falls back to a conservative manifest scan.
+The driver invokes GCC, Clang, MSVC, or clang-cl directly with an argument
+vector. Its fingerprint includes ordered source content, dependency closure,
+options, linked inputs, compiler identity and environment, target and shared
+library format, C++ mode, CRT, fsim ABI, and the selected Accellera runtime.
+GCC-like dependency files and MSVC `/sourceDependencies` JSON extend the cache
+identity to transitive headers and supported compiled-header inputs. Inputs
+that cannot be modeled safely make the build deliberately non-cacheable.
 
-On native MSVC and clang-cl builds, generated plug-ins use the same static or
-dynamic, Debug or Release CRT model as `fsim_systemc_support`. The selected
-`/MT`, `/MTd`, `/MD`, or `/MDd` option is present in every compile and link
-command and participates explicitly in cache identity. Compile inputs use
-UTF-8 C++20 mode and unique object/source-PDB paths. The nonincremental x86-64
-DLL link names its DLL, link PDB, import library, and export artifact
-explicitly. Manifest options may not override the CRT, output, machine, or
-incremental-link contract.
+The cache publishes a versioned key, size, and SHA-256 record under a per-key
+process lock. The shared library is installed before metadata becomes the
+commit point. Missing, corrupt, stale, incomplete, or incompatible pairs are
+cache misses and abandoned staging state is repaired by the locked writer.
 
-The cache uses process-aware per-key locks and a versioned commit record holding
-the exact key, DLL/shared-object size, and SHA-256. The library is installed
-atomically before the metadata rename becomes the commit point. Missing,
-truncated, corrupt, stale, or incompatible pairs are misses; one locked writer
-cleans abandoned build/object/PDB/metadata state and repairs the pair while
-waiters consume only the complete committed result. If fsim cannot prove the
-dependency closure—for example, because a raw option can name an external
-response file or a library is specified only by linker name—the build remains
-valid but is deliberately non-cacheable. Changes to a tracked transitive
-header, IFC/PCH, compiler environment, or linked file produce a different key.
-Exact uses of `__DATE__`, `__TIME__`, and `__TIMESTAMP__` in tracked text inputs
-also disable reuse. After compilation, fsim recomputes the plan before
-publication and discards output if any tracked input changed during the build.
+On Windows, generated plug-ins match fsim's CRT configuration, use explicit
+object/PDB/import/export outputs, UTF-16 response files, and safe DLL search.
+No context-switching assembly or fiber backend participates in compilation or
+cache identity.
 
-The driver executable and all modeled environment inputs are exact, but fsim
-does not separately hash every helper executable that the selected driver may
-spawn. Raw compile/link options remain deliberately non-cacheable because they
-can name unmodeled plug-ins, profiles, sysroots, response files, or forced
-inputs. Non-cacheable plug-in artifact directories are unique and are not yet
-covered by automatic eviction.
+## Native boundary
 
-Windows launch converts every UTF-8 argument to UTF-16, passes only stdin and
-the merged diagnostic pipe to the child, and uses a temporary UTF-16 response
-file before the `CreateProcessW` command-line limit. Launch, output-read, wait,
-and exit-status failures remain distinct compiler diagnostics. Loading resolves
-the absolute cached image and searches its directory plus Windows' safe default
-DLL locations, so dependency lookup does not depend on the caller's current
-directory.
-
-## Native ABI
-
-A plug-in image contains exactly one initialization symbol:
+A model image exposes one initialization symbol:
 
 ```c
 fsim_sc_status_v1 fsim_plugin_init_v1(
@@ -264,232 +141,68 @@ fsim_sc_status_v1 fsim_plugin_init_v1(
     fsim_sc_registrar_v1* registrar);
 ```
 
-The two versioned tables use only fixed-width integers, C pointers, callbacks,
-and explicit byte views. A plug-in registers module factories through the
-registrar. Factories and modules then register ports, processes, sensitivities,
-reads, writes, waits, and notifications through the host table.
+ABI version 3 uses fixed-width integers, C pointers, callbacks, and explicit
+byte views. The registrar publishes typed factory schemas. During construction,
+the official bridge registers root modules and boundary ports and returns
+stable opaque handles. At runtime, the host supplies boundary reads and writes,
+the current femtosecond time, and the wait-for-input-or-native-activity hook.
+There are no host callbacks for custom processes, events, waits,
+notifications, primitive-channel updates, or legacy foreign children.
 
-The integrated-elaboration ABI lets a running typed factory register a
-foreign-child placeholder beneath its module handle. The factory registers the
-child name and typed port surface, while the manifest—not plug-in C++ code—
-selects the HDL implementation. This keeps SystemC-to-HDL hierarchy recursive
-and symmetric with HDL-to-SystemC binding without exposing frontend or
-`DesignIR` layouts through the native ABI. The earlier untyped factory callback
-remains loadable for compatibility but cannot satisfy an integrated hierarchy
-binding.
+Registration is buffered and validated before factories or image ownership
+become visible. Missing symbols, ABI mismatch, malformed schemas, construction
+failure, and escaped callbacks reject the transaction without partial
+publication. Native exceptions are contained at the boundary. Loaded images
+and Accellera roots stay alive for the owning built project and are torn down
+after the native kernel finishes.
 
-Facade modules normally export factories declaratively:
+## Native TLM and observation
 
-```cpp
-SC_FSIM_EXPORT(ModuleType);
-SC_FSIM_EXPORT_AS(AnotherType, "stable_alias");
-```
+TLM-1 FIFOs, blocking and nonblocking put/get/peek, transport and analysis, and
+TLM-2 initiator/target sockets, generic payloads, phases, DMI, debug transport,
+extensions and quantum keeping execute natively inside one Accellera island.
+Only an explicit bridge serializes a transaction. Stable endpoint, peer,
+sequence and transaction identities correlate TLM activity with debugger and
+trace time/delta records without presenting it as a signal change.
 
-Any number of export macros may appear in one or several translation units.
-Descriptors are sorted by public name before the support library's single
-`fsim_plugin_init_v1` registers them, so initialization order is not
-observable. Duplicate public names reject the complete transaction; different
-aliases of the same type are valid. A type may expose an automatically
-discovered schema:
+After binding, fsim freezes a bounded inventory of native signals, buffers,
+clocks, resolved channels, ports, exports, hierarchical aliases and supported
+custom-channel metadata. Post-update dirty hooks feed VCD and FST without
+polling paths. Debug reads/writes and custom-channel adapters run only at safe
+points; disabled observation performs no value capture, and bounded queues use
+explicit retryable backpressure.
 
-```cpp
-inline static constexpr auto fsim_factory_parameters =
-    fsim::systemc::make_factory_parameters(
-        fsim::systemc::factory_parameter{
-            "WIDTH", FSIM_SC_CONSTRUCTION_POSITIVE, true, 8});
-```
+## Backend and artifacts
 
-Macro exporting and a handwritten entry point are mutually exclusive within
-one image. The handwritten `fsim_plugin_init_v1` and
-`register_module_factory<Module>` paths remain compatible but are deprecated
-for new source. Existing binary plug-ins retain the append-only ABI prefix.
-During construction, named `sc_in`, `sc_out`, and `sc_inout` members register
-their typed port handles. After construction, the helper publishes recorded
-processes, static sensitivities, edge qualifiers, and `dont_initialize()`
-state. The helper passes the host table as factory user context, so separate
-loaded sessions do not depend on a process-global host pointer.
+The in-process backend and serialized loopback exchange the same pointer-free,
+bounded protocol. Messages retain stable island, hierarchy, object, endpoint,
+transaction and sequence identities plus exact femtosecond time, delta and
+region. Disconnects, malformed messages, resource exhaustion and native
+exceptions are contained without partial publication.
 
-Packed ABI values are byte-addressed with least-significant bits first.
-`FSIM_SC_BIT2` uses one value plane. The other current encodings use an `aval`
-plane followed by an equal-size `bval` plane, preserving `0`, `1`, `X`, and
-`Z` without exposing a C++ datatype.
+Source and incremental plug-ins, mapped libraries, standalone object/design
+artifacts, relocation, caches and checkpoints carry the exact upstream source,
+compiler, standard-library, bridge and ABI identities. Transient native
+objects are reconstructed and rebound by stable hierarchy identity; they are
+never serialized as pointers.
 
-The loader rejects a missing image or entry point, host/registrar ABI mismatch,
-failed initialization, and invalid or duplicate factory/schema registration.
-An image which intentionally registers no factories remains loadable; an
-application requiring a named factory diagnoses its absence. Registration is buffered,
-validated, and replayed into a staging hierarchy before its factory table and
-image become visible. Failed replay leaves no partial registration. Exceptions
-from initialization, construction, process/channel callbacks, lifecycle, or
-destruction are contained at the native boundary and cannot unwind into fsim.
-If an arbitrary external registrar has already accepted callbacks before a
-later rejection, the loader conservatively quarantines the image rather than
-leaving dangling executable pointers.
+The protocol and island ownership are worker-ready, but v2 does not include an
+automatic partitioner, a kernel-per-worker launcher, or a conservative
+parallel scheduler. Those remain post-v2 work and require no replacement of
+the current SystemC/TLM ABI.
 
-Each built project retains its hierarchy registry and loaded image. Every
-fresh interpreter binds current native handles and callbacks; they are never
-serialized into persistent native objects. LLVM specialization provenance
-instead combines the plug-in compile key with stable selected-factory, typed
-construction, hierarchy path, object, signal, export, and process mappings.
-Warm O0/O2/debug reuse is valid only when that complete common-runtime identity
-is unchanged.
+## Closure evidence
 
-## Process execution
+`fsim.systemc.accellera_closure` uses CTest fixtures during ordinary regression
+so each underlying witness runs once. Direct invocation of
+`cmake/RunAccelleraSystemCClosure.cmake` runs the corpus, backend, integration
+and public-contract stages and retains a console log, per-stage logs and a
+machine-readable result table.
 
-The current common-kernel path executes `SC_METHOD` callbacks to completion
-with default time-zero initialization or `dont_initialize()`, static
-any-change/scalar-edge sensitivity, and dynamic `next_trigger` selection for
-time, a single event, an OR list, an AND list, or a time-bounded event/list.
-OR waits wake on the first listed event; AND waits retain progress until every
-distinct listed event has occurred. An event wake invalidates its timeout, a
-timeout removes its event registrations, and a same-timestamp event wins by
-stable scheduled-process order. `next_trigger` is method-only and its final
-call in one invocation replaces any earlier selection. Reads observe committed
-common-runtime values; writes enter the
-common update phase and awaken dependent HDL or SystemC processes in the next
-delta. Callback exceptions are contained at the native boundary and poison
-only the affected simulation session.
+## Deliberately outside the integration
 
-Named `sc_event` objects receive opaque elaboration handles. `notify()` is
-immediate, `notify(SC_ZERO_TIME)` enters the next delta, and a non-zero timed
-notification enters the future timestamp heap. SystemC time values cross the
-native ABI in femtoseconds and must divide exactly by the elaborated global
-tick. The common kernel owns the resulting wait lists and event scheduling, so
-the interpreter and hybrid LLVM execution paths use identical semantics.
-An already-pending delta notification wins. A timed notification is replaced
-only by an earlier due time. Immediate notification cancels pending work before
-triggering, and `sc_event::cancel()` invalidates a pending delta or timed
-notification. Canceled/replaced timestamp-heap entries are generation-checked
-no-ops when eventually dequeued. `notify_delayed()` and
-`notify_delayed(sc_time)` require no existing pending notification and report
-an error otherwise; zero delay targets the next delta and non-zero delay
-targets the requested future time.
-
-An `sc_prim_channel` constructed during module elaboration receives a stable
-native handle and debug-visible hierarchy record. `request_update()` is
-deduplicated until the channel's virtual `update()` callback returns. The
-callback runs in stable channel-handle order in the common update phase; a
-request for another channel made during that phase is deferred to the next
-delta, and a self-request made from `update()` is ignored while the original
-request remains pending. Channel callbacks can use registered ports and events
-through the same contained native invocation boundary as `SC_METHOD`.
-
-A module-local `sc_signal<T>` becomes a typed, debug-visible common-runtime
-signal with its declared initial value. `write()` retains only the last value
-requested before the channel update; `read()` continues to return the committed
-value until that update completes. A committed change awakens static
-sensitivity and dynamic `value_changed_event()` waits in the next delta.
-`event()` is true only during that awakened evaluation delta. The internal
-signal and its primitive channel share one opaque handle, avoiding a private
-SystemC event queue or duplicate value store.
-
-Binding `sc_in<T>`, `sc_out<T>`, or `sc_inout<T>` to a module-local
-`sc_signal<T>` registers an elaboration-time alias. The registry requires both
-objects to belong to the same module with identical encoding and width.
-DesignIR then maps the port handle and channel handle to one dense signal ID.
-An HDL parent can therefore drive a bound `sc_in` channel and observe a bound
-`sc_out` channel without a copy callback or an extra delta. Input bindings
-preserve the parent signal's initial value; output and inout bindings publish
-the internal channel's declared initial value. If multiple bound ports connect
-one channel to different parent signals, elaboration rejects the design.
-
-An `sc_module` data member constructed with a non-empty `sc_module_name`
-registers a native child beneath the module currently under construction. The
-constructor scope remains active through all of the child's member
-initializers and constructor body, so its ports, channels, events, and
-processes receive the child handle. Native children elaborate recursively;
-their processes are assigned stable IDs before processes owned directly by
-the parent. A child port may bind a type-identical `sc_signal` owned by its
-direct parent, producing one common signal ID rather than a copy process or
-extra delta. Duplicate child names fail factory construction, and inconsistent
-parent/path metadata is rejected during DesignIR elaboration.
-
-The direct-parent binding rule also permits a native child `sc_in<T>`,
-`sc_out<T>`, or `sc_inout<T>` to bind its parent's type-identical port. The
-child delegates C++ reads or writes through the parent port, while the
-elaborator aliases both registered port handles to one common signal ID.
-Bindings that skip a hierarchy level are rejected during factory construction.
-
-`sc_signal<T>` implements `sc_signal_in_if<T>`,
-`sc_signal_write_if<T>`, and `sc_signal_inout_if<T>`. An
-`sc_export<sc_signal_in_if<T>>` or
-`sc_export<sc_signal_inout_if<T>>` may bind a compatible signal endpoint, and
-one same-typed export may chain through another before a child port binds it.
-The append-only host ABI records every supported export and binding edge.
-DesignIR preserves the export paths and stable native handles while resolving
-the chain to the endpoint's dense signal ID, adding neither storage nor a
-scheduler delta. The earlier concrete `sc_export<sc_signal<T>>` spelling
-remains source-compatible. Unbound, cyclic, unknown, and conflicting export
-chains are rejected. Arbitrary user interfaces in kernel metadata remain
-future work.
-
-Every factory root registers `before_end_of_elaboration`,
-`end_of_elaboration`, `start_of_simulation`, and `end_of_simulation`. The first
-two run after DesignIR object binding; start runs immediately before the first
-kernel start; end runs on terminal completion or during teardown of a started
-session. Forward phases visit a parent before its native children; end visits
-children in reverse order before the parent. Lifecycle state is isolated by
-the exact root-handle set in each built project, including warm builds sharing
-one loaded plug-in. Exceptions are contained at the C ABI and poison only the
-affected build or simulation. Callbacks may mutate ordinary C++ module state
-that later processes inspect. Structural registration or binding during these
-callbacks, and callback-originated signal transactions, remain unsupported.
-
-The root factory object owns native C++ child members, so native children are
-not selected by a separate manifest binding. An `SC_FSIM_HDL_MODULE(Type)`
-crossing from the root or a native child resolves `Type` across HDL units in
-the parent logical library followed by configured elaboration search libraries;
-an explicit full-path binding overrides that complete scope.
-Legacy `hdl_instance` crossings still require explicit selection. Dynamic
-module creation after construction,
-non-parent port chains, and arbitrary custom-interface metadata are not yet
-implemented.
-
-`SC_THREAD` and `SC_CTHREAD` callbacks retain their ordinary C++ stacks in
-Boost.Context 1.91.0 fibers. `wait(sc_time)`, zero-delay wait,
-`wait(sc_event)`, OR/AND event-list waits, time-bounded event/list waits, and
-plain `wait()` on static sensitivity yield to the common scheduler. A fiber is
-a suspension mechanism only: simulation remains single-threaded and
-deterministic. Suspended stacks receive bounded repeated stop resumes so even a
-callback that performs more than one final yield is drained before reverse-
-order module destruction or plug-in unload.
-
-CMake accepts `FSIM_SYSTEMC_FIBER_MODE=AUTO`, `ON`, or `OFF`. `AUTO` and `ON`
-use an installed exact Boost.Context 1.91.0 package when present, otherwise
-they fetch Boost's official 1.91.0 release archive and verify its published
-SHA-256 before building only the x86-64 Context sources. `OFF` retains the
-non-fiber developer configuration and emits `FSIM-ELAB-BIND-042` if a design
-selects a thread process. Normal Linux builds use the ELF/GAS fcontext backend
-and Windows uses PE/MASM; fetched Linux AddressSanitizer builds select ucontext
-with Boost's sanitizer fiber-switch hooks.
-
-SystemC work participates in fsim's common phase policy:
-
-- runnable processes execute in stable process-ID order;
-- immediate event notifications enqueue active work without recursive calls;
-- timed notifications enter the future timestamp heap;
-- channel writes become visible in the common update phase; and
-- changed channels awaken dependents in the next delta.
-
-The facade and native host callbacks implement dynamic method sensitivity,
-port reads, update-phase port writes, named-event notification/cancellation,
-OR/AND dynamic event expressions, and primitive-channel registration/update
-dispatch. Module-local `sc_signal` values, sensitivities, and event queries use
-the common kernel, and typed port-to-signal bindings use common DesignIR
-aliases. Native child modules use the same recursive hierarchy and runtime
-registry, lifecycle callbacks are root-scoped, and direct-parent port/export
-chains resolve to common signals. It does not yet provide dynamic module
-construction, arbitrary user-defined channel binding semantics, asynchronous
-updates, thread reset/kill controls, or dynamic process creation.
-
-## Deliberately outside v1
-
-- Accellera binary or kernel compatibility
-- TLM, AMS, and CCI
-- dynamic process creation
-- arbitrary custom primitive-channel interfaces and binding semantics
-- user replacement of the scheduler
-- ARM64 context switching
-
-Models that need these facilities should use an Accellera implementation or a
-same-language wrapper around a simpler fsim-compatible boundary.
+- binary compatibility with arbitrary external SystemC builds;
+- the removed fsim SystemC facade and custom-kernel execution ABI;
+- dynamic cross-language hierarchy construction after simulation starts;
+- user replacement of either the Accellera or fsim scheduler; and
+- automatic adaptation of arbitrary user-defined interfaces at HDL boundaries.

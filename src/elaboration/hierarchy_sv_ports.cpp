@@ -858,15 +858,4 @@ HierarchyBuilder::external_port_declaration(
   return declaration;
 }
 
-frontend::SignalDeclaration
-HierarchyBuilder::foreign_port_declaration(
-    const ForeignPort& port) {
-  frontend::SignalDeclaration declaration;
-  declaration.name = port.name;
-  declaration.type = port.type;
-  declaration.direction = port.direction;
-  declaration.is_port = true;
-  return declaration;
-}
-
 }  // namespace fsim::elaboration

@@ -12,7 +12,7 @@ Verilog/SystemVerilog timing application.
   is `3e84f643e6df24090efb1161e0d6836847784268a139e3da3c2fda4568913c6f`.
 - `B170-C19-PROFILES`: SDF 2.1/3.0/4.0 applies without widening to VHDL
   87/93/2000/2002/2008 beside every Batch 167 Verilog/SystemVerilog profile and
-  the governed SystemC 2.3 proxy.
+  the governed official Accellera SystemC 3.0.2 boundary.
 - `B170-C19-MODELS`: standard-cell, primitive, state-table, memory and
   explicitly governed wrapper models use structural VITAL ownership rather
   than proprietary model-name heuristics.

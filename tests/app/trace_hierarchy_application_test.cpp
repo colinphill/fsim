@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_trace_hierarchy.hpp"
 #include "fsim/runtime/fst_writer.hpp"
+#include "fsim/systemc/kernel_backend_binding_inventory.hpp"
+#include "fsim/systemc/kernel_backend_inventory.hpp"
 
 #include <array>
 #include <cassert>
@@ -201,10 +203,64 @@ void test_invalid_hierarchy_provenance()
     });
 }
 
+void test_systemc_channel_inventory_path()
+{
+    using namespace fsim;
+    diagnostic::Engine diagnostics;
+    const systemc::SystemCKernelProtocolLimits limits;
+    const auto island = systemc::make_systemc_island_id(
+        "trace-hierarchy-island", limits, diagnostics);
+    const auto hierarchy = systemc::make_systemc_hierarchy_id(
+        *island, "systemc_root", limits, diagnostics);
+    assert(island && hierarchy);
+    systemc::SystemCKernelChannelInventory inventory { *island, *hierarchy };
+    assert(inventory.register_channel(
+        { "systemc_root.value", "sc_signal:bool:1",
+            systemc::SystemCKernelChannelKind::signal,
+            systemc::SystemCKernelChannelValueProfile {
+                systemc::SystemCKernelValueKind::bit2, 1U, false },
+            systemc::SystemCKernelWriterPolicy::one,
+            systemc::SystemCKernelUpdateOwner::signal_kernel,
+            systemc::SystemCKernelObservationMode::value_changed, true },
+        diagnostics));
+    assert(inventory.freeze(diagnostics));
+    const auto fixture = make_fixture();
+    const auto canonical = app::application_detail::canonical_fst_trace_object(
+        fixture.design,
+        fixture.design.objects()[fixture.objects[3].value()]);
+    assert(inventory.snapshot().channels.front().descriptor.canonical_path
+        == canonical.path);
+    const auto foreign_object = systemc::make_systemc_object_id(
+        *hierarchy, "verilog_root.value", limits, diagnostics);
+    const auto foreign_endpoint = systemc::make_systemc_endpoint_id(
+        *foreign_object, "signal", limits, diagnostics);
+    assert(foreign_object && foreign_endpoint);
+    systemc::SystemCKernelBindingTarget target;
+    target.chain = { "vhdl_root.verilog_value", "systemc_root.value" };
+    target.final_channel_path = "systemc_root.value";
+    target.foreign_language = systemc::SystemCKernelHostLanguage::verilog;
+    target.foreign_endpoint = *foreign_endpoint;
+    systemc::SystemCKernelBindingInventory bindings { inventory.snapshot() };
+    assert(bindings.register_binding(
+        { "vhdl_root.verilog_value", "mixed_signal_alias",
+            systemc::SystemCKernelBindingKind::port,
+            systemc::SystemCKernelBindingDirection::input,
+            { std::move(target) } },
+        diagnostics));
+    assert(bindings.freeze(diagnostics));
+    assert(bindings.snapshot().bindings.front().descriptor.declared_path
+        == fixture.design.objects()[fixture.objects[4].value()].path);
+    assert(bindings.snapshot().bindings.front()
+            .descriptor.targets.front().final_channel
+        == inventory.snapshot().channels.front().channel);
+    assert(!diagnostics.has_error());
+}
+
 } // namespace
 
 int main()
 {
     test_canonical_mixed_root_hierarchy();
     test_invalid_hierarchy_provenance();
+    test_systemc_channel_inventory_path();
 }

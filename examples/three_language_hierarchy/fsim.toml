@@ -29,8 +29,7 @@ files = ["logic_stage.vhd"]
 [elaboration]
 search_libraries = ["models"]
 
-# The SV parent searches models for the SystemC factory. The SystemC parent
-# then finds its VHDL child in its own models library.
+# The SV parent searches models for both the SystemC factory and VHDL child.
 
 [build]
 optimization = "O2"

@@ -267,10 +267,6 @@ public:
         runtime::simir::ProcessExecutionContext& context,
         runtime::simir::InstructionIndex) override;
 
-    void update_channel(
-        const std::uint64_t channel,
-        runtime::simir::ProcessExecutionContext& context) override;
-
 private:
     std::shared_ptr<systemc::HierarchyRegistry> hierarchy_;
     std::uint64_t process_ { };

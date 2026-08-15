@@ -51,12 +51,12 @@ C++20 and to reach platform services through these bounded seams.
 | Platform fixtures | `tests/systemc/plugin_compiler_test.cpp`, `tests/systemc/plugin_matrix_test.cpp` | Native compiler selection is isolated while shared cache, lifecycle, and semantic assertions remain identical |
 
 Build-system platform selection is concentrated in `CMakeLists.txt`,
-`CMakePresets.json`, `cmake/FsimBoostContext.cmake`, `cmake/FsimTcl.cmake`,
-`cmake/FsimWarnings.cmake`, `tests/CMakeLists.txt`, and
-`.github/workflows/ci.yml`. Windows selects MASM Boost.Context, the supported
-Tcl build and CRT, MSVC warning flags, DLL placement, bounded stacks, and PE
-plug-in behavior. Linux selects ELF/GAS Boost.Context, POSIX loading/process
-services, and GCC/Clang warning and sanitizer flags.
+`CMakePresets.json`, `cmake/FsimTcl.cmake`, `cmake/FsimWarnings.cmake`,
+`tests/CMakeLists.txt`, and `.github/workflows/ci.yml`. Windows selects the
+supported Tcl build and CRT, MSVC warning flags, DLL placement, bounded stacks,
+and PE plug-in behavior. Linux selects POSIX loading/process services and
+GCC/Clang warning and sanitizer flags. Both use the official Accellera SystemC
+runtime; no platform-specific fiber backend remains.
 
 ## Cross-platform invariants
 

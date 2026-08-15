@@ -57,13 +57,6 @@ runtime::simir::ProcessResumeResult SystemCProcessExecutor::resume(
     return result;
 }
 
-void SystemCProcessExecutor::update_channel(
-    const std::uint64_t channel,
-    runtime::simir::ProcessExecutionContext& context)
-{
-    hierarchy_->invoke_primitive_channel(channel, context);
-}
-
 std::string_view report_severity_name(
     const runtime::simir::AssertionSeverity severity) noexcept
 {

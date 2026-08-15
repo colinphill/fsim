@@ -44,7 +44,7 @@ struct PluginCompilePlan {
     bool cacheable{true};
     std::string cache_key;
     // Source/path-independent identity of the compiler binary, environment,
-    // ABI-affecting options, runtime ABI, host format, and fiber backend.
+    // ABI-affecting options, runtime ABI, host format, and Accellera runtime.
     // This is suitable for exact admission of a precompiled plug-in whose
     // payload is separately content-addressed.
     std::string host_fingerprint;

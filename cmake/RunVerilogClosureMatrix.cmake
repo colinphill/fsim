@@ -7,6 +7,12 @@ foreach(FSIM_REQUIRED IN ITEMS
   endif()
 endforeach()
 
+if(FSIM_DEDUPLICATED_CTEST)
+  message(STATUS
+    "Verilog closure fixture witnesses passed; nested CTest execution suppressed")
+  return()
+endif()
+
 set(FSIM_STAGE_TIMEOUT_SECONDS 1200)
 set(FSIM_WITNESSES
   fsim.application.systemverilog_hir

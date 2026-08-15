@@ -1646,13 +1646,16 @@ struct Simulation::Impl {
         });
     }
 
-    void end_systemc()
+    void end_systemc(
+        const std::optional<runtime::SimulationTick> current_time = std::nullopt)
     {
         if (!systemc_start_attempted || systemc_ended) {
             return;
         }
         for_each_systemc_registry([&](auto& registry, const auto& roots) {
-            registry.end_simulation(roots);
+            registry.end_simulation(
+                roots,
+                current_time.value_or(interpreter->scheduler().now()));
         });
         systemc_ended = true;
     }
@@ -2003,7 +2006,7 @@ runtime::RunResult Simulation::run(
             impl_->vhdl_psl->finish(result.time, result.delta);
             impl_->save_coverage_database();
             impl_->end_vpi();
-            impl_->end_systemc();
+            impl_->end_systemc(result.time);
             impl_->lifecycle = Impl::Lifecycle::finished;
         }
         return result;

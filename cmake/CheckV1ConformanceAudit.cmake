@@ -9,6 +9,7 @@ endif()
 set(FSIM_AUDIT "${FSIM_SOURCE_DIR}/docs/v1-conformance-audit.md")
 set(FSIM_REPOSITORY_LICENSE "${FSIM_SOURCE_DIR}/LICENSE")
 set(FSIM_IEEE_ROOT "${FSIM_SOURCE_DIR}/third_party/ieee-1076-2019")
+set(FSIM_SYSTEMC_ROOT "${FSIM_SOURCE_DIR}/third_party/systemc-3.0.2")
 foreach(FSIM_INPUT IN ITEMS
     "${FSIM_AUDIT}"
     "${FSIM_REPOSITORY_LICENSE}"
@@ -16,7 +17,13 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_IEEE_ROOT}/AUTHORS.md"
     "${FSIM_IEEE_ROOT}/README.md"
     "${FSIM_IEEE_ROOT}/SHA256SUMS"
-    "${FSIM_IEEE_ROOT}/inventory.cmake")
+    "${FSIM_IEEE_ROOT}/inventory.cmake"
+    "${FSIM_SYSTEMC_ROOT}/LICENSE"
+    "${FSIM_SYSTEMC_ROOT}/NOTICE"
+    "${FSIM_SYSTEMC_ROOT}/README.md"
+    "${FSIM_SYSTEMC_ROOT}/SOURCE_MANIFEST.txt"
+    "${FSIM_SYSTEMC_ROOT}/systemc-3.0.2.spdx.json"
+    "${FSIM_SYSTEMC_ROOT}/systemc-3.0.2.tar.gz")
   if(NOT EXISTS "${FSIM_INPUT}")
     message(FATAL_ERROR "v1 conformance audit input not found: ${FSIM_INPUT}")
   endif()
@@ -116,16 +123,18 @@ endforeach()
 file(GLOB FSIM_THIRD_PARTY_ENTRIES LIST_DIRECTORIES TRUE
   "${FSIM_SOURCE_DIR}/third_party/*")
 list(LENGTH FSIM_THIRD_PARTY_ENTRIES FSIM_THIRD_PARTY_COUNT)
-if(NOT FSIM_THIRD_PARTY_COUNT EQUAL 1)
+if(NOT FSIM_THIRD_PARTY_COUNT EQUAL 2)
   message(FATAL_ERROR
-    "expected exactly one reviewed third-party root, found "
+    "expected exactly two reviewed third-party roots, found "
     "${FSIM_THIRD_PARTY_COUNT}")
 endif()
-list(GET FSIM_THIRD_PARTY_ENTRIES 0 FSIM_THIRD_PARTY_ENTRY)
-if(NOT FSIM_THIRD_PARTY_ENTRY STREQUAL FSIM_IEEE_ROOT)
-  message(FATAL_ERROR
-    "unreviewed third-party root present: ${FSIM_THIRD_PARTY_ENTRY}")
-endif()
+foreach(FSIM_THIRD_PARTY_ENTRY IN LISTS FSIM_THIRD_PARTY_ENTRIES)
+  if(NOT FSIM_THIRD_PARTY_ENTRY STREQUAL FSIM_IEEE_ROOT
+      AND NOT FSIM_THIRD_PARTY_ENTRY STREQUAL FSIM_SYSTEMC_ROOT)
+    message(FATAL_ERROR
+      "unreviewed third-party root present: ${FSIM_THIRD_PARTY_ENTRY}")
+  endif()
+endforeach()
 
 string(FIND "${FSIM_AUDIT_CONTENTS}" "Task 1 imports" FSIM_NO_IMPORT_PREFIX)
 string(FIND

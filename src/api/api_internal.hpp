@@ -117,8 +117,8 @@ struct Session {
   std::optional<fsim::app::VerilogScopeProvenance> query_provenance;
   std::vector<std::optional<std::size_t>> systemc_scope_by_object;
   std::vector<std::optional<std::size_t>> systemc_object_by_process;
-  // Legacy SystemC object ordinals are retained solely as the v1 handle ABI
-  // adapter. Public identity and hierarchy metadata come from DesignIR IDs.
+  // Registry-local SystemC ordinals adapt DesignIR identities to the stable
+  // public C handle representation.
   std::vector<std::optional<fsim::semantic::design::ObjectId>>
       systemc_design_object_by_object;
   std::vector<std::optional<fsim::semantic::design::ProcessOccurrenceId>>

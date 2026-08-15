@@ -466,47 +466,31 @@ The current tree contains:
 - an executable versioned C session API for build, hierarchy/value access,
   simulation control, and synchronous callbacks;
 - versioned SystemC plug-in ABI, dynamic-library loading, typed factory
-  construction, and foreign-child registration;
-- an fsim SystemC compatibility header plus a shell-free, cached host compiler
+  construction, and stable HDL-facing boundary registration;
+- an official Accellera bridge header plus a shell-free, cached host compiler
   for plug-in shared libraries, with build-time entry-point and factory
   validation;
 - bounded `sc_logic`, arbitrary-width `sc_bv`/`sc_lv`, and 1–64-bit
   `sc_uint`/`sc_int` operations with checked bit selection, four-state
   propagation, shifts, reductions, and wrapping integer arithmetic;
-- executable facade-defined `SC_METHOD` processes with time-zero
-  initialization, `dont_initialize()`, static any-change/edge sensitivity,
-  dynamic time/event `next_trigger`, immediate/delta/timed named events with
-  pending replacement/cancellation, strict `notify_delayed`, dynamic OR/AND
-  event expressions, registered primitive-channel update callbacks,
-  kernel-backed module-local `sc_signal` objects, canonical packed port reads,
-  and common update-phase writes.
+- official `SC_METHOD`, `SC_THREAD`, and `SC_CTHREAD` execution with native
+  Accellera events, primitive-channel updates, signals, ports, exports,
+  lifecycle ordering, and TLM-1/TLM-2 activity synchronized at explicit common
+  scheduler safe points.
 
-The implemented SystemC hierarchy spine is bidirectional: HDL instances may
-bind to typed SystemC factories, and those factories may declare
-elaboration-time foreign children explicitly bound to VHDL or SystemVerilog
-targets. Either HDL or SystemC may be the selected top. The resulting ports,
-aliases, HDL descendants, and stable SystemC instance metadata enter the common
-elaborated design. Static `SC_METHOD` callbacks and deduplicated
-`sc_prim_channel::request_update()` callbacks execute in that hierarchy;
-module-local `sc_signal` objects use the common signal store and scheduler.
-Typed `sc_in`/`sc_out`/`sc_inout` bindings to those signals alias one common
-DesignIR object, including when HDL instantiates the SystemC module. Native
-SystemC child members now elaborate recursively with stable hierarchy handles
-and direct-parent signal or port binding. The four standard module lifecycle
-callbacks run at deterministic build/start/terminal boundaries. Standard
-`sc_signal_in_if`/`sc_signal_inout_if` exports retain hierarchy metadata while
-resolving to common signals. `SC_THREAD` and `SC_CTHREAD` use single-threaded
-Boost.Context fibers for timed, event, and static-sensitivity suspension.
-General custom interfaces remain planned.
-Facade modules declare VHDL/SV children with the typed
-`fsim::systemc::hdl_instance` extension; the full child path in `fsim.toml`
-selects the implementation, so mixed hierarchy remains explicit in both
-directions. Bounded scalar VHDL generic and integral SystemVerilog parameter
-actuals already transfer across explicit VHDL/SV bindings in either direction
-before port widths are checked. `hdl_instance::set_actual` also transfers
-immutable named scalar values from SystemC into a selected VHDL/SV child;
-typed factory schemas also carry the reverse HDL-to-SystemC direction for the
-bounded scalar subset. The common hierarchy walk evaluates source-language
+SystemC source is compiled against the official Accellera 3.0.2 headers and
+runtime. HDL instances may bind to typed SystemC factories, and either HDL or
+SystemC may be the selected top. Native
+SystemC child modules, ports, exports, signals, events, primitive channels,
+`SC_METHOD`, `SC_THREAD`, and `SC_CTHREAD` execute in an isolated Accellera
+simulation context. The bridge synchronizes boundary values, pending native
+activity, and time with the common HDL scheduler while retaining stable mixed-
+language hierarchy and trace/debug identities. The former fsim SystemC facade,
+custom kernel, and Boost.Context execution path have been removed.
+
+Bounded scalar VHDL generic and integral SystemVerilog parameter actuals
+transfer across explicit HDL bindings before port widths are checked. Typed
+SystemC factory schemas carry HDL-to-SystemC construction values. The common hierarchy walk evaluates source-language
 actuals, exposes validated canonical values to constructors, and only then
 checks parameter-dependent ports.
 
@@ -553,7 +537,6 @@ Unsupported syntax is diagnosed rather than silently accepted.
 - A C++20 compiler: GCC or Clang on Linux, or MSVC on Windows
 - CMake 3.28 or newer
 - LLVM **22.1.8** for the supported compiled-code configuration
-- Boost.Context **1.91.0** for executable SystemC threads
 - Tcl **9.0.4 or newer in the 9.0 release series**, or network access for
   CMake's pinned fallback
 
@@ -570,12 +553,10 @@ manually smoke-test an older LLVM while
 bootstrapping, but that is not a supported project configuration and must not
 be used to claim v1 compatibility.
 
-The planned release dependency pins are CLI11 2.6.2, toml++ 3.4.0,
-Boost.Context 1.91.0, and Catch2 3.15.2. CMake first uses an installed exact
-Boost.Context 1.91.0 package and otherwise fetches Boost's official pinned
-source archive with SHA-256 verification. Set
-`FSIM_SYSTEMC_FIBER_MODE=OFF` only for a dependency-free build that
-intentionally diagnoses `SC_THREAD`/`SC_CTHREAD` as non-executable.
+The planned release dependency pins are CLI11 2.6.2, toml++ 3.4.0, Accellera
+SystemC 3.0.2, and Catch2 3.15.2. CMake first uses an installed exact SystemC
+3.0.2 package and otherwise fetches the official pinned source archive with
+SHA-256 verification.
 
 CMake accepts an installed Tcl 9.0 development package at patchlevel 9.0.4 or
 newer. An older or different Tcl release is ignored and CMake downloads the

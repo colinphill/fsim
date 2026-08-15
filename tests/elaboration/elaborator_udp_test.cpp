@@ -390,30 +390,6 @@ end architecture;
                 == "udp_vhdl_parent.wrapped.gate";
         }));
 
-    fsim::elaboration::SystemCInstanceDescription systemc_root;
-    systemc_root.path = "udp_systemc_root";
-    systemc_root.target = "systemc:work.udp_systemc_root";
-    systemc_root.handle = 500;
-    fsim::elaboration::ForeignChild systemc_child;
-    systemc_child.handle = 501;
-    systemc_child.name = "wrapped";
-    systemc_child.module_facade = true;
-    systemc_child.implementation = "udp_wrapper";
-    systemc_root.foreign_children.push_back(std::move(systemc_child));
-    const std::array systemc_roots{systemc_root};
-    const auto systemc_boundary = fsim::elaboration::elaborate(
-        parsed.design,
-        "systemc:work.udp_systemc_root",
-        {},
-        systemc_roots);
-    assert(systemc_boundary.ok());
-    assert(std::ranges::any_of(
-        systemc_boundary.design->specializations(),
-        [](const auto& specialization) {
-            return specialization.instance
-                == "udp_systemc_root.wrapped.gate";
-        }));
-
     auto ambiguous = parsed.design;
     const auto module = fsim::frontend::parse_text(
         "udp-collision.v",

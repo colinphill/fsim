@@ -56,10 +56,10 @@ endforeach()
 
 foreach(FSIM_EXACT_OUTPUT IN ITEMS
     "FST inventory passed: rows=17 preserved=17 active=0 digest=fa40e80a69015276a850de6f4f84355d93ec541c774a76003f2b1718d1eac248"
-    "diagnostic catalog covers 2477 production codes"
-    "Checked 1056 authored sources against the 2500-line hard limit with a 2000-line refactor target"
+    "diagnostic catalog covers 2516 production codes"
+    "Checked 1100 authored sources against the 2500-line hard limit with a 2000-line refactor target"
     "FST portability contract: bounded fixed-width decoding, binary filesystem I/O, transactional diagnostics, corruption/resource negatives, semantic differentials, and Linux/Windows dependency independence are present"
-    "application regression de-duplication: umbrella sentinel plus eight dedicated application phases are present")
+    "regression de-duplication: application partitions and nine fixture-backed closure drivers are present")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_EXACT_OUTPUT}"
     FSIM_OUTPUT_INDEX)
   if(FSIM_OUTPUT_INDEX EQUAL -1)
@@ -84,9 +84,12 @@ list(APPEND FSIM_AUTHORED_FILES
   "${FSIM_SOURCE_DIR}/CMakePresets.json"
   "${FSIM_SOURCE_DIR}/README.md")
 list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX "/tests/fuzz/corpus/")
+list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX "/\\.fsim-cache/")
+list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX
+  "/examples/three_language_hierarchy/three_language\\.vcd$")
 list(REMOVE_DUPLICATES FSIM_AUTHORED_FILES)
 list(LENGTH FSIM_AUTHORED_FILES FSIM_AUTHORED_COUNT)
-set(FSIM_EXPECTED_AUTHORED_COUNT 1252)
+set(FSIM_EXPECTED_AUTHORED_COUNT 1304)
 if(NOT FSIM_AUTHORED_COUNT EQUAL FSIM_EXPECTED_AUTHORED_COUNT)
   message(FATAL_ERROR
     "authored FST inventory changed: expected ${FSIM_EXPECTED_AUTHORED_COUNT} files, found ${FSIM_AUTHORED_COUNT}")
@@ -108,7 +111,7 @@ file(GLOB_RECURSE FSIM_TEST_CONTROL_FILES LIST_DIRECTORIES FALSE
 list(FILTER FSIM_TEST_CONTROL_FILES EXCLUDE REGEX "/tests/fuzz/corpus/")
 list(REMOVE_DUPLICATES FSIM_TEST_CONTROL_FILES)
 list(LENGTH FSIM_TEST_CONTROL_FILES FSIM_TEST_CONTROL_COUNT)
-set(FSIM_EXPECTED_TEST_CONTROL_COUNT 510)
+set(FSIM_EXPECTED_TEST_CONTROL_COUNT 536)
 if(NOT FSIM_TEST_CONTROL_COUNT EQUAL FSIM_EXPECTED_TEST_CONTROL_COUNT)
   message(FATAL_ERROR
     "FST test/control inventory changed: expected ${FSIM_EXPECTED_TEST_CONTROL_COUNT} files, found ${FSIM_TEST_CONTROL_COUNT}")
@@ -156,4 +159,4 @@ foreach(FSIM_DOC_TOKEN IN ITEMS
 endforeach()
 
 message(STATUS
-  "FST release audit: 17 rows, 2477 diagnostics, 1056 bounded sources, ${FSIM_AUTHORED_COUNT} SPDX-owned files, ${FSIM_TEST_CONTROL_COUNT} test/control files")
+  "FST release audit: 17 rows, 2516 diagnostics, 1100 bounded sources, ${FSIM_AUTHORED_COUNT} SPDX-owned files, ${FSIM_TEST_CONTROL_COUNT} test/control files")

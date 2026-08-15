@@ -56,10 +56,12 @@ elaboration, and runtime evidence.
 | `tests/fuzz` | 6 | Frontend fuzz target plus four stable seeds | Corpus provenance and deterministic failure expectations |
 | `tests/feature_matrix` | 1 | Human-readable executable inventory | Machine-readable conformance expectation mapping |
 
-The only checked-in third-party tree is
-`third_party/ieee-1076-2019`: 26 unmodified VHDL files plus five license,
-authorship, provenance, checksum, and loading-inventory files. Its independent
-`fsim.ieee-package-inventory` gate remains authoritative for those bytes.
+The checked-in third-party trees are `third_party/ieee-1076-2019`, containing
+26 unmodified VHDL files plus its license, authorship, provenance, checksum,
+and loading inventory, and `third_party/systemc-3.0.2`, containing the
+checksum-pinned official Accellera source archive plus license, notice,
+manifest, and SPDX evidence. The independent inventory and upstream-provenance
+gates remain authoritative for those bytes.
 
 ## Reviewed permissive sources
 
@@ -103,9 +105,9 @@ stable bounded expectations, and source IDs in the conformance manifest.
 | `B128-T4` | 4 | **Closed.** VHDL analysis order and contexts, declarations/types/subtypes, visibility and overloads, generics, packages, components/configurations, generate branches, and negative binding legality | Seventeen `CF-VHDL-*` expectation markers in the compact structural/analysis-order application cross-reference `SRC-IEEE-P1076` or `SRC-UVVM`; original P+/E cases prove structural elaboration and all eight exact analysis/binding order failures without importing standard prose |
 | `B128-T5` | 5 | **Closed.** VHDL expression typing, aggregates/attributes, callable modes, sequential/concurrent scheduling, waits/reports, files/TextIO, access/protected/physical values, transactions, and reviewed packages | Sixteen `CF-VHDL-*` expectation markers cross-reference `SRC-IEEE-P1076` or `SRC-UVVM` across the existing compact merged applications; direct interpreter/O0/O2 cold/warm/edit runtime differentials retain exact values, timing, reports, file bytes, VCD, debugger, cache, and runtime-failure expectations |
 | `B128-T6` | 6 | **Closed.** Bidirectional mixed construction, parameter/generic conversion, ownership, resolved drivers, timing, hierarchy/source identity, and unsupported-boundary failures | Nine `CF-MIX-*` expectation markers map the original bidirectional topology, conversion, resolution/timing, provenance, and exact missing-binding cases to `SRC-FSIM`; no external suite is treated as owning fsim's binding contract |
-| `B128-T7` | 7 | **Closed.** SystemC facade and C ABI, named hierarchy, datatypes, method/thread lifecycle, delta/event/update ordering, signals/channels, plug-in compilation/cache, and exception containment | Sixteen `CF-SC-*` expectation markers cross-reference original facade, strict-C ABI, loader, compiler/cache, and scheduling-matrix cases to bounded `SRC-SYSTEMC` expectations, including exact unsupported and transactional failure paths |
+| `B128-T7` | 7 | **Closed.** Official Accellera SystemC and C ABI, named hierarchy, datatypes, method/thread lifecycle, delta/event/update ordering, signals/channels, plug-in compilation/cache, and exception containment | Eleven `CF-SC-*` expectation markers cross-reference the official public surface, strict-C ABI, loader, compiler/cache, and scheduling-matrix cases to bounded `SRC-SYSTEMC` expectations, including exact unsupported and transactional failure paths |
 | `B128-T8` | 8 | **Closed.** Common scheduler and SimIR validation, LLVM/cache parity, C handle/callback lifecycle, debugger stepping, VCD normalization, project/CLI/Tcl behavior, diagnostics/source provenance, and failure containment | Nineteen `CF-COMMON-*` expectation markers cross-reference the original common-contract cases to `SRC-COCOTB`, `SRC-LLVM`, `SRC-TCL`, or `SRC-FSIM` where semantics overlap, including exact ABI, diagnostic, Tcl, LLVM-validation, and containment failures |
-| `B128-T9` | 9 | **Closed.** The exact machine-readable mapping joins all 105 conformance expectations in 28 fixtures to 27 owning CTests and their frontend/elaboration, interpreter/O0/O2, cold/warm/edit cache, debugger, callbacks, normalized VCD, source-map, and portable-path evidence | `fsim.v1-conformance-corpus` pins the sorted ID/source/expectation/file set by SHA-256 and rejects missing fixture/test mappings, duplicate or malformed IDs, unsupported source/license states, changed count/digest, invalid per-expectation evidence, or any absent required corpus mode |
+| `B128-T9` | 9 | **Closed.** The exact machine-readable mapping joins all 100 conformance expectations in 28 fixtures to 28 owning CTests and their frontend/elaboration, interpreter/O0/O2, cold/warm/edit cache, debugger, callbacks, normalized VCD, source-map, and portable-path evidence | `fsim.v1-conformance-corpus` pins the sorted ID/source/expectation/file set by SHA-256 and rejects missing fixture/test mappings, duplicate or malformed IDs, unsupported source/license states, changed count/digest, invalid per-expectation evidence, or any absent required corpus mode |
 
 Task 10 performs the final license/notice/checksum audit. Any exact upstream
 file introduced in Tasks 2 through 9 must be present in that inventory; an

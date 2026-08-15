@@ -182,6 +182,7 @@ load_incremental_plugin_metadata(
 // inventory still exactly matches the artifact metadata.
 [[nodiscard]] std::shared_ptr<HierarchyRegistry> load_incremental_plugin(
     const std::filesystem::path& directory,
-    diagnostic::Engine& diagnostics);
+    diagnostic::Engine& diagnostics,
+    std::string_view expected_compiler_fingerprint = {});
 
 }  // namespace fsim::systemc

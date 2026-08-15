@@ -367,15 +367,18 @@ drivers, and one explicit transaction descriptor per driven region. Boundary
 conversion records link formal/actual objects and adapter processes without
 frontend references. SystemC modules, ports, events, primitive channels,
 signals, exports, processes, native handles, and writable-export policy enter
-the same object/port/process/boundary tables, including SystemC-to-HDL children.
+the same object/port/process/boundary tables for official native hierarchy and
+HDL-owned boundaries into SystemC. The removed reverse SystemC-to-HDL proxy
+surface has no representation in the current design.
 
 The compact elaborated design now assigns a dense specialization ID to every
 instantiated unit occurrence and records its canonical unit identity, instance
 path, directly owned process IDs, and canonical bounded VHDL generic or
 SystemVerilog parameter/localparam values. Those values distinguish occurrence
-and native-cache identity. Typed bounded scalar construction values also cross
-SystemC factory boundaries in both directions. This older representation is
-retained only as the execution-payload compatibility adapter.
+and native-cache identity. Typed bounded scalar construction values cross from
+an owning HDL instance into its selected SystemC factory. SystemC does not
+construct HDL children. This older representation is retained only as the
+execution-payload compatibility adapter.
 `Simulation::runtime_adapter()` names that role explicitly; stable identity,
 hierarchy, provenance, and public metadata come from `Simulation::design_ir()`
 and `Simulation::semantics()`.
@@ -845,7 +848,8 @@ its native provenance. Standalone loading checksum-validates the embedded
 image, recreates factory roots and their native children, remaps serialized
 handles by stable hierarchy path, and reconnects ports, events, signals,
 processes, exports, lifecycle callbacks, debugger objects, and trace signals to
-the common runtime. Designs containing SystemC are therefore relocatable only
+the owning official Accellera context and fsim boundary adapters. Designs
+containing SystemC are therefore relocatable only
 between exact-compatible hosts; HDL-only format-1 and format-2 designs remain
 portable. `fsim simulate` places LLVM objects and HDL file state in explicit
 `--cache` and `--file-root` consumer directories and writes traces to the
@@ -853,24 +857,11 @@ requested path, never inside `.fsimdesign`. Delay selection is fixed by
 elaboration. The additive C++ phase/inspection API does not change the v1 C
 ABI.
 
-The hierarchy is deliberately bidirectional for SystemC. An HDL instance
-path may bind to a registered SystemC factory. During its elaboration, a
-SystemC factory may mark a normally constructed child module as an HDL proxy;
-the
-manifest binding at that full path resolves the placeholder to a VHDL
-architecture or SV module. The common elaborator remains authoritative in
-both directions and supports recursive alternation between languages while
-retaining one stable-ID namespace, one port-conversion policy, and recursion
-detection. Facade modules declare these proxies with `SC_FSIM_HDL_MODULE` and
-bind ordinary `sc_in`, `sc_out`, and `sc_inout` ports to signals or parent
-ports. The hierarchy registry converts the marked native child into a
-same-path HDL implementation descriptor while retaining module-and-port
-identity; it does not add an `hdl_instance` level. Processes, lifecycle hooks,
-events, channels, exports, signals, and nested modules are rejected within the
-proxy. The older `fsim::systemc::hdl_instance` facade remains deprecated but
-compatible, and the native ABI remains the implementation mechanism. Foreign
-children can be created only during elaboration, never
-dynamically after simulation starts. Native SystemC child modules are captured
+An HDL instance path may bind to a registered SystemC factory. The common
+elaborator remains authoritative for that boundary and retains one stable-ID
+namespace, one port-conversion policy, and recursion detection. The removed
+HDL-proxy facade has no source, ABI, artifact-construction, or compatibility
+execution path; HDL source owns HDL child hierarchy. Native SystemC child modules are captured
 recursively by the same factory root, and child ports may alias a direct
 parent signal or port. Concrete typed signal-export chains resolve to that
 same alias graph; standard signal-interface exports retain their own stable
@@ -880,13 +871,25 @@ state: the two elaboration callbacks run after common-object binding, the
 start callback runs before the first kernel start, and the end callback runs
 at terminal completion or session teardown.
 
-`hdl_module::set_actual` records named signed scalar construction values on
-the foreign-child descriptor through an append-only host callback. The common
-elaborator applies them to the explicitly selected HDL unit using that target
-language's name and subtype rules before port checks. They therefore flow into
-the same canonical specialization and native-cache identity as source-written
-generic/parameter actuals. The reverse HDL-to-SystemC direction now uses
-factory-declared typed schemas and construction-value delivery.
+HDL-to-SystemC construction uses factory-declared typed schemas and canonical
+construction-value delivery before port checks. Those values participate in
+the same specialization and native-cache identity as the rest of the bound
+hierarchy.
+
+Execution below that boundary is one official Accellera SystemC 3.0.2 runtime
+per fsim process. A transport-neutral backend exchanges bounded serialized
+messages containing stable island, hierarchy, object, endpoint, sequence and
+transaction identities; no upstream pointer or scheduler object crosses it.
+The direct and loopback implementations share the same request/response codec,
+safe-point ordering and failure containment. Native TLM-1/TLM-2 traffic stays
+inside an island unless an explicit bridge serializes it. Post-binding signal,
+port, export and alias inventories feed debugger, VCD and FST observation at
+quiescent safe points.
+
+This protocol is designed for a later worker process without changing the
+SystemC/TLM or artifact ABI. The v2 runtime does not automatically partition a
+design, launch one kernel per worker, or run a conservative parallel scheduler;
+those remain post-v2 responsibilities.
 
 Source factories are normally published with `SC_FSIM_EXPORT` or
 `SC_FSIM_EXPORT_AS`. Each macro contributes a plug-in-local descriptor; the
@@ -2594,20 +2597,17 @@ output when a tracked input changed before publication. A project build loads
 the resulting library, checks `fsim_plugin_init_v1`, contains initialization
 exceptions, and requires at least one valid factory registration. Typed
 elaboration factories are constructed before HDL elaboration; their registered
-ports and foreign HDL children are copied into ABI-neutral descriptions and
-recursively incorporated into the common hierarchy in either direction.
+ports and native SystemC children are copied into ABI-neutral descriptions and
+incorporated into the common HDL-to-SystemC hierarchy.
 Native module objects remain owned beside the built design until simulation
-teardown. Facade-defined `SC_METHOD` callbacks are represented by dense common
-process IDs and an external executor; registered port handles map to dense
-signals, reads observe committed values, and writes enter the common update
-phase. Static sensitivities therefore reuse the same fanout and next-delta
-wakeup path as HDL processes. `SC_THREAD` and `SC_CTHREAD` keep their C++
-stacks in Boost.Context 1.91.0 fibers while every context switch remains on the
-single deterministic simulation thread. Wait callbacks yield a resumable
-external process to the common scheduler; terminal shutdown resumes suspended
-stacks with an explicit stop request before plug-in code is unloaded.
+teardown. `SC_METHOD`, `SC_THREAD`, `SC_CTHREAD`, events, signals, and
+primitive-channel updates execute in a private Accellera 3.0.2 simulation
+context. The application bridge synchronizes committed boundary values and
+time with the common HDL scheduler. Terminal shutdown runs inside that native
+kernel, terminates remaining native processes through public process handles,
+destroys the Accellera context, and unloads plug-in code last.
 
-The facade's bounded fixed-width datatypes execute entirely inside plug-in
+Accellera's bounded fixed-width datatypes execute entirely inside plug-in
 C++ code. `sc_bv` and `sc_lv` retain arbitrary compile-time widths while
 `sc_uint` and `sc_int` cover widths 1 through 64 with explicit masking after
 wrapping operations. Typed port and signal adapters canonicalize those values

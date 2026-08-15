@@ -1,0 +1,17 @@
+schema=fsim-systemc-accellera-source-v1
+name=SystemC
+version=3.0.2
+release_date=2025-10-31
+release_tag=3.0.2
+upstream_commit=70b0fc8e4a74acc677b0fc73cea08f940c2115d5
+upstream_url=https://github.com/accellera-official/systemc/archive/refs/tags/3.0.2.tar.gz
+archive=systemc-3.0.2.tar.gz
+archive_size=4573759
+archive_sha256=9b3693ed286aab958b9e5d79bb0ad3bc523bbc46931100553275352038f4a0c4
+source_root=systemc-3.0.2
+tree_files=4456
+tree_sha256=b1fbb8b7bcb76e3f803155585f2c3e1073e4c990de72302040cfab283c9f9fd0
+license=Apache-2.0
+license_sha256=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
+notice_sha256=65f4baf4b72004c7984afdb798e4b506d2c9f82d0c6cb68e07feb0464a111ab1
+purl=pkg:github/accellera-official/systemc@3.0.2

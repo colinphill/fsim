@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fsim/systemc/plugin.hpp"
+#include "fsim/systemc/accellera.hpp"
 
 #include <algorithm>
 #include <string_view>
 #include <vector>
+
+extern "C" const char* fsim_systemc_accellera_runtime_identity() noexcept;
+extern "C" const char*
+fsim_systemc_accellera_compatibility_identity() noexcept;
 
 namespace fsim::systemc::detail {
 namespace {
@@ -29,6 +33,15 @@ extern "C" FSIM_SC_EXPORT fsim_sc_status_v1 fsim_plugin_init_v1(
     const fsim_sc_host_v1* host,
     fsim_sc_registrar_v1* registrar) {
     try {
+        const auto* const runtime_identity =
+            fsim_systemc_accellera_runtime_identity();
+        const auto* const compatibility_identity =
+            fsim_systemc_accellera_compatibility_identity();
+        if (runtime_identity == nullptr || *runtime_identity == '\0'
+            || compatibility_identity == nullptr
+            || *compatibility_identity == '\0') {
+            return FSIM_SC_ABI_MISMATCH;
+        }
         using fsim::systemc::detail::export_descriptor;
         std::vector<export_descriptor*> descriptors;
         for (auto* current =
@@ -37,7 +50,7 @@ extern "C" FSIM_SC_EXPORT fsim_sc_status_v1 fsim_plugin_init_v1(
              current = current->next) {
             if (current->public_name == nullptr
                 || *current->public_name == '\0'
-                || current->register_factory == nullptr) {
+                || current->register_export == nullptr) {
                 return FSIM_SC_INVALID_ARGUMENT;
             }
             descriptors.push_back(current);
@@ -57,7 +70,7 @@ extern "C" FSIM_SC_EXPORT fsim_sc_status_v1 fsim_plugin_init_v1(
             return FSIM_SC_INVALID_ARGUMENT;
         }
         for (const auto* descriptor : descriptors) {
-            const auto status = descriptor->register_factory(
+            const auto status = descriptor->register_export(
                 host, registrar, descriptor->public_name);
             if (status != FSIM_SC_OK) {
                 return status;

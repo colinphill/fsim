@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <span>
 #include <sstream>
+#include <vector>
 
 #include "fsim/artifact/design.hpp"
 #include "fsim/runtime/fst_change_encoder.hpp"
@@ -13,6 +18,12 @@
 #include "fsim/runtime/fst_value_encoder.hpp"
 #include "fsim/runtime/fst_writer.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/systemc/kernel_backend_binding_inventory.hpp"
+#include "fsim/systemc/kernel_backend_inventory.hpp"
+#include "fsim/systemc/kernel_backend_observation.hpp"
+#include "fsim/systemc/kernel_backend_tlm1.hpp"
+#include "fsim/systemc/kernel_backend_tlm2.hpp"
+#include "fsim/systemc/kernel_backend_value_codec.hpp"
 
 namespace {
 
@@ -93,8 +104,8 @@ int main() {
       fsim::runtime::PackedLogic4::from_msb_string("10XZ0011010101010"),
       leaf_metadata);
   fsim::runtime::FstChangeEncoder change_encoder;
-  change_encoder.append(
-      {{1U}, 9U, 0U, fsim::runtime::TraceRegion::Active, 2U}, trace_value);
+  change_encoder.append({{1U}, 9U, 0U, fsim::runtime::TraceRegion::Active, 2U},
+                        trace_value);
   change_encoder.append(
       {{1U}, 8U, 0U, fsim::runtime::TraceRegion::Snapshot, 1U}, trace_value);
   const auto ordered_changes = std::move(change_encoder).freeze();
@@ -103,23 +114,38 @@ int main() {
   assert(ordered_changes.values().back().event.time == 9U);
 
   fsim::runtime::TraceDeclarationBuilder trace_builder;
-  const auto trace_signal
-      = trace_builder.add_variable("primary.payload", trace_source.size());
+  fsim::runtime::TraceSourceMetadata systemc_source;
+  systemc_source.kind = fsim::runtime::TraceSourceKind::SystemC;
+  systemc_source.language = fsim::runtime::TraceLanguage::SystemC;
+  systemc_source.root_identity = "systemc_root";
+  systemc_source.library = "systemc";
+  systemc_source.owner_identity = "systemc:trace-island";
+  const auto trace_signal = trace_builder.add_typed_variable(
+      "systemc_root.payload", fsim::runtime::TraceTypeKind::Packed,
+      trace_source.size(), fsim::runtime::SystemVerilogScalarKind::None, {},
+      systemc_source);
+  static_cast<void>(trace_builder.add_alias("systemc_root.payload_input",
+                                            trace_signal, systemc_source));
   const auto trace_model = std::move(trace_builder).freeze();
   std::ostringstream fst_output(std::ios::binary);
   fsim::runtime::FstWriter fst_writer{fst_output};
   fst_writer.declare(trace_model);
   fst_writer.begin(8U);
   fst_writer.set_initial_value(trace_signal, trace_value);
-  fst_writer.change({trace_signal, 9U, 0U,
-                        fsim::runtime::TraceRegion::Active, 1U},
-                    trace_value);
+  fst_writer.change(
+      {trace_signal, 9U, 0U, fsim::runtime::TraceRegion::Active, 1U},
+      trace_value);
+  fst_writer.change(
+      {trace_signal, 9U, 1U, fsim::runtime::TraceRegion::Postponed, 2U},
+      trace_value);
   fst_writer.close(9U);
   const auto decoded_fst = fsim::runtime::read_fst(fst_output.str());
   assert(decoded_fst.ok());
-  assert(decoded_fst.trace->values.size() == 2U);
+  assert(decoded_fst.trace->values.size() == 3U);
   assert(decoded_fst.trace->values.front().payload == trace_value.symbols());
   assert(decoded_fst.trace->values.back().time == 9U);
+  assert(decoded_fst.trace->values[1].payload ==
+         decoded_fst.trace->values[2].payload);
 
   state_bytes.append(real_value.canonical_type());
   for (unsigned shift = 0; shift < 64U; shift += 8U) {
@@ -148,8 +174,9 @@ int main() {
   state_bytes.append(compressed_state.profile_identity);
   state_bytes.append(compressed_state.semantic_digest);
   state_bytes.append(decoded_fst.trace->semantic_digest);
-  state_bytes.append(reinterpret_cast<const char*>(compressed_state.bytes.data()),
-                     compressed_state.bytes.size());
+  state_bytes.append(
+      reinterpret_cast<const char*>(compressed_state.bytes.data()),
+      compressed_state.bytes.size());
   assert(state_bytes.find(std::string{"\x42\0\0\0\0\0\xf8\xff", 8U}) !=
          std::string::npos);
   assert(state_bytes.find(std::string{"A\0B\xc3\xa9", 5U}) !=
@@ -160,6 +187,174 @@ int main() {
   assert(state_bytes.find("ux01zwlh-") != std::string::npos);
   assert(state_bytes.find("o=28:primary.packet@declaration-5;") !=
          std::string::npos);
+  fsim::systemc::SystemCKernelValue crossing_value;
+  crossing_value.kind = fsim::systemc::SystemCKernelValueKind::logic9;
+  crossing_value.width = 129U;
+  crossing_value.range = {
+      64, -64, fsim::systemc::SystemCKernelRangeDirection::descending};
+  crossing_value.type_name = "ieee.std_logic_1164.std_logic_vector";
+  crossing_value.planes.assign(4U, std::vector<std::uint64_t>(3U));
+  for (std::uint32_t bit = 0U; bit < crossing_value.width; ++bit) {
+    const auto code = bit % 9U;
+    const auto word = static_cast<std::size_t>(bit / 64U);
+    const auto mask = std::uint64_t{1U} << (bit % 64U);
+    for (unsigned plane = 0U; plane < 4U; ++plane) {
+      if ((code & (1U << plane)) != 0U) {
+        crossing_value.planes[plane][word] |= mask;
+      }
+    }
+  }
+  fsim::diagnostic::Engine crossing_diagnostics;
+  const auto crossing_encoded = fsim::systemc::serialize_systemc_kernel_value(
+      crossing_value, {}, crossing_diagnostics);
+  assert(crossing_encoded && !crossing_diagnostics.has_error());
+  const std::string crossing_bytes(
+      reinterpret_cast<const char*>(crossing_encoded->data()),
+      crossing_encoded->size());
+  fsim::diagnostic::Engine crossing_decode_diagnostics;
+  assert(fsim::systemc::deserialize_systemc_kernel_value(
+             *crossing_encoded, {}, crossing_decode_diagnostics) ==
+         crossing_value);
+  const fsim::systemc::SystemCKernelProtocolLimits protocol_limits;
+  const auto tlm_island = fsim::systemc::make_systemc_island_id(
+      "artifact-tlm1-island", protocol_limits, crossing_diagnostics);
+  const auto tlm_hierarchy = fsim::systemc::make_systemc_hierarchy_id(
+      *tlm_island, "work.top", protocol_limits, crossing_diagnostics);
+  const auto tlm_object = fsim::systemc::make_systemc_object_id(
+      *tlm_hierarchy, "work.top.transport", protocol_limits,
+      crossing_diagnostics);
+  const auto tlm_source = fsim::systemc::make_systemc_endpoint_id(
+      *tlm_object, "initiator", protocol_limits, crossing_diagnostics);
+  const auto tlm_target = fsim::systemc::make_systemc_endpoint_id(
+      *tlm_object, "target", protocol_limits, crossing_diagnostics);
+  const auto tlm_sequence = fsim::systemc::make_systemc_sequence_id(
+      *tlm_island, 11U, crossing_diagnostics);
+  const auto tlm_transaction = fsim::systemc::make_systemc_transaction_id(
+      *tlm_source, *tlm_sequence, crossing_diagnostics);
+  assert(tlm_island && tlm_hierarchy && tlm_object && tlm_source &&
+         tlm_target && tlm_sequence && tlm_transaction &&
+         !crossing_diagnostics.has_error());
+  fsim::systemc::SystemCKernelTlm1Transaction crossing_transaction;
+  crossing_transaction.transaction = *tlm_transaction;
+  crossing_transaction.endpoint = *tlm_source;
+  crossing_transaction.peer = *tlm_target;
+  crossing_transaction.sequence = *tlm_sequence;
+  crossing_transaction.operation =
+      fsim::systemc::SystemCKernelTlm1Operation::transport;
+  crossing_transaction.state = fsim::systemc::SystemCKernelTlm1State::completed;
+  crossing_transaction.time_fs = 5000U;
+  crossing_transaction.delta = 3U;
+  crossing_transaction.explicit_bridge = true;
+  crossing_transaction.request = crossing_value;
+  crossing_transaction.response = crossing_value;
+  const auto tlm_encoded =
+      fsim::systemc::serialize_systemc_kernel_tlm1_transaction(
+          crossing_transaction, {}, crossing_diagnostics);
+  assert(tlm_encoded && !crossing_diagnostics.has_error());
+  const std::string tlm_bytes(
+      reinterpret_cast<const char*>(tlm_encoded->data()), tlm_encoded->size());
+  fsim::systemc::SystemCKernelTlm2Transaction tlm2_transaction;
+  tlm2_transaction.transaction = *tlm_transaction;
+  tlm2_transaction.endpoint = *tlm_source;
+  tlm2_transaction.peer = *tlm_target;
+  tlm2_transaction.sequence = *tlm_sequence;
+  tlm2_transaction.operation =
+      fsim::systemc::SystemCKernelTlm2Operation::direct_memory;
+  tlm2_transaction.state = fsim::systemc::SystemCKernelTlm2State::completed;
+  tlm2_transaction.sync = fsim::systemc::SystemCKernelTlm2Sync::completed;
+  tlm2_transaction.time_fs = 6000U;
+  tlm2_transaction.delta = 4U;
+  tlm2_transaction.explicit_bridge = true;
+  tlm2_transaction.payload.address = 0x40U;
+  tlm2_transaction.payload.command =
+      fsim::systemc::SystemCKernelTlm2Command::read;
+  tlm2_transaction.payload.response =
+      fsim::systemc::SystemCKernelTlm2Response::ok;
+  tlm2_transaction.payload.dmi_allowed = true;
+  tlm2_transaction.payload.streaming_width = 4U;
+  tlm2_transaction.payload.data = {std::byte{1U}, std::byte{2U}, std::byte{3U},
+                                   std::byte{4U}};
+  tlm2_transaction.payload.extensions = {{"artifact.route", {std::byte{23U}}}};
+  tlm2_transaction.dmi = {0x40U, 0x7fU,
+                          fsim::systemc::SystemCKernelTlm2DmiAccess::read_write,
+                          1000U, 2000U};
+  const auto tlm2_encoded =
+      fsim::systemc::serialize_systemc_kernel_tlm2_transaction(
+          tlm2_transaction, {}, crossing_diagnostics);
+  assert(tlm2_encoded && !crossing_diagnostics.has_error());
+  const std::string tlm2_bytes(
+      reinterpret_cast<const char*>(tlm2_encoded->data()),
+      tlm2_encoded->size());
+  fsim::systemc::SystemCKernelChannelInventory channel_inventory{
+      *tlm_island, *tlm_hierarchy};
+  assert(channel_inventory.register_channel(
+      {"work.top.transport.ready", "sc_signal:bool:1",
+       fsim::systemc::SystemCKernelChannelKind::signal,
+       fsim::systemc::SystemCKernelChannelValueProfile{
+           fsim::systemc::SystemCKernelValueKind::bit2, 1U, false},
+       fsim::systemc::SystemCKernelWriterPolicy::one,
+       fsim::systemc::SystemCKernelUpdateOwner::signal_kernel,
+       fsim::systemc::SystemCKernelObservationMode::value_changed, true},
+      crossing_diagnostics));
+  assert(channel_inventory.freeze(crossing_diagnostics));
+  const auto channel_inventory_encoded =
+      fsim::systemc::serialize_systemc_kernel_channel_inventory(
+          channel_inventory.snapshot(), {}, crossing_diagnostics);
+  assert(channel_inventory_encoded && !crossing_diagnostics.has_error());
+  const std::string channel_inventory_bytes(
+      reinterpret_cast<const char*>(channel_inventory_encoded->data()),
+      channel_inventory_encoded->size());
+  fsim::systemc::SystemCKernelBindingInventory binding_inventory{
+      channel_inventory.snapshot()};
+  fsim::systemc::SystemCKernelBindingTarget binding_target;
+  binding_target.chain = {"work.top.transport.ready_input",
+                          "work.top.transport.ready"};
+  binding_target.final_channel_path = "work.top.transport.ready";
+  assert(binding_inventory.register_binding(
+      {"work.top.transport.ready_input",
+       "sc_in",
+       fsim::systemc::SystemCKernelBindingKind::port,
+       fsim::systemc::SystemCKernelBindingDirection::input,
+       {std::move(binding_target)}},
+      crossing_diagnostics));
+  assert(binding_inventory.freeze(crossing_diagnostics));
+  const auto binding_inventory_encoded =
+      fsim::systemc::serialize_systemc_kernel_binding_inventory(
+          binding_inventory.snapshot(), {}, crossing_diagnostics);
+  assert(binding_inventory_encoded && !crossing_diagnostics.has_error());
+  const std::string binding_inventory_bytes(
+      reinterpret_cast<const char*>(binding_inventory_encoded->data()),
+      binding_inventory_encoded->size());
+  fsim::systemc::SystemCKernelObservationBatch systemc_observations;
+  systemc_observations.island = *tlm_island;
+  systemc_observations.records = {
+      {fsim::systemc::SystemCKernelObservationKind::tlm1_end,
+       {crossing_transaction.time_fs, crossing_transaction.delta,
+        fsim::systemc::SystemCAccelleraRegion::quiescent, *tlm_island,
+        *tlm_sequence},
+       *tlm_source,
+       *tlm_target,
+       *tlm_transaction,
+       std::nullopt,
+       *tlm_encoded,
+       "artifact correlated native TLM1 completion"},
+      {fsim::systemc::SystemCKernelObservationKind::tlm2_dmi,
+       {tlm2_transaction.time_fs, tlm2_transaction.delta,
+        fsim::systemc::SystemCAccelleraRegion::quiescent, *tlm_island,
+        *tlm_sequence},
+       *tlm_source,
+       *tlm_target,
+       *tlm_transaction,
+       std::nullopt,
+       *tlm2_encoded,
+       "artifact correlated native TLM2 DMI completion"}};
+  const auto systemc_observation_encoded =
+      fsim::systemc::serialize_systemc_kernel_observation_batch(
+          systemc_observations, {}, crossing_diagnostics);
+  assert(systemc_observation_encoded && !crossing_diagnostics.has_error());
+  const std::string systemc_observation_bytes(
+      reinterpret_cast<const char*>(systemc_observation_encoded->data()),
+      systemc_observation_encoded->size());
   fsim::artifact::DesignMetadata metadata;
   metadata.producer = "fsim test";
   metadata.time_resolution = "1ns";
@@ -204,7 +399,20 @@ int main() {
   metadata.payloads = {
       {"runtime", "state/runtime.bin", checksum(state_bytes)},
       {"semantics", "state/semantics.bin", checksum(state_bytes)},
-      {"design-ir", "state/design-ir.bin", checksum(state_bytes)}};
+      {"design-ir", "state/design-ir.bin", checksum(state_bytes)},
+      {"systemc-backend-values-v1", "state/systemc-values.bin",
+       checksum(crossing_bytes)},
+      {"systemc-native-tlm1-v1", "state/systemc-tlm1.bin", checksum(tlm_bytes)},
+      {"systemc-native-tlm2-v1", "state/systemc-tlm2.bin",
+       checksum(tlm2_bytes)},
+      {"systemc-channel-inventory-v1", "state/systemc-channels.bin",
+       checksum(channel_inventory_bytes)},
+      {"systemc-binding-inventory-v1", "state/systemc-bindings.bin",
+       checksum(binding_inventory_bytes)},
+      {"systemc-observation-v1", "state/systemc-observations.bin",
+       checksum(systemc_observation_bytes)},
+      {"systemc-trace-dirty-v1", "state/systemc-trace.fst",
+       checksum(fst_output.str())}};
   metadata.specialization_cache_keys = {checksum("specialization")};
   metadata.trace_archive = "00ff";
   metadata.unit_count = 2;
@@ -339,7 +547,14 @@ int main() {
   const std::vector<fsim::library::PortablePayload> payloads{
       {metadata.payloads[0].artifact, state_bytes},
       {metadata.payloads[1].artifact, state_bytes},
-      {metadata.payloads[2].artifact, state_bytes}};
+      {metadata.payloads[2].artifact, state_bytes},
+      {metadata.payloads[3].artifact, crossing_bytes},
+      {metadata.payloads[4].artifact, tlm_bytes},
+      {metadata.payloads[5].artifact, tlm2_bytes},
+      {metadata.payloads[6].artifact, channel_inventory_bytes},
+      {metadata.payloads[7].artifact, binding_inventory_bytes},
+      {metadata.payloads[8].artifact, systemc_observation_bytes},
+      {metadata.payloads[9].artifact, fst_output.str()}};
   fsim::diagnostic::Engine publish_diagnostics;
   assert(fsim::artifact::publish_design(directory, metadata, payloads,
                                         publish_diagnostics));
@@ -368,6 +583,80 @@ int main() {
                         std::ios::binary);
     assert((std::string{std::istreambuf_iterator<char>{input},
                         std::istreambuf_iterator<char>{}} == state_bytes));
+  }
+  {
+    std::ifstream input(directory / metadata.payloads[3].artifact,
+                        std::ios::binary);
+    const std::string persisted{std::istreambuf_iterator<char>{input},
+                                std::istreambuf_iterator<char>{}};
+    fsim::diagnostic::Engine persisted_diagnostics;
+    assert(fsim::systemc::deserialize_systemc_kernel_value(
+               std::as_bytes(std::span{persisted}), {},
+               persisted_diagnostics) == crossing_value);
+  }
+  {
+    std::ifstream input(directory / metadata.payloads[4].artifact,
+                        std::ios::binary);
+    const std::string persisted{std::istreambuf_iterator<char>{input},
+                                std::istreambuf_iterator<char>{}};
+    fsim::diagnostic::Engine persisted_diagnostics;
+    assert(fsim::systemc::deserialize_systemc_kernel_tlm1_transaction(
+               std::as_bytes(std::span{persisted}), {},
+               persisted_diagnostics) == crossing_transaction);
+  }
+  {
+    std::ifstream input(directory / metadata.payloads[5].artifact,
+                        std::ios::binary);
+    const std::string persisted{std::istreambuf_iterator<char>{input},
+                                std::istreambuf_iterator<char>{}};
+    fsim::diagnostic::Engine persisted_diagnostics;
+    assert(fsim::systemc::deserialize_systemc_kernel_tlm2_transaction(
+               std::as_bytes(std::span{persisted}), {},
+               persisted_diagnostics) == tlm2_transaction);
+  }
+  {
+    std::ifstream input(directory / metadata.payloads[6].artifact,
+                        std::ios::binary);
+    const std::string persisted{std::istreambuf_iterator<char>{input},
+                                std::istreambuf_iterator<char>{}};
+    fsim::diagnostic::Engine persisted_diagnostics;
+    assert(fsim::systemc::deserialize_systemc_kernel_channel_inventory(
+               std::as_bytes(std::span{persisted}), {},
+               persisted_diagnostics) == channel_inventory.snapshot());
+  }
+  {
+    std::ifstream input(directory / metadata.payloads[7].artifact,
+                        std::ios::binary);
+    const std::string persisted{std::istreambuf_iterator<char>{input},
+                                std::istreambuf_iterator<char>{}};
+    fsim::diagnostic::Engine persisted_diagnostics;
+    assert(fsim::systemc::deserialize_systemc_kernel_binding_inventory(
+               std::as_bytes(std::span{persisted}), {},
+               persisted_diagnostics) == binding_inventory.snapshot());
+  }
+  {
+    std::ifstream input(directory / metadata.payloads[8].artifact,
+                        std::ios::binary);
+    const std::string persisted{std::istreambuf_iterator<char>{input},
+                                std::istreambuf_iterator<char>{}};
+    fsim::diagnostic::Engine persisted_diagnostics;
+    assert(fsim::systemc::deserialize_systemc_kernel_observation_batch(
+               std::as_bytes(std::span{persisted}), {},
+               persisted_diagnostics) == systemc_observations);
+  }
+  {
+    std::ifstream input(directory / metadata.payloads[9].artifact,
+                        std::ios::binary);
+    const std::string persisted{std::istreambuf_iterator<char>{input},
+                                std::istreambuf_iterator<char>{}};
+    const auto trace = fsim::runtime::read_fst(persisted);
+    assert(trace.ok());
+    assert(trace.trace->values.size() == 3U);
+    assert(trace.trace->values[1].payload == trace.trace->values[2].payload);
+    assert(std::ranges::any_of(
+        trace.trace->declarations, [](const auto& declaration) {
+          return declaration.path == "systemc_root.payload_input";
+        }));
   }
   auto mismatch = payloads;
   mismatch.front().bytes.push_back('x');

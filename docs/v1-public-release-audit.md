@@ -13,7 +13,7 @@ The installed v1 surface is:
 - `fsim/api.h`, `fsim/systemc.hpp`, `fsim/systemc_abi.h`,
   `fsim/version.hpp`, the `<systemc>` compatibility header, and the complete
   `fsim/systemc/` facade header tree;
-- the `fsim_api` shared library and `fsim_systemc_support` library;
+- the `fsim_api` shared library and `fsim_systemc_plugin_exports` library;
 - the bundled Tcl runtime and license when selected; and
 - project documentation including the producer-independent UVM tutorial and
   closure audit, the Apache-2.0 license, README, and reviewed IEEE package tree.

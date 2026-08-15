@@ -1625,9 +1625,9 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
 
 1. Start in `/home/colin/projects/fsim`, read this section and the locked Batch
    172 allocation in `docs/implementation_plan_v2.md`, then verify branch
-   `codex/v2` is clean and synchronized at the pushed Batch 171 closeout commit
-   recorded by Batch 171 Change 20 above. Do not use stale conversational state
-   as an implementation handoff.
+   `codex/v2` is clean and synchronized at pushed Batch 171 closeout commit
+   `8c2c89ed678a044d8f522b83aafe7b9657c7354f`. Do not use stale conversational
+   state as an implementation handoff.
 2. Preserve Batch 171's zero-active 17-row FST ledger at normalized SHA-256
    `fa40e80a69015276a850de6f4f84355d93ec541c774a76003f2b1718d1eac248`,
    the immutable format-neutral model, VCD byte contract, both FST compression
@@ -1688,16 +1688,712 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     changes that induce long rebuilds. Semantic header edits are allowed only
     when required by the owning change.
 15. Release build testing is not required except during the final batch checks.
+16. The grouped Batch 172 allocation is expanded into exactly twenty bounded
+    changes before semantic implementation. Change 1 registers an eighteen-row
+    one-to-one ownership ledger for Changes 2-19 covering official provenance,
+    one runtime, ABI/cache identity, the opaque protocol/session/execution/
+    loopback/safe-point seams, arbitrary-width codecs, TLM 1/2, complete
+    inventory/trace/debug observation, compatibility/artifacts, corpus/resources
+    and documentation/closure. Preserve this planning-only Change 1 in the
+    intentionally dirty worktree and do not begin Change 2 until its ledger and
+    registration are validated. No workflow audit or hosted-CI action,
+    inspection, restart or monitoring is permitted under the current no-CI
+    instruction.
+17. Change 1 is complete without semantic implementation. The registered
+    eighteen-row `systemc_accellera_inventory.tsv` assigns Changes 2-19 exactly
+    across official source provenance, the one-runtime build, compatibility/
+    ABI/cache identity, backend protocol/session/execution/loopback/safe-point
+    seams, arbitrary-width codecs, TLM 1/2, signal/channel and binding/alias
+    inventories, trace/debug transaction observation, compatibility/artifacts,
+    corpus/resources and documentation/closure. All eighteen rows are active
+    at normalized SHA-256
+    `a31b86ab78bcfd9862477073217fff40ec5b4cbc9f6c199f88946eaf37a371ad`.
+    The direct workflow-independent contract passes; the refreshed graph has
+    34,911 nodes and 162,000 edges. No semantic SystemC code, Release build/test,
+    sanitizer, workflow audit, hosted-CI action, reset, commit, push or header
+    formatting ran. Preserve Change 1 in the intentionally dirty Batch 172
+    worktree and implement only Change 2's official upstream provenance next.
     Change 20 alone owns the LLVM-disabled sanitizer, fresh full exact-LLVM
     Debug/Release builds, installed/relocation/upstream/mixed/TLM/trace/debug/
     protocol/resource/release gates and the sole implementation commit/push.
-16. The authoritative plan labels Batch 172 a CI monitoring boundary, but the
-    user's current instruction forbids CI work. Do not inspect, monitor,
-    restart, cancel or modify hosted CI unless the user explicitly reauthorizes
-    that work; continue all possible local implementation and validation.
-17. Batch 171 Change 20 must replace this planned handoff's closeout reference
+18. The authoritative plan labels Batch 172 a CI monitoring boundary. Keep
+    hosted CI untouched through Changes 1-19. At Change 20, before the sole
+    implementation push, inspect the most recent CI log and reproduce/fix its
+    errors locally; after all final local gates pass, push and monitor the new
+    run. Do not inspect, monitor, restart, cancel or modify hosted CI earlier.
+19. Batch 171 Change 20 must replace this planned handoff's closeout reference
     with the exact synchronized commit and retained final-check evidence before
     Batch 172 implementation begins.
+20. Change 2 is complete in the same intentionally dirty worktree. The official
+    Accellera `3.0.2` tag archive is vendored unmodified at 4,573,759 bytes with
+    release commit `70b0fc8e4a74acc677b0fc73cea08f940c2115d5`, SHA-256
+    `9b3693ed286aab958b9e5d79bb0ad3bc523bbc46931100553275352038f4a0c4`
+    and deterministic 4,456-file tree identity
+    `b1fbb8b7bcb76e3f803155585f2c3e1073e4c990de72302040cfab283c9f9fd0`.
+    Its byte-identical Apache-2.0 license/notice, source manifest and SPDX 2.3
+    component are retained beside the archive. Configure validates the exact
+    offline archive before any SystemC target; isolated materialization checks
+    all files and emits a reproducible manifest. Focused negative evidence
+    rejects corrupt, wrong-version and incomplete inputs and unsafe work roots.
+    The warning-free Debug tree regenerates without compilation, the registered
+    provenance/inventory tests pass 2/2 in 0.56 seconds, and a separate corrupt
+    archive configure fails at the intended pre-target validation. The ledger
+    has one preserved and seventeen active rows at normalized SHA-256
+    `713a4dfd5019ce8f17027596975a558d5ed74f8bd68bd4a3efe758f8f45864e1`.
+    No upstream runtime has been built or linked yet. No Release test,
+    sanitizer, workflow/hosted-CI activity, commit, push or header formatting
+    ran. Preserve Changes 1-2 and implement only Change 3's one-shared-runtime
+    build boundary next.
+21. Change 3 is complete in the accumulated worktree. The official target now
+    builds one shared C++20 SystemC 3.0.2 runtime plus one versioned fsim bridge;
+    the runtime identity includes the pinned archive digest, compiler and
+    standard and rejects null, wrong-version and wrong-compiler identities.
+    A configure-time inventory proves all 124 non-interface fsim binaries,
+    libraries and plug-ins carry the bridge, and direct source/incremental
+    plug-in linkers add the same governed library. On Linux, all seven configured
+    SystemC plug-in modules and the compiler consumer name one bridge DSO, the
+    bridge resolves one `libsystemc.so.3.0`, and direct and bridge callers share
+    the same current `sc_simcontext`. The staged install retains byte-identical
+    official `systemc`, `systemc.h`, `tlm` and `tlm.h`, exact relocatable CMake
+    and pkg-config metadata, relative DSO/executable runpaths and one resolved
+    upstream runtime. Its independent installed consumer configures and builds
+    with eight workers against exact package versions
+    `SystemCLanguage 3.0.2.20251031` and `SystemCTLM 2.0.6.20191203`, then runs
+    successfully. The warning-free Debug build and focused shared-runtime,
+    provenance, plug-in, incremental, matrix, application and typed-boundary
+    gates pass 13/13 in 95.00 seconds. The ledger has two preserved and sixteen
+    active rows at normalized SHA-256
+    `77796d32c9fcb552c26047b75be5baf674d2ba2b61ca39d86b41b55d5903499d`.
+    The refreshed graph contains 34,948 nodes and 162,121 edges.
+    No Release build/test, sanitizer, CI/workflow activity, commit, push or
+    header formatting ran. Preserve Changes 1-3 and implement only Change 4's
+    compatibility, ABI and cache identity boundary next.
+22. Change 4 is complete in the same intentionally dirty worktree. Public fsim
+    compatibility headers now use official Accellera definitions by default;
+    the temporary custom implementation is reachable only through an explicit
+    legacy execution adapter. The installed adapter retains typed factory, HDL
+    proxy and export source forms, and its exact upstream SHA-256, bridge
+    revision 1 and compiler-specific standard-library identity join the runtime
+    in one compatibility fingerprint. Plug-in ABI 2 and source/incremental
+    compile/link keys carry that identity. Direct plug-ins, incremental caches,
+    mapped libraries and embedded designs reject or fall back from internally
+    consistent producers whose runtime/SystemC ABI, target or upstream/compiler/
+    stdlib/bridge fingerprint is stale. The compatibility archive and exact
+    adapter header install beside the one shared runtime. The warning-free full
+    Debug build completes; the focused installed/runtime/header/ABI/compiler/
+    incremental/mapped/design/application slice passes 18/18 in 60.93 seconds,
+    and inventory/catalog/source gates pass 3/3 in 0.33 seconds. The refreshed
+    graph has 35,002 nodes and 162,311 edges; the loader has cognitive
+    complexity 13 with no loop or recursion. The ledger preserves Changes 2-4
+    with fifteen active rows and digest
+    `cbbf2cbd3b9aa2ae07f16d2f631b9993345fe24c5c1fb48856a95030b2771a71`.
+    Required header changes were semantic and formatting touched only changed
+    implementation/test sources. No Release build/test, sanitizer, CI/workflow
+    activity, reset, commit or push ran. Preserve Changes 1-4 and implement only
+    Change 5's bounded backend message and stable identity boundary next.
+23. Change 5 is complete in the accumulated worktree. The opaque
+    `SystemCKernelBackend` accepts and returns only encoded bytes plus transport
+    status. Domain-separated SHA-256 identities provide typed stable island,
+    hierarchy, object, endpoint and transaction IDs; nonzero sequence IDs are
+    island scoped. Schema 1 freezes a 128-byte canonical little-endian header,
+    fifteen operation identities, direction/status/correlation rules, flags,
+    reserved zero bytes and exact payload length. Governed identity, payload
+    and message ceilings reject invalid parents, zero sequences, incomplete
+    chains, unknown fields, malformed/trailing/reserved encodings and resource
+    excess under three cataloged diagnostics. A source contract proves the
+    public boundary contains no upstream SystemC/TLM type, object/channel/socket
+    pointer, coroutine or thread handle, and exact identity/message hashes
+    freeze the encoding. The warning-free full Debug build completes; protocol,
+    installed, runtime, artifact, application, diagnostics and source evidence
+    passes 9/9 in 55.02 seconds. The graph has 35,124 nodes and 162,705 edges;
+    the loop-free validator has cognitive complexity 16 and the decoder has
+    complexity 4 with no loop or recursion. The ledger preserves Changes 2-5
+    with fourteen active rows and normalized SHA-256
+    `817f1eadb7d4957f576cba04dd32da2a5c95e0d2e0a780163e1e0ea032fe0733`.
+    Formatting touched only the new header/implementation/test. No Release
+    build/test, sanitizer, CI/workflow activity, reset, commit or push ran.
+    Preserve Changes 1-5 and implement only Change 6's one-session lifecycle,
+    rollback and teardown boundary next.
+24. Change 6 is complete in the same intentionally dirty worktree. Bounded
+    schema-1 payloads describe session identity and plug-in path, native roots,
+    typed construction parameters and endpoint/interface binding; lifecycle
+    receipts retain staged/published counts, context generation, terminal
+    state and one of four stable diagnostic classifications. One backend owns
+    one official `sc_simcontext` and factory registry, swaps that context only
+    under the serialized upstream global-context guard, and exposes no native
+    type through its public protocol/session headers. `backend_port` performs
+    real typed upstream binding. Official elaboration, start and initial delta
+    draining reach zero-time quiescence before staged roots publish. Repeated
+    session/object construction and native factory, binding, elaboration or
+    start failures roll back every object, plug-in and context; terminal close
+    is idempotent. The focused test covers malformed/trailing/duplicate and
+    resource payloads, parameter application, nested hierarchy names, a
+    throwing factory, missing binding, unbound elaboration, lifecycle callbacks,
+    initial evaluation, same-named roots in two simultaneously live contexts,
+    independent teardown and clean recovery. The warning-free eight-worker
+    full Debug build completes in 113 steps. The protocol/session/runtime/
+    compatibility/install/artifact/application/catalog/source/inventory/
+    contract slice passes 12/12 in 59.85 seconds, followed by a post-format
+    5/5 gate in 0.49 seconds. The graph has 35,307 nodes and 163,353 edges;
+    session methods have maximum cognitive complexity 19, loop depth one, no
+    nested loop and no recursion. The ledger preserves Changes 2-6 with
+    thirteen active rows and normalized SHA-256
+    `f8f1a38518c01dc945f542041e9f563ddf4f3d3e4589a579e4e1a6cbc176e721`.
+    Formatting touched only the new header/implementation/tests. The existing
+    adapter-header edit was semantic and was not reformatted. No Release
+    build/test, sanitizer, CI/workflow activity, reset, commit or push ran.
+    Preserve Changes 1-6 and implement only Change 7's bounded execution
+    protocol next.
+25. Change 7 is complete in the same intentionally dirty worktree. A public
+    schema-1 execution header carries bounded scalar input and exact delta/time
+    advance payloads plus ordered receipts for next activity, dirty output,
+    report, inspection and snapshot operations. No upstream kernel, process,
+    channel, socket, coroutine or thread object crosses the boundary. Each
+    receipt orders exact femtosecond time, delta, Accellera region, island and
+    nonzero result sequence. The official adapter now applies or samples
+    integral values through real bound signal interfaces with exact width and
+    signedness; arbitrary-width two-/four-/nine-state values remain owned by
+    Change 10. Official `sc_start` reaches bounded delta quiescence or an exact
+    time boundary, reports absolute next activity, and distinguishes safe,
+    paused, stopped and failed outcomes. Dirty output values drain exactly once;
+    inspection, snapshot and bounded reports remain available at safe points.
+    A native execution exception removes every root, plug-in and context and
+    returns an error receipt; explicit stop remains observable until idempotent
+    teardown. Direct tests cover malformed/trailing/noncanonical payloads,
+    ordering, wrong directions, delta/time and future activity, dirty-once
+    behavior, report/inspect/snapshot, pause/resume, stop, exception rollback,
+    resource limits and clean context recovery. The warning-free eight-worker
+    full Debug build completes in 121 steps. The dependent installed/runtime/
+    protocol/session/execution/artifact/application/catalog/source/inventory/
+    contract slice passes 12/12 in 60.03 seconds; the final post-documentation
+    rerun passes 12/12 in 59.93 seconds. The refreshed graph has 35,514 nodes
+    and 164,183 edges; native advance has maximum cognitive complexity 16, loop
+    depth one, no
+    nested loop and no recursion. The ledger preserves Changes 2-7 with twelve
+    active rows and normalized SHA-256
+    `52256374b0af37dfff67d84df1f0adee972d42cbd187d6f4ff351137661cbfab`.
+    Formatting touched only the new execution header/implementation/tests and
+    changed session implementation; the required existing adapter-header edit
+    was semantic and was not reformatted. No Release build/test, sanitizer,
+    CI/workflow activity, reset, commit or push ran. Preserve Changes 1-7 and
+    implement only Change 8's serialized loopback transport, replay ordering
+    and failure-containment boundary next.
+26. Change 8 is complete in the accumulated Batch 172 worktree. One public
+    loopback wrapper forwards copied request bytes to any serialized backend
+    and returns copied response bytes; the session factory therefore exercises
+    the identical protocol path intended for a future worker without adding a
+    launcher or partitioner. Protocol-valid responses may use an independent
+    sequence but must correlate to the request and preserve its operation and
+    complete typed identity chain. Per-island request sequences reject mutated
+    duplicates, stale, skipped and exhausted order; byte-identical replayable
+    duplicates return the cached deterministic response without peer execution.
+    Replay entries, buffers and forwarded exchanges are bounded with stable
+    FIFO eviction. Disconnect, malformed/rejected/excessive response and wrong
+    correlation/identity all close and clear the wrapper; a new wrapper proves
+    clean recovery. Tests compare direct and loopback real-session lifecycle and
+    execution receipts across two official contexts and separately cover byte
+    forwarding, independent response sequences, replay, eviction, ordering,
+    bounds and contained peer failures. The warning-free eight-worker full
+    Debug rebuild completes in 68 steps, and the dependent artifact/catalog/
+    source/inventory/contract/install/runtime/protocol/session/execution/
+    loopback/application slice passes 13/13 in 67.74 seconds. The graph has
+    35,614 nodes and 164,606 edges; implementation maximum cognitive complexity
+    is 11 with no loops or recursion. The ledger preserves Changes 2-8 with
+    eleven active rows and normalized SHA-256
+    `29d08dcf90820bb4cf89d258bd9e4561619be17215d75317de3d43437ab7b165`.
+    Formatting touched only the new loopback header/implementation/test. No
+    Release build/test, sanitizer, CI/workflow activity, reset, commit or push
+    ran. Preserve Changes 1-8 and implement only Change 9's exact Accellera
+    safe-point crossing and batched mixed-HDL synchronization boundary next.
+27. Change 9 is complete in the same intentionally dirty worktree. A public
+    transport-neutral synchronizer accepts only caller-owned absolute time/delta
+    safe points; it contains no scheduler. Before execution, each attachment
+    freezes a stable island, Verilog/SystemVerilog/VHDL host identity, next
+    serialized request sequence, current time and sorted pre-resolved output
+    endpoints. Each call sorts and applies the complete HDL input batch, moves
+    every official context to the same exact time barrier, then drains native
+    evaluate/update/notification work to quiescence before any dirty output is
+    published. A flattened endpoint list avoids per-event hierarchy lookup.
+    Crossing records retain input, time-arrival, kernel-quiescent and output
+    stages; dirty samples retain native update-region, time, delta, island and
+    result order. Final receipts merge activity and earliest-next-time only from
+    quiescent islands. Invalid/duplicate inputs, stale points, late attachment
+    and resource excess reject without mutation; any peer, receipt, exact-time
+    or update-order failure closes every island with no partial receipt. The
+    focused test uses one direct SystemVerilog-owned context and one loopback
+    VHDL-owned context, intentionally reverses attachment and input order, and
+    proves deterministic delta/time barriers, values, dirty-once output, next
+    activity, nonterminal validation recovery and terminal disconnect
+    containment. The warning-free eight-worker full Debug rebuild completes in
+    69 steps; the dependent artifact/catalog/source/inventory/contract/install/
+    runtime/protocol/session/execution/loopback/synchronization/application
+    slice passes 14/14 in 66.91 seconds. The graph has 35,746 nodes and 165,126
+    edges; implementation maximum cognitive complexity is 11, loop depth one,
+    with no recursion. The ledger preserves Changes 2-9 with ten active rows and
+    normalized SHA-256
+    `050d45131563a2268021d96d97754bd11becee1245980aa450ccfd0d53c93550`.
+    Formatting touched only the new synchronization header/implementation/test.
+    No Release build/test, sanitizer, CI/workflow activity, reset, commit or push
+    ran. Preserve Changes 1-9 and implement only Change 10's bounded arbitrary-
+    width two-state, four-state and VHDL nine-state crossing codec next.
+28. Change 10 is complete in the same intentionally dirty worktree. A canonical
+    schema-1 bounded value codec retains arbitrary-width bit2, logic4 and VHDL
+    logic9 planes, signedness, exact ascending/descending signed ranges,
+    enumeration tables and nonzero femtosecond time units. Execution schema 2
+    embeds those values while retaining the scalar source interface. Public
+    Accellera adapters drive and sample `sc_bv<129>` and `sc_lv<257>` through
+    real direct and serialized-loopback sessions; inputs, post-update dirty
+    outputs, inspection and snapshots remain exact. Generated 129/130/257-bit
+    cases cover every logic9 state without oversized string literals. Protocol,
+    artifact and the real 137-bit mixed-language typed-boundary application
+    retain every limb and unknown plane. Four cataloged diagnostics reject
+    unsupported/lossy projection, malformed/noncanonical metadata and padding,
+    truncation/trailing bytes and governed width/text/table/payload excess
+    without partial mutation. The warning-clean eight-worker full Debug rebuild
+    completes in 85 steps; the dependent codec/protocol/session/execution/
+    loopback/synchronization/runtime/artifact/application/inventory/contract/
+    install/catalog slice passes 17/17 in 90.71 seconds, and the source-line gate
+    passes separately. The refreshed graph contains 35,911 nodes and 165,839
+    edges; codec functions have maximum cognitive complexity 11, decoder
+    complexity 9, loop depth two and no recursion. The ledger preserves Changes
+    2-10 with nine active rows and digest
+    `27c9532b79594974be3da5cb83fc6ab26295d44772a1e52373a888f983a59625`.
+    Formatting touched only new headers and new/changed implementation/tests;
+    required existing-header edits were semantic and not reformatted. No
+    Release build/test, sanitizer, CI/workflow activity, reset, commit or push
+    ran. Preserve Changes 1-10 and implement only Change 11's native TLM 1.0
+    in-island interfaces next. Keep hosted CI untouched until Change 20, where
+    the latest user instruction requires inspecting the most recent CI log and
+    fixing its errors locally before the final push and monitoring run.
+29. Change 11 is complete in the same intentionally dirty worktree. Real
+    Accellera TLM1 FIFO, blocking/nonblocking put/get/peek, transport and
+    analysis interfaces retain native blocking, event ordering and analysis
+    fan-out inside one island. The bounded registry validates reciprocal typed
+    connections, bridge agreement, all interface kinds, canonical stable
+    endpoint/sequence/transaction identities and legal begun/blocked/terminal
+    transitions. Arbitrary-width request/response values serialize only for an
+    explicit bridge; native co-located traffic rejects serialization. The
+    application compiler now uses the configured build compiler and its driver
+    defaults, preserves the legacy `<systemc>` adapter while allowing official
+    TLM headers, and links Accellera macro exports through the exports-only
+    support archive. This prevents the legacy `sc_module_name` implementation
+    from interposing on the shared upstream runtime; mixed legacy/Accellera
+    object links reject, while the existing legacy datatype application still
+    passes. Protocol nesting and design-artifact persistence round-trip exact
+    TLM1 transactions. Four cataloged diagnostics cover metadata, lifecycle,
+    payload and resource failures. The warning-clean eight-worker full Debug
+    rebuild completes 516 steps in 244.39 seconds with peak RSS 1,600,180 KiB.
+    The dependent artifact/catalog/source/inventory/contract/install/runtime/
+    protocol/session/execution/loopback/synchronization/value/TLM/compiler/
+    incremental/application slice passes 20/20 in 43.45 seconds; the
+    Windows-critical typed-boundary case passes in 23.63 seconds. The refreshed
+    graph contains 36,061 nodes and 166,409 edges; TLM1 functions have maximum
+    cognitive complexity 11, loop depth one and no recursion. The ledger
+    preserves Changes 2-11 with eight active rows and normalized SHA-256
+    `30dc77d91ac2ab49dd5f87f7dd2a8ca0d8080c7b03503733fe5ba28ec6a126e4`.
+    Required existing-header changes were semantic and were not reformatted.
+    No Release build/test, sanitizer, hosted-CI/workflow action, reset, commit
+    or push ran. Preserve Changes 1-11 and implement only Change 12's native
+    TLM 2.0 boundary. Keep hosted CI untouched until Change 20, where the latest
+    user instruction requires inspecting the most recent CI log and fixing its
+    errors locally before the final push and monitoring run.
+30. Change 12 is complete in the same intentionally dirty worktree. Real
+    Accellera TLM2 initiator/target sockets retain blocking transport,
+    nonblocking forward/backward phases, response status, generic-payload
+    extensions, DMI plus invalidation, debug transport and `tlm_utils` quantum
+    keeping inside one island. The bounded registry validates reciprocal socket
+    graphs, directions, bus widths, bridge agreement, canonical stable
+    endpoint/sequence/transaction identities and legal lifecycle state while
+    exposing only owned data and pointer-free DMI metadata. Native co-located
+    traffic rejects serialization; explicit bridges use a canonical schema-1
+    codec with overflow-safe length accounting. The combined TLM1/TLM2
+    application, generic protocol nesting and design-artifact persistence all
+    pass. Four cataloged diagnostics cover metadata, lifecycle, payload and
+    resource failures. The warning-clean eight-worker full Debug dependency
+    build completes in 78 steps. The dependent artifact/catalog/source/
+    inventory/contract/install/provenance/runtime/protocol/session/execution/
+    loopback/synchronization/value/TLM/compiler/incremental/application slice
+    passes 21/21 in 47.47 seconds, including the Windows-critical typed-boundary
+    case in 26.42 seconds. The refreshed graph contains 36,464 nodes and
+    170,546 edges; TLM2 functions have maximum cognitive complexity 11, loop
+    depth one and no recursion. The ledger preserves Changes 2-12 with seven
+    active rows and normalized SHA-256
+    `914536cb3f207703ff572686b927d0c449f070b7ad5fc46d2d575f2661d69479`.
+    Formatting touched only the new header, implementation and direct test; no
+    existing header was reformatted. No Release build/test, sanitizer, hosted-
+    CI/workflow action, reset, commit or push ran. Preserve Changes 1-12 and
+    implement only Change 13's immutable signal/channel inventory next. Keep
+    hosted CI untouched until Change 20, when the most recent completed CI log
+    must be inspected and its failures reproduced and fixed locally before the
+    final push and monitoring run. The legacy SystemC interface is no longer
+    required: Change 17 must remove it and every residual custom-kernel path,
+    and Change 20 must verify only the official Accellera interface remains.
+31. Change 13 is complete in the same intentionally dirty worktree. A bounded
+    schema-1 post-binding registry freezes canonical channel paths and stable
+    object/channel identities with exact value-codec domain, width, signedness,
+    writer policy, update ownership and observation mode. Official adapters
+    cover built-in integral, `sc_bit`, `sc_logic`, `sc_int`, `sc_uint`,
+    `sc_bigint`, `sc_biguint`, `sc_bv` and `sc_lv` signals plus buffers, clocks,
+    resolved scalar/vector signals, mutexes, semaphores and event queues. The
+    native proof includes 17- and 129-bit signals. Duplicate paths, mutation
+    after freeze, disappearing/changed live channels, unsupported custom
+    primitive channels, malformed/trailing/reserved encodings and resource
+    exhaustion reject without partial publication. Generic protocol nesting,
+    trace-hierarchy path identity and design-artifact persistence round-trip
+    exact inventories. Four cataloged diagnostics cover metadata, lifecycle,
+    unsupported adapters and resources. The warning-clean eight-worker full
+    Debug dependency build completes in 74 steps. The dependent artifact/
+    catalog/source/inventory/contract/install/provenance/runtime/protocol/
+    session/execution/loopback/synchronization/value/TLM/channel-inventory/
+    compiler/incremental/trace/application slice passes 23/23 in 42.60 seconds,
+    including the Windows-critical typed-boundary case in 23.86 seconds. The
+    refreshed graph contains 36,659 nodes and 171,150 edges; inventory
+    functions have maximum cognitive complexity 11, loop depth one and no
+    recursion. The ledger preserves Changes 2-13 with six active rows and
+    normalized SHA-256
+    `0ab6d52101b206895318e09252d62331112249e39d4ef3b8f4c3c9587625ebf7`.
+    Formatting touched only the new headers, implementation and direct test;
+    no existing header was reformatted. No Release build/test, sanitizer,
+    hosted-CI/workflow action, reset, commit or push ran. Preserve Changes 1-13
+    and implement only Change 14's binding/alias inventory next. Keep the
+    legacy-interface removal assigned to Change 17 and hosted CI untouched
+    until Change 20's last-log audit, local repairs, final checks and push.
+32. Change 14 is complete in the same intentionally dirty worktree. A bounded
+    schema-1 binding registry resolves official `sc_in`, `sc_out`, `sc_inout`,
+    generic ports and exports once onto Change 13's immutable channel IDs. Each
+    declaration retains its canonical path, interface, direction, all sorted
+    targets, complete hierarchical alias chain and optional Verilog,
+    SystemVerilog or VHDL endpoint identity; the frozen execution-facing graph
+    needs no path lookup. Native coverage includes direct input/output, a child
+    port through its parent, export binding, two-target multi-bind and a
+    VHDL-correlated proxy. Missing channels, duplicates, cyclic/repeated chains,
+    bad lifecycle, malformed/trailing/reserved encodings and resource
+    exhaustion reject transactionally. Generic protocol nesting, trace alias
+    identity and design-artifact persistence round-trip exact graphs. Four
+    cataloged diagnostics cover metadata, topology, lifecycle and resources.
+    The warning-clean eight-worker full Debug dependency build completes in 80
+    steps. The dependent artifact/catalog/source/inventory/contract/install/
+    provenance/runtime/protocol/session/execution/loopback/synchronization/
+    value/TLM/channel/binding/compiler/incremental/trace/application slice
+    passes 24/24 in 42.63 seconds, including the Windows-critical typed-boundary
+    case in 24.55 seconds. The refreshed graph contains 36,783 nodes and
+    171,722 edges; binding functions have maximum cognitive complexity 11,
+    maximum loop depth two and no recursion. The ledger preserves Changes 2-14
+    with five active rows and normalized SHA-256
+    `615583497a88c0edc084f79b7fcd6f474d6169a8008809b90dc1af295660121c`.
+    Formatting touched only new headers, implementation and direct test; no
+    existing header was reformatted. No Release build/test, sanitizer, hosted-
+    CI/workflow action, reset, commit or push ran. Preserve Changes 1-14 and
+    implement only Change 15's post-update trace dirty hooks next. Keep the
+    legacy-interface removal assigned to Change 17 and hosted CI untouched
+    until Change 20.
+33. Change 15 is complete in the same intentionally dirty worktree. Official
+    post-update `value_changed_event` hooks now queue lossless ordered batches
+    by frozen endpoint ID without polling channel paths. Disabled observers
+    avoid value capture; late enablement publishes an immediate snapshot;
+    aliases validate against Change 14's frozen bindings; arbitrary-width
+    values and repeats reach the immutable observation model, forced VCD
+    checkpoints and FST. Queue saturation returns retryable bounded
+    backpressure without mutation, and flush/close contain writer failure in a
+    terminal state. A real `sc_buffer<sc_lv<257>>` and Boolean signal prove
+    selective tracing, disabled cost, repeated post-update capture, late
+    snapshot, aliasing, backpressure/retry and lifecycle behavior. Protocol,
+    phase and design-artifact tests preserve the same exact repeated value.
+    Four cataloged diagnostics cover metadata/order, lifecycle, backpressure
+    and writers. The warning-clean eight-worker full Debug dependency build
+    completes in 60 steps; the dependent artifact/catalog/source/inventory/
+    contract/install/provenance/runtime/protocol/session/execution/loopback/
+    synchronization/value/TLM/channel/binding/compiler/incremental/trace/
+    application slice passes 26/26 in 42.81 seconds, including the Windows-
+    critical typed-boundary case in 24.51 seconds. The refreshed graph has
+    36,787 nodes and 169,225 edges; trace functions have maximum cognitive
+    complexity 10, loop depth one and no recursion. The ledger preserves
+    Changes 2-15 with four active rows and normalized SHA-256
+    `018dacf38cc329b539b8add42442a072103e29de01358d49a0fcf90781aafd93`.
+    Formatting touched the new header and changed implementation/test sources;
+    no existing header was reformatted. No Release build/test, sanitizer,
+    hosted-CI/workflow action, reset, commit or push ran. Preserve Changes 1-15
+    and implement only Change 16's safe-point debugger and correlated TLM
+    transaction observation next. Change 17 still owns complete removal of the
+    legacy SystemC interface and every residual custom-kernel execution path;
+    keep hosted CI untouched until Change 20.
+34. Change 16 is complete in the same intentionally dirty worktree. A bounded
+    schema-1 safe-point observer publishes debugger reads/writes, inventory
+    queries and reports only at quiescent owning-island points, with explicit
+    frozen-endpoint adapters and mutation-free rejection before unsafe,
+    unsupported, out-of-order or resource-exhausted callbacks. Unsupported
+    custom primitive channels now remain visible and round-trip exactly in the
+    immutable inventory instead of disappearing; registering an adapter enables
+    their arbitrary-width debugger values without changing that inventory.
+    Native TLM1 begin/update/end and TLM2 begin/phase/DMI/invalidation/debug/end
+    activity is recorded with stable endpoint, peer, sequence and transaction
+    identity plus exact canonical payload bytes, never as fabricated signal
+    changes. Nested payload/correlation validation, generic protocol transport,
+    the real SystemC/TLM application phase and exact design-artifact
+    publication/load are covered. Four cataloged diagnostics own metadata,
+    safe-point, unsupported-adapter and resource failures. The warning-clean
+    eight-worker full Debug dependency build completes in 77 steps; the
+    dependent artifact/catalog/source/inventory/contract/install/provenance/
+    runtime/protocol/session/execution/loopback/synchronization/value/TLM/
+    channel/binding/observation/compiler/incremental/trace/application slice
+    passes 27/27 in 43.79 seconds, including the Windows-critical typed-boundary
+    case in 24.32 seconds. A stale portability contract was aligned with the
+    official-runtime linker by forbidding whole-archive legacy shim import. The
+    refreshed graph has 36,902 nodes and 169,950 edges; observation functions
+    have maximum cognitive complexity 13, loop depth one and no recursion. The
+    ledger preserves Changes 2-16 with three active rows and normalized SHA-256
+    `9e865d40fd801716bc50af244730a4038f4a199e8424e7855a494c3688f9c848`.
+    Formatting touched only the new header, implementation and direct test; no
+    existing header was reformatted. No Release build/test, sanitizer, hosted-
+    CI/workflow action, reset, commit or push ran. Preserve Changes 1-16 and
+    implement only Change 17 next: remove the legacy SystemC interface and all
+    residual custom-kernel execution paths while preserving source,
+    incremental, mapped-library, multi-root/plugin, mixed-language, API,
+    relocation, cache and replay behavior through official Accellera SystemC.
+    Keep hosted CI untouched until Change 20.
+35. Change 17 is complete in the same intentionally dirty worktree. SystemC
+    source and incremental builds, mapped libraries, multiple roots/plugins,
+    relocation, cold/warm/edit caches, mixed HDL boundaries, public APIs and
+    artifact/checkpoint replay now use only the official Accellera runtime.
+    The custom kernel, scheduler, fiber/Boost.Context path, compatibility
+    headers and support archive are removed. ABI v3 and the official bridge no
+    longer expose reverse SystemC-to-HDL proxy callbacks, declarations or
+    elaboration; HDL owns HDL child composition. A governed build overlay fixes
+    upstream teardown ordering by destroying the process table before the
+    coroutine package without modifying vendored source. The warning-clean
+    eight-worker full Debug rebuild completes in 1,062 steps. The fresh
+    official application matrix passes in 145.28 seconds; the dependent slice
+    passes 36/36 in 49.53 seconds, including typed boundaries in 49.52 seconds;
+    direct elaboration, ABI, plug-in, portability and public-release checks
+    pass 5/5 in 1.06 seconds. The three-language example now uses HDL-owned
+    SystemC and VHDL siblings and passes check, eight-worker build, execution,
+    PASS and clean stop. The refreshed graph contains 36,298 nodes and 160,328
+    edges. The complete authored-source audit finds removed names only in
+    negative contracts or historical records. The ledger preserves Changes
+    2-17 with two active rows at normalized SHA-256
+    `0c1398bf3dc97bd04061ae47caadc03ceb5db753b8c5c9cb551dc492a0b8b388`.
+    Required public-header edits were semantic and no existing header was
+    reformatted. No Release build/test, sanitizer, hosted-CI/workflow action,
+    reset, commit or push ran. Preserve Changes 1-17 and implement only Change
+    18's upstream/fsim corpus, platform and governed-resource boundary next;
+    keep hosted CI untouched until Change 20's final last-log audit, local
+    repairs, checks, commit and push.
+36. Change 18 is complete in the same intentionally dirty worktree. Three
+    byte-unmodified official programs from the pinned tree now run: simple
+    FIFO, the IEEE 1666 event-list regression and the TLM FIFO regression. A
+    portable exported entry shim provides shared-runtime discovery without
+    patching upstream source. The fsim-owned corpus runs two roots with
+    generated 129-bit two-state and 257-bit four-state values, ports, an export,
+    signals, clock, enabled/disabled observation, bounded TLM1 FIFO and TLM2
+    socket traffic. It proves exact time advancement, one runtime/context,
+    4,096 crossings, 1,792 observations, 2,048 TLM1 and 4,096 TLM2
+    transactions, 8,192 touched stack bytes, 9,120 object bytes, 2,040
+    backpressure events, PASS, stopped status and two-root destruction.
+    Throughput is reported without a machine-speed threshold. The four new
+    tests pass 4/4 in 0.02 seconds; the dependent session/plugin/loopback/
+    failure/replay/artifact/trace/typed-boundary slice passes 30/30 in 47.45
+    seconds, including typed boundaries in 47.44 seconds. Unchanged configure
+    runs no longer rewrite the governed upstream overlay, avoiding unnecessary
+    runtime rebuilds. The refreshed graph contains 36,340 nodes and 160,474
+    edges; new functions have maximum cognitive complexity 6, loop depth one
+    and no recursion. The ledger preserves Changes 2-18 with one active row at
+    normalized SHA-256
+    `5ab59debdba3be19aeffb70b345865a76b8f78b9ff2092a5ee0911c2a423c47e`.
+    No Release build/test, sanitizer, hosted-CI/workflow action, reset, commit
+    or push ran. Preserve Changes 1-18 and implement only Change 19's public
+    documentation, zero-active ledger, regression de-duplication and exact
+    Batch 173 handoff next. Keep hosted CI untouched until Change 20.
+37. Change 19 is complete in the same intentionally dirty worktree. README,
+    architecture, language support and the SystemC integration reference now
+    expose only the official Accellera 3.0.2 runtime, native TLM-1/TLM-2,
+    pointer-free direct/loopback backend, safe-point observation, exact
+    artifact/ABI identities and the explicit post-v2 parallelism boundary.
+    Nine recursive closure drivers use CTest fixtures during ordinary
+    regression, eliminating nested reruns while preserving explicit standalone
+    retained-evidence commands. The new Accellera closure passes four corpus,
+    thirteen backend, twelve integration and six contract witnesses; its
+    integration stage completes in 138.00 seconds and all retained logs are
+    nonempty. The SDF/VITAL audit now tracks 2,516 diagnostics, 1,100 bounded
+    sources and 1,304 SPDX-owned authored files while excluding generated
+    example cache and trace output. The final focused inventory, provenance,
+    installed-public, portability, de-duplication, SDF/VITAL, public-release,
+    catalog and source-policy slice passes 10/10, and the fixture-only closure
+    driver passes separately. The refreshed graph has 36,345 nodes and 160,486
+    edges. The final eight-worker Debug dependency build completes 124 link
+    steps warning-clean. The ledger has eighteen
+    preserved rows, zero active rows and normalized SHA-256
+    `f0a4261bc193480d573128edef7c0b3aa890e43f472bdf3cdac358eb00927d4e`.
+38. Preserve all Batch 172 Changes 1-19 and perform only Change 20 next. Before
+    pushing, inspect the most recent completed CI log once and reproduce/fix
+    its errors locally, including the audited MSVC test-string size boundary,
+    Windows `FSIM-SC-I004` cache-lock path, one-dimensional Verilog memory
+    concrete bound, SDF/VITAL release audit and duplicate regression coverage.
+    Make every CI timeout 120 minutes. Then run the LLVM-disabled sanitizer and
+    fresh exact-LLVM Debug/Release builds and complete product gates with at
+    least eight workers, commit and push the accumulated batch once, and wait
+    for a Windows run to complete before declaring the boundary finished. Until
+    that final boundary begins, perform no hosted-CI inspection, restart or
+    monitoring. Do not reintroduce the legacy SystemC interface or any custom
+    kernel path, and do not create formatting-only header churn.
+39. Change 20 is in progress at a restart-safe local checkpoint. Branch
+    `codex/v2`, `HEAD` and `origin/codex/v2` still identify
+    `8c2c89ed678a044d8f522b83aafe7b9657c7354f`; nothing from Batch 172 has been
+    committed or pushed. The intentionally dirty worktree contains 179 paths:
+    105 modified, 11 deleted and 63 untracked. `git diff --check` passes. The
+    most recent completed hosted run, `31866595347` at this same base, was
+    inspected once before local repair; do not inspect, restart or monitor
+    hosted CI again until the accumulated closeout has been committed and
+    pushed. All five workflow job timeouts in `.github/workflows/ci.yml` are
+    already 120 minutes. The complete MSVC test-string audit scans 408 C/C++
+    test files with a conservative 16,000-source-byte limit and passes; both
+    the largest token and adjacent group are 14,622 bytes at
+    `tests/app/vhdl_ieee_integration_application_test.cpp:729`.
+
+    The audited CI repairs are present but uncommitted. Trace-archive tests use
+    portable temporary producer/consumer roots; the FST corpus accepts CRLF by
+    normalizing it before enforcing canonical manifest content; the stale
+    three-language preprocessing assertions use the official HDL-sibling
+    hierarchy and final values; the VHDL/PSL digest and SDF/VITAL authored-file
+    count are synchronized; and incremental SystemC cache locks use a
+    32-character digest filename to protect the Windows path budget. The exact
+    LLVM Debug focused slice passes 7/7 for frontend, trace archive, FST corpus,
+    typed boundaries, preprocessing CLI, VHDL/PSL documentation and SDF/VITAL
+    release audit. This directly passes the reported `FSIM-SC-I004` typed-
+    boundary case locally. The current frontend suite also passes without an
+    additional source repair for the reported one-dimensional Verilog-memory
+    bound. The sanitizer build is complete with eight workers after making
+    three backend integral decoders warning-clean. Accellera's standards-legal
+    derived-module member-function conversion triggers GCC's `vptr` sanitizer,
+    so only the upstream runtime target is compiled with
+    `-fno-sanitize=vptr`; ASan and every other UBSan check remain enabled.
+    With leak detection disabled for the ptrace-constrained environment, the
+    focused SystemC datatype and typed-boundary sanitizer tests pass 2/2 in
+    224.55 seconds.
+
+    The first complete 243-test sanitizer attempt intentionally ran to its
+    1,200-second matrix timeout and leaves authoritative logs in
+    `build/ci-sanitizers/Testing/Temporary/`. It records 226 passes and 17
+    failed/not-run entries. Five closure drivers were not run only because of
+    fixture dependencies; they are not independent failures.
+
+    All four diagnosed root causes from that run now have local repairs. The C
+    API test follows the official hierarchy, validates the single
+    `named.$accellera_kernel` process and explicitly rejects removed legacy
+    `pulse`, `metadata` and `run` objects; `fsim.api` passes under the sanitizer
+    in 44.48 seconds. Incremental plug-in teardown now retains the mapped image
+    and its host/type-info resources for process life, because Accellera/TLM's
+    global extension registry owns `type_index` entries after logical registry
+    teardown; `fsim.application.systemc_tlm1` passes twice under the sanitizer
+    in 13.04 and 13.20 seconds without the former heap use after free, and
+    `fsim.systemc.matrix` passes in 40.79 seconds. The release/audit evidence is
+    synchronized at 2,516 diagnostics, 1,100 bounded sources, 1,304 authored
+    files, 100 corpus expectations and zero `SC-020`/`ML-011` positive-owner
+    gaps. The V1 release, inventory, mixed-SystemC, FST, SDF application,
+    VHDL/PSL, Verilog, UVM, differential and release-candidate checks all pass;
+    the feature matrix digest is
+    `bbef73769bca32d42b22fae66968b47bb4f15f59f51d8266353fbbb1f29db141`.
+    `fsim.application.systemc_matrix` now has the required 7,200-second
+    (120-minute) CTest timeout rather than the obsolete 1,200-second ceiling.
+
+    An isolated sanitizer run of `fsim.application.systemc_matrix` remained
+    active and silent for more than ten minutes. It was interrupted with exit
+    130 solely to create this restart boundary, so it has no pass/fail verdict
+    and no test process remains. On restart, rerun that exact isolated case
+    first with
+    `ASAN_OPTIONS=detect_leaks=0:strict_string_checks=1` and
+    `UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1`, allowing its full
+    120-minute timeout. If it passes, rerun the focused prior-failure slice and
+    then all 243 sanitizer tests with the same environment and at least eight
+    workers. Only after the sanitizer suite is clean run fresh eight-worker
+    exact-LLVM Debug and Release builds/tests and the remaining product gates.
+    Re-run the MSVC string audit, timeout audit, release audits and
+    `git diff --check`; update Change 20 evidence; commit and push the
+    accumulated Batch 172 exactly once; then wait for a Windows run to finish
+    before declaring the boundary complete. Do not inspect, restart or monitor
+    hosted CI before that push. Do not start Batch 173 from this dirty state,
+    do not reintroduce any legacy/custom SystemC interface, and avoid
+    formatting-only edits to existing headers.
+
+    The exact first command is:
+
+    ```sh
+    ASAN_OPTIONS=detect_leaks=0:strict_string_checks=1 \
+    UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+      ctest --test-dir build/ci-sanitizers --output-on-failure \
+      -R '^fsim\\.application\\.systemc_matrix$'
+    ```
+
+    After it passes, rebuild the sanitizer tree if any source or CMake input
+    changed, rerun the focused prior-failure tests, then rerun all 243 with
+    `--parallel 8`. The final closeout order remains sanitizer, fresh exact-
+    LLVM Debug, fresh exact-LLVM Release, audits, one commit/push and one
+    completed Windows run.
+
+40. Change 20 local qualification is complete and no test process remains.
+    Branch `codex/v2`, `HEAD` and `origin/codex/v2` still identify
+    `8c2c89ed678a044d8f522b83aafe7b9657c7354f`; nothing from Batch 172 has yet
+    been committed or pushed. The intentionally dirty worktree contains 179
+    paths: 105 modified, 11 deleted and 63 untracked. `git diff --check`
+    passes. Do not inspect, restart or monitor hosted CI until the accumulated
+    batch has been committed and pushed once.
+
+    The isolated LLVM-disabled sanitizer SystemC application matrix passes
+    1/1 in 1,615.29 seconds under its corrected 7,200-second timeout. The
+    focused prior-failure slice passes 11/11 in 12.51 seconds, including C API,
+    TLM1, V1 differential/release-candidate, inventory, mixed-SystemC, FST,
+    SDF, Verilog, VHDL/PSL and UVM evidence. The complete sanitizer regression
+    passes 243/243 in 1,718.11 seconds with no ASan/UBSan marker. A fresh clean-
+    first eight-worker exact-LLVM Debug build completes 2,162 steps and its
+    full regression passes 246/246 in 157.02 seconds.
+
+    Release qualification found two optimizer/linker-only build defects. The
+    synthesized official-SystemC process now directly emplaces Halt or
+    WaitSensitivity instead of moving a nested variant through a conditional
+    temporary, clearing GCC's `-Werror=maybe-uninitialized`. The process-wide
+    bridge exports its executable-interposable `sc_main` fallback normally and
+    carries Linux `--no-as-needed`, so GNU ld retains the bridge before the
+    official runtime introduces its standard `sc_main` reference. The final
+    Release build succeeds with eight workers and its complete regression
+    passes 246/246 in 272.63 seconds. The Release protocol executable resolves
+    one fsim Accellera bridge and one official `libsystemc.so.3.0`. Per the
+    explicit user instruction, neither sanitizer nor Debug was rerun after
+    these Release-only repairs; do not rerun either before the commit.
+
+    The final MSVC source-string audit passes 408 C/C++ test files at the
+    conservative 16,000-byte threshold; its maximum token and adjacent group
+    are 14,622 bytes at
+    `tests/app/vhdl_ieee_integration_application_test.cpp:729`. All five
+    workflow job timeouts remain 120 minutes, the SystemC application matrix
+    timeout is 7,200 seconds, SDF/VITAL and every other release/audit gate pass
+    in the final Release regression, and removed legacy SystemC source/header
+    names occur only in the negative portability contract or historical
+    documentation. The next bounded action is to re-index the final graph,
+    stage the complete 179-path Batch 172 changeset, audit the staged diff,
+    commit and push exactly once, then wait for a Windows run to finish. Do not
+    start Batch 173 until that Windows boundary is green; do not reintroduce
+    the legacy interface or create formatting-only header churn.
+
+## Batch 173 planned restart checkpoint - after Batch 172 closeout
+
+1. Start in `/home/colin/projects/fsim`, read this section and Batch 173 in
+   `docs/implementation_plan_v2.md`, and verify branch `codex/v2` is clean and
+   synchronized at the single pushed Batch 172 closeout commit recorded by
+   Change 20. Do not trust a stale checkpoint hash or begin from this still-
+   dirty Change 19 state.
+2. Preserve the pinned official Accellera SystemC 3.0.2 archive/runtime, native
+   TLM-1/TLM-2 behavior, ABI v3, bridge revision 2, zero-active eighteen-row
+   ledger and retained four-stage closure. The removed fsim SystemC facade,
+   reverse HDL proxy, custom kernel/scheduler, coroutine backend, custom
+   channels/datatypes and Boost.Context dependency must remain absent.
+3. Before semantic SCV work, expand Batch 173's grouped allocation into exactly
+   twenty bounded changes and freeze a one-to-one ownership ledger for official
+   SCV 2.0.1 provenance, compatibility patches, one shared library, ABI/cache,
+   randomization/introspection, recording, backend transport, artifacts,
+   platform/resources, documentation and closure. Change 1 is planning only.
+4. Changes 1-19 use focused Debug validation; Release and sanitizer work belong
+   only to Change 20. Use at least eight local build workers, avoid formatting
+   existing headers, preserve unrelated dirty work, and follow the Batch 173
+   CI-monitoring boundary exactly rather than starting hosted work early.
 
 ## Batch 168 planned restart checkpoint - 2026-08-13
 

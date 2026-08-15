@@ -1,0 +1,37 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "fsim-systemc-3.0.2-source",
+  "documentNamespace": "https://fsim.dev/spdx/systemc-3.0.2/9b3693ed286aab958b9e5d79bb0ad3bc523bbc46931100553275352038f4a0c4",
+  "creationInfo": {
+    "created": "2026-08-14T00:00:00Z",
+    "creators": ["Tool: fsim SystemC provenance harness"]
+  },
+  "packages": [
+    {
+      "name": "SystemC",
+      "SPDXID": "SPDXRef-Package-SystemC-3.0.2",
+      "versionInfo": "3.0.2",
+      "supplier": "Organization: Accellera Systems Initiative Inc.",
+      "downloadLocation": "https://github.com/accellera-official/systemc/archive/refs/tags/3.0.2.tar.gz",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "9b3693ed286aab958b9e5d79bb0ad3bc523bbc46931100553275352038f4a0c4"
+        }
+      ],
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/accellera-official/systemc@3.0.2"
+        }
+      ]
+    }
+  ]
+}

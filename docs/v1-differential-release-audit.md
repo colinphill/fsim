@@ -157,3 +157,10 @@ rows and 144 distinct runtime owners. The executable-row classifications now
 cover 508 interpreter, 423 LLVM/native, 282 cache, 113 debugger, 138 VCD/trace,
 502 scheduling, and 115 failure/diagnostic rows; the governed corpus union
 remains 36 registered CTests.
+
+Batch 172 retains 1,294 required rows and advances the reviewed runtime
+ownership to 145 distinct files after replacing the legacy SystemC facade with
+the official Accellera interface. Reclassification of the removed proxy paths
+and the official kernel bridge produces 506 interpreter, 423 LLVM/native, 282
+cache, 112 debugger, 137 VCD/trace, 503 scheduling, and 115 failure/diagnostic
+rows. The governed corpus union remains 36 registered CTests.

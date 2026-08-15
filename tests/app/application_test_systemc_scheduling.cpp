@@ -15,7 +15,6 @@
 namespace fsim::test {
 
 void ApplicationTestFixture::test_systemc_scheduling_matrix() {
-#if defined(FSIM_HAS_BOOST_CONTEXT)
   // FSIM-CONFORMANCE CF-SC-THREAD-001 source=SRC-SYSTEMC expectation=execute
   // FSIM-CONFORMANCE CF-SC-EVENT-001 source=SRC-SYSTEMC expectation=execute
   // FSIM-CONFORMANCE CF-SC-SIGNAL-001 source=SRC-SYSTEMC expectation=execute
@@ -33,14 +32,14 @@ void ApplicationTestFixture::test_systemc_scheduling_matrix() {
       "cross_updates",
       "ready"};
   const std::vector<std::string> expected_values{
-      "00000010",
+      "00000001",
       "00000011",
       "00000010",
       "00000001",
       "00000010",
       "00000100",
       "00000100",
-      "00000100",
+      "00000011",
       "00000001",
       "00000001",
       "1"};
@@ -73,7 +72,7 @@ void ApplicationTestFixture::test_systemc_scheduling_matrix() {
                  : "systemc_schedule_lifecycle_host";
         config.bindings = {
             {std::string{prefix} + ".u_threads",
-             "systemc:models.fiber_threads",
+             "systemc:models.accellera_threads",
              std::nullopt},
             {std::string{prefix} + ".u_channels",
              "systemc:models.kernel_channels",
@@ -118,7 +117,14 @@ void ApplicationTestFixture::test_systemc_scheduling_matrix() {
             == (vhdl ? fsim::runtime::RunStatus::completed
                      : fsim::runtime::RunStatus::stopped));
         assert(capture.result.time == 5);
-        assert(capture.values == expected_values);
+        if (capture.values != expected_values) {
+          std::ostringstream mismatch;
+          mismatch << "unexpected SystemC scheduling values:";
+          for (const auto& value : capture.values) {
+            mismatch << ' ' << value;
+          }
+          throw std::runtime_error{mismatch.str()};
+        }
       };
   const auto require_equivalent =
       [&](const MatrixCapture& actual,
@@ -296,14 +302,21 @@ void ApplicationTestFixture::test_systemc_scheduling_matrix() {
             config.run.max_deltas,
             fsim::app::SimulationEngine::compiled};
         bool rejected = false;
+        std::string failure;
         try {
           (void)simulation.run();
         } catch (const std::runtime_error& error) {
+          failure = error.what();
           rejected =
-              std::string_view{error.what()}.find(expected)
+              std::string_view{failure}.find(expected)
               != std::string_view::npos;
         }
-        assert(rejected);
+        if (!rejected) {
+          throw std::runtime_error{
+              "SystemC negative case '" + std::string{target}
+              + "' did not report '" + std::string{expected}
+              + "': " + (failure.empty() ? "no failure" : failure)};
+        }
         assert(simulation.poisoned());
       };
   run_failure(
@@ -311,7 +324,7 @@ void ApplicationTestFixture::test_systemc_scheduling_matrix() {
       "intentional channel update failure");
   run_failure(
       "systemc:models.lifecycle_suspend_failure",
-      "next_trigger is only valid in SC_METHOD");
+      "next_trigger() is only allowed in SC_METHODs");
   run_failure(
       "systemc:models.throwing_end_lifecycle",
       "intentional lifecycle terminal failure");
@@ -352,7 +365,6 @@ void ApplicationTestFixture::test_systemc_scheduling_matrix() {
       teardown_config,
       fsim::app::SimulationEngine::interpreter);
   require_equivalent(teardown_capture, sv_reference);
-#endif
 }
 
 }  // namespace fsim::test

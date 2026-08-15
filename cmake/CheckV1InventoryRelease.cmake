@@ -44,10 +44,10 @@ foreach(FSIM_GATE IN ITEMS
 endforeach()
 
 foreach(FSIM_EXACT_OUTPUT IN ITEMS
-    "diagnostic catalog covers 2477 production codes"
-    "Checked 1056 authored sources against the 2500-line hard limit with a 2000-line refactor target"
-    "v1 conformance audit: 392 authored test/control files, 10 reviewed source IDs, 6 excluded source IDs, 8 coverage queues"
-    "v1 conformance corpus: 105 expectations, 28 fixtures, 27 CTests, 49f5754862e3785fa964621b770f202d1d1ad5fb21bd4144b016b7ceb47dd5dd")
+    "diagnostic catalog covers 2516 production codes"
+    "Checked 1100 authored sources against the 2500-line hard limit with a 2000-line refactor target"
+    "v1 conformance audit: 412 authored test/control files, 10 reviewed source IDs, 6 excluded source IDs, 8 coverage queues"
+    "v1 conformance corpus: 100 expectations, 28 fixtures, 27 CTests, 715a4a1846f160a785171c86b777972cfd194271450b5b267588424d4a4a6f07")
   string(FIND
     "${FSIM_COMPOSED_OUTPUT}" "${FSIM_EXACT_OUTPUT}" FSIM_OUTPUT_INDEX)
   if(FSIM_OUTPUT_INDEX EQUAL -1)
@@ -72,11 +72,14 @@ list(APPEND FSIM_AUTHORED_FILES
   "${FSIM_SOURCE_DIR}/CMakePresets.json"
   "${FSIM_SOURCE_DIR}/README.md")
 list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX "/tests/fuzz/corpus/")
+list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX "/\\.fsim-cache/")
+list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX
+  "/examples/three_language_hierarchy/three_language\\.vcd$")
 list(REMOVE_DUPLICATES FSIM_AUTHORED_FILES)
 list(LENGTH FSIM_AUTHORED_FILES FSIM_AUTHORED_COUNT)
-if(NOT FSIM_AUTHORED_COUNT EQUAL 1252)
+if(NOT FSIM_AUTHORED_COUNT EQUAL 1304)
   message(FATAL_ERROR
-    "authored license inventory changed: expected 1252 files, "
+    "authored license inventory changed: expected 1304 files, "
     "found ${FSIM_AUTHORED_COUNT}")
 endif()
 foreach(FSIM_FILE IN LISTS FSIM_AUTHORED_FILES)
@@ -121,5 +124,5 @@ foreach(FSIM_REVIEW_ID IN ITEMS
 endforeach()
 
 message(STATUS
-  "final inventory audit: 2477 diagnostics, 1056 bounded sources, "
-  "1252 SPDX-owned files, 31 reviewed IEEE files, and 105 conformance expectations")
+  "final inventory audit: 2516 diagnostics, 1100 bounded sources, "
+  "1304 SPDX-owned files, 31 reviewed IEEE files, and 100 conformance expectations")

@@ -183,25 +183,6 @@ end architecture;
         return entry.instance == "strength_parent.wrapped.child";
       }));
 
-  fsim::elaboration::SystemCInstanceDescription systemc_root;
-  systemc_root.path = "strength_systemc_root";
-  systemc_root.target = "systemc:work.strength_systemc_root";
-  systemc_root.handle = 900;
-  fsim::elaboration::ForeignChild child;
-  child.handle = 901;
-  child.name = "wrapped";
-  child.module_facade = true;
-  child.implementation = "strength_systemc_wrapper";
-  systemc_root.foreign_children.push_back(std::move(child));
-  const std::array systemc_roots{systemc_root};
-  const auto systemc_boundary = fsim::elaboration::elaborate(
-      verilog.design, "systemc:work.strength_systemc_root", {},
-      systemc_roots);
-  assert(systemc_boundary.ok());
-  assert(std::ranges::any_of(
-      systemc_boundary.design->specializations(), [](const auto& entry) {
-        return entry.instance == "strength_systemc_root.wrapped";
-      }));
 }
 
 }  // namespace fsim::tests::elaboration

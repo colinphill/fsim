@@ -5,16 +5,15 @@
 
 namespace fsim::systemc::plugin_detail {
 
-std::atomic_uint64_t checksum_temporary_counter{};
-std::atomic_uint64_t uncached_plan_counter{};
-std::atomic_uint64_t dependency_scan_counter{};
+std::atomic_uint64_t checksum_temporary_counter { };
+std::atomic_uint64_t uncached_plan_counter { };
+std::atomic_uint64_t dependency_scan_counter { };
 #if defined(_WIN32)
-std::atomic_uint64_t response_temporary_counter{};
+std::atomic_uint64_t response_temporary_counter { };
 #endif
 
-
-
-[[nodiscard]] diagnostic::SourceSpan path_span(const std::filesystem::path& path) {
+[[nodiscard]] diagnostic::SourceSpan path_span(const std::filesystem::path& path)
+{
     diagnostic::SourceSpan span;
     span.path = path.generic_string();
     return span;
@@ -24,21 +23,24 @@ void report_error(
     diagnostic::Engine& diagnostics,
     std::string code,
     std::string message,
-    const std::filesystem::path& path) {
+    const std::filesystem::path& path)
+{
     diagnostics.error(std::move(code), std::move(message), path_span(path));
 }
 
-[[nodiscard]] std::string lowercase(std::string value) {
+[[nodiscard]] std::string lowercase(std::string value)
+{
     std::transform(value.begin(), value.end(), value.begin(), [](const unsigned char c) {
         return static_cast<char>(std::tolower(c));
     });
     return value;
 }
 
-[[nodiscard]] std::string path_argument(const std::filesystem::path& path) {
+[[nodiscard]] std::string path_argument(const std::filesystem::path& path)
+{
 #if defined(_WIN32)
     const auto encoded = path.u8string();
-    return {reinterpret_cast<const char*>(encoded.data()), encoded.size()};
+    return { reinterpret_cast<const char*>(encoded.data()), encoded.size() };
 #else
     return path.string();
 #endif
@@ -46,7 +48,8 @@ void report_error(
 
 [[nodiscard]] std::filesystem::path make_absolute(
     const std::filesystem::path& path,
-    const std::filesystem::path& working_directory) {
+    const std::filesystem::path& working_directory)
+{
     if (path.is_absolute()) {
         return path.lexically_normal();
     }
@@ -55,14 +58,15 @@ void report_error(
 
 [[nodiscard]] std::filesystem::path effective_working_directory(
     const PluginCompileRequest& request,
-    std::error_code& error) {
+    std::error_code& error)
+{
     error.clear();
     if (!request.working_directory.empty()) {
         auto result = request.working_directory;
         if (!result.is_absolute()) {
             result = std::filesystem::absolute(result, error);
             if (error) {
-                return {};
+                return { };
             }
         }
         return result.lexically_normal();
@@ -70,21 +74,22 @@ void report_error(
     return std::filesystem::current_path(error).lexically_normal();
 }
 
-[[nodiscard]] bool contains_directory_separator(const std::string_view value) noexcept {
+[[nodiscard]] bool contains_directory_separator(const std::string_view value) noexcept
+{
     return value.find('/') != std::string_view::npos
         || value.find('\\') != std::string_view::npos;
 }
 
 [[nodiscard]] std::vector<std::filesystem::path> executable_candidates(
-    const std::string& executable) {
+    const std::string& executable)
+{
     std::vector<std::filesystem::path> result;
     if (contains_directory_separator(executable)) {
         result.emplace_back(executable);
         return result;
     }
 
-    const auto raw_path =
-        fsim::support::environment_variable("PATH");
+    const auto raw_path = fsim::support::environment_variable("PATH");
     if (!raw_path) {
         return result;
     }
@@ -93,7 +98,7 @@ void report_error(
 #else
     constexpr char separator = ':';
 #endif
-    std::string_view search_path{*raw_path};
+    std::string_view search_path { *raw_path };
     std::size_t begin = 0;
     while (begin <= search_path.size()) {
         const auto end = search_path.find(separator, begin);
@@ -102,7 +107,7 @@ void report_error(
         if (directory.empty()) {
             directory = ".";
         }
-        auto candidate = std::filesystem::path{std::string{directory}} / executable;
+        auto candidate = std::filesystem::path { std::string { directory } } / executable;
         result.push_back(candidate);
 #if defined(_WIN32)
         if (!candidate.has_extension()) {
@@ -119,7 +124,8 @@ void report_error(
 
 [[nodiscard]] std::filesystem::path resolve_executable(
     const std::string& executable,
-    const std::filesystem::path& working_directory) {
+    const std::filesystem::path& working_directory)
+{
     std::error_code error;
     for (auto candidate : executable_candidates(executable)) {
         if (!candidate.is_absolute()) {
@@ -139,11 +145,12 @@ void report_error(
         }
         error.clear();
     }
-    return {};
+    return { };
 }
 
-[[nodiscard]] HostToolchain infer_toolchain(const std::string& compiler) {
-    const auto filename = lowercase(std::filesystem::path{compiler}.filename().string());
+[[nodiscard]] HostToolchain infer_toolchain(const std::string& compiler)
+{
+    const auto filename = lowercase(std::filesystem::path { compiler }.filename().string());
     if (filename == "cl" || filename == "cl.exe" || filename == "clang-cl"
         || filename == "clang-cl.exe") {
         return HostToolchain::msvc;
@@ -151,15 +158,41 @@ void report_error(
     return HostToolchain::gcc_like;
 }
 
-[[nodiscard]] std::string default_compiler() {
-#if defined(_WIN32)
+[[nodiscard]] std::string default_compiler()
+{
+#if defined(FSIM_SYSTEMC_DEFAULT_COMPILER)
+    return FSIM_SYSTEMC_DEFAULT_COMPILER;
+#elif defined(_WIN32)
     return "cl.exe";
 #else
     return "c++";
 #endif
 }
 
-[[nodiscard]] std::string shared_library_filename() {
+void add_default_compiler_settings(project::SystemCSection& settings)
+{
+    if (!settings.compiler.empty()) {
+        return;
+    }
+    settings.compiler = default_compiler();
+#if defined(FSIM_SYSTEMC_DEFAULT_COMPILE_OPTIONS)
+    std::string_view encoded { FSIM_SYSTEMC_DEFAULT_COMPILE_OPTIONS };
+    std::vector<std::string> options;
+    while (!encoded.empty()) {
+        const auto separator = encoded.find('|');
+        options.emplace_back(encoded.substr(0U, separator));
+        if (separator == std::string_view::npos) {
+            break;
+        }
+        encoded.remove_prefix(separator + 1U);
+    }
+    settings.compile_options.insert(
+        settings.compile_options.begin(), options.begin(), options.end());
+#endif
+}
+
+[[nodiscard]] std::string shared_library_filename()
+{
 #if defined(_WIN32)
     return "plugin.dll";
 #else
@@ -167,7 +200,8 @@ void report_error(
 #endif
 }
 
-[[nodiscard]] bool source_extension_supported(const std::filesystem::path& path) {
+[[nodiscard]] bool source_extension_supported(const std::filesystem::path& path)
+{
     const auto extension = lowercase(path.extension().string());
     return extension == ".cpp" || extension == ".cc" || extension == ".cxx";
 }
@@ -175,11 +209,12 @@ void report_error(
 void add_sequence_to_key(
     compiler::CacheKeyBuilder& builder,
     const std::string_view label,
-    const std::vector<std::string>& values) {
-    builder.add(std::string{label} + ".count", std::to_string(values.size()));
+    const std::vector<std::string>& values)
+{
+    builder.add(std::string { label } + ".count", std::to_string(values.size()));
     for (std::size_t index = 0; index < values.size(); ++index) {
         builder.add(
-            std::string{label} + "." + std::to_string(index),
+            std::string { label } + "." + std::to_string(index),
             values[index]);
     }
 }
@@ -187,11 +222,12 @@ void add_sequence_to_key(
 void add_paths_to_key(
     compiler::CacheKeyBuilder& builder,
     const std::string_view label,
-    const std::vector<std::filesystem::path>& values) {
-    builder.add(std::string{label} + ".count", std::to_string(values.size()));
+    const std::vector<std::filesystem::path>& values)
+{
+    builder.add(std::string { label } + ".count", std::to_string(values.size()));
     for (std::size_t index = 0; index < values.size(); ++index) {
         builder.add(
-            std::string{label} + "." + std::to_string(index),
+            std::string { label } + "." + std::to_string(index),
             values[index].generic_string());
     }
 }
@@ -199,7 +235,8 @@ void add_paths_to_key(
 [[nodiscard]] bool add_compiler_identity(
     compiler::CacheKeyBuilder& builder,
     const std::string& compiler_name,
-    const std::filesystem::path& resolved_compiler) {
+    const std::filesystem::path& resolved_compiler)
+{
     builder.add("compiler.requested", compiler_name);
     if (resolved_compiler.empty()) {
         builder.add("compiler.resolved", "<unresolved>");
@@ -228,8 +265,9 @@ void add_paths_to_key(
 
 void add_compiler_environment_to_key(
     compiler::CacheKeyBuilder& builder,
-    const HostToolchain toolchain) {
-    constexpr std::array gcc_environment{
+    const HostToolchain toolchain)
+{
+    constexpr std::array gcc_environment {
         "PATH",
         "CPATH",
         "CPLUS_INCLUDE_PATH",
@@ -238,8 +276,9 @@ void add_compiler_environment_to_key(
         "LIBRARY_PATH",
         "COMPILER_PATH",
         "GCC_EXEC_PREFIX",
-        "SOURCE_DATE_EPOCH"};
-    constexpr std::array msvc_environment{
+        "SOURCE_DATE_EPOCH"
+    };
+    constexpr std::array msvc_environment {
         "PATH",
         "INCLUDE",
         "LIB",
@@ -254,7 +293,8 @@ void add_compiler_environment_to_key(
         "UCRTVersion",
         "Platform",
         "PreferredToolArchitecture",
-        "SOURCE_DATE_EPOCH"};
+        "SOURCE_DATE_EPOCH"
+    };
     const auto add = [&](const auto& names) {
         builder.add(
             "compiler.environment.count",
@@ -266,7 +306,7 @@ void add_compiler_environment_to_key(
                 names[index]);
             builder.add(
                 "compiler.environment." + std::to_string(index) + ".value",
-                value ? *value : std::string{"<unset>"});
+                value ? *value : std::string { "<unset>" });
         }
     };
     if (toolchain == HostToolchain::msvc) {
@@ -276,11 +316,10 @@ void add_compiler_environment_to_key(
     }
 }
 
-
-
 [[nodiscard]] std::optional<std::string> read_text_file(
     const std::filesystem::path& path,
-    std::error_code& error) {
+    std::error_code& error)
+{
     error.clear();
     std::ifstream stream(path, std::ios::binary);
     if (!stream) {
@@ -296,7 +335,8 @@ void add_compiler_environment_to_key(
     return contents.str();
 }
 
-[[nodiscard]] std::string remove_cpp_comments(const std::string_view source) {
+[[nodiscard]] std::string remove_cpp_comments(const std::string_view source)
+{
     enum class State : std::uint8_t {
         normal,
         line_comment,
@@ -352,8 +392,7 @@ void add_compiler_environment_to_key(
         case State::string_literal:
         case State::character_literal: {
             result.push_back(character);
-            const auto delimiter =
-                state == State::string_literal ? '"' : '\'';
+            const auto delimiter = state == State::string_literal ? '"' : '\'';
             if (!escaped && character == delimiter) {
                 state = State::normal;
             }
@@ -369,13 +408,12 @@ void add_compiler_environment_to_key(
     return result;
 }
 
-
-
 [[nodiscard]] std::optional<IncludeDirective> parse_include_replacement(
-    const std::string_view replacement) {
+    const std::string_view replacement)
+{
     std::size_t begin = 0;
     while (begin < replacement.size()
-           && std::isspace(static_cast<unsigned char>(replacement[begin])) != 0) {
+        && std::isspace(static_cast<unsigned char>(replacement[begin])) != 0) {
         ++begin;
     }
     if (begin >= replacement.size()
@@ -388,13 +426,15 @@ void add_compiler_environment_to_key(
     if (end == std::string_view::npos) {
         return std::nullopt;
     }
-    return IncludeDirective{
-        std::string{replacement.substr(begin + 1, end - begin - 1)}, quoted};
+    return IncludeDirective {
+        std::string { replacement.substr(begin + 1, end - begin - 1) }, quoted
+    };
 }
 
 [[nodiscard]] IncludeScan find_includes(
     const std::string_view source,
-    const std::vector<std::string>& command_defines) {
+    const std::vector<std::string>& command_defines)
+{
     const auto without_comments = remove_cpp_comments(source);
     std::unordered_map<std::string, std::string> macros;
     bool ambiguous_macro_state = false;
@@ -408,8 +448,7 @@ void add_compiler_environment_to_key(
             name.erase(0, 2);
         }
         if (!name.empty()) {
-            const auto replacement =
-                name_end == define.size() ? std::string{"1"} : define.substr(name_end + 1);
+            const auto replacement = name_end == define.size() ? std::string { "1" } : define.substr(name_end + 1);
             if (const auto found = macros.find(name);
                 found != macros.end() && found->second != replacement) {
                 ambiguous_macro_state = true;
@@ -422,7 +461,7 @@ void add_compiler_environment_to_key(
     std::size_t line_begin = 0;
     while (line_begin <= without_comments.size()) {
         const auto line_end = without_comments.find('\n', line_begin);
-        const auto line = std::string_view{without_comments}.substr(
+        const auto line = std::string_view { without_comments }.substr(
             line_begin,
             line_end == std::string::npos
                 ? without_comments.size() - line_begin
@@ -430,7 +469,7 @@ void add_compiler_environment_to_key(
         std::size_t position = 0;
         const auto skip_space = [&]() {
             while (position < line.size()
-                   && std::isspace(static_cast<unsigned char>(line[position])) != 0) {
+                && std::isspace(static_cast<unsigned char>(line[position])) != 0) {
                 ++position;
             }
         };
@@ -440,8 +479,8 @@ void add_compiler_environment_to_key(
             skip_space();
             const auto directive_begin = position;
             while (position < line.size()
-                   && (std::isalnum(static_cast<unsigned char>(line[position])) != 0
-                       || line[position] == '_')) {
+                && (std::isalnum(static_cast<unsigned char>(line[position])) != 0
+                    || line[position] == '_')) {
                 ++position;
             }
             const auto directive = line.substr(
@@ -450,16 +489,15 @@ void add_compiler_environment_to_key(
             if (directive == "define") {
                 const auto name_begin = position;
                 while (position < line.size()
-                       && (std::isalnum(static_cast<unsigned char>(line[position])) != 0
-                           || line[position] == '_')) {
+                    && (std::isalnum(static_cast<unsigned char>(line[position])) != 0
+                        || line[position] == '_')) {
                     ++position;
                 }
                 if (position > name_begin
                     && (position == line.size() || line[position] != '(')) {
-                    const auto name =
-                        std::string{line.substr(name_begin, position - name_begin)};
+                    const auto name = std::string { line.substr(name_begin, position - name_begin) };
                     skip_space();
-                    const auto replacement = std::string{line.substr(position)};
+                    const auto replacement = std::string { line.substr(position) };
                     if (const auto found = macros.find(name);
                         found != macros.end() && found->second != replacement) {
                         ambiguous_macro_state = true;
@@ -469,14 +507,12 @@ void add_compiler_environment_to_key(
             } else if (directive == "undef") {
                 const auto name_begin = position;
                 while (position < line.size()
-                       && (std::isalnum(static_cast<unsigned char>(line[position])) != 0
-                           || line[position] == '_')) {
+                    && (std::isalnum(static_cast<unsigned char>(line[position])) != 0
+                        || line[position] == '_')) {
                     ++position;
                 }
-                const auto name =
-                    std::string{line.substr(name_begin, position - name_begin)};
-                ambiguous_macro_state =
-                    ambiguous_macro_state || macros.contains(name);
+                const auto name = std::string { line.substr(name_begin, position - name_begin) };
+                ambiguous_macro_state = ambiguous_macro_state || macros.contains(name);
                 macros.erase(name);
             } else if (directive == "include") {
                 include_replacements.emplace_back(line.substr(position));
@@ -510,13 +546,13 @@ void add_compiler_environment_to_key(
             }
             std::size_t begin = 0;
             while (begin < replacement.size()
-                   && std::isspace(static_cast<unsigned char>(replacement[begin])) != 0) {
+                && std::isspace(static_cast<unsigned char>(replacement[begin])) != 0) {
                 ++begin;
             }
             std::size_t end = begin;
             while (end < replacement.size()
-                   && (std::isalnum(static_cast<unsigned char>(replacement[end])) != 0
-                       || replacement[end] == '_')) {
+                && (std::isalnum(static_cast<unsigned char>(replacement[end])) != 0
+                    || replacement[end] == '_')) {
                 ++end;
             }
             const auto name = replacement.substr(begin, end - begin);
@@ -537,7 +573,8 @@ void add_compiler_environment_to_key(
 }
 
 [[nodiscard]] bool plausible_cpp_dependency(
-    const std::filesystem::path& path) {
+    const std::filesystem::path& path)
+{
     const auto extension = lowercase(path.extension().string());
     return extension.empty() || extension == ".h" || extension == ".hh"
         || extension == ".hpp" || extension == ".hxx" || extension == ".inc"
@@ -548,21 +585,22 @@ void add_compiler_environment_to_key(
 [[nodiscard]] bool collect_conservative_root_dependencies(
     const std::vector<std::filesystem::path>& roots,
     std::vector<std::filesystem::path>& dependencies,
-    diagnostic::Engine& diagnostics) {
+    diagnostic::Engine& diagnostics)
+{
     std::error_code error;
     for (const auto& root : roots) {
         if (!std::filesystem::is_directory(root, error)) {
             error.clear();
             continue;
         }
-        std::filesystem::recursive_directory_iterator iterator{
-            root, std::filesystem::directory_options::skip_permission_denied, error};
+        std::filesystem::recursive_directory_iterator iterator {
+            root, std::filesystem::directory_options::skip_permission_denied, error
+        };
         const std::filesystem::recursive_directory_iterator end;
         while (!error && iterator != end) {
             if (iterator->is_regular_file(error)
                 && plausible_cpp_dependency(iterator->path())) {
-                auto normalized =
-                    std::filesystem::weakly_canonical(iterator->path(), error);
+                auto normalized = std::filesystem::weakly_canonical(iterator->path(), error);
                 if (error) {
                     error.clear();
                     normalized = iterator->path().lexically_normal();
@@ -585,11 +623,12 @@ void add_compiler_environment_to_key(
 
 [[nodiscard]] std::filesystem::path normalized_existing_path(
     const std::filesystem::path& path,
-    std::error_code& error) {
+    std::error_code& error)
+{
     error.clear();
     if (!std::filesystem::is_regular_file(path, error)) {
         error.clear();
-        return {};
+        return { };
     }
     auto canonical = std::filesystem::weakly_canonical(path, error);
     if (error) {
@@ -602,11 +641,11 @@ void add_compiler_environment_to_key(
 [[nodiscard]] std::filesystem::path resolve_include(
     const IncludeDirective& include,
     const std::filesystem::path& including_file,
-    const std::vector<std::filesystem::path>& roots) {
+    const std::vector<std::filesystem::path>& roots)
+{
     std::error_code error;
     if (include.quoted) {
-        auto candidate =
-            normalized_existing_path(including_file.parent_path() / include.name, error);
+        auto candidate = normalized_existing_path(including_file.parent_path() / include.name, error);
         if (!candidate.empty()) {
             return candidate;
         }
@@ -617,7 +656,7 @@ void add_compiler_environment_to_key(
             return candidate;
         }
     }
-    return {};
+    return { };
 }
 
 [[nodiscard]] bool add_transitive_dependencies_to_key(
@@ -626,7 +665,8 @@ void add_compiler_environment_to_key(
     const std::vector<std::filesystem::path>& includes,
     const std::vector<std::string>& command_defines,
     bool& cacheable,
-    diagnostic::Engine& diagnostics) {
+    diagnostic::Engine& diagnostics)
+{
     std::vector<std::filesystem::path> include_roots;
     std::unordered_set<std::string> include_root_names;
     const auto append_include_root = [&](const std::filesystem::path& root) {
@@ -638,10 +678,8 @@ void add_compiler_environment_to_key(
     for (const auto& include : includes) {
         append_include_root(include);
     }
-    std::vector<std::filesystem::path> conservative_scan_roots =
-        include_roots;
-    std::unordered_set<std::string> scan_root_names =
-        include_root_names;
+    std::vector<std::filesystem::path> conservative_scan_roots = include_roots;
+    std::unordered_set<std::string> scan_root_names = include_root_names;
     const auto append_scan_root = [&](const std::filesystem::path& root) {
         const auto normalized = root.lexically_normal();
         if (scan_root_names.insert(normalized.generic_string()).second) {
@@ -685,12 +723,10 @@ void add_compiler_environment_to_key(
             return false;
         }
         const auto scan = find_includes(*text, command_defines);
-        needs_conservative_scan =
-            needs_conservative_scan || scan.has_unresolved_macro_include;
+        needs_conservative_scan = needs_conservative_scan || scan.has_unresolved_macro_include;
         cacheable = cacheable && !scan.has_unresolved_macro_include;
         for (const auto& include : scan.includes) {
-            auto resolved =
-                resolve_include(include, current, include_roots);
+            auto resolved = resolve_include(include, current, include_roots);
             if (resolved.empty()) {
                 // The selected compiler may find this in an implicit directory,
                 // which this portable scanner cannot fingerprint soundly.
@@ -743,7 +779,8 @@ void add_compiler_environment_to_key(
     const std::vector<std::string>& libraries,
     const std::filesystem::path& working_directory,
     bool& cacheable,
-    diagnostic::Engine& diagnostics) {
+    diagnostic::Engine& diagnostics)
+{
     std::error_code error;
     std::size_t content_index = 0;
     for (const auto& library : libraries) {
@@ -757,12 +794,10 @@ void add_compiler_environment_to_key(
             continue;
         }
 #endif
-        const auto candidate =
-            make_absolute(std::filesystem::path{library}, working_directory);
+        const auto candidate = make_absolute(std::filesystem::path { library }, working_directory);
         const auto exists = std::filesystem::is_regular_file(candidate, error);
         error.clear();
-        const bool explicit_path =
-            std::filesystem::path{library}.is_absolute()
+        const bool explicit_path = std::filesystem::path { library }.is_absolute()
             || contains_directory_separator(library);
         if (!exists) {
             if (explicit_path) {
@@ -794,7 +829,8 @@ void add_compiler_environment_to_key(
 
 [[nodiscard]] bool option_changes_output(
     const HostToolchain toolchain,
-    const std::string& option) {
+    const std::string& option)
+{
     const auto folded = lowercase(option);
     if (toolchain == HostToolchain::msvc) {
         return folded == "/c" || folded == "/e" || folded == "/ep" || folded == "/p"
@@ -815,7 +851,8 @@ void add_compiler_environment_to_key(
 
 [[nodiscard]] bool option_hides_cache_dependencies(
     const HostToolchain toolchain,
-    const std::string& option) {
+    const std::string& option)
+{
     const auto folded = lowercase(option);
     if (toolchain == HostToolchain::msvc) {
         return folded == "/i" || folded.rfind("/i", 0) == 0
@@ -840,7 +877,8 @@ void add_compiler_environment_to_key(
 [[nodiscard]] bool validate_options(
     const project::SystemCSection& settings,
     const HostToolchain toolchain,
-    diagnostic::Engine& diagnostics) {
+    diagnostic::Engine& diagnostics)
+{
     const auto validate = [&](
                               const std::vector<std::string>& options,
                               const bool compile_options) {
@@ -872,7 +910,8 @@ void add_compiler_environment_to_key(
 
 [[nodiscard]] std::string prefixed_define(
     const HostToolchain toolchain,
-    const std::string& define) {
+    const std::string& define)
+{
     if (toolchain == HostToolchain::msvc) {
         if (define.rfind("/D", 0) == 0 || define.rfind("-D", 0) == 0) {
             return define;
@@ -885,30 +924,32 @@ void add_compiler_environment_to_key(
     return "-D" + define;
 }
 
-[[nodiscard]] bool is_path_like_library(const std::string& library) {
+[[nodiscard]] bool is_path_like_library(const std::string& library)
+{
     if (contains_directory_separator(library)) {
         return true;
     }
-    const auto extension = lowercase(std::filesystem::path{library}.extension().string());
+    const auto extension = lowercase(std::filesystem::path { library }.extension().string());
     return extension == ".a" || extension == ".so" || extension == ".dylib"
         || extension == ".lib" || extension == ".dll";
 }
 
-[[nodiscard]] std::string_view msvc_runtime_option() noexcept {
+[[nodiscard]] std::string_view msvc_runtime_option() noexcept
+{
 #if defined(_MSC_VER)
-#  if defined(_DLL)
-#    if defined(_DEBUG)
+#if defined(_DLL)
+#if defined(_DEBUG)
     return "/MDd";
-#    else
+#else
     return "/MD";
-#    endif
-#  else
-#    if defined(_DEBUG)
+#endif
+#else
+#if defined(_DEBUG)
     return "/MTd";
-#    else
+#else
     return "/MT";
-#    endif
-#  endif
+#endif
+#endif
 #else
     // Non-Windows command-planning tests model the conventional MSVC
     // dynamic-release runtime. A native MSVC or clang-cl build derives the
@@ -917,7 +958,8 @@ void add_compiler_environment_to_key(
 #endif
 }
 
-[[nodiscard]] constexpr bool msvc_debug_mode() noexcept {
+[[nodiscard]] constexpr bool msvc_debug_mode() noexcept
+{
 #if defined(_DEBUG)
     return true;
 #else
@@ -930,10 +972,11 @@ void add_compiler_environment_to_key(
     const std::string& compiler_name,
     const std::filesystem::path& resolved_compiler,
     const std::vector<std::filesystem::path>& includes,
-    const project::SystemCSection& settings) {
+    const project::SystemCSection& settings)
+{
     std::vector<std::string> argv;
     argv.push_back(
-        path_argument(resolved_compiler.empty() ? std::filesystem::path{compiler_name}
+        path_argument(resolved_compiler.empty() ? std::filesystem::path { compiler_name }
                                                 : resolved_compiler));
 
     if (toolchain == HostToolchain::msvc) {
@@ -985,21 +1028,20 @@ void add_compiler_environment_to_key(
     const project::SystemCSection& settings,
     const std::filesystem::path& output,
     const std::filesystem::path& working_directory,
-    std::vector<std::filesystem::path>& intermediate_paths) {
+    std::vector<std::filesystem::path>& intermediate_paths)
+{
     std::vector<CompilerCommand> commands;
     if (toolchain == HostToolchain::msvc) {
         for (std::size_t index = 0; index < sources.size(); ++index) {
-            auto object =
-                output.parent_path() / ("source-" + std::to_string(index) + ".obj");
-            auto program_database =
-                output.parent_path() / ("source-" + std::to_string(index) + ".pdb");
+            auto object = output.parent_path() / ("source-" + std::to_string(index) + ".obj");
+            auto program_database = output.parent_path() / ("source-" + std::to_string(index) + ".pdb");
             auto argv = common_compile_argv(
                 toolchain, compiler_name, resolved_compiler, includes, settings);
             argv.emplace_back("/c");
             argv.push_back(path_argument(sources[index]));
             argv.push_back("/Fo" + path_argument(object));
             argv.push_back("/Fd" + path_argument(program_database));
-            commands.push_back({std::move(argv), working_directory, toolchain});
+            commands.push_back({ std::move(argv), working_directory, toolchain });
             intermediate_paths.push_back(std::move(object));
             intermediate_paths.push_back(std::move(program_database));
         }
@@ -1013,7 +1055,7 @@ void add_compiler_environment_to_key(
         auto export_file = link_stem;
         export_file += ".exp";
         link_argv.push_back(path_argument(
-            resolved_compiler.empty() ? std::filesystem::path{compiler_name}
+            resolved_compiler.empty() ? std::filesystem::path { compiler_name }
                                       : resolved_compiler));
         link_argv.emplace_back("/nologo");
         link_argv.emplace_back(msvc_runtime_option());
@@ -1049,7 +1091,7 @@ void add_compiler_environment_to_key(
         intermediate_paths.push_back(std::move(link_program_database));
         intermediate_paths.push_back(std::move(import_library));
         intermediate_paths.push_back(std::move(export_file));
-        commands.push_back({std::move(link_argv), working_directory, toolchain});
+        commands.push_back({ std::move(link_argv), working_directory, toolchain });
         return commands;
     }
 
@@ -1072,14 +1114,15 @@ void add_compiler_environment_to_key(
             argv.push_back("-l" + library);
         }
     }
-    commands.push_back({std::move(argv), working_directory, toolchain});
+    commands.push_back({ std::move(argv), working_directory, toolchain });
     return commands;
 }
 
 [[nodiscard]] bool hash_file(
     const std::filesystem::path& path,
     std::string& result,
-    std::error_code& error) {
+    std::error_code& error)
+{
     error.clear();
     std::ifstream stream(path, std::ios::binary);
     if (!stream) {
@@ -1088,12 +1131,12 @@ void add_compiler_environment_to_key(
     }
 
     support::Sha256 hasher;
-    std::array<char, 64U * 1024U> buffer{};
+    std::array<char, 64U * 1024U> buffer { };
     while (stream) {
         stream.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
         const auto count = stream.gcount();
         if (count > 0) {
-            hasher.update(std::as_bytes(std::span{buffer.data(), static_cast<std::size_t>(count)}));
+            hasher.update(std::as_bytes(std::span { buffer.data(), static_cast<std::size_t>(count) }));
         }
     }
     if (!stream.eof()) {
@@ -1106,43 +1149,46 @@ void add_compiler_environment_to_key(
 
 namespace {
 
-constexpr std::string_view kArtifactMetadataMagic =
-    "fsim-systemc-artifact-v1";
+    constexpr std::string_view kArtifactMetadataMagic = "fsim-systemc-artifact-v1";
 
-[[nodiscard]] std::filesystem::path artifact_metadata_path(
-    const std::filesystem::path& library) {
-    return library.string() + ".metadata";
-}
-
-[[nodiscard]] bool lowercase_sha256(const std::string_view value) noexcept {
-    return value.size() == 64
-        && std::all_of(value.begin(), value.end(), [](const char character) {
-               return (character >= '0' && character <= '9')
-                   || (character >= 'a' && character <= 'f');
-           });
-}
-
-[[nodiscard]] bool remove_stale_file(
-    const std::filesystem::path& path,
-    diagnostic::Engine& diagnostics) {
-    std::error_code error;
-    const bool exists = std::filesystem::exists(path, error);
-    if (!error && (!exists || std::filesystem::remove(path, error))) {
-        return true;
+    [[nodiscard]] std::filesystem::path artifact_metadata_path(
+        const std::filesystem::path& library)
+    {
+        return library.string() + ".metadata";
     }
-    report_error(
-        diagnostics,
-        "FSIM-SC-C005",
-        "cannot remove stale SystemC plug-in build input: " + error.message(),
-        path);
-    return false;
-}
+
+    [[nodiscard]] bool lowercase_sha256(const std::string_view value) noexcept
+    {
+        return value.size() == 64
+            && std::all_of(value.begin(), value.end(), [](const char character) {
+                   return (character >= '0' && character <= '9')
+                       || (character >= 'a' && character <= 'f');
+               });
+    }
+
+    [[nodiscard]] bool remove_stale_file(
+        const std::filesystem::path& path,
+        diagnostic::Engine& diagnostics)
+    {
+        std::error_code error;
+        const bool exists = std::filesystem::exists(path, error);
+        if (!error && (!exists || std::filesystem::remove(path, error))) {
+            return true;
+        }
+        report_error(
+            diagnostics,
+            "FSIM-SC-C005",
+            "cannot remove stale SystemC plug-in build input: " + error.message(),
+            path);
+        return false;
+    }
 
 } // namespace
 
 [[nodiscard]] bool valid_cached_artifact(
     const PluginCompilePlan& plan,
-    std::error_code& error) {
+    std::error_code& error)
+{
     error.clear();
     if (!std::filesystem::is_regular_file(plan.library_path, error)) {
         error.clear();
@@ -1177,12 +1223,12 @@ constexpr std::string_view kArtifactMetadataMagic =
         return false;
     }
 
-    std::uintmax_t expected_size{};
+    std::uintmax_t expected_size { };
     const auto parsed = std::from_chars(
         encoded_size.data(),
         encoded_size.data() + encoded_size.size(),
         expected_size);
-    if (parsed.ec != std::errc{}
+    if (parsed.ec != std::errc { }
         || parsed.ptr != encoded_size.data() + encoded_size.size()
         || expected_size == 0 || expected_size != size) {
         error.clear();
@@ -1198,7 +1244,8 @@ constexpr std::string_view kArtifactMetadataMagic =
 
 [[nodiscard]] bool prepare_artifact_build(
     const PluginCompilePlan& plan,
-    diagnostic::Engine& diagnostics) {
+    diagnostic::Engine& diagnostics)
+{
     if (!remove_stale_file(plan.build_path, diagnostics)) {
         return false;
     }
@@ -1210,10 +1257,11 @@ constexpr std::string_view kArtifactMetadataMagic =
 
     std::error_code error;
     const auto directory = plan.library_path.parent_path();
-    std::filesystem::directory_iterator iterator{
+    std::filesystem::directory_iterator iterator {
         directory,
         std::filesystem::directory_options::skip_permission_denied,
-        error};
+        error
+    };
     if (error) {
         report_error(
             diagnostics,
@@ -1222,10 +1270,8 @@ constexpr std::string_view kArtifactMetadataMagic =
             directory);
         return false;
     }
-    const auto metadata_prefix =
-        artifact_metadata_path(plan.library_path).filename().string() + ".tmp.";
-    const auto legacy_prefix =
-        plan.library_path.filename().string() + ".sha256.tmp.";
+    const auto metadata_prefix = artifact_metadata_path(plan.library_path).filename().string() + ".tmp.";
+    const auto legacy_prefix = plan.library_path.filename().string() + ".sha256.tmp.";
     const std::filesystem::directory_iterator end;
     for (; iterator != end; iterator.increment(error)) {
         if (error) {
@@ -1253,7 +1299,8 @@ constexpr std::string_view kArtifactMetadataMagic =
 
 [[nodiscard]] bool publish_artifact(
     const PluginCompilePlan& plan,
-    diagnostic::Engine& diagnostics) {
+    diagnostic::Engine& diagnostics)
+{
     std::error_code error;
     std::string checksum;
     if (!hash_file(plan.build_path, checksum, error)) {
@@ -1276,12 +1323,12 @@ constexpr std::string_view kArtifactMetadataMagic =
     }
 
     const auto metadata_path = artifact_metadata_path(plan.library_path);
-    const auto suffix =
-        checksum_temporary_counter.fetch_add(1, std::memory_order_relaxed);
-    const auto temporary_metadata = std::filesystem::path{
+    const auto suffix = checksum_temporary_counter.fetch_add(1, std::memory_order_relaxed);
+    const auto temporary_metadata = std::filesystem::path {
         metadata_path.string() + ".tmp."
         + std::to_string(dependency_process_id()) + "-"
-        + std::to_string(suffix)};
+        + std::to_string(suffix)
+    };
     {
         std::ofstream stream(
             temporary_metadata, std::ios::binary | std::ios::trunc);
@@ -1327,7 +1374,5 @@ constexpr std::string_view kArtifactMetadataMagic =
     std::filesystem::remove(plan.library_path.string() + ".sha256", error);
     return true;
 }
-
-
 
 } // namespace fsim::systemc::plugin_detail

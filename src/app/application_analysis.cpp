@@ -41,9 +41,6 @@ ApplicationSystemCFactoryProvider::candidates() const {
   std::vector<elaboration::SystemCFactoryCandidate> result;
   for (const auto& entry : registries_) {
     for (const auto& name : entry.registry->factory_names()) {
-      if (!entry.registry->has_elaboration_factory(name)) {
-        continue;
-      }
       result.push_back({
           entry.library,
           name,
@@ -679,22 +676,10 @@ std::vector<SystemCLibraryCompileRequest> systemc_requests(
 std::shared_ptr<systemc::HierarchyRegistry> load_systemc_plugin(
     const std::filesystem::path& path,
     diagnostic::Engine& diagnostics)  {
-  static std::mutex registry_mutex;
-  static std::map<
-      std::filesystem::path,
-      std::weak_ptr<systemc::HierarchyRegistry>>
-      registries;
   const auto normalized = path.lexically_normal();
-  std::lock_guard lock(registry_mutex);
-  if (const auto found = registries.find(normalized);
-      found != registries.end()) {
-    if (auto registry = found->second.lock()) {
-      return registry;
-    }
-    registries.erase(found);
-  }
   std::string error;
-  auto registry = systemc::HierarchyRegistry::load(normalized, error);
+  auto registry = systemc::HierarchyRegistry::load(
+      normalized, error, true);
   if (!registry) {
     diagnostics.error(
         "FSIM-SC-C009",
@@ -707,10 +692,8 @@ std::shared_ptr<systemc::HierarchyRegistry> load_systemc_plugin(
         "compiled SystemC plug-in did not register a module factory");
     return {};
   }
-  auto shared = std::shared_ptr<systemc::HierarchyRegistry>(
+  return std::shared_ptr<systemc::HierarchyRegistry>(
       std::move(registry));
-  registries.emplace(normalized, shared);
-  return shared;
 }
 
 std::string unit_key(const frontend::DesignUnit& unit)  {
@@ -970,36 +953,13 @@ elaboration::SystemCInstanceDescription systemc_description(
         port.bound_object,
     });
   }
-  result.foreign_children.reserve(module.foreign_children.size());
-  for (const auto& child : module.foreign_children) {
-    elaboration::ForeignChild converted;
-    converted.handle = child.handle;
-    converted.name = child.name;
-    converted.construction_actuals =
-        child.construction_actuals;
-    converted.module_facade = child.module_facade;
-    converted.implementation = child.implementation;
-    converted.ports.reserve(child.ports.size());
-    for (const auto& port : child.ports) {
-      converted.ports.push_back({
-          port.name,
-          systemc_type(port.encoding, port.width),
-          systemc_direction(port.direction),
-          port.object,
-          port.handle,
-      });
-    }
-    result.foreign_children.push_back(std::move(converted));
-  }
   result.processes.reserve(module.processes.size());
   for (const auto& process : module.processes) {
     elaboration::ExternalProcess converted;
     converted.handle = process.handle;
     converted.name = process.name;
-    converted.kind = process.kind;
     converted.entry = process.entry;
     converted.user = process.user;
-    converted.initialize = process.initialize;
     converted.sensitivity.reserve(process.sensitivity.size());
     for (const auto& sensitivity : process.sensitivity) {
       converted.sensitivity.push_back(
@@ -1007,16 +967,6 @@ elaboration::SystemCInstanceDescription systemc_description(
            static_cast<std::uint32_t>(sensitivity.edge)});
     }
     result.processes.push_back(std::move(converted));
-  }
-  result.events.reserve(module.events.size());
-  for (const auto& event : module.events) {
-    result.events.push_back({event.handle, event.name});
-  }
-  result.primitive_channels.reserve(
-      module.primitive_channels.size());
-  for (const auto& channel : module.primitive_channels) {
-    result.primitive_channels.push_back(
-        {channel.handle, channel.name, channel.kind});
   }
   result.internal_signals.reserve(module.internal_signals.size());
   for (const auto& signal : module.internal_signals) {
@@ -1040,11 +990,6 @@ elaboration::SystemCInstanceDescription systemc_description(
         export_object.bound_object,
         export_object.writable,
     });
-  }
-  result.metadata_objects.reserve(module.metadata_objects.size());
-  for (const auto& object : module.metadata_objects) {
-    result.metadata_objects.push_back({
-        object.handle, object.name, object.category, object.kind});
   }
   result.native_children.reserve(module.native_children.size());
   for (const auto& child : module.native_children) {
@@ -1133,13 +1078,6 @@ construct_systemc_instances(
               + "' was not registered by the compiled plug-in");
       continue;
     }
-    if (!registry->has_elaboration_factory(request.parsed.unit)) {
-      diagnostics.error(
-          "FSIM-SC-A003",
-          "SystemC factory '" + request.parsed.unit
-              + "' uses the legacy untyped construction ABI");
-      continue;
-    }
     fsim_sc_handle_v1 parent = 0;
     if (const auto separator = request.path.rfind('.');
         separator != std::string::npos) {
@@ -1223,13 +1161,6 @@ void validate_bindings(
           &SystemCLibraryRegistry::library);
       found = registry != systemc_registries.end()
           && registry->registry->has_factory(target->unit);
-      if (found
-          && !registry->registry->has_elaboration_factory(target->unit)) {
-        diagnostics.error(
-            "FSIM-SC-A003",
-            "SystemC factory '" + target->unit
-                + "' uses the legacy untyped construction ABI");
-      }
     } else {
       diagnostics.error(
           "FSIM-ELAB-BIND-0002",

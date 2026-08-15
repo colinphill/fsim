@@ -1,24 +1,101 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "plugin_compiler_internal.hpp"
+#include "producer_fingerprint.hpp"
 
+#include <algorithm>
 #include <mutex>
 
 namespace fsim::systemc {
 using namespace plugin_detail;
 
+extern "C" const char* fsim_systemc_accellera_runtime_identity() noexcept;
+extern "C" const char*
+fsim_systemc_accellera_compatibility_identity() noexcept;
+
 namespace {
 
 #if defined(_WIN32)
-// Concurrent cl.exe dependency scans and cache publication have exhibited
-// intermittent process failures on hosted Windows. Serialize the complete
-// plan/build/verify transaction in-process; the per-key directory lock still
-// provides cross-process publication safety.
-std::mutex windows_compile_mutex;
+    // Concurrent cl.exe dependency scans and cache publication have exhibited
+    // intermittent process failures on hosted Windows. Serialize the complete
+    // plan/build/verify transaction in-process; the per-key directory lock still
+    // provides cross-process publication safety.
+    std::mutex windows_compile_mutex;
 #endif
+
+    std::filesystem::path accellera_runtime_library()
+    {
+#if defined(FSIM_SYSTEMC_ACCELERA_LIBRARY_PATH)
+        auto result = std::filesystem::path { FSIM_SYSTEMC_ACCELERA_LIBRARY_PATH };
+#if defined(FSIM_SYSTEMC_INSTALLED_ACCELERA_LIBRARY_PATH)
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(result, error)) {
+            result = FSIM_SYSTEMC_INSTALLED_ACCELERA_LIBRARY_PATH;
+        }
+#endif
+        return result;
+#else
+        return { };
+#endif
+    }
+
+    std::filesystem::path official_runtime_library()
+    {
+#if defined(FSIM_SYSTEMC_OFFICIAL_LIBRARY_PATH)
+        auto result = std::filesystem::path { FSIM_SYSTEMC_OFFICIAL_LIBRARY_PATH };
+#if defined(FSIM_SYSTEMC_INSTALLED_OFFICIAL_LIBRARY_PATH)
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(result, error)) {
+            result = FSIM_SYSTEMC_INSTALLED_OFFICIAL_LIBRARY_PATH;
+        }
+#endif
+        return result;
+#else
+        return { };
+#endif
+    }
+
+    void add_governed_runtime_library(project::SystemCSection& settings)
+    {
+        const auto runtime = accellera_runtime_library();
+        if (!runtime.empty()) {
+            settings.libraries.push_back(runtime.string());
+        }
+        const auto official_runtime = official_runtime_library();
+        if (!official_runtime.empty()) {
+            settings.libraries.push_back(official_runtime.string());
+        }
+    }
+
+    std::filesystem::path plugin_export_library()
+    {
+#if defined(FSIM_SYSTEMC_PLUGIN_EXPORT_LIBRARY_PATH)
+        auto result
+            = std::filesystem::path { FSIM_SYSTEMC_PLUGIN_EXPORT_LIBRARY_PATH };
+#if defined(FSIM_SYSTEMC_INSTALLED_PLUGIN_EXPORT_LIBRARY_PATH)
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(result, error)) {
+            result = FSIM_SYSTEMC_INSTALLED_PLUGIN_EXPORT_LIBRARY_PATH;
+        }
+#endif
+        return result;
+#else
+        return { };
+#endif
+    }
+
+    void add_plugin_export_library(project::SystemCSection& settings)
+    {
+        const auto exports = plugin_export_library();
+        if (!exports.empty()) {
+            settings.libraries.insert(
+                settings.libraries.begin(), exports.string());
+        }
+    }
 
 } // namespace
 
-std::string_view to_string(const HostToolchain toolchain) noexcept {
+std::string_view to_string(const HostToolchain toolchain) noexcept
+{
     switch (toolchain) {
     case HostToolchain::gcc_like:
         return "gcc-like";
@@ -31,10 +108,12 @@ std::string_view to_string(const HostToolchain toolchain) noexcept {
 std::optional<std::string> plugin_host_fingerprint(
     const project::SystemCSection& settings,
     const std::filesystem::path& requested_working_directory,
-    diagnostic::Engine& diagnostics) {
+    diagnostic::Engine& diagnostics)
+{
     auto effective_settings = settings;
+    add_default_compiler_settings(effective_settings);
 #if defined(FSIM_SYSTEMC_HEADER_PATH)
-    auto header_directory = std::filesystem::path{FSIM_SYSTEMC_HEADER_PATH};
+    auto header_directory = std::filesystem::path { FSIM_SYSTEMC_HEADER_PATH };
 #if defined(FSIM_SYSTEMC_INSTALLED_HEADER_PATH)
     std::error_code header_error;
     if (!std::filesystem::is_directory(header_directory, header_error)) {
@@ -44,18 +123,22 @@ std::optional<std::string> plugin_host_fingerprint(
     effective_settings.include_directories.insert(
         effective_settings.include_directories.begin(), header_directory);
 #endif
-#if defined(FSIM_SYSTEMC_SUPPORT_LIBRARY_PATH)
-    auto support_library =
-        std::filesystem::path{FSIM_SYSTEMC_SUPPORT_LIBRARY_PATH};
-#if defined(FSIM_SYSTEMC_INSTALLED_SUPPORT_LIBRARY_PATH)
-    std::error_code support_error;
-    if (!std::filesystem::is_regular_file(support_library, support_error)) {
-        support_library = FSIM_SYSTEMC_INSTALLED_SUPPORT_LIBRARY_PATH;
+#if defined(FSIM_SYSTEMC_UPSTREAM_HEADER_PATH)
+    auto upstream_header_directory
+        = std::filesystem::path { FSIM_SYSTEMC_UPSTREAM_HEADER_PATH };
+#if defined(FSIM_SYSTEMC_INSTALLED_UPSTREAM_HEADER_PATH)
+    std::error_code upstream_header_error;
+    if (!std::filesystem::is_directory(
+            upstream_header_directory, upstream_header_error)) {
+        upstream_header_directory = FSIM_SYSTEMC_INSTALLED_UPSTREAM_HEADER_PATH;
     }
 #endif
-    effective_settings.libraries.insert(
-        effective_settings.libraries.begin(), support_library.string());
+    effective_settings.include_directories.insert(
+        std::next(effective_settings.include_directories.begin()),
+        upstream_header_directory);
 #endif
+    add_plugin_export_library(effective_settings);
+    add_governed_runtime_library(effective_settings);
     PluginCompileRequest request;
     request.working_directory = requested_working_directory;
     std::error_code error;
@@ -69,21 +152,24 @@ std::optional<std::string> plugin_host_fingerprint(
         return std::nullopt;
     }
     const auto compiler_name = effective_settings.compiler.empty()
-        ? default_compiler() : effective_settings.compiler;
+        ? default_compiler()
+        : effective_settings.compiler;
     const auto toolchain = infer_toolchain(compiler_name);
     if (!validate_options(effective_settings, toolchain, diagnostics)) {
         return std::nullopt;
     }
-    const auto resolved_compiler =
-        resolve_executable(compiler_name, working_directory);
+    const auto resolved_compiler = resolve_executable(compiler_name, working_directory);
     compiler::CacheKeyBuilder builder;
     builder.add("kind", "fsim-systemc-host-v1");
     builder.add("source-language", "c++");
     builder.add("source-standard", "c++20");
     builder.add("runtime-abi", std::to_string(runtime_abi_version));
     builder.add("systemc-abi", std::to_string(FSIM_SYSTEMC_ABI_VERSION));
+    builder.add("accellera-runtime", fsim_systemc_accellera_runtime_identity());
+    builder.add(
+        "accellera-compatibility",
+        fsim_systemc_accellera_compatibility_identity());
     builder.add("toolchain", to_string(toolchain));
-    builder.add("fiber-backend", FSIM_SYSTEMC_FIBER_IDENTITY);
     if (toolchain == HostToolchain::msvc) {
         builder.add("msvc-runtime", msvc_runtime_option());
     }
@@ -97,7 +183,8 @@ std::optional<std::string> plugin_host_fingerprint(
             diagnostics,
             "the selected compiler executable identity could not be hashed",
             resolved_compiler.empty()
-                ? std::filesystem::path{compiler_name} : resolved_compiler);
+                ? std::filesystem::path { compiler_name }
+                : resolved_compiler);
         return std::nullopt;
     }
     add_compiler_environment_to_key(builder, toolchain);
@@ -110,12 +197,30 @@ std::optional<std::string> plugin_host_fingerprint(
     return builder.finish();
 }
 
+std::optional<std::string> plugin_producer_fingerprint(
+    const project::SystemCSection& settings,
+    const std::filesystem::path& working_directory,
+    diagnostic::Engine& diagnostics)
+{
+    auto producer_settings = settings;
+    plugin_detail::add_default_compiler_settings(producer_settings);
+    producer_settings.include_directories.clear();
+    producer_settings.defines.clear();
+    producer_settings.compile_options.clear();
+    producer_settings.link_options.clear();
+    producer_settings.libraries.clear();
+    return plugin_host_fingerprint(
+        producer_settings, working_directory, diagnostics);
+}
+
 std::optional<PluginCompilePlan> plan_plugin_compile(
     const PluginCompileRequest& request,
-    diagnostic::Engine& diagnostics) {
+    diagnostic::Engine& diagnostics)
+{
     auto effective_settings = request.settings;
+    add_default_compiler_settings(effective_settings);
 #if defined(FSIM_SYSTEMC_HEADER_PATH)
-    auto header_directory = std::filesystem::path{FSIM_SYSTEMC_HEADER_PATH};
+    auto header_directory = std::filesystem::path { FSIM_SYSTEMC_HEADER_PATH };
 #if defined(FSIM_SYSTEMC_INSTALLED_HEADER_PATH)
     std::error_code header_error;
     if (!std::filesystem::is_directory(header_directory, header_error)) {
@@ -125,21 +230,22 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
     effective_settings.include_directories.insert(
         effective_settings.include_directories.begin(), header_directory);
 #endif
-#if defined(FSIM_SYSTEMC_SUPPORT_LIBRARY_PATH)
-    auto support_library =
-        std::filesystem::path{FSIM_SYSTEMC_SUPPORT_LIBRARY_PATH};
-#if defined(FSIM_SYSTEMC_INSTALLED_SUPPORT_LIBRARY_PATH)
-    std::error_code support_error;
-    if (!std::filesystem::is_regular_file(
-            support_library, support_error)) {
-        support_library =
-            FSIM_SYSTEMC_INSTALLED_SUPPORT_LIBRARY_PATH;
+#if defined(FSIM_SYSTEMC_UPSTREAM_HEADER_PATH)
+    auto upstream_header_directory
+        = std::filesystem::path { FSIM_SYSTEMC_UPSTREAM_HEADER_PATH };
+#if defined(FSIM_SYSTEMC_INSTALLED_UPSTREAM_HEADER_PATH)
+    std::error_code upstream_header_error;
+    if (!std::filesystem::is_directory(
+            upstream_header_directory, upstream_header_error)) {
+        upstream_header_directory = FSIM_SYSTEMC_INSTALLED_UPSTREAM_HEADER_PATH;
     }
 #endif
-    effective_settings.libraries.insert(
-        effective_settings.libraries.begin(),
-        support_library.string());
+    effective_settings.include_directories.insert(
+        std::next(effective_settings.include_directories.begin()),
+        upstream_header_directory);
 #endif
+    add_plugin_export_library(effective_settings);
+    add_governed_runtime_library(effective_settings);
     std::error_code error;
     const auto working_directory = effective_working_directory(request, error);
     if (error || working_directory.empty()) {
@@ -169,7 +275,7 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
             return std::nullopt;
         }
         if (!std::filesystem::is_regular_file(absolute, error)) {
-            const auto detail = error ? ": " + error.message() : std::string{};
+            const auto detail = error ? ": " + error.message() : std::string { };
             report_error(
                 diagnostics,
                 "FSIM-SC-C003",
@@ -187,18 +293,16 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
         includes.push_back(make_absolute(include, working_directory));
     }
 
-    const auto compiler_name =
-        effective_settings.compiler.empty()
-            ? default_compiler()
-            : effective_settings.compiler;
+    const auto compiler_name = effective_settings.compiler.empty()
+        ? default_compiler()
+        : effective_settings.compiler;
     const auto toolchain = infer_toolchain(compiler_name);
     if (!validate_options(effective_settings, toolchain, diagnostics)) {
         return std::nullopt;
     }
     const auto resolved_compiler = resolve_executable(compiler_name, working_directory);
-    auto cache_directory =
-        request.cache_directory.empty() ? std::filesystem::path{".fsim-cache"}
-                                        : request.cache_directory;
+    auto cache_directory = request.cache_directory.empty() ? std::filesystem::path { ".fsim-cache" }
+                                                           : request.cache_directory;
     cache_directory = make_absolute(cache_directory, working_directory);
 
     compiler::CacheKeyBuilder key_builder;
@@ -209,8 +313,12 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
     key_builder.add("logical-library", request.logical_library);
     key_builder.add("runtime-abi", std::to_string(runtime_abi_version));
     key_builder.add("systemc-abi", std::to_string(FSIM_SYSTEMC_ABI_VERSION));
+    key_builder.add(
+        "accellera-runtime", fsim_systemc_accellera_runtime_identity());
+    key_builder.add(
+        "accellera-compatibility",
+        fsim_systemc_accellera_compatibility_identity());
     key_builder.add("toolchain", to_string(toolchain));
-    key_builder.add("fiber-backend", FSIM_SYSTEMC_FIBER_IDENTITY);
     if (toolchain == HostToolchain::msvc) {
         key_builder.add("msvc-runtime", msvc_runtime_option());
     }
@@ -219,16 +327,15 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
 #else
     key_builder.add("host-format", "linux-elf-x86-64");
 #endif
-    const bool compiler_identity_complete =
-        add_compiler_identity(
-            key_builder, compiler_name, resolved_compiler);
+    const bool compiler_identity_complete = add_compiler_identity(
+        key_builder, compiler_name, resolved_compiler);
     add_compiler_environment_to_key(key_builder, toolchain);
     if (!compiler_identity_complete) {
         report_dependency_cache_disabled(
             diagnostics,
             "the selected compiler executable identity could not be hashed",
             resolved_compiler.empty()
-                ? std::filesystem::path{compiler_name}
+                ? std::filesystem::path { compiler_name }
                 : resolved_compiler);
     }
     add_paths_to_key(key_builder, "include", includes);
@@ -246,8 +353,12 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
     host_builder.add("runtime-abi", std::to_string(runtime_abi_version));
     host_builder.add(
         "systemc-abi", std::to_string(FSIM_SYSTEMC_ABI_VERSION));
+    host_builder.add(
+        "accellera-runtime", fsim_systemc_accellera_runtime_identity());
+    host_builder.add(
+        "accellera-compatibility",
+        fsim_systemc_accellera_compatibility_identity());
     host_builder.add("toolchain", to_string(toolchain));
-    host_builder.add("fiber-backend", FSIM_SYSTEMC_FIBER_IDENTITY);
     if (toolchain == HostToolchain::msvc) {
         host_builder.add("msvc-runtime", msvc_runtime_option());
     }
@@ -274,8 +385,8 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
     // but never claim a persistent hit unless all inputs came through the
     // structured manifest fields.
     bool cacheable = compiler_identity_complete
-        && effective_settings.compile_options.empty()
-        && effective_settings.link_options.empty();
+        && request.settings.compile_options.empty()
+        && request.settings.link_options.empty();
     key_builder.add("source.count", std::to_string(sources.size()));
     for (std::size_t index = 0; index < sources.size(); ++index) {
         if (!key_builder.add_file(
@@ -309,30 +420,26 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
         return std::nullopt;
     }
     if (!cacheable) {
-        const auto serial =
-            uncached_plan_counter.fetch_add(1, std::memory_order_relaxed);
+        const auto serial = uncached_plan_counter.fetch_add(1, std::memory_order_relaxed);
         key_builder.add(
             "uncached.nonce",
             std::to_string(
                 std::chrono::system_clock::now().time_since_epoch().count())
-                + "-" + std::to_string(
-                            std::chrono::steady_clock::now().time_since_epoch().count())
+                + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())
                 + "-" + std::to_string(serial));
     }
     const auto key = key_builder.finish();
 
-    const auto artifact_directory =
-        cache_directory / "systemc" / "artifacts" / key.substr(0, 2) / key;
+    const auto artifact_directory = cache_directory / "systemc" / "artifacts" / key.substr(0, 2) / key;
     PluginCompilePlan plan;
     plan.toolchain = toolchain;
     plan.cacheable = cacheable;
     plan.cache_key = key;
     plan.host_fingerprint = host_fingerprint;
     plan.library_path = artifact_directory / shared_library_filename();
-    plan.build_path =
-        artifact_directory
-        / (std::filesystem::path{shared_library_filename()}.stem().string() + ".build"
-           + std::filesystem::path{shared_library_filename()}.extension().string());
+    plan.build_path = artifact_directory
+        / (std::filesystem::path { shared_library_filename() }.stem().string() + ".build"
+            + std::filesystem::path { shared_library_filename() }.extension().string());
     plan.commands = build_commands(
         toolchain,
         compiler_name,
@@ -348,9 +455,10 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
 
 PluginCompileResult compile_plugin(
     const PluginCompileRequest& request,
-    diagnostic::Engine& diagnostics) {
+    diagnostic::Engine& diagnostics)
+{
 #if defined(_WIN32)
-    const std::lock_guard compile_guard{windows_compile_mutex};
+    const std::lock_guard compile_guard { windows_compile_mutex };
 #endif
     PluginCompileResult result;
     const auto plan = plan_plugin_compile(request, diagnostics);
@@ -369,8 +477,7 @@ PluginCompileResult compile_plugin(
         return result;
     }
 
-    const auto cache_root =
-        plan->library_path.parent_path().parent_path().parent_path().parent_path();
+    const auto cache_root = plan->library_path.parent_path().parent_path().parent_path().parent_path();
     const auto lock_directory = cache_root / "locks";
     std::filesystem::create_directories(lock_directory, error);
     if (error) {
@@ -381,8 +488,9 @@ PluginCompileResult compile_plugin(
             lock_directory);
         return result;
     }
-    compiler::detail::CacheDirectoryLock lock{
-        lock_directory / (plan->cache_key + ".lock"), error};
+    compiler::detail::CacheDirectoryLock lock {
+        lock_directory / (plan->cache_key + ".lock"), error
+    };
     if (!lock.held()) {
         report_error(
             diagnostics,
@@ -414,16 +522,16 @@ PluginCompileResult compile_plugin(
 
     if (plan->commands.empty() || plan->commands.front().argv.empty()
         || resolve_executable(
-               plan->commands.front().argv.front(),
-               plan->commands.front().working_directory)
-               .empty()) {
+            plan->commands.front().argv.front(),
+            plan->commands.front().working_directory)
+            .empty()) {
         report_error(
             diagnostics,
             "FSIM-SC-C007",
             "cannot find executable SystemC compiler '"
                 + (plan->commands.empty() || plan->commands.front().argv.empty()
-                       ? std::string{"<empty>"}
-                       : plan->commands.front().argv.front())
+                        ? std::string { "<empty>" }
+                        : plan->commands.front().argv.front())
                 + "'");
         return result;
     }
@@ -460,12 +568,11 @@ PluginCompileResult compile_plugin(
         diagnostic::Diagnostic diagnostic;
         diagnostic.severity = diagnostic::Severity::error;
         diagnostic.code = "FSIM-SC-C007";
-        diagnostic.message =
-            "SystemC compiler exited with status " + std::to_string(process.exit_code);
+        diagnostic.message = "SystemC compiler exited with status " + std::to_string(process.exit_code);
         diagnostic.notes.push_back(
-            {"argv: " + format_compiler_command(command), {}});
+            { "argv: " + format_compiler_command(command), { } });
         if (!process.output.empty()) {
-            diagnostic.notes.push_back({"compiler output:\n" + process.output, {}});
+            diagnostic.notes.push_back({ "compiler output:\n" + process.output, { } });
         }
         diagnostics.report(std::move(diagnostic));
         std::filesystem::remove(plan->build_path, error);
@@ -481,28 +588,25 @@ PluginCompileResult compile_plugin(
         return result;
     }
     if (plan->cacheable) {
-        const auto verified_plan =
-            plan_plugin_compile(request, diagnostics);
-        const bool inputs_unchanged =
-            verified_plan && verified_plan->cacheable
+        const auto verified_plan = plan_plugin_compile(request, diagnostics);
+        const bool inputs_unchanged = verified_plan && verified_plan->cacheable
             && verified_plan->cache_key == plan->cache_key;
         if (!inputs_unchanged) {
             diagnostic::Diagnostic diagnostic;
             diagnostic.severity = diagnostic::Severity::error;
             diagnostic.code = "FSIM-SC-C013";
-            diagnostic.message =
-                "SystemC plug-in inputs or compiler identity changed during "
-                "compilation; the unpublished output was discarded, retry "
-                "the build";
+            diagnostic.message = "SystemC plug-in inputs or compiler identity changed during "
+                                 "compilation; the unpublished output was discarded, retry "
+                                 "the build";
             diagnostic.span = path_span(plan->build_path);
             diagnostic.notes.push_back(
-                {"initial cache key: " + plan->cache_key, {}});
+                { "initial cache key: " + plan->cache_key, { } });
             diagnostic.notes.push_back(
-                {"post-compile cache key: "
-                     + (verified_plan
-                            ? verified_plan->cache_key
-                            : std::string{"<unavailable>"}),
-                 {}});
+                { "post-compile cache key: "
+                        + (verified_plan
+                                ? verified_plan->cache_key
+                                : std::string { "<unavailable>" }),
+                    { } });
             diagnostics.report(std::move(diagnostic));
 
             std::filesystem::remove(plan->build_path, error);
@@ -527,7 +631,8 @@ PluginCompileResult compile_plugin(
     return result;
 }
 
-std::string format_compiler_command(const CompilerCommand& command) {
+std::string format_compiler_command(const CompilerCommand& command)
+{
     std::ostringstream result;
     for (std::size_t index = 0; index < command.argv.size(); ++index) {
         if (index != 0) {
@@ -537,6 +642,5 @@ std::string format_compiler_command(const CompilerCommand& command) {
     }
     return result.str();
 }
-
 
 } // namespace fsim::systemc

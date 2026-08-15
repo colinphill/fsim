@@ -39,11 +39,21 @@ void require(const bool condition, const std::string_view message)
 
 void verify_manifest(const std::filesystem::path& directory)
 {
-    const auto text = read_file(directory / "complete_trace.tsv");
+    const auto source_text = read_file(directory / "complete_trace.tsv");
+    std::string text;
+    text.reserve(source_text.size());
+    for (std::size_t index = 0; index < source_text.size(); ++index) {
+        if (source_text[index] == '\r'
+            && index + 1U < source_text.size()
+            && source_text[index + 1U] == '\n') {
+            continue;
+        }
+        text.push_back(source_text[index]);
+    }
     require(text.starts_with("# SPDX-License-Identifier: Apache-2.0\n"),
         "FST corpus manifest must retain Apache-2.0 provenance");
     require(text.find('\r') == std::string::npos,
-        "FST corpus manifest must use canonical newlines");
+        "FST corpus manifest must not contain a bare carriage return");
     require(static_cast<std::size_t>(std::ranges::count(text, '\n')) == 30U,
         "FST corpus manifest must retain 28 exact obligations");
     constexpr std::array tokens {

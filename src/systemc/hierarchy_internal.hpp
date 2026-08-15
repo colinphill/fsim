@@ -5,9 +5,7 @@
 #include "fsim/runtime/simir.hpp"
 #include "fsim/systemc/plugin_loader.hpp"
 
-#if defined(FSIM_HAS_BOOST_CONTEXT)
-#include <boost/context/fiber.hpp>
-#endif
+#include <sysc/kernel/sc_simcontext.h>
 
 #include <algorithm>
 #include <cctype>
@@ -21,19 +19,8 @@
 
 namespace fsim::systemc {
 
-#if defined(FSIM_HAS_BOOST_CONTEXT)
-struct ThreadFiberState {
-    boost::context::fiber process;
-    boost::context::fiber caller;
-    bool started{};
-    bool terminated{};
-    bool stopping{};
-};
-#endif
-
 struct HierarchyRegistry::Impl {
     struct Factory {
-        fsim_sc_module_factory_v1 legacy{};
         fsim_sc_module_elaborate_v1 elaborate{};
         fsim_sc_module_destroy_v1 destroy{};
         void* user{};
@@ -56,24 +43,9 @@ struct HierarchyRegistry::Impl {
         bool writable{true};
     };
 
-    struct Child {
-        fsim_sc_handle_v1 module{};
-        std::size_t child{};
-    };
-
     struct Process {
         fsim_sc_handle_v1 module{};
         std::size_t process{};
-    };
-
-    struct Event {
-        fsim_sc_handle_v1 module{};
-        std::size_t event{};
-    };
-
-    struct PrimitiveChannel {
-        fsim_sc_handle_v1 module{};
-        std::size_t channel{};
     };
 
     struct LiveModule {
@@ -95,31 +67,21 @@ struct HierarchyRegistry::Impl {
 
     std::filesystem::path path;
     std::unique_ptr<Plugin> plugin;
+    // Destroy the kernel and its native processes before unloading the image
+    // that owns their module callbacks and coroutine implementation state.
+    std::unique_ptr<sc_core::sc_simcontext> owned_context;
     std::unordered_map<std::string, Factory> factories;
     std::unordered_map<fsim_sc_handle_v1, ModuleDescription> pending;
-    struct HdlModule {
-        std::string implementation;
-        std::vector<std::pair<std::string, std::int64_t>> actuals;
-    };
-    std::unordered_map<fsim_sc_handle_v1, HdlModule> hdl_modules;
     std::unordered_map<
         fsim_sc_handle_v1, std::vector<fsim_sc_handle_v1>>
         native_children;
     std::unordered_map<fsim_sc_handle_v1, Object> objects;
-    std::unordered_map<fsim_sc_handle_v1, Child> children;
     std::unordered_map<fsim_sc_handle_v1, Process> processes;
-    std::unordered_map<fsim_sc_handle_v1, Event> events;
-    std::unordered_map<fsim_sc_handle_v1, PrimitiveChannel>
-        primitive_channels;
     std::unordered_set<fsim_sc_handle_v1> internal_signals;
     std::unordered_map<fsim_sc_handle_v1, std::uint32_t> runtime_objects;
-#if defined(FSIM_HAS_BOOST_CONTEXT)
-    std::unordered_map<
-        fsim_sc_handle_v1, std::unique_ptr<ThreadFiberState>>
-        thread_fibers;
-#endif
     std::vector<LiveModule> live;
     std::uint64_t femtoseconds_per_tick{1};
+    std::uint64_t lifecycle_time{};
     std::string elaboration_failure;
 
     [[nodiscard]] std::optional<fsim_sc_handle_v1> allocate_handle();
@@ -129,9 +91,6 @@ struct HierarchyRegistry::Impl {
     [[nodiscard]] ModuleDescription collect(
         const fsim_sc_handle_v1 module);
 
-    [[nodiscard]] bool validate_hdl_modules(
-        const fsim_sc_handle_v1 root,
-        std::string& error) const;
 };
 
 namespace hierarchy_detail {
@@ -139,9 +98,6 @@ namespace hierarchy_detail {
 struct ActiveInvocation {
     HierarchyRegistry::Impl* registry{};
     runtime::simir::ProcessExecutionContext* context{};
-#if defined(FSIM_HAS_BOOST_CONTEXT)
-    ThreadFiberState* thread{};
-#endif
     std::vector<std::uint8_t> read_buffer;
     std::string failure;
     std::optional<MethodSuspendResult> suspension;
@@ -157,10 +113,6 @@ public:
     InvocationScope(const InvocationScope&) = delete;
     InvocationScope& operator=(const InvocationScope&) = delete;
 };
-
-[[nodiscard]] fsim_sc_status_v1 suspend_thread() noexcept;
-
-void shutdown_threads(HierarchyRegistry::Impl& registry) noexcept;
 
 [[nodiscard]] bool valid_direction(
     const fsim_sc_port_direction_v1 direction) noexcept;
@@ -206,52 +158,16 @@ extern "C" fsim_sc_status_v1 registry_register_export(
     const std::uint32_t width,
     fsim_sc_handle_v1* result) noexcept;
 
-extern "C" fsim_sc_status_v1 registry_register_event(
-    void* context,
-    const fsim_sc_handle_v1 module,
-    const char* name,
-    fsim_sc_handle_v1* result) noexcept;
-
-extern "C" fsim_sc_status_v1 registry_register_primitive_channel(
-    void* context,
-    const fsim_sc_handle_v1 module,
-    const char* name,
-    const fsim_sc_channel_update_v1 update,
-    void* user,
-    fsim_sc_handle_v1* result) noexcept;
-
-extern "C" fsim_sc_status_v1 registry_register_foreign_child(
-    void* context,
-    const fsim_sc_handle_v1 module,
-    const char* name,
-    fsim_sc_handle_v1* result) noexcept;
-
-extern "C" fsim_sc_status_v1 registry_set_foreign_child_actual(
-    void* context,
-    const fsim_sc_handle_v1 child,
-    const char* name,
-    const std::int64_t value) noexcept;
-
 extern "C" fsim_sc_status_v1 registry_get_construction_value(
     void* context,
     const fsim_sc_handle_v1 module,
     const char* name,
     std::int64_t* result) noexcept;
 
-extern "C" fsim_sc_status_v1 registry_connect_foreign_port(
-    void* context,
-    const fsim_sc_handle_v1 child,
-    const char* name,
-    const fsim_sc_port_direction_v1 direction,
-    const fsim_sc_value_encoding_v1 encoding,
-    const std::uint32_t width,
-    const fsim_sc_handle_v1 object) noexcept;
-
 extern "C" fsim_sc_status_v1 registry_register_process(
     void* context,
     const fsim_sc_handle_v1 module,
     const char* name,
-    const fsim_sc_process_kind_v1 kind,
     const fsim_sc_process_entry_v1 entry,
     void* user,
     fsim_sc_handle_v1* result) noexcept;
@@ -262,22 +178,17 @@ extern "C" fsim_sc_status_v1 registry_add_sensitivity(
     const fsim_sc_handle_v1 object,
     const fsim_sc_edge_kind_v1 edge) noexcept;
 
-extern "C" fsim_sc_status_v1 registry_set_process_initialize(
-    void* context,
-    const fsim_sc_handle_v1 process,
-    const std::uint8_t initialize) noexcept;
-
 [[nodiscard]] std::size_t plane_size(
     const std::uint32_t width) noexcept;
 
 extern "C" fsim_sc_status_v1 registry_register_signal(
     void* context,
     const fsim_sc_handle_v1 module,
-    const fsim_sc_handle_v1 channel,
     const char* name,
     const fsim_sc_value_encoding_v1 encoding,
     const std::uint32_t width,
-    const fsim_sc_value_view_v1* initial_value) noexcept;
+    const fsim_sc_value_view_v1* initial_value,
+    fsim_sc_handle_v1* result) noexcept;
 
 extern "C" fsim_sc_status_v1 registry_bind_port(
     void* context,
@@ -294,39 +205,15 @@ extern "C" fsim_sc_status_v1 registry_set_export_writable(
     fsim_sc_handle_v1 export_handle,
     std::uint8_t writable) noexcept;
 
-extern "C" fsim_sc_status_v1 registry_register_metadata_object(
-    void* context,
-    fsim_sc_handle_v1 module,
-    const char* name,
-    fsim_sc_metadata_category_v1 category,
-    const char* kind,
-    fsim_sc_handle_v1* result) noexcept;
-
-extern "C" fsim_sc_status_v1 registry_set_primitive_channel_kind(
-    void* context,
-    fsim_sc_handle_v1 channel,
-    const char* kind) noexcept;
-
 extern "C" fsim_sc_status_v1 registry_register_native_module(
     void* context,
     const fsim_sc_handle_v1 parent,
     const char* name,
     fsim_sc_handle_v1* result) noexcept;
 
-extern "C" fsim_sc_status_v1 registry_mark_hdl_module(
+extern "C" fsim_sc_status_v1 registry_current_time_femtoseconds(
     void* context,
-    fsim_sc_handle_v1 module) noexcept;
-
-extern "C" fsim_sc_status_v1 registry_set_hdl_module_actual(
-    void* context,
-    fsim_sc_handle_v1 module,
-    const char* name,
-    std::int64_t value) noexcept;
-
-extern "C" fsim_sc_status_v1 registry_set_hdl_module_implementation(
-    void* context,
-    fsim_sc_handle_v1 module,
-    const char* implementation) noexcept;
+    std::uint64_t* result) noexcept;
 
 extern "C" fsim_sc_status_v1 registry_register_lifecycle(
     void* context,
@@ -342,11 +229,6 @@ extern "C" fsim_sc_status_v1 registry_read(
     const fsim_sc_handle_v1 object,
     fsim_sc_value_view_v1* result) noexcept;
 
-extern "C" fsim_sc_status_v1 registry_value_changed(
-    void* context,
-    const fsim_sc_handle_v1 object,
-    std::uint8_t* result) noexcept;
-
 extern "C" fsim_sc_status_v1 registry_write(
     void* context,
     const fsim_sc_handle_v1 object,
@@ -357,60 +239,12 @@ extern "C" fsim_sc_status_v1 registry_write(
     const std::uint64_t femtoseconds,
     std::uint64_t& ticks);
 
-extern "C" fsim_sc_status_v1 registry_wait_time(
-    void* context, const std::uint64_t femtoseconds) noexcept;
-
-extern "C" fsim_sc_status_v1 registry_wait_event(
-    void* context, const fsim_sc_handle_v1 event) noexcept;
-
-extern "C" fsim_sc_status_v1 registry_wait_event_list(
-    void* context,
-    const fsim_sc_handle_v1* events,
-    const std::size_t event_count,
-    const fsim_sc_event_list_kind_v1 kind) noexcept;
-
-extern "C" fsim_sc_status_v1 registry_wait_static(
-    void* context) noexcept;
-extern "C" fsim_sc_status_v1 registry_wait_event_timeout(
-    void* context,
-    std::uint64_t femtoseconds,
-    const fsim_sc_handle_v1* events,
-    std::size_t event_count,
-    fsim_sc_event_list_kind_v1 kind) noexcept;
-
-extern "C" fsim_sc_status_v1 registry_notify_mode(
-    void* context,
-    const fsim_sc_handle_v1 event,
-    const std::uint64_t femtoseconds,
-    const fsim_sc_notification_kind_v1 kind) noexcept;
-
-extern "C" fsim_sc_status_v1 registry_notify_delayed(
-    void* context,
-    const fsim_sc_handle_v1 event,
-    const std::uint64_t femtoseconds) noexcept;
-
-extern "C" fsim_sc_status_v1 registry_cancel_event(
-    void* context,
-    const fsim_sc_handle_v1 event) noexcept;
-
-extern "C" fsim_sc_status_v1 registry_request_update(
-    void* context,
-    const fsim_sc_handle_v1 channel) noexcept;
-
-extern "C" fsim_sc_status_v1 registry_notify(
-    void* context,
-    const fsim_sc_handle_v1 event,
-    const std::uint64_t femtoseconds) noexcept;
+extern "C" fsim_sc_status_v1
+registry_wait_for_input_or_native_activity(
+    void* context, std::uint64_t femtoseconds) noexcept;
 
 extern "C" void registry_report(
     void* context, const int severity, const char* message) noexcept;
-
-extern "C" fsim_sc_status_v1 registry_register_factory(
-    void* context,
-    const char* name,
-    const fsim_sc_module_factory_v1 factory,
-    const fsim_sc_module_destroy_v1 destroy,
-    void* user) noexcept;
 
 extern "C" fsim_sc_status_v1 registry_register_elaboration_factory(
     void* context,

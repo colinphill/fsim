@@ -14,7 +14,6 @@ namespace {
 
 struct PendingFactory {
     std::string name;
-    fsim_sc_module_factory_v1 factory{};
     fsim_sc_module_elaborate_v1 elaboration_factory{};
     fsim_sc_module_destroy_v1 destroy{};
     void* user{};
@@ -34,6 +33,31 @@ struct RegistrationBuffer {
     std::vector<PendingParameter> parameters;
     bool rejected{};
 };
+
+struct RetainedPluginResources {
+    std::unique_ptr<fsim_sc_host_v1> host;
+    std::unique_ptr<platform::DynamicLibrary> library;
+};
+
+void retain_plugin_resources(
+    std::unique_ptr<fsim_sc_host_v1> host,
+    std::unique_ptr<platform::DynamicLibrary> library) noexcept {
+    if (!library) {
+        return;
+    }
+    try {
+        static std::mutex mutex;
+        static std::vector<RetainedPluginResources> resources;
+        std::lock_guard lock(mutex);
+        resources.push_back({std::move(host), std::move(library)});
+    } catch (...) {
+        // Unloading is unsafe after a plug-in's static initializers may have
+        // registered C++ type_info or callbacks with the shared runtime.
+        // Preserve process-lifetime validity even under allocation failure.
+        (void)host.release();
+        (void)library.release();
+    }
+}
 
 [[nodiscard]] fsim_sc_status_v1 reject_registration(void* context) noexcept {
     if (context != nullptr) {
@@ -57,35 +81,6 @@ struct RegistrationBuffer {
     case FSIM_SC_CONSTRUCTION_BIT: return value == 0 || value == 1;
     }
     return false;
-}
-
-extern "C" fsim_sc_status_v1 buffer_factory(
-    void* context,
-    const char* name,
-    const fsim_sc_module_factory_v1 factory,
-    const fsim_sc_module_destroy_v1 destroy,
-    void* user) noexcept {
-    if (context == nullptr || name == nullptr || *name == '\0'
-        || factory == nullptr || destroy == nullptr) {
-        return reject_registration(context);
-    }
-    try {
-        auto& registrations = *static_cast<RegistrationBuffer*>(context);
-        if (std::any_of(
-                registrations.factories.begin(),
-                registrations.factories.end(),
-                [&](const auto& candidate) {
-                    return candidate.name == name;
-                })) {
-            return reject_registration(context);
-        }
-        registrations.factories.push_back(
-            PendingFactory{name, factory, nullptr, destroy, user});
-        return FSIM_SC_OK;
-    } catch (...) {
-        static_cast<RegistrationBuffer*>(context)->rejected = true;
-        return FSIM_SC_RUNTIME_ERROR;
-    }
 }
 
 extern "C" fsim_sc_status_v1 buffer_factory_parameter(
@@ -157,7 +152,7 @@ extern "C" fsim_sc_status_v1 buffer_elaboration_factory(
             return reject_registration(context);
         }
         registrations.factories.push_back(
-            PendingFactory{name, nullptr, factory, destroy, user});
+            PendingFactory{name, factory, destroy, user});
         return FSIM_SC_OK;
     } catch (...) {
         static_cast<RegistrationBuffer*>(context)->rejected = true;
@@ -167,14 +162,11 @@ extern "C" fsim_sc_status_v1 buffer_elaboration_factory(
 
 /*
  * A registrar callback is outside fsim's control and might retain an earlier
- * factory before rejecting a later one. Keep code pointers valid in that rare
- * failure case. No failed plug-in callbacks are invoked by fsim itself.
+ * factory before rejecting a later one. Destruction retains the image and host
+ * resources for process life, while discarding fsim's failed registration.
  */
 void quarantine(std::unique_ptr<Plugin> plugin) {
-    static std::mutex mutex;
-    static std::vector<std::unique_ptr<Plugin>> plugins;
-    std::lock_guard lock(mutex);
-    plugins.push_back(std::move(plugin));
+    plugin.reset();
 }
 
 } // namespace
@@ -186,6 +178,10 @@ Plugin::Plugin(
     : path_(std::move(path)),
       host_(std::make_unique<fsim_sc_host_v1>(host)),
       library_(std::move(library)) {}
+
+Plugin::~Plugin() {
+    retain_plugin_resources(std::move(host_), std::move(library_));
+}
 
 std::unique_ptr<Plugin> Plugin::load(
     const std::filesystem::path& path,
@@ -206,7 +202,6 @@ std::unique_ptr<Plugin> Plugin::load(
         || host.struct_size < sizeof(fsim_sc_host_v1)
         || registrar.abi_version != FSIM_SYSTEMC_ABI_VERSION
         || registrar.struct_size < sizeof(fsim_sc_registrar_v1)
-        || registrar.register_factory == nullptr
         || registrar.register_elaboration_factory == nullptr
         || registrar.register_factory_parameter == nullptr) {
         error = "SystemC host/registrar ABI mismatch";
@@ -220,6 +215,7 @@ std::unique_ptr<Plugin> Plugin::load(
     auto* raw_init = library->symbol("fsim_plugin_init_v1", error);
     if (raw_init == nullptr) {
         error = "SystemC plug-in does not export fsim_plugin_init_v1: " + error;
+        retain_plugin_resources(nullptr, std::move(library));
         return nullptr;
     }
 
@@ -235,7 +231,6 @@ std::unique_ptr<Plugin> Plugin::load(
     auto buffered_registrar = registrar;
     buffered_registrar.struct_size = sizeof(fsim_sc_registrar_v1);
     buffered_registrar.context = &registrations;
-    buffered_registrar.register_factory = buffer_factory;
     buffered_registrar.register_elaboration_factory =
         buffer_elaboration_factory;
     buffered_registrar.register_factory_parameter =
@@ -267,20 +262,12 @@ std::unique_ptr<Plugin> Plugin::load(
     }
     for (const auto& factory : registrations.factories) {
         try {
-            status =
-                factory.elaboration_factory != nullptr
-                ? registrar.register_elaboration_factory(
-                      registrar.context,
-                      factory.name.c_str(),
-                      factory.elaboration_factory,
-                      factory.destroy,
-                      factory.user)
-                : registrar.register_factory(
-                      registrar.context,
-                      factory.name.c_str(),
-                      factory.factory,
-                      factory.destroy,
-                      factory.user);
+            status = registrar.register_elaboration_factory(
+                registrar.context,
+                factory.name.c_str(),
+                factory.elaboration_factory,
+                factory.destroy,
+                factory.user);
         } catch (const std::exception& exception) {
             error =
                 "SystemC factory registration threw an exception: "

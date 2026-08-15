@@ -203,22 +203,6 @@ using namespace elaboration_detail;
                 objects.emplace(port.handle, aliases.at(port.name));
             }
         }
-        for (const auto& event : instance.events) {
-            frontend::Type type;
-            type.domain = frontend::ValueDomain::Bit2;
-            type.spelling = "systemc.event";
-            const frontend::SignalDeclaration declaration{
-                event.name,
-                std::move(type),
-                frontend::PortDirection::Unknown,
-                false,
-                {}};
-            const auto signal =
-                add_owned_signal(declaration, path, aliases);
-            if (signal) {
-                objects.emplace(event.handle, *signal);
-            }
-        }
         for (const auto& signal : instance.internal_signals) {
             std::optional<SignalId> bound_signal;
             bool use_internal_initial = false;
@@ -444,53 +428,6 @@ using namespace elaboration_detail;
                     signal->second);
             }
         }
-        for (const auto& event : instance.events) {
-            if (const auto signal = objects.find(event.handle);
-                signal != objects.end()) {
-                info.events.push_back(
-                    {event.name, event.handle, signal->second});
-                append_value_object(
-                    SystemCNamedObjectKind::event,
-                    event.handle,
-                    event.name,
-                    "sc_event",
-                    signal->second);
-            }
-        }
-        for (const auto& channel : instance.primitive_channels) {
-            info.primitive_channels.push_back(
-                {channel.name, channel.handle});
-            const auto promoted = std::any_of(
-                instance.internal_signals.begin(),
-                instance.internal_signals.end(),
-                [&](const ExternalInternalSignal& signal) {
-                  return signal.handle == channel.handle;
-                });
-            if (!promoted) {
-                design_.systemc_objects_.push_back({
-                    SystemCNamedObjectKind::primitive_channel,
-                    channel.handle,
-                    path + "." + channel.name,
-                    path,
-                    channel.kind,
-                    std::nullopt,
-                    std::nullopt,
-                    {}});
-            }
-        }
-        for (const auto& object : instance.metadata_objects) {
-            design_.systemc_objects_.push_back({
-                object.category == FSIM_SC_METADATA_PORT
-                    ? SystemCNamedObjectKind::port
-                    : SystemCNamedObjectKind::export_object,
-                object.handle,
-                path + "." + object.name,
-                path,
-                object.kind,
-                std::nullopt,
-                std::nullopt,
-                {}});
-        }
         for (const auto& signal : instance.internal_signals) {
             if (const auto runtime_signal =
                     objects.find(signal.handle);
@@ -527,17 +464,6 @@ using namespace elaboration_detail;
         design_.systemc_instances_.push_back(std::move(info));
 
         for (const auto& external : instance.processes) {
-#if !defined(FSIM_HAS_BOOST_CONTEXT)
-            if (external.kind != FSIM_SC_METHOD) {
-                report(
-                    "FSIM-ELAB-BIND-042",
-                    "SystemC process '" + path + "." + external.name
-                        + "' requires SC_THREAD/SC_CTHREAD suspension, "
-                          "which is not executable yet",
-                    {});
-                continue;
-            }
-#endif
             runtime::simir::Process process;
             process.id = static_cast<ProcessId>(
                 design_.processes_.size());
@@ -550,7 +476,7 @@ using namespace elaboration_detail;
                 continue;
             }
             process.name = path + "." + external.name;
-            process.initialize = external.initialize;
+            process.initialize = true;
             for (const auto& sensitivity : external.sensitivity) {
                 const auto signal = objects.find(sensitivity.object);
                 if (signal == objects.end()) {
@@ -608,26 +534,21 @@ using namespace elaboration_detail;
                     process.static_sensitivity.begin(),
                     process.static_sensitivity.end()),
                 process.static_sensitivity.end());
-            process.operations.emplace_back(
-                process.static_sensitivity.empty()
-                    ? runtime::simir::Operation{
-                          runtime::simir::Halt{}}
-                    : runtime::simir::Operation{
-                          runtime::simir::WaitSensitivity{}});
+            if (process.static_sensitivity.empty()) {
+                process.operations.emplace_back(
+                    runtime::simir::Halt{});
+            } else {
+                process.operations.emplace_back(
+                    runtime::simir::WaitSensitivity{});
+            }
             design_.systemc_processes_.push_back(
                 {process.id, external.handle});
-            std::string_view process_type = "sc_method_process";
-            if (external.kind == FSIM_SC_THREAD) {
-                process_type = "sc_thread_process";
-            } else if (external.kind == FSIM_SC_CTHREAD) {
-                process_type = "sc_cthread_process";
-            }
             design_.systemc_objects_.push_back({
                 SystemCNamedObjectKind::process,
                 external.handle,
                 process.name,
                 path,
-                std::string{process_type},
+                "sc_method_process",
                 std::nullopt,
                 process.id,
                 {}});
@@ -674,98 +595,6 @@ using namespace elaboration_detail;
                 true);
         }
 
-        for (const auto& child : instance.foreign_children) {
-            const auto child_path = path + "." + child.name;
-            design_.systemc_objects_.push_back({
-                child.module_facade
-                    ? SystemCNamedObjectKind::module
-                    : SystemCNamedObjectKind::foreign_child,
-                child.handle,
-                child_path,
-                path,
-                child.module_facade ? "hdl_module" : "hdl_instance",
-                std::nullopt,
-                std::nullopt,
-                {}});
-            const auto* binding = binding_for(child_path);
-            const auto* selected = systemc_foreign_target(
-                child, instance, child_path, binding);
-            if (selected == nullptr) {
-                continue;
-            }
-            std::vector<frontend::ParameterOverride> actuals;
-            actuals.reserve(child.construction_actuals.size());
-            for (const auto& [name, value] :
-                 child.construction_actuals) {
-                frontend::Expression expression;
-                expression.kind =
-                    frontend::ExpressionKind::IntegerLiteral;
-                expression.text = std::to_string(value);
-                actuals.push_back({
-                    name,
-                    std::move(expression),
-                    {},
-                });
-            }
-            auto specialized =
-                specialize_selected_unit(
-                    *selected,
-                    actuals,
-                    {},
-                    {},
-                    {},
-                    {},
-                    {},
-                    {},
-                    {},
-                    selected->language);
-            auto child_aliases = connect_foreign_child(
-                child, specialized.unit, child_path, objects);
-            if (child.module_facade) {
-                for (const auto& port : child.ports) {
-                    const auto signal = child_aliases.find(port.name);
-                    if (signal == child_aliases.end()) {
-                        continue;
-                    }
-                    std::string_view kind = "sc_port";
-                    switch (port.direction) {
-                    case frontend::PortDirection::Input:
-                        kind = "sc_in";
-                        break;
-                    case frontend::PortDirection::Output:
-                        kind = "sc_out";
-                        break;
-                    case frontend::PortDirection::Inout:
-                        kind = "sc_inout";
-                        break;
-                    default:
-                        break;
-                    }
-                    design_.systemc_objects_.push_back({
-                        SystemCNamedObjectKind::port,
-                        port.handle,
-                        child_path + "." + port.name,
-                        child_path,
-                        std::string{kind},
-                        signal->second,
-                        std::nullopt,
-                        {}});
-                }
-            }
-            instantiate(
-                specialized.unit,
-                child_path,
-                std::move(child_aliases),
-                {},
-                {},
-                {},
-                {},
-                std::move(specialized.environment),
-                std::move(specialized.integral_environment),
-                std::move(specialized.values),
-                std::move(specialized.identity_values),
-                std::move(specialized.packages));
-        }
         stack_.pop_back();
     }
 
@@ -795,77 +624,6 @@ using namespace elaboration_detail;
             }
         }
         return {std::move(aliases.signals), std::move(objects)};
-    }
-
-    HierarchyBuilder::SignalMap HierarchyBuilder::connect_foreign_child(
-        const ForeignChild& child,
-        const DesignUnit& target,
-        const std::string& path,
-        const ObjectMap& objects) {
-        SignalMap aliases;
-        const auto* target_ports = unit_ports(parsed_, target);
-        if (target_ports == nullptr) {
-            report(
-                "FSIM-ELAB-002",
-                "architecture '" + target.name
-                    + "' has no matching entity",
-                target.span);
-            return aliases;
-        }
-        std::unordered_set<std::string> connected;
-        for (const auto& foreign_port : child.ports) {
-            const auto formal = std::find_if(
-                target_ports->begin(), target_ports->end(),
-                [&](const frontend::SignalDeclaration& port) {
-                    return port.name == foreign_port.name;
-                });
-            if (formal == target_ports->end()) {
-                report(
-                    "FSIM-ELAB-BIND-034",
-                    "foreign child '" + path
-                        + "' declares unknown target port '"
-                        + foreign_port.name + "'",
-                    {});
-                continue;
-            }
-            if (!connected.insert(foreign_port.name).second) {
-                report(
-                    "FSIM-ELAB-BIND-035",
-                    "foreign child port '" + path + "."
-                        + foreign_port.name
-                        + "' is connected more than once",
-                    {});
-                continue;
-            }
-            const auto actual = objects.find(foreign_port.object);
-            if (actual == objects.end()) {
-                report(
-                    "FSIM-ELAB-BIND-036",
-                    "foreign child port '" + path + "."
-                        + foreign_port.name
-                        + "' references an unknown SystemC object",
-                    {});
-                continue;
-            }
-            const auto placeholder = foreign_port_declaration(foreign_port);
-            const auto& actual_info = design_.signal_info_.at(actual->second);
-            validate_boundary_type(placeholder, actual_info, path, {}, true);
-            validate_boundary_type(*formal, actual_info, path, {}, true);
-            if (placeholder.direction != formal->direction) {
-                report(
-                    "FSIM-ELAB-BIND-037",
-                    "foreign child port direction mismatch on '"
-                        + path + "." + foreign_port.name + "'",
-                    {});
-            }
-            aliases.emplace(formal->name, actual->second);
-            aliases.emplace(path + "." + formal->name, actual->second);
-            design_.signal_by_name_.emplace(
-                path + "." + formal->name, actual->second);
-            // This foreign child is an implementation detail of the SystemC
-            // parent, whose boundary driver is already recorded.
-        }
-        return aliases;
     }
 
     void HierarchyBuilder::report(

@@ -332,6 +332,43 @@ void test_reentrant_callback_containment()
     assert(complete == 1U);
 }
 
+void test_systemc_repeated_dirty_phase()
+{
+    using namespace fsim::runtime;
+    TraceDeclarationBuilder builder;
+    TraceSourceMetadata source;
+    source.kind = TraceSourceKind::SystemC;
+    source.language = TraceLanguage::SystemC;
+    source.root_identity = "systemc_root";
+    source.library = "systemc";
+    source.owner_identity = "systemc:trace-island";
+    const auto signal = builder.add_typed_variable("systemc_root.wide",
+        TraceTypeKind::Packed, 257U, SystemVerilogScalarKind::None,
+        { }, source);
+    const auto alias = builder.add_alias(
+        "systemc_root.wide_input", signal, source);
+    const auto declarations = std::move(builder).freeze();
+    assert(declarations.alias(alias).target == signal);
+    TraceObservationRecorder recorder(declarations);
+    std::string symbols(257U, '0');
+    for (std::size_t index = 0U; index < symbols.size(); ++index) {
+        constexpr std::array states { '0', '1', 'X', 'Z' };
+        symbols[index] = states[index % states.size()];
+    }
+    const std::array values { TraceObservationValue { signal,
+        PackedLogic4::from_msb_string(symbols), std::nullopt } };
+    const auto first = recorder.accept(TraceObservationKind::Signal, 8U, 2U,
+        TraceRegion::Postponed, "systemc:post-update-dirty", values);
+    const auto second = recorder.accept(TraceObservationKind::Signal, 8U, 3U,
+        TraceRegion::Postponed, "systemc:post-update-dirty", values);
+    assert(first + 1U == second);
+    assert(recorder.records().size() == 2U);
+    assert(recorder.records()[0].values.front().signal
+        == recorder.records()[1].values.front().signal);
+    assert(recorder.records()[0].values.front().value
+        == recorder.records()[1].values.front().value);
+}
+
 } // namespace
 
 int main()
@@ -339,4 +376,5 @@ int main()
     test_atomic_correlated_fanout();
     test_transactional_negatives();
     test_reentrant_callback_containment();
+    test_systemc_repeated_dirty_phase();
 }

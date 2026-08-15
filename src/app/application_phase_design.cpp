@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "../systemc/producer_fingerprint.hpp"
 
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
@@ -120,6 +121,18 @@ namespace {
             return RehydratedSystemC { };
         }
 
+        project::SystemCSection host_settings;
+        diagnostic::Engine fingerprint_diagnostics;
+        const auto current_fingerprint = systemc::plugin_producer_fingerprint(
+            host_settings, directory, fingerprint_diagnostics);
+        if (!current_fingerprint) {
+            diagnostics.error(
+                "FSIM-ART-0014",
+                "cannot establish the current SystemC upstream/compiler/"
+                "standard-library/bridge producer identity");
+            return std::nullopt;
+        }
+
         RehydratedSystemC result;
         std::map<std::string, std::shared_ptr<systemc::HierarchyRegistry>> by_library;
         for (const auto& record : metadata.systemc_plugins) {
@@ -148,8 +161,18 @@ namespace {
                     "embedded SystemC plug-in metadata disagrees with design provenance");
                 return std::nullopt;
             }
+            if (record.compiler_fingerprint != *current_fingerprint) {
+                diagnostics.error(
+                    "FSIM-ART-0014",
+                    "embedded SystemC plug-in producer identity is stale or "
+                    "incompatible with the current upstream source, compiler, "
+                    "standard library, or bridge (embedded "
+                        + record.compiler_fingerprint + ", current "
+                        + *current_fingerprint + ")");
+                return std::nullopt;
+            }
             auto registry = systemc::load_incremental_plugin(
-                plugin_directory, diagnostics);
+                plugin_directory, diagnostics, *current_fingerprint);
             if (!registry
                 || !by_library.emplace(record.logical_library, registry).second) {
                 if (!diagnostics.has_error()) {
@@ -518,10 +541,10 @@ bool publish_design_artifact(
                 "Verilog/SystemVerilog standard and compatibility provenance");
             return false;
         }
-        metadata.verilog_unit_provenance.push_back({
-            unit.id.value(),
+        metadata.verilog_unit_provenance.push_back({ unit.id.value(),
             unit.language == semantic::Language::verilog
-                ? "verilog" : "systemverilog",
+                ? "verilog"
+                : "systemverilog",
             std::string { frontend::revision_string(revision->second) },
             profile->second });
     }
@@ -830,8 +853,7 @@ std::optional<BuiltProject> load_design_artifact(
         provenance.standard = object.standard;
         provenance.compatibility_profile = object.compatibility_profile;
         provenance.library = object.library;
-        provenance.vhdl_package_dependencies =
-            object.vhdl_package_dependencies;
+        provenance.vhdl_package_dependencies = object.vhdl_package_dependencies;
         provenance.unit_checksums = object.unit_checksums;
         objects.push_back(std::move(provenance));
     }
@@ -857,7 +879,7 @@ std::optional<BuiltProject> load_design_artifact(
         verilog_unit_revisions;
     std::map<std::string, std::string, std::less<>>
         verilog_unit_compatibility_profiles;
-    std::size_t semantic_verilog_units{};
+    std::size_t semantic_verilog_units { };
     for (const auto& unit : semantics->units()) {
         if (unit.language == semantic::Language::verilog
             || unit.language == semantic::Language::system_verilog) {
@@ -900,11 +922,13 @@ std::optional<BuiltProject> load_design_artifact(
         }
         const auto identity = unit.library + "::" + unit.name;
         if (!verilog_unit_revisions.emplace(
-                identity,
-                application_detail::frontend_standard_revision(
-                    expected_language, *canonical)).second
+                                       identity,
+                                       application_detail::frontend_standard_revision(
+                                           expected_language, *canonical))
+                .second
             || !verilog_unit_compatibility_profiles.emplace(
-                identity, record.compatibility_profile).second) {
+                                                       identity, record.compatibility_profile)
+                .second) {
             diagnostics.error(
                 "FSIM-ART-0014",
                 ".fsimdesign contains duplicate Verilog/SystemVerilog unit "

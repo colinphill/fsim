@@ -9,6 +9,18 @@
 
 namespace {
 
+[[nodiscard]] std::filesystem::path producer_root()
+{
+    return (std::filesystem::temp_directory_path()
+        / "fsim-trace-archive-origin").lexically_normal();
+}
+
+[[nodiscard]] std::filesystem::path consumer_root()
+{
+    return (std::filesystem::temp_directory_path()
+        / "fsim-trace-archive-replay").lexically_normal();
+}
+
 void require(const bool condition, const std::string_view message)
 {
     if (!condition) {
@@ -23,7 +35,7 @@ fsim::app::TraceArchiveSnapshot snapshot()
     app::TraceControlRequest request;
     request.surface = app::TraceControlSurface::NonProjectCompile;
     request.phase = app::TraceControlPhase::Compile;
-    request.output = "/producer/private/build/traces/waves.fst";
+    request.output = producer_root() / "traces" / "waves.fst";
     request.format = project::TraceFormat::fst;
     request.compression = project::TraceCompression::none;
     request.selection = { "top.clock", "top.payload" };
@@ -31,8 +43,7 @@ fsim::app::TraceArchiveSnapshot snapshot()
     request.generation = 7U;
     const auto applied = app::apply_trace_control(std::move(request));
     require(applied.ok(), "trace control fixture must be valid");
-    return app::make_trace_archive_snapshot(
-        *applied.application, "/producer/private/build");
+    return app::make_trace_archive_snapshot(*applied.application, producer_root());
 }
 
 void test_round_trip_all_boundaries()
@@ -63,19 +74,20 @@ void test_relocation_and_path_hiding()
 {
     using namespace fsim;
     const auto archived = snapshot();
-    require(archived.output_intent == "traces/waves.fst",
+    require(archived.output_intent
+            == std::filesystem::path { "traces" } / "waves.fst",
         "producer root must be removed from durable output intent");
-    require(archived.semantic_identity.find("producer") == std::string::npos,
+    require(archived.semantic_identity.find(producer_root().generic_string())
+            == std::string::npos,
         "semantic identity must not expose a producer path");
-    const auto restored = app::restore_trace_archive_control(
-        archived, "/consumer/replay");
+    const auto restored = app::restore_trace_archive_control(archived, consumer_root());
     require(restored.ok(), "relocated trace control must restore");
     require(restored.application->request().output
-            == "/consumer/replay/traces/waves.fst",
+            == consumer_root() / "traces" / "waves.fst",
         "output intent must resolve beneath the consumer root");
 
     auto leaking = archived;
-    leaking.output_intent = "/producer/secret/waves.fst";
+    leaking.output_intent = producer_root() / "secret" / "waves.fst";
     require(!app::encode_trace_archive(
                 leaking, app::TraceArchiveKind::Design)
                 .ok(),
@@ -85,7 +97,7 @@ void test_relocation_and_path_hiding()
                 leaking, app::TraceArchiveKind::Design)
                 .ok(),
         "parent traversal must not enter an archive");
-    require(!app::restore_trace_archive_control(archived, "/consumer/replay",
+    require(!app::restore_trace_archive_control(archived, consumer_root(),
                 { .max_selection_count = 1U })
                 .ok(),
         "restore must enforce consumer resource limits");
@@ -98,7 +110,7 @@ void test_profile_compatibility()
     app::TraceControlRequest request;
     request.surface = app::TraceControlSurface::ProjectCli;
     request.phase = app::TraceControlPhase::Simulate;
-    request.output = "/producer/private/build/traces/waves.fst";
+    request.output = producer_root() / "traces" / "waves.fst";
     request.format = project::TraceFormat::fst;
     request.compression = project::TraceCompression::none;
     request.selection = { "top.clock", "top.payload" };
@@ -107,7 +119,7 @@ void test_profile_compatibility()
     const auto applied = app::apply_trace_control(std::move(request));
     require(applied.ok(), "replay trace control fixture must be valid");
     const auto replay = app::make_trace_archive_snapshot(
-        *applied.application, "/producer/private/build");
+        *applied.application, producer_root());
     require(compiled != replay
             && app::trace_archive_profiles_compatible(compiled, replay),
         "phase and surface changes must preserve a compatible profile");

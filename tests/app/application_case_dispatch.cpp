@@ -172,6 +172,7 @@ int fsim_application_case_vhdl_composite_operations();
 int fsim_application_case_vhdl_advanced_types();
 int fsim_application_case_vhdl_projected();
 int fsim_application_case_systemc_datatypes();
+int fsim_application_case_systemc_tlm1();
 int fsim_application_case_mixed_conversions();
 int fsim_application_case_typed_boundaries();
 #if FSIM_APPLICATION_WITH_TCL
@@ -190,6 +191,7 @@ constexpr NamedApplicationCase application_cases[] = {
         fsim_application_case_vhdl_advanced_types },
     { "vhdl_projected", fsim_application_case_vhdl_projected },
     { "systemc_datatypes", fsim_application_case_systemc_datatypes },
+    { "systemc_tlm1", fsim_application_case_systemc_tlm1 },
     { "mixed_conversions", fsim_application_case_mixed_conversions },
     { "typed_boundaries", fsim_application_case_typed_boundaries },
 #if FSIM_APPLICATION_WITH_TCL

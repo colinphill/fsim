@@ -2399,15 +2399,8 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-ELAB-BIND-031` | error | Same-language VHDL packed-array boundary bounds or direction differ. |
 | `FSIM-ELAB-BIND-032` | error | More than one preconstructed SystemC description names the same instance path. |
 | `FSIM-ELAB-BIND-033` | error | A preconstructed SystemC instance was not reached from the selected top. |
-| `FSIM-ELAB-BIND-034` | error | A SystemC HDL proxy or legacy foreign child declares a port absent from its bound HDL target. |
-| `FSIM-ELAB-BIND-035` | error | A SystemC foreign-child port is connected more than once. |
-| `FSIM-ELAB-BIND-036` | error | A SystemC foreign-child port references an unknown registered object. |
-| `FSIM-ELAB-BIND-037` | error | A SystemC foreign-child port direction differs from its bound HDL target. |
 | `FSIM-ELAB-BIND-038` | error | An HDL-to-SystemC binding has no matching preconstructed factory instance. |
 | `FSIM-ELAB-BIND-039` | error | A preconstructed SystemC instance target differs from its manifest binding. |
-| `FSIM-ELAB-BIND-040` | error | A legacy SystemC `hdl_instance` lacks its required explicit full-path HDL binding. |
-| `FSIM-ELAB-BIND-041` | error | A SystemC HDL proxy or legacy foreign child is bound to a non-HDL target. |
-| `FSIM-ELAB-BIND-042` | error | A registered SystemC thread process requires fiber support, but this build configured `FSIM_SYSTEMC_FIBER_MODE=OFF`. |
 | `FSIM-ELAB-BIND-043` | error | A SystemC process sensitivity references an unknown registered object. |
 | `FSIM-ELAB-BIND-044` | error | A SystemC process registered an invalid sensitivity edge. |
 | `FSIM-ELAB-BIND-045` | error | A SystemC edge sensitivity references a non-scalar object. |
@@ -2570,7 +2563,7 @@ one stable diagnostic from the five-code FST reader family.
 | `FSIM-ART-0011` | error | `.fsimdesign` metadata has invalid roots, bindings, paths, checksums, object provenance, ordered VHDL or Verilog/SystemVerilog semantic-unit provenance, counts, or design digest. |
 | `FSIM-ART-0012` | error | `.fsimdesign` publication/loading failed, including overwrite, staging, permissions, or exact-payload-set failures. |
 | `FSIM-ART-0013` | error | A runtime, semantic, or DesignIR state payload is malformed, excessive, structurally invalid, contains an invalid scalar enumeration, or contains a producer-absolute source path. |
-| `FSIM-ART-0014` | error | Standalone design publication, inspection, loading, projection validation, exact semantic-unit language-profile association, fixed-delay compatibility, or required-payload verification failed. |
+| `FSIM-ART-0014` | error | Standalone design publication, inspection, loading, projection validation, exact semantic-unit language-profile association, fixed-delay compatibility, required-payload verification, or embedded SystemC producer-identity validation failed. |
 
 ## SystemC source compiler and plug-in validation
 
@@ -2578,7 +2571,6 @@ one stable diagnostic from the five-code FST reader family.
 |---|---|---|
 | `FSIM-SC-A001` | error | A validated SystemC plug-in registered no module factory. |
 | `FSIM-SC-A002` | error | A requested SystemC hierarchy has no compiled plug-in or registered factory. |
-| `FSIM-SC-A003` | error | A requested SystemC factory uses the legacy untyped construction ABI. |
 | `FSIM-SC-A004` | error | A typed SystemC factory failed during module construction or declared invalid HDL-proxy contents, bindings, or construction actuals. |
 | `FSIM-SC-A005` | error | One SystemC instance path has conflicting factory targets. |
 | `FSIM-SC-A006` | error | A registered SystemC object could not be bound to its common-runtime signal. |
@@ -2601,8 +2593,67 @@ one stable diagnostic from the five-code FST reader family.
 | `FSIM-SC-I002` | error | Incremental SystemC metadata has invalid ABI, toolchain, path, checksum, dependency, option, factory, schema, or digest values. |
 | `FSIM-SC-I003` | error | Incremental SystemC artifact payload loading or transactional read-only publication failed, including checksum, overwrite, staging, or permission errors. |
 | `FSIM-SC-I004` | error | One SystemC translation-unit compile or dependency scan is invalid, unavailable, mutated, unsafe, unsuccessful, or produced no object. |
-| `FSIM-SC-I005` | error | Ordered SystemC object linking found duplicate/incompatible inputs, unsafe settings, invalid exports/entry points, ABI failure, or no published factories. |
+| `FSIM-SC-I005` | error | Ordered SystemC object linking or native plug-in loading found duplicate/incompatible inputs, unsafe settings, invalid exports/entry points, a stale producer identity, ABI failure, or no published factories. |
 | `FSIM-SC-I006` | error | Explicit SystemC plug-in inputs contain the same logical library more than once. |
+| `FSIM-SC-B001` | error | A SystemC backend island, hierarchy, object, endpoint, transaction, or sequence identity has invalid canonical text, an absent parent, or a zero ordinal. |
+| `FSIM-SC-B002` | error | A SystemC backend message has an unsupported schema/operation/direction/status/flag, invalid request-response correlation, incomplete identity chain, or malformed encoding. |
+| `FSIM-SC-B003` | error | SystemC backend identity, payload, message, reserved-header, or protocol-limit resources are inconsistent or exceed their governed bounds. |
+| `FSIM-SC-S001` | error | A SystemC kernel session request has the wrong owner, lifecycle phase, typed hierarchy identity, repeated construction, or terminal-state transition. |
+| `FSIM-SC-S002` | error | A SystemC kernel session construction, object, binding, or lifecycle-receipt payload is malformed, truncated, trailing, inconsistent, duplicated, or noncanonical. |
+| `FSIM-SC-S003` | error | SystemC kernel session plug-in path, identity, name, object, binding, parameter, detail, or enclosing protocol resources exceed their governed limits. |
+| `FSIM-SC-S004` | error | Upstream SystemC context allocation, plug-in loading, native factory construction, typed port binding, elaboration, start, or zero-time quiescence failed and forced transactional rollback. |
+| `FSIM-SC-E001` | error | A SystemC execution request targets the wrong session state, island, object, endpoint direction, order, or terminal transition. |
+| `FSIM-SC-E002` | error | A SystemC scalar or typed input, advance, result, inspection, report, or snapshot payload is malformed, truncated, trailing, inconsistent, duplicated, noncanonical, or unordered. |
+| `FSIM-SC-E003` | error | SystemC execution sample, typed value, detail, delta-cycle, duration, receipt, or enclosing protocol resources exceed their governed limits. |
+| `FSIM-SC-E004` | error | Upstream SystemC value application, exact advancement, activity query, value sampling, pause/stop observation, or execution failed at a kernel safe point. |
+| `FSIM-SC-L001` | error | A SystemC loopback request is malformed, uses the wrong direction, mutates a replay, or has a duplicate, stale, skipped, or exhausted island sequence. |
+| `FSIM-SC-L002` | error | A loopback peer returned a rejected, malformed, excessive, misdirected, uncorrelated, wrong-operation, or wrong-identity response and was disconnected. |
+| `FSIM-SC-L003` | error | SystemC loopback replay, buffer, or forwarded-exchange limits are invalid or exhausted. |
+| `FSIM-SC-L004` | error | A SystemC loopback has no live serialized peer, or its peer disconnected or failed and was contained. |
+| `FSIM-SC-N001` | error | A SystemC multi-island synchronization request targets an empty or terminal coordinator, or repeats, reverses, or skips the required exact time/delta safe-point order. |
+| `FSIM-SC-N002` | error | A synchronized island, host language, endpoint, scalar input, serialized backend, or batch identity is invalid, unknown, or duplicated. |
+| `FSIM-SC-N003` | error | SystemC synchronization island, input, output, batch, or request-sequence resources are invalid, exhausted, or exceed their governed limits. |
+| `FSIM-SC-N004` | error | A serialized island failed to apply its input batch, reach exact time, drain evaluate/update/notification to quiescence, or return its ordered dirty-output batch; all coordinated islands were closed without partial publication. |
+| `FSIM-SC-V001` | error | A type-erased SystemC value has unsupported or inconsistent kind, signedness, range, plane, padding, enumeration, or time metadata. |
+| `FSIM-SC-V002` | error | A serialized SystemC value has a malformed magic, version, header, dimension, text, limb plane, truncation, reserved field, or trailing byte. |
+| `FSIM-SC-V003` | error | A SystemC value-codec limit, width, encoded byte count, type name, enumeration table, literal, or aggregate enumeration text exceeds its governed bound. |
+| `FSIM-SC-V004` | error | A type-erased SystemC value cannot be converted to or from the legacy scalar representation without losing width, range, kind, type, or state information. |
+| `FSIM-SC-T001` | error | A native TLM1 endpoint, connection, interface kind, operation, transaction identity, or explicit-bridge ownership is incomplete, unsupported, noncanonical, duplicated, or inconsistent. |
+| `FSIM-SC-T002` | error | A TLM1 transaction transition is stale or illegal, or native co-located traffic was submitted to the explicit serialized bridge. |
+| `FSIM-SC-T003` | error | A TLM1 request, response, state, presence flag, header, reserved field, nested value, truncation, or trailing byte is malformed or noncanonical. |
+| `FSIM-SC-T004` | error | TLM1 endpoint, peer, transaction, type-name, nested-value, or encoded-byte resources exceed their governed limits. |
+| `FSIM-SC-U001` | error | Native TLM2 endpoint, socket, connection, transaction identity, direction, bus width, or explicit-bridge ownership metadata is incomplete, unsupported, duplicated, or inconsistent. |
+| `FSIM-SC-U002` | error | A TLM2 transaction transition is stale or illegal, or native co-located traffic was submitted to the explicit serialized bridge. |
+| `FSIM-SC-U003` | error | A TLM2 generic payload, command, response, phase, synchronization result, extension, DMI descriptor, header, reserved field, truncation, or trailing byte is malformed or noncanonical. |
+| `FSIM-SC-U004` | error | TLM2 endpoint, peer, transaction, data, byte-enable, extension, or encoded-byte resources exceed their governed limits. |
+| `FSIM-SC-W001` | error | A SystemC signal or primitive-channel inventory entry has invalid, duplicated, unordered, noncanonical, or inconsistent path, type, identity, domain, writer, update-owner, or observation metadata. |
+| `FSIM-SC-W002` | error | A SystemC channel inventory was frozen or mutated in an illegal lifecycle state, or a frozen post-binding channel disappeared or changed. |
+| `FSIM-SC-W003` | error | Unsupported SystemC channel metadata is inconsistent, or a custom channel claims support without an explicit observation adapter; unsupported custom channels remain visible in the immutable inventory. |
+| `FSIM-SC-W004` | error | SystemC channel count, canonical path, type name, or encoded inventory bytes exceed their governed limits. |
+| `FSIM-SC-X001` | error | A SystemC port or export inventory declaration has invalid, duplicated, unordered, noncanonical, or inconsistent identity, path, interface, kind, or direction metadata. |
+| `FSIM-SC-X002` | error | A SystemC port/export binding does not resolve to an inventoried final channel, or its hierarchical, multi-bind, alias, or mixed-language chain is incomplete, repeated, cyclic, or unordered. |
+| `FSIM-SC-X003` | error | A SystemC binding inventory was frozen or mutated in an illegal lifecycle state. |
+| `FSIM-SC-X004` | error | SystemC binding declaration, target fanout, chain depth, path, interface name, or encoded inventory bytes exceed their governed limits. |
+| `FSIM-SC-Y001` | error | A SystemC debugger, report, inventory-query, or TLM observation has malformed, inconsistent, duplicated, uncorrelated, or out-of-order metadata. |
+| `FSIM-SC-Y002` | error | A SystemC debugger read, write, inventory query, or report was attempted outside the owning island's quiescent safe point. |
+| `FSIM-SC-Y003` | error | A visible SystemC channel has no explicit debugger read or write adapter for the requested operation. |
+| `FSIM-SC-Y004` | error | SystemC observation adapters, records, details, transaction payloads, or encoded batch bytes exceed their governed limits. |
+| `FSIM-SC-Z001` | error | A SystemC trace route, frozen channel, binding alias, trace declaration, endpoint, value kind, width, or batch coordinate is invalid, duplicated, inconsistent, or out of order. |
+| `FSIM-SC-Z002` | error | A SystemC trace selection, post-update submission, flush, or close operation was attempted outside the open trace lifecycle. |
+| `FSIM-SC-Z003` | error | A lossless SystemC trace dirty batch or late-enable snapshot reached the governed pending-batch, value-count, or payload-bit bound and must be retried after flush. |
+| `FSIM-SC-Z004` | error | VCD or FST rejected an accepted SystemC trace batch or failed during flush or close; the trace pipeline is terminal and retains the writer failure. |
+
+SystemC incremental objects, native plug-ins, mapped-library variants, and
+embedded design plug-ins retain one producer fingerprint over the exact
+upstream source, compiler executable and environment, standard library, and
+bridge revision. A consumer rejects or falls back from a producer whose current
+fingerprint, runtime ABI, SystemC ABI, target, or CPU identity differs, even when
+the artifact's internal checksums remain self-consistent.
+
+Kernel-session responses carry the four stable session classifications as a
+bounded enum while retaining a bounded human-readable detail. Failed native
+mutation destroys every staged object and its owned upstream context before the
+response is published; no partial island survives into a subsequent session.
 
 ## Consistency check
 

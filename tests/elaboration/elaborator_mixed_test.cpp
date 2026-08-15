@@ -1104,14 +1104,6 @@ module systemc_parent;
   end
 endmodule
 
-module systemc_hdl_child #(
-  parameter VALUE = 8'hA5
-) (
-  input bit clock,
-  output bit [7:0] value
-);
-  assign value = VALUE;
-endmodule
 )";
     const auto parsed_systemc_boundary = fsim::frontend::parse_text(
         "systemc_boundary.sv",
@@ -1293,40 +1285,16 @@ endmodule
     assert(has_diagnostic(
         failed_construction, "FSIM-ELAB-SC-PARAM-008"));
 
-    const fsim::elaboration::SystemCInstanceDescription
-        nested_systemc{
-            "systemc_parent.u_bridge",
-            "systemc:work.bridge",
-            100,
-            0,
-            {},
-            {
-                {101, "clock", systemc_bit,
-                 fsim::frontend::PortDirection::Input, 0},
-                {102, "value", systemc_unsigned,
-                 fsim::frontend::PortDirection::Output, 0},
-            },
-            {
-                {103,
-                 "u_hdl",
-                 {{"VALUE", 0x3c}},
-                 {
-                     {"clock", systemc_bit,
-                      fsim::frontend::PortDirection::Input, 101},
-                     {"value", systemc_unsigned,
-                      fsim::frontend::PortDirection::Output, 102},
-                 },
-                 true,
-                 "systemc_hdl_child"},
-            },
-            {},
-            {},
-            {},
-            {},
-            {},
-            {},
-            {},
-            {}};
+    fsim::elaboration::SystemCInstanceDescription nested_systemc;
+    nested_systemc.path = "systemc_parent.u_bridge";
+    nested_systemc.target = "systemc:work.bridge";
+    nested_systemc.handle = 100;
+    nested_systemc.ports = {
+        {101, "clock", systemc_bit,
+         fsim::frontend::PortDirection::Input, 0},
+        {102, "value", systemc_unsigned,
+         fsim::frontend::PortDirection::Output, 0},
+    };
     const std::vector<fsim::elaboration::Binding>
         hdl_to_systemc_bindings{
             {"systemc_parent.u_bridge",
@@ -1355,165 +1323,23 @@ endmodule
     const auto systemc_port_value =
         hdl_to_systemc.design->find_signal(
             "systemc_parent.u_bridge.value");
-    const auto systemc_child_value =
-        hdl_to_systemc.design->find_signal(
-            "systemc_parent.u_bridge.u_hdl.value");
-    assert(
-        systemc_parent_value && systemc_port_value
-        && systemc_child_value);
+    assert(systemc_parent_value && systemc_port_value);
     assert(*systemc_parent_value == *systemc_port_value);
-    assert(*systemc_parent_value == *systemc_child_value);
-    auto hdl_to_systemc_interpreter =
-        hdl_to_systemc.design->create_interpreter();
-    const auto hdl_to_systemc_result =
-        hdl_to_systemc_interpreter->run();
-    assert(
-        hdl_to_systemc_result.status
-        == fsim::runtime::RunStatus::stopped);
-    assert(
-        hdl_to_systemc_interpreter
-            ->signal_value(*systemc_parent_value)
-            .to_msb_string()
-        == "00111100");
 
     auto systemc_root = nested_systemc;
     systemc_root.path = "bridge";
     systemc_root.target = "systemc:models.bridge";
-    const std::vector<fsim::elaboration::Binding>
-        systemc_to_hdl_bindings{
-            {"bridge.u_hdl",
-             "sv:work.systemc_hdl_child",
-             std::nullopt},
-        };
-    const std::array systemc_root_instances{systemc_root};
-    auto systemc_to_hdl = fsim::elaboration::elaborate(
-        parsed_systemc_boundary.design,
-        "systemc:models.bridge",
-        systemc_to_hdl_bindings,
-        systemc_root_instances);
-    if (!systemc_to_hdl.ok()) {
-        for (const auto& diagnostic : systemc_to_hdl.diagnostics) {
-            std::cerr << diagnostic.code << ": "
-                      << diagnostic.message << '\n';
-        }
-    }
-    assert(systemc_to_hdl.ok());
-    assert(systemc_to_hdl.design->systemc_instances().size() == 1);
-    assert(systemc_to_hdl.design->specializations().size() == 1);
-    assert((
-        systemc_to_hdl.design->specializations().front()
-            .parameter_values
-        == std::vector<std::pair<std::string, std::string>>{
-            {"VALUE", "60"}}));
-    const auto systemc_root_value =
-        systemc_to_hdl.design->find_signal("bridge.value");
-    const auto systemc_root_child_value =
-        systemc_to_hdl.design->find_signal(
-            "bridge.u_hdl.value");
-    assert(systemc_root_value && systemc_root_child_value);
-    assert(*systemc_root_value == *systemc_root_child_value);
-    auto systemc_to_hdl_interpreter =
-        systemc_to_hdl.design->create_interpreter();
-    const auto systemc_to_hdl_result =
-        systemc_to_hdl_interpreter->run();
-    assert(
-        systemc_to_hdl_result.status
-        == fsim::runtime::RunStatus::completed);
-    assert(
-        systemc_to_hdl_interpreter
-            ->signal_value(*systemc_root_value)
-            .to_msb_string()
-        == "00111100");
-
-    auto invalid_systemc_actual = systemc_root;
-    invalid_systemc_actual.foreign_children.front()
-        .construction_actuals = {{"MISSING", 1}};
-    const std::array invalid_systemc_actual_instances{
-        invalid_systemc_actual};
-    const auto rejected_systemc_actual =
-        fsim::elaboration::elaborate(
-            parsed_systemc_boundary.design,
-            "systemc:models.bridge",
-            systemc_to_hdl_bindings,
-            invalid_systemc_actual_instances);
-    assert(!rejected_systemc_actual.ok());
-    assert(has_diagnostic(
-        rejected_systemc_actual, "FSIM-ELAB-PARAM-001"));
-
-    auto duplicate_systemc_actual = systemc_root;
-    duplicate_systemc_actual.foreign_children.front()
-        .construction_actuals = {
-            {"VALUE", 1},
-            {"VALUE", 2},
-        };
-    const std::array duplicate_systemc_actual_instances{
-        duplicate_systemc_actual};
-    const auto rejected_duplicate_systemc_actual =
-        fsim::elaboration::elaborate(
-            parsed_systemc_boundary.design,
-            "systemc:models.bridge",
-            systemc_to_hdl_bindings,
-            duplicate_systemc_actual_instances);
-    assert(!rejected_duplicate_systemc_actual.ok());
-    assert(has_diagnostic(
-        rejected_duplicate_systemc_actual,
-        "FSIM-ELAB-PARAM-002"));
-
-    const std::vector<fsim::elaboration::Binding>
-        missing_systemc_child_binding;
-    auto legacy_systemc_root = systemc_root;
-    legacy_systemc_root.foreign_children.front().module_facade = false;
-    legacy_systemc_root.foreign_children.front().implementation.clear();
-    const std::array legacy_systemc_root_instances{legacy_systemc_root};
-    const auto missing_systemc_child =
-        fsim::elaboration::elaborate(
-            parsed_systemc_boundary.design,
-            "systemc:models.bridge",
-            missing_systemc_child_binding,
-            legacy_systemc_root_instances);
-    assert(!missing_systemc_child.ok());
-    assert(has_diagnostic(
-        missing_systemc_child, "FSIM-ELAB-BIND-040"));
-
-    auto thread_systemc = systemc_root;
-    thread_systemc.foreign_children.clear();
-    thread_systemc.processes.push_back({
-        150,
-        "thread",
-        FSIM_SC_THREAD,
-        nullptr,
-        nullptr,
-        {},
-        true});
-    const std::array thread_systemc_instances{thread_systemc};
-    const auto systemc_thread =
-        fsim::elaboration::elaborate(
-            parsed_systemc_boundary.design,
-            "systemc:models.bridge",
-            std::span<const fsim::elaboration::Binding>{},
-            thread_systemc_instances);
-#if defined(FSIM_HAS_BOOST_CONTEXT)
-    assert(systemc_thread.ok());
-    assert(systemc_thread.design->systemc_processes().size() == 1);
-#else
-    assert(!systemc_thread.ok());
-    assert(has_diagnostic(
-        systemc_thread, "FSIM-ELAB-BIND-042"));
-#endif
 
     const auto elaborate_sensitivity =
         [&](std::vector<fsim::elaboration::ExternalSensitivity>
                 sensitivity) {
           auto instance = systemc_root;
-          instance.foreign_children.clear();
           instance.processes = {{
               151,
               "sensitivity",
-              FSIM_SC_METHOD,
               nullptr,
               nullptr,
-              std::move(sensitivity),
-              false}};
+              std::move(sensitivity)}};
           return fsim::elaboration::elaborate(
               parsed_systemc_boundary.design,
               "systemc:models.bridge",
@@ -1570,20 +1396,6 @@ begin
     port map (value => value, inverted => inverted);
 end architecture rtl;
 
-entity systemc_vhdl_child is
-  generic (
-    choose : integer := 1
-  );
-  port (
-    value : in std_logic;
-    inverted : out std_logic
-  );
-end entity systemc_vhdl_child;
-
-architecture rtl of systemc_vhdl_child is
-begin
-  inverted <= not value;
-end architecture rtl;
 )";
     const auto parsed_systemc_vhdl = fsim::frontend::parse_text(
         "systemc_boundary.vhd",
@@ -1595,40 +1407,16 @@ end architecture rtl;
         "systemc.logic",
         std::nullopt,
         false};
-    const fsim::elaboration::SystemCInstanceDescription
-        vhdl_nested_systemc{
-            "systemc_vhdl_parent.u_bridge",
-            "systemc:work.bridge",
-            200,
-            0,
-            {},
-            {
-                {201, "value", systemc_logic,
-                 fsim::frontend::PortDirection::Input, 0},
-                {202, "inverted", systemc_logic,
-                 fsim::frontend::PortDirection::Output, 0},
-            },
-            {
-                {203,
-                 "u_hdl",
-                 {{"CHOOSE", 0}},
-                 {
-                     {"value", systemc_logic,
-                      fsim::frontend::PortDirection::Input, 201},
-                     {"inverted", systemc_logic,
-                      fsim::frontend::PortDirection::Output, 202},
-                 },
-                 true,
-                 "systemc_vhdl_child"},
-            },
-            {},
-            {},
-            {},
-            {},
-            {},
-            {},
-            {},
-            {}};
+    fsim::elaboration::SystemCInstanceDescription vhdl_nested_systemc;
+    vhdl_nested_systemc.path = "systemc_vhdl_parent.u_bridge";
+    vhdl_nested_systemc.target = "systemc:work.bridge";
+    vhdl_nested_systemc.handle = 200;
+    vhdl_nested_systemc.ports = {
+        {201, "value", systemc_logic,
+         fsim::frontend::PortDirection::Input, 0},
+        {202, "inverted", systemc_logic,
+         fsim::frontend::PortDirection::Output, 0},
+    };
     const std::vector<fsim::elaboration::Binding>
         vhdl_systemc_bindings{
             {"systemc_vhdl_parent.u_bridge",
@@ -1650,44 +1438,11 @@ end architecture rtl;
     }
     assert(vhdl_systemc.ok());
     assert(vhdl_systemc.design->systemc_instances().size() == 1);
-    const auto vhdl_systemc_child_specialization =
-        std::find_if(
-            vhdl_systemc.design->specializations().begin(),
-            vhdl_systemc.design->specializations().end(),
-            [](const auto& specialization) {
-                return specialization.instance
-                    == "systemc_vhdl_parent.u_bridge.u_hdl";
-            });
-    assert(
-        vhdl_systemc_child_specialization
-        != vhdl_systemc.design->specializations().end());
-    assert((
-        vhdl_systemc_child_specialization->parameter_values
-        == std::vector<std::pair<std::string, std::string>>{
-            {"choose", "0"}}));
     const auto vhdl_systemc_value =
         vhdl_systemc.design->find_signal("value");
-    const auto vhdl_systemc_child_value =
-        vhdl_systemc.design->find_signal(
-            "systemc_vhdl_parent.u_bridge.u_hdl.value");
     const auto vhdl_systemc_inverted =
         vhdl_systemc.design->find_signal("inverted");
-    assert(
-        vhdl_systemc_value && vhdl_systemc_child_value
-        && vhdl_systemc_inverted);
-    assert(*vhdl_systemc_value == *vhdl_systemc_child_value);
-    auto vhdl_systemc_interpreter =
-        vhdl_systemc.design->create_interpreter();
-    const auto vhdl_systemc_result =
-        vhdl_systemc_interpreter->run();
-    assert(
-        vhdl_systemc_result.status
-        == fsim::runtime::RunStatus::completed);
-    assert(
-        vhdl_systemc_interpreter
-            ->signal_value(*vhdl_systemc_inverted)
-            .to_msb_string()
-        == "0");
+    assert(vhdl_systemc_value && vhdl_systemc_inverted);
 
     TestSystemCFactoryProvider inferred_vhdl_systemc_provider;
     inferred_vhdl_systemc_provider.prototype = vhdl_nested_systemc;
@@ -1826,14 +1581,10 @@ endmodule
                  1003},
             },
             {},
-            {},
-            {},
-            {{1003, "shared"}},
             {{1003,
               "shared",
               systemc_logic,
               fsim::runtime::PackedLogic4::from_msb_string("0")}},
-            {},
             {},
             {},
             {}};

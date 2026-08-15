@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_internal.hpp"
+#include "context_activation.hpp"
 
 #include <atomic>
 
@@ -18,11 +19,9 @@ void collect_object_info(
          HierarchyObjectKind::module});
     std::vector<HierarchyObjectInfo> direct;
     direct.reserve(
-        module.ports.size() + module.foreign_children.size()
-        + module.processes.size() + module.events.size()
-        + module.primitive_channels.size()
-        + module.internal_signals.size() + module.exports.size()
-        + module.metadata_objects.size()
+        module.ports.size() + module.processes.size()
+        + module.internal_signals.size()
+        + module.exports.size()
         + module.native_children.size());
     const auto append = [&](const auto& objects, const auto kind) {
         for (const auto& object : objects) {
@@ -32,43 +31,9 @@ void collect_object_info(
         }
     };
     append(module.ports, HierarchyObjectKind::port);
-    for (const auto& child : module.foreign_children) {
-        direct.push_back(
-            {child.handle, module.handle, child.name,
-             path + "." + child.name,
-             child.module_facade ? HierarchyObjectKind::module
-                                 : HierarchyObjectKind::foreign_child});
-    }
     append(module.processes, HierarchyObjectKind::process);
-    append(module.events, HierarchyObjectKind::event);
-    const auto is_signal = [&](const fsim_sc_handle_v1 handle) {
-        return std::any_of(
-            module.internal_signals.begin(),
-            module.internal_signals.end(),
-            [&](const InternalSignalDescription& signal) {
-                return signal.handle == handle;
-            });
-    };
-    for (const auto& channel : module.primitive_channels) {
-        if (!is_signal(channel.handle)) {
-            direct.push_back(
-                {channel.handle, module.handle, channel.name,
-                 path + "." + channel.name,
-                 HierarchyObjectKind::primitive_channel});
-        }
-    }
     append(module.internal_signals, HierarchyObjectKind::signal);
     append(module.exports, HierarchyObjectKind::export_object);
-    for (const auto& object : module.metadata_objects) {
-        direct.push_back({
-            object.handle,
-            module.handle,
-            object.name,
-            path + "." + object.name,
-            object.category == FSIM_SC_METADATA_PORT
-                ? HierarchyObjectKind::port
-                : HierarchyObjectKind::export_object});
-    }
     for (const auto& child : module.native_children) {
         direct.push_back(
             {child.handle, module.handle, child.instance,
@@ -92,29 +57,6 @@ void collect_object_info(
             });
         if (child != module.native_children.end()) {
             collect_object_info(*child, object.path, module.handle, result);
-            continue;
-        }
-        const auto proxy = std::find_if(
-            module.foreign_children.begin(),
-            module.foreign_children.end(),
-            [&](const ForeignChildDescription& candidate) {
-                return candidate.module_facade
-                    && candidate.handle == object.handle;
-            });
-        if (proxy != module.foreign_children.end()) {
-            result.push_back(object);
-            auto ports = proxy->ports;
-            std::sort(
-                ports.begin(), ports.end(),
-                [](const auto& left, const auto& right) {
-                    return left.handle < right.handle;
-                });
-            for (const auto& port : ports) {
-                result.push_back(
-                    {port.handle, proxy->handle, port.name,
-                     object.path + "." + port.name,
-                     HierarchyObjectKind::port});
-            }
         }
     }
 }
@@ -153,7 +95,6 @@ void HierarchyRegistry::Impl::rollback(const fsim_sc_handle_v1 module) noexcept 
             native_children.erase(descendants);
         }
         const auto found = pending.find(module);
-        hdl_modules.erase(module);
         if (found == pending.end()) {
             return;
         }
@@ -161,17 +102,8 @@ void HierarchyRegistry::Impl::rollback(const fsim_sc_handle_v1 module) noexcept 
         for (const auto& port : description.ports) {
             objects.erase(port.handle);
         }
-        for (const auto& child : description.foreign_children) {
-            children.erase(child.handle);
-        }
         for (const auto& process : description.processes) {
             processes.erase(process.handle);
-        }
-        for (const auto& event : description.events) {
-            events.erase(event.handle);
-        }
-        for (const auto& channel : description.primitive_channels) {
-            primitive_channels.erase(channel.handle);
         }
         for (const auto& signal : description.internal_signals) {
             objects.erase(signal.handle);
@@ -195,90 +127,12 @@ void HierarchyRegistry::Impl::rollback(const fsim_sc_handle_v1 module) noexcept 
         const auto descendants = native_children.find(module);
         if (descendants != native_children.end()) {
             for (const auto child : descendants->second) {
-                const auto marked = hdl_modules.find(child);
-                if (marked == hdl_modules.end()) {
-                    result.native_children.push_back(collect(child));
-                    continue;
-                }
-                auto child_found = pending.find(child);
-                if (child_found == pending.end()) {
-                    throw std::logic_error{
-                        "missing pending HDL-backed SystemC module"};
-                }
-                ForeignChildDescription proxy;
-                proxy.handle = child;
-                proxy.name = child_found->second.instance;
-                proxy.construction_actuals =
-                    std::move(marked->second.actuals);
-                proxy.module_facade = true;
-                proxy.implementation =
-                    std::move(marked->second.implementation);
-                proxy.ports.reserve(child_found->second.ports.size());
-                for (const auto& port : child_found->second.ports) {
-                    proxy.ports.push_back(
-                        {port.name,
-                         port.direction,
-                         port.encoding,
-                         port.width,
-                         port.bound_object,
-                         port.handle});
-                }
-                result.foreign_children.push_back(std::move(proxy));
-                pending.erase(child_found);
-                hdl_modules.erase(marked);
+                result.native_children.push_back(collect(child));
             }
             native_children.erase(descendants);
         }
-        std::sort(
-            result.foreign_children.begin(),
-            result.foreign_children.end(),
-            [](const auto& left, const auto& right) {
-                return left.handle < right.handle;
-            });
         return result;
     }
-
-[[nodiscard]] bool HierarchyRegistry::Impl::validate_hdl_modules(
-    const fsim_sc_handle_v1 root,
-    std::string& error) const {
-    for (const auto& [handle, metadata] : hdl_modules) {
-        (void)metadata;
-        const auto found = pending.find(handle);
-        if (found == pending.end()) {
-            error = "marked HDL module has no pending hierarchy record";
-            return false;
-        }
-        const auto& module = found->second;
-        if (handle == root || module.parent == 0) {
-            error = "an HDL module proxy cannot be a factory root";
-            return false;
-        }
-        const auto descendants = native_children.find(handle);
-        if ((descendants != native_children.end()
-             && !descendants->second.empty())
-            || !module.foreign_children.empty()
-            || !module.processes.empty() || !module.events.empty()
-            || !module.primitive_channels.empty()
-            || !module.internal_signals.empty()
-            || !module.exports.empty()
-            || !module.metadata_objects.empty()) {
-            error = "HDL module proxy '" + module.instance
-                + "' may contain only ports and construction actuals";
-            return false;
-        }
-        const auto unbound = std::find_if(
-            module.ports.begin(), module.ports.end(),
-            [](const PortDescription& port) {
-                return port.bound_object == 0;
-            });
-        if (unbound != module.ports.end()) {
-            error = "HDL module proxy '" + module.instance
-                + "' has unbound port '" + unbound->name + "'";
-            return false;
-        }
-    }
-    return true;
-}
 
 HierarchyRegistry::HierarchyRegistry(
     std::unique_ptr<Impl> impl) noexcept
@@ -302,10 +156,14 @@ void HierarchyRegistry::reset() noexcept {
     if (!impl_) {
         return;
     }
+    std::unique_ptr<detail::ContextActivation> activation;
+    if (impl_->owned_context) {
+        activation = std::make_unique<detail::ContextActivation>(
+            impl_->owned_context.get());
+    }
     // Suspended stacks may still hold plug-in code addresses and module
     // references, so release them before destroying modules or unloading the
     // dynamic library.
-    shutdown_threads(*impl_);
     // A caller may abandon a simulation after start without explicitly
     // entering its terminal phase. Give every still-started root exactly one
     // best-effort end_of_simulation callback while the image and host table
@@ -339,15 +197,23 @@ void HierarchyRegistry::reset() noexcept {
         }
     }
     impl_->live.clear();
-    impl_->plugin.reset();
     impl_.reset();
 }
 
 std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
     const std::filesystem::path& path,
-    std::string& error) {
+    std::string& error,
+    const bool isolated_kernel) {
     auto impl = std::make_unique<Impl>();
     impl->path = path;
+    if (isolated_kernel) {
+        impl->owned_context = std::make_unique<sc_core::sc_simcontext>();
+    }
+    std::unique_ptr<detail::ContextActivation> activation;
+    if (impl->owned_context) {
+        activation = std::make_unique<detail::ContextActivation>(
+            impl->owned_context.get());
+    }
 
     fsim_sc_host_v1 host{};
     host.abi_version = FSIM_SYSTEMC_ABI_VERSION;
@@ -358,50 +224,26 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
     host.add_sensitivity = registry_add_sensitivity;
     host.read_value = registry_read;
     host.write_value = registry_write;
-    host.wait_time = registry_wait_time;
-    host.wait_event = registry_wait_event;
-    host.notify_event = registry_notify;
     host.report = registry_report;
-    host.register_foreign_child = registry_register_foreign_child;
-    host.connect_foreign_port = registry_connect_foreign_port;
-    host.set_process_initialize =
-        registry_set_process_initialize;
-    host.register_event = registry_register_event;
-    host.notify_event_mode = registry_notify_mode;
-    host.cancel_event = registry_cancel_event;
-    host.wait_event_list = registry_wait_event_list;
-    host.notify_event_delayed = registry_notify_delayed;
-    host.register_primitive_channel =
-        registry_register_primitive_channel;
-    host.request_update = registry_request_update;
     host.register_signal = registry_register_signal;
-    host.value_changed = registry_value_changed;
     host.bind_port = registry_bind_port;
     host.register_native_module = registry_register_native_module;
     host.register_lifecycle = registry_register_lifecycle;
     host.register_export = registry_register_export;
     host.bind_export = registry_bind_export;
-    host.wait_static = registry_wait_static;
-    host.set_foreign_child_actual =
-        registry_set_foreign_child_actual;
     host.get_construction_value =
         registry_get_construction_value;
     host.set_export_writable = registry_set_export_writable;
-    host.register_metadata_object = registry_register_metadata_object;
-    host.set_primitive_channel_kind =
-        registry_set_primitive_channel_kind;
-    host.wait_event_timeout = registry_wait_event_timeout;
-    host.mark_hdl_module = registry_mark_hdl_module;
-    host.set_hdl_module_actual = registry_set_hdl_module_actual;
-    host.set_hdl_module_implementation =
-        registry_set_hdl_module_implementation;
+    host.wait_for_input_or_native_activity =
+        registry_wait_for_input_or_native_activity;
+    host.current_time_femtoseconds =
+        registry_current_time_femtoseconds;
 
     Impl staged_registrations;
     fsim_sc_registrar_v1 registrar{};
     registrar.abi_version = FSIM_SYSTEMC_ABI_VERSION;
     registrar.struct_size = sizeof(registrar);
     registrar.context = &staged_registrations;
-    registrar.register_factory = registry_register_factory;
     registrar.register_elaboration_factory =
         registry_register_elaboration_factory;
     registrar.register_factory_parameter =
@@ -421,16 +263,6 @@ bool HierarchyRegistry::has_factory(
     const std::string_view name) const noexcept {
     return impl_ != nullptr
         && impl_->factories.contains(std::string{name});
-}
-
-bool HierarchyRegistry::has_elaboration_factory(
-    const std::string_view name) const noexcept {
-    if (impl_ == nullptr) {
-        return false;
-    }
-    const auto found = impl_->factories.find(std::string{name});
-    return found != impl_->factories.end()
-        && found->second.elaborate != nullptr;
 }
 
 std::size_t HierarchyRegistry::factory_count() const noexcept {
@@ -457,12 +289,8 @@ bool HierarchyRegistry::owns_handle(
         return false;
     }
     return impl_->objects.contains(handle)
-        || impl_->children.contains(handle)
         || impl_->processes.contains(handle)
-        || impl_->events.contains(handle)
-        || impl_->primitive_channels.contains(handle)
         || impl_->pending.contains(handle)
-        || impl_->hdl_modules.contains(handle)
         || std::ranges::any_of(
             impl_->live,
             [&](const auto& module) {
@@ -590,12 +418,6 @@ std::optional<ModuleDescription> HierarchyRegistry::instantiate(
             + "' was not registered";
         return std::nullopt;
     }
-    if (found->second.elaborate == nullptr) {
-        error = "SystemC factory '" + std::string{factory}
-            + "' uses the legacy registration form and has no typed "
-              "elaboration surface";
-        return std::nullopt;
-    }
     std::vector<std::pair<std::string, std::int64_t>>
         construction_values;
     construction_values.reserve(found->second.parameters.size());
@@ -663,6 +485,12 @@ std::optional<ModuleDescription> HierarchyRegistry::instantiate(
         std::move(construction_values);
     impl_->pending.emplace(*handle, pending);
 
+    std::unique_ptr<detail::ContextActivation> activation;
+    if (impl_->owned_context) {
+        activation = std::make_unique<detail::ContextActivation>(
+            impl_->owned_context.get());
+    }
+
     void* object = nullptr;
     fsim_sc_status_v1 status = FSIM_SC_RUNTIME_ERROR;
     impl_->elaboration_failure.clear();
@@ -696,11 +524,6 @@ std::optional<ModuleDescription> HierarchyRegistry::instantiate(
         error = "SystemC factory '" + std::string{factory}
             + "' returned a null module object";
     }
-    if (error.empty()
-        && !impl_->validate_hdl_modules(*handle, error)) {
-        error = "SystemC factory '" + std::string{factory}
-            + "' failed during elaboration: " + error;
-    }
     if (!error.empty() || constructed == impl_->pending.end()) {
         if (object != nullptr) {
             try {
@@ -730,8 +553,7 @@ void HierarchyRegistry::bind_runtime_object(
     const fsim_sc_handle_v1 object,
     const std::uint32_t signal) {
     if (impl_ == nullptr
-        || (!impl_->objects.contains(object)
-            && !impl_->events.contains(object))) {
+        || !impl_->objects.contains(object)) {
         throw std::invalid_argument{
             "cannot bind an unknown SystemC object handle"};
     }
@@ -756,6 +578,11 @@ void HierarchyRegistry::complete_elaboration(
     const std::span<const fsim_sc_handle_v1> roots) {
     if (impl_ == nullptr) {
         throw std::logic_error{"SystemC hierarchy registry is unavailable"};
+    }
+    std::unique_ptr<detail::ContextActivation> activation;
+    if (impl_->owned_context) {
+        activation = std::make_unique<detail::ContextActivation>(
+            impl_->owned_context.get());
     }
     std::vector<Impl::LiveModule*> modules;
     modules.reserve(roots.size());
@@ -825,6 +652,11 @@ void HierarchyRegistry::start_simulation(
     if (impl_ == nullptr) {
         throw std::logic_error{"SystemC hierarchy registry is unavailable"};
     }
+    std::unique_ptr<detail::ContextActivation> activation;
+    if (impl_->owned_context) {
+        activation = std::make_unique<detail::ContextActivation>(
+            impl_->owned_context.get());
+    }
     for (const auto root : roots) {
         auto* module = find_live_module(*impl_, root);
         if (module == nullptr) {
@@ -857,11 +689,17 @@ void HierarchyRegistry::start_simulation(
 }
 
 void HierarchyRegistry::end_simulation(
-    const std::span<const fsim_sc_handle_v1> roots) {
+    const std::span<const fsim_sc_handle_v1> roots,
+    const std::uint64_t current_time) {
     if (impl_ == nullptr) {
         throw std::logic_error{"SystemC hierarchy registry is unavailable"};
     }
-    shutdown_threads(*impl_);
+    std::unique_ptr<detail::ContextActivation> activation;
+    if (impl_->owned_context) {
+        activation = std::make_unique<detail::ContextActivation>(
+            impl_->owned_context.get());
+    }
+    impl_->lifecycle_time = current_time;
     std::exception_ptr failure;
     for (auto root = roots.rbegin(); root != roots.rend(); ++root) {
         auto* module = find_live_module(*impl_, *root);
@@ -904,6 +742,11 @@ MethodSuspendResult HierarchyRegistry::invoke_process(
     if (impl_ == nullptr) {
         throw std::logic_error{"SystemC hierarchy registry is unavailable"};
     }
+    std::unique_ptr<detail::ContextActivation> activation;
+    if (impl_->owned_context) {
+        activation = std::make_unique<detail::ContextActivation>(
+            impl_->owned_context.get());
+    }
     const auto found = impl_->processes.find(process);
     if (found == impl_->processes.end()) {
         throw std::invalid_argument{"unknown SystemC process handle"};
@@ -927,165 +770,59 @@ MethodSuspendResult HierarchyRegistry::invoke_process(
         throw std::logic_error{
             "recursive SystemC process invocation is not supported"};
     }
-    if (description->kind == FSIM_SC_METHOD) {
-        ActiveInvocation invocation{};
-        invocation.registry = impl_.get();
-        invocation.context = &context;
-        InvocationScope scope{invocation};
-        try {
-            description->entry(description->user);
-        } catch (const std::exception& exception) {
-            invocation.failure =
-                "SystemC process callback escaped with an exception: "
-                + std::string{exception.what()};
-        } catch (...) {
-            invocation.failure =
-                "SystemC process callback escaped with an "
-                "unknown exception";
-        }
-        if (!invocation.failure.empty()) {
-            throw std::runtime_error{std::move(invocation.failure)};
-        }
-        if (invocation.suspension) {
-            return *invocation.suspension;
-        }
-        return {
-            description->sensitivity.empty()
-                ? MethodSuspendKind::halt
-                : MethodSuspendKind::static_sensitivity,
-            0,
-            {},
-            false,
-            std::nullopt};
-    }
-
-#if defined(FSIM_HAS_BOOST_CONTEXT)
-    if (description->kind != FSIM_SC_THREAD
-        && description->kind != FSIM_SC_CTHREAD) {
-        throw std::logic_error{
-            "SystemC process has an invalid process kind"};
-    }
-    auto& state = impl_->thread_fibers[process];
-    if (!state) {
-        state = std::make_unique<ThreadFiberState>();
-    }
-    if (state->terminated) {
-        return {
-            MethodSuspendKind::halt,
-            0,
-            {},
-            false,
-            std::nullopt};
-    }
 
     ActiveInvocation invocation{};
     invocation.registry = impl_.get();
     invocation.context = &context;
-    invocation.thread = state.get();
     InvocationScope scope{invocation};
     try {
-        if (!state->started) {
-            state->started = true;
-            const auto entry = description->entry;
-            void* const user = description->user;
-            auto* const fiber_state = state.get();
-            state->process = boost::context::fiber{
-                [entry, user, fiber_state](
-                    boost::context::fiber&& caller) mutable {
-                    fiber_state->caller = std::move(caller);
-                    entry(user);
-                    fiber_state->terminated = true;
-                    return std::move(fiber_state->caller);
-                }};
-        }
-        state->process = std::move(state->process).resume();
+        description->entry(description->user);
     } catch (const std::exception& exception) {
         invocation.failure =
-            "SystemC thread fiber failed: "
+            "SystemC process callback escaped with an exception: "
             + std::string{exception.what()};
     } catch (...) {
         invocation.failure =
-            "SystemC thread fiber failed with an unknown exception";
+            "SystemC process callback escaped with an unknown exception";
     }
     if (!invocation.failure.empty()) {
-        state->terminated = true;
         throw std::runtime_error{std::move(invocation.failure)};
     }
     if (invocation.suspension) {
-        return *invocation.suspension;
-    }
-    if (state->terminated) {
-        return {
-            MethodSuspendKind::halt,
-            0,
-            {},
-            false,
-            std::nullopt};
-    }
-    throw std::runtime_error{
-        "SystemC thread yielded without a wait request"};
-#else
-    throw std::logic_error{
-        "SystemC thread execution requires Boost.Context 1.91.0"};
-#endif
-}
-
-void HierarchyRegistry::invoke_primitive_channel(
-    const fsim_sc_handle_v1 channel,
-    runtime::simir::ProcessExecutionContext& context) {
-    if (impl_ == nullptr) {
-        throw std::logic_error{"SystemC hierarchy registry is unavailable"};
-    }
-    const auto found = impl_->primitive_channels.find(channel);
-    if (found == impl_->primitive_channels.end()) {
-        throw std::invalid_argument{
-            "unknown SystemC primitive-channel handle"};
-    }
-    const PrimitiveChannelDescription* description = nullptr;
-    for (const auto& module : impl_->live) {
-        const auto* owner = find_module_description(
-            module.description, found->second.module);
-        if (owner == nullptr
-            || found->second.channel
-                >= owner->primitive_channels.size()) {
-            continue;
+        auto suspension = std::move(*invocation.suspension);
+        if (suspension.kind == MethodSuspendKind::wait_event
+            && suspension.event_signals.empty()) {
+            for (const auto& sensitivity : description->sensitivity) {
+                const auto binding =
+                    impl_->runtime_objects.find(sensitivity.object);
+                if (binding == impl_->runtime_objects.end()) {
+                    throw std::logic_error{
+                        "SystemC bridge sensitivity is not runtime-bound"};
+                }
+                suspension.event_signals.push_back(binding->second);
+            }
+            std::ranges::sort(suspension.event_signals);
+            const auto [first_duplicate, end] =
+                std::ranges::unique(suspension.event_signals);
+            suspension.event_signals.erase(first_duplicate, end);
+            if (suspension.event_signals.empty()
+                && suspension.timeout_ticks) {
+                suspension.kind = MethodSuspendKind::wait_for;
+                suspension.delay_ticks = *suspension.timeout_ticks;
+                suspension.timeout_ticks.reset();
+            }
         }
-        description =
-            &owner->primitive_channels[found->second.channel];
-        break;
+        return suspension;
     }
-    if (description == nullptr || description->update == nullptr) {
-        throw std::logic_error{
-            "SystemC primitive channel has no executable update callback"};
-    }
-    if (active_invocation != nullptr) {
-        throw std::logic_error{
-            "recursive SystemC callback invocation is not supported"};
-    }
-    ActiveInvocation invocation{};
-    invocation.registry = impl_.get();
-    invocation.context = &context;
-    InvocationScope scope{invocation};
-    try {
-        description->update(description->user);
-    } catch (const std::exception& exception) {
-        invocation.failure =
-            "SystemC primitive-channel callback escaped with an "
-            "exception: " + std::string{exception.what()};
-    } catch (...) {
-        invocation.failure =
-            "SystemC primitive-channel callback escaped with an "
-            "unknown exception";
-    }
-    if (invocation.suspension && invocation.failure.empty()) {
-        invocation.failure =
-            "SystemC primitive-channel update cannot suspend";
-    }
-    if (!invocation.failure.empty()) {
-        throw std::runtime_error{std::move(invocation.failure)};
-    }
+    return {
+        description->sensitivity.empty()
+            ? MethodSuspendKind::halt
+            : MethodSuspendKind::static_sensitivity,
+        0,
+        {},
+        false,
+        std::nullopt};
 }
-
 const std::filesystem::path& HierarchyRegistry::path() const noexcept {
     return impl_->path;
 }

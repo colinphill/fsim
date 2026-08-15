@@ -119,7 +119,7 @@ The synchronized Batch 165 Change 19 candidate corpus freezes 1,294 executable r
 5,176 linked evidence cells, and 617 exact paths split across 272 test, 318
 production, and 27 release/build owners. It retains 144 runtime files and 36
 corpus CTests with matrix digest
-`ee856dcd8f7af5c9835821eb480caa6a5e23022f563be49ef0352d3e8cb38f4d`
+`bbef73769bca32d42b22fae66968b47bb4f15f59f51d8266353fbbb1f29db141`
 and evidence digest
 `e4076a40c31945c3385495a1c3076b85518143712c89ea1fa3f629fffaac6120`.
 
@@ -136,9 +136,9 @@ boundary.
 |---|---:|---|---|
 | `B130-T2-SV` | 2 | **Closed.** 671 `SV` plus 9 `V1-SV` rows | All 680 rows pass the strict owner audit with 48 distinct runtime evidence files; stale expression, triple-delay, and classic-callable evidence was repaired and its focused executable gate passes |
 | `B130-T3-VHDL` | 3 | **Closed.** 265 `VH` plus 8 `V1-VH` rows | All 273 rows pass the strict owner audit with 40 distinct runtime evidence files; the complete VHDL-labeled Debug slice passes without a stale or unowned row; v2 Batches 140-141 added five VITAL rows without changing that owner set |
-| `B130-T4-MIXED-SYSTEMC` | 4 | **Closed.** 17 `ML` plus 28 `SC` rows | All 45 rows pass the strict owner audit with 14 distinct runtime evidence files; the complete mixed/SystemC focused slice passes across facade, compiler/cache, lifecycle, scheduling, datatypes, conversions, and typed boundaries |
+| `B130-T4-MIXED-SYSTEMC` | 4 | **Closed.** 17 `ML` plus 28 `SC` rows | All 45 rows pass the strict owner audit with 14 distinct runtime evidence files; the complete mixed/SystemC focused slice passes across the official bridge, compiler/cache, lifecycle, scheduling, datatypes, conversions, and typed boundaries |
 | `B130-T5-DIFFERENTIAL` | 5 | **Closed.** Interpreter, LLVM, cache, debugger, VCD, scheduling, and failures | The composed audit freezes 95 runtime evidence files, 36 corpus CTests, all required differential modes, and exact overlapping claim counts; the 19 unique portability owners plus the new gate pass locally |
-| `B130-T6-PUBLIC` | 6 | **Closed.** CLI, C/C++ API, ABI, Tcl, runtime, installed/package use | The static public audit and fresh Unicode-prefix staged install protect all five commands, five header groups, two libraries, exact API/ABI version 1, CLI status 0/1/2/3, native path/environment seams, and installed command behavior; all 11 focused owners pass locally |
+| `B130-T6-PUBLIC` | 6 | **Closed.** CLI, C/C++ API, ABI, Tcl, runtime, installed/package use | The static public audit and fresh Unicode-prefix staged install protect all five commands, five header groups, two libraries, exact API version 1 and current SystemC ABI version 3, CLI status 0/1/2/3, native path/environment seams, and installed command behavior; all 11 focused owners pass locally |
 | `B130-T7-INVENTORIES` | 7 | **Closed.** Diagnostics, source size, licenses, conformance, and provenance | The composed gate covers 1,643 diagnostics, 445 bounded sources, 534 SPDX-owned artifacts, the 31-file/26-VHDL IEEE snapshot, 105 conformance expectations in 28 fixtures owned by 27 CTests, and 10 reviewed plus 6 excluded provenance identities; v2 Batch 136 owns the current increase |
 | `B130-T8-RESOURCES` | 8 | **Closed.** Linux/Windows Debug/Release build and test bounds | The composed static audit freezes 11 hosted configurations plus one scheduled local sanitizer configuration, five four-worker CI build steps, an eight-link local pool, compact Debug objects, 8 MiB stacks, bounded job/test timeouts, phase traces, 14 platform files, and 20 portability rows; all 11 focused owners pass locally |
 | `B130-T9-RECLASSIFICATION` | 9 | **Closed.** Final feature matrix and release corpus | All 1,082 required rows are `execute`; all 4,328 P+/P-/E/R cells link to checked-in owners; the 326-path evidence identity (161 test, 149 production, 16 release/build paths), 95 runtime files, and 36 corpus CTests are exact and digest-pinned |

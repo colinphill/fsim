@@ -94,7 +94,6 @@ fsim_sc_status_v1 elaborate_process_throw(
         retained_host->context,
         module,
         "throwing_method",
-        FSIM_SC_METHOD,
         process_throw,
         state,
         &process);

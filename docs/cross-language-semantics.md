@@ -77,10 +77,9 @@ scope reports every unavailable configured library. Explicit qualified tops
 and full-path binding targets remain authoritative and do not query the list.
 
 SystemC factories participate under their public `SC_FSIM_EXPORT` or
-`SC_FSIM_EXPORT_AS` names. `SC_FSIM_HDL_MODULE(Type)` records `Type` as the HDL
-implementation spelling, so an HDL-backed child uses the same effective-scope
-resolver while retaining ordinary SystemC construction and port binding.
-Legacy `hdl_instance` objects still require explicit full-path bindings.
+`SC_FSIM_EXPORT_AS` names. HDL source owns HDL child hierarchy and may select
+an official SystemC factory at an explicit binding path; SystemC source exposes
+no reverse HDL-proxy facade.
 
 ## Boundary types
 

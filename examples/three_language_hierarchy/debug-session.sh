@@ -11,10 +11,10 @@ scope u_bridge
 where
 scopes
 signals
+scope ..
 scope u_vhdl
 where
 signals
-scope ..
 scope ..
 break signal observed == 1
 trace clear

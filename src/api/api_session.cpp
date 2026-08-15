@@ -543,7 +543,7 @@ std::optional<std::size_t> append_design_scope(
             fsim::runtime::simir::SourceLocation{
                 std::string{source}, 1, 1};
       }
-      if (!type_name.empty() && type_name != "hdl_instance") {
+      if (!type_name.empty()) {
         scope.type_name = std::move(type_name);
       }
       return index;

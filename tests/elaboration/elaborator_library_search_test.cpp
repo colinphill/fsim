@@ -236,33 +236,6 @@ end architecture;
     assert(has_diagnostic(rejected_systemc_top, "FSIM-ELAB-007"));
     provider.construction_failure.clear();
 
-    auto proxy_target = fsim::frontend::parse_text(
-        "proxy-target.sv",
-        "module proxy_target; endmodule\n",
-        fsim::frontend::Language::SystemVerilog2017);
-    assert(proxy_target.ok());
-    assign_library(proxy_target.design, "vendor");
-    SystemCInstanceDescription proxy_root;
-    proxy_root.path = "proxy_root";
-    proxy_root.target = "systemc:work.proxy_root";
-    proxy_root.handle = 100;
-    fsim::elaboration::ForeignChild proxy_child;
-    proxy_child.handle = 101;
-    proxy_child.name = "child";
-    proxy_child.module_facade = true;
-    proxy_child.implementation = "proxy_target";
-    proxy_root.foreign_children.push_back(std::move(proxy_child));
-    const std::array proxy_roots{proxy_root};
-    const auto systemc_to_hdl = elaborate_with_search(
-        proxy_target.design,
-        "systemc:work.proxy_root",
-        vendor_search,
-        {},
-        proxy_roots);
-    assert(systemc_to_hdl.ok());
-    assert(
-        systemc_to_hdl.design->specializations().back().unit
-        == "sv:vendor.proxy_target");
 }
 
 } // namespace fsim::tests::elaboration

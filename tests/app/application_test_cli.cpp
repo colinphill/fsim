@@ -270,7 +270,7 @@ void ApplicationTestFixture::test_preprocessing_debug_and_cli()
     clone_library_writable(
         exported_systemc_library, incompatible_systemc_library);
     auto incompatible_systemc_metadata = *systemc_metadata;
-    incompatible_systemc_metadata.native_artifacts.front().target += "-incompatible";
+    incompatible_systemc_metadata.native_artifacts.front().compiler_fingerprint = std::string(64, 'd');
     const auto incompatible_systemc_metadata_path = incompatible_systemc_library / fsim::library::kMetadataFilename;
     std::filesystem::permissions(
         incompatible_systemc_metadata_path,
@@ -586,7 +586,7 @@ endmodule
         metadata.library = library_name;
         metadata.producer = "dependency-test";
         metadata.runtime_schema = 1;
-        metadata.standards = {{"systemverilog", "2017"}};
+        metadata.standards = { { "systemverilog", "2017" } };
         metadata.dependencies = dependencies;
         metadata.units = { { "systemverilog", "module", "dummy", { }, { },
             "units/dummy.fsimir", std::string(64, '0'), "2017", "none" } };
@@ -1182,10 +1182,10 @@ endmodule
     assert(three_language_hybrid_project);
     assert(
         three_language_reference_project->design.find_signal(
-            "three_language_tb.u_bridge.to_vhdl"));
+            "three_language_tb.bridge_value"));
     assert(
         three_language_reference_project->design.find_signal(
-            "three_language_tb.u_bridge.u_vhdl.value"));
+            "three_language_tb.u_vhdl.value"));
     assert(
         three_language_reference_project->design.systemc_instances()
             .size()
@@ -1196,7 +1196,7 @@ endmodule
             return object.kind
                 == fsim::semantic::design::ObjectKind::systemc_module
                 && object.path
-                == "three_language_tb.u_bridge.u_vhdl";
+                == "three_language_tb.u_bridge";
         }));
     assert(std::ranges::any_of(
         three_language_reference_project->design_ir.objects(),
@@ -1204,7 +1204,7 @@ endmodule
             return object.kind
                 == fsim::semantic::design::ObjectKind::systemc_port
                 && object.path
-                == "three_language_tb.u_bridge.u_vhdl.value";
+                == "three_language_tb.u_bridge.result";
         }));
     const auto three_language_reference = capture_simulation(
         std::move(*three_language_reference_project),
@@ -1220,7 +1220,7 @@ endmodule
     assert(three_language_hybrid.result.time == 3);
     assert((
         three_language_hybrid.final_values
-        == std::vector<std::string> { "0", "0", "1" }));
+        == std::vector<std::string> { "0", "1", "0" }));
 
     fsim::app::Simulation simulation(std::move(*first), config.run.max_deltas);
     const auto q = simulation.find_signal("q");

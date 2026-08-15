@@ -2232,8 +2232,6 @@ private:
 
     static frontend::SignalDeclaration external_port_declaration(
         const ExternalPort& port);
-    static frontend::SignalDeclaration foreign_port_declaration(
-        const ForeignPort& port);
     std::pair<SignalMap, ObjectMap> connect_systemc_instance(
         const frontend::Instance& instance,
         const SystemCInstanceDescription& target,
@@ -2241,16 +2239,6 @@ private:
         const SignalMap& parent_signals,
         const Binding* binding);
 
-    SignalMap connect_foreign_child(
-        const ForeignChild& child,
-        const DesignUnit& target,
-        const std::string& path,
-        const ObjectMap& objects);
-    const DesignUnit* systemc_foreign_target(
-        const ForeignChild& child,
-        const SystemCInstanceDescription& parent,
-        const std::string& path,
-        const Binding* binding);
     const SystemCInstanceDescription* systemc_description(
         const std::string& path,
         const std::string_view target,

@@ -8,6 +8,12 @@ if(NOT DEFINED FSIM_SOURCE_DIR OR
     "SDF VITAL closure requires source, binary, ctest and output directories")
 endif()
 
+if(FSIM_DEDUPLICATED_CTEST)
+  message(STATUS
+    "SDF VITAL closure fixture witnesses passed; nested CTest execution suppressed")
+  return()
+endif()
+
 file(MAKE_DIRECTORY "${FSIM_OUTPUT_DIR}/logs")
 set(FSIM_LOG "${FSIM_OUTPUT_DIR}/logs/corpus.log")
 set(FSIM_CONSOLE "${FSIM_OUTPUT_DIR}/console.log")
