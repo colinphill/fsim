@@ -72,6 +72,8 @@ endforeach()
 
 file(REAL_PATH "${FSIM_UPSTREAM_LIBRARY}" upstream_real)
 get_filename_component(upstream_name "${upstream_real}" NAME)
+get_filename_component(upstream_directory "${upstream_real}" DIRECTORY)
+get_filename_component(bridge_directory "${FSIM_BRIDGE_LIBRARY}" DIRECTORY)
 if(NOT upstream_name MATCHES "systemc" OR upstream_name MATCHES "fsim_systemc")
   message(FATAL_ERROR "unexpected official SystemC runtime path: ${upstream_real}")
 endif()
@@ -85,6 +87,7 @@ endif()
 
 file(GET_RUNTIME_DEPENDENCIES
   LIBRARIES "${FSIM_BRIDGE_LIBRARY}"
+  DIRECTORIES "${bridge_directory}" "${upstream_directory}"
   RESOLVED_DEPENDENCIES_VAR resolved
   UNRESOLVED_DEPENDENCIES_VAR unresolved
   CONFLICTING_DEPENDENCIES_PREFIX conflicts)

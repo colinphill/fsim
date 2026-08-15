@@ -1,2 +1,7 @@
 # The reviewed IEEE bundle is verified byte-for-byte at runtime and in CTest.
 third_party/ieee-1076-2019/** -text
+
+# The governed SystemC bundle carries pinned byte digests for its provenance
+# files as well as the archive. Do not let checkout line-ending policy rewrite
+# those reviewed bytes on Windows.
+third_party/systemc-3.0.2/** -text

@@ -328,6 +328,10 @@ function(fsim_systemc_apply_runtime_fixes target source_root)
     # targets and consumers retain their own `/W4 /WX` policy.
     target_compile_options(
       "${target}" PRIVATE "/FI${patched_common_header}" /W0)
+    # Upstream's Windows split also builds a small static launcher containing
+    # main()/sc_main dispatch. It carries the same misinterpreted `-Wall`
+    # spelling but is distinct from the shared runtime target above.
+    target_compile_options(systemc PRIVATE /W0)
   endif()
 
   get_target_property(runtime_sources "${target}" SOURCES)

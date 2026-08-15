@@ -4,7 +4,9 @@ foreach(required IN ITEMS
     FSIM_EXECUTABLE
     FSIM_TCL_LIBRARY_DIR
     FSIM_TCL_LIBRARY_VERSION
-    FSIM_STAGE_DIR)
+    FSIM_STAGE_DIR
+    FSIM_SYSTEMC_BRIDGE_LIBRARY
+    FSIM_SYSTEMC_UPSTREAM_LIBRARY)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "${required} is required")
   endif()
@@ -28,6 +30,10 @@ set(
 )
 file(MAKE_DIRECTORY "${staged_library}")
 file(COPY "${FSIM_EXECUTABLE}" DESTINATION "${FSIM_STAGE_DIR}/bin")
+file(COPY
+  "${FSIM_SYSTEMC_BRIDGE_LIBRARY}"
+  "${FSIM_SYSTEMC_UPSTREAM_LIBRARY}"
+  DESTINATION "${FSIM_STAGE_DIR}/bin")
 file(COPY "${FSIM_TCL_LIBRARY_DIR}/" DESTINATION "${staged_library}")
 file(
   APPEND

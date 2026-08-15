@@ -11802,9 +11802,27 @@ carry an explicit evidence-backed scope disposition approved by the user.
   forced generated header that undefines `NDEBUG`, preserving assertions without
   MSVC D9025 option-conflict noise. The affected Release targets build
   warning-clean, their portability/runtime/corpus/upstream gate passes 6/6, and
-  the MSVC Release policy contract passes. Push this narrow follow-up, then
-  require every replacement Windows job to complete before declaring Change 20
-  complete.
+  the MSVC Release policy contract passes. Follow-up `a1b29be` is pushed and
+  run `31909370259` clears the prior compiler failures in both clang-cl lanes
+  and both completed MSVC Debug lanes. The two finalized clang-cl builds retain
+  only 283 Debug and 279 Release warnings, all from Accellera's distinct static
+  launcher; fsim emits none and the `NDEBUG`/`UNDEBUG` conflict is absent.
+
+  CTest then exposes one common Windows DLL-search failure plus four independent
+  contracts: byte-governed SystemC license checkout, nested installed-consumer
+  CRT selection, runtime dependency discovery and relocated Tcl staging. The
+  current repair preserves the SystemC tree as binary checkout content,
+  propagates the parent MSVC runtime model, executes the installed consumer
+  beside installed DLLs, supplies explicit runtime dependency directories,
+  stages both SystemC DLLs with Tcl, and recursively prepends the bridge and
+  upstream target directories to every Windows test environment. Suppress the
+  remaining warnings only on the pristine upstream static launcher. The
+  revised Accellera and MSVC contracts freeze each boundary. The regenerated
+  Release tree needs no rebuild; the exact affected slice passes 12/12 in 2.98
+  seconds, the 408-file MSVC string audit remains below 16,000 bytes, all five
+  hosted timeouts remain 120 minutes and `git diff --check` passes. Sanitizer
+  and Debug are intentionally not rerun. Push this repair and require every
+  replacement Windows job to complete before declaring Change 20 complete.
 
 ### Batch 173 - SCV 2.0.1 compatibility, recording, and verification closure - CI monitoring boundary
 

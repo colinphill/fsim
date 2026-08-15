@@ -10,13 +10,16 @@ set(FSIM_PRESETS "${FSIM_SOURCE_DIR}/CMakePresets.json")
 set(FSIM_WORKFLOW "${FSIM_SOURCE_DIR}/.github/workflows/ci.yml")
 set(FSIM_COMPILER "${FSIM_SOURCE_DIR}/src/systemc/plugin_compiler_common.cpp")
 set(FSIM_COMPILER_TEST "${FSIM_SOURCE_DIR}/tests/systemc/plugin_compiler_test.cpp")
+set(FSIM_INSTALLED_CONTRACT
+  "${FSIM_SOURCE_DIR}/cmake/CheckInstalledPublicContract.cmake")
 foreach(FSIM_INPUT IN ITEMS
     "${FSIM_ROOT_CMAKE}"
     "${FSIM_TEST_CMAKE}"
     "${FSIM_PRESETS}"
     "${FSIM_WORKFLOW}"
     "${FSIM_COMPILER}"
-    "${FSIM_COMPILER_TEST}")
+    "${FSIM_COMPILER_TEST}"
+    "${FSIM_INSTALLED_CONTRACT}")
   if(NOT EXISTS "${FSIM_INPUT}")
     message(FATAL_ERROR "MSVC Release contract input is missing: ${FSIM_INPUT}")
   endif()
@@ -28,6 +31,7 @@ file(READ "${FSIM_PRESETS}" FSIM_PRESET_CONTENTS)
 file(READ "${FSIM_WORKFLOW}" FSIM_WORKFLOW_CONTENTS)
 file(READ "${FSIM_COMPILER}" FSIM_COMPILER_CONTENTS)
 file(READ "${FSIM_COMPILER_TEST}" FSIM_COMPILER_TEST_CONTENTS)
+file(READ "${FSIM_INSTALLED_CONTRACT}" FSIM_INSTALLED_CONTRACT_CONTENTS)
 
 foreach(FSIM_ASSERT_POLICY IN ITEMS
     "CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL \"MSVC\""
@@ -47,6 +51,27 @@ string(FIND "${FSIM_ROOT_CONTENTS}"
 if(NOT FSIM_MSVC_UNDEBUG_INDEX EQUAL -1)
   message(FATAL_ERROR
     "test build restored the conflicting MSVC /DNDEBUG /UNDEBUG policy")
+endif()
+
+foreach(FSIM_RUNTIME_PROPAGATION IN ITEMS
+    "-DFSIM_MSVC_RUNTIME_LIBRARY=\${CMAKE_MSVC_RUNTIME_LIBRARY}")
+  string(FIND
+    "${FSIM_TEST_CMAKE_CONTENTS}"
+    "${FSIM_RUNTIME_PROPAGATION}"
+    FSIM_POLICY_INDEX)
+  if(FSIM_POLICY_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "installed test lost MSVC runtime propagation: ${FSIM_RUNTIME_PROPAGATION}")
+  endif()
+endforeach()
+
+string(FIND
+  "${FSIM_INSTALLED_CONTRACT_CONTENTS}"
+  "-DCMAKE_MSVC_RUNTIME_LIBRARY=\${FSIM_MSVC_RUNTIME_LIBRARY}"
+  FSIM_POLICY_INDEX)
+if(FSIM_POLICY_INDEX EQUAL -1)
+  message(FATAL_ERROR
+    "installed consumer lost MSVC runtime propagation")
 endif()
 
 foreach(FSIM_PRESET_POLICY IN ITEMS

@@ -92,7 +92,27 @@ fsim_require_tokens(cmake/FsimSystemCAccellera.cmake
   "CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL \"MSVC\""
   "!defined(__clang__)"
   "cannot apply the governed SystemC clang-cl template fix"
-  "\"\${target}\" PRIVATE \"/FI\${patched_common_header}\" /W0")
+  "\"\${target}\" PRIVATE \"/FI\${patched_common_header}\" /W0"
+  "target_compile_options(systemc PRIVATE /W0)")
+fsim_require_tokens(.gitattributes
+  "third_party/systemc-3.0.2/** -text")
+fsim_require_tokens(cmake/CheckInstalledPublicContract.cmake
+  "CMAKE_MSVC_RUNTIME_LIBRARY=\${FSIM_MSVC_RUNTIME_LIBRARY}"
+  "FSIM_STAGED_CONSUMER_EXECUTABLE")
+fsim_require_tokens(cmake/CheckSystemCSharedRuntime.cmake
+  "DIRECTORIES \"\${bridge_directory}\" \"\${upstream_directory}\"")
+fsim_require_tokens(cmake/CheckFetchedTclRelocation.cmake
+  "FSIM_SYSTEMC_BRIDGE_LIBRARY"
+  "FSIM_SYSTEMC_UPSTREAM_LIBRARY"
+  "DESTINATION \"\${FSIM_STAGE_DIR}/bin\"")
+fsim_require_tokens(tests/CMakeLists.txt
+  "-DFSIM_MSVC_RUNTIME_LIBRARY=\${CMAKE_MSVC_RUNTIME_LIBRARY}"
+  "fsim_configure_windows_test_runtime"
+  "ENVIRONMENT_MODIFICATION"
+  "PATH=path_list_prepend:$<TARGET_FILE_DIR:fsim_systemc_accellera_runtime>"
+  "PATH=path_list_prepend:$<TARGET_FILE_DIR:\${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}>"
+  "-DFSIM_SYSTEMC_BRIDGE_LIBRARY=$<TARGET_FILE:fsim_systemc_accellera_runtime>"
+  "-DFSIM_SYSTEMC_UPSTREAM_LIBRARY=$<TARGET_FILE:\${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}>")
 fsim_require_tokens(src/systemc/accellera_compatibility.cpp
   "_LIBCPP_VERSION"
   "_MSVC_STL_VERSION"

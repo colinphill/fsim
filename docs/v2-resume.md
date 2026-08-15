@@ -2437,6 +2437,51 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     untouched. Commit and push this follow-up, then wait for every Windows job
     on the new exact SHA before closing Batch 172.
 
+43. The warning/assertion follow-up was committed as
+    `a1b29be5329dc7bb6583f994682b96661b7d5b0c` and pushed. Hosted run
+    `31909370259` proves both clang-cl configurations and both completed MSVC
+    Debug configurations now build successfully past every prior SystemC
+    compiler and linkage failure. Both clang-cl jobs completed before this
+    repair began. Their warning totals fell from more than 66,000 to 283 Debug
+    and 279 Release; every remaining diagnostic belongs to Accellera's separate
+    static `systemc` launcher target, with zero warning from fsim sources. No
+    MSVC `D9025` or `NDEBUG`/`UNDEBUG` override diagnostic remains.
+
+    The finalized clang-cl Debug log runs 238 tests: 53 pass, 180 terminate at
+    process startup with Windows `0xc0000135`, four independent contract tests
+    fail, and the fixture-backed FST closure is not run. The systemic startup
+    failure is missing search visibility for the fsim bridge and official
+    SystemC DLLs; `fsim.application.typed_boundaries` exits in 0.01 seconds and
+    never reaches either `FSIM-SC-I004` or its assertions. The independent
+    failures are Windows line-ending conversion of the byte-governed SystemC
+    license, an installed-consumer `MDd_DynamicDebug` versus
+    `MT_StaticRelease` mismatch, a runtime-dependency scan with no DLL search
+    directories, and relocated Tcl staging without its two SystemC DLLs. The
+    SDF/VITAL release audit passes. Both completed MSVC Debug jobs expose the
+    same systemic DLL-loading boundary after successful builds; the two MSVC
+    Release jobs were still running when this superseding repair was selected.
+
+    The current repair preserves the governed SystemC bundle bytes on every
+    checkout, propagates the parent MSVC runtime model into the installed
+    consumer, runs that consumer beside the installed DLLs, gives the shared-
+    runtime dependency audit explicit bridge/upstream directories, and stages
+    both SystemC DLLs with fetched Tcl. A recursive Windows CTest environment
+    prepends both target directories for tests in the root and runtime
+    subdirectory. `/W0` now applies to the remaining pristine upstream static
+    launcher as well as the pristine shared runtime while fsim retains
+    `/W4 /WX`. The Accellera and MSVC Release contracts freeze all of these
+    boundaries.
+
+    The exact-LLVM Release tree regenerates with no rebuild. The twelve focused
+    provenance, portability, installation, runtime, compatibility, corpus,
+    upstream, Tcl relocation and MSVC policy tests pass 12/12 in 2.98 seconds.
+    The complete 408-file MSVC string audit remains below 16,000 source bytes
+    with a 14,622-byte maximum, all five hosted job timeouts remain 120 minutes,
+    and `git diff --check` passes. Per instruction, neither sanitizer nor Debug
+    was rerun. Commit and push this repair, then wait for and inspect every
+    Windows job on the replacement exact SHA before closing Batch 172 or
+    starting Batch 173.
+
 ## Batch 173 planned restart checkpoint - after Batch 172 closeout
 
 1. Start in `/home/colin/projects/fsim`, read this section and Batch 173 in

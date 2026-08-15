@@ -1380,6 +1380,7 @@ add_test(
     "-DFSIM_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
     "-DFSIM_CXX_FLAGS=${CMAKE_CXX_FLAGS}"
     "-DFSIM_EXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}"
+    "-DFSIM_MSVC_RUNTIME_LIBRARY=${CMAKE_MSVC_RUNTIME_LIBRARY}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckInstalledPublicContract.cmake"
 )
 add_test(
@@ -3118,6 +3119,8 @@ if(TARGET fsim_application)
             "-DFSIM_TCL_LIBRARY_DIR=${FSIM_FETCHED_TCL_LIBRARY_DIR}"
             "-DFSIM_TCL_LIBRARY_VERSION=${FSIM_TCL_LIBRARY_VERSION}"
             "-DFSIM_STAGE_DIR=${CMAKE_CURRENT_BINARY_DIR}/fetched-tcl-stage"
+            "-DFSIM_SYSTEMC_BRIDGE_LIBRARY=$<TARGET_FILE:fsim_systemc_accellera_runtime>"
+            "-DFSIM_SYSTEMC_UPSTREAM_LIBRARY=$<TARGET_FILE:${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}>"
             -P
             "${PROJECT_SOURCE_DIR}/cmake/CheckFetchedTclRelocation.cmake"
         )
@@ -4415,6 +4418,8 @@ set_tests_properties(
           "-DFSIM_TCL_LIBRARY_DIR=${FSIM_FETCHED_TCL_LIBRARY_DIR}"
           "-DFSIM_TCL_LIBRARY_VERSION=${FSIM_TCL_LIBRARY_VERSION}"
           "-DFSIM_STAGE_DIR=${CMAKE_CURRENT_BINARY_DIR}/fetched-tcl-stage"
+          "-DFSIM_SYSTEMC_BRIDGE_LIBRARY=$<TARGET_FILE:fsim_systemc_accellera_runtime>"
+          "-DFSIM_SYSTEMC_UPSTREAM_LIBRARY=$<TARGET_FILE:${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}>"
           -P
           "${PROJECT_SOURCE_DIR}/cmake/CheckFetchedTclRelocation.cmake"
       )
@@ -4633,3 +4638,27 @@ fsim_require_fixture_witnesses(
   fsim.artifact.design
   fsim.runtime.fst_reader
   fsim.fst-portability-contract)
+
+# Windows does not search sibling build directories for dependent DLLs. Every
+# build-tree executable links the one process-wide fsim bridge, which in turn
+# loads the one official SystemC runtime, so expose both target directories to
+# CTest without copying runtime binaries into each test directory.
+if(WIN32)
+  function(fsim_configure_windows_test_runtime directory)
+    get_property(directory_tests DIRECTORY "${directory}" PROPERTY TESTS)
+    if(directory_tests)
+      set_tests_properties(
+        ${directory_tests}
+        DIRECTORY "${directory}"
+        PROPERTIES
+          ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:fsim_systemc_accellera_runtime>;PATH=path_list_prepend:$<TARGET_FILE_DIR:${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}>")
+    endif()
+    get_property(child_directories
+      DIRECTORY "${directory}" PROPERTY SUBDIRECTORIES)
+    foreach(child_directory IN LISTS child_directories)
+      fsim_configure_windows_test_runtime("${child_directory}")
+    endforeach()
+  endfunction()
+  fsim_configure_windows_test_runtime("${CMAKE_CURRENT_SOURCE_DIR}")
+endif()
