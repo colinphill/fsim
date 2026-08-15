@@ -11787,9 +11787,24 @@ carry an explicit evidence-backed scope disposition approved by the user.
   tree. The Accellera portability contract freezes both requirements. The
   repaired eight-worker Release build and focused SystemC/runtime tests pass;
   the final full Release regression passes 246/246 in 257.64 seconds. Per the
-  explicit user instruction, sanitizer and Debug were not rerun. Commit and
-  push this repair, then require every replacement Windows job to complete
-  before declaring Change 20 complete.
+  explicit user instruction, sanitizer and Debug were not rerun. Repair commit
+  `db3362d` was pushed; replacement run `31907845365` clears both original
+  compiler failures and reaches test targets. Plain MSVC Debug and both clang-cl
+  lanes then find the same linkage rule on the corpus executable's redundant
+  `sc_main` DLL export. The complete three-definition audit removes that
+  Windows-only annotation from corpus, shared-runtime and upstream wrapper
+  executables; official Windows SystemC already supplies `main()` plus its
+  unresolved `sc_main()` reference in the static `systemc.lib`. The completed
+  clang-cl logs also expose more than 66,000 upstream warnings per lane because
+  clang-cl interprets Accellera's `-Wall` spelling as MSVC `/Wall`; append `/W0`
+  only to that pristine third-party runtime while retaining `/W4 /WX` on fsim
+  sources. Replace the Release-test `/DNDEBUG` plus `/UNDEBUG` pair with a
+  forced generated header that undefines `NDEBUG`, preserving assertions without
+  MSVC D9025 option-conflict noise. The affected Release targets build
+  warning-clean, their portability/runtime/corpus/upstream gate passes 6/6, and
+  the MSVC Release policy contract passes. Push this narrow follow-up, then
+  require every replacement Windows job to complete before declaring Change 20
+  complete.
 
 ### Batch 173 - SCV 2.0.1 compatibility, recording, and verification closure - CI monitoring boundary
 

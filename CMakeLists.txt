@@ -370,15 +370,25 @@ function(fsim_configure_test_platform target)
   endif()
 endfunction()
 
+set(FSIM_TEST_ASSERTIONS_HEADER
+    "${PROJECT_BINARY_DIR}/generated/fsim_test_assertions.h")
+file(MAKE_DIRECTORY "${PROJECT_BINARY_DIR}/generated")
+file(GENERATE
+  OUTPUT "${FSIM_TEST_ASSERTIONS_HEADER}"
+  CONTENT "#pragma once\n#undef NDEBUG\n")
+
 function(fsim_configure_test target)
   fsim_configure_executable(${target})
   # Several small, dependency-free tests intentionally use assert(). Keep
-  # those assertions live in multi-config and Release test builds.
+  # those assertions live in multi-config and Release test builds. A forced
+  # header avoids the MSVC D9025 command-line warning produced by pairing
+  # CMake's Release `/DNDEBUG` with a later `/UNDEBUG`.
   if(
     MSVC
     OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
   )
-    target_compile_options(${target} PRIVATE /UNDEBUG)
+    target_compile_options(
+      ${target} PRIVATE "/FI${FSIM_TEST_ASSERTIONS_HEADER}")
   else()
     target_compile_options(${target} PRIVATE -UNDEBUG)
   endif()

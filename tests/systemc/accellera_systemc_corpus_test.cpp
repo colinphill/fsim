@@ -18,9 +18,7 @@
 extern "C" const char* fsim_systemc_accellera_version() noexcept;
 extern "C" const void* fsim_systemc_accellera_context() noexcept;
 
-#if defined(_WIN32)
-#define FSIM_SYSTEMC_CORPUS_EXPORT __declspec(dllexport)
-#elif defined(__GNUC__) || defined(__clang__)
+#if defined(__GNUC__) || defined(__clang__)
 #define FSIM_SYSTEMC_CORPUS_EXPORT __attribute__((visibility("default")))
 #else
 #define FSIM_SYSTEMC_CORPUS_EXPORT

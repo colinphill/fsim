@@ -31,7 +31,9 @@ file(READ "${FSIM_COMPILER_TEST}" FSIM_COMPILER_TEST_CONTENTS)
 
 foreach(FSIM_ASSERT_POLICY IN ITEMS
     "CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL \"MSVC\""
-    "target_compile_options(\${target} PRIVATE /UNDEBUG)"
+    "FSIM_TEST_ASSERTIONS_HEADER"
+    "\"/FI\${FSIM_TEST_ASSERTIONS_HEADER}\""
+    "#undef NDEBUG"
     "target_compile_options(\${target} PRIVATE -UNDEBUG)")
   string(FIND "${FSIM_ROOT_CONTENTS}" "${FSIM_ASSERT_POLICY}" FSIM_POLICY_INDEX)
   if(FSIM_POLICY_INDEX EQUAL -1)
@@ -39,6 +41,13 @@ foreach(FSIM_ASSERT_POLICY IN ITEMS
       "test build lost Release assertion policy: ${FSIM_ASSERT_POLICY}")
   endif()
 endforeach()
+
+string(FIND "${FSIM_ROOT_CONTENTS}"
+  "PRIVATE /UNDEBUG" FSIM_MSVC_UNDEBUG_INDEX)
+if(NOT FSIM_MSVC_UNDEBUG_INDEX EQUAL -1)
+  message(FATAL_ERROR
+    "test build restored the conflicting MSVC /DNDEBUG /UNDEBUG policy")
+endif()
 
 foreach(FSIM_PRESET_POLICY IN ITEMS
     "\"name\": \"ci-windows-release\""

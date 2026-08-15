@@ -91,7 +91,8 @@ fsim_require_tokens(cmake/FsimSystemCAccellera.cmake
   "cannot apply the governed SystemC process teardown fix"
   "CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL \"MSVC\""
   "!defined(__clang__)"
-  "cannot apply the governed SystemC clang-cl template fix")
+  "cannot apply the governed SystemC clang-cl template fix"
+  "\"\${target}\" PRIVATE \"/FI\${patched_common_header}\" /W0")
 fsim_require_tokens(src/systemc/accellera_compatibility.cpp
   "_LIBCPP_VERSION"
   "_MSVC_STL_VERSION"
@@ -137,6 +138,12 @@ foreach(path IN ITEMS
     "fsim_systemc_support"
     "FSIM_SYSTEMC_SUPPORT_LIBRARY_PATH"
     "FSIM_SYSTEMC_ACCELERA_SUPPORT_LIBRARY_PATH")
+endforeach()
+foreach(path IN ITEMS
+    tests/systemc/accellera_systemc_corpus_test.cpp
+    tests/systemc/accellera_upstream_sc_main.cpp
+    tests/systemc/systemc_shared_runtime_test.cpp)
+  fsim_forbid_tokens("${path}" "__declspec(dllexport)")
 endforeach()
 fsim_require_tokens(tests/systemc/systemc_compatibility_test.cpp
   "SC_VERSION_MAJOR == 3"

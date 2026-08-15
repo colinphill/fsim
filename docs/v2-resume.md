@@ -2402,6 +2402,41 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     replacement Windows job to complete. Do not start Batch 173 until that
     Windows boundary is green.
 
+42. Repair commit `db3362ddc46c9a73cf83aa89251989268355753b` is pushed.
+    Replacement run `31907845365` clears both original Windows compiler
+    failures: all six lanes configure and build beyond the former upstream
+    template and compatibility-export points. Plain MSVC Debug reaches step
+    1,754/2,102 before finding `C2375` on the corpus executable's `sc_main`;
+    clang-cl Debug and Release reach the same source and report
+    `-Wdll-attribute-on-redeclaration`. The definition redundantly adds
+    `dllexport` after SystemC's unadorned C-linkage declaration.
+
+    A complete audit finds three test-executable `sc_main` definitions. The
+    current narrow repair removes the Windows export annotation from corpus,
+    shared-runtime and upstream-wrapper sources. This is correct for official
+    SystemC's Windows split: its shared runtime excludes unresolved symbols,
+    while the merged static `systemc.lib` supplies `main()` with its unresolved
+    `sc_main()` reference for direct resolution by the executable.
+
+    The two completed clang-cl logs also quantify the reported warning flood:
+    each contains more than 66,000 diagnostics from the pristine official
+    runtime, led by 18,000+ `-Wzero-as-null-pointer-constant`, 12,200
+    `-Wold-style-cast`, and 8,553 `-Wunsafe-buffer-usage` instances. Accellera's
+    upstream target spells its normal warning level `-Wall`, which clang-cl
+    interprets as MSVC `/Wall`; append `/W0` only after that third-party target's
+    options. fsim sources and consumers retain `/W4 /WX`. Release test commands
+    also carried CMake's `/DNDEBUG` followed by fsim's `/UNDEBUG`; replace the
+    conflicting undefine option with a forced generated header containing
+    `#undef NDEBUG`, so test assertions remain live without MSVC D9025 warnings.
+
+    The Accellera portability contract now freezes the clang-cl warning boundary
+    and forbids the redundant annotation on all three definitions. Their five
+    Release targets are current with eight workers, the portability/shared-
+    runtime/corpus/three-upstream gate passes 6/6, and the revised MSVC Release
+    policy contract passes. No public header changed; sanitizer and Debug remain
+    untouched. Commit and push this follow-up, then wait for every Windows job
+    on the new exact SHA before closing Batch 172.
+
 ## Batch 173 planned restart checkpoint - after Batch 172 closeout
 
 1. Start in `/home/colin/projects/fsim`, read this section and Batch 173 in

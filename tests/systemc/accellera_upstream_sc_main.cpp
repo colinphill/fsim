@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#if defined(_WIN32)
-#define FSIM_SYSTEMC_UPSTREAM_EXPORT __declspec(dllexport)
-#elif defined(__GNUC__) || defined(__clang__)
+#if defined(__GNUC__) || defined(__clang__)
 #define FSIM_SYSTEMC_UPSTREAM_EXPORT __attribute__((visibility("default")))
 #else
 #define FSIM_SYSTEMC_UPSTREAM_EXPORT

@@ -13,9 +13,7 @@ extern "C" const void* fsim_systemc_accellera_context() noexcept;
 extern "C" bool
 fsim_systemc_accellera_accepts_identity(const char* candidate) noexcept;
 
-#if defined(_WIN32)
-#define FSIM_SYSTEMC_TEST_EXPORT __declspec(dllexport)
-#elif defined(__GNUC__) || defined(__clang__)
+#if defined(__GNUC__) || defined(__clang__)
 #define FSIM_SYSTEMC_TEST_EXPORT __attribute__((visibility("default")))
 #else
 #define FSIM_SYSTEMC_TEST_EXPORT

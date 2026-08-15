@@ -321,7 +321,13 @@ function(fsim_systemc_apply_runtime_fixes target source_root)
       patched_header_contents "${patched_header_contents}")
     set(patched_common_header "${patched_root}/sc_cmnhdr.h")
     file(WRITE "${patched_common_header}" "${patched_header_contents}")
-    target_compile_options("${target}" PRIVATE "/FI${patched_common_header}")
+    # Upstream spells its normal warning level as `-Wall`. clang-cl interprets
+    # that spelling as MSVC's `/Wall`, enabling every off-by-default Clang
+    # diagnostic and producing tens of thousands of warnings in pristine
+    # Accellera sources. Silence only this governed third-party runtime; fsim
+    # targets and consumers retain their own `/W4 /WX` policy.
+    target_compile_options(
+      "${target}" PRIVATE "/FI${patched_common_header}" /W0)
   endif()
 
   get_target_property(runtime_sources "${target}" SOURCES)
