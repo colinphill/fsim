@@ -5,9 +5,7 @@
 #include <string>
 #include <string_view>
 
-#if defined(_WIN32)
-#define FSIM_SYSTEMC_COMPATIBILITY_EXPORT __declspec(dllexport)
-#elif defined(__GNUC__) || defined(__clang__)
+#if defined(__GNUC__) || defined(__clang__)
 #define FSIM_SYSTEMC_COMPATIBILITY_EXPORT \
     __attribute__((visibility("default")))
 #else

@@ -2373,6 +2373,35 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     start Batch 173 until that Windows boundary is green; do not reintroduce
     the legacy interface or create formatting-only header churn.
 
+41. The accumulated Batch 172 implementation was committed as
+    `bbc840201ccae367168cc3418b9a2100e24ed49c` and pushed. Hosted run
+    `31907213291` completed all six Windows jobs before repair. All four
+    MSVC-frontend jobs stopped in `accellera_compatibility.cpp` with the same
+    `C2375` different-linkage diagnostics for the two compatibility identity
+    exports. Both clang-cl jobs stopped while building official SystemC 3.0.2
+    because its `_MSC_VER` path eagerly instantiated `sc_vpool` while
+    `sc_int_bitref` and `sc_int_subref` were incomplete. No other Windows
+    diagnostic was present.
+
+    The current four-path repair keeps declarations and definitions at matching
+    linkage and enables CMake's Windows automatic symbol export on the bridge
+    DLL. A governed generated `sc_cmnhdr.h` override changes only clang-cl to
+    the normal extern-template branch; the pinned extracted source remains
+    byte-identical and the provenance gate still passes. The Accellera
+    portability contract requires the frontend discrimination, clang exclusion,
+    governed-fix diagnostic and Windows export policy. No public header was
+    changed.
+
+    The eight-worker exact-LLVM Release build completes 129 affected build/link
+    steps warning-clean. Focused provenance, shared-runtime, compatibility,
+    protocol and upstream tests pass 8/8, the portability contract passes, and
+    the exact repaired full Release regression passes 246/246 in 257.64 seconds.
+    Per the explicit user instruction, neither sanitizer nor Debug was rerun
+    after the Release repairs. Next audit and commit these four implementation/
+    contract paths plus this documentation, push the repair, and wait for every
+    replacement Windows job to complete. Do not start Batch 173 until that
+    Windows boundary is green.
+
 ## Batch 173 planned restart checkpoint - after Batch 172 closeout
 
 1. Start in `/home/colin/projects/fsim`, read this section and Batch 173 in

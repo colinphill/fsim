@@ -11740,7 +11740,7 @@ carry an explicit evidence-backed scope disposition approved by the user.
   No Release build/test, sanitizer, hosted-CI/workflow action, reset, commit or
   push ran. Preserve Changes 1-19 and proceed only to Change 20's last-log
   audit, local repairs and final qualification.
-- **Change 20: In progress; local qualification complete.** The last completed
+- **Change 20: In progress; Windows repair locally qualified.** The last completed
   hosted log was inspected once at the boundary and every observed Linux and
   Windows failure was reproduced or audited locally. Portable trace roots,
   CRLF-normalized FST provenance, official three-language hierarchy assertions,
@@ -11774,9 +11774,22 @@ carry an explicit evidence-backed scope disposition approved by the user.
   application matrix timeout is 7,200 seconds, the Release protocol executable
   retains exactly the fsim Accellera bridge and official SystemC runtime, and
   `git diff --check` passes. The legacy/custom SystemC implementation remains
-  absent. No post-audit hosted-CI action has run. Commit and push the accumulated
-  Batch 172 once, then wait for a Windows run to complete and repair any
-  non-documentation failure before declaring Change 20 complete.
+  absent.
+
+  The accumulated batch was committed as `bbc8402` and pushed. Hosted run
+  `31907213291` completed all six Windows jobs: four MSVC-frontend builds found
+  the same `C2375` compatibility-export linkage mismatch, while both clang-cl
+  builds found the same upstream eager `sc_vpool` instantiation of incomplete
+  `sc_int_bitref`/`sc_int_subref` types. The repair uses Windows automatic DLL
+  symbol export so compatibility declarations and definitions retain matching
+  linkage, and a governed generated `sc_cmnhdr.h` override makes only clang-cl
+  take upstream's extern-template path without modifying the pinned source
+  tree. The Accellera portability contract freezes both requirements. The
+  repaired eight-worker Release build and focused SystemC/runtime tests pass;
+  the final full Release regression passes 246/246 in 257.64 seconds. Per the
+  explicit user instruction, sanitizer and Debug were not rerun. Commit and
+  push this repair, then require every replacement Windows job to complete
+  before declaring Change 20 complete.
 
 ### Batch 173 - SCV 2.0.1 compatibility, recording, and verification closure - CI monitoring boundary
 

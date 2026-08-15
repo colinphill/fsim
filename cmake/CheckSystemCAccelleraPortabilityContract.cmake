@@ -88,7 +88,10 @@ fsim_require_tokens(cmake/FsimSystemCAccellera.cmake
   "fsim_systemc_apply_runtime_fixes"
   "delete m_process_table;"
   "delete m_cor_pkg;"
-  "cannot apply the governed SystemC process teardown fix")
+  "cannot apply the governed SystemC process teardown fix"
+  "CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL \"MSVC\""
+  "!defined(__clang__)"
+  "cannot apply the governed SystemC clang-cl template fix")
 fsim_require_tokens(src/systemc/accellera_compatibility.cpp
   "_LIBCPP_VERSION"
   "_MSVC_STL_VERSION"
@@ -120,7 +123,8 @@ fsim_require_tokens(CMakeLists.txt
   "fsim::systemc_plugin_exports"
   "fsim_systemc_headers"
   "FSIM_SYSTEMC_PLUGIN_EXPORT_LIBRARY_PATH"
-  "fsim_systemc_accellera_runtime")
+  "fsim_systemc_accellera_runtime"
+  "WINDOWS_EXPORT_ALL_SYMBOLS ON")
 foreach(path IN ITEMS
     include/fsim/systemc.hpp
     include/systemc

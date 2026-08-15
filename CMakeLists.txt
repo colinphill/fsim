@@ -148,6 +148,12 @@ set_target_properties(
     VERSION "${FSIM_SYSTEMC_VERSION}"
     SOVERSION 3
 )
+if(WIN32)
+  set_target_properties(
+    fsim_systemc_accellera_runtime
+    PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON
+  )
+endif()
 if(NOT WIN32)
   set_target_properties(
     fsim_systemc_accellera_runtime

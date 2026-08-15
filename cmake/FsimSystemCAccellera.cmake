@@ -302,6 +302,28 @@ function(fsim_systemc_apply_runtime_fixes target source_root)
     file(WRITE "${patched_source}" "${patched_contents}")
   endif()
 
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND
+     CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    set(upstream_common_header
+        "${source_root}/src/sysc/kernel/sc_cmnhdr.h")
+    file(READ "${upstream_common_header}" patched_header_contents)
+    set(old_template_condition
+        "#if defined(SC_BUILD) && defined(_MSC_VER)")
+    set(new_template_condition
+        "#if defined(SC_BUILD) && defined(_MSC_VER) && !defined(__clang__)")
+    string(FIND "${patched_header_contents}" "${old_template_condition}"
+      template_condition_offset)
+    if(template_condition_offset EQUAL -1)
+      message(FATAL_ERROR
+        "cannot apply the governed SystemC clang-cl template fix")
+    endif()
+    string(REPLACE "${old_template_condition}" "${new_template_condition}"
+      patched_header_contents "${patched_header_contents}")
+    set(patched_common_header "${patched_root}/sc_cmnhdr.h")
+    file(WRITE "${patched_common_header}" "${patched_header_contents}")
+    target_compile_options("${target}" PRIVATE "/FI${patched_common_header}")
+  endif()
+
   get_target_property(runtime_sources "${target}" SOURCES)
   set(found_source FALSE)
   set(filtered_sources "")
