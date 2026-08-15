@@ -2531,6 +2531,32 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     push it, then wait for every Windows job at the replacement exact SHA.
     Do not close Batch 172 or begin Batch 173 until that matrix is green.
 
+45. Repair `a0cc4bd4fb8e10091afd08cd75a6962e41cf082f` is pushed, and
+    run `31914511439` completed all six Windows jobs before the next repair.
+    Every lane fails at the same first fsim bridge translation unit, before
+    tests: direct linkage to the shared SystemC core exposed that target's
+    public headers as ordinary includes. The bridge also used a mixed
+    `target_include_directories` spelling that CMake interpreted as a literal
+    source-tree `SYSTEM` directory. MSVC therefore promotes upstream C4127 to
+    C2220 under fsim's `/W4 /WX`; clang-cl promotes upstream ignored-import and
+    unused-variable diagnostics under the same strict consumer policy. No
+    independent build error is present in any finalized Windows log.
+
+    The current three-path implementation/contract repair marks the direct
+    Windows shared runtime's interface includes as `SYSTEM` just like the
+    official launcher target, and places the bridge's private upstream include
+    in a separate valid `SYSTEM PRIVATE` call. This preserves strict fsim
+    warnings while suppressing only diagnostics originating in byte-pinned
+    Accellera headers. The eight-worker exact-LLVM Release rebuild completes
+    130 affected link/compile steps. The exact prior-failure slice passes 28/28
+    in 242.83 seconds, and the combined MSVC, Windows, source, resource,
+    Accellera, SDF/VITAL and release-contract slice passes 16/16 in 9.38
+    seconds. The 408-file string audit remains below 16,000 bytes, all five
+    workflow timeouts remain 120 minutes and `git diff --check` passes.
+    Sanitizer and Debug were not rerun. Commit and push this repair, then wait
+    for every replacement Windows job at the new exact SHA before closing
+    Batch 172 or beginning Batch 173.
+
 ## Batch 173 planned restart checkpoint - after Batch 172 closeout
 
 1. Start in `/home/colin/projects/fsim`, read this section and Batch 173 in

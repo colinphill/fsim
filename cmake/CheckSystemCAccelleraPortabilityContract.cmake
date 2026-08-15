@@ -92,6 +92,8 @@ fsim_require_tokens(cmake/FsimSystemCAccellera.cmake
   "CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL \"MSVC\""
   "set(MSVC TRUE)"
   "set(MSVC \"\${FSIM_SYSTEMC_PARENT_MSVC}\")"
+  "TARGET \"\${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}\" APPEND PROPERTY"
+  "INTERFACE_SYSTEM_INCLUDE_DIRECTORIES"
   "!defined(__clang__)"
   "cannot apply the governed SystemC clang-cl template fix"
   "\"\${target}\" PRIVATE \"/FI\${patched_common_header}\" /W0"

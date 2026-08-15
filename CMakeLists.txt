@@ -127,6 +127,9 @@ target_compile_definitions(
 target_include_directories(
   fsim_systemc_accellera_runtime
   PRIVATE "${PROJECT_SOURCE_DIR}/include"
+)
+target_include_directories(
+  fsim_systemc_accellera_runtime
   SYSTEM PRIVATE "${FSIM_SYSTEMC_OFFICIAL_SOURCE_DIR}/src"
 )
 target_link_libraries(

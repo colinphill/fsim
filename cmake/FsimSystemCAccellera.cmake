@@ -437,6 +437,10 @@ macro(fsim_systemc_add_official_runtime archive work_root)
     if(NOT TARGET "${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}")
       message(FATAL_ERROR "official Windows SystemC shared runtime target is missing")
     endif()
+    set_property(
+      TARGET "${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}" APPEND PROPERTY
+        INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+          "${FSIM_SYSTEMC_UPSTREAM_INCLUDE_DIRECTORIES}")
   else()
     set(FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET systemc)
   endif()

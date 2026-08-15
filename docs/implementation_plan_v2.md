@@ -11845,7 +11845,18 @@ carry an explicit evidence-backed scope disposition approved by the user.
   five 120-minute workflow timeouts and `git diff --check` remain clean.
   Sanitizer and Debug were not rerun. Commit and push this repair, then require
   every replacement Windows job to complete green before declaring Change 20
-  complete or starting Batch 173.
+  complete or starting Batch 173. Repair `a0cc4bd` is pushed; run
+  `31914511439` completes all six Windows jobs at the same bridge compile
+  failure before tests. Direct linkage exposed the shared runtime's headers as
+  ordinary includes, and a mixed include declaration treated `SYSTEM` as a
+  literal directory, so strict fsim warnings promoted pristine Accellera header
+  diagnostics to errors. Mark the direct runtime interface and bridge-private
+  upstream headers as system includes without weakening fsim warnings. The
+  eight-worker Release rebuild completes 130 affected steps, the exact
+  prior-failure slice passes 28/28 in 242.83 seconds and the combined policy/
+  release slice passes 16/16 in 9.38 seconds. String, timeout and diff audits
+  remain clean; sanitizer and Debug remain untouched. Commit and push this
+  narrow repair and again require every Windows job to complete green.
 
 ### Batch 173 - SCV 2.0.1 compatibility, recording, and verification closure - CI monitoring boundary
 
