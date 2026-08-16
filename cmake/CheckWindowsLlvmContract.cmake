@@ -156,6 +156,9 @@ foreach(FSIM_JOB_POLICY IN ITEMS
     "llvm-mingw-20260616-ucrt-x86_64.zip"
     "mingw-w64-clang-x86_64-llvm-22.1.8-2"
     "/clang64/bin/lli.exe --version"
+    "id: msys2"
+    "steps.msys2.outputs.msys2-location"
+    "LLVMConfig.cmake was not installed at"
     "--parallel 4")
   string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_JOB_POLICY}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)

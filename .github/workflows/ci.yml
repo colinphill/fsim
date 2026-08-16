@@ -151,6 +151,7 @@ jobs:
             -Sha256 "b9b68a4d276e16fa25802aaba458e4638f64b3884c290aaccdc2d87083b6ca35"
 
       - name: Initialize the matching MinGW LLVM development environment
+        id: msys2
         if: matrix.llvm_mode == 'ON'
         uses: msys2/setup-msys2@v2
         with:
@@ -188,7 +189,13 @@ jobs:
             "-DFSIM_WARNINGS_AS_ERRORS=ON"
           )
           if ("${{ matrix.llvm_mode }}" -eq "ON") {
-            $arguments += "-DLLVM_DIR=C:/msys64/clang64/lib/cmake/llvm"
+            $msys2Root = "${{ steps.msys2.outputs.msys2-location }}".Replace('\', '/')
+            $llvmDirectory = "$msys2Root/clang64/lib/cmake/llvm"
+            $llvmConfig = "$llvmDirectory/LLVMConfig.cmake"
+            if (-not (Test-Path -LiteralPath $llvmConfig -PathType Leaf)) {
+              throw "LLVMConfig.cmake was not installed at $llvmConfig"
+            }
+            $arguments += "-DLLVM_DIR=$llvmDirectory"
           }
           & cmake @arguments
 
