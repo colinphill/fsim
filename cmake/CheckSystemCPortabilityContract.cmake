@@ -9,6 +9,7 @@ set(FSIM_WRAPPER "${FSIM_SOURCE_DIR}/tests/systemc/test_cxx_compiler.in")
 set(FSIM_MATRIX "${FSIM_SOURCE_DIR}/tests/systemc/plugin_matrix_test.cpp")
 set(FSIM_COMPILER "${FSIM_SOURCE_DIR}/src/systemc/plugin_compiler.cpp")
 set(FSIM_COMMON "${FSIM_SOURCE_DIR}/src/systemc/plugin_compiler_common.cpp")
+set(FSIM_DEPENDENCIES "${FSIM_SOURCE_DIR}/src/systemc/plugin_compiler_dependencies.cpp")
 set(FSIM_PROCESS "${FSIM_SOURCE_DIR}/src/systemc/plugin_compiler_process.cpp")
 set(FSIM_INCREMENTAL "${FSIM_SOURCE_DIR}/src/systemc/incremental_compiler.cpp")
 set(FSIM_LOADER "${FSIM_SOURCE_DIR}/src/systemc/plugin_loader.cpp")
@@ -21,6 +22,7 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_MATRIX}"
     "${FSIM_COMPILER}"
     "${FSIM_COMMON}"
+    "${FSIM_DEPENDENCIES}"
     "${FSIM_PROCESS}"
     "${FSIM_INCREMENTAL}"
     "${FSIM_LOADER}"
@@ -37,6 +39,7 @@ file(READ "${FSIM_WRAPPER}" FSIM_WRAPPER_CONTENTS)
 file(READ "${FSIM_MATRIX}" FSIM_MATRIX_CONTENTS)
 file(READ "${FSIM_COMPILER}" FSIM_COMPILER_CONTENTS)
 file(READ "${FSIM_COMMON}" FSIM_COMMON_CONTENTS)
+file(READ "${FSIM_DEPENDENCIES}" FSIM_DEPENDENCY_CONTENTS)
 file(READ "${FSIM_PROCESS}" FSIM_PROCESS_CONTENTS)
 file(READ "${FSIM_INCREMENTAL}" FSIM_INCREMENTAL_CONTENTS)
 file(READ "${FSIM_LOADER}" FSIM_LOADER_CONTENTS)
@@ -118,6 +121,7 @@ foreach(FSIM_LEGACY_WHOLE_ARCHIVE IN ITEMS
 endforeach()
 foreach(FSIM_COMMAND_POLICY IN ITEMS
     "msvc_runtime_option()"
+    "SC_WIN_DLL"
     "/bigobj"
     "-fPIC"
     "-shared"
@@ -126,6 +130,17 @@ foreach(FSIM_COMMAND_POLICY IN ITEMS
   string(FIND "${FSIM_COMMON_CONTENTS}" "${FSIM_COMMAND_POLICY}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR "SystemC compiler lost command policy: ${FSIM_COMMAND_POLICY}")
+  endif()
+endforeach()
+foreach(FSIM_DEPENDENCY_POLICY IN ITEMS
+    "Clang's Windows Make depfiles"
+    "escaped == '#'"
+    "token.push_back(character)")
+  string(FIND
+    "${FSIM_DEPENDENCY_CONTENTS}" "${FSIM_DEPENDENCY_POLICY}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "SystemC compiler lost Windows depfile policy: ${FSIM_DEPENDENCY_POLICY}")
   endif()
 endforeach()
 foreach(FSIM_PROCESS_POLICY IN ITEMS

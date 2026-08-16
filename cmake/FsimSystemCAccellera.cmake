@@ -264,12 +264,6 @@ function(fsim_systemc_configure_pkgconfig source_root binary_root)
 endfunction()
 
 function(fsim_systemc_apply_runtime_fixes target source_root)
-  set(use_windows_std_threads FALSE)
-  if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND
-     CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
-    set(use_windows_std_threads TRUE)
-  endif()
-
   set(upstream_source "${source_root}/src/sysc/kernel/sc_simcontext.cpp")
   file(READ "${upstream_source}" patched_contents)
   set(old_order [=[    delete m_cor_pkg;
@@ -294,21 +288,6 @@ function(fsim_systemc_apply_runtime_fixes target source_root)
   if(patched_contents STREQUAL original_contents)
     message(FATAL_ERROR "cannot apply the governed SystemC process teardown fix")
   endif()
-  if(use_windows_std_threads)
-    set(fiber_include [=[#include "sysc/kernel/sc_cor_fiber.h"]=])
-    set(std_thread_include [=[#if !defined(SC_USE_STD_THREADS)
-#include "sysc/kernel/sc_cor_fiber.h"
-#else
-#include <condition_variable>
-#endif]=])
-    string(FIND "${patched_contents}" "${fiber_include}" fiber_include_offset)
-    if(fiber_include_offset EQUAL -1)
-      message(FATAL_ERROR
-        "cannot apply the governed SystemC clang-cl scheduler fix")
-    endif()
-    string(REPLACE "${fiber_include}" "${std_thread_include}"
-      patched_contents "${patched_contents}")
-  endif()
   set(patched_root "${CMAKE_BINARY_DIR}/generated/systemc-runtime-fixes")
   file(MAKE_DIRECTORY "${patched_root}")
   set(patched_source "${patched_root}/sc_simcontext.cpp")
@@ -325,108 +304,67 @@ function(fsim_systemc_apply_runtime_fixes target source_root)
 
   if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND
      CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
-    set(upstream_common_header
-        "${source_root}/src/sysc/kernel/sc_cmnhdr.h")
-    file(READ "${upstream_common_header}" patched_header_contents)
-    set(old_template_condition
-        "#if defined(SC_BUILD) && defined(_MSC_VER)")
-    set(new_template_condition
-        "#if defined(SC_BUILD) && defined(_MSC_VER) && !defined(__clang__)")
-    string(FIND "${patched_header_contents}" "${old_template_condition}"
-      template_condition_offset)
-    if(template_condition_offset EQUAL -1)
+    # Clang correctly diagnoses two upstream explicit-instantiation declarations
+    # that occur while their sc_int proxy types are still incomplete. Keep the
+    # normal DLL template policy everywhere else and make only those private
+    # pool declarations extern in the runtime build. Consumers continue to see
+    # the byte-pinned public header.
+    set(upstream_int_header
+        "${source_root}/src/sysc/datatypes/int/sc_int_base.h")
+    file(READ "${upstream_int_header}" patched_int_header_contents)
+    set(original_int_header_contents "${patched_int_header_contents}")
+    foreach(proxy_type IN ITEMS sc_int_bitref sc_int_subref)
+      set(old_pool_declaration
+          "SC_API_TEMPLATE_DECL_ sc_vpool<sc_dt::${proxy_type}>;")
+      string(FIND "${patched_int_header_contents}" "${old_pool_declaration}"
+        pool_declaration_offset)
+      if(pool_declaration_offset EQUAL -1)
+        message(FATAL_ERROR
+          "cannot apply the governed SystemC clang-cl template fix: ${proxy_type}")
+      endif()
+      string(REPLACE
+        "${old_pool_declaration}"
+        "extern template class SC_API sc_vpool<sc_dt::${proxy_type}>;"
+        patched_int_header_contents "${patched_int_header_contents}")
+    endforeach()
+    if(patched_int_header_contents STREQUAL original_int_header_contents)
       message(FATAL_ERROR
         "cannot apply the governed SystemC clang-cl template fix")
     endif()
-    string(REPLACE "${old_template_condition}" "${new_template_condition}"
-      patched_header_contents "${patched_header_contents}")
-    set(patched_common_header "${patched_root}/sc_cmnhdr.h")
-    file(WRITE "${patched_common_header}" "${patched_header_contents}")
+    set(patched_int_header_dir
+        "${patched_root}/sysc/datatypes/int")
+    set(patched_int_header
+        "${patched_int_header_dir}/sc_int_base.h")
+    file(MAKE_DIRECTORY "${patched_int_header_dir}")
+    set(write_patched_int_header TRUE)
+    if(EXISTS "${patched_int_header}")
+      file(READ "${patched_int_header}" current_patched_int_header_contents)
+      if(current_patched_int_header_contents STREQUAL patched_int_header_contents)
+        set(write_patched_int_header FALSE)
+      endif()
+    endif()
+    if(write_patched_int_header)
+      file(WRITE "${patched_int_header}" "${patched_int_header_contents}")
+    endif()
+    target_include_directories("${target}" BEFORE PRIVATE "${patched_root}")
     # Upstream spells its normal warning level as `-Wall`. clang-cl interprets
     # that spelling as MSVC's `/Wall`, enabling every off-by-default Clang
     # diagnostic and producing tens of thousands of warnings in pristine
     # Accellera sources. Silence only this governed third-party runtime; fsim
     # targets and consumers retain their own `/W4 /WX` policy.
-    target_compile_options(
-      "${target}" PRIVATE "/FI${patched_common_header}" /W0)
+    target_compile_options("${target}" PRIVATE /W0)
     # Upstream's Windows split also builds a small static launcher containing
     # main()/sc_main dispatch. It carries the same misinterpreted `-Wall`
     # spelling but is distinct from the shared runtime target above.
     target_compile_options(systemc PRIVATE /W0)
-
-    # SystemC 3.0.2 exposes ENABLE_STD_THREADS but its implementation is still
-    # guarded off on Windows, omits the condition-variable header and leaves
-    # the main coroutine's thread pointer indeterminate. Patch only a generated
-    # copy for clang-cl, where the otherwise-selected Fiber backend does not
-    # execute SystemC processes correctly.
-    set(upstream_std_thread_source
-        "${source_root}/src/sysc/kernel/sc_cor_std_thread.cpp")
-    file(READ "${upstream_std_thread_source}" patched_std_thread_contents)
-    set(original_std_thread_contents "${patched_std_thread_contents}")
-    string(REPLACE
-      "#if !defined(_WIN32) && !defined(WIN32) && defined(SC_USE_STD_THREADS)"
-      "#if defined(SC_USE_STD_THREADS)"
-      patched_std_thread_contents "${patched_std_thread_contents}")
-    string(REPLACE
-      "#include <cstring>"
-      "#include <condition_variable>\n#include <cstring>"
-      patched_std_thread_contents "${patched_std_thread_contents}")
-    string(REPLACE
-      [=[    : m_cor_fn_arg( 0 ), m_pkg_p( 0 )]=]
-      [=[    : m_cor_fn( fn ), m_cor_fn_arg( arg_p ), m_pkg_p( 0 ), m_thread_p( 0 )]=]
-      patched_std_thread_contents "${patched_std_thread_contents}")
-    string(REGEX REPLACE
-      "    m_thread_p->detach\\(\\);[ \t]*\n    delete m_thread_p;[ \t]*"
-      [=[    if ( m_thread_p != 0 ) {
-        if ( m_thread_p->joinable() ) m_thread_p->detach();
-        delete m_thread_p;
-    }]=]
-      patched_std_thread_contents "${patched_std_thread_contents}")
-    if(patched_std_thread_contents STREQUAL original_std_thread_contents)
-      message(FATAL_ERROR
-        "cannot apply the governed SystemC clang-cl std-thread fix")
-    endif()
-    foreach(required_std_thread_token IN ITEMS
-        "#if defined(SC_USE_STD_THREADS)"
-        "#include <condition_variable>"
-        "m_cor_fn( fn )"
-        "m_thread_p( 0 )"
-        "m_thread_p->joinable()")
-      string(FIND "${patched_std_thread_contents}"
-        "${required_std_thread_token}" required_std_thread_token_offset)
-      if(required_std_thread_token_offset EQUAL -1)
-        message(FATAL_ERROR
-          "cannot apply the governed SystemC clang-cl std-thread fix: ${required_std_thread_token}")
-      endif()
-    endforeach()
-    set(patched_std_thread_source "${patched_root}/sc_cor_std_thread.cpp")
-    set(write_patched_std_thread_source TRUE)
-    if(EXISTS "${patched_std_thread_source}")
-      file(READ
-        "${patched_std_thread_source}" current_patched_std_thread_contents)
-      if(current_patched_std_thread_contents STREQUAL patched_std_thread_contents)
-        set(write_patched_std_thread_source FALSE)
-      endif()
-    endif()
-    if(write_patched_std_thread_source)
-      file(WRITE
-        "${patched_std_thread_source}" "${patched_std_thread_contents}")
-    endif()
   endif()
 
   get_target_property(runtime_sources "${target}" SOURCES)
   set(found_source FALSE)
-  set(found_std_thread_source FALSE)
-  set(found_fiber_source FALSE)
   set(filtered_sources "")
   foreach(source IN LISTS runtime_sources)
     if(source MATCHES "(^|/)sc_simcontext\\.cpp$")
       set(found_source TRUE)
-    elseif(use_windows_std_threads AND
-           source MATCHES "(^|/)sc_cor_std_thread\\.cpp$")
-      set(found_std_thread_source TRUE)
-    elseif(use_windows_std_threads AND source MATCHES "(^|/)sc_cor_fiber\\.cpp$")
-      set(found_fiber_source TRUE)
     else()
       list(APPEND filtered_sources "${source}")
     endif()
@@ -436,13 +374,6 @@ function(fsim_systemc_apply_runtime_fixes target source_root)
   endif()
   set_property(TARGET "${target}" PROPERTY SOURCES "${filtered_sources}")
   target_sources("${target}" PRIVATE "${patched_source}")
-  if(use_windows_std_threads)
-    if(NOT found_std_thread_source OR NOT found_fiber_source)
-      message(FATAL_ERROR
-        "official SystemC target omits a governed coroutine source")
-    endif()
-    target_sources("${target}" PRIVATE "${patched_std_thread_source}")
-  endif()
 endfunction()
 
 function(fsim_systemc_materialize_source archive work_root output_root output_manifest)
@@ -509,13 +440,6 @@ macro(fsim_systemc_add_official_runtime archive work_root)
   set(FSIM_SYSTEMC_PARENT_MSVC "${MSVC}")
   if(WIN32 AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
     set(MSVC TRUE)
-    # The upstream Fiber coroutine backend enters invalid scheduler state when
-    # SystemC is compiled by clang-cl. The upstream std::thread backend is the
-    # supported Windows alternative and preserves the same SystemC semantics.
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-      set(ENABLE_STD_THREADS ON CACHE BOOL
-          "Use standard-library threads for clang-cl SystemC coroutines" FORCE)
-    endif()
   endif()
   add_subdirectory(
     "${FSIM_SYSTEMC_OFFICIAL_SOURCE_DIR}"

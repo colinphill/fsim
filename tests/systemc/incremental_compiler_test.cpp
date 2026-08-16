@@ -152,9 +152,15 @@ int run_clang_cl_fake_compiler(const int argc, char* const* argv)
             || dependency_argument->filename() != "translation-unit.d") {
             return 82;
         }
+        const auto dependency_source =
+#if defined(_WIN32)
+            source->string();
+#else
+            source->generic_string();
+#endif
         write_file(
             *dependency_argument,
-            "fsim_systemc_object: " + source->generic_string() + "\n");
+            "fsim_systemc_object: " + dependency_source + "\n");
     }
     write_file(*object, "fake clang-cl object\n");
     return 0;

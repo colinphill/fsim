@@ -172,6 +172,12 @@ void report_error(
 void add_default_compiler_settings(project::SystemCSection& settings)
 {
     if (!settings.compiler.empty()) {
+#if defined(_WIN32)
+        if (std::ranges::find(settings.defines, "SC_WIN_DLL")
+            == settings.defines.end()) {
+            settings.defines.insert(settings.defines.begin(), "SC_WIN_DLL");
+        }
+#endif
         return;
     }
     settings.compiler = default_compiler();

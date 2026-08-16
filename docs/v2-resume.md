@@ -2628,6 +2628,48 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     wait for and inspect every Windows job on the new exact SHA. Do not close
     Batch 172 or begin Batch 173 until that matrix is green.
 
+48. Scheduler/teardown repair `d3cf7db` is pushed, and run `31924385035`
+    completed all six Windows jobs before this follow-up repair. Both clang-cl
+    lanes build warning-free and then fail 23/238 tests. Plain MSVC Release and
+    Debug fail 10/237 and 18/237; MSVC-with-LLVM Release and Debug fail 10/238
+    and 18/238. The only warning text in the MSVC lanes is Accellera's five
+    expected W506 runtime object-name substitutions. No lane reports D9025 or
+    an NDEBUG/UNDEBUG conflict.
+
+    The complete logs isolate three Windows contracts. Clang's Make depfiles
+    contain ordinary native backslash separators, but the parser consumed each
+    backslash as a generic escape and reported otherwise-existing dependencies
+    as unreadable under `FSIM-SC-I004`. Explicit compiler settings returned
+    before adding `SC_WIN_DLL`, so generated plug-ins used the wrong SystemC
+    data-symbol linkage and the plug-in matrix reported seven unresolved data
+    symbols plus one duplicate template destructor. Finally, the broad
+    generated `sc_cmnhdr.h` override changed every runtime template declaration,
+    while the generated standard-thread backend still did not repair the
+    direct clang-cl compatibility, kernel or upstream-example failures.
+
+    Preserve native separators while decoding only Make whitespace, `#`, `:`
+    and escaped-backslash syntax; a host-independent regression uses a POSIX
+    filename containing literal backslashes and proves dependency readability
+    and cache invalidation. Add `SC_WIN_DLL` to explicit Windows compiler
+    settings before plan construction. Restore upstream's native Windows Fiber
+    backend and normal DLL template policy, then generate a private override of
+    only `sc_int_base.h` declarations for incomplete `sc_int_bitref` and
+    `sc_int_subref`. A standalone transformation probe proves exactly those two
+    replacements. Retain process-lifetime loaded images: a local unload
+    experiment violated the matrix's required loaded-library lifetime and was
+    reverted.
+
+    The eight-worker exact-LLVM Release build is warning-clean. Compiler,
+    incremental and matrix tests pass 3/3 in 37.32 seconds; SDF/VITAL inventory
+    and release audit plus Accellera, V1, MSVC and Windows portability contracts
+    pass 9/9 in 10.26 seconds. The 408-file string audit remains below 16,000
+    bytes with a 14,622-byte maximum, all five workflow timeouts remain 120
+    minutes, `git diff --check` passes, no repository header changed and the
+    legacy SystemC interface remains absent under the passing portability
+    contract. Sanitizer and Debug were not rerun. Commit and push this repair,
+    then wait for and inspect every Windows job on the replacement exact SHA.
+    Do not close Batch 172 or begin Batch 173 until all six are green.
+
 ## Batch 173 planned restart checkpoint - after Batch 172 closeout
 
 1. Start in `/home/colin/projects/fsim`, read this section and Batch 173 in

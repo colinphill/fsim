@@ -178,17 +178,27 @@ parse_makefile_dependencies(const std::string_view contents) {
             if (index + 1 >= contents.size()) {
                 return std::nullopt;
             }
-            if (contents[index + 1] == '\n') {
+            const char escaped = contents[index + 1];
+            if (escaped == '\n') {
                 ++index;
                 continue;
             }
-            if (contents[index + 1] == '\r'
+            if (escaped == '\r'
                 && index + 2 < contents.size()
                 && contents[index + 2] == '\n') {
                 index += 2;
                 continue;
             }
-            token.push_back(contents[++index]);
+            // Clang's Windows Make depfiles spell native paths with ordinary
+            // backslash separators. Preserve those separators while still
+            // decoding the characters Make actually escapes in a filename.
+            if (std::isspace(static_cast<unsigned char>(escaped)) != 0
+                || escaped == '#' || escaped == ':' || escaped == '\\') {
+                token.push_back(escaped);
+                ++index;
+            } else {
+                token.push_back(character);
+            }
             continue;
         }
         if (character == '$' && index + 1 < contents.size()

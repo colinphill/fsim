@@ -11933,6 +11933,37 @@ carry an explicit evidence-backed scope disposition approved by the user.
   this follow-up, then require every Windows job on the new exact SHA to
   complete green before declaring Change 20 complete or starting Batch 173.
 
+  Scheduler/teardown repair `d3cf7db` was pushed, and run `31924385035`
+  completed all six Windows jobs before this follow-up repair. Both clang-cl
+  lanes build warning-free and fail 23/238 tests; plain MSVC Release/Debug fail
+  10/237 and 18/237, and MSVC-with-LLVM Release/Debug fail 10/238 and 18/238.
+  The only MSVC-lane warning text is five expected Accellera W506 runtime name
+  substitutions, with no D9025 or NDEBUG/UNDEBUG conflict. The logs prove that
+  ordinary Windows backslashes were consumed by the Make-dependency parser,
+  explicit compiler settings omitted required `SC_WIN_DLL`, and the broad
+  clang-cl template override altered the whole runtime without curing the
+  direct scheduler failures.
+
+  Preserve native depfile separators while decoding Make escapes, add
+  `SC_WIN_DLL` to explicit Windows compiler settings, restore the official
+  Windows Fiber backend and normal DLL template policy, and replace only the
+  two incomplete `sc_vpool<sc_int_bitref/sc_int_subref>` declarations through
+  a generated private `sc_int_base.h`. The host-independent dependency
+  regression proves raw-backslash readability and cache invalidation; an
+  isolated transform probe proves both narrow template replacements. Retain
+  process-lifetime loaded images because unloading violates the matrix's
+  required library-lifetime contract.
+
+  The warning-clean eight-worker exact-LLVM Release build passes compiler,
+  incremental and matrix tests 3/3 in 37.32 seconds and the SDF/VITAL,
+  Accellera, V1, MSVC and Windows audit slice 9/9 in 10.26 seconds. The 408-file
+  string audit remains below 16,000 bytes with a 14,622-byte maximum, all five
+  workflow timeouts remain 120 minutes, `git diff --check` passes, no repository
+  header changed and the legacy SystemC interface remains absent. Sanitizer and
+  Debug were not rerun. Commit and push this repair, then wait for all six
+  replacement Windows jobs and inspect their logs before closing Batch 172 or
+  starting Batch 173.
+
 ### Batch 173 - SCV 2.0.1 compatibility, recording, and verification closure - CI monitoring boundary
 
 - **Changes 1-4:** vendor the official SCV 2.0.1 source archive with a pinned

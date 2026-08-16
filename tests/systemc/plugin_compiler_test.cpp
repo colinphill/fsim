@@ -167,15 +167,23 @@ void write_text(const std::filesystem::path& path, const std::string& text) {
     return std::nullopt;
 }
 
+#if defined(_WIN32)
+constexpr bool escape_dependency_backslashes = false;
+#else
+constexpr bool escape_dependency_backslashes = true;
+#endif
+
 [[nodiscard]] std::string make_dependency_escape(
-    const std::string_view path) {
+    const std::string_view path,
+    const bool escape_backslashes = escape_dependency_backslashes) {
     std::string result;
     for (const char character : path) {
         if (character == '$') {
             result += "$$";
         } else if (
             character == ' ' || character == '\t' || character == '#'
-            || character == ':' || character == '\\') {
+            || character == ':'
+            || (character == '\\' && escape_backslashes)) {
             result.push_back('\\');
             result.push_back(character);
         } else {
@@ -253,13 +261,26 @@ int run_clang_cl_dependency_fake_compiler(
         return 83;
     }
     const auto header = source->parent_path() / "clang generated header.hpp";
+#if !defined(_WIN32)
+    const auto native_separator_header =
+        source->parent_path() / "clang\\native\\header.hpp";
+#endif
     std::ofstream output(
         *dependency_file,
         std::ios::binary | std::ios::trunc);
     output
         << "fsim_clang_cl_dependency_target: \\\n  "
         << make_dependency_escape(source->generic_string()) << " \\\n  "
-        << make_dependency_escape(header.generic_string()) << '\n';
+        << make_dependency_escape(header.generic_string());
+#if !defined(_WIN32)
+    // Model the unescaped native separators emitted by clang-cl on Windows.
+    // A POSIX filename may contain those literal characters, so this exercises
+    // the parser without requiring a Windows host.
+    output << " \\\n  "
+           << make_dependency_escape(
+                  native_separator_header.generic_string(), false);
+#endif
+    output << '\n';
     return output ? 0 : 84;
 }
 
@@ -455,6 +476,7 @@ int main(const int argc, char** argv) {
     assert(first_plan->commands.front().working_directory == working);
 #if defined(_WIN32)
     assert(has_argument(*first_plan, "/DFSIM_PLUGIN_TEST=1"));
+    assert(has_argument(*first_plan, "/DSC_WIN_DLL"));
     assert(has_argument(*first_plan, "/I" + include.string()));
     assert(has_argument(*first_plan, "/utf-8"));
     assert(has_argument(*first_plan, "/Zc:__cplusplus"));
@@ -1013,9 +1035,18 @@ int main(const int argc, char** argv) {
         working / "clang dependency source.cpp";
     const auto clang_cl_dependency_header =
         working / "clang generated header.hpp";
+#if !defined(_WIN32)
+    const auto clang_cl_native_separator_header =
+        working / "clang\\native\\header.hpp";
+#endif
     write_text(
         clang_cl_dependency_header,
         "#define FSIM_CLANG_CL_DEPENDENCY_VALUE 53\n");
+#if !defined(_WIN32)
+    write_text(
+        clang_cl_native_separator_header,
+        "#define FSIM_CLANG_CL_NATIVE_SEPARATOR_VALUE 61\n");
+#endif
     write_source(
         clang_cl_dependency_source,
         "fsim_clang_cl_dependency",
@@ -1030,18 +1061,38 @@ int main(const int argc, char** argv) {
     fsim::diagnostic::Engine emitted_clang_cl_diagnostics;
     const auto emitted_clang_cl_plan = fsim::systemc::plan_plugin_compile(
         emitted_clang_cl_request, emitted_clang_cl_diagnostics);
+    if (!emitted_clang_cl_plan || !emitted_clang_cl_plan->cacheable) {
+        fsim::diagnostic::print_text(
+            std::cerr, emitted_clang_cl_diagnostics);
+    }
     assert(emitted_clang_cl_plan && emitted_clang_cl_plan->cacheable);
     assert(!has_diagnostic_code(
         emitted_clang_cl_diagnostics, "FSIM-SC-C012"));
+#if !defined(_WIN32)
+    write_text(
+        clang_cl_native_separator_header,
+        "#define FSIM_CLANG_CL_NATIVE_SEPARATOR_VALUE 67\n");
+    const auto edited_native_separator_plan =
+        fsim::systemc::plan_plugin_compile(
+            emitted_clang_cl_request, emitted_clang_cl_diagnostics);
+    assert(edited_native_separator_plan && edited_native_separator_plan->cacheable);
+    assert(
+        edited_native_separator_plan->cache_key
+        != emitted_clang_cl_plan->cache_key);
+#endif
     write_text(
         clang_cl_dependency_header,
         "#define FSIM_CLANG_CL_DEPENDENCY_VALUE 59\n");
     const auto edited_clang_cl_plan = fsim::systemc::plan_plugin_compile(
         emitted_clang_cl_request, emitted_clang_cl_diagnostics);
     assert(edited_clang_cl_plan && edited_clang_cl_plan->cacheable);
-    assert(
-        edited_clang_cl_plan->cache_key
-        != emitted_clang_cl_plan->cache_key);
+#if !defined(_WIN32)
+    const auto& prior_clang_cl_cache_key =
+        edited_native_separator_plan->cache_key;
+#else
+    const auto& prior_clang_cl_cache_key = emitted_clang_cl_plan->cache_key;
+#endif
+    assert(edited_clang_cl_plan->cache_key != prior_clang_cl_cache_key);
 #endif
 
     // A sibling source directory is not an include search root. Finding this
