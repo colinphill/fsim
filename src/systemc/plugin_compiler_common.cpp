@@ -1000,6 +1000,7 @@ void add_compiler_environment_to_key(
         argv.emplace_back("/utf-8");
         argv.emplace_back("/Zc:__cplusplus");
         argv.emplace_back("/FC");
+        argv.emplace_back("/bigobj");
         argv.emplace_back(msvc_runtime_option());
         if (msvc_debug_mode()) {
             argv.emplace_back("/Od");

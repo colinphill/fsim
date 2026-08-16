@@ -203,8 +203,12 @@ int main(const int argc, char** argv)
     first_request.settings = settings;
     first_request.working_directory = root;
     first_request.scratch_directory = root / "scratch";
-    assert(fsim::systemc::compile_incremental_object(
-        first_request, diagnostics));
+    const auto first_compiled = fsim::systemc::compile_incremental_object(
+        first_request, diagnostics);
+    if (!first_compiled) {
+        fsim::diagnostic::print_text(std::cerr, diagnostics);
+    }
+    assert(first_compiled);
     assert(!diagnostics.has_error());
 
 #if !defined(_WIN32)

@@ -39,6 +39,11 @@ struct RetainedPluginResources {
     std::unique_ptr<platform::DynamicLibrary> library;
 };
 
+struct RetainedPluginResourceStore {
+    std::mutex mutex;
+    std::vector<RetainedPluginResources> resources;
+};
+
 void retain_plugin_resources(
     std::unique_ptr<fsim_sc_host_v1> host,
     std::unique_ptr<platform::DynamicLibrary> library) noexcept {
@@ -46,10 +51,14 @@ void retain_plugin_resources(
         return;
     }
     try {
-        static std::mutex mutex;
-        static std::vector<RetainedPluginResources> resources;
-        std::lock_guard lock(mutex);
-        resources.push_back({std::move(host), std::move(library)});
+        // This store must outlive C++ static destruction. In particular,
+        // Accellera TLM registries may retain plug-in type information until
+        // their own process teardown, whose order relative to this translation
+        // unit is unspecified. Deliberately retaining the store also retains
+        // every mapped image through that teardown.
+        static auto* store = new RetainedPluginResourceStore;
+        std::lock_guard lock(store->mutex);
+        store->resources.push_back({std::move(host), std::move(library)});
     } catch (...) {
         // Unloading is unsafe after a plug-in's static initializers may have
         // registered C++ type_info or callbacks with the shared runtime.

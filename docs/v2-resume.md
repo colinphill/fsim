@@ -2586,6 +2586,48 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     narrow repair, then require every replacement Windows job to complete
     green before closing Batch 172 or beginning Batch 173.
 
+47. Launcher/dependency repair `cb1c76d` is pushed, and run `31920910314`
+    completed all six Windows jobs before the follow-up repair was prepared.
+    Both clang-cl lanes stop in the build with the same SystemC 3.0.2
+    `sc_cor_pkg` typedef conflict: enabling standard threads does not disable
+    the upstream Windows Fiber header or compile its standard-thread source.
+    The four MSVC-frontend builds remain compiler-warning-free with no D9025
+    or NDEBUG/UNDEBUG conflict. Plain and LLVM Release each fail the same ten
+    tests; plain and LLVM Debug each fail the same eighteen, adding eight
+    Debug-only application crashes. The only warning text is five expected
+    Accellera W506 runtime object-name substitutions. Comparing the former
+    32 MiB and current 128 MiB runs shows identical failure families and
+    disproves test-stack exhaustion as their cause.
+
+    The current governed clang-cl repair generates a corrected SystemC
+    standard-thread source, excludes both original coroutine sources, disables
+    the Fiber include under `SC_USE_STD_THREADS`, supplies the missing
+    condition-variable include, and initializes and safely releases the main
+    coroutine thread pointer. The pinned source archive remains byte-identical.
+    An isolated Windows-source transformation probe builds and runs the
+    official simple-fifo and event-list examples successfully.
+
+    The MSVC failures resolve into two common boundaries. Dynamic SystemC
+    compile commands omitted the project-wide `/bigobj` contract, explaining
+    the cold matrix compile failure, and the nominally process-lifetime loaded-
+    image registry was a destructible function-static vector, allowing Windows
+    to unload plug-ins before Accellera/TLM static teardown. Add `/bigobj` to
+    the generated command and cache identity, and deliberately allocate the
+    retained-resource store so mapped images survive C++ static destruction.
+    Focused tests now print otherwise-hidden compiler diagnostics before their
+    assertions, and the portability contracts freeze all three repairs.
+
+    The eight-worker exact-LLVM Release rebuild completes warning-clean. The
+    affected compiler, incremental, matrix, application and SystemC/TLM slice
+    passes 11/11 in 249.35 seconds; the SDF/VITAL, SystemC, V1 and Windows
+    release-policy audit slice passes 8/8 in 9.54 seconds. The 408-file MSVC
+    string audit remains below 16,000 bytes with a 14,622-byte maximum, all
+    five workflow timeouts remain 120 minutes, `git diff --check` passes, no
+    repository header changed and the legacy SystemC interface remains absent.
+    Sanitizer and Debug were not rerun. Commit and push this follow-up, then
+    wait for and inspect every Windows job on the new exact SHA. Do not close
+    Batch 172 or begin Batch 173 until that matrix is green.
+
 ## Batch 173 planned restart checkpoint - after Batch 172 closeout
 
 1. Start in `/home/colin/projects/fsim`, read this section and Batch 173 in

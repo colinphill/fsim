@@ -123,8 +123,11 @@ int main() {
 #endif
     fsim::diagnostic::Engine diagnostics;
     const auto cold = fsim::systemc::compile_plugin(request, diagnostics);
-    const auto warm = fsim::systemc::compile_plugin(request, diagnostics);
+    if (!cold.success) {
+        fsim::diagnostic::print_text(std::cerr, diagnostics);
+    }
     assert(cold.success && !cold.cache_hit);
+    const auto warm = fsim::systemc::compile_plugin(request, diagnostics);
     assert(warm.success && warm.cache_hit);
     assert(cold.cache_key == warm.cache_key);
     assert(!diagnostics.has_error());

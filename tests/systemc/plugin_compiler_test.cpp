@@ -459,6 +459,7 @@ int main(const int argc, char** argv) {
     assert(has_argument(*first_plan, "/utf-8"));
     assert(has_argument(*first_plan, "/Zc:__cplusplus"));
     assert(has_argument(*first_plan, "/FC"));
+    assert(has_argument(*first_plan, "/bigobj"));
     assert(first_plan->commands.size() == request.sources.size() + 1);
 #else
     assert(has_argument(*first_plan, "-DFSIM_PLUGIN_TEST=1"));

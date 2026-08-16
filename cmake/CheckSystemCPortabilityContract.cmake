@@ -118,6 +118,7 @@ foreach(FSIM_LEGACY_WHOLE_ARCHIVE IN ITEMS
 endforeach()
 foreach(FSIM_COMMAND_POLICY IN ITEMS
     "msvc_runtime_option()"
+    "/bigobj"
     "-fPIC"
     "-shared"
     "/INCREMENTAL:NO"
@@ -163,6 +164,15 @@ foreach(FSIM_ABI_POLICY IN ITEMS
   string(FIND "${FSIM_LOADER_CONTENTS}" "${FSIM_ABI_POLICY}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR "SystemC loader lost ABI policy: ${FSIM_ABI_POLICY}")
+  endif()
+endforeach()
+foreach(FSIM_LIFETIME_POLICY IN ITEMS
+    "new RetainedPluginResourceStore"
+    "store->resources.push_back")
+  string(FIND "${FSIM_LOADER_CONTENTS}" "${FSIM_LIFETIME_POLICY}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "SystemC loader lost process-teardown image retention: ${FSIM_LIFETIME_POLICY}")
   endif()
 endforeach()
 string(FIND "${FSIM_CALLBACK_CONTENTS}" "callback escaped with an exception" FSIM_INDEX)

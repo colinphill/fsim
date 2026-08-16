@@ -11900,6 +11900,39 @@ carry an explicit evidence-backed scope disposition approved by the user.
   minutes and `git diff --check` passes. No header was changed, and Debug and
   sanitizer regressions were intentionally not rerun.
 
+  Launcher/dependency repair `cb1c76d` is pushed, and run `31920910314`
+  completes all six Windows jobs before the next repair. Both clang-cl lanes
+  stop in the build on the same SystemC 3.0.2 `sc_cor_pkg` typedef conflict:
+  the advertised standard-thread option neither disables the Windows Fiber
+  include nor compiles a usable standard-thread implementation. All four MSVC-
+  frontend builds are warning-free with no D9025 or NDEBUG/UNDEBUG conflict.
+  Plain and LLVM Release each fail the same ten tests; plain and LLVM Debug each
+  fail the same eighteen. Only five expected Accellera W506 runtime messages
+  remain. Identical failure sets with 32 MiB and 128 MiB stacks disprove stack
+  exhaustion as the remedy.
+
+  Generate a governed clang-cl standard-thread source, omit both original
+  coroutine sources and guard the Fiber include. The generated repair supplies
+  the condition-variable dependency and initializes and safely releases the
+  main coroutine thread pointer without changing the pinned archive. The MSVC
+  failure audit finds that dynamic SystemC compile commands also lack the
+  project-wide `/bigobj` contract, while the loaded-image registry is a
+  destructible function-static vector that can unload plug-ins before
+  Accellera/TLM static teardown. Add `/bigobj` to the generated command/cache
+  identity and allocate the process-lifetime resource store deliberately.
+  Freeze each boundary and expose compiler diagnostics before focused test
+  assertions.
+
+  The eight-worker exact-LLVM Release rebuild completes warning-clean. The
+  affected compiler, incremental, matrix, application and SystemC/TLM slice
+  passes 11/11 in 249.35 seconds, and the SDF/VITAL, SystemC, V1 and Windows
+  release-policy audit slice passes 8/8 in 9.54 seconds. The 408-file string
+  audit remains below 16,000 bytes, all five hosted timeouts remain 120 minutes,
+  no repository header changed, the legacy SystemC interface remains absent,
+  and the diff audit is clean. Do not rerun Debug or sanitizer. Commit and push
+  this follow-up, then require every Windows job on the new exact SHA to
+  complete green before declaring Change 20 complete or starting Batch 173.
+
 ### Batch 173 - SCV 2.0.1 compatibility, recording, and verification closure - CI monitoring boundary
 
 - **Changes 1-4:** vendor the official SCV 2.0.1 source archive with a pinned
