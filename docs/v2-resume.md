@@ -2557,6 +2557,35 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     for every replacement Windows job at the new exact SHA before closing
     Batch 172 or beginning Batch 173.
 
+46. System-header repair `77421e3b0212abd020a0b8f47c753b3f15ce09ec`
+    is pushed, and run `31914982465` completed all six Windows jobs before the
+    next repair. Every build progresses through the former bridge/header
+    failure warning-free and then stops while linking native `sc_main` tests.
+    MSVC reports `LNK2019`/`LNK1120` and clang-cl reports an undefined `main`;
+    no finalized lane contains an independent warning or error. Removing the
+    static launcher from fsim's transitive runtime linkage correctly protected
+    fsim-owned entrypoints, but six native test executables had depended on
+    that accidental transitive `main()` provider.
+
+    The complete test-source audit finds ten `sc_main` files. Shared-runtime,
+    Accellera corpus, upstream-corpus wrapper and installed-consumer paths
+    already select the official launcher explicitly; TLM-1, TLM-2, kernel
+    inventory, kernel binding inventory, kernel observation and the SystemC
+    trace application do not. The current two-code-path repair centralizes
+    root-test launcher selection in `fsim_link_systemc_launcher`, applies it
+    to every root `sc_main` target, retains the installed consumer's explicit
+    package link and freezes all ten mappings in the Accellera portability
+    contract. Exact-LLVM Release configuration is clean and needs no Linux
+    relink because ELF already received the same runtime transitively. The
+    complete launcher, installed-consumer and portability slice passes 14/14
+    in 1.67 seconds. The composed FST, SDF/VITAL, V1, installed-public, MSVC,
+    resource and SystemC Release-contract slice passes 17/17 in 22.59 seconds.
+    The 408-file string audit remains below 16,000 bytes with a 14,622-byte
+    maximum, all five workflow timeouts remain 120 minutes and `git diff
+    --check` passes. Sanitizer and Debug were not rerun. Commit and push this
+    narrow repair, then require every replacement Windows job to complete
+    green before closing Batch 172 or beginning Batch 173.
+
 ## Batch 173 planned restart checkpoint - after Batch 172 closeout
 
 1. Start in `/home/colin/projects/fsim`, read this section and Batch 173 in

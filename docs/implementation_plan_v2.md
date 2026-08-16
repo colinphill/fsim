@@ -11857,6 +11857,21 @@ carry an explicit evidence-backed scope disposition approved by the user.
   release slice passes 16/16 in 9.38 seconds. String, timeout and diff audits
   remain clean; sanitizer and Debug remain untouched. Commit and push this
   narrow repair and again require every Windows job to complete green.
+  Repair `77421e3` is pushed; run `31914982465` completes all six Windows jobs
+  after the system-header correction, warning-free, and every failure is now
+  an unresolved `main` while linking a native `sc_main` test. Audit all ten
+  test sources that define `sc_main` before repair: four linkage paths already
+  select the official launcher explicitly, while TLM-1, TLM-2, three kernel
+  inventory/observation targets and the SystemC trace application relied on
+  the removed transitive launcher. Centralize the explicit root-test launcher
+  link, apply it to every such target and freeze the complete mapping while
+  preserving the installed consumer's package-level explicit link. The
+  resulting exact-LLVM Release launcher/install/portability slice passes 14/14
+  in 1.67 seconds, and the composed FST, SDF/VITAL, V1, installed-public,
+  MSVC, resource and SystemC Release-contract slice passes 17/17 in 22.59
+  seconds. The 408-file string audit, five 120-minute workflow timeouts and
+  diff audit remain clean. Do not rerun Debug or sanitizer. Commit and push
+  this narrow repair and again require every Windows job to complete green.
 
 ### Batch 173 - SCV 2.0.1 compatibility, recording, and verification closure - CI monitoring boundary
 

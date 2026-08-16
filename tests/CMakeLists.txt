@@ -1771,6 +1771,10 @@ add_test(
   NAME fsim.elaboration.sv-container
   COMMAND fsim_sv_container_elaboration_tests)
 
+function(fsim_link_systemc_launcher target)
+  target_link_libraries("${target}" PRIVATE SystemC::systemc)
+endfunction()
+
 add_executable(
   fsim_systemc_shared_runtime_tests
   systemc/systemc_shared_runtime_test.cpp
@@ -1787,8 +1791,9 @@ target_compile_definitions(
 )
 target_link_libraries(
   fsim_systemc_shared_runtime_tests
-  PRIVATE fsim_systemc_accellera_runtime SystemC::systemc
+  PRIVATE fsim_systemc_accellera_runtime
 )
+fsim_link_systemc_launcher(fsim_systemc_shared_runtime_tests)
 add_test(
   NAME fsim.systemc.shared_runtime
   COMMAND fsim_systemc_shared_runtime_tests
@@ -2011,6 +2016,7 @@ fsim_configure_test(fsim_systemc_tlm1_backend_tests)
 target_link_libraries(
   fsim_systemc_tlm1_backend_tests PRIVATE fsim_systemc
 )
+fsim_link_systemc_launcher(fsim_systemc_tlm1_backend_tests)
 add_test(
   NAME fsim.systemc.tlm1_backend
   COMMAND fsim_systemc_tlm1_backend_tests
@@ -2028,6 +2034,7 @@ fsim_configure_test(fsim_systemc_tlm2_backend_tests)
 target_link_libraries(
   fsim_systemc_tlm2_backend_tests PRIVATE fsim_systemc
 )
+fsim_link_systemc_launcher(fsim_systemc_tlm2_backend_tests)
 add_test(
   NAME fsim.systemc.tlm2_backend
   COMMAND fsim_systemc_tlm2_backend_tests
@@ -2045,6 +2052,7 @@ fsim_configure_test(fsim_systemc_kernel_backend_inventory_tests)
 target_link_libraries(
   fsim_systemc_kernel_backend_inventory_tests PRIVATE fsim_systemc
 )
+fsim_link_systemc_launcher(fsim_systemc_kernel_backend_inventory_tests)
 add_test(
   NAME fsim.systemc.kernel_backend_inventory
   COMMAND fsim_systemc_kernel_backend_inventory_tests
@@ -2062,6 +2070,8 @@ fsim_configure_test(fsim_systemc_kernel_backend_binding_inventory_tests)
 target_link_libraries(
   fsim_systemc_kernel_backend_binding_inventory_tests PRIVATE fsim_systemc
 )
+fsim_link_systemc_launcher(
+  fsim_systemc_kernel_backend_binding_inventory_tests)
 add_test(
   NAME fsim.systemc.kernel_backend_binding_inventory
   COMMAND fsim_systemc_kernel_backend_binding_inventory_tests
@@ -2079,6 +2089,7 @@ fsim_configure_test(fsim_systemc_kernel_backend_observation_tests)
 target_link_libraries(
   fsim_systemc_kernel_backend_observation_tests PRIVATE fsim_systemc
 )
+fsim_link_systemc_launcher(fsim_systemc_kernel_backend_observation_tests)
 add_test(
   NAME fsim.systemc.kernel_backend_observation
   COMMAND fsim_systemc_kernel_backend_observation_tests
@@ -2096,8 +2107,9 @@ add_executable(
 fsim_configure_test(fsim_systemc_accellera_corpus_tests)
 target_link_libraries(
   fsim_systemc_accellera_corpus_tests
-  PRIVATE fsim_systemc_accellera_runtime SystemC::systemc
+  PRIVATE fsim_systemc_accellera_runtime
 )
+fsim_link_systemc_launcher(fsim_systemc_accellera_corpus_tests)
 add_test(
   NAME fsim.systemc.accellera_corpus
   COMMAND fsim_systemc_accellera_corpus_tests
@@ -2125,8 +2137,9 @@ function(fsim_add_systemc_upstream_corpus_test target test_name source pass_rege
   )
   target_compile_features("${target}" PRIVATE cxx_std_20)
   target_link_libraries(
-    "${target}" PRIVATE fsim_systemc_accellera_runtime SystemC::systemc
+    "${target}" PRIVATE fsim_systemc_accellera_runtime
   )
+  fsim_link_systemc_launcher("${target}")
   add_test(NAME "${test_name}" COMMAND "${target}")
   set_tests_properties(
     "${test_name}"
@@ -2602,6 +2615,7 @@ if(TARGET fsim_application)
     fsim_systemc_trace_application_tests
     PRIVATE fsim_application
   )
+  fsim_link_systemc_launcher(fsim_systemc_trace_application_tests)
   add_test(
     NAME fsim.application.systemc_trace
     COMMAND fsim_systemc_trace_application_tests

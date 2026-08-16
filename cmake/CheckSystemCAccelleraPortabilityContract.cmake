@@ -112,11 +112,25 @@ fsim_require_tokens(cmake/CheckFetchedTclRelocation.cmake
 fsim_require_tokens(tests/CMakeLists.txt
   "-DFSIM_MSVC_RUNTIME_LIBRARY=\${CMAKE_MSVC_RUNTIME_LIBRARY}"
   "fsim_configure_windows_test_runtime"
+  "function(fsim_link_systemc_launcher target)"
+  "target_link_libraries(\"\${target}\" PRIVATE SystemC::systemc)"
+  "fsim_link_systemc_launcher(fsim_systemc_shared_runtime_tests)"
+  "fsim_link_systemc_launcher(fsim_systemc_tlm1_backend_tests)"
+  "fsim_link_systemc_launcher(fsim_systemc_tlm2_backend_tests)"
+  "fsim_link_systemc_launcher(fsim_systemc_kernel_backend_inventory_tests)"
+  "fsim_link_systemc_launcher(\n  fsim_systemc_kernel_backend_binding_inventory_tests)"
+  "fsim_link_systemc_launcher(fsim_systemc_kernel_backend_observation_tests)"
+  "fsim_link_systemc_launcher(fsim_systemc_accellera_corpus_tests)"
+  "fsim_link_systemc_launcher(\"\${target}\")"
+  "fsim_link_systemc_launcher(fsim_systemc_trace_application_tests)"
   "ENVIRONMENT_MODIFICATION"
   "PATH=path_list_prepend:$<TARGET_FILE_DIR:fsim_systemc_accellera_runtime>"
   "PATH=path_list_prepend:$<TARGET_FILE_DIR:\${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}>"
   "-DFSIM_SYSTEMC_BRIDGE_LIBRARY=$<TARGET_FILE:fsim_systemc_accellera_runtime>"
   "-DFSIM_SYSTEMC_UPSTREAM_LIBRARY=$<TARGET_FILE:\${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}>")
+fsim_require_tokens(tests/systemc/installed_consumer/CMakeLists.txt
+  "fsim_systemc_installed_consumer"
+  "PRIVATE SystemC::systemc")
 fsim_require_tokens(src/systemc/accellera_compatibility.cpp
   "_LIBCPP_VERSION"
   "_MSVC_STL_VERSION"
