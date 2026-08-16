@@ -2670,6 +2670,46 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     then wait for and inspect every Windows job on the replacement exact SHA.
     Do not close Batch 172 or begin Batch 173 until all six are green.
 
+49. Compiler-compatibility repair `8b756a0` is pushed, and replacement run
+    `31928630786` completed all six Windows jobs before this repair was
+    prepared. Both clang-cl lanes are warning-clean and stop on the same one
+    compiler error: upstream explicitly instantiates
+    `tlm_array<tlm_utils::ispex_base*>` before `ispex_base::free()` is defined.
+    Plain and LLVM MSVC Release each fail 10 tests, while the corresponding
+    Debug lanes each fail 18. The prior `FSIM-SC-I004` cache-lock failure is
+    absent, no lane reports D9025 or an `NDEBUG`/`UNDEBUG` conflict, and the
+    only MSVC warning text is the five expected Accellera W506 runtime name
+    substitutions. SDF/VITAL and the release audits pass. Direct official
+    SystemC, TLM and CMake-built plug-in tests pass; the failures converge on
+    dynamically compiled SystemC modules during simulation.
+
+    The current generated-header repair relocates the two `sc_vpool` and one
+    TLM-array explicit instantiations after their complete type definitions
+    instead of weakening them to extern declarations, preserving upstream's
+    normal Windows DLL export policy. The dynamic compiler no longer treats an
+    explicit compiler executable as a request to omit the governed host
+    compile defaults: defaults are prepended idempotently, user options retain
+    override order, and the Windows manifest always carries the official
+    shared target's `WIN32` plus `SC_WIN_DLL` definitions. This closes the
+    remaining observed configuration difference between CMake-built plug-ins
+    and the generated plug-ins that crashed in all four MSVC lanes.
+
+    The exact-LLVM Release tree reconfigures and builds warning-clean with
+    eight workers. The compiler, incremental, lifecycle matrix and seven
+    previously failing application cases pass 10/10 in 402.34 seconds; the
+    SDF/VITAL, Accellera, V1, MSVC and Windows audit slice passes 9/9 in 1.69
+    seconds. The final parallel Release regression passes 246/246 in 260.83
+    seconds. The standalone source-header transformation plus Clang 22
+    `SC_BUILD` syntax probe relocates all three declarations immediately after
+    type completion without a diagnostic, and both source contracts plus the
+    line-budget gate pass after that final refinement. The prior complete
+    408-file string audit remains
+    valid because this repair adds no long test literal; all five workflow
+    timeouts remain 120 minutes, no repository header changes, and neither
+    Debug nor sanitizer was rerun. Audit, commit and push this repair, then
+    wait for every replacement Windows job before closing Batch 172 or
+    beginning Batch 173.
+
 ## Batch 173 planned restart checkpoint - after Batch 172 closeout
 
 1. Start in `/home/colin/projects/fsim`, read this section and Batch 173 in

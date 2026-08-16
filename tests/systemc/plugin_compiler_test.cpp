@@ -476,6 +476,7 @@ int main(const int argc, char** argv) {
     assert(first_plan->commands.front().working_directory == working);
 #if defined(_WIN32)
     assert(has_argument(*first_plan, "/DFSIM_PLUGIN_TEST=1"));
+    assert(has_argument(*first_plan, "/DWIN32"));
     assert(has_argument(*first_plan, "/DSC_WIN_DLL"));
     assert(has_argument(*first_plan, "/I" + include.string()));
     assert(has_argument(*first_plan, "/utf-8"));

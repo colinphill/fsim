@@ -122,6 +122,9 @@ endforeach()
 foreach(FSIM_COMMAND_POLICY IN ITEMS
     "msvc_runtime_option()"
     "SC_WIN_DLL"
+    "settings.compiler.empty()"
+    "settings.compile_options.insert("
+    "settings.defines.insert("
     "/bigobj"
     "-fPIC"
     "-shared"

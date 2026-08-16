@@ -11964,6 +11964,35 @@ carry an explicit evidence-backed scope disposition approved by the user.
   replacement Windows jobs and inspect their logs before closing Batch 172 or
   starting Batch 173.
 
+  Compiler-compatibility repair `8b756a0` was pushed, and run `31928630786`
+  completed all six Windows jobs before the next repair. Both clang-cl builds
+  are warning-clean and stop on the same incomplete `ispex_base` explicit TLM
+  array instantiation. Plain and LLVM MSVC Release fail 10 tests each and the
+  corresponding Debug lanes fail 18 each, all converging on dynamically
+  compiled SystemC modules while direct official runtime/TLM and CMake-built
+  plug-in tests pass. `FSIM-SC-I004`, D9025 and the NDEBUG/UNDEBUG conflict are
+  absent; only the five expected Accellera W506 runtime warnings remain, and
+  SDF/VITAL plus the release audits pass.
+
+  Relocate the two `sc_vpool` and one TLM-array explicit instantiations after
+  their complete type definitions while retaining normal DLL export
+  semantics. Apply governed host compile defaults idempotently even when the
+  compiler executable is explicit, preserve later user-option override order,
+  and carry the official Windows target's `WIN32` and `SC_WIN_DLL` definitions
+  in the manifest/cache identity. The warning-clean eight-worker exact-LLVM
+  Release build passes the compiler, incremental, lifecycle and previously
+  failing application slice 10/10 in 402.34 seconds; the SDF/VITAL, Accellera,
+  V1, MSVC and Windows audits pass 9/9 in 1.69 seconds. The final parallel
+  Release regression passes 246/246 in 260.83 seconds. The isolated header
+  relocation plus Clang 22 `SC_BUILD` syntax probe covers all three
+  declarations immediately after type completion without a diagnostic; both
+  source contracts and the line-budget gate pass after that final refinement.
+  The prior 408-file string
+  audit remains valid, all five hosted timeouts remain 120 minutes, no
+  repository header changed, and Debug and sanitizer were not rerun. Commit
+  and push this repair, then require all six replacement Windows jobs to
+  complete green before closing Batch 172 or starting Batch 173.
+
 ### Batch 173 - SCV 2.0.1 compatibility, recording, and verification closure - CI monitoring boundary
 
 - **Changes 1-4:** vendor the official SCV 2.0.1 source archive with a pinned

@@ -171,16 +171,9 @@ void report_error(
 
 void add_default_compiler_settings(project::SystemCSection& settings)
 {
-    if (!settings.compiler.empty()) {
-#if defined(_WIN32)
-        if (std::ranges::find(settings.defines, "SC_WIN_DLL")
-            == settings.defines.end()) {
-            settings.defines.insert(settings.defines.begin(), "SC_WIN_DLL");
-        }
-#endif
-        return;
+    if (settings.compiler.empty()) {
+        settings.compiler = default_compiler();
     }
-    settings.compiler = default_compiler();
 #if defined(FSIM_SYSTEMC_DEFAULT_COMPILE_OPTIONS)
     std::string_view encoded { FSIM_SYSTEMC_DEFAULT_COMPILE_OPTIONS };
     std::vector<std::string> options;
@@ -192,8 +185,13 @@ void add_default_compiler_settings(project::SystemCSection& settings)
         }
         encoded.remove_prefix(separator + 1U);
     }
-    settings.compile_options.insert(
-        settings.compile_options.begin(), options.begin(), options.end());
+    for (auto option = options.rbegin(); option != options.rend(); ++option) {
+        if (std::ranges::find(settings.compile_options, *option)
+            == settings.compile_options.end()) {
+            settings.compile_options.insert(
+                settings.compile_options.begin(), *option);
+        }
+    }
 #endif
 #if defined(FSIM_SYSTEMC_DEFAULT_DEFINES)
     std::string_view encoded_defines { FSIM_SYSTEMC_DEFAULT_DEFINES };
@@ -206,8 +204,20 @@ void add_default_compiler_settings(project::SystemCSection& settings)
         }
         encoded_defines.remove_prefix(separator + 1U);
     }
-    settings.defines.insert(
-        settings.defines.begin(), defines.begin(), defines.end());
+    for (auto define = defines.rbegin(); define != defines.rend(); ++define) {
+        if (std::ranges::find(settings.defines, *define)
+            == settings.defines.end()) {
+            settings.defines.insert(settings.defines.begin(), *define);
+        }
+    }
+#endif
+#if defined(_WIN32)
+    // The governed shared runtime requires import semantics even when this
+    // translation unit is compiled without generated CMake defaults.
+    if (std::ranges::find(settings.defines, "SC_WIN_DLL")
+        == settings.defines.end()) {
+        settings.defines.insert(settings.defines.begin(), "SC_WIN_DLL");
+    }
 #endif
 }
 

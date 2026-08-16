@@ -860,7 +860,9 @@ foreach(FSIM_SYSTEMC_DEFAULT_OPTION IN LISTS FSIM_SYSTEMC_DEFAULT_COMPILE_OPTION
   endif()
 endforeach()
 if(WIN32)
-  list(APPEND FSIM_SYSTEMC_DEFAULT_DEFINES SC_WIN_DLL)
+  # Match the public definitions carried by the official shared SystemC
+  # target even when a project names its compiler explicitly.
+  list(APPEND FSIM_SYSTEMC_DEFAULT_DEFINES WIN32 SC_WIN_DLL)
 endif()
 list(REMOVE_DUPLICATES FSIM_SYSTEMC_DEFAULT_DEFINES)
 list(

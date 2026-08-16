@@ -304,29 +304,59 @@ function(fsim_systemc_apply_runtime_fixes target source_root)
 
   if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND
      CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
-    # Clang correctly diagnoses two upstream explicit-instantiation declarations
-    # that occur while their sc_int proxy types are still incomplete. Keep the
-    # normal DLL template policy everywhere else and make only those private
-    # pool declarations extern in the runtime build. Consumers continue to see
-    # the byte-pinned public header.
+    # Clang correctly diagnoses upstream explicit-instantiation declarations
+    # that occur while their sc_int proxy and TLM extension types are still
+    # incomplete. Move only those declarations below the corresponding full
+    # definitions, preserving the normal DLL instantiation/export policy and
+    # the byte-pinned public source archive.
     set(upstream_int_header
         "${source_root}/src/sysc/datatypes/int/sc_int_base.h")
     file(READ "${upstream_int_header}" patched_int_header_contents)
     set(original_int_header_contents "${patched_int_header_contents}")
-    foreach(proxy_type IN ITEMS sc_int_bitref sc_int_subref)
-      set(old_pool_declaration
-          "SC_API_TEMPLATE_DECL_ sc_vpool<sc_dt::${proxy_type}>;")
-      string(FIND "${patched_int_header_contents}" "${old_pool_declaration}"
-        pool_declaration_offset)
-      if(pool_declaration_offset EQUAL -1)
-        message(FATAL_ERROR
-          "cannot apply the governed SystemC clang-cl template fix: ${proxy_type}")
-      endif()
-      string(REPLACE
-        "${old_pool_declaration}"
-        "extern template class SC_API sc_vpool<sc_dt::${proxy_type}>;"
-        patched_int_header_contents "${patched_int_header_contents}")
-    endforeach()
+    set(int_pool_declarations [=[// extern template instantiations
+namespace sc_core {
+SC_API_TEMPLATE_DECL_ sc_vpool<sc_dt::sc_int_bitref>;
+SC_API_TEMPLATE_DECL_ sc_vpool<sc_dt::sc_int_subref>;
+} // namespace sc_core
+
+]=])
+    string(FIND "${patched_int_header_contents}" "${int_pool_declarations}"
+      int_pool_declarations_offset)
+    if(int_pool_declarations_offset EQUAL -1)
+      message(FATAL_ERROR
+        "cannot apply the governed SystemC clang-cl template fix: sc_int pools")
+    endif()
+    string(REPLACE "${int_pool_declarations}" ""
+      patched_int_header_contents "${patched_int_header_contents}")
+    set(int_instantiation_anchor [=[inline
+::std::istream&
+operator >> ( ::std::istream&, sc_int_subref& );
+
+]=])
+    set(relocated_int_instantiations [=[inline
+::std::istream&
+operator >> ( ::std::istream&, sc_int_subref& );
+
+// Explicit instantiations require the proxy definitions above to be complete.
+} // namespace sc_dt
+
+namespace sc_core {
+SC_API_TEMPLATE_DECL_ sc_vpool<sc_dt::sc_int_bitref>;
+SC_API_TEMPLATE_DECL_ sc_vpool<sc_dt::sc_int_subref>;
+} // namespace sc_core
+
+namespace sc_dt {
+
+]=])
+    string(FIND "${patched_int_header_contents}" "${int_instantiation_anchor}"
+      int_instantiation_anchor_offset)
+    if(int_instantiation_anchor_offset EQUAL -1)
+      message(FATAL_ERROR
+        "cannot apply the governed SystemC clang-cl template fix: sc_int anchor")
+    endif()
+    string(REPLACE "${int_instantiation_anchor}"
+      "${relocated_int_instantiations}"
+      patched_int_header_contents "${patched_int_header_contents}")
     if(patched_int_header_contents STREQUAL original_int_header_contents)
       message(FATAL_ERROR
         "cannot apply the governed SystemC clang-cl template fix")
@@ -345,6 +375,66 @@ function(fsim_systemc_apply_runtime_fixes target source_root)
     endif()
     if(write_patched_int_header)
       file(WRITE "${patched_int_header}" "${patched_int_header_contents}")
+    endif()
+
+    set(upstream_tlm_header
+        "${source_root}/src/tlm_utils/instance_specific_extensions_int.h")
+    file(READ "${upstream_tlm_header}" patched_tlm_header_contents)
+    set(original_tlm_header_contents "${patched_tlm_header_contents}")
+    set(tlm_array_declaration [=[namespace tlm {
+SC_API_TEMPLATE_DECL_ tlm_array<tlm_utils::ispex_base*>;
+} // namespace tlm
+
+]=])
+    string(FIND "${patched_tlm_header_contents}" "${tlm_array_declaration}"
+      tlm_array_declaration_offset)
+    if(tlm_array_declaration_offset EQUAL -1)
+      message(FATAL_ERROR
+        "cannot apply the governed SystemC clang-cl template fix: TLM array")
+    endif()
+    string(REPLACE "${tlm_array_declaration}" ""
+      patched_tlm_header_contents "${patched_tlm_header_contents}")
+    set(tlm_instantiation_anchor [=[};
+
+//this thing is basically a snippet of the generic_payload]=])
+    set(relocated_tlm_instantiation [=[};
+
+} // namespace tlm_utils
+
+// Explicit instantiation requires ispex_base::free() above to be complete.
+namespace tlm {
+SC_API_TEMPLATE_DECL_ tlm_array<tlm_utils::ispex_base*>;
+} // namespace tlm
+
+namespace tlm_utils {
+
+//this thing is basically a snippet of the generic_payload]=])
+    string(FIND "${patched_tlm_header_contents}" "${tlm_instantiation_anchor}"
+      tlm_instantiation_anchor_offset)
+    if(tlm_instantiation_anchor_offset EQUAL -1)
+      message(FATAL_ERROR
+        "cannot apply the governed SystemC clang-cl template fix: TLM anchor")
+    endif()
+    string(REPLACE "${tlm_instantiation_anchor}"
+      "${relocated_tlm_instantiation}"
+      patched_tlm_header_contents "${patched_tlm_header_contents}")
+    if(patched_tlm_header_contents STREQUAL original_tlm_header_contents)
+      message(FATAL_ERROR
+        "cannot apply the governed SystemC clang-cl template fix: TLM unchanged")
+    endif()
+    set(patched_tlm_header_dir "${patched_root}/tlm_utils")
+    set(patched_tlm_header
+        "${patched_tlm_header_dir}/instance_specific_extensions_int.h")
+    file(MAKE_DIRECTORY "${patched_tlm_header_dir}")
+    set(write_patched_tlm_header TRUE)
+    if(EXISTS "${patched_tlm_header}")
+      file(READ "${patched_tlm_header}" current_patched_tlm_header_contents)
+      if(current_patched_tlm_header_contents STREQUAL patched_tlm_header_contents)
+        set(write_patched_tlm_header FALSE)
+      endif()
+    endif()
+    if(write_patched_tlm_header)
+      file(WRITE "${patched_tlm_header}" "${patched_tlm_header_contents}")
     endif()
     target_include_directories("${target}" BEFORE PRIVATE "${patched_root}")
     # Upstream spells its normal warning level as `-Wall`. clang-cl interprets
