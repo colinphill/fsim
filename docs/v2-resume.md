@@ -3771,6 +3771,327 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
    platform/toolchain owners, retained-log locations and exact validation
    boundaries from live state.
 
+## Batch 175 active checkpoint - after Change 1
+
+1. Batch 175 starts from clean synchronized Batch 174 closeout
+   `953e1bb906fe19ec8824c81f3c5bc1f87f09e410`. Change 1 is the only current
+   dirty-worktree change; verify live Git state rather than trusting this hash.
+2. `tests/feature_matrix/v2_qualification_inventory.tsv` assigns Changes 2-20
+   one-to-one across nineteen active rows. Every row records platform,
+   toolchain, configuration, implementation, positive, negative, performance
+   and resource owners, a build-local retained-log path and an exact validation
+   boundary. Its normalized SHA-256 is
+   `dfed45f0542bf969b43ce6459af4b84b344fb4f4d9d8b5967752cffea128a157`.
+3. `cmake/CheckV2QualificationInventory.cmake` proves the exact 19-row/20-change
+   allocation, checked-in ownership paths, unique identities, build-local log
+   paths, plan boundaries and CTest registration. The direct validator passes;
+   after a Debug-only regeneration with no compilation, the registered ledger,
+   retained ABI/schema inventory, diagnostic catalog and source-budget slice
+   passes 4/4 in 0.29 seconds.
+4. No compiler/runtime behavior, public header, ABI/schema, Release, sanitizer,
+   hosted CI, commit, push or formatting-only header work ran in Change 1.
+   Preserve its three-file implementation plus the CTest registration in the
+   intentionally dirty Batch 175 worktree until Change 20.
+5. The next bounded action is Change 2 only: run and retain the complete Linux
+   exact-LLVM Clang Debug non-Release ordinary regression, audit its per-domain
+   conformance and command ownership, repair any exposed failure, then preserve
+   Change 2 without starting Linux GCC work.
+6. Batch 175 Change 2 is complete. The first ordinary-regression attempt proved
+   `fsim.sdf-application-release-audit` was the only static release audit
+   missing its `release` label; it entered `-LE release` and reported the two
+   new Change 1 files. Its deferred Release baseline was not changed. After
+   labeling that owner correctly, the complete Linux exact-LLVM 22.1.8 Clang
+   Debug non-Release regression passes 273/273 in 162.84 seconds with retained
+   log `build/llvm22-ninja-debug/batch175-change02-linux-clang-debug.log`.
+   The generated-command audit reports all 297 commands have one owner. The
+   qualification ledger now has one preserved and eighteen active rows at
+   normalized SHA-256
+   `7a40ca39fbdbab2dd6f6201253d12ed8e74b51f5fcf95721bc5bd819d076f866`;
+   its direct and registered validators pass. Preserve Changes 1-2 without
+   commit or push. The next bounded action is Change 3 only: configure/build the
+   Linux GCC Debug tree with at least eight workers, run the equivalent non-
+   Release ordinary regression with a retained log, and distinguish compiler
+   portability/warning failures from semantic failures before any repair.
+7. Batch 175 Change 3 is complete in the same intentionally dirty worktree.
+   GCC 13 exposed and now cleanly builds through one governed SCV C++20
+   constructor patch, two 16-bit byte-decoder promotion repairs and three
+   warning-clean SCV integration repairs without relaxing project warnings.
+   The governed SCV manifest/tree identities are
+   `b5954d8b0dc9f26f4e02c2a24063e742bbdcaa094c3c34fba8f2f7b1935ef57b`
+   and `4dea71f4e320539aae40a12209445519193da9cd237512f79a1377a5174cb3ea`.
+   Both GCC and exact-LLVM Clang SCV closure slices pass 31/31. The complete
+   GCC non-Release regression passed 272/273 in 291.85 seconds; only the
+   intentionally changed SystemC ABI-contract checksum was stale, and its
+   focused rerun passes on both compilers. The already-green 285.19-second
+   SystemC matrix was not duplicated. Retain the GCC build, broad-regression
+   and focused-rerun logs under `build/gcc-debug/batch175-change03-*` plus the
+   Clang build log. The qualification ledger has two preserved and seventeen
+   active rows at normalized SHA-256
+   `987a435780e9fc371802a235351e930b7598a0643ac34e5f5f00ab803e46af47`.
+   No Release, sanitizer, hosted-CI, commit or push work ran. Preserve Changes
+   1-3 and proceed only to Change 4's Windows MSVC Debug qualification.
+8. The current Linux host cannot execute Changes 4-5's MSVC/clang-cl runtime
+   rows, and hosted CI remains deferred, so those rows stay active rather than
+   being inferred green. Change 6 is nevertheless complete for every locally
+   executable owner without adding a duplicate runtime wrapper. New registered
+   contract `fsim.execution-mode-qualification` pins fixed-seed and changed-
+   seed behavior, interpreter/LLVM output and state equality, O0/O2 cold/warm
+   cache counts, debugger observations, checkpoint identity and the interactive
+   debugger path across the existing artifact-phases, random, coverage and
+   preprocessing/CLI owners. Exact-LLVM passes 5/5 in 24.08 seconds with log
+   `build/llvm22-ninja-debug/batch175-change06-execution-modes.log`; GCC passes
+   the four runtime owners 4/4 in 43.03 seconds and the registered contract
+   1/1. The ledger has three preserved and sixteen active rows at normalized
+   SHA-256
+   `8fab40a8120f9dc71c61cb82e66ad7c6ea706362d03b47b0760463e743f9d51c`.
+   No Release, sanitizer, hosted-CI, commit or push work ran. Preserve Changes
+   1-3 and 6, retain Changes 4-5 for Windows, and proceed to Change 7's locally
+   verifiable composition/artifact/relocation qualification.
+9. Batch 175 Change 7 is complete for every locally executable owner without a
+   duplicate wrapper executable or nested CTest. Registered contract
+   `fsim.composition-qualification` pins multiple roots and aliases,
+   bidirectional VHDL/SystemVerilog, typed VHDL/SystemVerilog/SystemC,
+   project/non-project phases, artifacts, source-hidden publication and
+   identity-preserving relocation, including absolute-path and missing-mapping
+   rejection. Exact-LLVM Debug passes the eight-owner slice 8/8 in 3.14 seconds
+   with retained log
+   `build/llvm22-ninja-debug/batch175-change07-composition-relocation.log`;
+   GCC Debug passes the same slice 8/8 in 3.45 seconds. Both regenerations
+   compiled no changed C++ source. The expensive typed-boundary runtime was not
+   repeated because Changes 2-3 already passed it on both Linux toolchains; the
+   new contract pins its exact mixed-language, cache and engine assertions.
+   The ledger preserves Changes 2, 3, 6 and 7, leaves fifteen rows active and
+   has normalized SHA-256
+   `ac440a04c4ec30eafa0125a2ce77a296081a9c3d4cba461ee48456178677ebb3`.
+   Changes 4-5 remain active for Windows. No Release, sanitizer, hosted-CI,
+   commit or push work ran. Preserve the accumulated worktree and proceed to
+   Change 8's observability-correlation qualification.
+10. Batch 175 Change 8 is complete for every locally executable owner.
+    Registered contract `fsim.observability-qualification` pins debugger
+    transcript/state equivalence, signal callbacks, atomic VCD/FST fanout,
+    callback failure/re-entry containment, deterministic FST publication,
+    canonical transaction serialization/order, native/direct/loopback SCV
+    record equality, SystemC/TLM/VCD/FST correlation, selection, backpressure,
+    lifecycle and mixed-boundary edit invalidation. Exact-LLVM Debug passes the
+    eight-owner slice 8/8 in 23.88 seconds with retained log
+    `build/llvm22-ninja-debug/batch175-change08-observability.log`; GCC Debug
+    passes the same slice 8/8 in 42.38 seconds. The Change 7 mixed-conversion
+    runtime was not duplicated; its exact debugger/VCD/cache-edit tokens remain
+    statically pinned. Both regenerations compiled no changed C++ source. The
+    ledger preserves Changes 2, 3 and 6-8, leaves fourteen rows active and has
+    normalized SHA-256
+    `6b19a102b81e4b10ecd2d70c345b6322fb1384ecaae0afac8223207d109c61fb`.
+    Changes 4-5 remain active for Windows. No Release, sanitizer, hosted-CI,
+    commit or push work ran. Preserve the accumulated worktree and proceed to
+    Change 9's configure/compile/link performance qualification.
+11. Batch 175 Change 9 is complete for the available Linux toolchains, while
+    Q175-09 remains active for its Windows MSVC and clang-cl measurements.
+    Fresh eight-worker Debug Ninja evidence is retained under
+    `build/qualification/batch175-change09-*`. Exact-LLVM 22.1.8 Clang
+    configures in 2.36 seconds at 98,680 KiB peak RSS, completes 2,391 build
+    actions in 14:36.20 at 6,977,224 KiB, and reaches a final warning-clean
+    no-op rebuild in 0.12 seconds at 29,556 KiB. GCC 13 configures in 2.07
+    seconds at 44,940 KiB, completes the same 1,070 compile and 168 link edges
+    in 15:27.23 at 5,198,168 KiB, and reaches a no-op rebuild in 0.11 seconds
+    at 19,284 KiB. The isolated Clang harness initially omitted the established
+    ASM suppression for the upstream SystemC QuickThreads driver; adding it
+    caused only a 157-action dependent relink, which completed warning-free in
+    30.35 seconds at 1,600,280 KiB. This was harness alignment, not a product
+    regression. The consolidated raw-log index has SHA-256
+    `6db1f7de0b80cd67e875ea0667e38901a12111f02df18539ce69f96b7c5a32aa`.
+    The ledger therefore remains at five preserved and fourteen active rows,
+    normalized SHA-256
+    `6b19a102b81e4b10ecd2d70c345b6322fb1384ecaae0afac8223207d109c61fb`.
+    No Release, sanitizer, hosted-CI, commit, push or public-header formatting
+    work ran. Preserve the accumulated worktree, leave Changes 4-5 and the
+    Windows portion of Change 9 active, and proceed to Change 10's locally
+    executable elaboration/simulation performance qualification.
+12. Batch 175 Change 10 is complete for the available Linux toolchains, while
+    Q175-10 remains active for Windows. One fixed serial workload reuses the
+    existing non-duplicated elaboration, trace-observation, core-simulation,
+    mixed-language and runtime/scheduler correctness owners. All five pass on
+    both compilers with their deterministic semantic, ordering and waveform
+    assertions intact. Exact-LLVM Clang completes in 7.10 seconds at 128,464
+    KiB peak RSS; GCC completes in 13.51 seconds at 124,884 KiB. Retained raw
+    logs are `build/qualification/batch175-change10-*`; the consolidated log
+    has SHA-256
+    `9f7bc78b35292b8abd82551cf3b955eb6384d1d53f85e90f4cc954eb6013d56e`.
+    No regression required repair, and the qualification ledger deliberately
+    remains at five preserved and fourteen active rows. No Release, sanitizer,
+    hosted-CI, commit, push or public-header formatting work ran. Preserve the
+    accumulated worktree and proceed to Change 11's locally executable solver
+    and UVM performance qualification.
+13. Batch 175 Change 11 is complete for the available Linux toolchains, while
+    Q175-11 remains active for Windows. The single `fsim.runtime` owner already
+    timed in Change 10 executes the complete solver/UVM unit surface on both
+    compilers, including deterministic solve/replay, transactional solver
+    exhaustion, phases, objections, TLM, registers, sequences and atomic
+    checkpoint ceilings; it was not duplicated. The Clang UVM 1.2 application
+    matrix passes all ten direct, compile, O0/O2 elaborate, cold/warm compiled
+    FST and debug VCD stages with an exact common transcript in 7:32.21 at
+    4,631,912 KiB peak RSS. A Clang UVM 2020-3.1 direct witness passes in
+    1:52.65 at 5,220,824 KiB, and a GCC UVM 1.2 direct witness passes in
+    1:56.05 at 4,631,084 KiB. The first 2020-3.1 command used a non-existent
+    cached-source directory and rejected immediately with `FSIM-FE-IO-001`;
+    its log is retained beside the successful exact-source rerun as harness
+    provenance. Consolidated evidence has SHA-256
+    `ab1e03591123be4ac76fda8a7e355c90ece74eead3559b55ee6c72610e290206`.
+    No product regression required repair, and the ledger remains at five
+    preserved and fourteen active rows. No Release, sanitizer, hosted-CI,
+    commit, push or public-header formatting work ran. Preserve the accumulated
+    worktree and proceed to Change 12's locally executable native timing and
+    trace performance qualification.
+14. Batch 175 Change 12 is complete for the available Linux toolchains, while
+    Q175-12 remains active for Windows. The fixed nine-owner native slice
+    covers SDF/VITAL corpus and scheduling, SCV resources/backpressure and
+    corpus behavior, Accellera SystemC/TLM, incremental plug-in/cache recovery,
+    and FST corpus/writer/compression determinism. It passes 9/9 in 17.38
+    seconds at 252,724 KiB peak RSS on exact-LLVM Clang and 9/9 in 22.30 seconds
+    at 369,108 KiB on GCC. Direct SystemC corpus runs preserve the same two
+    roots, 1,024 samples, 1,792 events, 4,096 crossings, 2,048 TLM1 and 4,096
+    TLM2 transactions, 1,044,480 stack checksum, 9,120 object bytes and 2,040
+    backpressure events. Observed crossing throughput is 429,305/s on Clang
+    and 421,095/s on GCC. Consolidated retained evidence has SHA-256
+    `b94dfc360988e75fff2209d93e19bbed0c1198d1c1a5fee9a5b375f9eb24ffcd`.
+    No regression required repair, and the ledger remains at five preserved
+    and fourteen active rows. No Release, sanitizer, hosted-CI, commit, push or
+    public-header formatting work ran. Preserve the accumulated worktree and
+    proceed to Change 13's locally executable duration/delta/cancellation
+    stress qualification.
+15. Batch 175 Change 13 is complete for the available Linux toolchains, while
+    Q175-13 remains active for Windows. The single runtime owner timed earlier
+    already covers checked future-time and scheduler delta exhaustion. A fixed
+    nine-owner slice adds SystemC synchronization/containment, artifact
+    checkpoint/restart, call safe points, checked time and delay behavior,
+    transition scheduling, mailbox/semaphore synchronization, named-event
+    ordering and trace teardown. It passes 9/9 in 4.95 seconds at 110,540 KiB
+    peak RSS on exact-LLVM Clang and 9/9 in 5.22 seconds at 105,564 KiB on GCC.
+    Atomic maximum-tick overflow, invalid cancellation/ownership, restart
+    parity and teardown containment remain asserted without partial state.
+    Consolidated retained evidence has SHA-256
+    `be2cbb621545f58115d1da6f250acb4d765b869a07342cd096f709c583d310e4`.
+    No regression required repair, and the ledger remains at five preserved
+    and fourteen active rows. No Release, sanitizer, hosted-CI, commit, push or
+    public-header formatting work ran. Preserve the accumulated worktree and
+    proceed to Change 14's locally executable width/array/hierarchy stress.
+16. Batch 175 Change 14 is complete for the available Linux toolchains, while
+    Q175-14 remains active for Windows. A fixed eight-owner slice covers
+    SystemVerilog container elaboration, nested hierarchy, capacity/resource
+    negatives, multidimensional aggregates, wide VHDL arrays/advanced types
+    and SystemC data types. It passes 8/8 in 76.18 seconds at 3,766,068 KiB peak
+    RSS on exact-LLVM Clang and 8/8 in 1:51.56 at 3,790,144 KiB on GCC. The
+    principal `sv_containers` owner takes 47.83 and 76.28 seconds. The expensive
+    typed-boundary owner was not duplicated because Changes 2-3 already passed
+    it on both compilers, while Change 7 pins its exact width, concrete one-
+    dimensional memory-bound and cache assertions. Consolidated evidence has
+    SHA-256
+    `eff64bc6e4e4a207bc114f89bd1f1a37fcf94d4b30e89cf263807fd3a2b8a448`.
+    No arbitrary cap, host-width defect or partial mutation was observed, and
+    the ledger remains at five preserved and fourteen active rows. No Release,
+    sanitizer, hosted-CI, commit, push or public-header formatting work ran.
+    Preserve the accumulated worktree and proceed to Change 15's locally
+    executable incremental plug-in/bridge stress qualification.
+17. Batch 175 Change 15 is complete for the available Linux toolchains, while
+    Q175-15 remains active for Windows. Change 12's incremental SystemC owner
+    already supplies concurrent lock, cold/warm reconstruction and recovery
+    evidence. A fixed eleven-owner slice adds object cache, SCV plug-in
+    compiler/protocol/application/transport, opaque SystemC protocol/session/
+    execution/loopback, plug-in containment and compiler recovery. It passes
+    11/11 in 22.77 seconds at 278,768 KiB peak RSS on exact-LLVM Clang and
+    11/11 in 25.06 seconds at 404,760 KiB on GCC. Rollback, disconnect, crash
+    containment, identity, serialization, replay, backpressure and resource
+    negatives remain exact. Consolidated evidence has SHA-256
+    `97e6cf29ff957f5161c8d2d5ef664f56c4df42fc62840e9159992be5ec77e2d1`.
+    No regression required repair, and the ledger remains at five preserved
+    and fourteen active rows. No Release, sanitizer, hosted-CI, commit, push or
+    public-header formatting work ran. Preserve the accumulated worktree and
+    proceed to Change 16's locally executable fault/resource stress.
+18. Batch 175 Change 16 is complete for the available Linux toolchains, while
+    Q175-16 remains active for Windows. Earlier timed owners already cover
+    trace/SCV backpressure, FST limits, plug-in crash containment and external
+    compiler recovery. A fixed eight-owner slice adds semantic/frontend nesting
+    and payload limits, SDF schema corruption/resource rejection, atomic trace/
+    VCD selection and lifecycle, external system-command failure, stochastic
+    queue ceilings, and file/string/task resources. It passes 8/8 in 2.62
+    seconds at 120,952 KiB peak RSS on exact-LLVM Clang and 8/8 in 3.22 seconds
+    at 117,988 KiB on GCC. Consolidated evidence has SHA-256
+    `9437cb679f17f23c5733016507ea2c2b0bf42b7af7f3d798e65e7695b03eb90b`.
+    No ceiling was weakened or regression repaired. The CI-oriented resource-
+    portability contract was not run, and the ledger remains at five preserved
+    and fourteen active rows. No Release, sanitizer, hosted-CI, commit, push or
+    public-header formatting work ran. Preserve the accumulated worktree and
+    proceed to Change 17's locally executable failure-closure audit.
+19. Batch 175 Change 17 is complete for the available Linux evidence, while
+    Q175-17 remains active for Windows closure. Auditing all 47 retained Batch
+    175 logs found exactly three Linux-side issue logs: the stale Change 3
+    SystemC ABI digest, Change 9's isolated Clang ASM flag omission, and Change
+    11's non-existent UVM 2020 source-path invocation. Focused GCC/Clang ABI
+    owners pass, the ASM-dependent relink and final no-op are warning-free, and
+    the exact-source UVM 2020 direct witness passes its complete transcript.
+    Unresolved Linux correctness, portability, warning, performance and
+    resource issues are zero. The retained closure log has SHA-256
+    `b0f2e077f6ea2eb991e0dffc0ccd7907229949f1ca54e254f0de1049b9196fa3`.
+    No broad regression, Release, sanitizer, hosted-CI, commit, push or public-
+    header formatting work ran. The ledger remains five preserved/fourteen
+    active because every Windows and cross-platform closeout row remains
+    honest. Preserve the accumulated worktree and proceed to Change 18's
+    provisional Linux baseline/evidence freeze without fabricating Windows
+    thresholds.
+20. Batch 175 Change 18 is complete for the available Linux evidence, while
+    Q175-18 remains active for Windows. New 44-row
+    `tests/feature_matrix/v2_performance_baselines.tsv` freezes integer
+    observations and reviewed maximum wall-time/peak-RSS ceilings plus two
+    minimum SystemC throughput floors for Changes 9-16 on exact-LLVM Clang 22
+    and GCC 13 Debug. Its SHA-256 is
+    `4c9f07b36a3b9dba16f76f983a5478b2ef4e3ca514efa6f032a24b16940792cf`.
+    The registered matrix validator and CTest generated-command uniqueness
+    owner pass 2/2 on both compiler trees in 2.79 seconds, with no C++
+    compilation; consolidated evidence has SHA-256
+    `0cc2468ca24e4e5d2dadbe9e707c3241d2a8c7ffd210c7ac17ab99a33df962a4`.
+    No Windows observation or threshold was invented; Batch 177 must add those
+    from real MSVC and clang-cl runs. The ledger therefore remains at five
+    preserved and fourteen active rows. No Release, sanitizer, hosted-CI,
+    commit, push or public-header formatting work ran. Preserve the accumulated
+    worktree and proceed to Change 19's partial documentation/inventory sync,
+    keeping Windows-dependent zero-active closure deferred.
+21. Batch 175 Change 19 is complete in the same intentionally dirty worktree.
+    Architecture, diagnostics, README, the performance baseline, qualification
+    inventory and final-release handoff now describe the same boundary: six
+    preserved rows, twelve Windows-dependent rows explicitly deferred to Batch
+    177, and only Change 20 active. The normalized qualification-ledger SHA-256
+    is `44e36c8888a894984a668fad83113ed0da12da71a8ba963fa0a2fcf0306b5655`.
+    The first documentation slice passed 7/8 because the VHDL/PSL closure audit
+    retained an older inventory digest. Updating that exact digest repaired the
+    owner; the final diagnostic, source, qualification, performance, Verilog,
+    VHDL/PSL, UVM and command-uniqueness slice passes 8/8 in 3.37 seconds.
+    Initial and repaired logs have SHA-256
+    `02d7352ee867a82946178ae42012701d8c247e4ddbc9810b29973019b1d26b13`
+    and `6c8b4f030ac5bf5b74fb6e3b02c163bf888a89e3598978573f04b8ff9f4cdc58`.
+    No Windows result was fabricated and no Release, sanitizer or hosted-CI
+    work ran. Preserve Changes 1-19 and perform only Change 20's full local
+    non-Release Debug closeout; Batch 177 owns every deferred row.
+22. Batch 175 Change 20 local qualification is complete. Both eight-worker
+    Debug trees are warning-clean and current. Exact-LLVM Clang passes the full
+    non-Release suite 277/277 in 541.44 seconds at 3,783,540 KiB peak RSS; GCC
+    13 passes 277/277 in 738.81 seconds at 3,790,184 KiB. Neither run swaps.
+    The final evidence includes the SystemC application matrix and typed-
+    boundary owners on both compilers, all static portability/resource/
+    performance/documentation contracts, and every ordinary language/runtime
+    owner. The first final static slice found only a paraphrased validator-
+    pinned hosted-CI phrase; restoring the exact wording makes the final slice
+    pass 8/8 in 3.37 seconds. Its initial/final log SHA-256 values are
+    `0c964a2441393bc339e0c43c7c23c784b157da8fe0e747b77d8d934ba85887a4`
+    and `145513d59aca9e960903dd2cc8e8a826aeb1db00441938e64288451586a207f3`.
+    All four GitHub Actions job declarations retain 120-minute timeouts; no
+    workflow was executed or monitored. The qualification ledger closes at
+    zero active, seven preserved and twelve explicitly deferred rows with
+    normalized SHA-256
+    `8c5339906ccfd708516a95607edf45084d884437438d532ce9dd5b16bfb42fc6`.
+    No Release configuration, release gate or sanitizer ran. Batch 177 owns
+    those final checks and the real Windows MSVC/clang-cl measurements. Commit
+    and push the accumulated Batch 175 once, then begin Batch 176 only from the
+    clean synchronized branch and its authoritative plan.
+
 ## Batch 168 planned restart checkpoint - 2026-08-13
 
 1. Start in `/home/colin/projects/fsim`, read this section and the authoritative

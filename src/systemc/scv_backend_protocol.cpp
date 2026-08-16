@@ -52,13 +52,13 @@ namespace {
 
     std::uint16_t read_u16(std::span<const std::byte> bytes, std::size_t& offset)
     {
-        std::uint16_t value { };
+        std::uint32_t value { };
         for (unsigned shift = 0; shift < 16U; shift += 8U) {
-            value |= static_cast<std::uint16_t>(
+            value |= static_cast<std::uint32_t>(
                          std::to_integer<std::uint8_t>(bytes[offset++]))
                 << shift;
         }
-        return value;
+        return static_cast<std::uint16_t>(value);
     }
 
     std::uint32_t read_u32(std::span<const std::byte> bytes, std::size_t& offset)

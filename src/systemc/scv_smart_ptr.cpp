@@ -21,6 +21,7 @@ struct Lifetime {
     {
         live_payloads.fetch_add(1U, std::memory_order_relaxed);
     }
+    Lifetime& operator=(const Lifetime&) = default;
     ~Lifetime() { live_payloads.fetch_sub(1U, std::memory_order_relaxed); }
 };
 
@@ -74,14 +75,17 @@ struct Introspection {
 } // namespace fsim::systemc::scv_native_detail
 
 SCV_ENUM_EXTENSIONS(fsim::systemc::scv_native_detail::NativeMode) {
-    public :
-        SCV_ENUM_CTOR(fsim::systemc::scv_native_detail::NativeMode) {
-            SCV_ENUM(fsim::systemc::scv_native_detail::idle);
-SCV_ENUM(fsim::systemc::scv_native_detail::running);
-SCV_ENUM(fsim::systemc::scv_native_detail::stopped);
-}
-}
-;
+public:
+    SCV_ENUM_CTOR(fsim::systemc::scv_native_detail::NativeMode)
+    {
+        _set_enum(static_cast<int>(fsim::systemc::scv_native_detail::idle),
+            "fsim::systemc::scv_native_detail::idle");
+        _set_enum(static_cast<int>(fsim::systemc::scv_native_detail::running),
+            "fsim::systemc::scv_native_detail::running");
+        _set_enum(static_cast<int>(fsim::systemc::scv_native_detail::stopped),
+            "fsim::systemc::scv_native_detail::stopped");
+    }
+};
 
 SCV_EXTENSIONS(fsim::systemc::scv_native_detail::Scalar)
 {

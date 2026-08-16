@@ -2598,6 +2598,20 @@ inputs enter through UTF-16 APIs. SystemC source compilation passes argument
 arrays directly to the selected GCC-like or MSVC-compatible toolchain and
 never invokes a shell. A fingerprinted test launcher preserves any required
 parent compiler discovery arguments without making the manifest cache-unsafe.
+
+Batch 175 qualification records deterministic Debug performance separately
+from correctness. The checked 44-row Linux baseline matrix is
+`tests/feature_matrix/v2_performance_baselines.tsv`; every integer wall-time,
+peak-RSS or throughput observation names its retained raw log and a reviewed
+maximum ceiling or minimum floor. It covers Clang 22 and GCC 13 configure,
+clean/no-op builds, representative elaboration/simulation, UVM, SystemC/SCV/
+SDF/FST, duration/delta, width/hierarchy, bridge and resource workloads.
+Correctness tests remain the authority for language and resource behavior: a
+performance threshold must never relax a diagnostic, limit or deterministic
+output contract. Windows MSVC and clang-cl observations are intentionally not
+inferred from Linux; their rows remain active until measured in final Batch
+177, which also owns Release, sanitizer, release-gate and hosted-CI evidence.
+
 The current
 compiler component produces checksummed, content-keyed shared libraries with
 per-key locking, and project builds invoke it for SystemC source sets.

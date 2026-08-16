@@ -20,17 +20,23 @@ set(FSIM_SCV_LICENSE_EXPRESSION "Apache-2.0")
 set(FSIM_SCV_SBOM_PURL
     "pkg:generic/scv@2.0.1?download_url=https%3A%2F%2Fwww.accellera.org%2Fimages%2Fdownloads%2Fstandards%2Fsystemc%2Fscv-2.0.1.tar.gz")
 set(FSIM_SCV_PATCH_SCHEMA "fsim-scv-patch-set-v1")
-set(FSIM_SCV_PATCH_COUNT 1)
+set(FSIM_SCV_PATCH_COUNT 2)
 set(FSIM_SCV_PATCH_MANIFEST_SHA256
-    "15625eaeef9c640b3e446ff4f1350795e1afb103ad4cfcd40d8329a4c9d20b29")
+    "b5954d8b0dc9f26f4e02c2a24063e742bbdcaa094c3c34fba8f2f7b1935ef57b")
 set(FSIM_SCV_PATCHED_TREE_SHA256
-    "b8ee86c4050b7a77e39fcbba25fc553d477074b323349885a7634844ecd6a112")
+    "4dea71f4e320539aae40a12209445519193da9cd237512f79a1377a5174cb3ea")
 set(FSIM_SCV_BAG_PATCH_SHA256
     "f931c715608578638a7d49c88d20a9d323aa836023cac0af64c078c21f3a39fb")
 set(FSIM_SCV_BAG_INPUT_SHA256
     "ef2eacb6f536c3d06e78f83b853525a83a01cc71a13cd9688d0c01d41c858dad")
 set(FSIM_SCV_BAG_OUTPUT_SHA256
     "c1d917666f20f553f03fe7d3af51c76c950651e194aab223053287cf32f80dd6")
+set(FSIM_SCV_NESTED_EXTENSION_PATCH_SHA256
+    "3b098f1500ad07f4e57f23c8e608ea18d39fedcdb38660318dabbc0b22ef1105")
+set(FSIM_SCV_NESTED_EXTENSION_INPUT_SHA256
+    "b970da079e8b103d83acc9114ac592b6f8e44c668a63d07bbffa4831942289ae")
+set(FSIM_SCV_NESTED_EXTENSION_OUTPUT_SHA256
+    "8b17414a6495c541a2d351a485b9320b4704c73016fdac280846f778da6f4a77")
 set(
   FSIM_SCV_REQUIRED_FILES
   "LICENSE|4b4fe282d05e6f3f63e36b124565a5d07727e84bc32fe30e2937ca0f84a34601"
@@ -279,10 +285,12 @@ function(fsim_scv_patch_governance_error root manifest output_error)
           "upstream_tree_sha256=${FSIM_SCV_TREE_SHA256}"
           "patch_count=${FSIM_SCV_PATCH_COUNT}"
           "patch=scv-bag-mutable-random|${FSIM_SCV_BAG_PATCH_SHA256}|src/scv/scv_bag.h|${FSIM_SCV_BAG_INPUT_SHA256}|${FSIM_SCV_BAG_OUTPUT_SHA256}"
+          "patch=scv-nested-extension-constructors|${FSIM_SCV_NESTED_EXTENSION_PATCH_SHA256}|src/scv/_scv_introspection.h|${FSIM_SCV_NESTED_EXTENSION_INPUT_SHA256}|${FSIM_SCV_NESTED_EXTENSION_OUTPUT_SHA256}"
           "unmodified_linux_result=shared-and-static-library-build-pass"
           "llvm22_configure_result=blocked-before-source-compilation"
-          "decision=external-cmake-adapter-with-one-generated-source-patch"
-          "positive_probe=patched-exact-tree-builds-with-clang-and-preserves-const-peek-randomization"
+          "gcc13_cxx20_result=blocked-by-template-id-constructor-spelling"
+          "decision=external-cmake-adapter-with-two-generated-source-patches"
+          "positive_probe=patched-exact-tree-builds-with-clang-and-gcc-and-preserves-const-peek-randomization-and-nested-extension-construction"
           "negative_probe=changed-manifest-patch-input-output-or-source-tree-rejected-before-build"
           "removal_criteria=")
         string(FIND "${manifest_text}" "${token}" token_index)
@@ -303,12 +311,19 @@ function(fsim_scv_patch_governance_error root manifest output_error)
           "SCV patch count mismatch: expected ${FSIM_SCV_PATCH_COUNT}, found ${patch_count}")
     else()
       set(bag_patch "${manifest_root}/patches/scv-bag-mutable-random.patch")
-      if(NOT EXISTS "${bag_patch}")
-        set(error "SCV bag compatibility patch is missing")
+      set(nested_extension_patch
+          "${manifest_root}/patches/scv-nested-extension-constructors.patch")
+      if(NOT EXISTS "${bag_patch}" OR NOT EXISTS "${nested_extension_patch}")
+        set(error "SCV compatibility patch set is incomplete")
       else()
         file(SHA256 "${bag_patch}" bag_patch_digest)
         if(NOT bag_patch_digest STREQUAL FSIM_SCV_BAG_PATCH_SHA256)
           set(error "SCV bag compatibility patch SHA-256 mismatch")
+        endif()
+        file(SHA256 "${nested_extension_patch}" nested_extension_patch_digest)
+        if(NOT nested_extension_patch_digest STREQUAL
+           FSIM_SCV_NESTED_EXTENSION_PATCH_SHA256)
+          set(error "SCV nested-extension compatibility patch SHA-256 mismatch")
         endif()
       endif()
     endif()
@@ -363,6 +378,37 @@ function(fsim_scv_apply_governed_patches root manifest output_root)
   file(SHA256 "${bag_header}" bag_output_digest)
   if(NOT bag_output_digest STREQUAL FSIM_SCV_BAG_OUTPUT_SHA256)
     message(FATAL_ERROR "SCV bag patch output SHA-256 mismatch")
+  endif()
+  set(nested_extension_header
+      "${patched_root}/src/scv/_scv_introspection.h")
+  file(SHA256 "${nested_extension_header}" nested_extension_input_digest)
+  if(NOT nested_extension_input_digest STREQUAL
+     FSIM_SCV_NESTED_EXTENSION_INPUT_SHA256)
+    message(FATAL_ERROR "SCV nested-extension patch input SHA-256 mismatch")
+  endif()
+  file(READ "${nested_extension_header}" nested_extension_contents)
+  set(old_default_constructor
+      "  scv_extensions< scv_extensions<T> > () {}")
+  set(new_default_constructor "  scv_extensions() {}")
+  set(old_copy_constructor
+      "  scv_extensions< scv_extensions<T> > (const scv_extensions<T>& rhs) : scv_extensions<T>(rhs) {}")
+  set(new_copy_constructor
+      "  scv_extensions(const scv_extensions<T>& rhs) : scv_extensions<T>(rhs) {}")
+  foreach(anchor IN ITEMS "${old_default_constructor}" "${old_copy_constructor}")
+    string(FIND "${nested_extension_contents}" "${anchor}" anchor_offset)
+    if(anchor_offset EQUAL -1)
+      message(FATAL_ERROR "SCV nested-extension patch anchor is missing")
+    endif()
+  endforeach()
+  string(REPLACE "${old_default_constructor}" "${new_default_constructor}"
+         nested_extension_contents "${nested_extension_contents}")
+  string(REPLACE "${old_copy_constructor}" "${new_copy_constructor}"
+         nested_extension_contents "${nested_extension_contents}")
+  file(WRITE "${nested_extension_header}" "${nested_extension_contents}")
+  file(SHA256 "${nested_extension_header}" nested_extension_output_digest)
+  if(NOT nested_extension_output_digest STREQUAL
+     FSIM_SCV_NESTED_EXTENSION_OUTPUT_SHA256)
+    message(FATAL_ERROR "SCV nested-extension patch output SHA-256 mismatch")
   endif()
   fsim_scv_compute_tree_identity(
     "${patched_root}" patched_count patched_digest)

@@ -25,9 +25,9 @@ namespace {
 
     bool canonical_name(const std::string_view value, const std::size_t limit)
     {
-        const auto invalid = std::ranges::find_if(value, [](const char value) {
-            const auto byte = static_cast<unsigned char>(value);
-            return byte < 0x20U || byte == 0x7fU || value == '\\';
+        const auto invalid = std::ranges::find_if(value, [](const char character) {
+            const auto byte = static_cast<unsigned char>(character);
+            return byte < 0x20U || byte == 0x7fU || character == '\\';
         });
         return !value.empty() && value.size() <= limit && invalid == value.end()
             && value.front() != ' ' && value.back() != ' ';

@@ -65,14 +65,14 @@ namespace {
         }
         std::optional<std::uint16_t> u16()
         {
-            std::uint16_t result { };
+            std::uint32_t result { };
             for (unsigned shift = 0; shift < 16U; shift += 8U) {
                 const auto value = u8();
                 if (!value)
                     return std::nullopt;
-                result |= static_cast<std::uint16_t>(*value) << shift;
+                result |= static_cast<std::uint32_t>(*value) << shift;
             }
-            return result;
+            return static_cast<std::uint16_t>(result);
         }
         std::optional<std::uint32_t> u32()
         {

@@ -911,7 +911,10 @@ the reference and O2 hybrid engines and compares status, time, delta,
 committed-change callbacks, and final values. Assertion metadata, normalized
 VCD comparison, and bidirectional bounded VHDL/SystemVerilog
 construction-actual/cache tests are also automated. Exhaustive semantic
-fixtures and Windows execution evidence remain open.
+fixtures are automated. Batch 175's checked Linux Debug performance matrix
+covers Clang 22 and GCC 13 with retained time/RSS/throughput provenance;
+Windows MSVC/clang-cl measurements and all Release, sanitizer, release-gate
+and hosted-CI evidence remain explicitly deferred to final Batch 177.
 
 The [three-language hierarchy tutorial](examples/three_language_hierarchy/README.md)
 builds on that slice with a SystemVerilog top, a SystemC factory and method,

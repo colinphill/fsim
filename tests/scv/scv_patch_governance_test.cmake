@@ -32,20 +32,28 @@ file(SHA256 "${adapted_root}/src/scv/scv_bag.h" bag_output_digest)
 if(NOT bag_output_digest STREQUAL FSIM_SCV_BAG_OUTPUT_SHA256)
   message(FATAL_ERROR "SCV bag compatibility output drifted")
 endif()
+file(SHA256 "${adapted_root}/src/scv/_scv_introspection.h"
+  nested_extension_output_digest)
+if(NOT nested_extension_output_digest STREQUAL
+   FSIM_SCV_NESTED_EXTENSION_OUTPUT_SHA256)
+  message(FATAL_ERROR "SCV nested-extension compatibility output drifted")
+endif()
 fsim_scv_validate_source_tree("${materialized_root}")
 
 file(READ "${patch_manifest}" patch_manifest_text)
 foreach(token IN ITEMS
-    "patch_count=1"
+    "patch_count=2"
     "patch=scv-bag-mutable-random|${FSIM_SCV_BAG_PATCH_SHA256}|src/scv/scv_bag.h|${FSIM_SCV_BAG_INPUT_SHA256}|${FSIM_SCV_BAG_OUTPUT_SHA256}"
+    "patch=scv-nested-extension-constructors|${FSIM_SCV_NESTED_EXTENSION_PATCH_SHA256}|src/scv/_scv_introspection.h|${FSIM_SCV_NESTED_EXTENSION_INPUT_SHA256}|${FSIM_SCV_NESTED_EXTENSION_OUTPUT_SHA256}"
     "unmodified_linux_compiler=g++-13"
     "unmodified_linux_systemc=3.0.2"
     "unmodified_linux_result=shared-and-static-library-build-pass"
     "llvm22_configure_blockers=unrecognized-clang-compiler,legacy-lib-gnu-layout"
-    "decision=external-cmake-adapter-with-one-generated-source-patch"
+    "gcc13_cxx20_result=blocked-by-template-id-constructor-spelling"
+    "decision=external-cmake-adapter-with-two-generated-source-patches"
     "rationale="
     "platform_scope=all-supported-compilers"
-    "positive_probe=patched-exact-tree-builds-with-clang-and-preserves-const-peek-randomization"
+    "positive_probe=patched-exact-tree-builds-with-clang-and-gcc-and-preserves-const-peek-randomization-and-nested-extension-construction"
     "negative_probe=changed-manifest-patch-input-output-or-source-tree-rejected-before-build"
     "removal_criteria=")
   string(FIND "${patch_manifest_text}" "${token}" token_index)

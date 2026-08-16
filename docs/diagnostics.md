@@ -12,6 +12,13 @@ Unsupported ABI, schema, artifact, and native-producer diagnostics follow the
 transactional identity and regeneration policy in the
 [v2 ABI and schema reference](abi-schema-reference.md).
 
+The Batch 175 performance-baseline gate is a qualification/test contract, not
+a production diagnostic family. Its wall-time, peak-memory and throughput
+threshold failures do not introduce `FSIM-*` codes and may not suppress or
+weaken the resource, overflow, cache-lock, external-process or trace errors
+cataloged below. Linux Clang/GCC thresholds are checked in; Windows MSVC and
+clang-cl thresholds remain pending real Batch 177 measurements.
+
 Source and manifest paths carried by text or JSON diagnostics are normalized
 UTF-8 generic paths on Linux and Windows. A leading UTF-8 BOM is transport
 metadata rather than a token; CRLF and CR line endings retain the same logical

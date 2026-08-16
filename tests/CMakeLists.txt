@@ -1021,6 +1021,66 @@ set_tests_properties(
     LABELS "abi;schema;artifact;cache;inventory;documentation;positive;negative;fast"
 )
 add_test(
+  NAME fsim.v2-qualification-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV2QualificationInventory.cmake"
+)
+set_tests_properties(
+  fsim.v2-qualification-inventory
+  PROPERTIES
+    LABELS "qualification;platform;performance;resource;inventory;documentation;positive;negative;fast"
+)
+add_test(
+  NAME fsim.v2-performance-baselines
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV2PerformanceBaselines.cmake"
+)
+set_tests_properties(
+  fsim.v2-performance-baselines
+  PROPERTIES
+    LABELS "qualification;performance;resource;baseline;linux;clang;gcc;inventory;positive;negative;fast"
+)
+add_test(
+  NAME fsim.execution-mode-qualification
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckExecutionModeQualification.cmake"
+)
+set_tests_properties(
+  fsim.execution-mode-qualification
+  PROPERTIES
+    LABELS "qualification;execution;interpreter;llvm;o0;o2;debugger;cache;cold;warm;determinism;positive;negative;fast"
+)
+add_test(
+  NAME fsim.composition-qualification
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckCompositionQualification.cmake"
+)
+set_tests_properties(
+  fsim.composition-qualification
+  PROPERTIES
+    LABELS "qualification;composition;mixed-language;multiple-root;project;non-project;artifact;source-hidden;relocation;identity;positive;negative;fast"
+)
+add_test(
+  NAME fsim.observability-qualification
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckObservabilityQualification.cmake"
+)
+set_tests_properties(
+  fsim.observability-qualification
+  PROPERTIES
+    LABELS "qualification;observability;debugger;callback;vcd;fst;systemc;scv;transaction;correlation;ordering;invalidation;positive;negative;fast"
+)
+add_test(
   NAME fsim.api.contract
   COMMAND
     "${CMAKE_COMMAND}"
@@ -1826,6 +1886,10 @@ set_tests_properties(
   PROPERTIES LABELS "fast;fst;vcd;trace;release;audit;documentation;inventory;diagnostics;resources;license;portability"
 )
 set_tests_properties(
+  fsim.sdf-application-release-audit
+  PROPERTIES LABELS "fast;sdf;application;release;audit;documentation;inventory;diagnostics;resources;license;portability"
+)
+set_tests_properties(
   fsim.sdf-vital-release-audit
   PROPERTIES LABELS "fast;sdf;vhdl;vital;mixed-language;release;audit;documentation;inventory;diagnostics;resources;license;portability"
 )
@@ -2490,7 +2554,10 @@ foreach(FSIM_SCV_OFFICIAL_EXAMPLE IN LISTS FSIM_SCV_OFFICIAL_EXAMPLES)
   else()
     target_compile_options(
       "${FSIM_SCV_OFFICIAL_TARGET}"
-      PRIVATE -Wno-unused-parameter -Wno-sign-conversion
+      PRIVATE
+        -Wno-unused-parameter
+        -Wno-sign-conversion
+        -Wno-old-style-cast
     )
   endif()
   target_link_libraries("${FSIM_SCV_OFFICIAL_TARGET}" PRIVATE SCV::scv)
