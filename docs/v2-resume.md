@@ -3170,34 +3170,94 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     Release build/test, sanitizer or hosted-CI inspection runs; all three remain
     explicit final release Batch 177 work.
 
-## Batch 174 exact restart checkpoint - after Batch 173 closeout
+## Batch 174 planned restart checkpoint - before Change 1
 
-1. Start Batch 174 only after verifying the live `codex/v2` branch is clean and
-   synchronized with `origin/codex/v2` at the single Batch 173 closeout commit;
-   do not trust a stale checkpoint hash. Batch 173's final clean-first Debug
-   build completed 2,383/2,383 steps warning-free and its complete regression
-   passed 276/276 in 169.55 seconds.
-2. Batch 173 starts from pushed Batch 172 baseline
-   `771b7afc19af6c5c71332cf28460437174b00b0a`. Its accumulated Changes 1-19
-   must remain intact until Change 20; do not reset or split the changeset.
-3. Preserve the official SCV 2.0.1 archive SHA-256
-   `7bd1c4037f3c108d02f45cae003d112efdb788d469cb029fada247d330ca4881`,
-   patched-tree SHA-256
-   `b8ee86c4050b7a77e39fcbba25fc553d477074b323349885a7634844ecd6a112`,
-   the single governed mutable-random-pointer patch, the one shared SystemC
-   3.0.2 runtime and the zero-active eighteen-row inventory at SHA-256
-   `78fda3ccb3264ad3833ddb7334f1b49cdd3c63970fb7aaacd32b8c8b6ad997b0`.
-4. Release, sanitizer and hosted Linux/Windows CI evidence for Batch 173 is not
-   a Batch 173 or Batch 174 restart prerequisite. It is deliberately deferred
-   to final release Batch 177. Do not inspect or rerun those gates early.
-5. Expand Batch 174's grouped artifact/ABI/migration freeze into exactly twenty
-   bounded changes before implementation. Change 1 is planning only; preserve
-   the existing public ABI and schema identities until the ownership inventory
-   explicitly assigns any semantic change.
-6. Batch 174 must freeze every v2 public C/C++/SystemC/TLM/SCV/DPI/VPI/VHPI
-   ABI, portable/native artifact and cache schema, migration path, installed
-   package contract, and diagnostic/test evidence named in the authoritative
-   Batch 174 allocation. It must not broaden language/runtime behavior.
+1. Start in `/home/colin/projects/fsim`, read this section and the expanded
+   Batch 174 allocation in `docs/implementation_plan_v2.md`, then verify branch
+   `codex/v2` is clean and synchronized with `origin/codex/v2` at pushed Batch
+   173 closeout `cde88a5bdb8b7fe37e70c4f3d05b058e467b351e` plus the subsequent
+   documentation-only Batch 174 planning checkpoint. Do not trust a stale hash.
+2. This checkpoint is the required pre-batch flow: Batch 174 is expanded into
+   exactly twenty bounded changes without modifying implementation, ABI,
+   schema, tests or build behavior. Resume in a fresh context and begin only
+   Change 1's planning ledger.
+3. Preserve Batch 173's warning-free 2,383-step clean Debug build, final 276/276
+   Debug regression, 33/33 SCV closure, zero-active eighteen-row SCV inventory
+   and the exact official SCV 2.0.1 archive/patched-tree identities
+   `7bd1c4037f3c108d02f45cae003d112efdb788d469cb029fada247d330ca4881`
+   and `b8ee86c4050b7a77e39fcbba25fc553d477074b323349885a7634844ecd6a112`.
+4. Preserve the single governed SystemC 3.0.2 runtime, native TLM-1/TLM-2/SCV
+   island, pointer-free backend and transaction records, removed legacy SystemC
+   facade and the existing post-v2 partitioner/scheduler boundary. Batch 174
+   freezes contracts; it does not broaden language or runtime behavior.
+5. The current development-schema policy overrides the older grouped migration
+   wording. Until an external stable-format promise is declared, readers accept
+   only current schemas and reject superseded versions deterministically.
+   Remove any accidental compatibility reader, fallback, migration entry point
+   or dual-write path; document source regeneration instead of adding one.
+6. Change 1 is planning and ownership only. Create a registered eighteen-row
+   ledger assigning Changes 2-19 exactly across core public APIs, native and
+   foreign ABIs, portable/native schemas, stale-version policy, relocation,
+   restartability, toolchain/cache isolation, documentation, exhaustive
+   evidence and closure before any semantic edit.
+7. Changes 2-4 freeze the installed core C/C++ surface, the SystemC/TLM/SCV
+   host/producer/runtime boundary and DPI/VPI/VHPI/UVM-foreign descriptor,
+   marshalling, callback, handle and plug-in ABIs with C and C++ layout/symbol/
+   load-order evidence.
+8. Changes 5-8 freeze `.fsimobj`, `.fsimdesign`, `.fsimlib`, incremental
+   SystemC/native caches and nested SDF, trace, transaction, coverage,
+   assertion, UVM, debugger/checkpoint and SCV schemas with explicit producer,
+   profile, provenance and resource identities.
+9. Changes 9-12 inventory and remove superseded project/artifact/native-cache
+   readers, implicit defaults and producer fallbacks, then centralize stable
+   unsupported-version/downgrade diagnostics that reject transactionally and
+   give safe source-regeneration guidance.
+10. Changes 13-16 verify source-hidden and read-only relocation, explicit non-
+    project restart phases, mixed host/toolchain and installed-package behavior,
+    stale/corrupt/concurrent artifacts and exact cache separation across POSIX
+    and modeled Windows paths.
+11. Changes 17-19 publish the ABI/schema/no-migration reference, exhaustive
+    positive and corruption matrices, zero-active inventory, diagnostics,
+    counts/digests, release evidence and the exact Batch 175 restart handoff.
+12. Change 20 alone runs fresh clean-first exact-LLVM 22.1.8 Debug and Release
+    builds with at least eight workers and 120-minute command timeouts, both
+    complete non-sanitized regressions and every ABI/schema, artifact, cache,
+    installed, relocation, corruption, inventory, documentation and release
+    gate before the single Batch 174 implementation commit and push.
+13. Changes 1-19 use focused warnings-as-errors Debug builds and the smallest
+    owning test matrix. Preserve the intentionally dirty worktree, use at least
+    eight build workers and do not reset, split, commit or push implementation
+    before Change 20.
+14. Release builds and tests are not required during Changes 1-19. Avoid
+    formatting-only edits to existing headers; change a header only for its
+    owning semantic ABI/schema requirement and format new or changed
+    implementation sources without churning unrelated declarations.
+15. Batch 174 is neither a sanitizer nor hosted-CI monitoring boundary. Do not
+    configure/run sanitizers, inspect hosted CI or restart workflows. Batch 177
+    still owns the deferred Batch 173 final Release/sanitizer/hosted Linux and
+    Windows evidence.
+16. Preserve current artifact version numbers and ABI layouts until the Change
+    1 ledger assigns their owner. A version may advance only when its exact
+    current writer/reader contract changes, and every stale/future version must
+    reject before partial state, cache publication or native image loading.
+17. Portable schemas must prove source-hidden cross-host reuse only where their
+    public contract promises it. Native objects, plug-ins and caches remain
+    exact-producer artifacts and must reject compiler/target/standard-library/
+    runtime/SystemC/TLM/SCV/foreign-ABI mismatch before loading.
+18. Installed and relocated tests must resolve exactly one governed dependency
+    runtime from non-ASCII and space-containing paths without source/build-
+    prefix leakage. Read-only input trees and explicit analyze/elaborate/
+    compile/link/run/debug/trace/checkpoint phases remain mandatory evidence.
+19. Documentation and matrices must distinguish current-format regeneration
+    from migration support, name every public ABI/schema and diagnostic owner,
+    and retain exhaustive positive, single-field mutation, stale/future,
+    corruption, truncation, resource, toolchain and platform evidence without
+    duplicate regression execution.
+20. The next bounded action is Batch 174 Change 1 only: discover all current ABI
+    and persisted-format owners, create and register the eighteen-row freeze
+    ledger, run its focused Debug inventory/diagnostic/source gates, record the
+    exact digest in both authoritative documents and proceed to Change 2 without
+    reset, commit, push, Release, sanitizer or hosted-CI work.
 
 ## Batch 168 planned restart checkpoint - 2026-08-13
 

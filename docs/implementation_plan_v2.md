@@ -12457,24 +12457,112 @@ carry an explicit evidence-backed scope disposition approved by the user.
   sanitizer, or hosted-CI inspection runs; Batch 177 owns all three deferred
   final-release obligations.
 
-### Batch 174 - v2 artifact, ABI, and migration freeze
+### Batch 174 - v2 artifact, ABI, and development-schema freeze - Planned
 
-- **Changes 1-4:** inventory and freeze all v2 public C/C++/SystemC/TLM/SCV/
-  DPI/VPI/VHPI ABIs, append-only layouts, symbol/version policies, installed
-  headers, compatibility tests and governed upstream patch identities.
-- **Changes 5-8:** freeze `.fsimobj`, `.fsimdesign`, `.fsimlib`, incremental
-  SystemC, native-cache, SDF, trace, transaction, coverage, assertion, UVM and
-  SCV schemas with explicit version/provenance identities.
-- **Changes 9-12:** provide migrations from every v1/project schema and every
-  supported earlier v2 artifact schema, plus clear unsupported downgrade and
-  producer/version diagnostics.
-- **Changes 13-16:** verify source-hidden relocation, read-only mappings,
-  non-project restartability, mixed hosts/toolchains, stale/corrupt artifacts,
-  and cache separation across Linux and Windows.
-- **Changes 17-19:** publish ABI/schema/migration references, exhaustive positive
-  and corruption matrices, inventories, release evidence, and restart handoff.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push once without hosted CI monitoring.
+1. **Planning and ownership only.** Create one registered eighteen-row freeze
+   ledger assigning Changes 2-19 one-to-one across the public C/C++ API, native
+   SystemC/TLM/SCV and foreign interfaces, every portable and native artifact
+   family, stale-schema policy, relocation/restartability, mixed-toolchain and
+   cache isolation, documentation, exhaustive corruption evidence and final
+   closure. Freeze the clean Batch 173 base, exact owners, positive/negative/
+   artifact/platform evidence, diagnostics and resource limits before changing
+   an ABI or schema.
+2. Inventory and freeze the installed core C ABI and C++ API: version queries,
+   opaque handles, enums, callback signatures, ownership/lifetime rules,
+   exported symbols, calling conventions, exception boundaries, struct sizes/
+   offsets/alignments and installed target aliases. Add C and C++ compile/link/
+   runtime probes plus single-field and truncation negatives without changing
+   behavior.
+3. Freeze the native SystemC 3.0.2, TLM-1/TLM-2 and SCV 2.0.1 boundary: host/
+   registrar layout, append-only revision policy, producer fingerprints,
+   pointer-free backend/transaction records, shared-library identity, installed
+   discovery and the exact governed upstream archive/patch/tree identities.
+4. Freeze DPI-C, VPI, VHPI and UVM-foreign ABIs across C and C++: descriptor and
+   host table layouts, scalar/composite/open-array marshalling, callbacks,
+   handles, symbol names, version negotiation, plug-in ownership and fail-
+   before-load mismatch diagnostics on Linux and Windows object models.
+5. Freeze the portable compilation-unit `.fsimobj` envelope and every owned
+   semantic HIR/constant/type/source-coordinate payload with explicit schema,
+   producer, language/profile and resource identities. Round-trip the complete
+   supported value/type union and reject stale, future, truncated, oversized or
+   internally inconsistent objects transactionally.
+6. Freeze `.fsimdesign` and `.fsimlib` independently: root/library identities,
+   mapped units, native and portable plug-in metadata, source fallback policy,
+   checksums, compiler/runtime/SystemC/SCV provenance and source-hidden reuse.
+   Corrupt or incompatible embedded records must reject before publication or
+   native image access.
+7. Freeze incremental SystemC objects/plug-ins and every native compilation
+   cache key/metadata record, including compiler frontend, target, standard
+   library, member-pointer model, runtime/SystemC/TLM/SCV identities,
+   dependency digests and cold/warm/edit invalidation. Native artifacts remain
+   exact-producer only and never gain a cross-toolchain compatibility reader.
+8. Freeze the remaining portable schemas and their composition into projects,
+   libraries and designs: SDF IR/plans, trace and archive records, transaction
+   records, coverage/assertion state, UVM state/checkpoints/register coverage,
+   debugger/checkpoint data and SCV protocol/recording/transport identities.
+   Require explicit schema and bounded collection/string/value metadata at
+   every nested boundary.
+9. Inventory every project/manifest and v1-era persisted schema still accepted
+   by a current reader. Under the development-schema policy, remove any
+   superseded compatibility reader, migration entry point, fallback or dual-
+   write path; current writers emit only the one current schema and stale input
+   rejects with a stable diagnostic plus source-regeneration guidance.
+10. Audit every earlier v2 portable object/design/library and nested ancillary
+    schema. Remove accidental prior-version decoders and implicit defaults,
+    preserve current-version round trips, and prove stale/future/downgrade
+    attempts reject before returning partial state, cache files or mapped
+    native payloads.
+11. Audit native caches, incremental objects and plug-ins for producer/version
+    fallback. Reject compiler, target, standard-library, runtime ABI, SystemC/
+    TLM/SCV, DPI/VPI/VHPI/UVM-foreign and governed-patch mismatches before
+    `dlopen`/`LoadLibrary`, while retaining deterministic current-producer cold,
+    warm and dependency-edited reuse.
+12. Centralize unsupported schema, downgrade and producer diagnostics across
+    project, object, design, library, checkpoint and native-cache readers.
+    Every negative names the artifact family, found and required identity and
+    the safe regeneration action; malformed input must not mutate registries,
+    publish outputs or leave temporary/cache artifacts.
+13. Verify source-hidden relocation for installed packages, mapped libraries,
+    designs, objects, traces and checkpoints from non-ASCII and space-containing
+    paths. Run from read-only source/artifact trees and reject absolute source/
+    build-prefix leakage while preserving relative runtime discovery.
+14. Verify non-project restartability through explicit analyze, elaborate,
+    compile, link, run, debug, trace, checkpoint and replay phases. Delete or
+    hide original sources at each portable boundary and prove multiple roots,
+    logical libraries, mixed languages and edited-cache invalidation retain the
+    same ordered identities and results.
+15. Verify mixed host/toolchain behavior across exact LLVM, GCC-compatible and
+    Windows compiler identities: portable artifacts remain reusable where the
+    schema promises portability, native payloads reject mismatches before
+    loading, and installed CMake/pkg-config consumers resolve exactly one
+    governed runtime for each dependency.
+16. Exercise stale, corrupt, truncated, oversized, read-only and concurrently
+    accessed artifacts/caches on POSIX and modeled Windows paths. Freeze atomic
+    publication, lock cleanup, case/path normalization and cache-key separation
+    across Debug/Release, interpreter/LLVM O0/O2, language profiles, toolchains,
+    runtime identities and source edits.
+17. Publish one v2 ABI and schema reference covering public layouts/symbols,
+    installed targets, current format numbers, nested composition, provenance,
+    portability versus native boundaries, rejection semantics and the explicit
+    no-compatibility-reader development policy. Document regeneration and
+    source rebuild workflows instead of claiming unsupported migration.
+18. Build exhaustive positive, single-field mutation, stale/future version,
+    corruption, truncation, resource, relocation, read-only, source-hidden,
+    toolchain and platform matrices for every ledger row. Ensure shared tests
+    execute once in regression and every matrix cell names its owning CTest,
+    diagnostic and checked-in implementation/evidence path.
+19. Close the ledger to zero active rows; synchronize diagnostics, feature and
+    release matrices, source/license inventories, digests, install/package
+    evidence, architecture/language/API documentation and the exact Batch 175
+    restart handoff. Retain focused Debug closure evidence without committing,
+    pushing, running a sanitizer or inspecting hosted CI.
+20. Run fresh clean-first exact-LLVM 22.1.8 Debug and Release builds with at
+    least eight workers and 120-minute command timeouts, then both complete
+    non-sanitized regressions and all ABI/schema, installed/relocation, artifact,
+    cache, corruption, source-budget, diagnostics, documentation, inventory and
+    release gates. Retain timing/log evidence, repair every failure, commit the
+    accumulated batch once and push once. Batch 174 is neither a sanitizer nor
+    hosted-CI monitoring boundary; do not run or inspect either.
 
 ### Batch 175 - Cross-platform conformance and performance qualification
 
