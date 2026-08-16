@@ -396,7 +396,7 @@ void VhdlVhpiIoSystem::teardown() noexcept {
         return;
       }
       selected->second.descriptor.active = false;
-      sink = std::move(selected->second.sink);
+      sink.swap(selected->second.sink);
     }
     sink = {};
   }

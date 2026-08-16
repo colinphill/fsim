@@ -532,9 +532,9 @@ VhdlVhpiForeignError VhdlVhpiForeignSystem::unregister_foreign(
       }
     }
     found->second.descriptor.state = VhdlVhpiForeignState::Unregistered;
-    start_callback = std::move(found->second.start);
-    invoke_callback = std::move(found->second.invoke);
-    stop_callback = std::move(found->second.stop);
+    start_callback.swap(found->second.start);
+    invoke_callback.swap(found->second.invoke);
+    stop_callback.swap(found->second.stop);
   }
   start_callback = {};
   invoke_callback = {};
@@ -578,9 +578,9 @@ void VhdlVhpiForeignSystem::teardown() noexcept {
       }
       selected->second.descriptor.state =
           VhdlVhpiForeignState::Unregistered;
-      start_callback = std::move(selected->second.start);
-      invoke_callback = std::move(selected->second.invoke);
-      stop_callback = std::move(selected->second.stop);
+      start_callback.swap(selected->second.start);
+      invoke_callback.swap(selected->second.invoke);
+      stop_callback.swap(selected->second.stop);
     }
     start_callback = {};
     invoke_callback = {};

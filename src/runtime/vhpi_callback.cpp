@@ -205,7 +205,7 @@ VhdlVhpiCallbackError VhdlVhpiCallbackSystem::remove_callback(
     }
     found->second.descriptor.status =
         VhdlVhpiCallbackStatus::Removed;
-    callback = std::move(found->second.callback);
+    callback.swap(found->second.callback);
   }
   callback = {};
   return VhdlVhpiCallbackError::None;
@@ -360,7 +360,7 @@ void VhdlVhpiCallbackSystem::teardown() noexcept {
         selected->second.descriptor.status =
             VhdlVhpiCallbackStatus::TornDown;
       }
-      callback = std::move(selected->second.callback);
+      callback.swap(selected->second.callback);
     }
     callback = {};
   }
