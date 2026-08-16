@@ -437,16 +437,19 @@ namespace tlm_utils {
       file(WRITE "${patched_tlm_header}" "${patched_tlm_header_contents}")
     endif()
     target_include_directories("${target}" BEFORE PRIVATE "${patched_root}")
+    # Accellera publishes /vmg for native MSVC consumers because its process
+    # callbacks cross the shared-library boundary as pointers to members. Its
+    # compiler-id expression misses clang-cl, so publish the same ABI contract.
     # Upstream spells its normal warning level as `-Wall`. clang-cl interprets
     # that spelling as MSVC's `/Wall`, enabling every off-by-default Clang
     # diagnostic and producing tens of thousands of warnings in pristine
     # Accellera sources. Silence only this governed third-party runtime; fsim
     # targets and consumers retain their own `/W4 /WX` policy.
-    target_compile_options("${target}" PRIVATE /W0)
+    target_compile_options("${target}" PUBLIC /vmg PRIVATE /W0)
     # Upstream's Windows split also builds a small static launcher containing
     # main()/sc_main dispatch. It carries the same misinterpreted `-Wall`
     # spelling but is distinct from the shared runtime target above.
-    target_compile_options(systemc PRIVATE /W0)
+    target_compile_options(systemc PUBLIC /vmg PRIVATE /W0)
   endif()
 
   get_target_property(runtime_sources "${target}" SOURCES)

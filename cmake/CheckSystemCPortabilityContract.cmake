@@ -102,7 +102,8 @@ foreach(FSIM_COMPILER_POLICY IN ITEMS
     "add_compiler_identity"
     "add_compiler_environment_to_key"
     "add_compiler_dependencies_to_key"
-    "add_linked_library_contents_to_key")
+    "add_linked_library_contents_to_key"
+    "msvc-member-pointer-model")
   string(FIND "${FSIM_COMPILER_CONTENTS}" "${FSIM_COMPILER_POLICY}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR "SystemC compiler lost key policy: ${FSIM_COMPILER_POLICY}")
@@ -126,6 +127,7 @@ foreach(FSIM_COMMAND_POLICY IN ITEMS
     "settings.compile_options.insert("
     "settings.defines.insert("
     "/bigobj"
+    "/vmg"
     "-fPIC"
     "-shared"
     "/INCREMENTAL:NO"

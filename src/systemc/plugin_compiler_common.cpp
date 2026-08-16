@@ -1017,6 +1017,9 @@ void add_compiler_environment_to_key(
         argv.emplace_back("/Zc:__cplusplus");
         argv.emplace_back("/FC");
         argv.emplace_back("/bigobj");
+        // Match Accellera's public MSVC ABI contract for SC_METHOD and
+        // SC_THREAD member-function callbacks, including clang-cl consumers.
+        argv.emplace_back("/vmg");
         argv.emplace_back(msvc_runtime_option());
         if (msvc_debug_mode()) {
             argv.emplace_back("/Od");

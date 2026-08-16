@@ -104,8 +104,8 @@ fsim_require_tokens(cmake/FsimSystemCAccellera.cmake
   "Explicit instantiation requires ispex_base::free() above to be complete."
   "cannot apply the governed SystemC clang-cl template fix"
   "target_include_directories(\"\${target}\" BEFORE PRIVATE \"\${patched_root}\")"
-  "target_compile_options(\"\${target}\" PRIVATE /W0)"
-  "target_compile_options(systemc PRIVATE /W0)")
+  "target_compile_options(\"\${target}\" PUBLIC /vmg PRIVATE /W0)"
+  "target_compile_options(systemc PUBLIC /vmg PRIVATE /W0)")
 fsim_forbid_tokens(cmake/FsimSystemCAccellera.cmake
   "ENABLE_STD_THREADS"
   "SC_USE_STD_THREADS"

@@ -483,6 +483,7 @@ int main(const int argc, char** argv) {
     assert(has_argument(*first_plan, "/Zc:__cplusplus"));
     assert(has_argument(*first_plan, "/FC"));
     assert(has_argument(*first_plan, "/bigobj"));
+    assert(has_argument(*first_plan, "/vmg"));
     assert(first_plan->commands.size() == request.sources.size() + 1);
 #else
     assert(has_argument(*first_plan, "-DFSIM_PLUGIN_TEST=1"));
@@ -1178,6 +1179,7 @@ int main(const int argc, char** argv) {
         "/IMPLIB:" + msvc_plan->intermediate_paths[5].string()));
     assert(msvc_plan->intermediate_paths[6].extension() == ".exp");
     for (std::size_t index = 0; index < msvc_request.sources.size(); ++index) {
+        assert(command_has_argument(msvc_plan->commands[index], "/vmg"));
 #if defined(_DEBUG)
         assert(command_has_argument(msvc_plan->commands[index], "/Od"));
         assert(command_has_argument(msvc_plan->commands[index], "/Z7"));

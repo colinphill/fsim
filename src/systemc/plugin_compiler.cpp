@@ -172,6 +172,7 @@ std::optional<std::string> plugin_host_fingerprint(
     builder.add("toolchain", to_string(toolchain));
     if (toolchain == HostToolchain::msvc) {
         builder.add("msvc-runtime", msvc_runtime_option());
+        builder.add("msvc-member-pointer-model", "/vmg");
     }
 #if defined(_WIN32)
     builder.add("host-format", "windows-pe-x86-64");
@@ -321,6 +322,7 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
     key_builder.add("toolchain", to_string(toolchain));
     if (toolchain == HostToolchain::msvc) {
         key_builder.add("msvc-runtime", msvc_runtime_option());
+        key_builder.add("msvc-member-pointer-model", "/vmg");
     }
 #if defined(_WIN32)
     key_builder.add("host-format", "windows-pe-x86-64");
@@ -361,6 +363,7 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
     host_builder.add("toolchain", to_string(toolchain));
     if (toolchain == HostToolchain::msvc) {
         host_builder.add("msvc-runtime", msvc_runtime_option());
+        host_builder.add("msvc-member-pointer-model", "/vmg");
     }
 #if defined(_WIN32)
     host_builder.add("host-format", "windows-pe-x86-64");

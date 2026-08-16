@@ -11993,6 +11993,32 @@ carry an explicit evidence-backed scope disposition approved by the user.
   and push this repair, then require all six replacement Windows jobs to
   complete green before closing Batch 172 or starting Batch 173.
 
+  Generated-plug-in repair `4b655f1` was pushed, and run `31933240042`
+  completed all six Windows jobs before this repair. All builds succeed, with
+  no `FSIM-SC-I004`, incomplete-template, D9025 or NDEBUG/UNDEBUG failure and
+  no clang-cl warning flood. Plain and LLVM MSVC Release fail 10 tests each,
+  their Debug lanes fail 18 each, and clang-cl Release/Debug fail 22 each.
+  Direct clang-cl callback/backend failures and generated-module crashes in all
+  lanes converge on the missing `/vmg` member-pointer ABI contract: upstream
+  publishes it only when the compiler ID is native MSVC, while fsim's generated
+  MSVC-compatible compile commands also omitted it.
+
+  Publish `/vmg` from the governed clang-cl runtime and launcher, add it to
+  every generated MSVC-compatible compilation, and include that model in the
+  plug-in/cache/producer fingerprints. Modeled plug-in and incremental
+  clang-cl tests plus source contracts freeze all paths. The warning-clean
+  eight-worker exact-LLVM Release build passes the focused compiler and
+  incremental tests 2/2 in 25.14 seconds, the direct runtime and formerly
+  failing application slice 13/13 in 385.66 seconds, the FST and SDF/VITAL
+  audits 2/2 in 1.40 seconds, and the full parallel Release regression 246/246
+  in 396.25 seconds. `typed_boundaries` passes in 66.85 seconds. The prior
+  408-file string audit remains valid because only short literals were added;
+  all five workflow timeouts remain 120 minutes, no repository header changed,
+  the legacy SystemC interface remains absent, and `git diff --check` passes.
+  Debug and sanitizer were not rerun. Commit and push this repair, then require
+  every replacement Windows job to complete and inspect all six logs before
+  closing Batch 172 or starting Batch 173.
+
 ### Batch 173 - SCV 2.0.1 compatibility, recording, and verification closure - CI monitoring boundary
 
 - **Changes 1-4:** vendor the official SCV 2.0.1 source archive with a pinned

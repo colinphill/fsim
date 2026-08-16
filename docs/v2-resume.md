@@ -2710,6 +2710,42 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     wait for every replacement Windows job before closing Batch 172 or
     beginning Batch 173.
 
+50. Generated-plug-in repair `4b655f1` is pushed, and run `31933240042`
+    completed all six Windows jobs before this repair was prepared. Every
+    build succeeds. Plain and LLVM MSVC Release fail 10 tests each, their Debug
+    lanes fail 18 each, and clang-cl Release/Debug fail 22 each. The original
+    `FSIM-SC-I004`, incomplete-template errors, D9025 and NDEBUG/UNDEBUG
+    conflicts are absent. Both clang-cl logs contain only five expected W506
+    runtime name substitutions, and the MSVC logs contain seven; there is no
+    compiler-warning flood. Direct clang-cl compatibility/backend tests fail
+    alongside generated-module simulations in every lane, while native MSVC
+    direct-runtime tests pass.
+
+    Upstream SystemC publishes `/vmg` to native MSVC consumers because process
+    dispatch stores pointers to user-module member functions. Its compiler-ID
+    expression omits clang-cl, and fsim's generated MSVC-compatible compile
+    commands also omitted the flag. The resulting cross-DLL member-pointer ABI
+    mismatch explains both direct clang-cl callbacks that never fire and the
+    generated-module crashes shared by all six configurations. Publish `/vmg`
+    from the governed clang-cl runtime and launcher, add it to every generated
+    MSVC-compatible translation unit, and include the member-pointer model in
+    plug-in, host and incremental producer fingerprints so stale objects cannot
+    cross the repair. Modeled plug-in and incremental clang-cl tests plus both
+    portability contracts freeze the command, cache and target contracts.
+
+    The exact-LLVM Release tree reconfigures and builds warning-clean with
+    eight workers without a repository-header change. The focused compiler and
+    incremental tests pass 2/2 in 25.14 seconds; the direct runtime, compiler,
+    lifecycle and formerly failing application slice passes 13/13 in 385.66
+    seconds, including `fsim.application.typed_boundaries` in 66.85 seconds.
+    The FST and SDF/VITAL release audits pass 2/2 in 1.40 seconds, and the final
+    parallel Release regression passes 246/246 in 396.25 seconds. The prior
+    408-file string audit remains valid because only short literals were added,
+    all five hosted timeouts remain 120 minutes, the legacy SystemC interface
+    remains absent, and `git diff --check` passes. Debug and sanitizer were not
+    rerun. Commit and push this repair, then wait for and inspect all six
+    replacement Windows jobs before closing Batch 172 or beginning Batch 173.
+
 ## Batch 173 planned restart checkpoint - after Batch 172 closeout
 
 1. Start in `/home/colin/projects/fsim`, read this section and Batch 173 in

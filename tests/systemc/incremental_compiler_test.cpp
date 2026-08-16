@@ -145,6 +145,9 @@ int run_clang_cl_fake_compiler(const int argc, char* const* argv)
     if (!source || !object) {
         return 81;
     }
+    if (!has_argument(argc, argv, "/vmg")) {
+        return 83;
+    }
     if (has_argument(argc, argv, "/clang:-MD")) {
         const auto dependency_argument =
             clang_argument_after(argc, argv, "/clang:-MF");
