@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/design_artifact.hpp"
 
+#include "../diagnostic/artifact_identity.hpp"
+
 #include <boost/pfr/core.hpp>
 
 #include <array>
@@ -833,7 +835,11 @@ namespace codec_detail {
             || reader.remaining() != 0) {
             auto message = reader.failure();
             if (message.empty() && schema != expected_schema) {
-                message = "unsupported design-state schema " + std::to_string(schema);
+                message = diagnostic::unsupported_artifact_identity(
+                    "design state " + std::string { magic },
+                    "schema " + std::to_string(schema),
+                    "schema " + std::to_string(expected_schema),
+                    ".fsimdesign");
             } else if (message.empty()) {
                 message = "design state contains trailing bytes";
             }

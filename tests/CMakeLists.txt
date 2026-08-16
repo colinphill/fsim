@@ -1009,6 +1009,222 @@ add_test(
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckScvInventory.cmake"
 )
 add_test(
+  NAME fsim.abi-schema-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckAbiSchemaInventory.cmake"
+)
+set_tests_properties(
+  fsim.abi-schema-inventory
+  PROPERTIES
+    LABELS "abi;schema;artifact;cache;inventory;documentation;positive;negative;fast"
+)
+add_test(
+  NAME fsim.api.contract
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckCoreApiContract.cmake"
+)
+set_tests_properties(
+  fsim.api.contract
+  PROPERTIES
+    LABELS "api;abi;c;cxx;inventory;installed;positive;negative;fast"
+)
+add_test(
+  NAME fsim.systemc.abi-freeze
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSystemCAbiFreeze.cmake"
+)
+set_tests_properties(
+  fsim.systemc.abi-freeze
+  PROPERTIES
+    LABELS "systemc;tlm;scv;abi;protocol;runtime;installed;inventory;positive;negative;fast"
+)
+add_test(
+  NAME fsim.foreign-abi-freeze
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckForeignAbiFreeze.cmake"
+)
+set_tests_properties(
+  fsim.foreign-abi-freeze
+  PROPERTIES
+    LABELS "dpi;vpi;vhpi;uvm;foreign;abi;c;cxx;runtime;inventory;positive;negative;fast"
+)
+add_test(
+  NAME fsim.portable-object-schema-freeze
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckPortableObjectFreeze.cmake"
+)
+set_tests_properties(
+  fsim.portable-object-schema-freeze
+  PROPERTIES
+    LABELS "artifact;object;schema;portable;hir;source;corruption;positive;negative;fast"
+)
+add_test(
+  NAME fsim.design-library-schema-freeze
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckDesignLibraryFreeze.cmake"
+)
+set_tests_properties(
+  fsim.design-library-schema-freeze
+  PROPERTIES
+    LABELS "artifact;design;library;schema;native;source;corruption;positive;negative;fast"
+)
+add_test(
+  NAME fsim.incremental-native-cache-freeze
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckIncrementalNativeFreeze.cmake"
+)
+set_tests_properties(
+  fsim.incremental-native-cache-freeze
+  PROPERTIES
+    LABELS "systemc;scv;compiler;native;cache;schema;corruption;positive;negative;fast"
+)
+add_test(
+  NAME fsim.native-producer-policy
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckNativeProducerPolicy.cmake"
+)
+set_tests_properties(
+  fsim.native-producer-policy
+  PROPERTIES
+    LABELS "systemc;scv;dpi;vpi;vhpi;uvm;llvm;native;cache;abi;positive;negative;fast"
+)
+add_test(
+  NAME fsim.schema-producer-diagnostics
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSchemaProducerDiagnostics.cmake"
+)
+set_tests_properties(
+  fsim.schema-producer-diagnostics
+  PROPERTIES
+    LABELS "project;artifact;object;design;library;systemc;uvm;checkpoint;native;diagnostics;regeneration;negative;fast"
+)
+add_test(
+  NAME fsim.source-hidden-relocation-contract
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSourceHiddenRelocation.cmake"
+)
+set_tests_properties(
+  fsim.source-hidden-relocation-contract
+  PROPERTIES
+    LABELS "artifact;install;library;object;design;trace;checkpoint;systemc;relocation;source-hidden;read-only;positive;negative;fast"
+)
+add_test(
+  NAME fsim.non-project-restartability-contract
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckNonProjectRestartability.cmake"
+)
+set_tests_properties(
+  fsim.non-project-restartability-contract
+  PROPERTIES
+    LABELS "application;artifact;object;design;library;systemc;trace;checkpoint;replay;cache;source-hidden;restartability;positive;fast"
+)
+add_test(
+  NAME fsim.mixed-toolchain-install-contract
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckMixedToolchainInstall.cmake"
+)
+set_tests_properties(
+  fsim.mixed-toolchain-install-contract
+  PROPERTIES
+    LABELS "artifact;install;library;systemc;scv;llvm;compiler;toolchain;windows;cache;native;portable;positive;negative;fast"
+)
+add_test(
+  NAME fsim.cache-corruption-isolation-contract
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckCacheCorruptionIsolation.cmake"
+)
+set_tests_properties(
+  fsim.cache-corruption-isolation-contract
+  PROPERTIES
+    LABELS "cache;corruption;isolation;llvm;systemc;windows;concurrency;native;positive;negative;fast"
+)
+add_test(
+  NAME fsim.abi-schema-reference
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckAbiSchemaReference.cmake"
+)
+set_tests_properties(
+  fsim.abi-schema-reference
+  PROPERTIES
+    LABELS "abi;schema;documentation;artifact;install;native;portable;regeneration;positive;negative;fast"
+)
+add_test(
+  NAME fsim.abi-schema-evidence-matrix
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckAbiSchemaEvidenceMatrix.cmake"
+)
+set_tests_properties(
+  fsim.abi-schema-evidence-matrix
+  PROPERTIES
+    LABELS "abi;schema;evidence;artifact;cache;deduplication;platform;positive;negative;fast"
+)
+add_test(
+  NAME fsim.nested-portable-schema-freeze
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckNestedPortableFreeze.cmake"
+)
+set_tests_properties(
+  fsim.nested-portable-schema-freeze
+  PROPERTIES
+    LABELS "artifact;sdf;trace;transaction;coverage;assertion;uvm;checkpoint;scv;schema;resources;positive;negative;fast"
+)
+add_test(
+  NAME fsim.project-manifest-schema-freeze
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckProjectManifestFreeze.cmake"
+)
+set_tests_properties(
+  fsim.project-manifest-schema-freeze
+  PROPERTIES
+    LABELS "project;manifest;schema;diagnostics;regeneration;positive;negative;fast"
+)
+add_test(
+  NAME fsim.portable-stale-schema-policy
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckPortableStaleSchemaPolicy.cmake"
+)
+set_tests_properties(
+  fsim.portable-stale-schema-policy
+  PROPERTIES
+    LABELS "artifact;object;design;library;portable;schema;downgrade;atomic;positive;negative;fast"
+)
+add_test(
   NAME fsim.scv-portability-contract
   COMMAND
     "${CMAKE_COMMAND}"
@@ -1466,7 +1682,9 @@ add_test(
     "-DFSIM_CMAKE_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
     "-DFSIM_CMAKE_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
     "-DFSIM_CMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+    "-DFSIM_C_COMPILER=${CMAKE_C_COMPILER}"
     "-DFSIM_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+    "-DFSIM_C_FLAGS=${CMAKE_C_FLAGS}"
     "-DFSIM_CXX_FLAGS=${CMAKE_CXX_FLAGS}"
     "-DFSIM_EXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}"
     "-DFSIM_MSVC_RUNTIME_LIBRARY=${CMAKE_MSVC_RUNTIME_LIBRARY}"
@@ -1590,6 +1808,18 @@ set_tests_properties(
 set_tests_properties(
   fsim.application-regression-dedup-contract
   PROPERTIES LABELS "fast;application;regression;deduplication;cmake"
+)
+add_test(
+  NAME fsim.ctest-command-uniqueness
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckCTestCommandUniqueness.cmake"
+)
+set_tests_properties(
+  fsim.ctest-command-uniqueness
+  PROPERTIES LABELS "fast;regression;deduplication;ctest;cmake"
 )
 set_tests_properties(
   fsim.fst-release-audit
@@ -4980,6 +5210,34 @@ set_tests_properties(
         "${CMAKE_COMMAND}" -E copy_if_different
         "$<TARGET_FILE:fsim_api>"
         "$<TARGET_FILE_DIR:fsim_api_header_c_test>"
+      VERBATIM
+    )
+  endif()
+
+  add_executable(
+    fsim_api_abi_tests
+    api/api_abi_c_test.c
+    api/api_abi_cpp_test.cpp
+  )
+  target_compile_features(
+    fsim_api_abi_tests
+    PRIVATE c_std_11 cxx_std_20
+  )
+  target_link_libraries(fsim_api_abi_tests PRIVATE fsim_api)
+  fsim_configure_test(fsim_api_abi_tests)
+  add_test(NAME fsim.api.abi COMMAND fsim_api_abi_tests)
+  set_tests_properties(
+    fsim.api.abi
+    PROPERTIES LABELS "api;abi;c;cxx;runtime;positive;negative;fast"
+  )
+  if(WIN32)
+    add_custom_command(
+      TARGET fsim_api_abi_tests
+      POST_BUILD
+      COMMAND
+        "${CMAKE_COMMAND}" -E copy_if_different
+        "$<TARGET_FILE:fsim_api>"
+        "$<TARGET_FILE_DIR:fsim_api_abi_tests>"
       VERBATIM
     )
   endif()

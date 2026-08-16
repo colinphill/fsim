@@ -8,6 +8,8 @@ add_executable(
   runtime_tests.cpp
   runtime_value_tests.cpp
   runtime_dpi_tests.cpp
+  runtime_dpi_abi_c_test.c
+  runtime_foreign_abi_cpp_test.cpp
   runtime_vhpi_tests.cpp
   runtime_vhpi_abi_c_test.c
   runtime_vhpi_object_tests.cpp

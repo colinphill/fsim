@@ -29,6 +29,7 @@ if(
 endif()
 
 include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
 include(CTest)
 include(cmake/FsimWarnings.cmake)
 include(cmake/FsimDebugFootprint.cmake)
@@ -919,6 +920,7 @@ list(
 target_compile_definitions(
   fsim_systemc
   PRIVATE
+    FSIM_BUILD_CONFIGURATION="$<CONFIG>"
     FSIM_SYSTEMC_HEADER_PATH="${PROJECT_SOURCE_DIR}/include"
     FSIM_SYSTEMC_INSTALLED_HEADER_PATH="${CMAKE_INSTALL_FULL_INCLUDEDIR}"
     FSIM_SYSTEMC_UPSTREAM_HEADER_PATH="${FSIM_SYSTEMC_OFFICIAL_SOURCE_DIR}/src"
@@ -952,7 +954,7 @@ target_link_libraries(
 add_library(fsim_api SHARED src/api/api.cpp src/api/api_session.cpp)
 add_library(fsim::api ALIAS fsim_api)
 fsim_configure_library(fsim_api)
-target_link_libraries(fsim_api PUBLIC fsim_project fsim_diagnostic)
+target_link_libraries(fsim_api PRIVATE fsim_project fsim_diagnostic)
 target_compile_definitions(
   fsim_api
   PRIVATE FSIM_SHARED FSIM_BUILDING_LIBRARY
@@ -961,6 +963,7 @@ target_compile_definitions(
 set_target_properties(
   fsim_api
   PROPERTIES
+    EXPORT_NAME api
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN YES
 )
@@ -1008,7 +1011,11 @@ if(FSIM_WITH_LLVM)
   fsim_configure_library(fsim_llvm)
   target_link_libraries(fsim_llvm PUBLIC fsim_runtime PRIVATE fsim_object_cache)
   target_include_directories(fsim_llvm SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
-  target_compile_definitions(fsim_llvm PUBLIC FSIM_HAS_LLVM=1)
+  target_compile_definitions(
+    fsim_llvm
+    PRIVATE FSIM_BUILD_CONFIGURATION="$<CONFIG>"
+    PUBLIC FSIM_HAS_LLVM=1
+  )
   if(MSVC)
     # LLVM's DenseMap templates trigger C4702 in MSVC after instantiation,
     # even when their headers are marked external.
@@ -1200,7 +1207,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       )
     endif()
   endif()
-  target_link_libraries(fsim_api PUBLIC fsim_application)
+  target_link_libraries(fsim_api PRIVATE fsim_application)
 endif()
 
 if(EXISTS "${PROJECT_SOURCE_DIR}/src/main.cpp")
@@ -1273,13 +1280,34 @@ if(FSIM_WITH_BUNDLED_TCL)
   )
 endif()
 install(
+  TARGETS fsim_api
+  ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+  LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+)
+install(
   TARGETS
-    fsim_api
     fsim_systemc_plugin_exports
     fsim_systemc_accellera_runtime
   ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
   LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+)
+configure_package_config_file(
+  "${PROJECT_SOURCE_DIR}/cmake/fsimConfig.cmake.in"
+  "${PROJECT_BINARY_DIR}/fsimConfig.cmake"
+  INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/fsim"
+)
+write_basic_package_version_file(
+  "${PROJECT_BINARY_DIR}/fsimConfigVersion.cmake"
+  VERSION "${PROJECT_VERSION}"
+  COMPATIBILITY SameMajorVersion
+)
+install(
+  FILES
+    "${PROJECT_BINARY_DIR}/fsimConfig.cmake"
+    "${PROJECT_BINARY_DIR}/fsimConfigVersion.cmake"
+  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/fsim"
 )
 install(
   FILES LICENSE README.md

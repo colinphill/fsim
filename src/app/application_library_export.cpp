@@ -283,7 +283,8 @@ namespace {
                 / (key + ".o");
             metadata.native_artifacts.push_back({ "llvm_object", artifact,
                 support::Sha256::hex(support::Sha256::digest(raw)),
-                runtime_abi_version, 0, { }, { }, host.llvm_version, host.target,
+                runtime_abi_version, 0, { }, host.fingerprint,
+                host.llvm_version, host.target,
                 host.data_layout, host.cpu, feature_identity(host.features),
                 optimization == compiler::JitOptimizationLevel::o0 ? "O0" : "O2",
                 key });

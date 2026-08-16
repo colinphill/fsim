@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/project/project.hpp"
+
+#include "../diagnostic/artifact_identity.hpp"
 #include "fsim/support/path.hpp"
 
 #include <algorithm>
@@ -750,7 +752,12 @@ class Parser {
     schema_seen_ = true;
     if (const auto schema = unsigned_integer(value, key)) {
       if (*schema > std::numeric_limits<std::uint32_t>::max()) {
-        diagnostics_.error(std::string(kSchemaCode), "schema version is too large", value.span);
+          diagnostics_.error(
+              std::string(kSchemaCode),
+              diagnostic::unsupported_artifact_identity(
+                  "project manifest", "schema outside the uint32 range",
+                  "schema 2", "fsim.toml"),
+              value.span);
       } else {
         config_.schema = static_cast<std::uint32_t>(*schema);
       }
@@ -1147,14 +1154,18 @@ class Parser {
     const diagnostic::SourceSpan document_span{
         source_name_, {1, 1, 0}, {1, 1, 0}};
     if (!schema_seen_) {
-      diagnostics_.error(
-          std::string(kSchemaCode), "missing required top-level key 'schema = 2'", document_span);
+        diagnostics_.error(
+            std::string(kSchemaCode),
+            diagnostic::unsupported_artifact_identity(
+                "project manifest", "no schema", "schema 2", "fsim.toml"),
+            document_span);
     } else if (config_.schema != kSchemaVersion) {
-      diagnostics_.error(
-          std::string(kSchemaCode),
-          "unsupported project schema " + std::to_string(config_.schema) +
-              "; this build supports schema 2",
-          document_span);
+        diagnostics_.error(
+            std::string(kSchemaCode),
+            diagnostic::unsupported_artifact_identity(
+                "project manifest", "schema " + std::to_string(config_.schema),
+                "schema " + std::to_string(kSchemaVersion), "fsim.toml"),
+            document_span);
     }
     if (!config_.project.top.empty() && !config_.project.tops.empty()) {
       diagnostics_.error(

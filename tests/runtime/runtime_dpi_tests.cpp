@@ -7,10 +7,14 @@
 #include "runtime_test_support.hpp"
 
 #include <bit>
+#include <cstddef>
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+
+extern "C" std::size_t fsim_dpi_abi_c_descriptor_size();
+extern "C" const char* fsim_dpi_abi_c_descriptor_symbol();
 
 namespace fsim::tests::runtime {
 
@@ -759,6 +763,12 @@ void test_systemverilog_dpi_plugin_planning()
         static_cast<std::uint32_t>(manifest.name.size()),
         manifest.name.data()
     };
+    require(
+        fsim_dpi_abi_c_descriptor_size()
+                == sizeof(fsim_dpi_plugin_descriptor_v1)
+            && std::string_view { fsim_dpi_abi_c_descriptor_symbol() }
+                == FSIM_DPI_PLUGIN_DESCRIPTOR_SYMBOL,
+        "DPI C and C++ translation units freeze one descriptor layout and symbol");
     auto invalid_descriptor = valid_descriptor;
     invalid_descriptor.abi_version = FSIM_DPI_PLUGIN_ABI_VERSION + 1U;
     require(
@@ -776,6 +786,34 @@ void test_systemverilog_dpi_plugin_planning()
             invalid_descriptor, manifest)
             == Error::AbiPointerWidth,
         "DPI plug-in ABI descriptors reject pointer-width mismatch");
+    invalid_descriptor = valid_descriptor;
+    --invalid_descriptor.struct_size;
+    require(
+        validate_systemverilog_dpi_plugin_descriptor(
+            invalid_descriptor, manifest)
+            == Error::AbiSize,
+        "DPI plug-in ABI descriptors reject a one-byte truncated prefix");
+    invalid_descriptor = valid_descriptor;
+    invalid_descriptor.struct_size += 64U;
+    require(
+        validate_systemverilog_dpi_plugin_descriptor(
+            invalid_descriptor, manifest)
+            == Error::None,
+        "DPI plug-in ABI descriptors accept future append-only extents");
+    invalid_descriptor = valid_descriptor;
+    invalid_descriptor.flags = 1U;
+    require(
+        validate_systemverilog_dpi_plugin_descriptor(
+            invalid_descriptor, manifest)
+            == Error::AbiFlags,
+        "DPI plug-in ABI descriptors reject reserved flags");
+    invalid_descriptor = valid_descriptor;
+    --invalid_descriptor.name_size;
+    require(
+        validate_systemverilog_dpi_plugin_descriptor(
+            invalid_descriptor, manifest)
+            == Error::AbiName,
+        "DPI plug-in ABI descriptors reject a mismatched bounded owner name");
     auto missing = manifest;
     missing.imported_symbols.push_back("missing_symbol");
     const auto rejected = load_systemverilog_dpi_plugin(

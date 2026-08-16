@@ -22,6 +22,10 @@ This repository is an **internal vertical slice**, not the fsim v1 release.
 It establishes the semantic and platform spine on which the full language
 implementations will be built.
 
+See the [v2 ABI and schema reference](docs/abi-schema-reference.md) for the
+current installed targets, public layouts and symbols, artifact formats,
+native-cache identity rules, rejection policy, and source rebuild workflows.
+
 Verilog and SystemVerilog bit strings and based-number literals have no
 implementation-selected language width limit. Source- and context-determined
 width, signedness, and `X`/`Z` planes remain exact through parsing, folding,

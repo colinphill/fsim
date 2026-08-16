@@ -133,12 +133,17 @@ int main()
         ".fsimdesign producer", oversized_diagnostics));
     assert(has_code(oversized_diagnostics, "FSIM-SCV-A001"));
 
-    auto future = metadata;
-    ++future.format;
+    auto future = serialized;
+    const auto current_format = "format = "
+        + std::to_string(fsim::library::kFormatVersion);
+    const auto future_format = "format = "
+        + std::to_string(fsim::library::kFormatVersion + 1U);
+    const auto format_offset = future.find(current_format);
+    assert(format_offset != std::string::npos);
+    future.replace(format_offset, current_format.size(), future_format);
     fsim::diagnostic::Engine future_diagnostics;
     assert(!fsim::library::parse_metadata(
-        fsim::library::serialize_metadata(future), "future-scv-library",
-        future_diagnostics));
+        future, "future-scv-library", future_diagnostics));
     assert(future_diagnostics.has_error());
 
     auto corrupt_payloads = payloads;

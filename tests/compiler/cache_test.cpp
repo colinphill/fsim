@@ -9,8 +9,10 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <string>
+#include <vector>
 
 int main() {
     using fsim::compiler::CacheKeyBuilder;
@@ -27,6 +29,34 @@ int main() {
     assert(
         key
         == second.add("source", "module m; endmodule").add("llvm", "22.1.8").finish());
+
+    CacheKeyBuilder debug_native;
+    const auto debug_native_key = debug_native
+                                      .add("engine", "llvm")
+                                      .add("optimization", "O0")
+                                      .add("build-configuration", "Debug")
+                                      .finish();
+    CacheKeyBuilder release_native;
+    const auto release_native_key = release_native
+                                        .add("engine", "llvm")
+                                        .add("optimization", "O0")
+                                        .add("build-configuration", "Release")
+                                        .finish();
+    CacheKeyBuilder optimized_native;
+    const auto optimized_native_key = optimized_native
+                                          .add("engine", "llvm")
+                                          .add("optimization", "O2")
+                                          .add("build-configuration", "Debug")
+                                          .finish();
+    CacheKeyBuilder interpreted;
+    const auto interpreter_key = interpreted
+                                     .add("engine", "interpreter")
+                                     .add("optimization", "O0")
+                                     .add("build-configuration", "Debug")
+                                     .finish();
+    assert(debug_native_key != release_native_key);
+    assert(debug_native_key != optimized_native_key);
+    assert(debug_native_key != interpreter_key);
 
     const auto nonce =
         std::chrono::steady_clock::now().time_since_epoch().count();
@@ -99,6 +129,97 @@ int main() {
     assert(replaced);
     assert(std::equal(
         replaced->begin(), replaced->end(), replacement.begin(), replacement.end()));
+
+    // Corrupt and truncated entries are isolated as cache misses with a stable
+    // data-integrity error. A subsequent publisher can replace either entry.
+    {
+        std::fstream corrupt(cache.path_for(key), std::ios::binary | std::ios::in | std::ios::out);
+        assert(corrupt);
+        corrupt.seekp(-1, std::ios::end);
+        corrupt.put('\0');
+    }
+    assert(!cache.load(key, error));
+    assert(error == std::errc::illegal_byte_sequence);
+    assert(cache.store(key, replacement, error));
+    std::filesystem::resize_file(cache.path_for(key), 4, error);
+    assert(!error);
+    assert(!cache.load(key, error));
+    assert(error == std::errc::illegal_byte_sequence);
+
+    // Cache artifacts have a governed input ceiling, checked before allocation.
+    // resize_file creates a sparse file on supported filesystems, keeping this
+    // regression cheap while covering hostile oversized inputs.
+    constexpr std::uintmax_t maximum_cache_entry_bytes =
+        256U * 1024U * 1024U;
+    std::filesystem::resize_file(
+        cache.path_for(key), maximum_cache_entry_bytes + 1U, error);
+    assert(!error);
+    assert(!cache.load(key, error));
+    assert(error == std::errc::file_too_large);
+    assert(cache.store(key, replacement, error));
+
+    // Valid cache hits require no write access. Restore owner write permission
+    // before exercising replacement and cleanup on both POSIX and Windows.
+    std::filesystem::permissions(
+        cache.path_for(key),
+        std::filesystem::perms::owner_write
+            | std::filesystem::perms::group_write
+            | std::filesystem::perms::others_write,
+        std::filesystem::perm_options::remove,
+        error);
+    assert(!error);
+    const auto read_only = cache.load(key, error);
+    assert(read_only);
+    assert(!error);
+    assert(std::equal(
+        read_only->begin(), read_only->end(), replacement.begin(), replacement.end()));
+    std::filesystem::permissions(
+        cache.path_for(key),
+        std::filesystem::perms::owner_write,
+        std::filesystem::perm_options::add,
+        error);
+    assert(!error);
+
+    // Concurrent writers serialize through the destination lock, publish a
+    // complete entry atomically, and leave neither locks nor temporaries behind.
+    std::vector<std::future<std::pair<bool, std::error_code>>> publishers;
+    for (int writer = 0; writer < 4; ++writer) {
+        publishers.emplace_back(std::async(
+            std::launch::async,
+            [&cache, &key, &replacement] {
+                std::error_code publisher_error;
+                const auto stored = cache.store(key, replacement, publisher_error);
+                return std::make_pair(stored, publisher_error);
+            }));
+    }
+    for (auto& publisher : publishers) {
+        const auto [stored, publisher_error] = publisher.get();
+        assert(stored);
+        assert(!publisher_error);
+    }
+    const auto concurrently_published = cache.load(key, error);
+    assert(concurrently_published);
+    assert(std::equal(
+        concurrently_published->begin(),
+        concurrently_published->end(),
+        replacement.begin(),
+        replacement.end()));
+    for (const auto& entry : std::filesystem::recursive_directory_iterator{root}) {
+        const auto filename = entry.path().filename().string();
+        assert(!filename.ends_with(".lock"));
+        assert(filename.find(".fobj.tmp.") == std::string::npos);
+    }
+
+    // Canonical keys are lowercase hexadecimal; case variants and malformed
+    // path components cannot alias the same cache entry on Windows.
+    auto uppercase_key = key;
+    uppercase_key.front() = static_cast<char>(
+        uppercase_key.front() >= 'a' && uppercase_key.front() <= 'f'
+            ? uppercase_key.front() - ('a' - 'A')
+            : 'G');
+    assert(cache.path_for(uppercase_key).empty());
+    assert(!cache.load(uppercase_key, error));
+    assert(error == std::errc::invalid_argument);
 
     assert(cache.erase(key, error));
 

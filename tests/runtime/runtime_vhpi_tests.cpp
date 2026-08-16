@@ -319,6 +319,16 @@ void test_vhdl_vhpi_host_abi() {
       !static_cast<bool>(host_failure)
           && host_failure.error == VhdlVhpiPluginError::HostAbi,
       "VHPI loader validates host ownership before opening an image");
+  auto truncated_host = host;
+  --truncated_host.struct_size;
+  const auto truncated_host_failure = load_vhdl_vhpi_plugin(
+      std::filesystem::path{FSIM_VHPI_TEST_PLUGIN_PATH}.concat(
+          ".unopened-truncated-host"),
+      truncated_host);
+  require_vhpi(
+      !static_cast<bool>(truncated_host_failure)
+          && truncated_host_failure.error == VhdlVhpiPluginError::HostAbi,
+      "VHPI loader rejects a one-byte host truncation before opening an image");
   const auto missing_artifact = load_vhdl_vhpi_plugin(
       std::filesystem::path{FSIM_VHPI_TEST_PLUGIN_PATH}.concat(".missing"),
       host);

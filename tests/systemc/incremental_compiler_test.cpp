@@ -3,12 +3,15 @@
 
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/support/sha256.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -54,6 +57,52 @@ void copy_tree(
             std::filesystem::copy_file(entry.path(), destination / relative);
         }
     }
+}
+
+void store_u32(
+    std::string& bytes,
+    const std::size_t offset,
+    const std::uint32_t value)
+{
+    assert(offset + 4U <= bytes.size());
+    for (unsigned shift = 0; shift < 32; shift += 8) {
+        bytes[offset + shift / 8U]
+            = static_cast<char>((value >> shift) & 0xffU);
+    }
+}
+
+void store_u64(
+    std::string& bytes,
+    const std::size_t offset,
+    const std::uint64_t value)
+{
+    assert(offset + 8U <= bytes.size());
+    for (unsigned shift = 0; shift < 64; shift += 8) {
+        bytes[offset + shift / 8U]
+            = static_cast<char>((value >> shift) & 0xffU);
+    }
+}
+
+bool has_identity_diagnostic(
+    const fsim::diagnostic::Engine& diagnostics,
+    const std::string_view family,
+    const std::string_view found,
+    const std::string_view required,
+    const std::string_view artifact)
+{
+    return std::ranges::any_of(
+        diagnostics.diagnostics(), [&](const auto& diagnostic) {
+            return diagnostic.message.find(
+                       "unsupported " + std::string { family }
+                       + " identity: found " + std::string { found })
+                != std::string::npos
+                && diagnostic.message.find(
+                       "; required " + std::string { required })
+                != std::string::npos
+                && diagnostic.message.ends_with(
+                    "; regenerate " + std::string { artifact }
+                    + " with this fsim build");
+        });
 }
 
 std::string module_source(
@@ -173,6 +222,8 @@ int run_clang_cl_fake_compiler(const int argc, char* const* argv)
 
 int main(const int argc, char** argv)
 {
+    static_assert(fsim::systemc::kIncrementalObjectFormatVersion == 2U);
+    static_assert(fsim::systemc::kIncrementalPluginFormatVersion == 2U);
     if (has_argument(
             argc, argv, "/DFSIM_TEST_CLANG_CL_INCREMENTAL_COMPILER=1")) {
         return run_clang_cl_fake_compiler(argc, argv);
@@ -282,18 +333,123 @@ int main(const int argc, char** argv)
         first_round_trip, "first-round-trip", diagnostics);
     assert(first_decoded == first_metadata);
 
+    const auto assert_object_input_changes = [&](const auto& mutate) {
+        auto changed = *first_metadata;
+        mutate(changed);
+        assert(fsim::systemc::compute_incremental_object_input_digest(changed)
+            != first_metadata->input_digest);
+    };
+    assert_object_input_changes([](auto& changed) {
+        changed.toolchain += "-changed";
+    });
+    assert_object_input_changes([](auto& changed) {
+        changed.target += "-changed";
+    });
+    assert_object_input_changes([](auto& changed) {
+        changed.compiler_fingerprint = std::string(64, '1');
+    });
+    assert_object_input_changes([](auto& changed) {
+        changed.scv_compatibility += "-changed";
+    });
+    assert_object_input_changes([](auto& changed) {
+        changed.defines.push_back("FSIM_IDENTITY_CHANGE=1");
+    });
+    assert_object_input_changes([](auto& changed) {
+        changed.compile_options.push_back("-ffsim-identity-change");
+    });
+    assert_object_input_changes([](auto& changed) {
+        changed.inputs.back().checksum = std::string(64, '2');
+    });
+    assert_object_input_changes([](auto& changed) {
+        changed.defines_plugin_entry_point = !changed.defines_plugin_entry_point;
+    });
+    assert_object_input_changes([](auto& changed) {
+        changed.contains_macro_export = !changed.contains_macro_export;
+    });
+
+    auto corrupt_object_magic = first_round_trip;
+    corrupt_object_magic[0] = 'X';
+    fsim::diagnostic::Engine corrupt_object_magic_diagnostics;
+    assert(!fsim::systemc::deserialize_incremental_object_metadata(
+        corrupt_object_magic, "corrupt-object-magic",
+        corrupt_object_magic_diagnostics));
+    auto stale_object_format = first_round_trip.substr(0, 20U);
+    store_u32(stale_object_format, 8U, 1U);
+    fsim::diagnostic::Engine stale_object_format_diagnostics;
+    assert(!fsim::systemc::deserialize_incremental_object_metadata(
+        stale_object_format, "stale-object-format",
+        stale_object_format_diagnostics));
+    assert(has_identity_diagnostic(
+        stale_object_format_diagnostics, ".fsimscobj", "format 1",
+        "format 2", ".fsimscobj"));
+    auto future_object_format = first_round_trip.substr(0, 20U);
+    store_u32(future_object_format, 8U, 3U);
+    fsim::diagnostic::Engine future_object_format_diagnostics;
+    assert(!fsim::systemc::deserialize_incremental_object_metadata(
+        future_object_format, "future-object-format",
+        future_object_format_diagnostics));
+    assert(has_identity_diagnostic(
+        future_object_format_diagnostics, ".fsimscobj", "format 3",
+        "format 2", ".fsimscobj"));
+    auto incompatible_object_runtime = first_round_trip.substr(0, 20U);
+    store_u32(incompatible_object_runtime, 12U, 2U);
+    fsim::diagnostic::Engine incompatible_object_runtime_diagnostics;
+    assert(!fsim::systemc::deserialize_incremental_object_metadata(
+        incompatible_object_runtime, "incompatible-object-runtime",
+        incompatible_object_runtime_diagnostics));
+    assert(has_identity_diagnostic(
+        incompatible_object_runtime_diagnostics, ".fsimscobj",
+        "format 2, runtime ABI 2", "format 2, runtime ABI 1",
+        ".fsimscobj"));
+    auto incompatible_object_systemc = first_round_trip.substr(0, 20U);
+    store_u32(incompatible_object_systemc, 16U, 0U);
+    fsim::diagnostic::Engine incompatible_object_systemc_diagnostics;
+    assert(!fsim::systemc::deserialize_incremental_object_metadata(
+        incompatible_object_systemc, "incompatible-object-systemc",
+        incompatible_object_systemc_diagnostics));
+    assert(has_identity_diagnostic(
+        incompatible_object_systemc_diagnostics, ".fsimscobj",
+        "format 2, runtime ABI 1 and SystemC ABI 0",
+        "format 2, runtime ABI 1 and SystemC ABI 4", ".fsimscobj"));
+    auto stale_object_producer = *first_metadata;
+    stale_object_producer.producer += "-stale";
+    fsim::diagnostic::Engine stale_object_producer_diagnostics;
+    assert(!fsim::systemc::deserialize_incremental_object_metadata(
+        fsim::systemc::serialize_incremental_object_metadata(
+            stale_object_producer),
+        "stale-object-producer", stale_object_producer_diagnostics));
+    assert(has_identity_diagnostic(
+        stale_object_producer_diagnostics, ".fsimscobj producer",
+        stale_object_producer.producer, "fsim ", ".fsimscobj"));
+    auto oversized_object_identity = first_round_trip;
+    store_u64(
+        oversized_object_identity, 20U,
+        std::numeric_limits<std::uint64_t>::max());
+    fsim::diagnostic::Engine oversized_object_identity_diagnostics;
+    assert(!fsim::systemc::deserialize_incremental_object_metadata(
+        oversized_object_identity, "oversized-object-identity",
+        oversized_object_identity_diagnostics));
+    fsim::diagnostic::Engine truncated_object_header_diagnostics;
+    assert(!fsim::systemc::deserialize_incremental_object_metadata(
+        first_round_trip.substr(0, 16), "truncated-object-header",
+        truncated_object_header_diagnostics));
+    auto trailing_object_metadata = first_round_trip;
+    trailing_object_metadata.push_back('\0');
+    fsim::diagnostic::Engine trailing_object_metadata_diagnostics;
+    assert(!fsim::systemc::deserialize_incremental_object_metadata(
+        trailing_object_metadata, "trailing-object-metadata",
+        trailing_object_metadata_diagnostics));
+
     const auto incompatible_scv_object = root / "incompatible-scv.fsimscobj";
     copy_tree(first_request.output, incompatible_scv_object);
     make_writable(incompatible_scv_object);
     auto incompatible_scv_metadata = *first_metadata;
-    const auto scv_version =
-        incompatible_scv_metadata.scv_compatibility.find("|scv=2.0.1|");
+    const auto scv_version = incompatible_scv_metadata.scv_compatibility.find("|scv=2.0.1|");
     assert(scv_version != std::string::npos);
     incompatible_scv_metadata.scv_compatibility.replace(
         scv_version, 11, "|scv=2.0.2|");
-    incompatible_scv_metadata.input_digest =
-        fsim::systemc::compute_incremental_object_input_digest(
-            incompatible_scv_metadata);
+    incompatible_scv_metadata.input_digest = fsim::systemc::compute_incremental_object_input_digest(
+        incompatible_scv_metadata);
     incompatible_scv_metadata.compilation_digest =
         fsim::systemc::compute_incremental_object_digest(
             incompatible_scv_metadata);
@@ -390,6 +546,127 @@ int main(const int argc, char** argv)
     assert(plugin_metadata->factories[1].name == "second");
     assert(plugin_metadata->link_digest
         == fsim::systemc::compute_incremental_plugin_digest(*plugin_metadata));
+    const auto plugin_round_trip
+        = fsim::systemc::serialize_incremental_plugin_metadata(*plugin_metadata);
+    fsim::diagnostic::Engine plugin_round_trip_diagnostics;
+    assert(fsim::systemc::deserialize_incremental_plugin_metadata(
+               plugin_round_trip, "plugin-round-trip",
+               plugin_round_trip_diagnostics)
+        == plugin_metadata);
+    assert(!plugin_round_trip_diagnostics.has_error());
+
+    const auto assert_plugin_input_changes = [&](const auto& mutate) {
+        auto changed = *plugin_metadata;
+        mutate(changed);
+        assert(fsim::systemc::compute_incremental_plugin_input_digest(changed)
+            != plugin_metadata->input_digest);
+    };
+    assert_plugin_input_changes([](auto& changed) {
+        changed.logical_library += "_changed";
+    });
+    assert_plugin_input_changes([](auto& changed) {
+        changed.toolchain += "-changed";
+    });
+    assert_plugin_input_changes([](auto& changed) {
+        changed.target += "-changed";
+    });
+    assert_plugin_input_changes([](auto& changed) {
+        changed.compiler_fingerprint = std::string(64, '3');
+    });
+    assert_plugin_input_changes([](auto& changed) {
+        changed.scv_compatibility += "-changed";
+    });
+    assert_plugin_input_changes([](auto& changed) {
+        changed.object_digests.front() = std::string(64, '4');
+    });
+    assert_plugin_input_changes([](auto& changed) {
+        changed.link_options.push_back("-ffsim-link-identity-change");
+    });
+    assert_plugin_input_changes([](auto& changed) {
+        changed.libraries.push_back("fsim_identity_change");
+    });
+    auto changed_factory = *plugin_metadata;
+    changed_factory.factories.front().parameters.front().default_value++;
+    assert(fsim::systemc::compute_incremental_plugin_digest(changed_factory)
+        != plugin_metadata->link_digest);
+    auto changed_library_payload = *plugin_metadata;
+    changed_library_payload.library_checksum = std::string(64, '5');
+    assert(fsim::systemc::compute_incremental_plugin_digest(
+               changed_library_payload)
+        != plugin_metadata->link_digest);
+
+    auto corrupt_plugin_magic = plugin_round_trip;
+    corrupt_plugin_magic[0] = 'X';
+    fsim::diagnostic::Engine corrupt_plugin_magic_diagnostics;
+    assert(!fsim::systemc::deserialize_incremental_plugin_metadata(
+        corrupt_plugin_magic, "corrupt-plugin-magic",
+        corrupt_plugin_magic_diagnostics));
+    auto stale_plugin_format = plugin_round_trip.substr(0, 20U);
+    store_u32(stale_plugin_format, 8U, 1U);
+    fsim::diagnostic::Engine stale_plugin_format_diagnostics;
+    assert(!fsim::systemc::deserialize_incremental_plugin_metadata(
+        stale_plugin_format, "stale-plugin-format",
+        stale_plugin_format_diagnostics));
+    assert(has_identity_diagnostic(
+        stale_plugin_format_diagnostics, ".fsimscplugin", "format 1",
+        "format 2", ".fsimscplugin"));
+    auto future_plugin_format = plugin_round_trip.substr(0, 20U);
+    store_u32(future_plugin_format, 8U, 3U);
+    fsim::diagnostic::Engine future_plugin_format_diagnostics;
+    assert(!fsim::systemc::deserialize_incremental_plugin_metadata(
+        future_plugin_format, "future-plugin-format",
+        future_plugin_format_diagnostics));
+    assert(has_identity_diagnostic(
+        future_plugin_format_diagnostics, ".fsimscplugin", "format 3",
+        "format 2", ".fsimscplugin"));
+    auto incompatible_plugin_runtime = plugin_round_trip.substr(0, 20U);
+    store_u32(incompatible_plugin_runtime, 12U, 2U);
+    fsim::diagnostic::Engine incompatible_plugin_runtime_diagnostics;
+    assert(!fsim::systemc::deserialize_incremental_plugin_metadata(
+        incompatible_plugin_runtime, "incompatible-plugin-runtime",
+        incompatible_plugin_runtime_diagnostics));
+    assert(has_identity_diagnostic(
+        incompatible_plugin_runtime_diagnostics, ".fsimscplugin",
+        "format 2, runtime ABI 2", "format 2, runtime ABI 1",
+        ".fsimscplugin"));
+    auto incompatible_plugin_systemc = plugin_round_trip.substr(0, 20U);
+    store_u32(incompatible_plugin_systemc, 16U, 0U);
+    fsim::diagnostic::Engine incompatible_plugin_systemc_diagnostics;
+    assert(!fsim::systemc::deserialize_incremental_plugin_metadata(
+        incompatible_plugin_systemc, "incompatible-plugin-systemc",
+        incompatible_plugin_systemc_diagnostics));
+    assert(has_identity_diagnostic(
+        incompatible_plugin_systemc_diagnostics, ".fsimscplugin",
+        "format 2, runtime ABI 1 and SystemC ABI 0",
+        "format 2, runtime ABI 1 and SystemC ABI 4", ".fsimscplugin"));
+    auto stale_plugin_producer = *plugin_metadata;
+    stale_plugin_producer.producer += "-stale";
+    fsim::diagnostic::Engine stale_plugin_producer_diagnostics;
+    assert(!fsim::systemc::deserialize_incremental_plugin_metadata(
+        fsim::systemc::serialize_incremental_plugin_metadata(
+            stale_plugin_producer),
+        "stale-plugin-producer", stale_plugin_producer_diagnostics));
+    assert(has_identity_diagnostic(
+        stale_plugin_producer_diagnostics, ".fsimscplugin producer",
+        stale_plugin_producer.producer, "fsim ", ".fsimscplugin"));
+    auto oversized_plugin_identity = plugin_round_trip;
+    store_u64(
+        oversized_plugin_identity, 20U,
+        std::numeric_limits<std::uint64_t>::max());
+    fsim::diagnostic::Engine oversized_plugin_identity_diagnostics;
+    assert(!fsim::systemc::deserialize_incremental_plugin_metadata(
+        oversized_plugin_identity, "oversized-plugin-identity",
+        oversized_plugin_identity_diagnostics));
+    fsim::diagnostic::Engine truncated_plugin_header_diagnostics;
+    assert(!fsim::systemc::deserialize_incremental_plugin_metadata(
+        plugin_round_trip.substr(0, 16), "truncated-plugin-header",
+        truncated_plugin_header_diagnostics));
+    auto trailing_plugin_metadata = plugin_round_trip;
+    trailing_plugin_metadata.push_back('\0');
+    fsim::diagnostic::Engine trailing_plugin_metadata_diagnostics;
+    assert(!fsim::systemc::deserialize_incremental_plugin_metadata(
+        trailing_plugin_metadata, "trailing-plugin-metadata",
+        trailing_plugin_metadata_diagnostics));
     auto registry = fsim::systemc::load_incremental_plugin(
         link_request.output, diagnostics);
     assert(registry != nullptr);
@@ -413,6 +690,40 @@ int main(const int argc, char** argv)
     assert(!fsim::systemc::load_incremental_plugin(
         stale_plugin, stale_plugin_diagnostics));
     assert(stale_plugin_diagnostics.has_error());
+
+    const auto stale_target_plugin = root / "stale-target.fsimscplugin";
+    copy_tree(link_request.output, stale_target_plugin);
+    make_writable(stale_target_plugin);
+    fsim::diagnostic::Engine stale_target_metadata_diagnostics;
+    auto stale_target_metadata = fsim::systemc::load_incremental_plugin_metadata(
+        stale_target_plugin, stale_target_metadata_diagnostics);
+    assert(stale_target_metadata
+        && !stale_target_metadata_diagnostics.has_error());
+    stale_target_metadata->target += "-stale";
+    const std::string invalid_native = "not-a-native-shared-library";
+    write_file(
+        stale_target_plugin / stale_target_metadata->library,
+        invalid_native);
+    stale_target_metadata->library_checksum = fsim::support::Sha256::hex(
+        fsim::support::Sha256::digest(invalid_native));
+    stale_target_metadata->input_digest = fsim::systemc::compute_incremental_plugin_input_digest(
+        *stale_target_metadata);
+    stale_target_metadata->link_digest = fsim::systemc::compute_incremental_plugin_digest(
+        *stale_target_metadata);
+    write_file(
+        stale_target_plugin
+            / fsim::systemc::kIncrementalPluginMetadataFilename,
+        fsim::systemc::serialize_incremental_plugin_metadata(
+            *stale_target_metadata));
+    fsim::diagnostic::Engine stale_target_diagnostics;
+    assert(!fsim::systemc::load_incremental_plugin(
+        stale_target_plugin, stale_target_diagnostics,
+        plugin_metadata->compiler_fingerprint));
+    assert(has_identity_diagnostic(
+        stale_target_diagnostics, "SystemC plug-in producer",
+        "producer " + stale_target_metadata->producer + " and target "
+            + stale_target_metadata->target,
+        "producer fsim ", ".fsimscplugin"));
 
     fsim::systemc::IncrementalLinkRequest incompatible_link = link_request;
     incompatible_link.objects = { first_request.output, incompatible_object };

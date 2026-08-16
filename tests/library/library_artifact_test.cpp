@@ -8,12 +8,14 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
 #include <ranges>
 #include <string>
+#include <string_view>
 
 namespace {
 
@@ -53,15 +55,34 @@ fsim::library::Metadata example_metadata()
             "fsim-synopsys-ieee-compat-v2" }
     };
     metadata.native_artifacts = { { "llvm_object", "native/llvm/fixture.fobj", std::string(64, 'd'),
-        1, 0, { }, { }, "22.1.0", "x86_64-test", "e-m:e-p:64:64", "generic",
+        1, 0, { }, std::string(64, 'f'), "22.1.0", "x86_64-test",
+        "e-m:e-p:64:64", "generic",
         "+sse2", "O2", std::string(64, 'e') } };
     return metadata;
+}
+
+bool has_identity_diagnostic(
+    const fsim::diagnostic::Engine& diagnostics,
+    const std::string_view family,
+    const std::string_view found,
+    const std::string_view required,
+    const std::string_view artifact)
+{
+    const auto expected = "unsupported " + std::string { family }
+        + " identity: found " + std::string { found } + "; required "
+        + std::string { required } + "; regenerate "
+        + std::string { artifact } + " with this fsim build";
+    return std::ranges::any_of(
+        diagnostics.diagnostics(), [&](const auto& diagnostic) {
+            return diagnostic.message == expected;
+        });
 }
 
 } // namespace
 
 int main()
 {
+    static_assert(fsim::library::kFormatVersion == 5);
     static_assert(fsim::library::kOwningUnitSchemaVersion == 26);
     static_assert(fsim::library::kPortableSchemaVersion == 10);
     const auto expected = example_metadata();
@@ -116,6 +137,18 @@ int main()
         fsim::support::Sha256::digest(payloads[2].bytes));
     published_metadata.native_artifacts.front().checksum = fsim::support::Sha256::hex(
         fsim::support::Sha256::digest(payloads[3].bytes));
+    auto stale_publication_metadata = published_metadata;
+    stale_publication_metadata.format = fsim::library::kFormatVersion - 1U;
+    const auto stale_publication = directory.parent_path() / "stale-publication.fsimlib";
+    fsim::diagnostic::Engine stale_publication_diagnostics;
+    assert(!fsim::library::publish(
+        stale_publication, stale_publication_metadata, payloads,
+        stale_publication_diagnostics));
+    assert(has_identity_diagnostic(
+        stale_publication_diagnostics, ".fsimlib publication",
+        "format 4 and portable-unit schema 10",
+        "format 5 and portable-unit schema 10", ".fsimlib"));
+    assert(!std::filesystem::exists(stale_publication));
     fsim::diagnostic::Engine publish_diagnostics;
     assert(fsim::library::publish(
         published, published_metadata, payloads, publish_diagnostics));
@@ -128,6 +161,28 @@ int main()
     assert(fsim::library::load_metadata(
                published, "vendor", published_load_diagnostics)
         == std::optional { published_metadata });
+
+    auto source_hidden_metadata = published_metadata;
+    source_hidden_metadata.sources.front().artifact.clear();
+    source_hidden_metadata.sources.front().checksum.clear();
+    auto source_hidden_payloads = payloads;
+    source_hidden_payloads.erase(source_hidden_payloads.begin() + 2);
+    const auto source_hidden = directory.parent_path() / "source-hidden.fsimlib";
+    fsim::diagnostic::Engine source_hidden_diagnostics;
+    assert(fsim::library::publish(
+        source_hidden, source_hidden_metadata, source_hidden_payloads,
+        source_hidden_diagnostics));
+    assert(!source_hidden_diagnostics.has_error());
+    assert(!std::filesystem::exists(source_hidden / "sources"));
+    assert(std::filesystem::is_regular_file(
+        source_hidden / source_hidden_metadata.units.front().artifact));
+    assert(std::filesystem::is_regular_file(
+        source_hidden / source_hidden_metadata.native_artifacts.front().artifact));
+    fsim::diagnostic::Engine source_hidden_load_diagnostics;
+    assert(fsim::library::load_metadata(
+               source_hidden, "vendor", source_hidden_load_diagnostics)
+        == std::optional { source_hidden_metadata });
+    assert(!source_hidden_load_diagnostics.has_error());
     fsim::diagnostic::Engine overwrite_diagnostics;
     assert(!fsim::library::publish(
         published, published_metadata, payloads, overwrite_diagnostics));
@@ -864,6 +919,33 @@ endprimitive
         && restored_class->method_definitions.front()
                 .verilog_compatibility_profile
             == "implicit-net");
+    auto stale_class = *class_bytes;
+    stale_class[8] = static_cast<char>(
+        fsim::library::kOwningUnitSchemaVersion - 1U);
+    fsim::diagnostic::Engine stale_class_diagnostics;
+    assert(!fsim::library::deserialize_portable_class_unit(
+        stale_class, "stale.fsimclass", stale_class_diagnostics));
+    assert(has_identity_diagnostic(
+        stale_class_diagnostics, "portable class unit", "schema 25",
+        "schema 26", ".fsimobj"));
+    auto future_class = *class_bytes;
+    future_class[8] = static_cast<char>(
+        fsim::library::kOwningUnitSchemaVersion + 1U);
+    fsim::diagnostic::Engine future_class_diagnostics;
+    assert(!fsim::library::deserialize_portable_class_unit(
+        future_class, "future.fsimclass", future_class_diagnostics));
+    assert(has_identity_diagnostic(
+        future_class_diagnostics, "portable class unit", "schema 27",
+        "schema 26", ".fsimobj"));
+    fsim::diagnostic::Engine truncated_class_diagnostics;
+    assert(!fsim::library::deserialize_portable_class_unit(
+        class_bytes->substr(0, 15), "truncated.fsimclass",
+        truncated_class_diagnostics));
+    auto trailing_class = *class_bytes;
+    trailing_class.push_back('\0');
+    fsim::diagnostic::Engine trailing_class_diagnostics;
+    assert(!fsim::library::deserialize_portable_class_unit(
+        trailing_class, "trailing.fsimclass", trailing_class_diagnostics));
     auto trailing_udp = *udp_bytes;
     trailing_udp.push_back('\0');
     fsim::diagnostic::Engine trailing_udp_diagnostics;
@@ -880,6 +962,21 @@ endprimitive
     fsim::diagnostic::Engine future_udp_diagnostics;
     assert(!fsim::library::deserialize_portable_udp(
         future_udp, "future.fsimudp", future_udp_diagnostics));
+    assert(has_identity_diagnostic(
+        future_udp_diagnostics, "portable UDP declaration", "schema 2",
+        "schema 1", ".fsimobj"));
+    auto stale_udp = *udp_bytes;
+    stale_udp[8] = '\0';
+    fsim::diagnostic::Engine stale_udp_diagnostics;
+    assert(!fsim::library::deserialize_portable_udp(
+        stale_udp, "stale.fsimudp", stale_udp_diagnostics));
+    assert(has_identity_diagnostic(
+        stale_udp_diagnostics, "portable UDP declaration", "schema 0",
+        "schema 1", ".fsimobj"));
+    fsim::diagnostic::Engine truncated_udp_diagnostics;
+    assert(!fsim::library::deserialize_portable_udp(
+        udp_bytes->substr(0, 15), "truncated.fsimudp",
+        truncated_udp_diagnostics));
 
     const auto producer_source = directory.parent_path()
         / "producer" / "private" / "stage.sv";
@@ -949,6 +1046,35 @@ endprimitive
     fsim::diagnostic::Engine future_diagnostics;
     assert(!fsim::library::deserialize_portable_unit(
         future_unit, "future.fsimir", future_diagnostics));
+    assert(has_identity_diagnostic(
+        future_diagnostics, "portable owning unit", "schema 27",
+        "schema 26", ".fsimobj"));
+    auto stale_unit = *unit_bytes;
+    stale_unit[8] = static_cast<char>(
+        fsim::library::kOwningUnitSchemaVersion - 1U);
+    fsim::diagnostic::Engine stale_diagnostics;
+    assert(!fsim::library::deserialize_portable_unit(
+        stale_unit, "stale.fsimir", stale_diagnostics));
+    assert(has_identity_diagnostic(
+        stale_diagnostics, "portable owning unit", "schema 25",
+        "schema 26", ".fsimobj"));
+    fsim::diagnostic::Engine truncated_unit_diagnostics;
+    assert(!fsim::library::deserialize_portable_unit(
+        unit_bytes->substr(0, 15), "truncated.fsimir",
+        truncated_unit_diagnostics));
+    auto oversized_unit = *unit_bytes;
+    assert(oversized_unit.size() > 56U);
+    std::fill(
+        oversized_unit.begin() + 48, oversized_unit.begin() + 56,
+        static_cast<char>(0xff));
+    fsim::diagnostic::Engine oversized_unit_diagnostics;
+    assert(!fsim::library::deserialize_portable_unit(
+        oversized_unit, "oversized.fsimir", oversized_unit_diagnostics));
+    auto corrupt_unit = *unit_bytes;
+    corrupt_unit[0] = 'X';
+    fsim::diagnostic::Engine corrupt_unit_diagnostics;
+    assert(!fsim::library::deserialize_portable_unit(
+        corrupt_unit, "corrupt.fsimir", corrupt_unit_diagnostics));
 
     fsim::diagnostic::Engine wrong_name_diagnostics;
     assert(!fsim::library::load_metadata(
@@ -998,11 +1124,81 @@ endprimitive
     fsim::diagnostic::Engine schema_diagnostics;
     assert(!fsim::library::parse_metadata(
         incompatible_text, "future.toml", schema_diagnostics));
-    assert(std::ranges::any_of(
-        schema_diagnostics.diagnostics(),
-        [](const auto& diagnostic) {
-            return diagnostic.code == "FSIM-LIB-0002";
-        }));
+    assert(has_identity_diagnostic(
+        schema_diagnostics, ".fsimlib", "format 99", "format 5",
+        ".fsimlib"));
+
+    for (std::uint32_t format = 0;
+        format < fsim::library::kFormatVersion; ++format) {
+        auto stale_text = serialized;
+        stale_text.replace(
+            stale_text.find("format = 5"),
+            std::string { "format = 5" }.size(),
+            "format = " + std::to_string(format));
+        fsim::diagnostic::Engine stale_schema_diagnostics;
+        assert(!fsim::library::parse_metadata(
+            stale_text, "stale.toml", stale_schema_diagnostics));
+        assert(has_identity_diagnostic(
+            stale_schema_diagnostics, ".fsimlib",
+            "format " + std::to_string(format), "format 5", ".fsimlib"));
+    }
+
+    for (std::uint32_t schema = 0;
+        schema < fsim::library::kPortableSchemaVersion; ++schema) {
+        auto stale_portable_text = serialized;
+        stale_portable_text.replace(
+            stale_portable_text.find("portable_schema = 10"),
+            std::string { "portable_schema = 10" }.size(),
+            "portable_schema = " + std::to_string(schema));
+        fsim::diagnostic::Engine stale_portable_diagnostics;
+        assert(!fsim::library::parse_metadata(
+            stale_portable_text, "stale-portable.toml",
+            stale_portable_diagnostics));
+        assert(has_identity_diagnostic(
+            stale_portable_diagnostics, ".fsimlib",
+            "portable-unit schema " + std::to_string(schema),
+            "portable-unit schema 10", ".fsimlib"));
+    }
+
+    auto future_portable_text = serialized;
+    future_portable_text.replace(
+        future_portable_text.find("portable_schema = 10"),
+        std::string { "portable_schema = 10" }.size(),
+        "portable_schema = 11");
+    fsim::diagnostic::Engine future_portable_diagnostics;
+    assert(!fsim::library::parse_metadata(
+        future_portable_text, "future-portable.toml",
+        future_portable_diagnostics));
+    assert(has_identity_diagnostic(
+        future_portable_diagnostics, ".fsimlib",
+        "portable-unit schema 11", "portable-unit schema 10", ".fsimlib"));
+
+    auto systemc_metadata = expected;
+    systemc_metadata.native_artifacts = { { "systemc_plugin", "native/systemc/libfixture.so",
+        std::string(64, 'd'), 1, 4, "scv-2.0.1",
+        "compiler-producer-fingerprint", { }, "x86_64-test", { },
+        "generic", "+sse2", { }, { } } };
+    fsim::diagnostic::Engine systemc_metadata_diagnostics;
+    assert(fsim::library::parse_metadata(
+               fsim::library::serialize_metadata(systemc_metadata),
+               "systemc-native.toml", systemc_metadata_diagnostics)
+        == std::optional { systemc_metadata });
+    assert(!systemc_metadata_diagnostics.has_error());
+
+    auto missing_scv_metadata = systemc_metadata;
+    missing_scv_metadata.native_artifacts.front().scv_compatibility.clear();
+    fsim::diagnostic::Engine missing_scv_metadata_diagnostics;
+    assert(!fsim::library::parse_metadata(
+        fsim::library::serialize_metadata(missing_scv_metadata),
+        "missing-scv-native.toml", missing_scv_metadata_diagnostics));
+    assert(missing_scv_metadata_diagnostics.has_error());
+    const auto rejected_native = directory.parent_path() / "rejected-native.fsimlib";
+    fsim::diagnostic::Engine rejected_native_diagnostics;
+    assert(!fsim::library::publish(
+        rejected_native, missing_scv_metadata, { },
+        rejected_native_diagnostics));
+    assert(rejected_native_diagnostics.has_error());
+    assert(!std::filesystem::exists(rejected_native));
 
     std::error_code ignored;
     std::filesystem::remove_all(directory.parent_path(), ignored);

@@ -8,6 +8,11 @@ present in this repository. “Current” means code exists in the vertical slic
 “v1 target” means the interface or semantic rule is intentional but its full
 implementation is not complete.
 
+The normative compact inventory of current public layouts and symbols,
+installed targets, artifact/schema identities, native-versus-portable policy,
+rejection semantics, and regeneration workflows is the
+[v2 ABI and schema reference](abi-schema-reference.md).
+
 The architectural invariants are:
 
 - simulation is deterministic and single-threaded;

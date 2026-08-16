@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/systemc/incremental.hpp"
 
+#include "../diagnostic/artifact_identity.hpp"
 #include "plugin_compiler_internal.hpp"
 #include "producer_fingerprint.hpp"
 
@@ -743,6 +744,7 @@ namespace {
         metadata.runtime_abi = runtime_abi_version;
         metadata.systemc_abi = FSIM_SYSTEMC_ABI_VERSION;
         metadata.scv_compatibility = fsim_scv_compatibility_identity();
+        metadata.producer = std::string { "fsim " } + std::string { version };
         metadata.toolchain = std::string { to_string(toolchain) };
         metadata.target = target_identity();
         metadata.compiler_fingerprint = std::move(*fingerprint);
@@ -766,6 +768,7 @@ namespace {
         plugin.runtime_abi = runtime_abi_version;
         plugin.systemc_abi = FSIM_SYSTEMC_ABI_VERSION;
         plugin.scv_compatibility = fsim_scv_compatibility_identity();
+        plugin.producer = std::string { "fsim " } + std::string { version };
         plugin.logical_library = request.logical_library;
         plugin.link_options = request.settings.link_options;
         plugin.libraries = request.settings.libraries;
@@ -794,6 +797,37 @@ namespace {
                 return std::nullopt;
             }
             plugin.object_digests.push_back(object->compilation_digest);
+        }
+        auto current_settings = request.settings;
+        current_settings.include_directories.clear();
+        current_settings.defines.clear();
+        current_settings.compile_options.clear();
+        plugin_detail::add_default_compiler_settings(current_settings);
+        const auto current_compiler = current_settings.compiler.empty()
+            ? default_compiler()
+            : current_settings.compiler;
+        const auto current_toolchain = infer_toolchain(current_compiler);
+        auto current_fingerprint = compiler_fingerprint(
+            current_settings, base, diagnostics);
+        if (!current_fingerprint
+            || plugin.toolchain != to_string(current_toolchain)
+            || plugin.target != target_identity()
+            || plugin.compiler_fingerprint != *current_fingerprint) {
+            if (!diagnostics.has_error()) {
+                report(
+                    diagnostics, kLinkCode,
+                    diagnostic::unsupported_artifact_identity(
+                        "cached SystemC link producer",
+                        "toolchain " + plugin.toolchain + ", target "
+                            + plugin.target + " and fingerprint "
+                            + plugin.compiler_fingerprint,
+                        "toolchain " + std::string { to_string(current_toolchain) }
+                            + ", target " + target_identity()
+                            + " and fingerprint "
+                            + current_fingerprint.value_or("unavailable"),
+                        ".fsimscplugin"));
+            }
+            return std::nullopt;
         }
         return compute_incremental_plugin_input_digest(plugin);
     }
@@ -1011,6 +1045,17 @@ bool link_incremental_plugin(
         metadata.push_back(std::move(*object));
     }
     const auto& first = metadata.front();
+    if (first.producer != std::string { "fsim " } + std::string { version }
+        || first.target != target_identity()) {
+        report(
+            diagnostics, kLinkCode,
+            diagnostic::unsupported_artifact_identity(
+                "SystemC object producer", "producer " + first.producer + " and target " + first.target,
+                "producer fsim " + std::string { version } + " and target "
+                    + target_identity(),
+                ".fsimscobj"));
+        return false;
+    }
     if (std::ranges::any_of(metadata, [&](const auto& object) {
             return object.runtime_abi != first.runtime_abi
                 || object.systemc_abi != first.systemc_abi
@@ -1252,8 +1297,23 @@ std::shared_ptr<HierarchyRegistry> load_incremental_plugin(
     if (metadata->compiler_fingerprint != current_fingerprint) {
         report(
             diagnostics, kLinkCode,
-            "SystemC plug-in producer identity is stale or incompatible with the "
-            "current upstream source, compiler, standard library, or bridge",
+            diagnostic::unsupported_artifact_identity(
+                "SystemC plug-in compiler producer",
+                "fingerprint " + metadata->compiler_fingerprint,
+                "fingerprint " + current_fingerprint, ".fsimscplugin"),
+            directory);
+        return { };
+    }
+    if (metadata->producer
+            != std::string { "fsim " } + std::string { version }
+        || metadata->target != target_identity()) {
+        report(
+            diagnostics, kLinkCode,
+            diagnostic::unsupported_artifact_identity(
+                "SystemC plug-in producer", "producer " + metadata->producer + " and target " + metadata->target,
+                "producer fsim " + std::string { version } + " and target "
+                    + target_identity(),
+                ".fsimscplugin"),
             directory);
         return { };
     }

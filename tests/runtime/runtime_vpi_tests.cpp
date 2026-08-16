@@ -3,11 +3,13 @@
 #include "fsim/runtime/vpi_plugin.hpp"
 
 #include <cstddef>
+#include <cstring>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
 
 extern "C" std::size_t fsim_vpi_abi_c_host_size();
+extern "C" const char* fsim_vpi_abi_c_bind_symbol();
 extern "C" void fsim_vpi_abi_c_report(const fsim_vpi_host_v1* host);
 
 namespace fsim::tests::runtime {
@@ -52,6 +54,10 @@ void test_systemverilog_vpi_host_abi() {
   require(
       host.struct_size == fsim_vpi_abi_c_host_size(),
       "VPI host v1 has identical C and C++ layout");
+  require(
+      std::strcmp(
+          fsim_vpi_abi_c_bind_symbol(), "fsim_vpi_plugin_bind_v1") == 0,
+      "VPI C ABI publishes exactly one versioned bind symbol");
   fsim_vpi_abi_c_report(&host);
   require(
       capture.code == "FSIM-VPI-ABI-TEST"
@@ -230,6 +236,17 @@ void test_systemverilog_vpi_host_abi() {
       !host_failure
           && host_failure.error == SystemVerilogVpiPluginError::HostAbi,
       "VPI loader validates host ownership before opening an image");
+  auto truncated_host = host;
+  --truncated_host.struct_size;
+  const auto truncated_host_failure = load_systemverilog_vpi_plugin(
+      std::filesystem::path{FSIM_VPI_TEST_PLUGIN_PATH}.concat(
+          ".unopened-truncated-host"),
+      truncated_host);
+  require(
+      !truncated_host_failure
+          && truncated_host_failure.error
+              == SystemVerilogVpiPluginError::HostAbi,
+      "VPI loader rejects a one-byte host truncation before opening an image");
   const auto missing_artifact = load_systemverilog_vpi_plugin(
       std::filesystem::path{FSIM_VPI_TEST_PLUGIN_PATH}.concat(".missing"),
       host);

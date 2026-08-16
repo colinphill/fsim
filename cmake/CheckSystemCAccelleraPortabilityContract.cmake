@@ -177,7 +177,7 @@ fsim_require_tokens(src/systemc/incremental_compiler.cpp
   "cannot locate the fsim SystemC plug-in export library"
   "expected_compiler_fingerprint"
   "metadata->compiler_fingerprint != current_fingerprint"
-  "producer identity is stale or incompatible")
+  "\"SystemC plug-in compiler producer\"")
 fsim_require_tokens(src/app/application_library_import.cpp
   "native.compiler_fingerprint != *fingerprint"
   "native.systemc_abi != FSIM_SYSTEMC_ABI_VERSION")
@@ -229,7 +229,7 @@ fsim_require_tokens(tests/systemc/incremental_compiler_test.cpp
   "stale_plugin_diagnostics")
 fsim_require_tokens(tests/app/application_test_cli.cpp
   "compiler_fingerprint ="
-  "mapped-systemc-fallback")
+  "mapped-systemc-incompatible")
 fsim_require_tokens(tests/app/application_test_non_project_cli.cpp
   "stale-incremental.fsimdesign"
   "stale_producer_rejected")

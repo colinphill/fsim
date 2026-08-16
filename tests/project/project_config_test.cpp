@@ -333,11 +333,51 @@ mystery = true
       std::ranges::any_of(
           diagnostics.diagnostics(),
           [](const fsim::diagnostic::Diagnostic& diagnostic) {
-            return diagnostic.code == "FSIM-PROJ-0005"
-                && diagnostic.message
-                    == "unsupported project schema 1; this build supports schema 2";
+              return diagnostic.code == "FSIM-PROJ-0005"
+                  && diagnostic.message
+                  == "unsupported project manifest identity: found schema 1; required schema 2; regenerate fsim.toml with this fsim build";
           }),
-      "schema 1 rejection identifies only the accepted current schema");
+      "schema 1 rejection identifies the current schema and regeneration action");
+
+  const auto require_schema_rejection = [](
+                                            const std::string_view source,
+                                            const std::string_view expected) {
+      fsim::diagnostic::Engine schema_diagnostics;
+      const auto rejected = fsim::project::parse(
+          source, "schema-rejection.toml", ".", schema_diagnostics);
+      check(!rejected.has_value(), "non-current project schema is rejected");
+      check(
+          std::ranges::any_of(
+              schema_diagnostics.diagnostics(),
+              [&](const fsim::diagnostic::Diagnostic& diagnostic) {
+                  return diagnostic.code == "FSIM-PROJ-0005"
+                      && diagnostic.message == expected;
+              }),
+          "project schema rejection retains its exact regeneration diagnostic");
+  };
+  require_schema_rejection(
+      R"([project]
+top = "top"
+)",
+      "unsupported project manifest identity: found no schema; required schema 2; regenerate fsim.toml with this fsim build");
+  require_schema_rejection(
+      R"(schema = 0
+[project]
+top = "top"
+)",
+      "unsupported project manifest identity: found schema 0; required schema 2; regenerate fsim.toml with this fsim build");
+  require_schema_rejection(
+      R"(schema = 3
+[project]
+top = "top"
+)",
+      "unsupported project manifest identity: found schema 3; required schema 2; regenerate fsim.toml with this fsim build");
+  require_schema_rejection(
+      R"(schema = 18446744073709551615
+[project]
+top = "top"
+)",
+      "unsupported project manifest identity: found schema outside the uint32 range; required schema 2; regenerate fsim.toml with this fsim build");
 }
 
 void test_elaboration_search_library_validation() {

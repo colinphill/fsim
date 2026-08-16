@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/artifact/design.hpp"
 
+#include "../diagnostic/artifact_identity.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 
@@ -297,198 +298,165 @@ void validate_sdf_annotations(
     const std::string& source) {
   std::set<std::string> cache_keys;
   for (const auto& annotation : metadata.sdf_annotations) {
-    if (metadata.format < 9 || annotation.schema != 1
-        || (annotation.revision != "2.1" && annotation.revision != "3.0"
-            && annotation.revision != "4.0")
-        || annotation.revision_adapter.empty()
-        || (annotation.has_timescale != !annotation.timescale.empty())
-        || (annotation.selection_policy != "min"
-            && annotation.selection_policy != "typ"
-            && annotation.selection_policy != "max")
-        || annotation.scope_identity.empty()
-        || !checksum_spelling(annotation.source_digest)
-        || !checksum_spelling(annotation.design_digest)
-        || annotation.ir_identity.empty()
-        || annotation.resolution_identity.empty()
-        || annotation.mapping_identity.empty()
-        || !valid_ordered_identities(annotation.selected_root_identities)
-        || !valid_ordered_identities(annotation.semantic_unit_identities)
-        || !valid_ordered_identities(annotation.semantic_object_identities)
-        || !checksum_spelling(annotation.cache_key)
-        || !cache_keys.insert(annotation.cache_key).second) {
-      report(
-          diagnostics, kValueCode,
-          "design SDF annotations require complete ordered portable semantic "
-          "identities, exact policy, and unique content cache keys",
-          source);
-    }
+      if (annotation.schema != 1
+          || (annotation.revision != "2.1" && annotation.revision != "3.0"
+              && annotation.revision != "4.0")
+          || annotation.revision_adapter.empty()
+          || (annotation.has_timescale != !annotation.timescale.empty())
+          || (annotation.selection_policy != "min"
+              && annotation.selection_policy != "typ"
+              && annotation.selection_policy != "max")
+          || annotation.scope_identity.empty()
+          || !checksum_spelling(annotation.source_digest)
+          || !checksum_spelling(annotation.design_digest)
+          || annotation.ir_identity.empty()
+          || annotation.resolution_identity.empty()
+          || annotation.mapping_identity.empty()
+          || !valid_ordered_identities(annotation.selected_root_identities)
+          || !valid_ordered_identities(annotation.semantic_unit_identities)
+          || !valid_ordered_identities(annotation.semantic_object_identities)
+          || !checksum_spelling(annotation.cache_key)
+          || !cache_keys.insert(annotation.cache_key).second) {
+          report(
+              diagnostics, kValueCode,
+              "design SDF annotations require complete ordered portable semantic "
+              "identities, exact policy, and unique content cache keys",
+              source);
+      }
   }
 }
 
 void write_digest_fields(Writer& writer, const DesignMetadata& metadata) {
-    writer.string(metadata.format == 1
-            ? "fsim-design-provenance-v1"
-            : metadata.format < 4
-            ? "fsim-design-provenance-v2"
-            : metadata.format < 5
-            ? "fsim-design-provenance-v3"
-            : metadata.format < 6
-            ? "fsim-design-provenance-v4-language-profile"
-            : metadata.format < 7
-            ? "fsim-design-provenance-v5-vhdl-package-dependencies"
-            : metadata.format < 8
-            ? "fsim-design-provenance-v6-vhdl-unit-provenance"
-            : metadata.format < 9
-            ? "fsim-design-provenance-v7-verilog-unit-provenance"
-            : metadata.format < 10
-            ? "fsim-design-provenance-v8-sdf-identity"
-            : "fsim-design-provenance-v9-trace-profile");
+    writer.string("fsim-design-provenance-v9-trace-profile");
     writer.u32(metadata.runtime_abi);
     writer.string(metadata.time_resolution);
     writer.string(metadata.delay_mode);
     writer.string(metadata.optimization);
     writer.string(metadata.cache_key);
-    if (metadata.format >= 10)
-        writer.string(metadata.trace_archive);
-    if (metadata.format >= 4) {
-        writer.string(metadata.uvm_release);
-        writer.string(metadata.uvm_source_identity);
-    }
-  writer.u64(metadata.seed);
-  writer.boolean(metadata.entropy_seed);
-  writer.sequence(metadata.search_libraries, [&](const auto& value) {
-    writer.string(value);
-  });
-  writer.sequence(metadata.roots, [&](const auto& root) {
-    writer.string(root.alias);
-    writer.string(root.target);
-    writer.string(root.selected_identity);
-  });
-  writer.sequence(metadata.bindings, [&](const auto& binding) {
-    writer.string(binding.instance);
-    writer.optional_string(binding.target);
-    writer.optional_string(binding.resolver);
-  });
-  writer.sequence(metadata.objects, [&](const auto& object) {
-    writer.string(object.metadata_digest);
-    writer.string(object.compilation_digest);
-    writer.string(object.language);
-    writer.string(object.standard);
-    if (metadata.format >= 5) {
+    writer.string(metadata.trace_archive);
+    writer.string(metadata.uvm_release);
+    writer.string(metadata.uvm_source_identity);
+    writer.u64(metadata.seed);
+    writer.boolean(metadata.entropy_seed);
+    writer.sequence(metadata.search_libraries, [&](const auto& value) {
+        writer.string(value);
+    });
+    writer.sequence(metadata.roots, [&](const auto& root) {
+        writer.string(root.alias);
+        writer.string(root.target);
+        writer.string(root.selected_identity);
+    });
+    writer.sequence(metadata.bindings, [&](const auto& binding) {
+        writer.string(binding.instance);
+        writer.optional_string(binding.target);
+        writer.optional_string(binding.resolver);
+    });
+    writer.sequence(metadata.objects, [&](const auto& object) {
+        writer.string(object.metadata_digest);
+        writer.string(object.compilation_digest);
+        writer.string(object.language);
+        writer.string(object.standard);
         writer.string(object.compatibility_profile);
-    }
-    writer.string(object.library);
-    if (metadata.format >= 6) {
-      writer.sequence(
-          object.vhdl_package_dependencies, [&](const auto& dependency) {
+        writer.string(object.library);
+        writer.sequence(
+            object.vhdl_package_dependencies, [&](const auto& dependency) {
+                writer.string(dependency.standard);
+                writer.string(dependency.predefined_environment);
+                writer.string(dependency.package);
+                writer.string(dependency.revision);
+                writer.string(dependency.source_digest);
+            });
+        writer.sequence(object.unit_checksums, [&](const auto& checksum) {
+            writer.string(checksum);
+        });
+    });
+    writer.sequence(metadata.vhdl_unit_provenance, [&](const auto& unit) {
+        writer.u32(unit.unit);
+        writer.string(unit.standard);
+        writer.string(unit.predefined_environment);
+        writer.string(unit.compatibility_profile);
+        writer.sequence(unit.package_dependencies, [&](const auto& dependency) {
             writer.string(dependency.standard);
             writer.string(dependency.predefined_environment);
             writer.string(dependency.package);
             writer.string(dependency.revision);
             writer.string(dependency.source_digest);
-          });
-    }
-    writer.sequence(object.unit_checksums, [&](const auto& checksum) {
-      writer.string(checksum);
+        });
     });
-  });
-  if (metadata.format >= 7) {
-    writer.sequence(metadata.vhdl_unit_provenance, [&](const auto& unit) {
-      writer.u32(unit.unit);
-      writer.string(unit.standard);
-      writer.string(unit.predefined_environment);
-      writer.string(unit.compatibility_profile);
-      writer.sequence(unit.package_dependencies, [&](const auto& dependency) {
-        writer.string(dependency.standard);
-        writer.string(dependency.predefined_environment);
-        writer.string(dependency.package);
-        writer.string(dependency.revision);
-        writer.string(dependency.source_digest);
-      });
-    });
-  }
-  if (metadata.format >= 8) {
     writer.sequence(metadata.verilog_unit_provenance, [&](const auto& unit) {
-      writer.u32(unit.unit);
-      writer.string(unit.language);
-      writer.string(unit.standard);
-      writer.string(unit.compatibility_profile);
+        writer.u32(unit.unit);
+        writer.string(unit.language);
+        writer.string(unit.standard);
+        writer.string(unit.compatibility_profile);
     });
-  }
-  if (metadata.format >= 9) {
     write_sdf_annotations(writer, metadata.sdf_annotations);
-  }
-  if (metadata.format >= 2) {
     writer.sequence(metadata.systemc_plugins, [&](const auto& plugin) {
-      writer.string(plugin.logical_library);
-      writer.string(plugin.input_digest);
-      writer.string(plugin.link_digest);
-      writer.string(plugin.compiler_fingerprint);
-      if (metadata.format >= 11) {
+        writer.string(plugin.logical_library);
+        writer.string(plugin.input_digest);
+        writer.string(plugin.link_digest);
+        writer.string(plugin.compiler_fingerprint);
         writer.string(plugin.scv_compatibility);
-      }
-      writer.string(plugin.metadata_checksum);
-      writer.string(plugin.library_checksum);
-      writer.sequence(plugin.factories, [&](const auto& factory) {
-        writer.string(factory);
-      });
+        writer.string(plugin.metadata_checksum);
+        writer.string(plugin.library_checksum);
+        writer.sequence(plugin.factories, [&](const auto& factory) {
+            writer.string(factory);
+        });
     });
-  }
-  writer.sequence(metadata.payloads, [&](const auto& payload) {
-    writer.string(payload.kind);
-    writer.string(payload.checksum);
-  });
-  writer.sequence(metadata.specialization_cache_keys, [&](const auto& key) {
-    writer.string(key);
-  });
-  writer.u64(metadata.unit_count);
-  writer.u64(metadata.semantic_source_count);
-  writer.u64(metadata.specialization_count);
-  writer.u64(metadata.signal_count);
-  writer.u64(metadata.process_count);
+    writer.sequence(metadata.payloads, [&](const auto& payload) {
+        writer.string(payload.kind);
+        writer.string(payload.checksum);
+    });
+    writer.sequence(metadata.specialization_cache_keys, [&](const auto& key) {
+        writer.string(key);
+    });
+    writer.u64(metadata.unit_count);
+    writer.u64(metadata.semantic_source_count);
+    writer.u64(metadata.specialization_count);
+    writer.u64(metadata.signal_count);
+    writer.u64(metadata.process_count);
 }
 
 bool validate(
     const DesignMetadata& metadata,
     diagnostic::Engine& diagnostics,
     const std::string& source) {
-    if ((metadata.format != 1 && metadata.format != 2 && metadata.format != 4
-            && metadata.format != 5 && metadata.format != 6
-            && metadata.format != 7 && metadata.format != 8
-            && metadata.format != 9
-            && metadata.format != kDesignFormatVersion)
+    if (metadata.format != kDesignFormatVersion
         || metadata.runtime_abi != runtime_abi_version) {
         report(
             diagnostics, kSchemaCode,
-            "unsupported .fsimdesign format or runtime ABI", source);
+            diagnostic::unsupported_artifact_identity(
+                ".fsimdesign", "format " + std::to_string(metadata.format) + " and runtime ABI " + std::to_string(metadata.runtime_abi),
+                "format " + std::to_string(kDesignFormatVersion)
+                    + " and runtime ABI "
+                    + std::to_string(runtime_abi_version),
+                ".fsimdesign"),
+            source);
     }
-  if (metadata.producer.empty() || metadata.time_resolution.empty()
-      || (metadata.delay_mode != "min" && metadata.delay_mode != "typ"
-          && metadata.delay_mode != "max")
-      || (metadata.optimization != "O0" && metadata.optimization != "O2")
-      || !checksum_spelling(metadata.cache_key)
-      || (metadata.format >= 10
-          && ((metadata.trace_archive.size() % 2U) != 0U
-              || !std::ranges::all_of(metadata.trace_archive,
-                  [](const char value) {
-                    return (value >= '0' && value <= '9')
-                        || (value >= 'a' && value <= 'f');
-                  })))
-      || (metadata.format >= 4
-          && (metadata.uvm_release != "none"
-              && metadata.uvm_release != "1.2"
-              && metadata.uvm_release != "2020.3.1"))
-      || (metadata.format >= 4 && metadata.uvm_release == "none"
-          && !metadata.uvm_source_identity.empty())
-      || (metadata.format >= 4 && metadata.uvm_release != "none"
-          && !checksum_spelling(metadata.uvm_source_identity))
-      || !checksum_spelling(metadata.design_digest)) {
-    report(
-        diagnostics, kValueCode,
-        "design metadata requires producer, time resolution, delay and "
-        "optimization modes, and lowercase SHA-256 cache/design digests",
-        source);
-  }
+    if (metadata.producer.empty() || metadata.time_resolution.empty()
+        || (metadata.delay_mode != "min" && metadata.delay_mode != "typ"
+            && metadata.delay_mode != "max")
+        || (metadata.optimization != "O0" && metadata.optimization != "O2")
+        || !checksum_spelling(metadata.cache_key)
+        || (metadata.trace_archive.size() % 2U) != 0U
+        || !std::ranges::all_of(metadata.trace_archive,
+            [](const char value) {
+                return (value >= '0' && value <= '9')
+                    || (value >= 'a' && value <= 'f');
+            })
+        || (metadata.uvm_release != "none"
+            && metadata.uvm_release != "1.2"
+            && metadata.uvm_release != "2020.3.1")
+        || (metadata.uvm_release == "none"
+            && !metadata.uvm_source_identity.empty())
+        || (metadata.uvm_release != "none"
+            && !checksum_spelling(metadata.uvm_source_identity))
+        || !checksum_spelling(metadata.design_digest)) {
+        report(
+            diagnostics, kValueCode,
+            "design metadata requires producer, time resolution, delay and "
+            "optimization modes, and lowercase SHA-256 cache/design digests",
+            source);
+    }
   std::set<std::string> libraries;
   for (const auto& library : metadata.search_libraries) {
     if (!safe_name(library) || !libraries.insert(library).second) {
@@ -525,20 +493,19 @@ bool validate(
           || (object.language != "vhdl" && object.language != "verilog"
               && object.language != "systemverilog")
           || object.standard.empty()
-          || (metadata.format >= 5
-              && (object.compatibility_profile.empty()
-                  || (object.language == "vhdl"
-                      && object.compatibility_profile == "none")))
+          || object.compatibility_profile.empty()
+          || (object.language == "vhdl"
+              && object.compatibility_profile == "none")
           || !safe_name(object.library)
           || std::ranges::any_of(
               object.vhdl_package_dependencies,
               [&](const auto& dependency) {
-                return metadata.format < 6 || object.language != "vhdl"
-                    || dependency.standard != object.standard
-                    || dependency.predefined_environment.empty()
-                    || dependency.package.empty() || dependency.revision.empty()
-                    || !checksum_spelling(dependency.source_digest)
-                    || !vhdl_packages.insert(dependency.package).second;
+                  return object.language != "vhdl"
+                      || dependency.standard != object.standard
+                      || dependency.predefined_environment.empty()
+                      || dependency.package.empty() || dependency.revision.empty()
+                      || !checksum_spelling(dependency.source_digest)
+                      || !vhdl_packages.insert(dependency.package).second;
               })
           || object.unit_checksums.empty()
           || std::ranges::any_of(
@@ -554,15 +521,14 @@ bool validate(
   const auto has_vhdl_object = std::ranges::any_of(
       metadata.objects,
       [](const auto& object) { return object.language == "vhdl"; });
-  if (metadata.format >= 7
-      && (has_vhdl_object != !metadata.vhdl_unit_provenance.empty()
-          || !std::ranges::is_sorted(
-              metadata.vhdl_unit_provenance, {},
-              &DesignVhdlUnitProvenance::unit))) {
-    report(
-        diagnostics, kValueCode,
-        "format-7 VHDL designs require ordered semantic-unit provenance",
-        source);
+  if (has_vhdl_object != !metadata.vhdl_unit_provenance.empty()
+      || !std::ranges::is_sorted(
+          metadata.vhdl_unit_provenance, { },
+          &DesignVhdlUnitProvenance::unit)) {
+      report(
+          diagnostics, kValueCode,
+          "current VHDL designs require ordered semantic-unit provenance",
+          source);
   }
   for (const auto& unit : metadata.vhdl_unit_provenance) {
     std::set<std::string> packages;
@@ -581,7 +547,7 @@ bool validate(
                         != object.vhdl_package_dependencies.end();
                   });
         });
-    if (metadata.format < 7 || unit.unit >= metadata.unit_count
+    if (unit.unit >= metadata.unit_count
         || !vhdl_units.insert(unit.unit).second || unit.standard.empty()
         || unit.predefined_environment.empty()
         || unit.compatibility_profile.empty()
@@ -589,29 +555,28 @@ bool validate(
         || matching_object == metadata.objects.end()
         || std::ranges::any_of(
             unit.package_dependencies, [&](const auto& dependency) {
-              return dependency.standard != unit.standard
-                  || dependency.predefined_environment
-                      != unit.predefined_environment
-                  || dependency.package.empty() || dependency.revision.empty()
-                  || !checksum_spelling(dependency.source_digest)
-                  || !packages.insert(dependency.package).second;
+                return dependency.standard != unit.standard
+                    || dependency.predefined_environment
+                    != unit.predefined_environment
+                    || dependency.package.empty() || dependency.revision.empty()
+                    || !checksum_spelling(dependency.source_digest)
+                    || !packages.insert(dependency.package).second;
             })) {
-      report(
-          diagnostics, kValueCode,
-          "design VHDL unit provenance requires unique semantic units and "
-          "complete revision, environment, profile, and package identities",
-          source);
+        report(
+            diagnostics, kValueCode,
+            "design VHDL unit provenance requires unique semantic units and "
+            "complete revision, environment, profile, and package identities",
+            source);
     }
   }
   std::set<std::uint32_t> verilog_units;
-  if (metadata.format >= 8
-      && !std::ranges::is_sorted(
-          metadata.verilog_unit_provenance, {},
+  if (!std::ranges::is_sorted(
+          metadata.verilog_unit_provenance, { },
           &DesignVerilogUnitProvenance::unit)) {
-    report(
-        diagnostics, kValueCode,
-        "format-8 Verilog/SystemVerilog unit provenance must be ordered",
-        source);
+      report(
+          diagnostics, kValueCode,
+          "current Verilog/SystemVerilog unit provenance must be ordered",
+          source);
   }
   for (const auto& unit : metadata.verilog_unit_provenance) {
     const auto matching_object = std::ranges::find_if(
@@ -620,29 +585,23 @@ bool validate(
               && object.standard == unit.standard
               && object.compatibility_profile == unit.compatibility_profile;
         });
-    if (metadata.format < 8 || unit.unit >= metadata.unit_count
+    if (unit.unit >= metadata.unit_count
         || !verilog_units.insert(unit.unit).second
         || (unit.language != "verilog"
             && unit.language != "systemverilog")
         || unit.standard.empty() || unit.compatibility_profile.empty()
         || matching_object == metadata.objects.end()) {
-      report(
-          diagnostics, kValueCode,
-          "design Verilog/SystemVerilog unit provenance requires unique "
-          "semantic units and matching language, standard, and compatibility "
-          "object identities",
-          source);
+        report(
+            diagnostics, kValueCode,
+            "design Verilog/SystemVerilog unit provenance requires unique "
+            "semantic units and matching language, standard, and compatibility "
+            "object identities",
+            source);
     }
   }
   validate_sdf_annotations(metadata, diagnostics, source);
   std::set<std::string> systemc_libraries;
   std::set<std::string> systemc_directories;
-  if (metadata.format == 1 && !metadata.systemc_plugins.empty()) {
-    report(
-        diagnostics, kValueCode,
-        "format-1 .fsimdesign metadata cannot index SystemC plug-ins",
-        source);
-  }
   for (const auto& plugin : metadata.systemc_plugins) {
     const auto directory = support::path_to_utf8(plugin.directory);
     if (!safe_name(plugin.logical_library)
@@ -650,7 +609,7 @@ bool validate(
         || !checksum_spelling(plugin.input_digest)
         || !checksum_spelling(plugin.link_digest)
         || !checksum_spelling(plugin.compiler_fingerprint)
-        || (metadata.format >= 11 && plugin.scv_compatibility.empty())
+        || plugin.scv_compatibility.empty()
         || !safe_relative_path(plugin.directory)
         || !systemc_directories.insert(directory).second
         || !checksum_spelling(plugin.metadata_checksum)
@@ -663,11 +622,11 @@ bool validate(
         || std::ranges::any_of(
             plugin.factories,
             [](const auto& factory) { return factory.empty(); })) {
-      report(
-          diagnostics, kValueCode,
-          "design SystemC plug-ins require unique safe libraries/directories, "
-          "compatible checksums, and a sorted unique factory inventory",
-          source);
+        report(
+            diagnostics, kValueCode,
+            "design SystemC plug-ins require unique safe libraries/directories, "
+            "compatible checksums, and a sorted unique factory inventory",
+            source);
     }
   }
   std::set<std::string> payload_kinds;
@@ -858,7 +817,7 @@ std::string compute_design_digest(const DesignMetadata& metadata) {
 std::string serialize_design_metadata(const DesignMetadata& metadata) {
   Writer writer;
   writer.raw(kMagic);
-  writer.u32(metadata.format);
+  writer.u32(kDesignFormatVersion);
   writer.u32(metadata.runtime_abi);
   writer.string(metadata.producer);
   writer.string(metadata.design_digest);
@@ -866,13 +825,9 @@ std::string serialize_design_metadata(const DesignMetadata& metadata) {
   writer.string(metadata.delay_mode);
   writer.string(metadata.optimization);
   writer.string(metadata.cache_key);
-  if (metadata.format >= 10) {
-    writer.string(metadata.trace_archive);
-  }
-  if (metadata.format >= 4) {
-    writer.string(metadata.uvm_release);
-    writer.string(metadata.uvm_source_identity);
-  }
+  writer.string(metadata.trace_archive);
+  writer.string(metadata.uvm_release);
+  writer.string(metadata.uvm_source_identity);
   writer.u64(metadata.seed);
   writer.boolean(metadata.entropy_seed);
   writer.sequence(metadata.search_libraries, [&](const auto& value) {
@@ -893,26 +848,21 @@ std::string serialize_design_metadata(const DesignMetadata& metadata) {
     writer.string(object.compilation_digest);
     writer.string(object.language);
     writer.string(object.standard);
-    if (metadata.format >= 5) {
-        writer.string(object.compatibility_profile);
-    }
+    writer.string(object.compatibility_profile);
     writer.string(object.library);
-    if (metadata.format >= 6) {
-      writer.sequence(
-          object.vhdl_package_dependencies, [&](const auto& dependency) {
+    writer.sequence(
+        object.vhdl_package_dependencies, [&](const auto& dependency) {
             writer.string(dependency.standard);
             writer.string(dependency.predefined_environment);
             writer.string(dependency.package);
             writer.string(dependency.revision);
             writer.string(dependency.source_digest);
-          });
-    }
+        });
     writer.sequence(object.unit_checksums, [&](const auto& checksum) {
       writer.string(checksum);
     });
   });
-  if (metadata.format >= 7) {
-    writer.sequence(metadata.vhdl_unit_provenance, [&](const auto& unit) {
+  writer.sequence(metadata.vhdl_unit_provenance, [&](const auto& unit) {
       writer.u32(unit.unit);
       writer.string(unit.standard);
       writer.string(unit.predefined_environment);
@@ -924,36 +874,27 @@ std::string serialize_design_metadata(const DesignMetadata& metadata) {
         writer.string(dependency.revision);
         writer.string(dependency.source_digest);
       });
-    });
-  }
-  if (metadata.format >= 8) {
-    writer.sequence(metadata.verilog_unit_provenance, [&](const auto& unit) {
+  });
+  writer.sequence(metadata.verilog_unit_provenance, [&](const auto& unit) {
       writer.u32(unit.unit);
       writer.string(unit.language);
       writer.string(unit.standard);
       writer.string(unit.compatibility_profile);
-    });
-  }
-  if (metadata.format >= 9) {
-    write_sdf_annotations(writer, metadata.sdf_annotations);
-  }
-  if (metadata.format >= 2) {
-    writer.sequence(metadata.systemc_plugins, [&](const auto& plugin) {
+  });
+  write_sdf_annotations(writer, metadata.sdf_annotations);
+  writer.sequence(metadata.systemc_plugins, [&](const auto& plugin) {
       writer.string(plugin.logical_library);
       writer.string(plugin.input_digest);
       writer.string(plugin.link_digest);
       writer.string(plugin.compiler_fingerprint);
-      if (metadata.format >= 11) {
-        writer.string(plugin.scv_compatibility);
-      }
+      writer.string(plugin.scv_compatibility);
       writer.path(plugin.directory);
       writer.string(plugin.metadata_checksum);
       writer.string(plugin.library_checksum);
       writer.sequence(plugin.factories, [&](const auto& factory) {
         writer.string(factory);
       });
-    });
-  }
+  });
   writer.sequence(metadata.payloads, [&](const auto& payload) {
     writer.string(payload.kind);
     writer.path(payload.artifact);
@@ -988,14 +929,17 @@ std::optional<DesignMetadata> deserialize_design_metadata(
   }
   metadata.format = *format;
   metadata.runtime_abi = *runtime_abi;
-  if (metadata.format != 1 && metadata.format != 2 && metadata.format != 4
-      && metadata.format != 5 && metadata.format != 6
-      && metadata.format != 7 && metadata.format != 8
-      && metadata.format != 9 && metadata.format != 10
-      && metadata.format != kDesignFormatVersion) {
+  if (metadata.format != kDesignFormatVersion
+      || metadata.runtime_abi != runtime_abi_version) {
       report(
           diagnostics, kSchemaCode,
-          "unsupported .fsimdesign format or runtime ABI", source_name);
+          diagnostic::unsupported_artifact_identity(
+              ".fsimdesign", "format " + std::to_string(metadata.format) + " and runtime ABI " + std::to_string(metadata.runtime_abi),
+              "format " + std::to_string(kDesignFormatVersion)
+                  + " and runtime ABI "
+                  + std::to_string(runtime_abi_version),
+              ".fsimdesign"),
+          source_name);
       return std::nullopt;
   }
   const auto read_string = [&](std::string& value) {
@@ -1007,18 +951,16 @@ std::optional<DesignMetadata> deserialize_design_metadata(
     return true;
   };
   if (!read_string(metadata.producer)
-        || !read_string(metadata.design_digest)
-        || !read_string(metadata.time_resolution)
-        || !read_string(metadata.delay_mode)
-        || !read_string(metadata.optimization)
-        || !read_string(metadata.cache_key)
-        || (metadata.format >= 10
-            && !read_string(metadata.trace_archive))
-        || (metadata.format >= 4
-            && (!read_string(metadata.uvm_release)
-                || !read_string(metadata.uvm_source_identity)))) {
-    report(diagnostics, kSchemaCode, "truncated .fsimdesign root", source_name);
-    return std::nullopt;
+      || !read_string(metadata.design_digest)
+      || !read_string(metadata.time_resolution)
+      || !read_string(metadata.delay_mode)
+      || !read_string(metadata.optimization)
+      || !read_string(metadata.cache_key)
+      || !read_string(metadata.trace_archive)
+      || !read_string(metadata.uvm_release)
+      || !read_string(metadata.uvm_source_identity)) {
+      report(diagnostics, kSchemaCode, "truncated .fsimdesign root", source_name);
+      return std::nullopt;
   }
   const auto seed = reader.u64();
   const auto entropy = reader.boolean();
@@ -1041,126 +983,143 @@ std::optional<DesignMetadata> deserialize_design_metadata(
     return true;
   };
   if (!read_sequence([&] {
-        auto value = reader.string();
-        if (value) metadata.search_libraries.push_back(std::move(*value));
-        return value.has_value();
+          auto value = reader.string();
+          if (value)
+              metadata.search_libraries.push_back(std::move(*value));
+          return value.has_value();
       })
       || !read_sequence([&] {
-           DesignRoot root;
-           if (!read_string(root.alias) || !read_string(root.target)
-               || !read_string(root.selected_identity)) return false;
-           metadata.roots.push_back(std::move(root));
-           return true;
+             DesignRoot root;
+             if (!read_string(root.alias) || !read_string(root.target)
+                 || !read_string(root.selected_identity))
+                 return false;
+             metadata.roots.push_back(std::move(root));
+             return true;
          })
       || !read_sequence([&] {
-           DesignBinding binding;
-           if (!read_string(binding.instance)) return false;
-           auto target = reader.optional_string();
-           auto resolver = reader.optional_string();
-           if (!target || !resolver) return false;
-           binding.target = std::move(*target);
-           binding.resolver = std::move(*resolver);
-           metadata.bindings.push_back(std::move(binding));
-           return true;
+             DesignBinding binding;
+             if (!read_string(binding.instance))
+                 return false;
+             auto target = reader.optional_string();
+             auto resolver = reader.optional_string();
+             if (!target || !resolver)
+                 return false;
+             binding.target = std::move(*target);
+             binding.resolver = std::move(*resolver);
+             metadata.bindings.push_back(std::move(binding));
+             return true;
          })
       || !read_sequence([&] {
-           DesignObjectInput object;
-           if (!read_string(object.metadata_digest)
-               || !read_string(object.compilation_digest)
-               || !read_string(object.language)
-               || !read_string(object.standard)
-               || (metadata.format >= 5
-                   && !read_string(object.compatibility_profile))
-               || !read_string(object.library))
-               return false;
-           if (metadata.format >= 6 && !read_sequence([&] {
-                 library::VhdlPackageDependency dependency;
-                 if (!read_string(dependency.standard)
-                     || !read_string(dependency.predefined_environment)
-                     || !read_string(dependency.package)
-                     || !read_string(dependency.revision)
-                     || !read_string(dependency.source_digest)) return false;
-                 object.vhdl_package_dependencies.push_back(
-                     std::move(dependency));
-                 return true;
-               })) return false;
-           if (!read_sequence([&] {
-                 auto checksum = reader.string();
-                 if (checksum) object.unit_checksums.push_back(
-                     std::move(*checksum));
-                 return checksum.has_value();
-               })) return false;
-           metadata.objects.push_back(std::move(object));
-           return true;
-         })
-      || (metadata.format >= 7 && !read_sequence([&] {
-           DesignVhdlUnitProvenance unit;
-           const auto unit_id = reader.u32();
-           if (!unit_id || !read_string(unit.standard)
-               || !read_string(unit.predefined_environment)
-               || !read_string(unit.compatibility_profile)) return false;
-           unit.unit = *unit_id;
-           if (!read_sequence([&] {
-                 library::VhdlPackageDependency dependency;
-                 if (!read_string(dependency.standard)
-                     || !read_string(dependency.predefined_environment)
-                     || !read_string(dependency.package)
-                     || !read_string(dependency.revision)
-                     || !read_string(dependency.source_digest)) return false;
-                 unit.package_dependencies.push_back(std::move(dependency));
-                 return true;
-               })) return false;
-           metadata.vhdl_unit_provenance.push_back(std::move(unit));
-           return true;
-         }))
-      || (metadata.format >= 8 && !read_sequence([&] {
-           DesignVerilogUnitProvenance unit;
-           const auto unit_id = reader.u32();
-           if (!unit_id || !read_string(unit.language)
-               || !read_string(unit.standard)
-               || !read_string(unit.compatibility_profile)) return false;
-           unit.unit = *unit_id;
-           metadata.verilog_unit_provenance.push_back(std::move(unit));
-           return true;
-         }))
-      || (metadata.format >= 9 && !read_sdf_annotations(reader, metadata))
-      || (metadata.format >= 2 && !read_sequence([&] {
-           DesignSystemCPlugin plugin;
-           if (!read_string(plugin.logical_library)
-               || !read_string(plugin.input_digest)
-               || !read_string(plugin.link_digest)
-               || !read_string(plugin.compiler_fingerprint)) return false;
-           if (metadata.format >= 11
-               && !read_string(plugin.scv_compatibility)) return false;
-           auto directory = reader.path();
-           if (!directory || !read_string(plugin.metadata_checksum)
-               || !read_string(plugin.library_checksum)) return false;
-           plugin.directory = std::move(*directory);
-           if (!read_sequence([&] {
-                 auto factory = reader.string();
-                 if (factory) plugin.factories.push_back(std::move(*factory));
-                 return factory.has_value();
-               })) return false;
-           metadata.systemc_plugins.push_back(std::move(plugin));
-           return true;
-         }))
-      || !read_sequence([&] {
-           DesignPayload payload;
-           if (!read_string(payload.kind)) return false;
-           auto path = reader.path();
-           if (!path || !read_string(payload.checksum)) return false;
-           payload.artifact = std::move(*path);
-           metadata.payloads.push_back(std::move(payload));
-           return true;
+             DesignObjectInput object;
+             if (!read_string(object.metadata_digest)
+                 || !read_string(object.compilation_digest)
+                 || !read_string(object.language)
+                 || !read_string(object.standard)
+                 || !read_string(object.compatibility_profile)
+                 || !read_string(object.library))
+                 return false;
+             if (!read_sequence([&] {
+                     library::VhdlPackageDependency dependency;
+                     if (!read_string(dependency.standard)
+                         || !read_string(dependency.predefined_environment)
+                         || !read_string(dependency.package)
+                         || !read_string(dependency.revision)
+                         || !read_string(dependency.source_digest))
+                         return false;
+                     object.vhdl_package_dependencies.push_back(
+                         std::move(dependency));
+                     return true;
+                 }))
+                 return false;
+             if (!read_sequence([&] {
+                     auto checksum = reader.string();
+                     if (checksum)
+                         object.unit_checksums.push_back(
+                             std::move(*checksum));
+                     return checksum.has_value();
+                 }))
+                 return false;
+             metadata.objects.push_back(std::move(object));
+             return true;
          })
       || !read_sequence([&] {
-           auto key = reader.string();
-           if (key) metadata.specialization_cache_keys.push_back(
-               std::move(*key));
-           return key.has_value();
+             DesignVhdlUnitProvenance unit;
+             const auto unit_id = reader.u32();
+             if (!unit_id || !read_string(unit.standard)
+                 || !read_string(unit.predefined_environment)
+                 || !read_string(unit.compatibility_profile))
+                 return false;
+             unit.unit = *unit_id;
+             if (!read_sequence([&] {
+                     library::VhdlPackageDependency dependency;
+                     if (!read_string(dependency.standard)
+                         || !read_string(dependency.predefined_environment)
+                         || !read_string(dependency.package)
+                         || !read_string(dependency.revision)
+                         || !read_string(dependency.source_digest))
+                         return false;
+                     unit.package_dependencies.push_back(std::move(dependency));
+                     return true;
+                 }))
+                 return false;
+             metadata.vhdl_unit_provenance.push_back(std::move(unit));
+             return true;
+         })
+      || !read_sequence([&] {
+             DesignVerilogUnitProvenance unit;
+             const auto unit_id = reader.u32();
+             if (!unit_id || !read_string(unit.language)
+                 || !read_string(unit.standard)
+                 || !read_string(unit.compatibility_profile))
+                 return false;
+             unit.unit = *unit_id;
+             metadata.verilog_unit_provenance.push_back(std::move(unit));
+             return true;
+         })
+      || !read_sdf_annotations(reader, metadata)
+      || !read_sequence([&] {
+             DesignSystemCPlugin plugin;
+             if (!read_string(plugin.logical_library)
+                 || !read_string(plugin.input_digest)
+                 || !read_string(plugin.link_digest)
+                 || !read_string(plugin.compiler_fingerprint)
+                 || !read_string(plugin.scv_compatibility))
+                 return false;
+             auto directory = reader.path();
+             if (!directory || !read_string(plugin.metadata_checksum)
+                 || !read_string(plugin.library_checksum))
+                 return false;
+             plugin.directory = std::move(*directory);
+             if (!read_sequence([&] {
+                     auto factory = reader.string();
+                     if (factory)
+                         plugin.factories.push_back(std::move(*factory));
+                     return factory.has_value();
+                 }))
+                 return false;
+             metadata.systemc_plugins.push_back(std::move(plugin));
+             return true;
+         })
+      || !read_sequence([&] {
+             DesignPayload payload;
+             if (!read_string(payload.kind))
+                 return false;
+             auto path = reader.path();
+             if (!path || !read_string(payload.checksum))
+                 return false;
+             payload.artifact = std::move(*path);
+             metadata.payloads.push_back(std::move(payload));
+             return true;
+         })
+      || !read_sequence([&] {
+             auto key = reader.string();
+             if (key)
+                 metadata.specialization_cache_keys.push_back(
+                     std::move(*key));
+             return key.has_value();
          })) {
-    report(diagnostics, kSchemaCode, "truncated .fsimdesign index", source_name);
-    return std::nullopt;
+      report(diagnostics, kSchemaCode, "truncated .fsimdesign index", source_name);
+      return std::nullopt;
   }
   const auto units = reader.u64();
   const auto semantic_sources = reader.u64();
@@ -1225,7 +1184,31 @@ bool publish_design(
         support::path_to_utf8(destination));
     return false;
   }
+  if (metadata.format != kDesignFormatVersion
+      || metadata.runtime_abi != runtime_abi_version) {
+      report(
+          diagnostics, kSchemaCode,
+          diagnostic::unsupported_artifact_identity(
+              ".fsimdesign", "format " + std::to_string(metadata.format) + " and runtime ABI " + std::to_string(metadata.runtime_abi),
+              "format " + std::to_string(kDesignFormatVersion)
+                  + " and runtime ABI "
+                  + std::to_string(runtime_abi_version),
+              ".fsimdesign"));
+      return false;
+  }
   diagnostic::Engine validation;
+  if (!validate(
+          metadata, validation, std::string { kDesignMetadataFilename })) {
+      diagnostic::Diagnostic failure;
+      failure.severity = diagnostic::Severity::error;
+      failure.code = std::string { kIoCode };
+      failure.message = "invalid design metadata supplied for publication";
+      for (const auto& detail : validation.diagnostics()) {
+          failure.notes.push_back({ detail.code + ": " + detail.message, { } });
+      }
+      diagnostics.report(std::move(failure));
+      return false;
+  }
   const auto canonical = serialize_design_metadata(metadata);
   if (!deserialize_design_metadata(
           canonical, std::string{kDesignMetadataFilename}, validation)) {

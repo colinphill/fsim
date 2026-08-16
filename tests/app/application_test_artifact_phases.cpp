@@ -380,16 +380,25 @@ end architecture;
         stale_vhdl_diagnostics.diagnostics(), [](const auto& diagnostic) {
             return diagnostic.code == "FSIM-ART-VHDEP-001";
         }));
-    auto future_vhdl_object = *vhdl_metadata;
-    ++future_vhdl_object.format;
+    auto future_vhdl_object = artifact::serialize_object_metadata(*vhdl_metadata);
+    const auto future_object_format = artifact::kObjectFormatVersion + 1U;
+    for (std::size_t byte = 0; byte < 4U; ++byte) {
+        future_vhdl_object[8U + byte] = static_cast<char>(
+            (future_object_format >> (byte * 8U)) & 0xffU);
+    }
     diagnostic::Engine future_vhdl_object_diagnostics;
     assert(!artifact::deserialize_object_metadata(
-        artifact::serialize_object_metadata(future_vhdl_object),
-        "future-vhdl-object", future_vhdl_object_diagnostics));
+        future_vhdl_object, "future-vhdl-object",
+        future_vhdl_object_diagnostics));
     assert(std::ranges::any_of(
         future_vhdl_object_diagnostics.diagnostics(),
         [](const auto& diagnostic) {
-            return diagnostic.code == "FSIM-ART-0001";
+            return diagnostic.code == "FSIM-ART-0001"
+                && diagnostic.message
+                == "unsupported .fsimobj identity: found format 7 and "
+                   "portable-unit schema 10; required format 6 and "
+                   "portable-unit schema 10; regenerate .fsimobj with "
+                   "this fsim build";
         }));
     output.str({ });
     error.str({ });
@@ -596,12 +605,12 @@ end architecture;
                 && diagnostic.message.find("omits Verilog/SystemVerilog")
                     != std::string::npos;
         }));
-    auto future_design_metadata = *design_metadata;
-    ++future_design_metadata.format;
+    auto future_design_metadata = artifact::serialize_design_metadata(*design_metadata);
+    future_design_metadata[8] = static_cast<char>(artifact::kDesignFormatVersion + 1U);
     diagnostic::Engine future_design_metadata_diagnostics;
     assert(!artifact::deserialize_design_metadata(
-        artifact::serialize_design_metadata(future_design_metadata),
-        "future-vhdl-design", future_design_metadata_diagnostics));
+        future_design_metadata, "future-vhdl-design",
+        future_design_metadata_diagnostics));
     assert(std::ranges::any_of(
         future_design_metadata_diagnostics.diagnostics(),
         [](const auto& diagnostic) {
@@ -707,6 +716,14 @@ end architecture;
     diagnostic::Engine future_uvm_diagnostics;
     assert(!app::deserialize_systemverilog_uvm_state(
         future_uvm, "future-sv-uvm.bin", future_uvm_diagnostics));
+    assert(std::ranges::any_of(
+        future_uvm_diagnostics.diagnostics(), [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ART-0013"
+                && diagnostic.message
+                == "unsupported design state FSIMUVM1 identity: found "
+                   "schema 3; required schema 2; regenerate .fsimdesign "
+                   "with this fsim build";
+        }));
     const auto truncated_uvm = uvm_bytes->substr(0, uvm_bytes->size() - 1U);
     diagnostic::Engine truncated_uvm_diagnostics;
     assert(!app::deserialize_systemverilog_uvm_state(
@@ -1289,6 +1306,17 @@ end architecture;
         scalar_export_config, "work", scalar_library,
         scalar_export_diagnostics));
     assert(!scalar_export_diagnostics.has_error());
+    auto scalar_o0_export_config = scalar_export_config;
+    scalar_o0_export_config.build.optimization = project::Optimization::o0;
+    scalar_o0_export_config.build.cache_path
+        = directory / "scalar-export-o0-cache";
+    const auto scalar_o0_library
+        = directory / "scalar-artifact-o0.fsimlib";
+    diagnostic::Engine scalar_o0_export_diagnostics;
+    assert(app::export_library(
+        scalar_o0_export_config, "work", scalar_o0_library,
+        scalar_o0_export_diagnostics));
+    assert(!scalar_o0_export_diagnostics.has_error());
     struct ScalarLibraryCapture {
         std::string checks;
         std::string wide;
@@ -1314,7 +1342,7 @@ end architecture;
             / (optimization == project::Optimization::o0
                     ? "scalar-mapped-o0"
                     : "scalar-mapped-o2");
-        mapped.library_mappings.push_back({ "work", scalar_library });
+        mapped.library_mappings.push_back({ "work", optimization == project::Optimization::o0 ? scalar_o0_library : scalar_library });
         diagnostic::Engine diagnostics;
         auto built = app::build_project(mapped, diagnostics);
         if (!built)

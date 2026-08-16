@@ -1,7 +1,37 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 FSIM_1.0 {
   global:
-    fsim_*;
+    fsim_get_api_version;
+    fsim_status_string;
+    fsim_session_create;
+    fsim_session_destroy;
+    fsim_session_load_project;
+    fsim_session_check;
+    fsim_session_build;
+    fsim_session_configure_sdf;
+    fsim_session_get_sdf_summary;
+    fsim_session_get_sdf_report_entry;
+    fsim_session_configure_trace;
+    fsim_session_get_trace_status;
+    fsim_session_get_trace_report_entry;
+    fsim_session_flush_trace;
+    fsim_session_close_trace;
+    fsim_session_root;
+    fsim_session_find_object;
+    fsim_session_visit_children;
+    fsim_session_get_object_info;
+    fsim_session_mapped_library_count;
+    fsim_session_get_mapped_library_info;
+    fsim_session_read_value;
+    fsim_session_deposit;
+    fsim_session_force;
+    fsim_session_release;
+    fsim_session_run;
+    fsim_session_step;
+    fsim_session_request_stop;
+    fsim_session_set_callbacks;
+    fsim_session_get_diagnostic;
+    fsim_session_diagnostic_count;
   local:
     *;
 };

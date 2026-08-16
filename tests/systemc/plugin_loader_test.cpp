@@ -49,8 +49,7 @@ fsim_sc_status_v1 record_parameter(
         return FSIM_SC_INVALID_ARGUMENT;
     }
     if (std::string_view { factory } == "a_parameterized") {
-        parameter_registered =
-            std::string_view { name } == "WIDTH"
+        parameter_registered = std::string_view { name } == "WIDTH"
             && type == FSIM_SC_CONSTRUCTION_POSITIVE
             && has_default == 1
             && default_value == 12;
@@ -67,7 +66,7 @@ public:
     [[nodiscard]] fsim::runtime::PackedLogic4 read_signal(
         fsim::runtime::simir::SignalId) const override
     {
-        return fsim::runtime::PackedLogic4 {};
+        return fsim::runtime::PackedLogic4 { };
     }
 
     void write_blocking(
@@ -129,21 +128,18 @@ int main(int argc, char** argv)
     const auto error_plugin_path = std::filesystem::path { argv[2] };
     const auto empty_plugin_path = std::filesystem::path { argv[3] };
     const auto macro_plugin_path = std::filesystem::path { argv[4] };
-    const auto duplicate_macro_plugin_path =
-        std::filesystem::path { argv[5] };
+    const auto duplicate_macro_plugin_path = std::filesystem::path { argv[5] };
     const auto no_factory_plugin_path = std::filesystem::path { argv[6] };
 
-    fsim_sc_host_v1 host {};
+    fsim_sc_host_v1 host { };
     host.abi_version = FSIM_SYSTEMC_ABI_VERSION;
-    host.struct_size =
-        static_cast<decltype(host.struct_size)>(sizeof(host) + 64);
+    host.struct_size = static_cast<decltype(host.struct_size)>(sizeof(host) + 64);
     host.scv_compatibility_identity = fsim_scv_compatibility_identity();
 
-    fsim_sc_registrar_v1 registrar {};
+    fsim_sc_registrar_v1 registrar { };
     registrar.abi_version = FSIM_SYSTEMC_ABI_VERSION;
-    registrar.struct_size =
-        static_cast<decltype(registrar.struct_size)>(
-            sizeof(registrar) + 64);
+    registrar.struct_size = static_cast<decltype(registrar.struct_size)>(
+        sizeof(registrar) + 64);
     registrar.register_elaboration_factory = record_factory;
     registrar.register_factory_parameter = record_parameter;
 
@@ -155,11 +151,11 @@ int main(int argc, char** argv)
             macro_plugin_path, host, registrar, error);
         assert(plugin && error.empty());
         assert((registrations == std::vector<std::string> {
-            "PlainModule",
-            "a_parameterized",
-            "m_alias_one",
-            "m_alias_two",
-        }));
+                    "PlainModule",
+                    "a_parameterized",
+                    "m_alias_one",
+                    "m_alias_two",
+                }));
         assert(parameter_registered);
     }
 
@@ -170,14 +166,32 @@ int main(int argc, char** argv)
         macro_plugin_path, incompatible_host, registrar, error));
     assert(error == "SystemC host/registrar ABI mismatch");
 
-    auto wrong_scv_identity =
-        std::string { fsim_scv_compatibility_identity() };
+    auto truncated_host = host;
+    truncated_host.struct_size = sizeof(truncated_host) - 1U;
+    error.clear();
+    assert(!fsim::systemc::Plugin::load(
+        macro_plugin_path.parent_path() / "unopened-truncated-host",
+        truncated_host,
+        registrar,
+        error));
+    assert(error == "SystemC host/registrar ABI mismatch");
+
+    auto truncated_registrar = registrar;
+    truncated_registrar.struct_size = sizeof(truncated_registrar) - 1U;
+    error.clear();
+    assert(!fsim::systemc::Plugin::load(
+        macro_plugin_path.parent_path() / "unopened-truncated-registrar",
+        host,
+        truncated_registrar,
+        error));
+    assert(error == "SystemC host/registrar ABI mismatch");
+
+    auto wrong_scv_identity = std::string { fsim_scv_compatibility_identity() };
     const auto scv_version = wrong_scv_identity.find("|scv=2.0.1|");
     assert(scv_version != std::string::npos);
     wrong_scv_identity.replace(scv_version, 11, "|scv=2.0.2|");
     auto incompatible_scv_host = host;
-    incompatible_scv_host.scv_compatibility_identity =
-        wrong_scv_identity.c_str();
+    incompatible_scv_host.scv_compatibility_identity = wrong_scv_identity.c_str();
     error.clear();
     assert(!fsim::systemc::Plugin::load(
         macro_plugin_path, incompatible_scv_host, registrar, error));
@@ -198,17 +212,14 @@ int main(int argc, char** argv)
     assert(registrations.empty());
 
     error.clear();
-    auto hierarchy =
-        fsim::systemc::HierarchyRegistry::load(macro_plugin_path, error);
+    auto hierarchy = fsim::systemc::HierarchyRegistry::load(macro_plugin_path, error);
     assert(hierarchy && error.empty());
     assert(hierarchy->factory_count() == 4);
-    const auto parameters =
-        hierarchy->factory_parameters("a_parameterized");
+    const auto parameters = hierarchy->factory_parameters("a_parameterized");
     assert(parameters && parameters->size() == 1);
     assert(parameters->front().name == "WIDTH");
     assert(parameters->front().default_value == 12);
-    const auto module =
-        hierarchy->instantiate("a_parameterized", "top", 0, error);
+    const auto module = hierarchy->instantiate("a_parameterized", "top", 0, error);
     assert(module && error.empty());
     assert(module->processes.size() == 1);
     assert(module->processes.front().name == "$accellera_kernel");
@@ -219,9 +230,8 @@ int main(int argc, char** argv)
     hierarchy.reset();
 
     error.clear();
-    const auto no_factory =
-        fsim::systemc::HierarchyRegistry::load(
-            no_factory_plugin_path, error);
+    const auto no_factory = fsim::systemc::HierarchyRegistry::load(
+        no_factory_plugin_path, error);
     assert(no_factory && error.empty());
     assert(no_factory->factory_count() == 0);
 
@@ -234,8 +244,7 @@ int main(int argc, char** argv)
     assert(!error.empty());
 
     error.clear();
-    auto error_hierarchy =
-        fsim::systemc::HierarchyRegistry::load(error_plugin_path, error);
+    auto error_hierarchy = fsim::systemc::HierarchyRegistry::load(error_plugin_path, error);
     assert(error_hierarchy && error.empty());
     assert(!error_hierarchy->instantiate(
         "status_failure", "status", 0, error));
@@ -261,7 +270,7 @@ int main(int argc, char** argv)
             process_failure->processes.front().handle, context);
     } catch (const std::runtime_error& exception) {
         contained = std::string_view { exception.what() }.find(
-            "intentional process exception")
+                        "intentional process exception")
             != std::string_view::npos;
     }
     assert(contained);

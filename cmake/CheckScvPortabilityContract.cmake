@@ -37,8 +37,8 @@ fsim_scv_require_tokens(
   "std::string scv_compatibility")
 fsim_scv_require_tokens(
   "src/app/application_library_import.cpp"
-  "validate_scv_artifact_compatibility"
-  "mapped SystemC library")
+  "native.scv_compatibility != fsim_scv_compatibility_identity()"
+  "mapped SystemC native plug-in SCV producer")
 fsim_scv_require_tokens(
   "src/app/application_phase_design.cpp"
   "validate_scv_artifact_compatibility"
@@ -58,7 +58,7 @@ fsim_scv_require_tokens(
   "tests/app/application_test_cli.cpp"
   "models-systemc-stale-scv.fsimlib"
   "scv_compatibility"
-  "FSIM-SCV-A001"
+  "FSIM-LIB-0008"
   "stale_cache_has_file")
 fsim_scv_require_tokens(
   "docs/diagnostics.md"
@@ -224,7 +224,7 @@ fsim_scv_require_tokens(
   "tests/scv/scv_closure_test.cmake"
   "FSIM_PRESERVED_COUNT EQUAL 18"
   "SCV-012"
-  "Batch 174 exact restart checkpoint")
+  "Batch 175 planned restart checkpoint")
 fsim_scv_require_tokens(
   "docs/v2-scv-release-audit.md"
   "official Accellera SCV 2.0.1"

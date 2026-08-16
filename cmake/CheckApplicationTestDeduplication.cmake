@@ -7,6 +7,10 @@ endif()
 set(FSIM_APPLICATION_TEST
   "${FSIM_SOURCE_DIR}/tests/app/application_test.cpp")
 set(FSIM_TEST_CMAKE "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
+set(FSIM_EVIDENCE_MATRIX
+  "${FSIM_SOURCE_DIR}/tests/feature_matrix/abi_schema_evidence_matrix.tsv")
+set(FSIM_COMMAND_GATE
+  "${FSIM_SOURCE_DIR}/cmake/CheckCTestCommandUniqueness.cmake")
 set(FSIM_RECURSIVE_DRIVERS
   RunAccelleraSystemCClosure.cmake
   RunSdfClosure.cmake
@@ -18,7 +22,11 @@ set(FSIM_RECURSIVE_DRIVERS
   RunVerilogSystemVerilogStandardModeClosureMatrix.cmake
   RunSystemVerilogClosureMatrix.cmake
   RunVerilogClosureMatrix.cmake)
-set(FSIM_INPUTS "${FSIM_APPLICATION_TEST}" "${FSIM_TEST_CMAKE}")
+set(FSIM_INPUTS
+  "${FSIM_APPLICATION_TEST}"
+  "${FSIM_TEST_CMAKE}"
+  "${FSIM_EVIDENCE_MATRIX}"
+  "${FSIM_COMMAND_GATE}")
 foreach(FSIM_DRIVER IN LISTS FSIM_RECURSIVE_DRIVERS)
   list(APPEND FSIM_INPUTS "${FSIM_SOURCE_DIR}/cmake/${FSIM_DRIVER}")
 endforeach()
@@ -76,11 +84,36 @@ foreach(FSIM_TOKEN IN ITEMS
     "FIXTURES_REQUIRED"
     "FIXTURES_SETUP"
     "fsim_require_fixture_witnesses"
-    "fsim_require_fixture_regex")
+    "fsim_require_fixture_regex"
+    "fsim.ctest-command-uniqueness")
   string(FIND "${FSIM_TEST_CMAKE_TEXT}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)
   if(FSIM_TOKEN_INDEX EQUAL -1)
     message(FATAL_ERROR
       "regression de-duplication lost fixture token: ${FSIM_TOKEN}")
+  endif()
+endforeach()
+
+file(READ "${FSIM_COMMAND_GATE}" FSIM_COMMAND_GATE_TEXT)
+foreach(FSIM_TOKEN IN ITEMS
+    "--show-only=json-v1"
+    "FSIM_CANONICAL_COMMAND"
+    "duplicate CTest command owners")
+  string(FIND "${FSIM_COMMAND_GATE_TEXT}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)
+  if(FSIM_TOKEN_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "regression de-duplication lost command-audit token: ${FSIM_TOKEN}")
+  endif()
+endforeach()
+
+file(READ "${FSIM_EVIDENCE_MATRIX}" FSIM_EVIDENCE_MATRIX_TEXT)
+foreach(FSIM_TEST IN ITEMS
+    fsim.application-regression-dedup-contract
+    fsim.abi-schema-evidence-matrix)
+  string(FIND "${FSIM_EVIDENCE_MATRIX_TEXT}"
+    "\t${FSIM_TEST}\t" FSIM_TEST_INDEX)
+  if(FSIM_TEST_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "regression de-duplication lost evidence-matrix owner: ${FSIM_TEST}")
   endif()
 endforeach()
 
@@ -99,4 +132,4 @@ foreach(FSIM_DRIVER IN LISTS FSIM_RECURSIVE_DRIVERS)
 endforeach()
 
 message(STATUS
-  "regression de-duplication: application partitions and ten fixture-backed closure drivers are present")
+  "regression de-duplication: unique commands, application partitions and ten fixture-backed closure drivers are present")

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 
+#include "../diagnostic/artifact_identity.hpp"
 #include "fsim/library/artifact.hpp"
 #include "fsim/library/portable_unit.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
-#include "fsim/systemc/scv_artifact.hpp"
 #include "fsim/systemc_abi.h"
 
 #include <fstream>
@@ -249,14 +249,38 @@ namespace {
             : compiler::JitOptimizationLevel::o2;
         const auto host = compiler::LlvmJit::native_host_identity(optimization);
         const auto expected_optimization = optimization == compiler::JitOptimizationLevel::o0 ? "O0" : "O2";
+        const auto expected_features = feature_identity(host.features);
         if (native.runtime_abi != runtime_abi_version
+            || native.compiler_fingerprint != host.fingerprint
             || native.llvm_version != host.llvm_version
             || native.target != host.target
             || native.data_layout != host.data_layout
             || native.cpu != host.cpu
-            || native.features != feature_identity(host.features)
+            || native.features != expected_features
             || native.optimization != expected_optimization) {
-            return true;
+            diagnostics.error(
+                "FSIM-LIB-0008",
+                diagnostic::unsupported_artifact_identity(
+                    "mapped LLVM native object producer",
+                    "runtime ABI " + std::to_string(native.runtime_abi)
+                        + ", host fingerprint " + native.compiler_fingerprint
+                        + ", LLVM " + native.llvm_version + ", target "
+                        + native.target + ", data layout "
+                        + native.data_layout + ", CPU " + native.cpu
+                        + ", features SHA-256 "
+                        + support::Sha256::hex(
+                            support::Sha256::digest(native.features))
+                        + ", optimization " + native.optimization,
+                    "runtime ABI " + std::to_string(runtime_abi_version)
+                        + ", host fingerprint " + host.fingerprint
+                        + ", LLVM " + host.llvm_version + ", target "
+                        + host.target + ", data layout " + host.data_layout
+                        + ", CPU " + host.cpu + ", features SHA-256 "
+                        + support::Sha256::hex(
+                            support::Sha256::digest(expected_features))
+                        + ", optimization " + expected_optimization,
+                    ".fsimlib native payload"));
+            return false;
         }
         auto bytes = read_payload(
             directory / native.artifact, native.checksum, diagnostics);
@@ -295,17 +319,51 @@ namespace {
         diagnostic::Engine fingerprint_diagnostics;
         const auto fingerprint = systemc::plugin_host_fingerprint(
             config.systemc, config.base_directory, fingerprint_diagnostics);
-        if (!systemc::validate_scv_artifact_compatibility(
-                native.scv_compatibility, "mapped SystemC library", diagnostics)) {
+        if (native.scv_compatibility != fsim_scv_compatibility_identity()) {
+            diagnostics.error(
+                "FSIM-LIB-0008",
+                diagnostic::unsupported_artifact_identity(
+                    "mapped SystemC native plug-in SCV producer",
+                    native.scv_compatibility,
+                    fsim_scv_compatibility_identity(),
+                    ".fsimlib native payload"));
             return false;
         }
-        if (!fingerprint.has_value()
-            || native.runtime_abi != runtime_abi_version
+        if (!fingerprint.has_value()) {
+            for (const auto& item : fingerprint_diagnostics.diagnostics()) {
+                diagnostics.report(item);
+            }
+            if (!diagnostics.has_error()) {
+                diagnostics.error(
+                    "FSIM-LIB-0008",
+                    "cannot establish the current SystemC native producer "
+                    "identity");
+            }
+            return false;
+        }
+        if (native.runtime_abi != runtime_abi_version
             || native.systemc_abi != FSIM_SYSTEMC_ABI_VERSION
             || native.compiler_fingerprint != *fingerprint
             || native.target != target_name()
             || native.cpu != "compiler-default") {
-            return true;
+            diagnostics.error(
+                "FSIM-LIB-0008",
+                diagnostic::unsupported_artifact_identity(
+                    "mapped SystemC native plug-in producer",
+                    "runtime ABI " + std::to_string(native.runtime_abi)
+                        + ", SystemC ABI "
+                        + std::to_string(native.systemc_abi) + ", SCV "
+                        + native.scv_compatibility + ", fingerprint "
+                        + native.compiler_fingerprint + ", target "
+                        + native.target + ", CPU " + native.cpu,
+                    "runtime ABI " + std::to_string(runtime_abi_version)
+                        + ", SystemC ABI "
+                        + std::to_string(FSIM_SYSTEMC_ABI_VERSION) + ", SCV "
+                        + std::string { fsim_scv_compatibility_identity() }
+                        + ", fingerprint " + *fingerprint + ", target "
+                        + target_name() + ", CPU compiler-default",
+                    ".fsimlib native payload"));
+            return false;
         }
         if (!read_payload(
                 directory / native.artifact, native.checksum, diagnostics)) {

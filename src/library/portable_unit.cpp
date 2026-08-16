@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/library/portable_unit.hpp"
+
+#include "../diagnostic/artifact_identity.hpp"
 #include "fsim/support/path.hpp"
 
 #include <boost/pfr/core.hpp>
@@ -902,8 +904,10 @@ std::optional<frontend::DesignUnit> deserialize_portable_unit(
       || !valid_unit_specify(unit) || !valid_unit_hierarchy(unit)) {
       auto message = reader.failure();
       if (message.empty() && schema != kOwningUnitSchemaVersion) {
-          message = "unsupported portable owning-unit schema "
-              + std::to_string(schema);
+          message = diagnostic::unsupported_artifact_identity(
+              "portable owning unit", "schema " + std::to_string(schema),
+              "schema " + std::to_string(kOwningUnitSchemaVersion),
+              ".fsimobj");
       } else if (message.empty() && reader.remaining() != 0) {
           message = "portable unit contains trailing bytes";
       } else if (message.empty()) {
@@ -930,8 +934,10 @@ std::optional<frontend::VerilogUdpDeclaration> deserialize_portable_udp(
       || !frontend::verilog_udp_declaration_well_formed(declaration)) {
     auto message = reader.failure();
     if (message.empty() && schema != kUdpDeclarationSchemaVersion) {
-      message = "unsupported portable UDP-declaration schema "
-          + std::to_string(schema);
+        message = diagnostic::unsupported_artifact_identity(
+            "portable UDP declaration", "schema " + std::to_string(schema),
+            "schema " + std::to_string(kUdpDeclarationSchemaVersion),
+            ".fsimobj");
     } else if (message.empty() && reader.remaining() != 0) {
       message = "portable UDP declaration contains trailing bytes";
     } else if (message.empty()) {
@@ -963,8 +969,10 @@ deserialize_portable_class_unit(
       || (unit.declarations.empty() && unit.method_definitions.empty())) {
     auto message = reader.failure();
     if (message.empty() && schema != kOwningUnitSchemaVersion) {
-      message = "unsupported portable class-unit schema "
-          + std::to_string(schema);
+        message = diagnostic::unsupported_artifact_identity(
+            "portable class unit", "schema " + std::to_string(schema),
+            "schema " + std::to_string(kOwningUnitSchemaVersion),
+            ".fsimobj");
     } else if (message.empty() && reader.remaining() != 0) {
       message = "portable class unit contains trailing bytes";
     } else if (message.empty()) {

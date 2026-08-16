@@ -43,11 +43,11 @@ foreach(FSIM_TOKEN IN ITEMS
 endforeach()
 
 foreach(FSIM_TOKEN IN ITEMS
-    "sizeof(fsim_uvm_foreign_snapshot_v1) == 48u"
-    "sizeof(fsim_uvm_foreign_record_v1) == 72u"
-    "sizeof(fsim_uvm_foreign_activity_v1) == 88u"
-    "sizeof(fsim_uvm_foreign_host_v1) == 64u"
-    "offsetof(fsim_uvm_foreign_host_v1, remove_callback) == 56u"
+    "FSIM_UVM_LAYOUT(fsim_uvm_foreign_snapshot_v1, 48u, 8u)"
+    "FSIM_UVM_LAYOUT(fsim_uvm_foreign_record_v1, 72u, 8u)"
+    "FSIM_UVM_LAYOUT(fsim_uvm_foreign_activity_v1, 88u, 8u)"
+    "FSIM_UVM_LAYOUT(fsim_uvm_foreign_host_v1, 64u, 8u)"
+    "FSIM_UVM_OFFSET(fsim_uvm_foreign_host_v1, remove_callback, 56u)"
     "fsim_uvm_foreign_activity_callback_v1 callback")
   string(FIND "${FSIM_ABI_C_TEST_CONTENTS}" "${FSIM_TOKEN}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)

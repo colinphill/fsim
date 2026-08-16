@@ -150,21 +150,33 @@ void ApplicationTestFixture::test_preprocessing_debug_and_cli()
         output << fsim::library::serialize_metadata(incompatible_metadata);
         assert(output.good());
     }
-    auto portable_fallback_config = mapped_direct_config;
-    portable_fallback_config.project.name = "mapped-native-fallback";
-    portable_fallback_config.build.cache_path = directory / "mapped-native-fallback-cache";
-    portable_fallback_config.library_mappings.front().path = incompatible_library;
-    fsim::diagnostic::Engine portable_fallback_diagnostics;
-    auto portable_fallback = fsim::app::build_project(
-        portable_fallback_config, portable_fallback_diagnostics);
-    assert(portable_fallback);
-    assert(!portable_fallback->mapped_libraries.front().native_accepted);
-    fsim::app::Simulation portable_fallback_simulation(
-        std::move(*portable_fallback), portable_fallback_config.run.max_deltas,
-        fsim::app::SimulationEngine::compiled);
-    assert(portable_fallback_simulation.compiled_process_count() != 0);
-    assert(portable_fallback_simulation.native_cache_statistics().hits == 0);
-    assert(portable_fallback_simulation.native_cache_statistics().stores != 0);
+    auto incompatible_native_config = mapped_direct_config;
+    incompatible_native_config.project.name = "mapped-native-incompatible";
+    incompatible_native_config.build.cache_path = directory / "mapped-native-incompatible-cache";
+    incompatible_native_config.library_mappings.front().path = incompatible_library;
+    fsim::diagnostic::Engine incompatible_native_diagnostics;
+    auto incompatible_native = fsim::app::build_project(
+        incompatible_native_config, incompatible_native_diagnostics);
+    assert(!incompatible_native);
+    assert(std::ranges::any_of(
+        incompatible_native_diagnostics.diagnostics(),
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-LIB-0008"
+                && diagnostic.message.find("mapped LLVM native object")
+                != std::string::npos
+                && diagnostic.message.find("identity: found")
+                != std::string::npos
+                && diagnostic.message.find("; required ")
+                != std::string::npos
+                && diagnostic.message.ends_with(
+                    "regenerate .fsimlib native payload with this fsim build");
+        }));
+    const auto incompatible_cache_has_file = std::filesystem::exists(incompatible_native_config.build.cache_path)
+        && std::ranges::any_of(
+            std::filesystem::recursive_directory_iterator(
+                incompatible_native_config.build.cache_path),
+            [](const auto& entry) { return entry.is_regular_file(); });
+    assert(!incompatible_cache_has_file);
     const auto corrupt_native_library = directory / "work-native-corrupt.fsimlib";
     clone_library_writable(exported_library, corrupt_native_library);
     const auto corrupt_native_payload = corrupt_native_library
@@ -297,9 +309,11 @@ void ApplicationTestFixture::test_preprocessing_debug_and_cli()
     assert(!fsim::app::build_project(stale_scv_config, stale_scv_diagnostics));
     assert(std::ranges::any_of(
         stale_scv_diagnostics.diagnostics(), [](const auto& diagnostic) {
-            return diagnostic.code == "FSIM-SCV-A001"
-                && diagnostic.message.find("compiler mismatch")
-                    != std::string::npos;
+            return diagnostic.code == "FSIM-LIB-0008"
+                && diagnostic.message.find(
+                       "mapped SystemC native plug-in SCV producer identity: "
+                       "found")
+                != std::string::npos;
         }));
     const auto stale_cache_has_file =
         std::filesystem::exists(stale_scv_config.build.cache_path)
@@ -325,25 +339,33 @@ void ApplicationTestFixture::test_preprocessing_debug_and_cli()
             incompatible_systemc_metadata);
         assert(output.good());
     }
-    auto systemc_fallback_config = mapped_systemc_config;
-    systemc_fallback_config.project.name = "mapped-systemc-fallback";
-    systemc_fallback_config.build.cache_path = directory / "mapped-systemc-fallback-cache";
-    systemc_fallback_config.library_mappings.front().path = incompatible_systemc_library;
-    fsim::diagnostic::Engine systemc_fallback_diagnostics;
-    auto systemc_fallback = fsim::app::build_project(
-        systemc_fallback_config, systemc_fallback_diagnostics);
-    if (!systemc_fallback) {
-        for (const auto& diagnostic : systemc_fallback_diagnostics.diagnostics()) {
-            std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
-        }
-    }
-    assert(systemc_fallback);
-    assert(!systemc_fallback->mapped_libraries.front().native_accepted);
-    assert(systemc_fallback->systemc_plugins.size() == 1);
-    assert(
-        systemc_fallback->systemc_plugins.front().string().find(
-            "mapped-systemc-fallback-cache")
-        != std::string::npos);
+    auto incompatible_systemc_config = mapped_systemc_config;
+    incompatible_systemc_config.project.name = "mapped-systemc-incompatible";
+    incompatible_systemc_config.build.cache_path = directory / "mapped-systemc-incompatible-cache";
+    incompatible_systemc_config.library_mappings.front().path = incompatible_systemc_library;
+    fsim::diagnostic::Engine incompatible_systemc_diagnostics;
+    auto incompatible_systemc = fsim::app::build_project(
+        incompatible_systemc_config, incompatible_systemc_diagnostics);
+    assert(!incompatible_systemc);
+    assert(std::ranges::any_of(
+        incompatible_systemc_diagnostics.diagnostics(),
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-LIB-0008"
+                && diagnostic.message.find("mapped SystemC native plug-in")
+                != std::string::npos
+                && diagnostic.message.find("identity: found")
+                != std::string::npos
+                && diagnostic.message.find("; required ")
+                != std::string::npos
+                && diagnostic.message.ends_with(
+                    "regenerate .fsimlib native payload with this fsim build");
+        }));
+    const auto incompatible_systemc_cache_has_file = std::filesystem::exists(incompatible_systemc_config.build.cache_path)
+        && std::ranges::any_of(
+            std::filesystem::recursive_directory_iterator(
+                incompatible_systemc_config.build.cache_path),
+            [](const auto& entry) { return entry.is_regular_file(); });
+    assert(!incompatible_systemc_cache_has_file);
     const auto mapped_consumer_source = directory / "mapped_consumer.sv";
     {
         std::ofstream output(mapped_consumer_source, std::ios::binary);

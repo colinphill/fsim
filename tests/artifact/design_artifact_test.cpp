@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <span>
 #include <sstream>
 #include <vector>
@@ -31,6 +32,24 @@ std::string checksum(const std::string_view bytes) {
   return fsim::support::Sha256::hex(fsim::support::Sha256::digest(bytes));
 }
 
+void store_u32(std::string& bytes, const std::size_t offset,
+    const std::uint32_t value)
+{
+    assert(offset + 4U <= bytes.size());
+    for (unsigned shift = 0; shift < 32; shift += 8) {
+        bytes[offset + shift / 8U] = static_cast<char>((value >> shift) & 0xffU);
+    }
+}
+
+void store_u64(std::string& bytes, const std::size_t offset,
+    const std::uint64_t value)
+{
+    assert(offset + 8U <= bytes.size());
+    for (unsigned shift = 0; shift < 64; shift += 8) {
+        bytes[offset + shift / 8U] = static_cast<char>((value >> shift) & 0xffU);
+    }
+}
+
 void make_tree_writable(const std::filesystem::path& root) {
   std::error_code error;
   for (std::filesystem::recursive_directory_iterator iterator(root, error), end;
@@ -47,11 +66,13 @@ void make_tree_writable(const std::filesystem::path& root) {
 }  // namespace
 
 int main() {
-  std::string trace_source(257U, '0');
-  constexpr char trace_symbols[] = {'0', '1', 'X', 'Z'};
-  for (std::size_t index = 0; index < trace_source.size(); ++index) {
-    trace_source[index] = trace_symbols[index % 4U];
-  }
+    static_assert(fsim::artifact::kDesignFormatVersion == 11U);
+    static_assert(fsim::runtime_abi_version == 1U);
+    std::string trace_source(257U, '0');
+    constexpr char trace_symbols[] = { '0', '1', 'X', 'Z' };
+    for (std::size_t index = 0; index < trace_source.size(); ++index) {
+        trace_source[index] = trace_symbols[index % 4U];
+    }
   const auto trace_value = fsim::runtime::encode_fst_logic_value(
       fsim::runtime::PackedLogic4::from_msb_string(trace_source));
   std::string state_bytes{trace_value.symbols()};
@@ -429,6 +450,44 @@ int main() {
              encoded, "design", decode_diagnostics) == metadata);
   assert(!decode_diagnostics.has_error());
 
+  auto embedded_plugin = metadata;
+  embedded_plugin.systemc_plugins.push_back(
+      { "native", checksum("plugin-input"), checksum("plugin-link"),
+          checksum("compiler-producer"), "scv-2.0.1", "plugins/native",
+          checksum("plugin-metadata"), checksum("plugin-library"),
+          { "create_native" } });
+  embedded_plugin.payloads.push_back(
+      { "systemc-plugin-metadata:native",
+          "plugins/native/fsim-systemc-plugin.bin", checksum("plugin-metadata") });
+  embedded_plugin.payloads.push_back(
+      { "systemc-plugin-native:native", "plugins/native/libnative.so",
+          checksum("plugin-library") });
+  embedded_plugin.design_digest = fsim::artifact::compute_design_digest(embedded_plugin);
+  fsim::diagnostic::Engine embedded_plugin_diagnostics;
+  assert(fsim::artifact::deserialize_design_metadata(
+             fsim::artifact::serialize_design_metadata(embedded_plugin),
+             "embedded-plugin", embedded_plugin_diagnostics)
+      == embedded_plugin);
+  assert(!embedded_plugin_diagnostics.has_error());
+
+  auto missing_scv_identity = embedded_plugin;
+  missing_scv_identity.systemc_plugins.front().scv_compatibility.clear();
+  missing_scv_identity.design_digest = fsim::artifact::compute_design_digest(missing_scv_identity);
+  fsim::diagnostic::Engine missing_scv_diagnostics;
+  assert(!fsim::artifact::deserialize_design_metadata(
+      fsim::artifact::serialize_design_metadata(missing_scv_identity),
+      "missing-scv-identity", missing_scv_diagnostics));
+  assert(missing_scv_diagnostics.has_error());
+
+  auto mismatched_plugin_payload = embedded_plugin;
+  mismatched_plugin_payload.payloads[mismatched_plugin_payload.payloads.size() - 2U].checksum = checksum("different-plugin-metadata");
+  mismatched_plugin_payload.design_digest = fsim::artifact::compute_design_digest(mismatched_plugin_payload);
+  fsim::diagnostic::Engine mismatched_plugin_diagnostics;
+  assert(!fsim::artifact::deserialize_design_metadata(
+      fsim::artifact::serialize_design_metadata(mismatched_plugin_payload),
+      "mismatched-plugin-payload", mismatched_plugin_diagnostics));
+  assert(mismatched_plugin_diagnostics.has_error());
+
   auto changed_sv_revision = metadata;
   changed_sv_revision.objects.front().standard = "2017";
   assert(fsim::artifact::compute_design_digest(changed_sv_revision) !=
@@ -472,11 +531,12 @@ int main() {
       fsim::artifact::serialize_design_metadata(partial_sv_unit_provenance),
       "partial-verilog-unit-provenance", partial_sv_unit_diagnostics));
   assert(partial_sv_unit_diagnostics.has_error());
-  auto future_format = metadata;
-  ++future_format.format;
+  auto future_format = encoded;
+  store_u32(
+      future_format, 8U, fsim::artifact::kDesignFormatVersion + 1U);
   fsim::diagnostic::Engine future_format_diagnostics;
   assert(!fsim::artifact::deserialize_design_metadata(
-      fsim::artifact::serialize_design_metadata(future_format),
+      future_format,
       "future-standard-compatibility-design", future_format_diagnostics));
   assert(future_format_diagnostics.has_error());
 
@@ -503,24 +563,76 @@ int main() {
       "missing-vhdl-unit-provenance", missing_unit_diagnostics));
   assert(missing_unit_diagnostics.has_error());
 
-  auto format_one = metadata;
-  format_one.format = 1;
-  format_one.objects.erase(format_one.objects.begin() + 1);
-  format_one.objects.front().compatibility_profile = "none";
-  format_one.vhdl_unit_provenance.clear();
-  format_one.verilog_unit_provenance.clear();
-  format_one.trace_archive.clear();
-  format_one.unit_count = 1;
-  format_one.uvm_release = "none";
-  format_one.uvm_source_identity.clear();
-  format_one.design_digest = fsim::artifact::compute_design_digest(format_one);
-  const auto format_one_encoded =
-      fsim::artifact::serialize_design_metadata(format_one);
-  fsim::diagnostic::Engine format_one_diagnostics;
-  assert(fsim::artifact::deserialize_design_metadata(
-             format_one_encoded, "format-one-design", format_one_diagnostics) ==
-         format_one);
-  assert(!format_one_diagnostics.has_error());
+  const auto has_design_identity_diagnostic = [](
+                                                  const auto& diagnostics,
+                                                  const std::string& found) {
+      const auto expected = "unsupported .fsimdesign identity: found " + found
+          + "; required format 11 and runtime ABI 1; regenerate .fsimdesign "
+            "with this fsim build";
+      return std::ranges::any_of(
+          diagnostics.diagnostics(), [&](const auto& diagnostic) {
+              return diagnostic.code == "FSIM-ART-0010"
+                  && diagnostic.message == expected;
+          });
+  };
+
+  for (const auto stale_format :
+      { 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U }) {
+      auto stale_header = encoded.substr(0, 16U);
+      store_u32(stale_header, 8U, stale_format);
+      fsim::diagnostic::Engine stale_format_diagnostics;
+      assert(!fsim::artifact::deserialize_design_metadata(
+          stale_header, "stale-format-design", stale_format_diagnostics));
+      assert(has_design_identity_diagnostic(
+          stale_format_diagnostics,
+          "format " + std::to_string(stale_format) + " and runtime ABI 1"));
+  }
+
+  auto future_header = encoded.substr(0, 16U);
+  store_u32(
+      future_header, 8U, fsim::artifact::kDesignFormatVersion + 1U);
+  fsim::diagnostic::Engine future_header_diagnostics;
+  assert(!fsim::artifact::deserialize_design_metadata(
+      future_header, "future-format-design", future_header_diagnostics));
+  assert(has_design_identity_diagnostic(
+      future_header_diagnostics, "format 12 and runtime ABI 1"));
+
+  auto corrupt_magic = encoded;
+  corrupt_magic[0] = 'X';
+  fsim::diagnostic::Engine corrupt_magic_diagnostics;
+  assert(!fsim::artifact::deserialize_design_metadata(
+      corrupt_magic, "corrupt-magic", corrupt_magic_diagnostics));
+  assert(corrupt_magic_diagnostics.has_error());
+
+  fsim::diagnostic::Engine truncated_header_diagnostics;
+  assert(!fsim::artifact::deserialize_design_metadata(
+      encoded.substr(0, 12), "truncated-header",
+      truncated_header_diagnostics));
+  assert(truncated_header_diagnostics.has_error());
+
+  auto unsupported_format = encoded;
+  store_u32(unsupported_format, 8U, 3U);
+  fsim::diagnostic::Engine unsupported_format_diagnostics;
+  assert(!fsim::artifact::deserialize_design_metadata(
+      unsupported_format, "unsupported-format-3",
+      unsupported_format_diagnostics));
+  assert(unsupported_format_diagnostics.has_error());
+
+  auto incompatible_runtime = encoded;
+  store_u32(incompatible_runtime, 12U, fsim::runtime_abi_version + 1U);
+  fsim::diagnostic::Engine incompatible_runtime_diagnostics;
+  assert(!fsim::artifact::deserialize_design_metadata(
+      incompatible_runtime, "incompatible-runtime-abi",
+      incompatible_runtime_diagnostics));
+  assert(has_design_identity_diagnostic(
+      incompatible_runtime_diagnostics, "format 11 and runtime ABI 2"));
+
+  auto oversized_root = encoded;
+  store_u64(oversized_root, 16U, std::numeric_limits<std::uint64_t>::max());
+  fsim::diagnostic::Engine oversized_root_diagnostics;
+  assert(!fsim::artifact::deserialize_design_metadata(
+      oversized_root, "oversized-root", oversized_root_diagnostics));
+  assert(oversized_root_diagnostics.has_error());
 
   auto truncated = encoded;
   truncated.pop_back();
@@ -544,6 +656,13 @@ int main() {
       ("fsim-design-artifact-test-" +
        std::to_string(
            std::chrono::steady_clock::now().time_since_epoch().count()));
+  const auto rejected_plugin_directory = std::filesystem::path { directory.string() + "-rejected-plugin" };
+  fsim::diagnostic::Engine rejected_plugin_diagnostics;
+  assert(!fsim::artifact::publish_design(rejected_plugin_directory,
+      missing_scv_identity, { },
+      rejected_plugin_diagnostics));
+  assert(rejected_plugin_diagnostics.has_error());
+  assert(!std::filesystem::exists(rejected_plugin_directory));
   const std::vector<fsim::library::PortablePayload> payloads{
       {metadata.payloads[0].artifact, state_bytes},
       {metadata.payloads[1].artifact, state_bytes},
@@ -555,6 +674,16 @@ int main() {
       {metadata.payloads[7].artifact, binding_inventory_bytes},
       {metadata.payloads[8].artifact, systemc_observation_bytes},
       {metadata.payloads[9].artifact, fst_output.str()}};
+  auto stale_publication_metadata = metadata;
+  stale_publication_metadata.format = fsim::artifact::kDesignFormatVersion - 1U;
+  const auto stale_publication_directory = std::filesystem::path { directory.string() + "-stale-publication" };
+  fsim::diagnostic::Engine stale_publication_diagnostics;
+  assert(!fsim::artifact::publish_design(
+      stale_publication_directory, stale_publication_metadata, payloads,
+      stale_publication_diagnostics));
+  assert(has_design_identity_diagnostic(
+      stale_publication_diagnostics, "format 10 and runtime ABI 1"));
+  assert(!std::filesystem::exists(stale_publication_directory));
   fsim::diagnostic::Engine publish_diagnostics;
   assert(fsim::artifact::publish_design(directory, metadata, payloads,
                                         publish_diagnostics));

@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/systemc.hpp"
+#include "fsim/systemc/kernel_backend_protocol.hpp"
+#include "fsim/systemc/scv.hpp"
+#include "fsim/systemc/scv_backend_protocol.hpp"
+
+#include "fsim/runtime/transaction_record.hpp"
+
+#include <tlm>
 
 #include <cassert>
 #include <string>
@@ -17,11 +24,72 @@ static_assert(SC_VERSION_MAJOR == 3);
 static_assert(SC_VERSION_MINOR == 0);
 static_assert(SC_VERSION_PATCH == 2);
 static_assert(FSIM_SYSTEMC_ABI_VERSION == 4u);
+static_assert(TLM_VERSION_MAJOR == 2);
+static_assert(TLM_VERSION_MINOR == 0);
+static_assert(TLM_VERSION_PATCH == 6);
 static_assert(fsim::systemc::accellera_version == "3.0.2");
 static_assert(fsim::systemc::accellera_bridge_revision == 2u);
 static_assert(
     fsim::systemc::accellera_source_sha256
     == "9b3693ed286aab958b9e5d79bb0ad3bc523bbc46931100553275352038f4a0c4");
+static_assert(fsim::systemc::scv_version == "2.0.1");
+static_assert(fsim::systemc::scv_header_version == "2.0.0-20140417");
+static_assert(
+    fsim::systemc::scv_source_sha256
+    == "7bd1c4037f3c108d02f45cae003d112efdb788d469cb029fada247d330ca4881");
+static_assert(
+    fsim::systemc::scv_patch_sha256
+    == "15625eaeef9c640b3e446ff4f1350795e1afb103ad4cfcd40d8329a4c9d20b29");
+static_assert(
+    fsim::systemc::scv_patched_tree_sha256
+    == "b8ee86c4050b7a77e39fcbba25fc553d477074b323349885a7634844ecd6a112");
+
+static_assert(sizeof(fsim_sc_value_view_v1) == 32U);
+static_assert(alignof(fsim_sc_value_view_v1) == 8U);
+static_assert(sizeof(fsim_sc_host_v1) == 152U);
+static_assert(alignof(fsim_sc_host_v1) == 8U);
+static_assert(sizeof(fsim_sc_registrar_v1) == 32U);
+static_assert(alignof(fsim_sc_registrar_v1) == 8U);
+static_assert(std::is_standard_layout_v<fsim_sc_value_view_v1>);
+static_assert(std::is_trivially_copyable_v<fsim_sc_value_view_v1>);
+static_assert(std::is_standard_layout_v<fsim_sc_host_v1>);
+static_assert(std::is_trivially_copyable_v<fsim_sc_host_v1>);
+static_assert(std::is_standard_layout_v<fsim_sc_registrar_v1>);
+static_assert(std::is_trivially_copyable_v<fsim_sc_registrar_v1>);
+static_assert(std::is_same_v<fsim_plugin_init_v1_fn,
+    fsim_sc_status_v1 (*)(const fsim_sc_host_v1*, fsim_sc_registrar_v1*)>);
+static_assert(std::is_same_v<decltype(&fsim_systemc_accellera_version),
+    const char* (*)() noexcept>);
+static_assert(
+    std::is_same_v<decltype(&fsim_systemc_accellera_runtime_identity),
+        const char* (*)() noexcept>);
+static_assert(std::is_same_v<decltype(&fsim_systemc_accellera_context),
+    const void* (*)() noexcept>);
+static_assert(
+    std::is_same_v<decltype(&fsim_systemc_accellera_accepts_identity),
+        bool (*)(const char*) noexcept>);
+static_assert(
+    std::is_same_v<decltype(&fsim_systemc_accellera_compatibility_identity),
+        const char* (*)() noexcept>);
+static_assert(std::is_same_v<
+    decltype(&fsim_systemc_accellera_accepts_compatibility_identity),
+    bool (*)(const char*) noexcept>);
+
+static_assert(fsim::systemc::kSystemCKernelProtocolVersion == 1U);
+static_assert(fsim::systemc::kSystemCKernelMessageHeaderBytes == 128U);
+static_assert(fsim::systemc::scv_backend_protocol_version == 1U);
+static_assert(fsim::systemc::scv_backend_message_header_bytes == 160U);
+static_assert(fsim::runtime::transaction_record_schema_version == 1U);
+static_assert(sizeof(fsim::systemc::SystemCIslandId) == 16U);
+static_assert(sizeof(fsim::systemc::ScvIslandId) == 16U);
+static_assert(sizeof(fsim::runtime::TransactionStableId) == 16U);
+static_assert(!std::is_pointer_v<fsim::systemc::SystemCIslandId>);
+static_assert(!std::is_pointer_v<fsim::systemc::ScvIslandId>);
+static_assert(!std::is_pointer_v<fsim::runtime::TransactionStableId>);
+static_assert(std::is_trivially_copyable_v<fsim::systemc::SystemCIslandId>);
+static_assert(std::is_trivially_copyable_v<fsim::systemc::ScvIslandId>);
+static_assert(
+    std::is_trivially_copyable_v<fsim::runtime::TransactionStableId>);
 
 SC_MODULE(CompatibilityProbe)
 {

@@ -139,6 +139,33 @@ namespace {
             std::filesystem::perm_options::add);
     }
 
+    void make_tree_read_only(const std::filesystem::path& root)
+    {
+        for (const auto& entry :
+            std::filesystem::recursive_directory_iterator(root)) {
+            const auto permissions = entry.is_directory()
+                ? std::filesystem::perms::owner_read
+                    | std::filesystem::perms::owner_exec
+                    | std::filesystem::perms::group_read
+                    | std::filesystem::perms::group_exec
+                    | std::filesystem::perms::others_read
+                    | std::filesystem::perms::others_exec
+                : std::filesystem::perms::owner_read
+                    | std::filesystem::perms::group_read
+                    | std::filesystem::perms::others_read;
+            std::filesystem::permissions(entry.path(), permissions,
+                std::filesystem::perm_options::replace);
+        }
+        std::filesystem::permissions(root,
+            std::filesystem::perms::owner_read
+                | std::filesystem::perms::owner_exec
+                | std::filesystem::perms::group_read
+                | std::filesystem::perms::group_exec
+                | std::filesystem::perms::others_read
+                | std::filesystem::perms::others_exec,
+            std::filesystem::perm_options::replace);
+    }
+
 } // namespace
 
 void ApplicationTestFixture::test_non_project_cli()
@@ -1443,6 +1470,64 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     assert(!app::load_design_artifact(incompatible_design,
         incompatible_design_diagnostics));
     assert(incompatible_design_diagnostics.has_error());
+
+    const auto relocated_read_only_root = directory
+        / support::path_from_utf8("relocated artifacts \xc2\xb5");
+    const auto relocated_read_only_design = relocated_read_only_root
+        / "read only design.fsimdesign";
+    const auto relocated_trace_directory = directory
+        / support::path_from_utf8("relocated outputs \xc2\xb5");
+    const auto relocated_trace = relocated_trace_directory / "phase.fst";
+    const auto relocated_cache = directory / "relocated-consumer-cache";
+    const auto relocated_file_root = directory / "relocated-consumer-files";
+    std::filesystem::create_directories(relocated_read_only_root);
+    std::filesystem::create_directories(relocated_trace_directory);
+    std::filesystem::create_directories(relocated_cache);
+    std::filesystem::create_directories(relocated_file_root);
+    copy_tree(design, relocated_read_only_design);
+    const auto producer_prefix = support::path_to_utf8(directory);
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(
+             relocated_read_only_design)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        const auto bytes = read_binary_file(entry.path());
+        assert(bytes.find(producer_prefix) == std::string::npos);
+    }
+    make_tree_read_only(relocated_read_only_root);
+    const auto relocated_read_only_design_text
+        = support::path_to_utf8(relocated_read_only_design);
+    const auto relocated_trace_text = support::path_to_utf8(relocated_trace);
+    const auto relocated_cache_text = support::path_to_utf8(relocated_cache);
+    const auto relocated_file_root_text
+        = support::path_to_utf8(relocated_file_root);
+    const std::vector<const char*> relocated_arguments {
+        "fsim", "simulate", "--design", relocated_read_only_design_text.c_str(),
+        "--engine", "interpreter", "--duration", "10ns", "--max-deltas",
+        "1000", "--trace", relocated_trace_text.c_str(), "--cache",
+        relocated_cache_text.c_str(), "--file-root",
+        relocated_file_root_text.c_str(), "--trace-compression",
+        "deterministic", "--trace-filter", "primary.*"
+    };
+    output.str({ });
+    error.str({ });
+    const auto relocated_result = cli::run(
+        static_cast<int>(relocated_arguments.size()),
+        relocated_arguments.data(), production_services, output, error);
+    if (relocated_result != 0) {
+        std::cerr << error.str();
+    }
+    assert(relocated_result == 0);
+    assert(error.str().empty());
+    assert(output.str().find("simulation stopped at tick 3")
+        != std::string::npos);
+    assert(std::filesystem::is_regular_file(relocated_trace));
+    assert(runtime::read_fst(read_binary_file(relocated_trace)).ok());
+    assert(!std::filesystem::exists(
+        relocated_read_only_design / "llvm-native"));
+    assert(!std::filesystem::exists(
+        relocated_read_only_design / "phase.fst"));
+    make_tree_writable(relocated_read_only_root);
 
     std::filesystem::rename(hidden_object, object);
     std::filesystem::rename(hidden_extra_object, extra_object);

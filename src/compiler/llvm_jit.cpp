@@ -1507,6 +1507,7 @@ LlvmNativeHostIdentity LlvmJit::native_host_identity(
 
     CacheKeyBuilder builder;
     builder.add("kind", "fsim-llvm-native-host-v1");
+    builder.add("build-configuration", FSIM_BUILD_CONFIGURATION);
     builder.add("llvm-version", LLVM_VERSION_STRING);
     builder.add(
         "optimization",

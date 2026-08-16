@@ -30,6 +30,8 @@ namespace fsim::compiler {
 namespace {
 
 constexpr std::string_view kMagic = "FSIM-OBJECT-CACHE-V1\n";
+constexpr std::uintmax_t kMaximumCacheEntryBytes =
+    256U * 1024U * 1024U;
 std::atomic_uint64_t temp_counter{};
 std::atomic_uint64_t lock_counter{};
 
@@ -43,13 +45,18 @@ void hash_size(support::Sha256& hasher, const std::size_t size) noexcept {
 }
 
 std::optional<std::vector<std::byte>> read_all(
-    const std::filesystem::path& path, std::error_code& error) {
+    const std::filesystem::path& path,
+    std::error_code& error,
+    const std::uintmax_t maximum_size =
+        std::numeric_limits<std::uintmax_t>::max()) {
     error.clear();
     const auto size = std::filesystem::file_size(path, error);
     if (error) {
         return std::nullopt;
     }
-    if (size > static_cast<std::uintmax_t>(std::numeric_limits<std::size_t>::max())) {
+    if (size > maximum_size
+        || size > static_cast<std::uintmax_t>(std::numeric_limits<std::size_t>::max())
+        || size > static_cast<std::uintmax_t>(std::numeric_limits<std::streamsize>::max())) {
         error = std::make_error_code(std::errc::file_too_large);
         return std::nullopt;
     }
@@ -443,7 +450,7 @@ std::optional<std::vector<std::byte>> ObjectCache::load(
         error = std::make_error_code(std::errc::invalid_argument);
         return std::nullopt;
     }
-    auto encoded = read_all(path, error);
+    auto encoded = read_all(path, error, kMaximumCacheEntryBytes);
     if (!encoded) {
         return std::nullopt;
     }

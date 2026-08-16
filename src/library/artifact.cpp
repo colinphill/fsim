@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/library/artifact.hpp"
 
+#include "../diagnostic/artifact_identity.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 
@@ -289,11 +290,11 @@ bool make_tree_read_only(
 
 std::string serialize_metadata(const Metadata& metadata) {
   std::ostringstream output;
-  output << "format = " << metadata.format << '\n'
+  output << "format = " << kFormatVersion << '\n'
          << "library = \"" << escape(metadata.library) << "\"\n"
          << "producer = \"" << escape(metadata.producer) << "\"\n"
          << "runtime_schema = " << metadata.runtime_schema << '\n'
-         << "portable_schema = " << metadata.portable_schema << '\n'
+         << "portable_schema = " << kPortableSchemaVersion << '\n'
          << "trace_archive = \"" << escape(metadata.trace_archive) << "\"\n";
   for (const auto& dependency : metadata.dependencies) {
     output << "\n[[dependency]]\n"
@@ -647,21 +648,22 @@ std::optional<Metadata> parse_metadata(
 
   const auto document_line = std::max<std::uint32_t>(line_number, 1);
   if (metadata.format != kFormatVersion) {
-    error(
-        diagnostics, kSchemaCode,
-        "unsupported .fsimlib format " + std::to_string(metadata.format)
-            + "; this build supports format "
-            + std::to_string(kFormatVersion),
-        source_name, document_line);
+      error(
+          diagnostics, kSchemaCode,
+          diagnostic::unsupported_artifact_identity(
+              ".fsimlib", "format " + std::to_string(metadata.format),
+              "format " + std::to_string(kFormatVersion), ".fsimlib"),
+          source_name, document_line);
   }
   if (metadata.portable_schema != kPortableSchemaVersion) {
-    error(
-        diagnostics, kSchemaCode,
-        "unsupported portable-unit schema "
-            + std::to_string(metadata.portable_schema)
-            + "; this build supports schema "
-            + std::to_string(kPortableSchemaVersion),
-        source_name, document_line);
+      error(
+          diagnostics, kSchemaCode,
+          diagnostic::unsupported_artifact_identity(
+              ".fsimlib", "portable-unit schema " + std::to_string(metadata.portable_schema),
+              "portable-unit schema "
+                  + std::to_string(kPortableSchemaVersion),
+              ".fsimlib"),
+          source_name, document_line);
   }
   if ((metadata.trace_archive.size() % 2U) != 0U
       || !std::ranges::all_of(metadata.trace_archive, [](const char value) {
@@ -802,7 +804,7 @@ std::optional<Metadata> parse_metadata(
         && native.cache_key.empty();
     const bool llvm = native.kind == "llvm_object"
         && native.systemc_abi == 0 && native.scv_compatibility.empty()
-        && native.compiler_fingerprint.empty()
+        && checksum_spelling(native.compiler_fingerprint)
         && !native.llvm_version.empty() && !native.data_layout.empty()
         && (native.optimization == "O0" || native.optimization == "O2")
         && checksum_spelling(native.cache_key);
@@ -880,6 +882,21 @@ bool publish(
   }
 
   diagnostic::Engine metadata_diagnostics;
+  if (metadata.format != kFormatVersion
+      || metadata.portable_schema != kPortableSchemaVersion) {
+      diagnostics.error(
+          std::string { kPublishCode },
+          diagnostic::unsupported_artifact_identity(
+              ".fsimlib publication",
+              "format " + std::to_string(metadata.format)
+                  + " and portable-unit schema "
+                  + std::to_string(metadata.portable_schema),
+              "format " + std::to_string(kFormatVersion)
+                  + " and portable-unit schema "
+                  + std::to_string(kPortableSchemaVersion),
+              ".fsimlib"));
+      return false;
+  }
   const auto canonical = serialize_metadata(metadata);
   if (!parse_metadata(
           canonical, std::string{kMetadataFilename}, metadata_diagnostics)) {

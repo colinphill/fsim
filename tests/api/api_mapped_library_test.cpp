@@ -38,14 +38,34 @@ void test_mapped_library_api(const std::filesystem::path& directory) {
   sources.library = "vendor";
   sources.files = {source};
   producer.source_sets.push_back(std::move(sources));
-  const auto artifact = directory / "api-vendor.fsimlib";
+  const auto producer_artifact = directory / "api-vendor.fsimlib";
   fsim::diagnostic::Engine export_diagnostics;
   const auto exported = fsim::app::export_library(
-      producer, "vendor", artifact, export_diagnostics);
+      producer, "vendor", producer_artifact, export_diagnostics);
   if (!exported) {
     fsim::diagnostic::print_text(std::cerr, export_diagnostics);
   }
   assert(exported);
+
+  const auto relocated_root = directory
+      / fsim::support::path_from_utf8("relocated mapped packages \xc2\xb5");
+  const auto artifact = relocated_root / "vendor library.fsimlib";
+  std::filesystem::create_directories(relocated_root);
+  std::filesystem::permissions(
+      producer_artifact, std::filesystem::perms::owner_write,
+      std::filesystem::perm_options::add);
+  std::filesystem::rename(producer_artifact, artifact);
+  std::filesystem::rename(
+      source, directory / "api_mapped_library.sv.producer-hidden");
+  for (const auto& entry :
+      std::filesystem::recursive_directory_iterator(artifact)) {
+      std::filesystem::permissions(
+          entry.path(), std::filesystem::perms::owner_write,
+          std::filesystem::perm_options::remove);
+  }
+  std::filesystem::permissions(
+      artifact, std::filesystem::perms::owner_write,
+      std::filesystem::perm_options::remove);
 
   const auto manifest_path = directory / "api-mapped-library.toml";
   {
@@ -58,7 +78,7 @@ void test_mapped_library_api(const std::filesystem::path& directory) {
         << "time_resolution = \"1ns\"\n"
         << "[[library_map]]\n"
         << "library = \"vendor\"\n"
-        << "path = \"" << fsim::support::path_to_utf8(artifact) << "\"\n"
+        << "path = \"relocated mapped packages \xc2\xb5/vendor library.fsimlib\"\n"
         << "[build]\n"
         << "cache_path = \"api-mapped-consumer-cache\"\n";
     assert(manifest.good());
@@ -108,4 +128,13 @@ void test_mapped_library_api(const std::filesystem::path& directory) {
       fsim_session_get_mapped_library_info(session, 0, &info)
       == FSIM_STATUS_INCOMPATIBLE_ABI);
   assert(fsim_session_destroy(session) == FSIM_STATUS_OK);
+  for (const auto& entry :
+      std::filesystem::recursive_directory_iterator(artifact)) {
+      std::filesystem::permissions(
+          entry.path(), std::filesystem::perms::owner_write,
+          std::filesystem::perm_options::add);
+  }
+  std::filesystem::permissions(
+      artifact, std::filesystem::perms::owner_write,
+      std::filesystem::perm_options::add);
 }

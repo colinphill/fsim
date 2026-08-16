@@ -12459,110 +12459,498 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 174 - v2 artifact, ABI, and development-schema freeze - Planned
 
-1. **Planning and ownership only.** Create one registered eighteen-row freeze
-   ledger assigning Changes 2-19 one-to-one across the public C/C++ API, native
-   SystemC/TLM/SCV and foreign interfaces, every portable and native artifact
-   family, stale-schema policy, relocation/restartability, mixed-toolchain and
-   cache isolation, documentation, exhaustive corruption evidence and final
-   closure. Freeze the clean Batch 173 base, exact owners, positive/negative/
-   artifact/platform evidence, diagnostics and resource limits before changing
-   an ABI or schema.
-2. Inventory and freeze the installed core C ABI and C++ API: version queries,
-   opaque handles, enums, callback signatures, ownership/lifetime rules,
-   exported symbols, calling conventions, exception boundaries, struct sizes/
-   offsets/alignments and installed target aliases. Add C and C++ compile/link/
-   runtime probes plus single-field and truncation negatives without changing
-   behavior.
-3. Freeze the native SystemC 3.0.2, TLM-1/TLM-2 and SCV 2.0.1 boundary: host/
-   registrar layout, append-only revision policy, producer fingerprints,
-   pointer-free backend/transaction records, shared-library identity, installed
-   discovery and the exact governed upstream archive/patch/tree identities.
-4. Freeze DPI-C, VPI, VHPI and UVM-foreign ABIs across C and C++: descriptor and
-   host table layouts, scalar/composite/open-array marshalling, callbacks,
-   handles, symbol names, version negotiation, plug-in ownership and fail-
-   before-load mismatch diagnostics on Linux and Windows object models.
-5. Freeze the portable compilation-unit `.fsimobj` envelope and every owned
-   semantic HIR/constant/type/source-coordinate payload with explicit schema,
-   producer, language/profile and resource identities. Round-trip the complete
-   supported value/type union and reject stale, future, truncated, oversized or
-   internally inconsistent objects transactionally.
-6. Freeze `.fsimdesign` and `.fsimlib` independently: root/library identities,
-   mapped units, native and portable plug-in metadata, source fallback policy,
-   checksums, compiler/runtime/SystemC/SCV provenance and source-hidden reuse.
-   Corrupt or incompatible embedded records must reject before publication or
-   native image access.
-7. Freeze incremental SystemC objects/plug-ins and every native compilation
-   cache key/metadata record, including compiler frontend, target, standard
-   library, member-pointer model, runtime/SystemC/TLM/SCV identities,
-   dependency digests and cold/warm/edit invalidation. Native artifacts remain
+1. **Complete. Planning and ownership only.** One registered eighteen-row
+   freeze ledger assigns Changes 2-19 one-to-one across the public C/C++ API,
+   native SystemC/TLM/SCV and foreign interfaces, every portable and native
+   artifact family, stale-schema policy, relocation/restartability, mixed-
+   toolchain and cache isolation, documentation, exhaustive corruption evidence
+   and final closure. Every row freezes the clean `06f8e03` baseline, all
+   governed HDL/native profiles, one unique `B174-Cxx` closure, an exact current
+   implementation owner, five checked-in positive/negative/protocol/phase/
+   artifact evidence owners, diagnostics and the source-resource policy before
+   any ABI or schema changes. The direct validator and registered exact-LLVM
+   Debug inventory, diagnostic-catalog and source-budget slice pass 3/3 in 0.29
+   seconds with eighteen active rows, zero preserved rows and normalized
+   SHA-256
+   `0d34dfee6f40071b2d49293c6c3a0c56be2464884adf7be6a533a482cc0fe21e`.
+   CMake regeneration performs no compilation. No ABI, schema, runtime or
+   installed behavior changes; no Release build/test, sanitizer, hosted-CI
+   inspection, reset, commit, push or header formatting runs. Preserve Change
+   1 in the intentionally dirty worktree and proceed only to Change 2's core C
+   and C++ API freeze.
+2. **Complete.** The installed core boundary is frozen as the exact 31-symbol
+   C-linkage surface in `fsim/api.h` and `libfsim_api`, with no wildcard ELF
+   exports. A normalized contract records API version 1, the Windows/Linux
+   x86-64 object model, default C calling convention, opaque 64-bit handles,
+   session/input/output/callback ownership and the no-C++-exception boundary;
+   its SHA-256 is
+   `ad6f2dfa02f48610006c5296fec42db39a6969a29ac5549056c59baa2e14bc8e`.
+   Shared C/C++ compile probes freeze every enum value, callback and public
+   function signature and all struct sizes, alignments and field offsets. Their
+   runtime link probe calls every symbol, proves valid creation/configuration,
+   one-field API-version and one-byte size truncation rejection, invalid-handle
+   containment and no exception escape. The relocatable installed
+   `fsim::api` imported target exposes only the public include tree, shared
+   library and `FSIM_SHARED`, and the existing staged-install test builds and
+   runs the same mixed C/C++ consumer without adding a duplicate install
+   driver. The exact-LLVM Debug ABI/contract/inventory/installed slice passes
+   4/4 in 5.11 seconds; the built ELF has exactly the 31 governed `fsim_*`
+   functions plus its `FSIM_1.0` version node. The final API/header/contract/
+   ledger/catalog/source slice passes 7/7 in 2.89 seconds and the eight-worker
+   full Debug build is a no-op. One ledger row is preserved, seventeen remain
+   active and the ledger SHA-256 is
+   `86fb912f27e2dbc454122711ec177caebcc552716aaa620fabe77ae547c7591c`.
+   Runtime behavior and `include/fsim/api.h` are unchanged; only the redundant
+   build-tree transitive implementation link interface is private. No Release,
+   sanitizer, hosted-CI, commit, push or existing-header formatting work ran.
+   Preserve Changes 1-2 and proceed only to Change 3's SystemC/TLM/SCV ABI
+   freeze.
+3. **Complete.** A normalized 26-row native contract freezes SystemC
+   3.0.2.20251031, bundled TLM-1, TLM 2.0.6.20191203 and SCV 2.0.1 at SHA-256
+   `95c808d51c89d294a4e54b395e470d7c949295b741803025b0a6790acb0a3088`.
+   It records ABI 4 and the sole `fsim_plugin_init_v1` entry point, exact
+   32-byte value-view, 152-byte host and 32-byte registrar layouts and callback
+   signatures, future-extent/current-prefix append-only handling, compiler/
+   standard-library/SystemC/TLM/SCV producer fields, one shared runtime and
+   exact CMake/pkg-config discovery. C and C++ probes freeze all layouts and
+   signatures; the loader accepts future extents but rejects one-byte host or
+   registrar truncation with the ABI diagnostic before attempting the named
+   missing image. SystemC kernel schema 1/128-byte, SCV backend schema
+   1/160-byte and transaction schema 1 retain pointer-free typed stable IDs and
+   bounded explicit encodings. The official SystemC commit/archive/tree and
+   SCV archive/tree/patch/patched-tree identities are frozen without modifying
+   upstream or installed headers. The exact-LLVM Debug ABI, compatibility,
+   plug-in, protocol, transaction, shared-runtime, provenance, patch and two
+   installed-consumer slice passes 16/16 in 5.34 seconds. Two ledger rows are
+   preserved, sixteen remain active and the ledger SHA-256 is
+   `eb0252074549ddae301e94e81318a29cf109c405da3e9b12de1d4e4fb92ac262`.
+   No runtime behavior, Release, sanitizer, hosted-CI, commit, push or public-
+   header formatting work ran. Preserve Changes 1-3 and proceed only to Change
+   4's DPI/VPI/VHPI/UVM-foreign ABI freeze.
+4. **Complete.** A normalized 35-row contract freezes the Linux x86-64 LP64
+   and Windows x86-64 LLP64 object models, platform-default C calling
+   conventions, exact versioned DPI/VPI/VHPI entry points and append-only
+   ownership rules at SHA-256
+   `121bff0ce429135089c6e68212398ee54a273e5cb509edbff4b289729ad67b60`.
+   C11 and C++20 probes freeze the 32-byte DPI descriptor; VPI and VHPI
+   32-byte error view, 40-byte v1 host, 48-byte request, 40-byte result,
+   56-byte v2 host and 48-byte plug-in records; and UVM-foreign 48-byte
+   snapshot, 72-byte record, 88-byte activity and 64-byte host, including
+   every alignment, field offset, callback signature and typed 64-bit handle.
+   The existing scalar, real, string, chandle, composite and open-array DPI
+   behavior remains the marshalling owner. DPI now proves current and future
+   extents plus single-field version, one-byte size, pointer-width, flags and
+   bounded-name mutations. VPI and VHPI continue to contain bind/lifecycle
+   failures, and now reject one-byte host truncation against deliberately
+   missing images before `dlopen`/`LoadLibrary`. The UVM host retains bounded
+   capture/copy/release and borrowed callback identity/detail ownership. The
+   exact-LLVM Debug runtime/contract/inventory/source slice passes 4/4 in 0.35
+   seconds. Three ledger rows are preserved, fifteen remain active and the
+   ledger SHA-256 is
+   `ffeb5f3b56718be9b5e38e39257d2cab7f78596093c79c8ed54b6ca4969c162a`.
+   No public header or runtime behavior changed; no Release, sanitizer,
+   hosted-CI, commit, push or existing-header formatting work ran. Preserve
+   Changes 1-4 and proceed only to Change 5's portable `.fsimobj` freeze.
+5. **Complete.** A normalized 46-row contract freezes the read-only atomic
+   `.fsimobj` directory, `fsim-object.bin`, eight-byte `FSIMOBJ` magic, format
+   6, portable metadata schema 10 and all producer/language/standard/profile/
+   library/compilation/UVM/digest/index fields at SHA-256
+   `4c641ac6d6594701d8f51b9a2d838d0271eef859abe4e3aa47d2ff11ac329f9a`.
+   It also freezes the canonical little-endian owning codecs: `FSIMUNIT` and
+   `FSIMCLSU` schema 26 plus `FSIMUDPD` schema 1, u64 integral/length encoding,
+   bounded bool/enum/string/vector/optional/shared ownership, cycle rejection
+   and 512-level structural-depth limit. The existing deterministic HIR corpus
+   remains the complete design-unit, expression, type, constant/value,
+   declaration, hierarchy, execution, strength/timing and relative-coordinate
+   round-trip owner across every supported VHDL, Verilog and SystemVerilog
+   profile. Object metadata now explicitly rejects corrupt magic, stale/future
+   format and nested schema, truncated header, oversized root length and an
+   inconsistent compilation digest. Owning unit, UDP and class payloads reject
+   stale/future and truncated forms; units additionally reject corrupt magic,
+   oversized strings and trailing bytes without returning partial state. The
+   exact-LLVM Debug object/library/contract/inventory/source slice passes 5/5
+   in 0.34 seconds. Four ledger rows are preserved, fourteen remain active and
+   the ledger SHA-256 is
+   `5ad78980b07d28c5fa792960484130ff2f5c47801d2e76e11db9fd74ad3cc649`.
+   No schema version, public header or runtime writer/reader behavior changed;
+   no Release, sanitizer, hosted-CI, commit, push or header-formatting work ran.
+   Preserve Changes 1-5 and proceed only to Change 6's independent
+   `.fsimdesign` and `.fsimlib` freeze.
+6. **Complete.** A normalized 49-row contract independently freezes the
+   `.fsimdesign` and `.fsimlib` composition boundaries at SHA-256
+   `8d80b4fd92cb3017a799082271efb35c5e9234c474b4575270274414ba44d0a8`.
+   The current design writer remains eight-byte `FSIMDES` magic, format 11 and
+   runtime ABI 1 with explicit producer/runtime profile, selected roots and
+   bindings, object and per-unit provenance, SDF records, embedded SystemC/SCV
+   plug-in identities, checksummed payload index, digest and counts. The
+   existing formats 1/2/4-10 reader inventory is recorded without expanding
+   compatibility; Change 10 owns its development-policy removal. The library
+   boundary remains canonical `.toml` format 5 with portable schema 10,
+   logical dependencies, selected standards and VHDL packages, portable units,
+   optional embedded source and exact-producer LLVM/SystemC native records.
+   Source-hidden publication now has direct evidence: it retains logical source
+   and portable-unit identities while omitting both the source path/checksum
+   and source payload, and remains loadable with its portable and native
+   indexes intact. New single-boundary negatives cover corrupt design magic,
+   unsupported format, future format, runtime mismatch, truncated header/root,
+   oversized root, trailing bytes, inconsistent digest, missing SCV identity,
+   mismatched plug-in payload indexes, stale/future library and nested portable
+   schemas and malformed native records. Invalid embedded records reject before
+   a destination exists. Static ownership checks preserve metadata-only lazy
+   library loading and prove mapped/design SystemC admission compares SCV,
+   runtime, SystemC, compiler and payload identities before native image load.
+   The exact-LLVM Debug design/library/contract/inventory/source slice passes
+   5/5 in 0.35 seconds. Five ledger rows are preserved, thirteen remain active
+   and the ledger SHA-256 is
+   `1d42abdfcde6925609dec22da977da0f878c637074c62d6ab54d0fe49c357da2`.
+   No schema number, runtime behavior, public header, Release, sanitizer,
+   hosted-CI, commit, push or header-formatting work ran. Preserve Changes 1-6
+   and proceed only to Change 7's incremental native-cache freeze.
+7. **Complete.** A normalized 56-row contract freezes `.fsimscobj` and
+   `.fsimscplugin` format 2 plus the native compilation/cache composition at
+   SHA-256
+   `ec2029a648c0f3c8908e7b5ac06c1bdf2e1ed33b0247958a86ed945d909e8f95`.
+   Object records retain runtime ABI 1, SystemC ABI 4, SCV compatibility,
+   producer/toolchain/target/compiler identity, ordered defines/options and
+   content-addressed source/dependencies, export flags, relative native payload
+   and independent input/compilation digests. Plug-in records retain the same
+   exact producer plus logical library, ordered unique object digests, link
+   inputs, sorted typed factory/default inventory, native payload and separate
+   input/link digests. The shared host fingerprint is frozen at C++20 with the
+   compiler requested/resolved path and binary content, governed environment,
+   fsim runtime, SystemC/Accellera bridge/TLM/SCV source-patch identities,
+   standard-library version, ELF/PE host format, MSVC runtime and `/vmg`
+   member-pointer model. Incremental object and plug-in cache paths remain
+   complete-SHA-256 sharded, per-key locked and double checked. Existing cold/
+   warm, source-edit, dependency-edit, unrelated-hit, compiler-environment,
+   live-lock, atomic replacement and pruning tests remain owners. New
+   metadata-only mutations prove every producer/input/factory field contributes
+   to the correct digest without adding compiler invocations. Both envelopes
+   now directly reject bad magic, stale/future format, runtime/SystemC mismatch,
+   oversized identity, truncation and trailing bytes; existing SCV, compiler,
+   payload checksum and pre-load producer mismatches remain covered. Native
+   loading still performs metadata/checksum and current producer comparison
+   before `dlopen` and runtime factory comparison. Native artifacts remain
    exact-producer only and never gain a cross-toolchain compatibility reader.
-8. Freeze the remaining portable schemas and their composition into projects,
-   libraries and designs: SDF IR/plans, trace and archive records, transaction
-   records, coverage/assertion state, UVM state/checkpoints/register coverage,
-   debugger/checkpoint data and SCV protocol/recording/transport identities.
-   Require explicit schema and bounded collection/string/value metadata at
-   every nested boundary.
-9. Inventory every project/manifest and v1-era persisted schema still accepted
-   by a current reader. Under the development-schema policy, remove any
-   superseded compatibility reader, migration entry point, fallback or dual-
-   write path; current writers emit only the one current schema and stale input
-   rejects with a stable diagnostic plus source-regeneration guidance.
-10. Audit every earlier v2 portable object/design/library and nested ancillary
-    schema. Remove accidental prior-version decoders and implicit defaults,
-    preserve current-version round trips, and prove stale/future/downgrade
-    attempts reject before returning partial state, cache files or mapped
-    native payloads.
-11. Audit native caches, incremental objects and plug-ins for producer/version
-    fallback. Reject compiler, target, standard-library, runtime ABI, SystemC/
-    TLM/SCV, DPI/VPI/VHPI/UVM-foreign and governed-patch mismatches before
-    `dlopen`/`LoadLibrary`, while retaining deterministic current-producer cold,
-    warm and dependency-edited reuse.
-12. Centralize unsupported schema, downgrade and producer diagnostics across
-    project, object, design, library, checkpoint and native-cache readers.
-    Every negative names the artifact family, found and required identity and
-    the safe regeneration action; malformed input must not mutate registries,
-    publish outputs or leave temporary/cache artifacts.
-13. Verify source-hidden relocation for installed packages, mapped libraries,
-    designs, objects, traces and checkpoints from non-ASCII and space-containing
-    paths. Run from read-only source/artifact trees and reject absolute source/
-    build-prefix leakage while preserving relative runtime discovery.
-14. Verify non-project restartability through explicit analyze, elaborate,
-    compile, link, run, debug, trace, checkpoint and replay phases. Delete or
-    hide original sources at each portable boundary and prove multiple roots,
-    logical libraries, mixed languages and edited-cache invalidation retain the
-    same ordered identities and results.
-15. Verify mixed host/toolchain behavior across exact LLVM, GCC-compatible and
-    Windows compiler identities: portable artifacts remain reusable where the
-    schema promises portability, native payloads reject mismatches before
-    loading, and installed CMake/pkg-config consumers resolve exactly one
-    governed runtime for each dependency.
-16. Exercise stale, corrupt, truncated, oversized, read-only and concurrently
-    accessed artifacts/caches on POSIX and modeled Windows paths. Freeze atomic
-    publication, lock cleanup, case/path normalization and cache-key separation
-    across Debug/Release, interpreter/LLVM O0/O2, language profiles, toolchains,
-    runtime identities and source edits.
-17. Publish one v2 ABI and schema reference covering public layouts/symbols,
-    installed targets, current format numbers, nested composition, provenance,
-    portability versus native boundaries, rejection semantics and the explicit
-    no-compatibility-reader development policy. Document regeneration and
-    source rebuild workflows instead of claiming unsupported migration.
-18. Build exhaustive positive, single-field mutation, stale/future version,
+   The exact-LLVM Debug cache/SCV/SystemC/contract/inventory/source slice passes
+   8/8 in 37.59 seconds. Six ledger rows are preserved, twelve remain active
+   and the ledger SHA-256 is
+   `15e42378f69e4036a7b0fce37bd92c384519e707dae468127ac729255b0f6d36`.
+   No schema, native runtime, public header, Release, sanitizer, hosted-CI,
+   commit, push or header-formatting work ran. Preserve Changes 1-7 and proceed
+   only to Change 8's nested portable-schema freeze.
+8. **Complete.** A normalized 65-row contract freezes every remaining nested
+   portable boundary at SHA-256
+   `7e947fdb501fa6b1348216a5c6e20b4bfebaaf6bcc022441a36ad9a6ebfba7be`.
+   Its one-to-one SDF inventory covers all 36 schema-bearing IR, plan,
+   resolution, effective/portable/VITAL archive and timing-surface owners,
+   including schema 4 target plans, schema 2 primary/secondary checks and
+   schema 1 elsewhere. Every owner retains explicit collection, string, value,
+   identity or delegated effective-archive limits. Trace control/archive schema
+   1 and profile 1 retain FST compression schema/algorithm 1 and bounded
+   container/value decoding. Transaction schema 1 remains a pointer-free typed
+   record with stable IDs and independent message, string, word, attribute,
+   relation and correlated-object ceilings. Design composition freezes runtime
+   48, semantic/design-IR 3, class 10, constraint-HIR 6, coverage 4, UVM 2 and
+   VHDL-HIR 1; the common owning codec remains payload-bounded and limited to
+   1,024 structural levels. Coverage/assertion/UVM state, UVM checkpoints and
+   register coverage, VPI/VHPI restart metadata and nonpersistent debugger
+   views retain their current transactional resource owners. SCV artifact/cache
+   schema 1, backend protocol 1/160-byte header, transport 1/64-byte header,
+   nested transaction records, native recording/resources/extensions/random/
+   constraints/smart-pointer limits and exact compatibility identities are
+   frozen together. Existing round-trip, stale/future, corrupt, truncated,
+   trailing, resource and no-partial-state evidence remains authoritative. The
+   exact-LLVM Debug nested/SDF/trace/transaction/checkpoint/SCV/artifact/
+   inventory/source slice passes 12/12 in 1.41 seconds. Seven ledger rows are
+   preserved, eleven remain active and the ledger SHA-256 is
+   `3834f8b8316387f354f0c65b63c1137f5a4a4b4dc67b4b3baf7b624e00ec59c6`.
+   The eight-worker full Debug build performs configuration only and has no
+   compilation work. No schema, runtime behavior, public header, Release,
+   sanitizer, hosted-CI, commit, push or header-formatting work ran. Preserve
+   Changes 1-8 and proceed only to Change 9's project/manifest stale-schema
+   policy.
+9. **Complete.** A normalized 15-row project-manifest contract freezes the
+   sole persisted `fsim.toml` schema at exact version 2 and SHA-256
+   `5b4c8ed51e663e35a536e0894605aebbfe5bbb9843cd03196aac5d89bb82fb7c`.
+   Under the development-schema policy, the audit confirms `project::parse`/
+   `load` are the only readers and that no schema-0/1 compatibility reader,
+   migration/upgrade entry point, fallback schema, generated legacy writer or
+   dual-write path exists. Programmatically
+   constructed `Config` objects and current schema-2 language/standard/
+   compatibility spellings are explicitly distinguished from persisted-schema
+   compatibility. The reader now gives missing, zero, stale schema 1, future
+   schema 3 and beyond-u32 values one stable `FSIM-PROJ-0005` family with
+   source-regeneration guidance: it names required schema 2 and the action to
+   regenerate `fsim.toml` for the current build. Every error still returns no
+   configuration and path resolution occurs
+   only after a valid parse. Direct current/stale/future/missing/oversized and
+   unknown-key evidence is frozen with a negative no-migration-path gate. The
+   exact-LLVM Debug project/library/API/non-project/contract/inventory/source
+   slice passes 7/7 in 5.69 seconds after a warning-free eight-worker full
+   Debug relink of 95/95 steps. Eight ledger rows are preserved, ten remain
+   active and the ledger SHA-256 is
+   `f6ace52c3e5feaaf2fb201272c475790a080aa1b5ad7457bc64108e9b6e37cd5`.
+   No Release, sanitizer, hosted-CI, commit, push or header-formatting work ran.
+   Preserve Changes 1-9 and proceed only to Change 10's portable stale-schema
+   reader removal.
+10. **Complete.** Audited every earlier portable object, design, library and
+    nested ancillary schema under one normalized 31-row current-only policy at
+    SHA-256
+    `63bb8c68e24499e0eda1f0d9f164de045e0264986611a871c698f3f2cfd7b4f3`.
+    `.fsimdesign` no longer accepts formats 1/2/4-10 or supplies their omitted
+    trace, UVM, compatibility, VHDL/Verilog provenance, SDF, SystemC or SCV
+    fields; formats 0-10 and future 12 reject with runtime ABI mismatches at the
+    complete 16-byte header before root allocation or decoding. Object format
+    6/schema 10 now rejects all stale 0-5/0-9 and future identities at the same
+    binary boundary. Object, design and library writers emit only fixed current
+    identities, while publication validates the caller's original metadata
+    before canonicalization so downgrade attempts leave no destination or
+    staging tree. Library format 5/schema 10 remains an exact-current parser,
+    now with exhaustive stale ranges and fixed-current canonical text. Owning
+    unit/class schema 26 and UDP schema 1 already short-circuited before payload
+    decode; Change 8's 65-row nested inventory confirms every SDF, trace,
+    transaction, design-state, checkpoint and SCV reader remains exact-current,
+    bounded and transactional. Updated object and design/library freeze
+    contracts have SHA-256
+    `ac10fb1be3fc5d7e1baf1d56acf5f1b46a3cc460d9ef39b956dc620444f25d8e`
+    and
+    `94d28ca5f8e1c31e6b69cfcea8d96ef94130f6123ad446406aeb68c3711a50e0`.
+    The exact-LLVM focused Debug slice passes 10/10 in 1.40 seconds, followed by
+    a warning-free eight-worker 67-step full Debug relink. Nine ledger rows are
+    preserved, nine remain active and the ledger SHA-256 is
+    `8acfdbe6cf1a67d93ba311c3968d4c40439608ddd383af6b860ff9332f1a46d7`.
+    No public header, schema number, Release, sanitizer, hosted CI, commit, push
+    or header formatting ran. Preserve Changes 1-10 and proceed only to Change
+    11's native producer/version fallback removal.
+11. **Complete.** Audited mapped-library accelerators, incremental SystemC
+    objects and plug-ins, raw SystemC/DPI/VPI/VHPI loaders, UVM-foreign and the
+    LLVM JIT cache under a normalized 37-row native-producer policy at SHA-256
+    `bfaec1c5a63e7b59239096a507ef2e8e6e050de4e10d73b8c394d157f2f1229c`.
+    Mapped LLVM and SystemC records no longer treat an indexed but incompatible
+    native payload as a portable/source recompilation opportunity: runtime,
+    LLVM/SystemC/SCV, target, layout, CPU, features, optimization and compiler
+    fingerprint mismatches reject before payload read or cache publication.
+    Incremental object and plug-in envelopes now reject stale format/runtime/
+    SystemC identity from their complete 20-byte header before string decoding,
+    writers emit fixed format 2, and exact current `fsim` producer identity
+    participates in both input digests. Planned cache hits and link inputs
+    independently require the current compiler, target and fingerprint;
+    plug-in load requires current producer, target and fingerprint before the
+    native image opens. A checksummed non-library payload behind a stale target
+    proves that rejection happens before open. Existing SystemC, VPI and VHPI
+    host records still reject before image open; DPI descriptors reject before
+    imported/exported symbol admission; UVM-foreign has no separate native
+    cache fallback. Cold/warm, source-edit and dependency-edit reuse remains
+    deterministic. The updated incremental and design/library contracts have
+    SHA-256
+    `f2d1b2316d4bf168ccf9f6f259ee8477a6d9a1d06548e3a99624bdaccdb51e7d`
+    and
+    `17940b3fb89b79a853e13357501a61745116a538160496735c3b5c46e11ac6c3`.
+    The post-format exact-LLVM Debug slice passes 9/9 in 50.67 seconds, the
+    foreign/runtime slice passes 2/2 in 0.04 seconds and the warning-free
+    eight-worker full Debug relink completes 93/93 steps. Ten ledger rows are
+    preserved, eight remain active and the ledger SHA-256 is
+    `96ee0e9e38983c0159d12b1a2792ab36401c2af92aca14041207f92361cd1cf6`.
+    No public header, ABI/schema number, Release, sanitizer, hosted CI, commit,
+    push or header formatting ran. Preserve Changes 1-11 and proceed only to
+    Change 12's centralized unsupported-schema and producer diagnostics.
+12. **Complete.** One internal diagnostic constructor now gives project,
+    object, design, library, owning-unit, checkpoint and native-cache readers
+    the same unsupported-identity shape: artifact family, exact found and
+    required identity, and a safe regenerate-with-this-build action. Object,
+    design and library publication rejects stale caller metadata before making
+    destinations; mapped LLVM/SystemC and incremental SystemC admission rejects
+    producer, runtime, ABI, target, SCV and compiler mismatches before reading
+    or opening native payloads or publishing cache files. LLVM feature sets are
+    named by exact SHA-256 identity so diagnostics remain bounded on Windows.
+    Exact stale/future format and schema tests cover project manifests,
+    `.fsimobj`, `.fsimdesign`, `.fsimlib`, owning units, UDPs, class units and
+    persisted UVM checkpoint state, while the existing typed VPI/VHPI/UVM
+    checkpoint boundaries retain rejection before registry mutation. A
+    normalized 37-row diagnostic contract has SHA-256
+    `48dda18806aeba6b108e84770686057e8000f9deb1084f7d52662c8972a1928e`.
+    The exact-LLVM focused Debug/catalog/inventory/source slice passes 19/19 in
+    42.23 seconds, and the warning-free
+    eight-worker full Debug relink completes 89/89 steps. Eleven ledger rows
+    are preserved, seven remain active and the ledger SHA-256 is
+    `a9b872f525454ac4c4231b22f7c5a9db0399dc1c44e8cf4dcb51e07e6c551f6d`.
+    No public header, ABI/schema version, Release, sanitizer, hosted CI, commit,
+    push or header formatting ran. Preserve Changes 1-12 and proceed only to
+    Change 13's source-hidden read-only relocation boundary.
+13. **Complete.** A normalized 30-row source-hidden relocation contract freezes
+    installed fsim/SystemC/TLM/SCV CMake and pkg-config packages, mapped library
+    metadata/portable/native payloads, objects, designs, runtime/semantic/
+    design/class/coverage/checkpoint state, traces/FST, SDF and incremental
+    SystemC artifacts at SHA-256
+    `7f6c40bb6f814bab9bb056e74c5f70e33a7f95850222270bd862f98ca3ea266a`.
+    The installed public tree is now built at one prefix, renamed to a different
+    path containing spaces and UTF-8, made read-only, and consumed through its
+    relative imported targets before permissions are restored for cleanup. The
+    C API mapped-library test hides its source, relocates the published
+    `.fsimlib` to a read-only relative UTF-8 path and accepts its exact native
+    accelerator. The non-project application copies a fully self-contained
+    design to a read-only spaced/UTF-8 tree, scans every file for the producer
+    prefix, then runs from it with trace, cache and file-root output directed
+    outside the artifact. Existing object, SDF, trace, checkpoint, SystemC and
+    interpreter/LLVM relocation evidence remains authoritative. The focused
+    exact-LLVM Debug slice passes 8/8 in 16.33 seconds; the catalog/inventory/
+    source/contract confirmation passes 4/4 in 0.52 seconds and the eight-worker
+    full Debug build is a no-op. Twelve ledger rows are preserved, six remain
+    active and the ledger SHA-256 is
+    `c13a9a5596cdf4310154dfb0c311b31e36784cb7be348517a6ff64548653c42e`.
+    No public header, ABI/schema version, Release, sanitizer, hosted CI, commit,
+    push or header formatting ran. Preserve Changes 1-13 and proceed only to
+    Change 14's non-project phase restartability boundary.
+14. **Complete.** A normalized 36-row restartability contract maps the actual
+    public phase surface—`check` analysis, HDL and incremental SystemC compile,
+    SystemC link, object/library load, elaboration, artifact inspection,
+    interpreter/LLVM/debug execution, project `run`, interactive `debug`, VCD/
+    FST trace, design/UVM/VPI/VHPI checkpoint and replay, relocation and cache
+    invalidation—to exact implementation and CTest owners at SHA-256
+    `db5a4cb6ad75e7049891ca87596adc9c3c6415214ab4f1c01a512c63bb81ba73`.
+    The audit deliberately uses the existing supported commands and typed codec
+    entry points rather than adding aliases for phases that are not standalone
+    CLI commands. Existing tests hide sources after portable object creation,
+    hide objects after self-contained design publication and hide source behind
+    mapped libraries. They retain ordered roots, logical-library provenance,
+    mixed VHDL/SystemVerilog results and exact cold/warm plus edited source,
+    dependency and unused-source cache behavior across replay. The focused
+    exact-LLVM Debug slice passes 11/11 in 38.42 seconds; the catalog/inventory/
+    source/relocation/restartability confirmation passes 5/5 in 0.52 seconds
+    and the eight-worker full Debug build is a no-op. Thirteen ledger rows are
+    preserved, five remain active and the ledger SHA-256 is
+    `49df968989e7d6a9a55c2a0dc83a29306eb230e7a0f7a834838be1ca8aad090b`.
+    No public header, ABI/schema version, Release, sanitizer, hosted CI, commit,
+    push or header formatting ran. Preserve Changes 1-14 and proceed only to
+    Change 15's mixed host/toolchain installed-runtime boundary.
+15. **Complete.** A normalized 32-row mixed-toolchain/install contract freezes
+    exact LLVM version/target/layout/CPU/feature-digest/optimization identity,
+    GCC-compatible `clang++`/`g++`, modeled `cl.exe`/`clang-cl.exe`, compiler
+    path/content/environment, standard library, MSVC runtime and member-pointer
+    model, SystemC/TLM/SCV/runtime ABIs, portable/native cache policy and
+    relocated CMake/pkg-config consumers at SHA-256
+    `728dfff671a198543bbd60474cafed1a40c2a99d345cab016388324f95abb116`.
+    Portable object and library payloads remain host-independent at their
+    declared schema boundary; indexed LLVM/SystemC native accelerators remain
+    exact-producer and reject before payload read, image open or portable
+    fallback. Existing compiler tests exercise the native gcc-like route and
+    modeled MSVC/clang-cl dependency, response-file, `/bigobj`, `/vmg`, runtime
+    and path behavior locally. Installed fsim, SystemC, TLM and SCV consumers
+    resolve one relocated governed shared runtime rather than a build-tree or
+    duplicate dependency. The exact-LLVM focused Debug slice passes 11/11 in
+    50.11 seconds; catalog/inventory/source/contract confirmation passes 4/4 in
+    0.52 seconds and the eight-worker full Debug build is a no-op. Fourteen
+    ledger rows are preserved, four remain active and the ledger SHA-256 is
+    `1107bf3c932b419ee884be4ec75c2c8b050375472688a62dec0a6f3c92a740aa`.
+    No public header, ABI/schema version, Release, sanitizer, hosted CI, commit,
+    push or header formatting ran. Preserve Changes 1-15 and proceed only to
+    Change 16's cache-corruption and modeled Windows-path isolation boundary.
+16. **Complete.** A normalized 36-row cache-corruption/isolation contract at
+    SHA-256
+    `1f422f08663aa0fdebd96611853ef60eebecaed158ece973a58ff91ac1fe5a00`
+    freezes stale and live lock ownership, corrupt and truncated framing,
+    read-only consumption, concurrent publication, stale/fresh temporary
+    cleanup, lowercase hexadecimal keys, shard/path normalization and modeled
+    Windows replacement behavior. Object-cache loads reject entries beyond the
+    governed 256 MiB ceiling before allocation while compiler/dependency
+    identity hashing retains its prior range. Four concurrent publishers
+    serialize through the destination lock, leave one checksum-valid entry and
+    no lock or temporary. LLVM and SystemC native fingerprints now include the
+    CMake build configuration; mapped LLVM records carry and validate the same
+    fingerprint, separating Debug/Release alongside interpreter/LLVM, O0/O2,
+    language profile, toolchain, runtime and source identities without changing
+    a public header or portable schema. The synchronized design/library
+    contract has SHA-256
+    `3d99c5c8f1335e1de7a3cf87a883e2cfbe151bf7f7ba55128b6e7efabf5d62e2`.
+    The final focused exact-LLVM Debug
+    cache, LLVM, SystemC, artifact, library, application, API, inventory and
+    contract slice passes 16/16 in 51.79 seconds.
+    Fifteen ledger rows are preserved and three remain active at SHA-256
+    `ea268b19bd5ba245d97f4a9540e90ebec7ba9ef846e6211540c8c36eb3a6d931`.
+    No Release, sanitizer, hosted-CI, commit, push or header-formatting work ran.
+    Preserve Changes 1-16 and proceed only to Change 17's ABI/schema reference.
+17. **Complete.** The normative
+    [v2 ABI and schema reference](abi-schema-reference.md) publishes the x86-64
+    LP64/LLP64 object model; installed `fsim::api`, `SystemC::systemc` and
+    `SCV::scv` targets; exact core and foreign layout sizes; all 31 public C
+    symbols; SystemC/DPI/VPI/VHPI/UVM-foreign ABIs; current project, object,
+    design, library, incremental SystemC, nested state, trace/SDF/SCV and cache
+    identities; and their composition/provenance. It distinguishes append-only
+    public native records, host-independent portable payloads and exact-producer
+    native accelerators, then specifies pre-mutation rejection and concrete
+    source/current-portable regeneration commands with no legacy reader,
+    downgrade, dual writer or in-place migration claim. README, architecture
+    and diagnostic catalog link the same installed reference. A normalized
+    32-row reference contract has SHA-256
+    `0153c03838b7ba675797b9fa36a6873cede0b0683f0633969cdabfb862a1d9dc`
+    and proves all 31 symbol names remain present. The final Debug ABI/schema,
+    installed-package, diagnostics, inventory and source slice passes 16/16 in
+    5.47 seconds. Sixteen ledger rows are preserved and two remain active at
+    SHA-256
+    `632d93e78ff465ec3ae318af41d2ae878a8fdc0fa6de130ea9c1e6feaf42f395`.
+    No runtime, public header, ABI/schema version, Release, sanitizer, hosted-CI,
+    commit, push or header-formatting work ran. Preserve Changes 1-17 and
+    proceed only to Change 18's exhaustive evidence/deduplication matrix.
+18. **Complete.** A normalized 198-cell evidence matrix covers all 18 ledger
+    rows across positive, single-field mutation, stale/future version,
     corruption, truncation, resource, relocation, read-only, source-hidden,
-    toolchain and platform matrices for every ledger row. Ensure shared tests
-    execute once in regression and every matrix cell names its owning CTest,
-    diagnostic and checked-in implementation/evidence path.
-19. Close the ledger to zero active rows; synchronize diagnostics, feature and
-    release matrices, source/license inventories, digests, install/package
-    evidence, architecture/language/API documentation and the exact Batch 175
-    restart handoff. Retain focused Debug closure evidence without committing,
-    pushing, running a sanitizer or inspecting hosted CI.
-20. Run fresh clean-first exact-LLVM 22.1.8 Debug and Release builds with at
-    least eight workers and 120-minute command timeouts, then both complete
-    non-sanitized regressions and all ABI/schema, installed/relocation, artifact,
-    cache, corruption, source-budget, diagnostics, documentation, inventory and
-    release gates. Retain timing/log evidence, repair every failure, commit the
-    accumulated batch once and push once. Batch 174 is neither a sanitizer nor
-    hosted-CI monitoring boundary; do not run or inspect either.
+    toolchain and platform boundaries. Every cell names its generated CTest,
+    cataloged diagnostic, implementation owner and checked-in evidence path;
+    the matrix SHA-256 is
+    `b9bcf54400eedd53f66e01bfea3b0d54448a27a8321161a24196c591611b8d07`.
+    A generated-metadata audit proves all 296 exact CTest commands have one
+    owner, while ten recursive closure drivers consume fixture witnesses
+    without nested regression execution and the historical application
+    umbrella remains a dispatcher sentinel. The complete matrix owner slice
+    passes 30/30 in 17.30 seconds and the command audit passes in 2.62 seconds.
+    Seventeen ledger rows are preserved and one remains active at SHA-256
+    `62332c62677c300e8fbbbfce285ae524ade4c4a70c0687ed798efa56e3092cca`.
+    No public header, runtime, ABI/schema version, Release, sanitizer,
+    hosted-CI, commit, push or header-formatting work ran. Preserve Changes
+    1-18 and proceed only to Change 19's zero-active closure and Batch 175
+    handoff.
+19. **Complete.** The eighteen-row ABI/schema ledger is zero-active at
+    normalized SHA-256
+    `96d4ee761b927df5a02559f6abf3c0e2014f52bf44635ec245f98aaed2c7b613`.
+    The reference, architecture, README, diagnostics, installed-package,
+    relocation, evidence, regression-deduplication and restart documents name
+    the same current-only contracts. Source/license and dependent static audit
+    baselines are synchronized at 2,548 diagnostics, 1,149 bounded C/C++
+    sources, 436 authored conformance test/control files, 1,407 SPDX-owned
+    files, and 612 CMake/test-control files; the new reference now carries its
+    SPDX owner. The focused Debug documentation, inventory, evidence,
+    relocation, installed-package, source, diagnostic, conformance and CTest-
+    uniqueness slice passes 10/10 in 5.62 seconds with retained log
+    `build/llvm22-ninja-debug/batch174-change19-closure.log`. Release audit expectations
+    were synchronized but no Release or release-audit test was executed. The
+    exact Batch 175 restart checkpoint is recorded in `v2-resume.md`. No
+    runtime, public header, ABI/schema version, sanitizer, hosted-CI, commit,
+    push or header-formatting work ran. Preserve Changes 1-19 and proceed only
+    to Change 20's clean-first Debug closeout.
+20. **Complete.** With 120-minute command timeouts, the fresh eight-worker
+    clean-first exact-LLVM 22.1.8 Debug build completed 2,391 warning-free steps
+    in 898.025 seconds. The first
+    complete non-Release Debug regression exposed four direct failures and one
+    fixture-dependent skip: stale SCV closure/portability and UVM ABI contract
+    tokens, plus an SCV future-format test that incorrectly asked the canonical
+    fixed-current writer to emit a future envelope. The repaired test mutates
+    serialized metadata, and the contracts now govern the current exact SCV
+    identity, macro-owned UVM layouts and Batch 175 handoff. The fixture-aware
+    SCV slice passes 32/32 in 9.39 seconds and the final complete non-Release
+    Debug regression passes 273/273 in 161.06 seconds with retained log
+    `build/llvm22-ninja-debug/batch174-change20-debug-regression-repaired.log`.
+    All ABI/schema, installed/relocation, artifact, cache, corruption, source-
+    budget, diagnostics, documentation and inventory owners are included. CTest
+    fixture resolution selected the static `fsim.sdf-application-release-audit`
+    owner despite `-LE release`; it passed, but no Release configuration, build,
+    regression or intentional release-gate qualification ran. No sanitizer or
+    hosted-CI execution/monitoring ran. The zero-active ledger remains at SHA-
+    256 `96d4ee761b927df5a02559f6abf3c0e2014f52bf44635ec245f98aaed2c7b613`.
+    Batch 174 is neither a sanitizer nor a Release boundary and is not a
+    hosted-CI monitoring boundary. Commit and push the accumulated batch once;
+    defer all Release, sanitizer, release-gate and hosted-CI work to final Batch
+    177.
 
 ### Batch 175 - Cross-platform conformance and performance qualification
 
@@ -12615,9 +13003,10 @@ carry an explicit evidence-backed scope disposition approved by the user.
   gap remains.
 - **Changes 5-8:** repeat clean exact-LLVM Linux Debug/Release, Windows hosted
   MSVC/clang-cl Debug/Release, interpreter/O0/O2/debug and all release-candidate
-  smoke workflows. Run the fresh sanitizer and Release qualification deferred
-  from Batch 173 here, then monitor and repair the complete hosted Linux/Windows
-  CI matrix as final-release evidence.
+  smoke workflows. Run every fresh sanitizer, Release qualification, release
+  gate and hosted-CI execution/monitoring task deferred from Batches 173-176
+  here, then monitor and repair the complete hosted Linux/Windows CI matrix as
+  final-release evidence.
 - **Changes 9-12:** verify deterministic source and binary archives, SBOM/
   licenses, upstream source/patch identities, install layouts, ABI/schema
   versions, migrations, artifact digests, examples, and offline reproducibility.
@@ -12626,10 +13015,10 @@ carry an explicit evidence-backed scope disposition approved by the user.
 - **Changes 17-19:** freeze final docs/changelog/support policy, mark all v2
   roadmap items complete, prepare the exact release commit/tag notes, and record
   clean-context evidence.
-- **Change 20:** run the final full Debug/Release and release gates, confirm the
-  deferred Batch 173 sanitizer/Release/hosted-CI evidence remains green, commit
-  and push once, create and push annotated tag `v2.0.0`, verify the tag,
-  artifacts and complete hosted matrix, and declare v2 complete.
+- **Change 20:** run the final full Debug/Release and release gates, confirm all
+  sanitizer/Release/hosted-CI evidence deferred from Batches 173-176 remains
+  green, commit and push once, create and push annotated tag `v2.0.0`, verify
+  the tag, artifacts and complete hosted matrix, and declare v2 complete.
 
 ## Forward priority order
 

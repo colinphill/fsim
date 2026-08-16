@@ -80,7 +80,7 @@ fsim_scv_require_tokens("docs/implementation_plan_v2.md"
   "Change 19: Complete."
   "Batch 174 - v2 artifact")
 fsim_scv_require_tokens("docs/v2-resume.md"
-  "Batch 174 exact restart checkpoint"
+  "Batch 175 planned restart checkpoint"
   "Change 19 is complete")
 fsim_scv_require_tokens("README.md"
   "v2-scv-release-audit.md")

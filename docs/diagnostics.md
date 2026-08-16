@@ -8,6 +8,10 @@ source locations, messages, and notes provide the instance-specific detail.
 Code spellings are the stable, machine-readable part of the current
 diagnostic interface; message wording may evolve.
 
+Unsupported ABI, schema, artifact, and native-producer diagnostics follow the
+transactional identity and regeneration policy in the
+[v2 ABI and schema reference](abi-schema-reference.md).
+
 Source and manifest paths carried by text or JSON diagnostics are normalized
 UTF-8 generic paths on Linux and Windows. A leading UTF-8 BOM is transport
 metadata rather than a token; CRLF and CR line endings retain the same logical
@@ -60,7 +64,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-PROJ-0002` | error | A manifest value has the wrong type. |
 | `FSIM-PROJ-0003` | error | Unknown manifest table or key. |
 | `FSIM-PROJ-0004` | error | Duplicate table declaration or key assignment. |
-| `FSIM-PROJ-0005` | error | Missing, unsupported, or out-of-range schema version. |
+| `FSIM-PROJ-0005` | error | Missing, unsupported, or out-of-range project schema; the diagnostic names the found and required identity and directs regeneration of `fsim.toml` with the current build. |
 | `FSIM-PROJ-0006` | error | Required project, source-set, or binding field is missing. |
 | `FSIM-PROJ-0007` | error | A manifest value is outside its accepted range or vocabulary. |
 | `FSIM-PROJ-0008` | error | Project-manifest or source-glob I/O failed. |
@@ -360,13 +364,13 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | Code | Severity | Meaning |
 |---|---|---|
 | `FSIM-LIB-0001` | error | `fsim-library.toml` contains malformed or duplicate syntax. |
-| `FSIM-LIB-0002` | error | The directory uses an unsupported `.fsimlib` or portable-unit schema. |
+| `FSIM-LIB-0002` | error | The directory uses an unsupported `.fsimlib` or portable-unit schema; the diagnostic names the found and required identity and directs current-build regeneration. |
 | `FSIM-LIB-0003` | error | Metadata contains an unsafe, incomplete, mismatched, duplicate, reordered, or otherwise invalid source/unit provenance value. |
 | `FSIM-LIB-0004` | error | Mapped-library metadata cannot be opened or read. |
-| `FSIM-LIB-0005` | error | Transactional publication, payload validation, permissions, or atomic installation failed. |
-| `FSIM-LIB-0006` | error | A portable owning unit is malformed, incompatible, truncated, cyclic, excessively nested, contains an invalid scalar enumeration, or retains unmapped producer-absolute source provenance. |
+| `FSIM-LIB-0005` | error | Transactional publication, payload validation, permissions, or atomic installation failed; non-current publication identity diagnostics name found/required formats and leave no output tree. |
+| `FSIM-LIB-0006` | error | A portable owning unit is malformed, incompatible, truncated, cyclic, excessively nested, contains an invalid scalar enumeration, or retains unmapped producer-absolute source provenance; schema mismatches name found/required identities and direct `.fsimobj` regeneration. |
 | `FSIM-LIB-0007` | error | Project-library export cannot revalidate a source, serialize a unit, reproduce a portable SystemC build, compile/read a native variant, or complete publication. |
-| `FSIM-LIB-0008` | error | A lazily selected mapped library, dependency, payload, exact unit language/standard/compatibility identity, checksum, native admission, or consumer-cache installation failed. |
+| `FSIM-LIB-0008` | error | A lazily selected mapped library, dependency, payload, exact unit language/standard/compatibility identity, checksum, native admission, or consumer-cache installation failed; indexed native producer mismatches name found/required host identities and direct `.fsimlib` native-payload regeneration before payload read or cache publication. |
 
 ## VHDL frontend
 
@@ -2553,16 +2557,16 @@ one stable diagnostic from the five-code FST reader family.
 
 | Code | Severity | Meaning |
 |---|---|---|
-| `FSIM-ART-0001` | error | `.fsimobj` metadata has an unsupported, truncated, or trailing format/schema encoding. |
+| `FSIM-ART-0001` | error | `.fsimobj` metadata has an unsupported, truncated, or trailing format/schema encoding; identity mismatches name found/required format and portable schema and direct current-build regeneration. |
 | `FSIM-ART-0002` | error | `.fsimobj` metadata has an invalid language, standard, compatibility profile, source/unit index, path, checksum, or compilation digest. |
 | `FSIM-ART-0003` | error | `.fsimobj` metadata or payload publication/loading failed, including overwrite, staging, permissions, or exact-payload-set failures. |
 | `FSIM-ART-0004` | error | Explicit compilation is not one portable HDL source set, a checked source changed or became unreadable, or no owning unit was produced. |
 | `FSIM-ART-0005` | error | Ordered object loading found no input, corruption, duplicate/colliding identities, inconsistent library or language-profile ownership, or an invalid restored semantic projection. |
 | `FSIM-ART-VHDEP-001` | error | A portable object, design, or mapped-library artifact names a stale, unavailable, incomplete, or source-digest-mismatched compiler-supplied VHDL package dependency. |
-| `FSIM-ART-0010` | error | `.fsimdesign` metadata has an unsupported, truncated, trailing, or runtime-ABI-incompatible encoding. |
+| `FSIM-ART-0010` | error | `.fsimdesign` metadata has an unsupported, truncated, trailing, or runtime-ABI-incompatible encoding; identity mismatches name found/required format and ABI and direct current-build regeneration. |
 | `FSIM-ART-0011` | error | `.fsimdesign` metadata has invalid roots, bindings, paths, checksums, object provenance, ordered VHDL or Verilog/SystemVerilog semantic-unit provenance, counts, or design digest. |
 | `FSIM-ART-0012` | error | `.fsimdesign` publication/loading failed, including overwrite, staging, permissions, or exact-payload-set failures. |
-| `FSIM-ART-0013` | error | A runtime, semantic, or DesignIR state payload is malformed, excessive, structurally invalid, contains an invalid scalar enumeration, or contains a producer-absolute source path. |
+| `FSIM-ART-0013` | error | A runtime, semantic, DesignIR, coverage, HIR, or UVM-checkpoint state payload is malformed, excessive, structurally invalid, contains an invalid scalar enumeration, or contains a producer-absolute source path; schema mismatches name the magic-specific found/required identity and direct `.fsimdesign` regeneration. |
 | `FSIM-ART-0014` | error | Standalone design publication, inspection, loading, projection validation, exact semantic-unit language-profile association, fixed-delay compatibility, required-payload verification, or embedded SystemC producer-identity validation failed. |
 
 ## SystemC source compiler and plug-in validation
@@ -2621,11 +2625,11 @@ one stable diagnostic from the five-code FST reader family.
 | `FSIM-SC-C011` | error | A raw compiler option hides inputs from the persistent cache dependency model. |
 | `FSIM-SC-C012` | warning | Compiler identity, dependency closure, a raw external input, or a volatile predefined macro prevents safe persistent plug-in cache reuse. |
 | `FSIM-SC-C013` | error | A tracked plug-in input or compiler identity changed during compilation; the unpublished output was discarded. |
-| `FSIM-SC-I001` | error | Incremental SystemC object or plug-in metadata has an unsupported, truncated, or trailing schema encoding. |
+| `FSIM-SC-I001` | error | Incremental SystemC object or plug-in metadata has an unsupported, truncated, or trailing schema/producer encoding; mismatches name found/required format, ABI, SCV, and producer identities and direct regeneration. |
 | `FSIM-SC-I002` | error | Incremental SystemC metadata has invalid ABI, toolchain, path, checksum, dependency, option, factory, schema, or digest values. |
 | `FSIM-SC-I003` | error | Incremental SystemC artifact payload loading or transactional read-only publication failed, including checksum, overwrite, staging, or permission errors. |
 | `FSIM-SC-I004` | error | One SystemC translation-unit compile or dependency scan is invalid, unavailable, mutated, unsafe, unsuccessful, or produced no object. |
-| `FSIM-SC-I005` | error | Ordered SystemC object linking or native plug-in loading found duplicate/incompatible inputs, unsafe settings, invalid exports/entry points, a stale producer identity, ABI failure, or no published factories. |
+| `FSIM-SC-I005` | error | Ordered SystemC object linking or native plug-in loading found duplicate/incompatible inputs, unsafe settings, invalid exports/entry points, a stale producer identity, ABI failure, or no published factories; producer diagnostics name found/required compiler, target, fingerprint, and version before native image open. |
 | `FSIM-SC-I006` | error | Explicit SystemC plug-in inputs contain the same logical library more than once. |
 | `FSIM-SC-B001` | error | A SystemC backend island, hierarchy, object, endpoint, transaction, or sequence identity has invalid canonical text, an absent parent, or a zero ordinal. |
 | `FSIM-SC-B002` | error | A SystemC backend message has an unsupported schema/operation/direction/status/flag, invalid request-response correlation, incomplete identity chain, or malformed encoding. |

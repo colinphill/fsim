@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/artifact/object.hpp"
 
+#include "../diagnostic/artifact_identity.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 
@@ -235,9 +236,15 @@ bool validate_metadata(
     const std::string& source) {
   if (metadata.format != kObjectFormatVersion
       || metadata.portable_schema != library::kPortableSchemaVersion) {
-    error(
-        diagnostics, kSchemaCode,
-        "unsupported .fsimobj format or portable-unit schema", source);
+      error(
+          diagnostics, kSchemaCode,
+          diagnostic::unsupported_artifact_identity(
+              ".fsimobj", "format " + std::to_string(metadata.format) + " and portable-unit schema " + std::to_string(metadata.portable_schema),
+              "format " + std::to_string(kObjectFormatVersion)
+                  + " and portable-unit schema "
+                  + std::to_string(library::kPortableSchemaVersion),
+              ".fsimobj"),
+          source);
   }
   const bool known_language = metadata.language == "vhdl"
       || metadata.language == "verilog"
@@ -450,8 +457,8 @@ std::string compute_object_compilation_digest(
 std::string serialize_object_metadata(const ObjectMetadata& metadata) {
   Writer writer;
   writer.bytes(kMagic);
-  writer.u32(metadata.format);
-  writer.u32(metadata.portable_schema);
+  writer.u32(kObjectFormatVersion);
+  writer.u32(library::kPortableSchemaVersion);
   writer.string(metadata.producer);
   writer.string(metadata.language);
   writer.string(metadata.standard);
@@ -514,6 +521,19 @@ std::optional<ObjectMetadata> deserialize_object_metadata(
   }
   metadata.format = *read_format;
   metadata.portable_schema = *read_schema;
+  if (metadata.format != kObjectFormatVersion
+      || metadata.portable_schema != library::kPortableSchemaVersion) {
+      error(
+          diagnostics, kSchemaCode,
+          diagnostic::unsupported_artifact_identity(
+              ".fsimobj", "format " + std::to_string(metadata.format) + " and portable-unit schema " + std::to_string(metadata.portable_schema),
+              "format " + std::to_string(kObjectFormatVersion)
+                  + " and portable-unit schema "
+                  + std::to_string(library::kPortableSchemaVersion),
+              ".fsimobj"),
+          source_name);
+      return std::nullopt;
+  }
   const auto read_string = [&](std::string& output) {
     auto value = canonical.string();
     if (!value.has_value()) {
@@ -667,7 +687,29 @@ bool publish_object(
         support::path_to_utf8(destination));
     return false;
   }
+  if (metadata.format != kObjectFormatVersion
+      || metadata.portable_schema != library::kPortableSchemaVersion) {
+      error(
+          diagnostics, kSchemaCode,
+          diagnostic::unsupported_artifact_identity(
+              ".fsimobj publication",
+              "format " + std::to_string(metadata.format)
+                  + " and portable-unit schema "
+                  + std::to_string(metadata.portable_schema),
+              "format " + std::to_string(kObjectFormatVersion)
+                  + " and portable-unit schema "
+                  + std::to_string(library::kPortableSchemaVersion),
+              ".fsimobj"));
+      return false;
+  }
   diagnostic::Engine validation;
+  if (!validate_metadata(
+          metadata, validation, std::string { kObjectMetadataFilename })) {
+      error(
+          diagnostics, kIoCode,
+          "invalid object metadata supplied for publication");
+      return false;
+  }
   const auto canonical = serialize_object_metadata(metadata);
   if (!deserialize_object_metadata(
           canonical, std::string{kObjectMetadataFilename}, validation)) {

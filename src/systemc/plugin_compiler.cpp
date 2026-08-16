@@ -191,6 +191,7 @@ std::optional<std::string> plugin_host_fingerprint(
     const auto resolved_compiler = resolve_executable(compiler_name, working_directory);
     compiler::CacheKeyBuilder builder;
     builder.add("kind", "fsim-systemc-host-v1");
+    builder.add("build-configuration", FSIM_BUILD_CONFIGURATION);
     builder.add("source-language", "c++");
     builder.add("source-standard", "c++20");
     builder.add("runtime-abi", std::to_string(runtime_abi_version));
@@ -351,6 +352,7 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
     compiler::CacheKeyBuilder key_builder;
     key_builder.add("kind", "fsim-systemc-shared-library-v1");
     key_builder.add("fingerprint-schema", "systemc-compiler-v2");
+    key_builder.add("build-configuration", FSIM_BUILD_CONFIGURATION);
     key_builder.add("source-language", "c++");
     key_builder.add("source-standard", "c++20");
     key_builder.add("logical-library", request.logical_library);
@@ -393,6 +395,7 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
 
     compiler::CacheKeyBuilder host_builder;
     host_builder.add("kind", "fsim-systemc-host-v1");
+    host_builder.add("build-configuration", FSIM_BUILD_CONFIGURATION);
     host_builder.add("source-language", "c++");
     host_builder.add("source-standard", "c++20");
     host_builder.add("runtime-abi", std::to_string(runtime_abi_version));
