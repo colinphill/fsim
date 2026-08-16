@@ -3,15 +3,11 @@
 #include <sysc/kernel/sc_simcontext.h>
 #include <sysc/kernel/sc_ver.h>
 
+#include "fsim/systemc/accellera.hpp"
+
 #include <cassert>
 #include <cstring>
 #include <string>
-
-extern "C" const char* fsim_systemc_accellera_version() noexcept;
-extern "C" const char* fsim_systemc_accellera_runtime_identity() noexcept;
-extern "C" const void* fsim_systemc_accellera_context() noexcept;
-extern "C" bool
-fsim_systemc_accellera_accepts_identity(const char* candidate) noexcept;
 
 #if defined(__GNUC__) || defined(__clang__)
 #define FSIM_SYSTEMC_TEST_EXPORT __attribute__((visibility("default")))

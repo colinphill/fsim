@@ -6,6 +6,7 @@
 
 #include <llvm/Config/llvm-config.h>
 #include <llvm/ExecutionEngine/ObjectCache.h>
+#include <llvm/ExecutionEngine/Orc/AbsoluteSymbols.h>
 #include <llvm/ExecutionEngine/Orc/CompileUtils.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
@@ -45,6 +46,13 @@
 
 namespace fsim::compiler {
 namespace {
+
+#if defined(__MINGW32__)
+    // LLVM emits GNU Windows stack probes for sufficiently large JIT frames.
+    // Referencing the compiler-rt implementation also ensures the linker
+    // retains it in the host executable for the ORC absolute-symbol binding.
+    extern "C" void ___chkstk_ms();
+#endif
 
     using namespace llvm_detail;
     using runtime::Logic9;
@@ -439,6 +447,20 @@ LlvmJit::LlvmJit(const LlvmJitOptions options)
     }
     builder.setJITTargetMachineBuilder(std::move(target_builder));
     impl_->jit = unwrap(builder.create(), "cannot create LLVM LLJIT");
+#if defined(__MINGW32__)
+    llvm::orc::SymbolMap mingw_runtime_symbols;
+    mingw_runtime_symbols[
+        impl_->jit->getExecutionSession().intern("___chkstk_ms")] =
+        llvm::orc::ExecutorSymbolDef(
+            llvm::orc::ExecutorAddr::fromPtr(&___chkstk_ms),
+            llvm::JITSymbolFlags::Exported);
+    if (auto error = impl_->jit->getMainJITDylib().define(
+            llvm::orc::absoluteSymbols(std::move(mingw_runtime_symbols)))) {
+        throw LlvmJitError(
+            "cannot register LLVM-MinGW runtime symbols: "
+            + llvm_error(std::move(error)));
+    }
+#endif
 }
 
 LlvmJit::~LlvmJit() = default;

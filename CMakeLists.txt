@@ -368,19 +368,32 @@ function(fsim_configure_executable target)
   fsim_configure_debug_footprint(${target})
 endfunction()
 
-function(fsim_configure_test_platform target)
+function(fsim_configure_command_entrypoint target)
   if(
     WIN32
-    AND (
+    AND NOT MSVC
+    AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+  )
+    # GNU-compatible Windows CRTs select the wide-character startup object
+    # explicitly; MSVC discovers wmain without an additional linker option.
+    target_link_options(${target} PRIVATE -municode)
+  endif()
+endfunction()
+
+function(fsim_configure_test_platform target)
+  if(WIN32)
+    if(
       MSVC
       OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
     )
-  )
+      target_link_options(${target} PRIVATE /STACK:134217728)
+    else()
+      target_link_options(${target} PRIVATE "LINKER:--stack,134217728")
+    endif()
     # Accumulated feature-matrix and API fixtures can exceed Windows' 1 MiB
-    # default stack in both optimized and unoptimized MSVC-compatible builds.
+    # default stack in both optimized and unoptimized Windows builds.
     # Reserve address space uniformly so newly split or merged test hosts do
     # not silently lose the protection carried by an older executable.
-    target_link_options(${target} PRIVATE /STACK:134217728)
   endif()
 endfunction()
 
@@ -1157,6 +1170,7 @@ endif()
 if(EXISTS "${PROJECT_SOURCE_DIR}/src/main.cpp")
   add_executable(fsim src/main.cpp)
   fsim_configure_executable(fsim)
+  fsim_configure_command_entrypoint(fsim)
   if(TARGET fsim_application)
     target_link_libraries(fsim PRIVATE fsim_application)
   else()
@@ -1167,6 +1181,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/main.cpp")
   foreach(alias_name IN ITEMS fsim-vhdl fsim-sv fsim-elab fsim-run)
     add_executable(${alias_name} src/main.cpp)
     fsim_configure_executable(${alias_name})
+    fsim_configure_command_entrypoint(${alias_name})
     if(TARGET fsim_application)
       target_link_libraries(${alias_name} PRIVATE fsim_application)
     else()

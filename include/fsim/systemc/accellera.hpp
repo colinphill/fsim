@@ -23,6 +23,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cctype>
 #include <cstddef>
 #include <concepts>
 #include <cstdint>
@@ -42,14 +43,30 @@
     "9b3693ed286aab958b9e5d79bb0ad3bc523bbc46931100553275352038f4a0c4"
 #define FSIM_SYSTEMC_BRIDGE_REVISION 2u
 
-extern "C" const char* fsim_systemc_accellera_version() noexcept;
-extern "C" const char* fsim_systemc_accellera_runtime_identity() noexcept;
-extern "C" const void* fsim_systemc_accellera_context() noexcept;
-extern "C" bool fsim_systemc_accellera_accepts_identity(
+#if defined(_WIN32)
+#if defined(fsim_systemc_accellera_runtime_EXPORTS)
+#define FSIM_SYSTEMC_ACCELERA_API __declspec(dllexport)
+#else
+#define FSIM_SYSTEMC_ACCELERA_API __declspec(dllimport)
+#endif
+#elif defined(__GNUC__) || defined(__clang__)
+#define FSIM_SYSTEMC_ACCELERA_API __attribute__((visibility("default")))
+#else
+#define FSIM_SYSTEMC_ACCELERA_API
+#endif
+
+extern "C" FSIM_SYSTEMC_ACCELERA_API const char*
+fsim_systemc_accellera_version() noexcept;
+extern "C" FSIM_SYSTEMC_ACCELERA_API const char*
+fsim_systemc_accellera_runtime_identity() noexcept;
+extern "C" FSIM_SYSTEMC_ACCELERA_API const void*
+fsim_systemc_accellera_context() noexcept;
+extern "C" FSIM_SYSTEMC_ACCELERA_API bool fsim_systemc_accellera_accepts_identity(
     const char* candidate) noexcept;
-extern "C" const char*
+extern "C" FSIM_SYSTEMC_ACCELERA_API const char*
 fsim_systemc_accellera_compatibility_identity() noexcept;
-extern "C" bool fsim_systemc_accellera_accepts_compatibility_identity(
+extern "C" FSIM_SYSTEMC_ACCELERA_API bool
+fsim_systemc_accellera_accepts_compatibility_identity(
     const char* candidate) noexcept;
 
 namespace fsim::systemc {
@@ -665,6 +682,7 @@ namespace detail {
             port_handles;
         fsim_sc_handle_v1 root_module { };
         std::uint64_t last_host_time_femtoseconds { };
+        bool native_kernel_started { };
 
         void advance_to_host_time()
         {
@@ -685,10 +703,15 @@ namespace detail {
                 };
             }
             const auto delay = host_time - last_host_time_femtoseconds;
-            sc_core::sc_start(
-                sc_core::sc_time {
-                    static_cast<double>(delay), sc_core::SC_FS},
-                sc_core::SC_RUN_TO_TIME);
+            if (!native_kernel_started
+                || delay != 0U
+                || sc_core::sc_pending_activity_at_current_time()) {
+                sc_core::sc_start(
+                    sc_core::sc_time {
+                        static_cast<double>(delay), sc_core::SC_FS},
+                    sc_core::SC_RUN_TO_TIME);
+                native_kernel_started = true;
+            }
             last_host_time_femtoseconds = host_time;
         }
 
@@ -1056,6 +1079,19 @@ namespace detail {
         }
     };
 
+    [[nodiscard]] inline std::string accellera_object_basename(
+        const std::string_view instance_name)
+    {
+        std::string result { instance_name };
+        for (auto& character : result) {
+            if (character == SC_HIERARCHY_CHAR
+                || std::isspace(static_cast<unsigned char>(character)) != 0) {
+                character = '_';
+            }
+        }
+        return result;
+    }
+
 } // namespace detail
 
 template <typename T>
@@ -1127,8 +1163,10 @@ struct module_factory_state {
             detail::factory_scope scope {
                 host, module, &object->module_handles
             };
+            const auto object_name =
+                detail::accellera_object_basename(instance_name);
             object->module = std::make_unique<Module>(
-                sc_core::sc_module_name { instance_name });
+                sc_core::sc_module_name { object_name.c_str() });
             object->connect(module);
             *result = object.release();
             return FSIM_SC_OK;

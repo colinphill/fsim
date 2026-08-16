@@ -65,6 +65,12 @@ fsim_tcl_static_library_name(
 )
 fsim_tcl_static_library_name(
   "${FSIM_TCL_VERSION}"
+  MINGW
+  OFF
+  mingw_library
+)
+fsim_tcl_static_library_name(
+  "${FSIM_TCL_VERSION}"
   WINDOWS
   ON
   windows_dll_crt_library
@@ -77,6 +83,9 @@ fsim_tcl_static_library_name(
 )
 if(NOT unix_library STREQUAL "libtcl9.0.a")
   message(FATAL_ERROR "unexpected Unix Tcl library: ${unix_library}")
+endif()
+if(NOT mingw_library STREQUAL "libtcl90.a")
+  message(FATAL_ERROR "unexpected MinGW Tcl library: ${mingw_library}")
 endif()
 if(NOT windows_dll_crt_library STREQUAL "tcl90s.lib")
   message(

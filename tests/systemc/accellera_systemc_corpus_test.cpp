@@ -5,6 +5,8 @@
 #include <tlm_utils/simple_initiator_socket.h>
 #include <tlm_utils/simple_target_socket.h>
 
+#include "fsim/systemc/accellera.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -14,9 +16,6 @@
 #include <cstring>
 #include <iostream>
 #include <string>
-
-extern "C" const char* fsim_systemc_accellera_version() noexcept;
-extern "C" const void* fsim_systemc_accellera_context() noexcept;
 
 #if defined(__GNUC__) || defined(__clang__)
 #define FSIM_SYSTEMC_CORPUS_EXPORT __attribute__((visibility("default")))

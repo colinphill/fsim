@@ -124,116 +124,84 @@ jobs:
           -max_len=65536
           tests/fuzz/corpus/frontend
 
-  windows-msvc:
-    name: Windows / MSVC / ${{ matrix.configuration }}
+  windows-llvm-mingw:
+    name: Windows / LLVM-MinGW / ${{ matrix.configuration }} / LLVM ${{ matrix.llvm_mode }}
     runs-on: windows-2022
-    # Debug extended-COFF compilation plus the bounded SystemC matrix can
-    # require substantial headroom on a contended hosted runner.
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - configuration: Debug
-            preset: ci-windows
-          - configuration: Release
-            preset: ci-windows-release
-    steps:
-      - name: Check out sources
-        uses: actions/checkout@v7
-
-      - name: Initialize MSVC
-        shell: pwsh
-        run: >
-          & ./.github/scripts/setup-msvc.ps1
-          -Architecture x64
-
-      - name: Configure
-        run: cmake --preset ${{ matrix.preset }}
-
-      - name: Build
-        run: cmake --build --preset ${{ matrix.preset }} --parallel 4
-
-      - name: Test
-        run: ctest --preset ${{ matrix.preset }} -LE '^recursive-closure$'
-
-  windows-llvm22:
-    name: Windows / ${{ matrix.compiler }} / LLVM 22.1.8 / ${{ matrix.configuration }}
-    # LLVM's official 22.1.8 Windows archive was packaged against the
-    # Visual Studio 2022 DIA SDK and retains that SDK path in its CMake targets.
-    runs-on: windows-2022
-    # Debug plus the bounded 900-second SystemC matrix and 1,200-second
-    # container differential can exceed 70 minutes on a contended hosted
-    # runner, so retain enough headroom for the complete 118-test suite.
-    timeout-minutes: 120
-    # The official archive uses the release MSVC STL ABI. CL augments every
-    # compiler invocation without replacing CMake's /EHsc and configuration
-    # flags, including plug-ins compiled by the SystemC source-compiler tests.
-    env:
-      CL: /D_ITERATOR_DEBUG_LEVEL=0
-    strategy:
-      fail-fast: false
-      matrix:
-        compiler:
-          - MSVC
-          - Clang
         configuration:
           - Debug
           - Release
+        llvm_mode:
+          - 'ON'
+          - 'OFF'
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
 
-      - name: Initialize MSVC
-        shell: pwsh
-        run: >
-          & ./.github/scripts/setup-msvc.ps1
-          -Architecture x64
-
-      - name: Install and validate LLVM 22.1.8
-        shell: pwsh
-        # SHA-256 is published with the official GitHub release asset.
-        run: >
-          & ./.github/scripts/install-windows-llvm.ps1
-          -Version "22.1.8"
-          -ArchiveUrl
-          "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/clang%2Bllvm-22.1.8-x86_64-pc-windows-msvc.tar.xz"
-          -Sha256
-          "d96c2cc1736f4eb7fa43cb9bbdf56d93551a9ae0a9aadb9c99c3c3b2b712a234"
-
-      - name: Configure with required LLVM backend
+      - name: Install and validate LLVM-MinGW 20260616
         shell: pwsh
         run: |
-          $compiler = "${{ matrix.compiler }}"
-          if ($compiler -eq "Clang") {
-            $cCompiler = "clang-cl"
-            $cxxCompiler = "clang-cl"
-          } else {
-            $cCompiler = "cl"
-            $cxxCompiler = "cl"
+          & ./.github/scripts/install-windows-llvm-mingw.ps1 `
+            -Release "20260616" `
+            -Version "22.1.8" `
+            -ArchiveUrl "https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-x86_64.zip" `
+            -Sha256 "b9b68a4d276e16fa25802aaba458e4638f64b3884c290aaccdc2d87083b6ca35"
+
+      - name: Initialize the matching MinGW LLVM development environment
+        if: matrix.llvm_mode == 'ON'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+
+      - name: Install and validate LLVM 22.1.8 development files
+        if: matrix.llvm_mode == 'ON'
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          pacman -U --noconfirm --needed \
+            https://mirror.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-llvm-libs-22.1.8-2-any.pkg.tar.zst \
+            https://mirror.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-llvm-tools-22.1.8-2-any.pkg.tar.zst \
+            https://mirror.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-llvm-22.1.8-2-any.pkg.tar.zst
+          test "$(/clang64/bin/llvm-config.exe --version)" = "22.1.8"
+          /clang64/bin/lli.exe --version
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          $buildDirectory = "build/ci-windows-llvm-mingw-${{ matrix.configuration }}-llvm-${{ matrix.llvm_mode }}"
+          $arguments = @(
+            "-S", ".",
+            "-B", $buildDirectory,
+            "-G", "Ninja",
+            "-DCMAKE_BUILD_TYPE=${{ matrix.configuration }}",
+            "-DCMAKE_C_COMPILER=$env:LLVM_MINGW_ROOT/bin/clang.exe",
+            "-DCMAKE_CXX_COMPILER=$env:LLVM_MINGW_ROOT/bin/clang++.exe",
+            "-DCMAKE_RC_COMPILER=$env:LLVM_MINGW_ROOT/bin/llvm-windres.exe",
+            "-DCMAKE_CXX_SCAN_FOR_MODULES=OFF",
+            "-DFSIM_BUILD_TESTS=ON",
+            "-DFSIM_TCL_MODE=ON",
+            "-DFSIM_LLVM_MODE=${{ matrix.llvm_mode }}",
+            "-DFSIM_WARNINGS_AS_ERRORS=ON"
+          )
+          if ("${{ matrix.llvm_mode }}" -eq "ON") {
+            $arguments += "-DLLVM_DIR=C:/msys64/clang64/lib/cmake/llvm"
           }
-          cmake `
-            -S . `
-            -B "build/ci-windows-llvm22-${{ matrix.compiler }}-${{ matrix.configuration }}" `
-            -G Ninja `
-            -DCMAKE_BUILD_TYPE=${{ matrix.configuration }} `
-            "-DCMAKE_C_COMPILER=$cCompiler" `
-            "-DCMAKE_CXX_COMPILER=$cxxCompiler" `
-            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
-            -DFSIM_BUILD_TESTS=ON `
-            -DFSIM_LLVM_MODE=ON `
-            -DFSIM_WARNINGS_AS_ERRORS=ON `
-            "-DLLVM_DIR=$env:LLVM_PATH/lib/cmake/llvm"
+          & cmake @arguments
 
       - name: Build
-        run: >
-          cmake --build
-          build/ci-windows-llvm22-${{ matrix.compiler }}-${{ matrix.configuration }}
-          --parallel 4
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:LLVM_MINGW_ROOT/bin;$env:LLVM_MINGW_ROOT/busybox/bin;$env:PATH"
+          cmake --build "build/ci-windows-llvm-mingw-${{ matrix.configuration }}-llvm-${{ matrix.llvm_mode }}" --parallel 4
 
       - name: Test
-        run: >
-          ctest --test-dir
-          build/ci-windows-llvm22-${{ matrix.compiler }}-${{ matrix.configuration }}
-          --output-on-failure
-          -LE '^recursive-closure$'
+        shell: pwsh
+        env:
+          CTEST_OUTPUT_ON_FAILURE: '1'
+        run: |
+          $env:PATH = "$env:LLVM_MINGW_ROOT/bin;$env:LLVM_MINGW_ROOT/busybox/bin;$env:PATH"
+          ctest --test-dir "build/ci-windows-llvm-mingw-${{ matrix.configuration }}-llvm-${{ matrix.llvm_mode }}" --parallel 4 --progress --output-on-failure -LE '^recursive-closure$'

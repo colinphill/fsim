@@ -1173,6 +1173,8 @@ struct HdlVcdState {
     std::filesystem::path file_root;
     std::filesystem::path path;
     Simulation* simulation { };
+    std::function<void(std::uint64_t)> remove_observer;
+    std::function<SimulationTick()> current_time;
     std::vector<std::vector<runtime::VcdSignal>> handles;
     std::vector<bool> selected;
     std::vector<runtime::SystemVerilogScalarKind> scalar_kinds;

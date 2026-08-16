@@ -446,9 +446,9 @@ int main(const int argc, char** argv) {
     request.sources = {source, second_source};
     request.working_directory = working;
     request.cache_directory = root / "cache directory";
-#if defined(_WIN32)
-    request.settings.compiler = "cl.exe";
-#else
+#if defined(FSIM_TEST_CXX_COMPILER)
+    request.settings.compiler = FSIM_TEST_CXX_COMPILER;
+#elif !defined(_WIN32)
     if (const auto compiler =
             fsim::support::environment_variable("CXX");
         compiler && !compiler->empty()) {
@@ -456,6 +456,8 @@ int main(const int argc, char** argv) {
     } else {
         request.settings.compiler = "c++";
     }
+#else
+    request.settings.compiler = "cl.exe";
 #endif
     request.settings.include_directories = {include};
     request.settings.defines = {"FSIM_PLUGIN_TEST=1"};
@@ -474,23 +476,29 @@ int main(const int argc, char** argv) {
         == std::optional{first_plan->host_fingerprint});
     assert(!first_plan->commands.empty());
     assert(first_plan->commands.front().working_directory == working);
+    if (first_plan->toolchain == fsim::systemc::HostToolchain::msvc) {
+        assert(has_argument(*first_plan, "/DFSIM_PLUGIN_TEST=1"));
 #if defined(_WIN32)
-    assert(has_argument(*first_plan, "/DFSIM_PLUGIN_TEST=1"));
-    assert(has_argument(*first_plan, "/DWIN32"));
-    assert(has_argument(*first_plan, "/DSC_WIN_DLL"));
-    assert(has_argument(*first_plan, "/I" + include.string()));
-    assert(has_argument(*first_plan, "/utf-8"));
-    assert(has_argument(*first_plan, "/Zc:__cplusplus"));
-    assert(has_argument(*first_plan, "/FC"));
-    assert(has_argument(*first_plan, "/bigobj"));
-    assert(has_argument(*first_plan, "/vmg"));
-    assert(first_plan->commands.size() == request.sources.size() + 1);
-#else
-    assert(has_argument(*first_plan, "-DFSIM_PLUGIN_TEST=1"));
-    assert(has_argument(*first_plan, "-I" + include.string()));
-    assert(has_argument(*first_plan, source.string()));
-    assert(first_plan->commands.size() == 1);
+        assert(has_argument(*first_plan, "/DWIN32"));
+        assert(has_argument(*first_plan, "/DSC_WIN_DLL"));
 #endif
+        assert(has_argument(*first_plan, "/I" + include.string()));
+        assert(has_argument(*first_plan, "/utf-8"));
+        assert(has_argument(*first_plan, "/Zc:__cplusplus"));
+        assert(has_argument(*first_plan, "/FC"));
+        assert(has_argument(*first_plan, "/bigobj"));
+        assert(has_argument(*first_plan, "/vmg"));
+        assert(first_plan->commands.size() == request.sources.size() + 1);
+    } else {
+        assert(has_argument(*first_plan, "-DFSIM_PLUGIN_TEST=1"));
+#if defined(_WIN32)
+        assert(has_argument(*first_plan, "-DWIN32"));
+        assert(has_argument(*first_plan, "-DSC_WIN_DLL"));
+#endif
+        assert(has_argument(*first_plan, "-I" + include.string()));
+        assert(has_argument(*first_plan, source.string()));
+        assert(first_plan->commands.size() == 1);
+    }
     const auto display =
         fsim::systemc::format_compiler_command(first_plan->commands.front());
     assert(display.find("source with spaces.cpp") != std::string::npos);
@@ -514,12 +522,10 @@ int main(const int argc, char** argv) {
     assert(define_plan && define_plan->cacheable);
     assert(define_plan->cache_key != first_plan->cache_key);
 
-    const auto environment_name =
-#if defined(_WIN32)
-        std::string{"LIB"};
-#else
-        std::string{"LIBRARY_PATH"};
-#endif
+    const auto environment_name = first_plan->toolchain
+            == fsim::systemc::HostToolchain::msvc
+        ? std::string{"LIB"}
+        : std::string{"LIBRARY_PATH"};
     {
         const ScopedEnvironment changed_environment{
             environment_name,
@@ -544,13 +550,11 @@ int main(const int argc, char** argv) {
     const auto literal_plan =
         fsim::systemc::plan_plugin_compile(literal_arguments, literal_diagnostics);
     assert(literal_plan);
-#if defined(_WIN32)
     assert(has_argument(
-        *literal_plan, "/DFSIM_LITERAL_ARGUMENT=hello world;$HOME*"));
-#else
-    assert(has_argument(
-        *literal_plan, "-DFSIM_LITERAL_ARGUMENT=hello world;$HOME*"));
-#endif
+        *literal_plan,
+        std::string{first_plan->toolchain == fsim::systemc::HostToolchain::msvc
+                        ? "/D" : "-D"}
+            + "FSIM_LITERAL_ARGUMENT=hello world;$HOME*"));
 
     // Exercise recovery of a stale per-key lock before the first compile.
     const auto stale_lock =
@@ -1212,11 +1216,8 @@ int main(const int argc, char** argv) {
 
     PluginCompileRequest unsafe = request;
     unsafe.settings.compile_options = {
-#if defined(_WIN32)
-        "/c"
-#else
-        "-c"
-#endif
+        first_plan->toolchain == fsim::systemc::HostToolchain::msvc
+            ? "/c" : "-c"
     };
     fsim::diagnostic::Engine unsafe_diagnostics;
     assert(!fsim::systemc::plan_plugin_compile(unsafe, unsafe_diagnostics));

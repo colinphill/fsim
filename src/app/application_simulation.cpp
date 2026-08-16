@@ -1812,12 +1812,35 @@ Simulation::Simulation(
           std::make_unique<Impl>(
               std::move(project), max_deltas, engine))
 {
+    auto* const lifetime = impl_.get();
+    impl_->hdl_vcd.remove_observer = [lifetime](const std::uint64_t token) {
+        lifetime->signal_observers.erase(token);
+    };
+    impl_->hdl_vcd.current_time = [lifetime] {
+        return lifetime->interpreter->scheduler().now();
+    };
     application_detail::attach_hdl_vcd_control(
         *this, impl_->hdl_vcd, impl_->built.file_root);
 }
 Simulation::~Simulation() = default;
-Simulation::Simulation(Simulation&&) noexcept = default;
-Simulation& Simulation::operator=(Simulation&&) noexcept = default;
+Simulation::Simulation(Simulation&& other) noexcept
+    : impl_(std::move(other.impl_))
+{
+    if (impl_) {
+        impl_->hdl_vcd.simulation = this;
+    }
+}
+
+Simulation& Simulation::operator=(Simulation&& other) noexcept
+{
+    if (this != &other) {
+        impl_ = std::move(other.impl_);
+        if (impl_) {
+            impl_->hdl_vcd.simulation = this;
+        }
+    }
+    return *this;
+}
 
 #include "application_simulation_accessors.tpp"
 

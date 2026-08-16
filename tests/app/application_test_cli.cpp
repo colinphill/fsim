@@ -1551,6 +1551,7 @@ trace_filters = ["__none__"]
         std::istreambuf_iterator<char> { debug_trace_stream },
         std::istreambuf_iterator<char> { }
     };
+    debug_trace_stream.close();
     assert(!debug_vcd.empty());
     std::string q_identifier;
     std::istringstream debug_vcd_lines { debug_vcd };
@@ -1588,14 +1589,16 @@ trace_filters = ["__none__"]
     std::ostream interrupted_cli_output { &interrupted_output_buffer };
     std::ostringstream interrupted_cli_error;
     auto interrupted_services = fsim::app::make_cli_services(interrupted_cli_input);
-    assert(
-        fsim::cli::run(
-            static_cast<int>(arguments.size()),
-            arguments.data(),
-            interrupted_services,
-            interrupted_cli_output,
-            interrupted_cli_error)
-        == 0);
+    const auto interrupted_result = fsim::cli::run(
+        static_cast<int>(arguments.size()),
+        arguments.data(),
+        interrupted_services,
+        interrupted_cli_output,
+        interrupted_cli_error);
+    if (interrupted_result != 0) {
+        std::cerr << interrupted_cli_error.str();
+    }
+    assert(interrupted_result == 0);
     assert(interrupted_cli_error.str().empty());
     const auto interrupted_transcript = interrupted_output_buffer.str();
     assert(

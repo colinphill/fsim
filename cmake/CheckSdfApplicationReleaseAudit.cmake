@@ -83,9 +83,9 @@ list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX
   "/examples/three_language_hierarchy/three_language\\.vcd$")
 list(REMOVE_DUPLICATES FSIM_AUTHORED_FILES)
 list(LENGTH FSIM_AUTHORED_FILES FSIM_AUTHORED_COUNT)
-if(NOT FSIM_AUTHORED_COUNT EQUAL 1304)
+if(NOT FSIM_AUTHORED_COUNT EQUAL 1306)
   message(FATAL_ERROR
-    "authored SDF application inventory changed: expected 1304 files, "
+    "authored SDF application inventory changed: expected 1306 files, "
     "found ${FSIM_AUTHORED_COUNT}")
 endif()
 foreach(FSIM_FILE IN LISTS FSIM_AUTHORED_FILES)

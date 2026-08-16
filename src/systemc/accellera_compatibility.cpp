@@ -5,13 +5,6 @@
 #include <string>
 #include <string_view>
 
-#if defined(__GNUC__) || defined(__clang__)
-#define FSIM_SYSTEMC_COMPATIBILITY_EXPORT \
-    __attribute__((visibility("default")))
-#else
-#define FSIM_SYSTEMC_COMPATIBILITY_EXPORT
-#endif
-
 #define FSIM_SYSTEMC_STRINGIFY_INNER(value) #value
 #define FSIM_SYSTEMC_STRINGIFY(value) FSIM_SYSTEMC_STRINGIFY_INNER(value)
 
@@ -48,13 +41,13 @@ const std::string& compatibility_identity()
 
 } // namespace
 
-extern "C" FSIM_SYSTEMC_COMPATIBILITY_EXPORT const char*
+extern "C" FSIM_SYSTEMC_ACCELERA_API const char*
 fsim_systemc_accellera_compatibility_identity() noexcept
 {
     return compatibility_identity().c_str();
 }
 
-extern "C" FSIM_SYSTEMC_COMPATIBILITY_EXPORT bool
+extern "C" FSIM_SYSTEMC_ACCELERA_API bool
 fsim_systemc_accellera_accepts_compatibility_identity(
     const char* candidate) noexcept
 {

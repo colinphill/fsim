@@ -136,7 +136,7 @@ endforeach()
 foreach(FSIM_TOKEN IN ITEMS
     "diagnostic catalog covers 2516 production codes"
     "Checked 1100 authored sources against the 2500-line hard limit with a 2000-line refactor target"
-    "final inventory audit: 2516 diagnostics, 1100 bounded sources, 1304 SPDX-owned files"
+    "final inventory audit: 2516 diagnostics, 1100 bounded sources, 1306 SPDX-owned files"
     "v1 conformance audit: 412 authored test/control files")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)
   if(FSIM_TOKEN_INDEX EQUAL -1)
@@ -187,5 +187,5 @@ endif()
 
 message(STATUS
   "UVM closure audit: 21 release/behavior rows, 82 UVM diagnostics, 2516 "
-  "catalog codes, 1100 bounded sources, 1304 SPDX files, retained memory/trace/"
+  "catalog codes, 1100 bounded sources, 1306 SPDX files, retained memory/trace/"
   "artifact/cache provenance, and zero unresolved supported gaps")

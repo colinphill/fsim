@@ -114,10 +114,10 @@ int main() {
     request.cache_directory = root / "cache directory";
     request.settings.include_directories = {
         filesystem::path{FSIM_TEST_SOURCE_DIR} / "include"};
-#if defined(_WIN32)
-    request.settings.compiler = "cl.exe";
-#elif defined(FSIM_TEST_CXX_COMPILER)
+#if defined(FSIM_TEST_CXX_COMPILER)
     request.settings.compiler = FSIM_TEST_CXX_COMPILER;
+#elif defined(_WIN32)
+    request.settings.compiler = "cl.exe";
 #else
     request.settings.compiler = "c++";
 #endif

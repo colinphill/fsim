@@ -2,15 +2,13 @@
 #include "plugin_compiler_internal.hpp"
 #include "producer_fingerprint.hpp"
 
+#include "fsim/systemc/accellera.hpp"
+
 #include <algorithm>
 #include <mutex>
 
 namespace fsim::systemc {
 using namespace plugin_detail;
-
-extern "C" const char* fsim_systemc_accellera_runtime_identity() noexcept;
-extern "C" const char*
-fsim_systemc_accellera_compatibility_identity() noexcept;
 
 namespace {
 

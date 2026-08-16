@@ -5,10 +5,6 @@
 #include <string_view>
 #include <vector>
 
-extern "C" const char* fsim_systemc_accellera_runtime_identity() noexcept;
-extern "C" const char*
-fsim_systemc_accellera_compatibility_identity() noexcept;
-
 namespace fsim::systemc::detail {
 namespace {
 

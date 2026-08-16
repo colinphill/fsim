@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "plugin_compiler_internal.hpp"
+#include "fsim/support/path.hpp"
 
 namespace fsim::systemc::plugin_detail {
 
@@ -739,9 +740,11 @@ parse_msvc_source_dependencies(const std::string_view contents) {
         }
 
         for (const auto& dependency_name : *parsed) {
+            const auto dependency_path =
+                support::path_from_utf8(dependency_name);
             auto dependency =
                 make_absolute(
-                    std::filesystem::path{dependency_name},
+                    dependency_path,
                     working_directory);
             dependency = normalized_existing_path(dependency, error);
             if (dependency.empty()) {
@@ -750,7 +753,7 @@ parse_msvc_source_dependencies(const std::string_view contents) {
                 report_dependency_cache_disabled(
                     diagnostics,
                     "compiler dependency is not a readable regular file",
-                    std::filesystem::path{dependency_name});
+                    dependency_path);
                 return true;
             }
             dependencies.push_back(std::move(dependency));

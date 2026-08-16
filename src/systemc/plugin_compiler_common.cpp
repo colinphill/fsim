@@ -2,6 +2,7 @@
 #include "plugin_compiler_internal.hpp"
 
 #include <charconv>
+#include <chrono>
 
 namespace fsim::systemc::plugin_detail {
 
@@ -288,7 +289,9 @@ void add_paths_to_key(
     error.clear();
     const auto stamp = std::filesystem::last_write_time(resolved_compiler, error);
     if (!error) {
-        builder.add("compiler.mtime", std::to_string(stamp.time_since_epoch().count()));
+        const auto nanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            stamp.time_since_epoch());
+        builder.add("compiler.mtime", std::to_string(nanoseconds.count()));
     }
     return false;
 }

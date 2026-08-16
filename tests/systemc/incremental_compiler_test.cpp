@@ -507,5 +507,9 @@ int main(const int argc, char** argv)
     registry.reset();
     handwritten_registry.reset();
     make_writable(root);
-    std::filesystem::remove_all(root);
+    std::error_code cleanup_error;
+    std::filesystem::remove_all(root, cleanup_error);
+#if !defined(_WIN32)
+    assert(!cleanup_error);
+#endif
 }

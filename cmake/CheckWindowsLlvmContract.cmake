@@ -53,6 +53,7 @@ foreach(FSIM_HOST_POLICY IN ITEMS
   endif()
 endforeach()
 foreach(FSIM_TARGET IN ITEMS
+    "x86_64-w64-windows-gnu"
     "x86_64-pc-windows-msvc"
     "x86_64-unknown-linux-gnu")
   string(FIND "${FSIM_APPLICATION_CONTENTS}" "${FSIM_TARGET}" FSIM_INDEX)
@@ -145,15 +146,16 @@ foreach(FSIM_TEST_POLICY IN ITEMS
   endif()
 endforeach()
 foreach(FSIM_JOB_POLICY IN ITEMS
-    "windows-llvm22:"
-    "bounded 900-second SystemC matrix and 1,200-second"
+    "windows-llvm-mingw:"
     "timeout-minutes: 120"
-    "- MSVC"
-    "- Clang"
     "- Debug"
     "- Release"
-    "CL: /D_ITERATOR_DEBUG_LEVEL=0"
-    "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
+    "llvm_mode:"
+    "- 'ON'"
+    "- 'OFF'"
+    "llvm-mingw-20260616-ucrt-x86_64.zip"
+    "mingw-w64-clang-x86_64-llvm-22.1.8-2"
+    "/clang64/bin/lli.exe --version"
     "--parallel 4")
   string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_JOB_POLICY}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
@@ -170,6 +172,6 @@ if(FSIM_REGISTRATION_INDEX EQUAL -1)
 endif()
 
 message(STATUS
-  "Windows LLVM contract: x64 MSVC ABI target, native PE/COFF target and "
+  "Windows LLVM contract: x64 GNU Windows ABI target, native PE/COFF target and "
   "cache identity, strict C layout, safe DLL ownership, atomic cache replace, "
-  "O0/O2/debug provenance, and MSVC/clang-cl hosted matrix are present")
+  "O0/O2/debug provenance, and LLVM-MinGW hosted matrix are present")

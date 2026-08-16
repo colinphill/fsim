@@ -33,14 +33,18 @@
       }
     },
     {
-      "name": "windows-msvc",
-      "displayName": "Windows MSVC",
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64",
-      "binaryDir": "${sourceDir}/build/windows-msvc",
+      "name": "windows-llvm-mingw",
+      "displayName": "Windows LLVM-MinGW",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/windows-llvm-mingw",
       "cacheVariables": {
-        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreadedDLL",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "$env{LLVM_MINGW_ROOT}/bin/clang.exe",
+        "CMAKE_CXX_COMPILER": "$env{LLVM_MINGW_ROOT}/bin/clang++.exe",
+        "CMAKE_RC_COMPILER": "$env{LLVM_MINGW_ROOT}/bin/llvm-windres.exe",
+        "CMAKE_CXX_SCAN_FOR_MODULES": "OFF",
         "FSIM_BUILD_TESTS": "ON",
+        "FSIM_TCL_MODE": "ON",
         "FSIM_LLVM_MODE": "ON"
       }
     },
@@ -98,20 +102,24 @@
     },
     {
       "name": "ci-windows",
-      "displayName": "CI Windows MSVC",
+      "displayName": "CI Windows LLVM-MinGW",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/ci-windows",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreadedDLL",
+        "CMAKE_C_COMPILER": "$env{LLVM_MINGW_ROOT}/bin/clang.exe",
+        "CMAKE_CXX_COMPILER": "$env{LLVM_MINGW_ROOT}/bin/clang++.exe",
+        "CMAKE_RC_COMPILER": "$env{LLVM_MINGW_ROOT}/bin/llvm-windres.exe",
+        "CMAKE_CXX_SCAN_FOR_MODULES": "OFF",
         "FSIM_BUILD_TESTS": "ON",
+        "FSIM_TCL_MODE": "ON",
         "FSIM_LLVM_MODE": "OFF",
         "FSIM_WARNINGS_AS_ERRORS": "ON"
       }
     },
     {
       "name": "ci-windows-release",
-      "displayName": "CI Windows MSVC Release",
+      "displayName": "CI Windows LLVM-MinGW Release",
       "inherits": "ci-windows",
       "binaryDir": "${sourceDir}/build/ci-windows-release",
       "cacheVariables": {
@@ -129,9 +137,8 @@
       "configurePreset": "release"
     },
     {
-      "name": "windows-msvc",
-      "configurePreset": "windows-msvc",
-      "configuration": "Release"
+      "name": "windows-llvm-mingw",
+      "configurePreset": "windows-llvm-mingw"
     },
     {
       "name": "ci-linux",
@@ -177,9 +184,8 @@
       }
     },
     {
-      "name": "windows-msvc",
-      "configurePreset": "windows-msvc",
-      "configuration": "Release",
+      "name": "windows-llvm-mingw",
+      "configurePreset": "windows-llvm-mingw",
       "output": {
         "outputOnFailure": true
       }

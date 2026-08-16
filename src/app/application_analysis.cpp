@@ -1183,7 +1183,11 @@ void validate_bindings(
 }
 
 std::string target_name()  {
-#if defined(_WIN32)
+#if defined(_WIN32) && defined(__MINGW32__)
+  // LLVM-MinGW uses the GNU Windows ABI and triple. Keep that ABI distinct
+  // from the retained MSVC-compatible source-build support in cache keys.
+  return "x86_64-w64-windows-gnu";
+#elif defined(_WIN32)
   // The cache identity includes the ABI environment, not only the object
   // format. Windows JIT code and native plug-ins use the MSVC x64 ABI even
   // when clang-cl is the C++ frontend.

@@ -7,8 +7,8 @@ ownership; it does not query or claim a current GitHub Actions result.
 
 | Review ID | Frozen release contract | Required ownership |
 |---|---|---|
-| `B130-T8-MATRIX` | 12 hosted configurations | Linux GCC Debug/Release, Linux exact LLVM 22.1.8 Debug/Release, sanitizer, fuzz, Windows MSVC Debug/Release, and Windows MSVC/clang-cl plus exact LLVM 22.1.8 Debug/Release are configured |
-| `B130-T8-BUILD` | Six hosted build steps at four workers; local Ninja link/archive pool at eight | Hosted memory pressure remains bounded while all local builds retain the approved minimum eight-way concurrency |
+| `B130-T8-MATRIX` | 9 hosted configurations | Linux GCC Debug/Release, Linux exact LLVM 22.1.8 Debug/Release, fuzz, and Windows LLVM-MinGW Debug/Release with and without exact LLVM 22.1.8 are configured |
+| `B130-T8-BUILD` | Three Linux build definitions at four workers and the Windows build/test definition at twelve; local Ninja link/archive pool at eight | Hosted memory pressure remains bounded while Windows exercises the requested twelve-way concurrency |
 | `B130-T8-MEMORY` | Compact non-MSVC Debug objects and an 8 MiB MSVC-compatible test stack | GCC Debug uses `-Og` and compressed debug information; every configured C/C++ test host receives the common stack policy |
 | `B130-T8-TESTS` | 60/120/600/900/1200-second bounded test classes | Scoped locals, API, Windows application, serialized SystemC matrix, and the container differential retain explicit diagnostic timeouts; hosted jobs retain 20/45/70-minute bounds |
 | `B130-T8-TRACE` | Scoped-local and SystemC phase traces | A future timeout identifies build, parse, interpreter, compiled, warm-cache, integration, or scheduling phase rather than appearing as an opaque hang |

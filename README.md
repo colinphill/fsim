@@ -534,7 +534,8 @@ Unsupported syntax is diagnosed rather than silently accepted.
 ## Requirements
 
 - Windows or Linux on x86-64
-- A C++20 compiler: GCC or Clang on Linux, or MSVC on Windows
+- A C++20 compiler: GCC or Clang on Linux, or the pinned LLVM-MinGW UCRT
+  toolchain on Windows
 - CMake 3.28 or newer
 - LLVM **22.1.8** for the supported compiled-code configuration
 - Tcl **9.0.4 or newer in the 9.0 release series**, or network access for
@@ -545,8 +546,9 @@ can be developed without LLVM by configuring `FSIM_LLVM_MODE=OFF`. The
 checked-in CMake configuration accepts only LLVM 22.1.8 when the backend is
 enabled. The checked-in Linux and Windows LLVM CI jobs configure and run the
 adapter tests against that exact version, including its C runtime-table header
-test and O0/O2 ORC tests. Linux GCC and Windows MSVC are also exercised without
-LLVM in Debug and Release configurations; separate Linux jobs run the suite
+test and O0/O2 ORC tests. Linux GCC and Windows LLVM-MinGW are also exercised
+without LLVM in Debug and Release configurations; separate Linux jobs run the
+suite
 with ASan/UBSan and exercise the VHDL parser plus both Verilog/SV
 preprocessor/parser entry points with Clang/libFuzzer. Adapter developers may
 manually smoke-test an older LLVM while
@@ -561,7 +563,7 @@ SHA-256 verification.
 CMake accepts an installed Tcl 9.0 development package at patchlevel 9.0.4 or
 newer. An older or different Tcl release is ignored and CMake downloads the
 pinned Tcl 9.0.4 source archive, verifies its SHA-256 digest, builds the static
-core with Tcl's native Linux or MSVC build, and installs the Tcl
+core with Tcl's native Linux or Windows build, and installs the Tcl
 standard-library scripts in a relocatable fsim data directory. Set
 `FSIM_TCL_LIBRARY` to an alternate standard-library directory when packaging
 with a custom layout. Set `FSIM_TCL_MODE=OFF` only when intentionally building
@@ -634,12 +636,18 @@ cmake --build build/llvm
 ctest --test-dir build/llvm --output-on-failure
 ```
 
-On Windows, install LLVM 22.1.8 for x86-64 and use the checked-in preset:
+On Windows, extract the pinned
+[LLVM-MinGW 20260616 UCRT archive](https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-x86_64.zip),
+set `LLVM_MINGW_ROOT` to its forward-slash path, and use the checked-in preset.
+The LLVM-enabled configuration additionally needs LLVM 22.1.8 MinGW development
+files, such as the MSYS2 CLANG64 `mingw-w64-clang-x86_64-llvm` package:
 
 ```powershell
-cmake --preset windows-msvc -DLLVM_DIR=C:\llvm-22.1.8\lib\cmake\llvm
-cmake --build --preset windows-msvc
-ctest --test-dir build\windows-msvc -C Release --output-on-failure
+$env:LLVM_MINGW_ROOT = 'C:/llvm-mingw-20260616-ucrt-x86_64'
+cmake --preset windows-llvm-mingw `
+  -DLLVM_DIR=C:/msys64/clang64/lib/cmake/llvm
+cmake --build --preset windows-llvm-mingw --parallel 12
+ctest --preset windows-llvm-mingw --parallel 12
 ```
 
 The `ci-sanitizers` preset runs the non-LLVM suite locally with GCC ASan/UBSan

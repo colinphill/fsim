@@ -41,11 +41,11 @@ foreach(FSIM_GATE IN ITEMS
 endforeach()
 
 foreach(FSIM_EXACT_OUTPUT IN ITEMS
-    "v1 portability audit: 11 hosted configurations plus one local sanitizer configuration, 5 four-worker build steps, 14 explicit platform files, 8 repair queues"
-    "resource portability contract: five four-worker, 120-minute hosted jobs, eight-link pool, compact Debug objects, 8 MiB Windows stacks"
+    "v1 portability audit: 9 hosted configurations plus one local sanitizer configuration, 5 four-worker build/test steps, 14 explicit platform files, 8 repair queues"
+    "resource portability contract: five four-worker build/test steps, 120-minute hosted jobs, eight-link pool, compact Debug objects, 8 MiB Windows stacks"
     "MSVC Debug contract: /bigobj covers every target and the common 8 MiB stack policy covers C/C++ test hosts"
     "MSVC Release contract: assertions stay live"
-    "Windows LLVM contract: x64 MSVC ABI target"
+    "Windows LLVM contract: x64 GNU Windows ABI target"
     "v1 portability corpus: 20 exact rows cover Debug/Release")
   string(FIND
     "${FSIM_COMPOSED_OUTPUT}" "${FSIM_EXACT_OUTPUT}" FSIM_OUTPUT_INDEX)
@@ -66,16 +66,16 @@ string(REGEX MATCHALL
   "${FSIM_WORKFLOW_CONTENTS}")
 list(LENGTH FSIM_120_MINUTE_TIMEOUTS FSIM_120_MINUTE_TIMEOUT_COUNT)
 list(LENGTH FSIM_HOSTED_TIMEOUTS FSIM_HOSTED_TIMEOUT_COUNT)
-if(NOT FSIM_HOSTED_TIMEOUT_COUNT EQUAL 5
+if(NOT FSIM_HOSTED_TIMEOUT_COUNT EQUAL 4
     OR NOT FSIM_120_MINUTE_TIMEOUT_COUNT EQUAL FSIM_HOSTED_TIMEOUT_COUNT)
   message(FATAL_ERROR
-    "expected all five hosted job timeouts to be 120 minutes")
+    "expected all four hosted job timeouts to be 120 minutes")
 endif()
 foreach(FSIM_COMPILER IN ITEMS
     "-DCMAKE_C_COMPILER=gcc"
     "-DCMAKE_CXX_COMPILER=g++"
-    "\"clang-cl\""
-    "\"cl\"")
+    "LLVM_MINGW_ROOT/bin/clang.exe"
+    "LLVM_MINGW_ROOT/bin/clang++.exe")
   string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_COMPILER}" FSIM_COMPILER_INDEX)
   if(FSIM_COMPILER_INDEX EQUAL -1)
     message(FATAL_ERROR "hosted matrix lost compiler: ${FSIM_COMPILER}")
@@ -103,5 +103,5 @@ foreach(FSIM_REVIEW_ID IN ITEMS
 endforeach()
 
 message(STATUS
-  "final resource audit: 12 hosted configurations, four-worker CI builds, "
+  "final resource audit: 9 hosted configurations, four-worker Windows CI, "
   "eight-link local pool, bounded stacks/timeouts, traces, and 20 portability rows")

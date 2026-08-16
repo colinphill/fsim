@@ -31,8 +31,8 @@ set(FSIM_MATRIX_IDS
   PORT-CI-LINUX-LLVM
   PORT-CI-SANITIZERS
   PORT-CI-FUZZ
-  PORT-CI-WINDOWS-MSVC
-  PORT-CI-WINDOWS-LLVM
+  PORT-CI-WINDOWS-LLVM-MINGW
+  PORT-CI-WINDOWS-LLVM-MINGW-LLVM
 )
 set(FSIM_QUEUE_IDS
   B129-T2-GNU
@@ -72,8 +72,7 @@ set(FSIM_WORKFLOW_JOBS
   linux-gcc
   linux-llvm22
   linux-fuzz
-  windows-msvc
-  windows-llvm22
+  windows-llvm-mingw
 )
 foreach(FSIM_JOB IN LISTS FSIM_WORKFLOW_JOBS)
   string(FIND "${FSIM_WORKFLOW_CONTENTS}" "  ${FSIM_JOB}:" FSIM_JOB_INDEX)
@@ -87,13 +86,13 @@ string(REGEX MATCHALL "--parallel 4" FSIM_CI_PARALLEL_MATCHES
 list(LENGTH FSIM_CI_PARALLEL_MATCHES FSIM_CI_PARALLEL_COUNT)
 if(NOT FSIM_CI_PARALLEL_COUNT EQUAL 5)
   message(FATAL_ERROR
-    "expected five four-worker CI build steps, found ${FSIM_CI_PARALLEL_COUNT}")
+    "expected five four-worker CI build/test steps, found ${FSIM_CI_PARALLEL_COUNT}")
 endif()
 string(REGEX MATCH "--parallel ([0-35-9]|[1-9][0-9]+)" FSIM_OTHER_PARALLEL
   "${FSIM_WORKFLOW_CONTENTS}")
 if(FSIM_OTHER_PARALLEL)
   message(FATAL_ERROR
-    "CI build parallelism drifted from four workers: ${FSIM_OTHER_PARALLEL}")
+    "CI build/test parallelism drifted from four workers: ${FSIM_OTHER_PARALLEL}")
 endif()
 
 set(FSIM_REQUIRED_PRESETS
@@ -171,6 +170,6 @@ foreach(FSIM_INVARIANT IN ITEMS
 endforeach()
 
 message(STATUS
-  "v1 portability audit: 11 hosted configurations plus one local sanitizer configuration, "
-  "${FSIM_CI_PARALLEL_COUNT} four-worker build steps, "
+  "v1 portability audit: 9 hosted configurations plus one local sanitizer configuration, "
+  "${FSIM_CI_PARALLEL_COUNT} four-worker build/test steps, "
   "${FSIM_PLATFORM_FILE_COUNT} explicit platform files, 8 repair queues")

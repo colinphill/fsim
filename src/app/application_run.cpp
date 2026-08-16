@@ -11,15 +11,15 @@ namespace fsim::app::application_detail {
 
 HdlVcdState::~HdlVcdState()
 {
-    if (simulation && observer != 0) {
-        simulation->remove_signal_change_hook(observer);
+    if (remove_observer && observer != 0) {
+        remove_observer(observer);
     }
-    if (simulation) {
+    if (current_time) {
         for (auto& file : extended_files) {
             if (!file->begun || file->closed) {
                 continue;
             }
-            const auto now = simulation->now();
+            const auto now = current_time();
             if (now > std::numeric_limits<SimulationTick>::max()
                     / file->tick_multiplier) {
                 continue;

@@ -74,6 +74,9 @@ namespace {
     return "<unknown>";
   }
   const auto path = fsim::support::path_from_utf8(name);
+  if (!path.is_absolute()) {
+    return fsim::support::path_to_utf8(path.lexically_normal());
+  }
   std::error_code error;
   const auto canonical = std::filesystem::weakly_canonical(path, error);
   return fsim::support::path_to_utf8(

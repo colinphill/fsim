@@ -77,7 +77,8 @@ endif()
 foreach(FSIM_PRESET_POLICY IN ITEMS
     "\"name\": \"ci-windows-release\""
     "\"CMAKE_BUILD_TYPE\": \"Release\""
-    "\"CMAKE_MSVC_RUNTIME_LIBRARY\": \"MultiThreadedDLL\"")
+    "\"CMAKE_CXX_COMPILER\": \"\$env{LLVM_MINGW_ROOT}/bin/clang++.exe\""
+    "\"FSIM_TCL_MODE\": \"ON\"")
   string(FIND "${FSIM_PRESET_CONTENTS}" "${FSIM_PRESET_POLICY}" FSIM_POLICY_INDEX)
   if(FSIM_POLICY_INDEX EQUAL -1)
     message(FATAL_ERROR
@@ -86,13 +87,10 @@ foreach(FSIM_PRESET_POLICY IN ITEMS
 endforeach()
 
 foreach(FSIM_JOB_POLICY IN ITEMS
-    "windows-msvc:"
-    "windows-llvm22:"
-    "preset: ci-windows-release"
-    "CL: /D_ITERATOR_DEBUG_LEVEL=0"
-    "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
-    "          - Clang"
-    "          - MSVC"
+    "windows-llvm-mingw:"
+    "llvm-mingw-20260616-ucrt-x86_64.zip"
+    "-DFSIM_TCL_MODE=ON"
+    "-DFSIM_LLVM_MODE=\${{ matrix.llvm_mode }}"
     "configuration: Release"
     "--parallel 4")
   string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_JOB_POLICY}" FSIM_POLICY_INDEX)
@@ -148,6 +146,7 @@ if(FSIM_REGISTRATION_INDEX EQUAL -1)
 endif()
 
 message(STATUS
-  "MSVC Release contract: assertions stay live; MSVC and clang-cl hosted "
-  "Release builds share explicit CRT/iterator policy; plug-in compile/link "
+  "MSVC Release contract: assertions stay live; retained MSVC-compatible "
+  "source support keeps explicit CRT/iterator policy while hosted Windows "
+  "uses LLVM-MinGW; plug-in compile/link "
   "plans retain exact optimization, runtime, and deterministic output flags")

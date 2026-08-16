@@ -469,6 +469,51 @@ namespace tlm_utils {
   target_sources("${target}" PRIVATE "${patched_source}")
 endfunction()
 
+function(fsim_systemc_mingw_archive_recipes output_old output_new)
+  set(old_recipe [=[        add_custom_command(
+                TARGET systemc
+                POST_BUILD
+                COMMAND ar x $<TARGET_FILE:systemc>
+                COMMAND ar x $<TARGET_LINKER_FILE:${SYSTEMC_DLL_TARGET}>
+                COMMAND del *.a
+                COMMAND ar qc $<TARGET_FILE:systemc>  *.o *.obj
+                COMMAND del *.o *.obj
+                COMMENT "Combining SystemC libs..."
+        )]=])
+  set(new_recipe [=[        add_custom_command(
+                TARGET systemc
+                POST_BUILD
+                COMMAND "${CMAKE_COMMAND}"
+                        "-DFSIM_SYSTEMC_AR=${CMAKE_AR}"
+                        "-DFSIM_SYSTEMC_RANLIB=${CMAKE_RANLIB}"
+                        "-DFSIM_SYSTEMC_LAUNCHER_ARCHIVE=$<TARGET_FILE:systemc>"
+                        "-DFSIM_SYSTEMC_RUNTIME_ARCHIVE=$<TARGET_LINKER_FILE:${SYSTEMC_DLL_TARGET}>"
+                        -P "${CMAKE_SOURCE_DIR}/cmake/MergeSystemCArchives.cmake"
+                COMMENT "Combining SystemC libs..."
+                VERBATIM
+        )]=])
+  set(${output_old} "${old_recipe}" PARENT_SCOPE)
+  set(${output_new} "${new_recipe}" PARENT_SCOPE)
+endfunction()
+
+function(fsim_systemc_restore_mingw_archive_recipe source_root archive work_root)
+  if(NOT WIN32 OR MSVC)
+    return()
+  endif()
+  set(upstream_cmake "${source_root}/src/CMakeLists.txt")
+  if(NOT EXISTS "${upstream_cmake}")
+    return()
+  endif()
+  set(staging "${work_root}/restore-${FSIM_SYSTEMC_ARCHIVE_SHA256}")
+  file(REMOVE_RECURSE "${staging}")
+  file(MAKE_DIRECTORY "${staging}")
+  file(ARCHIVE_EXTRACT INPUT "${archive}" DESTINATION "${staging}")
+  configure_file(
+    "${staging}/${FSIM_SYSTEMC_SOURCE_ROOT}/src/CMakeLists.txt"
+    "${upstream_cmake}" COPYONLY)
+  file(REMOVE_RECURSE "${staging}")
+endfunction()
+
 function(fsim_systemc_materialize_source archive work_root output_root output_manifest)
   fsim_systemc_validate_archive("${archive}")
   fsim_systemc_work_root_error("${work_root}" work_root error)
@@ -487,6 +532,11 @@ function(fsim_systemc_materialize_source archive work_root output_root output_ma
     file(RENAME "${staging}/${FSIM_SYSTEMC_SOURCE_ROOT}" "${root}")
     file(REMOVE_RECURSE "${staging}")
   endif()
+  # The governed MinGW compatibility recipe is applied only after verifying
+  # the pristine extracted tree. Restore that exact known patch before each
+  # repeated configure so the pinned source identity remains enforceable.
+  fsim_systemc_restore_mingw_archive_recipe(
+    "${root}" "${archive}" "${work_root}")
   fsim_systemc_validate_source_tree("${root}")
   file(MAKE_DIRECTORY "${work_root}/manifests")
   set(manifest "${work_root}/manifests/systemc-3.0.2.txt")
@@ -494,6 +544,29 @@ function(fsim_systemc_materialize_source archive work_root output_root output_ma
   file(WRITE "${manifest}" "${contents}")
   set(${output_root} "${root}" PARENT_SCOPE)
   set(${output_manifest} "${manifest}" PARENT_SCOPE)
+endfunction()
+
+function(fsim_systemc_patch_mingw_archive_recipe source_root)
+  if(NOT WIN32 OR MSVC)
+    return()
+  endif()
+
+  set(upstream_cmake "${source_root}/src/CMakeLists.txt")
+  file(READ "${upstream_cmake}" upstream_contents)
+  fsim_systemc_mingw_archive_recipes(old_recipe new_recipe)
+  string(FIND "${upstream_contents}" "${old_recipe}" old_recipe_offset)
+  if(NOT old_recipe_offset EQUAL -1)
+    string(REPLACE "${old_recipe}" "${new_recipe}"
+      patched_contents "${upstream_contents}")
+    file(WRITE "${upstream_cmake}" "${patched_contents}")
+    return()
+  endif()
+
+  string(FIND "${upstream_contents}" "${new_recipe}" new_recipe_offset)
+  if(new_recipe_offset EQUAL -1)
+    message(FATAL_ERROR
+      "cannot apply the governed SystemC MinGW archive merge fix")
+  endif()
 endfunction()
 
 macro(fsim_systemc_add_official_runtime archive work_root)
@@ -523,6 +596,9 @@ macro(fsim_systemc_add_official_runtime archive work_root)
       "Do not install a SystemC target-architecture symlink" FORCE)
   set(SYSTEMC_UNITY_BUILD OFF CACHE BOOL "Disable SystemC unity build" FORCE)
   set(CMAKE_EXPORT_NO_PACKAGE_REGISTRY ON)
+
+  fsim_systemc_patch_mingw_archive_recipe(
+    "${FSIM_SYSTEMC_OFFICIAL_SOURCE_DIR}")
 
   # Upstream uses the legacy MSVC boolean both to select Windows Fibers and to
   # combine its sc_main launcher with the DLL import library through lib.exe.

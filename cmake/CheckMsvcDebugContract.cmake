@@ -222,15 +222,15 @@ foreach(FSIM_TIMEOUT_POLICY IN ITEMS
 endforeach()
 
 foreach(FSIM_JOB_POLICY IN ITEMS
-    "windows-msvc:"
-    "preset: ci-windows"
-    "preset: ci-windows-release"
+    "windows-llvm-mingw:"
+    "configuration:"
+    "llvm_mode:"
     "--parallel 4")
   string(FIND
     "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_JOB_POLICY}" FSIM_JOB_INDEX)
   if(FSIM_JOB_INDEX EQUAL -1)
     message(FATAL_ERROR
-      "workflow lost MSVC Debug contract: ${FSIM_JOB_POLICY}")
+      "workflow lost Windows Debug contract: ${FSIM_JOB_POLICY}")
   endif()
 endforeach()
 

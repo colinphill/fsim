@@ -58,7 +58,9 @@ namespace {
 
     std::string target_identity()
     {
-#if defined(_WIN32)
+#if defined(_WIN32) && defined(__MINGW32__)
+        return "x86_64-w64-windows-gnu";
+#elif defined(_WIN32)
         return "x86_64-pc-windows-msvc";
 #elif defined(__linux__)
         return "x86_64-unknown-linux-gnu";
@@ -379,12 +381,14 @@ namespace {
         std::vector<std::filesystem::path> dependencies;
         dependencies.reserve(parsed->size());
         for (const auto& name : *parsed) {
+            const auto dependency = support::path_from_utf8(name);
             auto path = normalized_existing_path(
-                absolute_from(std::filesystem::path { name }, base), error);
+                absolute_from(dependency, base), error);
             if (path.empty()) {
                 report(
                     diagnostics, kCompileCode,
-                    "compiler dependency is not a readable regular file", name);
+                    "compiler dependency is not a readable regular file",
+                    dependency);
                 return std::nullopt;
             }
             dependencies.push_back(std::move(path));
@@ -483,12 +487,14 @@ namespace {
         std::vector<std::filesystem::path> dependencies;
         dependencies.reserve(parsed->size());
         for (const auto& name : *parsed) {
+            const auto dependency = support::path_from_utf8(name);
             auto path = normalized_existing_path(
-                absolute_from(std::filesystem::path { name }, base), error);
+                absolute_from(dependency, base), error);
             if (path.empty()) {
                 report(
                     diagnostics, kCompileCode,
-                    "compiler dependency is not a readable regular file", name);
+                    "compiler dependency is not a readable regular file",
+                    dependency);
                 return std::nullopt;
             }
             dependencies.push_back(std::move(path));

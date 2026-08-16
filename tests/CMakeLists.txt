@@ -2334,6 +2334,10 @@ add_executable(
   systemc/plugin_compiler_test.cpp
 )
 fsim_configure_test(fsim_systemc_compiler_tests)
+target_compile_definitions(
+  fsim_systemc_compiler_tests
+  PRIVATE FSIM_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
+)
 target_link_libraries(fsim_systemc_compiler_tests PRIVATE fsim_systemc)
 add_test(NAME fsim.systemc.compiler COMMAND fsim_systemc_compiler_tests)
 

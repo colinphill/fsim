@@ -555,7 +555,7 @@ namespace {
                 ContextActivation active { context_.get() };
                 description = registry_->instantiate(payload->factory,
                     payload->instance, 0U, parameters, error);
-                const auto* native = context_->find_object(
+                const auto* native = sc_core::sc_find_object(
                     payload->object_path.c_str());
                 if (description && native == nullptr) {
                     error = "factory did not publish its root into the owned context";
@@ -633,9 +633,9 @@ namespace {
             backend_value_endpoint* typed { };
             try {
                 ContextActivation active { context_.get() };
-                auto* endpoint_object = context_->find_object(
+                auto* endpoint_object = sc_core::sc_find_object(
                     payload->endpoint_path.c_str());
-                auto* interface_object = context_->find_object(
+                auto* interface_object = sc_core::sc_find_object(
                     payload->interface_path.c_str());
                 auto* port = dynamic_cast<sc_core::sc_port_base*>(endpoint_object);
                 auto* bindable = dynamic_cast<backend_bindable_endpoint*>(endpoint_object);

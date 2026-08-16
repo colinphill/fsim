@@ -103,11 +103,12 @@ string(REGEX MATCHALL "--parallel 4" FSIM_PARALLEL_STEPS "${FSIM_WORKFLOW_CONTEN
 list(LENGTH FSIM_PARALLEL_STEPS FSIM_PARALLEL_COUNT)
 if(NOT FSIM_PARALLEL_COUNT EQUAL 5)
   message(FATAL_ERROR
-    "expected five four-worker hosted build steps, found ${FSIM_PARALLEL_COUNT}")
+    "expected five four-worker hosted build/test steps, found ${FSIM_PARALLEL_COUNT}")
 endif()
-string(REGEX MATCH "--parallel ([^4]|4[^[:space:]\r\n])" FSIM_OTHER_PARALLEL "${FSIM_WORKFLOW_CONTENTS}")
+string(REGEX MATCH "--parallel ([^4]|4[^[:space:]\r\n])" FSIM_OTHER_PARALLEL
+  "${FSIM_WORKFLOW_CONTENTS}")
 if(FSIM_OTHER_PARALLEL)
-  message(FATAL_ERROR "workflow contains a non-four-worker build step")
+  message(FATAL_ERROR "workflow contains a non-four-worker build/test step")
 endif()
 
 string(REGEX MATCHALL
@@ -120,10 +121,10 @@ string(REGEX MATCHALL
   "${FSIM_WORKFLOW_CONTENTS}")
 list(LENGTH FSIM_120_MINUTE_TIMEOUTS FSIM_120_MINUTE_TIMEOUT_COUNT)
 list(LENGTH FSIM_HOSTED_TIMEOUTS FSIM_HOSTED_TIMEOUT_COUNT)
-if(NOT FSIM_HOSTED_TIMEOUT_COUNT EQUAL 5
+if(NOT FSIM_HOSTED_TIMEOUT_COUNT EQUAL 4
     OR NOT FSIM_120_MINUTE_TIMEOUT_COUNT EQUAL FSIM_HOSTED_TIMEOUT_COUNT)
   message(FATAL_ERROR
-    "expected all five hosted job timeouts to be 120 minutes")
+    "expected all four hosted job timeouts to be 120 minutes")
 endif()
 
 foreach(FSIM_FOOTPRINT_POLICY IN ITEMS
@@ -259,7 +260,8 @@ if(FSIM_REGISTRATION_INDEX EQUAL -1)
 endif()
 
 message(STATUS
-  "resource portability contract: five four-worker, 120-minute hosted jobs, "
+  "resource portability contract: five four-worker build/test steps, "
+  "120-minute hosted jobs, "
   "eight-link pool, compact Debug objects, 8 MiB Windows stacks, bounded "
   "large-test and FST value/change/hierarchy storage, pinned Boost headers, "
   "and scoped/SystemC phase traces are present")
