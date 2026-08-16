@@ -2743,8 +2743,20 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     408-file string audit remains valid because only short literals were added,
     all five hosted timeouts remain 120 minutes, the legacy SystemC interface
     remains absent, and `git diff --check` passes. Debug and sanitizer were not
-    rerun. Commit and push this repair, then wait for and inspect all six
-    replacement Windows jobs before closing Batch 172 or beginning Batch 173.
+    rerun. The repair is committed and pushed as
+    `604a3618c14f85fda1f6c3433b1798443057530b`; the branch and remote were
+    synchronized at that exact SHA before this documentation-only handoff.
+
+    Restart on Windows from the new documentation handoff commit and verify its
+    live parent is `604a3618c14f85fda1f6c3433b1798443057530b`. Two read-only
+    GitHub queries made immediately after the repair push found no run for that
+    SHA yet; no job was restarted, canceled or otherwise modified. Wait for all
+    six Windows jobs on the documentation handoff SHA to reach terminal state,
+    then inspect every finalized log before closing Batch 172 or beginning
+    Batch 173. If another repair is required, preserve the Release-only rule:
+    do not rerun Debug or sanitizer, do not change repository headers merely
+    for formatting, keep all five timeouts at 120 minutes, and keep the legacy
+    SystemC interface removed.
 
 ## Batch 173 planned restart checkpoint - after Batch 172 closeout
 

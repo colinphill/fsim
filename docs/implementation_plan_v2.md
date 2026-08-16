@@ -12015,9 +12015,18 @@ carry an explicit evidence-backed scope disposition approved by the user.
   408-file string audit remains valid because only short literals were added;
   all five workflow timeouts remain 120 minutes, no repository header changed,
   the legacy SystemC interface remains absent, and `git diff --check` passes.
-  Debug and sanitizer were not rerun. Commit and push this repair, then require
-  every replacement Windows job to complete and inspect all six logs before
-  closing Batch 172 or starting Batch 173.
+  Debug and sanitizer were not rerun. The repair is committed and pushed as
+  `604a3618c14f85fda1f6c3433b1798443057530b`.
+
+  The Windows restart must verify that the documentation handoff commit has
+  `604a3618c14f85fda1f6c3433b1798443057530b` as its live parent. Two
+  read-only GitHub queries immediately after the repair push found no run for
+  that SHA; no CI state was changed. Wait for every Windows job on the handoff
+  SHA to complete and inspect all six finalized logs before closing Batch 172
+  or starting Batch 173. Any follow-up repair remains Release-only: do not
+  rerun Debug or sanitizer, avoid non-semantic repository-header formatting,
+  retain every 120-minute workflow timeout, and keep the legacy SystemC
+  interface absent.
 
 ### Batch 173 - SCV 2.0.1 compatibility, recording, and verification closure - CI monitoring boundary
 
