@@ -13265,25 +13265,100 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 176 - v2 release candidate, packaging, examples, and documentation
 
-- **Changes 1-4:** update every tutorial and example for multiple roots,
-  libraries, non-project phases, Accellera SystemC/TLM/SCV, the opaque backend,
-  complete signal/port waveform and transaction visibility, UVM, DPI/VPI/VHPI,
-  SDF, FST, older standards, debugger, and artifacts.
-- **Changes 5-8:** complete user, language, architecture, API/ABI, plug-in,
-  migration, diagnostics, troubleshooting, platform, worker-ready/post-v2
-  parallelism, and release documentation with no stale v1 limitation claims.
-- **Changes 9-12:** verify source/binary packaging, install/uninstall,
-  CMake/pkg-config discovery, runtime data, mapped libraries, headers, licenses,
-  upstream notices and patches, examples, and offline producer/consumer
-  workflows.
-- **Changes 13-16:** build signed/reproducible release-candidate archives for
-  supported Linux/Windows toolchains and run clean-machine install, tutorial,
-  artifact, plug-in, SystemC/TLM/SCV and compatibility smoke tests.
-- **Changes 17-19:** resolve release-candidate defects, freeze changelog/known-
-  issues/support matrices, complete inventories, and record exact artifact
-  digests and restart evidence.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push the v2.0 release candidate once without hosted CI monitoring.
+- **Locked scope:** produce the v2.0 release candidate from the frozen current-
+  only interfaces and artifacts. Tutorials, documentation, source/binary
+  packaging, installation, discovery, notices, reproducibility, clean-machine
+  smokes and release records must agree with executable behavior. Changes 1-19
+  remain one recoverable worktree; Change 20 alone owns the local Debug/Release
+  candidate gates, one commit and one push. Use at least eight local workers,
+  preserve 120-minute command timeouts, avoid formatting-only public-header
+  edits, and do not execute or monitor hosted CI. Fresh sanitizers and the
+  complete hosted Linux/Windows matrix remain final Batch 177 work. Real
+  Windows archive/smoke results may not be inferred from Linux evidence.
+1. **Planning and ownership only.** Start from clean synchronized Batch 175
+   closeout `e5f7c6cdd79ac931ffde2e73902082b19bee7ca9`. Record this exact
+   twenty-change contract and the Batch 176 restart checkpoint in a
+   documentation-only precursor commit and push before implementation. Do not
+   change source, public headers, ABI/schema, examples, packaging, build logic
+   or tests in this change.
+2. Audit and update the core Verilog, VHDL, SystemVerilog and mixed-language
+   tutorials/examples for current CLI syntax, explicit roots, logical
+   libraries, older-standard selection, non-project compile/elaborate/simulate
+   phases, portable artifacts, relocation, mapped libraries and debugger use.
+3. Audit and update SystemC/TLM/SCV tutorials/examples for the official
+   Accellera-only interface, opaque backend, plug-in compilation/cache,
+   multiple roots, complete signal/port waveform visibility, transaction
+   recording, selection, backpressure and source-hidden relocation.
+4. Audit and update UVM, DPI-C, VPI, VHPI, SDF/VITAL and FST tutorials/examples
+   so direct, interpreter/LLVM O0/O2, cold/warm, debug/trace and artifact flows
+   use supported current-only syntax with exact expected output and failure
+   guidance.
+5. Complete the user, platform, migration and troubleshooting guides, including
+   supported compiler/runtime combinations, 120-minute CI job limits, resource
+   budgets, cache recovery, Windows path/lock behavior and actionable failure
+   triage without promising unverified compatibility.
+6. Complete language and standard-mode documentation across VHDL-2008,
+   Verilog-1995/2001/2001-noconfig/2005, SystemVerilog-2005/2009/2012/2017,
+   UVM 1.2/2020, SDF/VITAL and current-only artifact semantics; remove every
+   stale v1 limitation claim contradicted by executable evidence.
+7. Complete architecture, public C/C++ API, ABI/schema, plug-in, SystemC/TLM/
+   SCV, DPI/VPI/VHPI, debugger, tracing and artifact documentation with exact
+   ownership, lifecycle, compatibility, relocation and failure boundaries.
+8. Complete diagnostics, release, worker-ready and post-v2 parallelism
+   documentation. Keep cataloged codes, resource limits and supported current
+   execution distinct from optional future process partitioning, AOT,
+   expanded coverage products and Python/notebook packaging.
+9. Define and validate the source-package manifest: authored source, CMake and
+   pkg-config metadata, runtime data, examples, licenses, upstream notices,
+   governed patches, SBOM inputs and exclusions. Reject missing, unexpected,
+   duplicated, path-unsafe or nondeterministically ordered entries.
+10. Define and validate binary install/uninstall ownership for executables,
+    libraries, mapped-library/runtime data, public headers, CMake exports,
+    pkg-config files, licenses/notices and examples. Prove staged discovery and
+    complete removal without touching files outside the install manifest.
+11. Exercise installed and offline producer/consumer workflows through CMake
+    and pkg-config, including object/library/design artifacts, mapped logical
+    libraries, SystemC/TLM/SCV plug-ins and all required pinned upstream source
+    archives without network dependence.
+12. Freeze deterministic source/binary packaging rules: normalized paths,
+    permissions, timestamps, ownership, entry order, compression parameters,
+    package identity and repeated-build digests. Add exact positive and
+    corruption/nondeterminism negative owners without weakening artifact
+    resource limits.
+13. Build and verify reproducible Linux release-candidate source and binary
+    archives for the supported exact-LLVM Clang and GCC families, retaining
+    commands, manifests, sizes, digests, signatures or explicit unsigned-
+    candidate disposition, and toolchain/runtime provenance.
+14. Build and verify the corresponding Windows MSVC and clang-cl release-
+    candidate archives with `/bigobj`, clean `NDEBUG`/`UNDEBUG` ownership,
+    120-minute job limits, deterministic manifests and retained warning logs.
+    Keep this change active until real Windows execution is available.
+15. Run clean-machine staged-install smokes for CLI discovery, every maintained
+    tutorial/example, non-project phases, mapped libraries, portable artifacts,
+    relocation, debugger, VCD/FST output and uninstall isolation on each
+    available release-candidate platform/toolchain.
+16. Run clean-machine plug-in and compatibility smokes for official SystemC
+    3.0.2, TLM, SCV 2.0.1, DPI-C, VPI and VHPI, including offline compilation,
+    cache reconstruction, ABI/producer rejection, transaction visibility and
+    failure containment without any legacy SystemC facade.
+17. Audit every retained release-candidate build, package, install and smoke
+    log. Classify compiler warnings, correctness failures, performance/resource
+    regressions and harness defects; repair each issue and rerun focused owners
+    on every affected available toolchain before broad gates.
+18. Freeze the changelog, known issues, support/platform matrices, package and
+    SBOM manifests, license/upstream notices, archive/signature identities,
+    example outputs and explicit Batch 177 deferrals. Add machine-checked
+    counts/digests and leave no unexplained or inferred platform claim.
+19. Synchronize README, architecture, language/API/platform/release guides,
+    diagnostics, inventories and the exact Batch 177 restart handoff. Run the
+    focused documentation, packaging, install, reproducibility, source and
+    catalog gates; retain initial failures and repaired evidence.
+20. Run fresh full non-sanitized Debug/Release builds, regressions and all local
+    release-candidate gates with at least eight workers and retained logs.
+    Repair every failure, close or explicitly transfer every unavailable
+    Windows row to Batch 177, commit and push the accumulated v2.0 release
+    candidate once, and do not execute or monitor hosted CI. Batch 177 alone
+    owns fresh sanitizers and final hosted-CI execution/monitoring.
 
 ### Batch 177 - v2.0 final qualification and release
 

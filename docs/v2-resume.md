@@ -4092,6 +4092,46 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     and push the accumulated Batch 175 once, then begin Batch 176 only from the
     clean synchronized branch and its authoritative plan.
 
+## Batch 176 planned restart checkpoint - after Batch 175 closeout
+
+1. Start in `/home/colin/projects/fsim`, read this section and the authoritative
+   expanded Batch 176 allocation in `implementation_plan_v2.md`, and verify
+   branch `codex/v2` is clean and synchronized at pushed Batch 175 closeout
+   `e5f7c6cdd79ac931ffde2e73902082b19bee7ca9` plus the documentation-only
+   planning commit that records this checkpoint.
+2. Batch 176 is now expanded into exactly twenty bounded changes without
+   broadening its locked v2.0 release-candidate scope. Change 1 is planning and
+   ownership only. Changes 2-4 own tutorials/examples; 5-8 own public and
+   release documentation; 9-12 own source/binary packaging, installation,
+   discovery, offline workflows and reproducibility; 13-16 own Linux/Windows
+   archives and clean-machine smokes; 17-19 own failure closure and frozen
+   release records; Change 20 alone owns local Debug/Release candidate gates,
+   the implementation commit and push.
+3. Preserve Batch 175's checked 44-row Linux Debug performance baseline and
+   final 19-row qualification ledger. Its closeout identity is
+   `8c5339906ccfd708516a95607edf45084d884437438d532ce9dd5b16bfb42fc6`:
+   zero active Batch 175 rows, seven preserved rows and twelve Windows rows
+   explicitly assigned to final Batch 177. Do not reinterpret those deferred
+   rows as release-candidate evidence.
+4. Preserve the official Accellera-only SystemC 3.0.2 and SCV 2.0.1 interface,
+   current-only artifacts, exact compiler/runtime producer identities,
+   pointer-free portable records and explicit rejection of every removed
+   legacy SystemC facade path/token. Preserve Batch 175's governed two-patch
+   SCV manifest/tree identities
+   `b5954d8b0dc9f26f4e02c2a24063e742bbdcaa094c3c34fba8f2f7b1935ef57b`
+   and `4dea71f4e320539aae40a12209445519193da9cd237512f79a1377a5174cb3ea`.
+5. Use at least eight workers for local builds and retain 120-minute command
+   timeouts. Avoid formatting-only public-header edits. Changes 1-19 remain one
+   recoverable accumulated worktree; do not reset, commit or push it before
+   Change 20. Release builds/tests are not required before Change 20. Do not
+   run a sanitizer or execute/monitor hosted CI in Batch 176; Batch 177 owns
+   fresh sanitizers and the complete final hosted Linux/Windows matrix.
+6. The next bounded action after pushing this documentation-only precursor is
+   Batch 176 Change 2 only: inventory every maintained core language and mixed-
+   language tutorial/example against current CLI, roots, libraries, phases,
+   standards, artifacts, relocation and debugger behavior. Keep Windows-only
+   evidence explicit rather than inferred.
+
 ## Batch 168 planned restart checkpoint - 2026-08-13
 
 1. Start in `/home/colin/projects/fsim`, read this section and the authoritative
