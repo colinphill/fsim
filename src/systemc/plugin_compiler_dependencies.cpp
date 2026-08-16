@@ -3,6 +3,17 @@
 
 namespace fsim::systemc::plugin_detail {
 
+[[nodiscard]] bool is_clang_cl_compiler(
+    const std::string& compiler_name,
+    const std::filesystem::path& resolved_compiler) {
+    const auto matches = [](const std::filesystem::path& candidate) {
+        const auto filename = lowercase(candidate.filename().string());
+        return filename == "clang-cl" || filename == "clang-cl.exe";
+    };
+    return matches(std::filesystem::path{compiler_name})
+        || (!resolved_compiler.empty() && matches(resolved_compiler));
+}
+
 [[nodiscard]] std::uint64_t dependency_process_id() noexcept {
 #if defined(_WIN32)
     return static_cast<std::uint64_t>(GetCurrentProcessId());
@@ -610,8 +621,9 @@ parse_msvc_source_dependencies(const std::string_view contents) {
     return JsonDependencyParser{contents}.parse();
 }
 
-[[nodiscard]] bool add_gcc_like_dependencies_to_key(
+[[nodiscard]] bool add_makefile_dependencies_to_key(
     compiler::CacheKeyBuilder& builder,
+    const HostToolchain toolchain,
     const std::string& compiler_name,
     const std::filesystem::path& resolved_compiler,
     const std::vector<std::filesystem::path>& sources,
@@ -621,7 +633,10 @@ parse_msvc_source_dependencies(const std::string_view contents) {
     const std::filesystem::path& cache_directory,
     bool& cacheable,
     diagnostic::Engine& diagnostics) {
-    builder.add("dependency.discovery", "compiler-make-v1");
+    const bool clang_cl = toolchain == HostToolchain::msvc;
+    builder.add(
+        "dependency.discovery",
+        clang_cl ? "compiler-clangcl-make-v1" : "compiler-make-v1");
     if (!cacheable) {
         builder.add("dependency.count", "0");
         return true;
@@ -631,7 +646,7 @@ parse_msvc_source_dependencies(const std::string_view contents) {
         builder.add("dependency.count", "0");
         report_dependency_cache_disabled(
             diagnostics,
-            "the selected GCC-like compiler could not be resolved");
+            "the selected compiler could not be resolved");
         return true;
     }
 
@@ -652,20 +667,37 @@ parse_msvc_source_dependencies(const std::string_view contents) {
     for (std::size_t index = 0; index < sources.size(); ++index) {
         const auto dependency_file =
             scratch->path() / ("source-" + std::to_string(index) + ".d");
+        const auto object_file =
+            scratch->path() / ("source-" + std::to_string(index) + ".obj");
+        const auto program_database =
+            scratch->path() / ("source-" + std::to_string(index) + ".pdb");
         auto argv = common_compile_argv(
-            HostToolchain::gcc_like,
+            toolchain,
             compiler_name,
             resolved_compiler,
             includes,
             settings);
-        argv.emplace_back("-M");
-        argv.emplace_back("-MF");
-        argv.push_back(path_argument(dependency_file));
-        argv.emplace_back("-MT");
-        argv.push_back("fsim_dependency_target_" + std::to_string(index));
-        argv.push_back(path_argument(sources[index]));
+        if (clang_cl) {
+            argv.emplace_back("/c");
+            argv.push_back(path_argument(sources[index]));
+            argv.push_back("/Fo" + path_argument(object_file));
+            argv.push_back("/Fd" + path_argument(program_database));
+            argv.emplace_back("/clang:-MD");
+            argv.emplace_back("/clang:-MF");
+            argv.push_back("/clang:" + path_argument(dependency_file));
+            argv.emplace_back("/clang:-MT");
+            argv.push_back(
+                "/clang:fsim_dependency_target_" + std::to_string(index));
+        } else {
+            argv.emplace_back("-M");
+            argv.emplace_back("-MF");
+            argv.push_back(path_argument(dependency_file));
+            argv.emplace_back("-MT");
+            argv.push_back("fsim_dependency_target_" + std::to_string(index));
+            argv.push_back(path_argument(sources[index]));
+        }
         const CompilerCommand command{
-            std::move(argv), working_directory, HostToolchain::gcc_like};
+            std::move(argv), working_directory, toolchain};
         const auto process = run_process(command);
         if (!process.started || process.exit_code != 0) {
             cacheable = false;
@@ -827,9 +859,11 @@ parse_msvc_source_dependencies(const std::string_view contents) {
     const std::filesystem::path& cache_directory,
     bool& cacheable,
     diagnostic::Engine& diagnostics) {
-    if (toolchain == HostToolchain::gcc_like) {
-        return add_gcc_like_dependencies_to_key(
+    if (toolchain == HostToolchain::gcc_like
+        || is_clang_cl_compiler(compiler_name, resolved_compiler)) {
+        return add_makefile_dependencies_to_key(
             builder,
+            toolchain,
             compiler_name,
             resolved_compiler,
             sources,

@@ -380,7 +380,7 @@ function(fsim_configure_test_platform target)
     # default stack in both optimized and unoptimized MSVC-compatible builds.
     # Reserve address space uniformly so newly split or merged test hosts do
     # not silently lose the protection carried by an older executable.
-    target_link_options(${target} PRIVATE /STACK:33554432)
+    target_link_options(${target} PRIVATE /STACK:134217728)
   endif()
 endfunction()
 

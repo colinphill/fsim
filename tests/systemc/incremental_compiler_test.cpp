@@ -9,7 +9,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
+#include <string_view>
 
 namespace {
 
@@ -77,10 +79,95 @@ std::string module_source(
     return result;
 }
 
+[[nodiscard]] bool has_argument(
+    const int argc,
+    char* const* argv,
+    const std::string_view expected)
+{
+    for (int index = 1; index < argc; ++index) {
+        if (std::string_view { argv[index] } == expected) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] std::optional<std::filesystem::path> prefixed_path_argument(
+    const int argc,
+    char* const* argv,
+    const std::string_view prefix)
+{
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view argument { argv[index] };
+        if (argument.starts_with(prefix)) {
+            return std::filesystem::path { argument.substr(prefix.size()) };
+        }
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<std::filesystem::path> clang_argument_after(
+    const int argc,
+    char* const* argv,
+    const std::string_view option)
+{
+    constexpr std::string_view prefix = "/clang:";
+    for (int index = 1; index + 1 < argc; ++index) {
+        if (std::string_view { argv[index] } == option) {
+            const std::string_view value { argv[index + 1] };
+            if (value.starts_with(prefix)) {
+                return std::filesystem::path { value.substr(prefix.size()) };
+            }
+            return std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<std::filesystem::path> source_argument(
+    const int argc,
+    char* const* argv)
+{
+    for (int index = argc - 1; index > 0; --index) {
+        const auto path = std::filesystem::path { argv[index] };
+        if (path.extension() == ".cpp" || path.extension() == ".cc"
+            || path.extension() == ".cxx") {
+            return path;
+        }
+    }
+    return std::nullopt;
+}
+
+int run_clang_cl_fake_compiler(const int argc, char* const* argv)
+{
+    const auto source = source_argument(argc, argv);
+    const auto object = prefixed_path_argument(argc, argv, "/Fo");
+    if (!source || !object) {
+        return 81;
+    }
+    if (has_argument(argc, argv, "/clang:-MD")) {
+        const auto dependency_argument =
+            clang_argument_after(argc, argv, "/clang:-MF");
+        if (!dependency_argument
+            || dependency_argument->filename() != "translation-unit.d") {
+            return 82;
+        }
+        write_file(
+            *dependency_argument,
+            "fsim_systemc_object: " + source->generic_string() + "\n");
+    }
+    write_file(*object, "fake clang-cl object\n");
+    return 0;
+}
+
 } // namespace
 
-int main()
+int main(const int argc, char** argv)
 {
+    if (has_argument(
+            argc, argv, "/DFSIM_TEST_CLANG_CL_INCREMENTAL_COMPILER=1")) {
+        return run_clang_cl_fake_compiler(argc, argv);
+    }
     const auto unique = std::to_string(
         std::chrono::steady_clock::now().time_since_epoch().count());
     const auto root = std::filesystem::temp_directory_path()
@@ -119,6 +206,44 @@ int main()
     assert(fsim::systemc::compile_incremental_object(
         first_request, diagnostics));
     assert(!diagnostics.has_error());
+
+#if !defined(_WIN32)
+    // Exercise clang-cl's Make dependency-file route on every host with a
+    // modeled compiler. The real compile writes a non-empty object payload so
+    // incremental publication and metadata validation run as well.
+    const auto fake_clang_cl = root / "clang-cl.exe";
+    std::error_code fake_error;
+    std::filesystem::copy_file(
+        std::filesystem::absolute(std::filesystem::path { argv[0] }, fake_error),
+        fake_clang_cl,
+        std::filesystem::copy_options::overwrite_existing,
+        fake_error);
+    assert(!fake_error);
+    std::filesystem::permissions(
+        fake_clang_cl,
+        std::filesystem::perms::owner_exec
+            | std::filesystem::perms::group_exec
+            | std::filesystem::perms::others_exec,
+        std::filesystem::perm_options::add,
+        fake_error);
+    assert(!fake_error);
+    const auto fake_source = root / "fake-clang-cl.cpp";
+    write_file(fake_source, "extern \"C\" int fake_clang_cl() { return 1; }\n");
+    auto fake_request = first_request;
+    fake_request.source = fake_source;
+    fake_request.output = root / "fake-clang-cl.fsimscobj";
+    fake_request.settings.compiler = fake_clang_cl.string();
+    fake_request.settings.defines = {
+        "FSIM_TEST_CLANG_CL_INCREMENTAL_COMPILER=1"
+    };
+    fsim::diagnostic::Engine fake_diagnostics;
+    assert(fsim::systemc::compile_incremental_object(
+        fake_request, fake_diagnostics));
+    assert(!fake_diagnostics.has_error());
+    const auto fake_metadata = fsim::systemc::load_incremental_object_metadata(
+        fake_request.output, fake_diagnostics);
+    assert(fake_metadata && fake_metadata->toolchain == "msvc");
+#endif
 
     auto cached_first_request = first_request;
     cached_first_request.output.clear();

@@ -328,6 +328,18 @@ namespace {
         return result;
     }
 
+    bool is_clang_cl(
+        const std::string& compiler,
+        const std::filesystem::path& resolved)
+    {
+        const auto matches = [](const std::filesystem::path& candidate) {
+            const auto filename = lowercase(candidate.filename().string());
+            return filename == "clang-cl" || filename == "clang-cl.exe";
+        };
+        return matches(std::filesystem::path { compiler })
+            || (!resolved.empty() && matches(resolved));
+    }
+
     std::optional<std::vector<std::filesystem::path>> gcc_dependencies(
         const std::string& compiler,
         const std::filesystem::path& resolved,
@@ -429,6 +441,61 @@ namespace {
         return parsed;
     }
 
+    std::optional<std::vector<std::filesystem::path>> clang_cl_dependencies(
+        const std::string& compiler,
+        const std::filesystem::path& resolved,
+        const std::filesystem::path& source,
+        const std::vector<std::filesystem::path>& includes,
+        const project::SystemCSection& settings,
+        const std::filesystem::path& base,
+        const std::filesystem::path& scratch,
+        diagnostic::Engine& diagnostics)
+    {
+        const auto dependency_file = scratch / "translation-unit.d";
+        const auto object = scratch / "dependency-scan.obj";
+        const auto program_database = scratch / "dependency-scan.pdb";
+        auto argv = common_compile_argv(
+            HostToolchain::msvc, compiler, resolved, includes, settings);
+        argv.emplace_back("/c");
+        argv.push_back(path_argument(source));
+        argv.push_back("/Fo" + path_argument(object));
+        argv.push_back("/Fd" + path_argument(program_database));
+        argv.emplace_back("/clang:-MD");
+        argv.emplace_back("/clang:-MF");
+        argv.push_back("/clang:" + path_argument(dependency_file));
+        argv.emplace_back("/clang:-MT");
+        argv.emplace_back("/clang:fsim_systemc_object");
+        CompilerCommand command { std::move(argv), base, HostToolchain::msvc };
+        if (!run_command(command, diagnostics, "SystemC dependency scan", kCompileCode)) {
+            return std::nullopt;
+        }
+        std::error_code error;
+        const auto bytes = read_text_file(dependency_file, error);
+        const auto parsed = bytes
+            ? parse_makefile_dependencies(*bytes)
+            : std::nullopt;
+        if (!parsed) {
+            report(
+                diagnostics, kCompileCode,
+                "compiler emitted an invalid SystemC dependency file", dependency_file);
+            return std::nullopt;
+        }
+        std::vector<std::filesystem::path> dependencies;
+        dependencies.reserve(parsed->size());
+        for (const auto& name : *parsed) {
+            auto path = normalized_existing_path(
+                absolute_from(std::filesystem::path { name }, base), error);
+            if (path.empty()) {
+                report(
+                    diagnostics, kCompileCode,
+                    "compiler dependency is not a readable regular file", name);
+                return std::nullopt;
+            }
+            dependencies.push_back(std::move(path));
+        }
+        return dependencies;
+    }
+
     std::optional<std::vector<std::filesystem::path>> dependencies(
         const HostToolchain toolchain,
         const std::string& compiler,
@@ -444,9 +511,13 @@ namespace {
             ? gcc_dependencies(
                   compiler, resolved, source, includes, settings, base, scratch,
                   diagnostics)
-            : msvc_dependencies(
-                  compiler, resolved, source, includes, settings, base, scratch,
-                  diagnostics);
+            : is_clang_cl(compiler, resolved)
+                ? clang_cl_dependencies(
+                      compiler, resolved, source, includes, settings, base, scratch,
+                      diagnostics)
+                : msvc_dependencies(
+                      compiler, resolved, source, includes, settings, base, scratch,
+                      diagnostics);
         if (!result) {
             return std::nullopt;
         }

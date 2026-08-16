@@ -11873,6 +11873,33 @@ carry an explicit evidence-backed scope disposition approved by the user.
   diff audit remain clean. Do not rerun Debug or sanitizer. Commit and push
   this narrow repair and again require every Windows job to complete green.
 
+  Launcher repair `afb6257` was pushed, and run `31917437304` was allowed to
+  finish all six Windows jobs before this repair. Every build is warning-free;
+  the only warning text is Accellera's five expected W506 runtime name
+  substitutions, and the prior MSVC `NDEBUG`/`UNDEBUG` conflict remains absent.
+  Plain MSVC and MSVC-with-LLVM report the same stack-exhaustion families: 18
+  Debug failures and 10 Release failures, including each Release lane's
+  dependent FST closure. The two clang-cl lanes each report 23 failures split
+  between an unstable upstream Windows Fiber scheduler and clang-cl ignoring
+  MSVC's `/sourceDependencies` JSON contract. The latter includes the observed
+  `FSIM-SC-I004` typed-boundaries failure.
+
+  The repair selects Accellera's supported standard-thread scheduler only for
+  Windows clang-cl, keeps native MSVC on Fibers, and raises the uniform Windows
+  test stack reserve from 32 MiB to 128 MiB. Both incremental compilation paths
+  now recognize clang-cl explicitly and request a Make dependency file through
+  `/clang:-MD`, `/clang:-MF` and `/clang:-MT`; native MSVC retains the JSON
+  scanner. Modeled clang-cl compiler tests freeze successful dependency scans,
+  included-header cache invalidation and incremental object compilation, while
+  the portability contracts freeze scheduler, scanner and stack policy. The
+  final eight-worker exact-LLVM Release build completes, its full regression
+  passes 246/246 in 655.65 seconds, and the focused compiler/incremental tests
+  pass 2/2 in 23.70 seconds. SDF/VITAL, FST, installed/public, portability and
+  release gates are green. The 408-file MSVC string audit remains below 16,000
+  bytes with a 14,622-byte maximum, all five workflow timeouts remain 120
+  minutes and `git diff --check` passes. No header was changed, and Debug and
+  sanitizer regressions were intentionally not rerun.
+
 ### Batch 173 - SCV 2.0.1 compatibility, recording, and verification closure - CI monitoring boundary
 
 - **Changes 1-4:** vendor the official SCV 2.0.1 source archive with a pinned

@@ -136,6 +136,23 @@ void write_text(const std::filesystem::path& path, const std::string& text) {
     return std::nullopt;
 }
 
+[[nodiscard]] std::optional<std::filesystem::path> clang_argument_after(
+    const int argc,
+    char* const* argv,
+    const std::string_view option) {
+    constexpr std::string_view prefix = "/clang:";
+    for (int index = 1; index + 1 < argc; ++index) {
+        if (std::string_view{argv[index]} == option) {
+            const std::string_view value{argv[index + 1]};
+            if (!value.starts_with(prefix)) {
+                return std::nullopt;
+            }
+            return std::filesystem::path{value.substr(prefix.size())};
+        }
+    }
+    return std::nullopt;
+}
+
 [[nodiscard]] std::optional<std::filesystem::path> source_argument(
     const int argc,
     char* const* argv) {
@@ -222,6 +239,28 @@ int run_msvc_dependency_fake_compiler(
         << make_json_escape(module.generic_string()) << "\"}]\n"
         << "  }\n}\n";
     return output ? 0 : 82;
+}
+
+int run_clang_cl_dependency_fake_compiler(
+    const int argc,
+    char* const* argv) {
+    const auto source = source_argument(argc, argv);
+    const auto dependency_file =
+        clang_argument_after(argc, argv, "/clang:-MF");
+    if (!source || !dependency_file
+        || !has_raw_argument(argc, argv, "/clang:-MD")
+        || !has_raw_argument(argc, argv, "/clang:-MT")) {
+        return 83;
+    }
+    const auto header = source->parent_path() / "clang generated header.hpp";
+    std::ofstream output(
+        *dependency_file,
+        std::ios::binary | std::ios::trunc);
+    output
+        << "fsim_clang_cl_dependency_target: \\\n  "
+        << make_dependency_escape(source->generic_string()) << " \\\n  "
+        << make_dependency_escape(header.generic_string()) << '\n';
+    return output ? 0 : 84;
 }
 
 int run_mutating_fake_compiler(
@@ -326,6 +365,10 @@ private:
 } // namespace
 
 int main(const int argc, char** argv) {
+    if (has_raw_argument(
+            argc, argv, "/DFSIM_TEST_CLANG_CL_DEPENDENCY_COMPILER=1")) {
+        return run_clang_cl_dependency_fake_compiler(argc, argv);
+    }
     if (has_raw_argument(
             argc, argv, "/DFSIM_TEST_MSVC_DEPENDENCY_COMPILER=1")) {
         return run_msvc_dependency_fake_compiler(argc, argv);
@@ -947,6 +990,57 @@ int main(const int argc, char** argv) {
         fallback_msvc_request, fallback_msvc_diagnostics);
     assert(fallback_msvc_plan && fallback_msvc_plan->cacheable);
     assert(!fallback_msvc_diagnostics.has_error());
+
+    // Model clang-cl separately because its MSVC-compatible compile driver
+    // emits Make dependency files rather than MSVC source-dependency JSON.
+    const auto fake_clang_cl = working / "clang-cl.exe";
+    filesystem::copy_file(
+        filesystem::absolute(filesystem::path{argv[0]}, error),
+        fake_clang_cl,
+        filesystem::copy_options::overwrite_existing,
+        error);
+    assert(!error);
+    filesystem::permissions(
+        fake_clang_cl,
+        filesystem::perms::owner_exec
+            | filesystem::perms::group_exec
+            | filesystem::perms::others_exec,
+        filesystem::perm_options::add,
+        error);
+    assert(!error);
+    const auto clang_cl_dependency_source =
+        working / "clang dependency source.cpp";
+    const auto clang_cl_dependency_header =
+        working / "clang generated header.hpp";
+    write_text(
+        clang_cl_dependency_header,
+        "#define FSIM_CLANG_CL_DEPENDENCY_VALUE 53\n");
+    write_source(
+        clang_cl_dependency_source,
+        "fsim_clang_cl_dependency",
+        "FSIM_CLANG_CL_DEPENDENCY_VALUE",
+        "\"clang generated header.hpp\"");
+    auto emitted_clang_cl_request = request;
+    emitted_clang_cl_request.sources = {clang_cl_dependency_source};
+    emitted_clang_cl_request.settings.compiler = fake_clang_cl.string();
+    emitted_clang_cl_request.settings.include_directories = {working};
+    emitted_clang_cl_request.settings.defines = {
+        "FSIM_TEST_CLANG_CL_DEPENDENCY_COMPILER=1"};
+    fsim::diagnostic::Engine emitted_clang_cl_diagnostics;
+    const auto emitted_clang_cl_plan = fsim::systemc::plan_plugin_compile(
+        emitted_clang_cl_request, emitted_clang_cl_diagnostics);
+    assert(emitted_clang_cl_plan && emitted_clang_cl_plan->cacheable);
+    assert(!has_diagnostic_code(
+        emitted_clang_cl_diagnostics, "FSIM-SC-C012"));
+    write_text(
+        clang_cl_dependency_header,
+        "#define FSIM_CLANG_CL_DEPENDENCY_VALUE 59\n");
+    const auto edited_clang_cl_plan = fsim::systemc::plan_plugin_compile(
+        emitted_clang_cl_request, emitted_clang_cl_diagnostics);
+    assert(edited_clang_cl_plan && edited_clang_cl_plan->cacheable);
+    assert(
+        edited_clang_cl_plan->cache_key
+        != emitted_clang_cl_plan->cache_key);
 #endif
 
     // A sibling source directory is not an include search root. Finding this

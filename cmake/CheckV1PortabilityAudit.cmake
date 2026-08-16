@@ -116,7 +116,7 @@ foreach(FSIM_CONTRACT IN ITEMS
     "fsim currently supports only Windows and Linux x86-64"
     "CMAKE_SIZEOF_VOID_P EQUAL 8"
     "^(x86_64|amd64|x64)$"
-    "/STACK:33554432")
+    "/STACK:134217728")
   string(FIND "${FSIM_ROOT_CMAKE_CONTENTS}" "${FSIM_CONTRACT}" FSIM_CONTRACT_INDEX)
   if(FSIM_CONTRACT_INDEX EQUAL -1)
     message(FATAL_ERROR

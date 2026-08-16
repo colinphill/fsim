@@ -415,6 +415,13 @@ macro(fsim_systemc_add_official_runtime archive work_root)
   set(FSIM_SYSTEMC_PARENT_MSVC "${MSVC}")
   if(WIN32 AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
     set(MSVC TRUE)
+    # The upstream Fiber coroutine backend enters invalid scheduler state when
+    # SystemC is compiled by clang-cl. The upstream std::thread backend is the
+    # supported Windows alternative and preserves the same SystemC semantics.
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+      set(ENABLE_STD_THREADS ON CACHE BOOL
+          "Use standard-library threads for clang-cl SystemC coroutines" FORCE)
+    endif()
   endif()
   add_subdirectory(
     "${FSIM_SYSTEMC_OFFICIAL_SOURCE_DIR}"

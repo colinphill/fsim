@@ -91,6 +91,7 @@ fsim_require_tokens(cmake/FsimSystemCAccellera.cmake
   "cannot apply the governed SystemC process teardown fix"
   "CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL \"MSVC\""
   "set(MSVC TRUE)"
+  "set(ENABLE_STD_THREADS ON CACHE BOOL"
   "set(MSVC \"\${FSIM_SYSTEMC_PARENT_MSVC}\")"
   "TARGET \"\${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}\" APPEND PROPERTY"
   "INTERFACE_SYSTEM_INCLUDE_DIRECTORIES"
@@ -98,6 +99,18 @@ fsim_require_tokens(cmake/FsimSystemCAccellera.cmake
   "cannot apply the governed SystemC clang-cl template fix"
   "\"\${target}\" PRIVATE \"/FI\${patched_common_header}\" /W0"
   "target_compile_options(systemc PRIVATE /W0)")
+fsim_require_tokens(src/systemc/incremental_compiler.cpp
+  "is_clang_cl(compiler, resolved)"
+  "clang_cl_dependencies"
+  "argv.emplace_back(\"/clang:-MD\")"
+  "argv.emplace_back(\"/clang:-MF\")"
+  "argv.emplace_back(\"/clang:-MT\")")
+fsim_require_tokens(src/systemc/plugin_compiler_dependencies.cpp
+  "is_clang_cl_compiler(compiler_name, resolved_compiler)"
+  "compiler-clangcl-make-v1"
+  "argv.emplace_back(\"/clang:-MD\")"
+  "argv.emplace_back(\"/clang:-MF\")"
+  "argv.emplace_back(\"/clang:-MT\")")
 fsim_require_tokens(.gitattributes
   "third_party/systemc-3.0.2/** -text")
 fsim_require_tokens(cmake/CheckInstalledPublicContract.cmake
@@ -169,7 +182,7 @@ fsim_require_tokens(CMakeLists.txt
   "FSIM_SYSTEMC_INTERNAL_RUNTIME_TARGET"
   "FSIM_SYSTEMC_DEFAULT_DEFINES"
   "TARGET_LINKER_FILE:\${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}"
-  "/STACK:33554432"
+  "/STACK:134217728"
   "WINDOWS_EXPORT_ALL_SYMBOLS ON")
 foreach(path IN ITEMS
     include/fsim/systemc.hpp
