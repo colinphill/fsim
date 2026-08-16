@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 // FSIM-CONFORMANCE CF-SC-ABI-001 source=SRC-SYSTEMC expectation=accept
-_Static_assert(FSIM_SYSTEMC_ABI_VERSION == 3u, "unexpected SystemC ABI");
+_Static_assert(FSIM_SYSTEMC_ABI_VERSION == 4u, "unexpected SystemC ABI");
 _Static_assert(
     offsetof(fsim_sc_host_v1, register_process)
         > offsetof(fsim_sc_host_v1, register_port),
@@ -45,6 +45,10 @@ _Static_assert(
 _Static_assert(
     sizeof(fsim_sc_handle_v1) == sizeof(uint64_t),
     "SystemC handles must remain opaque 64-bit values");
+_Static_assert(
+    offsetof(fsim_sc_host_v1, scv_compatibility_identity)
+        > offsetof(fsim_sc_host_v1, current_time_femtoseconds),
+    "SCV producer identity must extend the host ABI append-only");
 
 int main(void)
 {

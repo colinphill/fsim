@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+libdir=${exec_prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+compatibility_schema=fsim-scv-compatibility-v1
+source_sha256=@FSIM_SCV_ARCHIVE_SHA256@
+patch_sha256=@FSIM_SCV_PATCH_MANIFEST_SHA256@
+patched_tree_sha256=@FSIM_SCV_PATCHED_TREE_SHA256@
+adapter_abi=1
+plugin_abi=1
+artifact_schema=1
+cache_schema=1
+
+Name: SCV
+Description: Accellera SystemC Verification Library
+Version: @FSIM_SCV_VERSION@
+Requires: systemc = @FSIM_SYSTEMC_VERSION@
+Libs: -L${libdir} -lscv
+Cflags: -I${includedir}

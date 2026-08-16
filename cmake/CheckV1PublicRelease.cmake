@@ -111,7 +111,7 @@ endforeach()
 
 foreach(FSIM_INVARIANT IN ITEMS
     "#define FSIM_API_VERSION UINT32_C(1)"
-    "#define FSIM_SYSTEMC_ABI_VERSION 3u")
+    "#define FSIM_SYSTEMC_ABI_VERSION 4u")
   string(FIND
     "${FSIM_API_CONTENTS}${FSIM_SYSTEMC_CONTENTS}"
     "${FSIM_INVARIANT}"

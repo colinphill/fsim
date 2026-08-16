@@ -365,6 +365,7 @@ std::string serialize_metadata(const Metadata& metadata) {
         output << key << " = \"" << escape(value) << "\"\n";
       }
     };
+    put("scv_compatibility", native.scv_compatibility);
     put("compiler_fingerprint", native.compiler_fingerprint);
     put("llvm_version", native.llvm_version);
     put("target", native.target);
@@ -592,6 +593,8 @@ std::optional<Metadata> parse_metadata(
         native.artifact = fsim::support::path_from_utf8(*text);
       } else if (key == "checksum") {
         native.checksum = *text;
+      } else if (key == "scv_compatibility") {
+        native.scv_compatibility = *text;
       } else if (key == "compiler_fingerprint") {
         native.compiler_fingerprint = *text;
       } else if (key == "llvm_version") {
@@ -793,11 +796,13 @@ std::optional<Metadata> parse_metadata(
         && !native.cpu.empty();
     const bool systemc = native.kind == "systemc_plugin"
         && native.systemc_abi != 0
+        && !native.scv_compatibility.empty()
         && !native.compiler_fingerprint.empty()
         && native.llvm_version.empty() && native.optimization.empty()
         && native.cache_key.empty();
     const bool llvm = native.kind == "llvm_object"
-        && native.systemc_abi == 0 && native.compiler_fingerprint.empty()
+        && native.systemc_abi == 0 && native.scv_compatibility.empty()
+        && native.compiler_fingerprint.empty()
         && !native.llvm_version.empty() && !native.data_layout.empty()
         && (native.optimization == "O0" || native.optimization == "O2")
         && checksum_spelling(native.cache_key);

@@ -424,6 +424,9 @@ void write_digest_fields(Writer& writer, const DesignMetadata& metadata) {
       writer.string(plugin.input_digest);
       writer.string(plugin.link_digest);
       writer.string(plugin.compiler_fingerprint);
+      if (metadata.format >= 11) {
+        writer.string(plugin.scv_compatibility);
+      }
       writer.string(plugin.metadata_checksum);
       writer.string(plugin.library_checksum);
       writer.sequence(plugin.factories, [&](const auto& factory) {
@@ -647,6 +650,7 @@ bool validate(
         || !checksum_spelling(plugin.input_digest)
         || !checksum_spelling(plugin.link_digest)
         || !checksum_spelling(plugin.compiler_fingerprint)
+        || (metadata.format >= 11 && plugin.scv_compatibility.empty())
         || !safe_relative_path(plugin.directory)
         || !systemc_directories.insert(directory).second
         || !checksum_spelling(plugin.metadata_checksum)
@@ -939,6 +943,9 @@ std::string serialize_design_metadata(const DesignMetadata& metadata) {
       writer.string(plugin.input_digest);
       writer.string(plugin.link_digest);
       writer.string(plugin.compiler_fingerprint);
+      if (metadata.format >= 11) {
+        writer.string(plugin.scv_compatibility);
+      }
       writer.path(plugin.directory);
       writer.string(plugin.metadata_checksum);
       writer.string(plugin.library_checksum);
@@ -984,7 +991,7 @@ std::optional<DesignMetadata> deserialize_design_metadata(
   if (metadata.format != 1 && metadata.format != 2 && metadata.format != 4
       && metadata.format != 5 && metadata.format != 6
       && metadata.format != 7 && metadata.format != 8
-      && metadata.format != 9
+      && metadata.format != 9 && metadata.format != 10
       && metadata.format != kDesignFormatVersion) {
       report(
           diagnostics, kSchemaCode,
@@ -1123,6 +1130,8 @@ std::optional<DesignMetadata> deserialize_design_metadata(
                || !read_string(plugin.input_digest)
                || !read_string(plugin.link_digest)
                || !read_string(plugin.compiler_fingerprint)) return false;
+           if (metadata.format >= 11
+               && !read_string(plugin.scv_compatibility)) return false;
            auto directory = reader.path();
            if (!directory || !read_string(plugin.metadata_checksum)
                || !read_string(plugin.library_checksum)) return false;

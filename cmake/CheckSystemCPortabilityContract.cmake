@@ -200,7 +200,7 @@ if(FSIM_INDEX EQUAL -1)
   message(FATAL_ERROR "SystemC facade lost callback exception containment")
 endif()
 foreach(FSIM_C_EVIDENCE IN ITEMS
-    "FSIM_SYSTEMC_ABI_VERSION == 3u"
+    "FSIM_SYSTEMC_ABI_VERSION == 4u"
     "offsetof(fsim_sc_host_v1, current_time_femtoseconds)"
     "offsetof(fsim_sc_host_v1, wait_for_input_or_native_activity)"
     "host.struct_size = (uint32_t)sizeof(host)"

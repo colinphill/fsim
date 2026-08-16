@@ -53,7 +53,7 @@ fsim::library::Metadata example_metadata()
             "fsim-synopsys-ieee-compat-v2" }
     };
     metadata.native_artifacts = { { "llvm_object", "native/llvm/fixture.fobj", std::string(64, 'd'),
-        1, 0, { }, "22.1.0", "x86_64-test", "e-m:e-p:64:64", "generic",
+        1, 0, { }, { }, "22.1.0", "x86_64-test", "e-m:e-p:64:64", "generic",
         "+sse2", "O2", std::string(64, 'e') } };
     return metadata;
 }
@@ -67,7 +67,7 @@ int main()
     const auto expected = example_metadata();
     const auto serialized = fsim::library::serialize_metadata(expected);
     assert(serialized.starts_with(
-        "format = 4\nlibrary = \"vendor\"\nproducer = \"fsim 0.2.0-dev\"\n"));
+        "format = 5\nlibrary = \"vendor\"\nproducer = \"fsim 0.2.0-dev\"\n"));
     assert(serialized.find("trace_archive = \"\"") != std::string::npos);
     assert(serialized.find("[[dependency]]") != std::string::npos);
     assert(serialized.find("[[vhdl_package_dependency]]")
@@ -993,8 +993,8 @@ endprimitive
 
     auto incompatible_text = serialized;
     incompatible_text.replace(
-        incompatible_text.find("format = 4"),
-        std::string { "format = 4" }.size(), "format = 99");
+        incompatible_text.find("format = 5"),
+        std::string { "format = 5" }.size(), "format = 99");
     fsim::diagnostic::Engine schema_diagnostics;
     assert(!fsim::library::parse_metadata(
         incompatible_text, "future.toml", schema_diagnostics));

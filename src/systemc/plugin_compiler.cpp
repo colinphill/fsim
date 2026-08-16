@@ -3,6 +3,7 @@
 #include "producer_fingerprint.hpp"
 
 #include "fsim/systemc/accellera.hpp"
+#include "fsim/systemc/scv.hpp"
 
 #include <algorithm>
 #include <mutex>
@@ -52,6 +53,22 @@ namespace {
 #endif
     }
 
+    std::filesystem::path scv_runtime_library()
+    {
+#if defined(FSIM_SCV_LIBRARY_PATH)
+        auto result = std::filesystem::path { FSIM_SCV_LIBRARY_PATH };
+#if defined(FSIM_INSTALLED_SCV_LIBRARY_PATH)
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(result, error)) {
+            result = FSIM_INSTALLED_SCV_LIBRARY_PATH;
+        }
+#endif
+        return result;
+#else
+        return { };
+#endif
+    }
+
     void add_governed_runtime_library(project::SystemCSection& settings)
     {
         const auto runtime = accellera_runtime_library();
@@ -61,6 +78,10 @@ namespace {
         const auto official_runtime = official_runtime_library();
         if (!official_runtime.empty()) {
             settings.libraries.push_back(official_runtime.string());
+        }
+        const auto scv_runtime = scv_runtime_library();
+        if (!scv_runtime.empty()) {
+            settings.libraries.push_back(scv_runtime.string());
         }
     }
 
@@ -135,6 +156,17 @@ std::optional<std::string> plugin_host_fingerprint(
         std::next(effective_settings.include_directories.begin()),
         upstream_header_directory);
 #endif
+#if defined(FSIM_SCV_HEADER_PATH)
+    auto scv_header_directory = std::filesystem::path { FSIM_SCV_HEADER_PATH };
+#if defined(FSIM_INSTALLED_SCV_HEADER_PATH)
+    std::error_code scv_header_error;
+    if (!std::filesystem::is_directory(
+            scv_header_directory, scv_header_error)) {
+        scv_header_directory = FSIM_INSTALLED_SCV_HEADER_PATH;
+    }
+#endif
+    effective_settings.include_directories.push_back(scv_header_directory);
+#endif
     add_plugin_export_library(effective_settings);
     add_governed_runtime_library(effective_settings);
     PluginCompileRequest request;
@@ -167,6 +199,7 @@ std::optional<std::string> plugin_host_fingerprint(
     builder.add(
         "accellera-compatibility",
         fsim_systemc_accellera_compatibility_identity());
+    builder.add("scv-compatibility", fsim_scv_compatibility_identity());
     builder.add("toolchain", to_string(toolchain));
     if (toolchain == HostToolchain::msvc) {
         builder.add("msvc-runtime", msvc_runtime_option());
@@ -243,6 +276,17 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
         std::next(effective_settings.include_directories.begin()),
         upstream_header_directory);
 #endif
+#if defined(FSIM_SCV_HEADER_PATH)
+    auto scv_header_directory = std::filesystem::path { FSIM_SCV_HEADER_PATH };
+#if defined(FSIM_INSTALLED_SCV_HEADER_PATH)
+    std::error_code scv_header_error;
+    if (!std::filesystem::is_directory(
+            scv_header_directory, scv_header_error)) {
+        scv_header_directory = FSIM_INSTALLED_SCV_HEADER_PATH;
+    }
+#endif
+    effective_settings.include_directories.push_back(scv_header_directory);
+#endif
     add_plugin_export_library(effective_settings);
     add_governed_runtime_library(effective_settings);
     std::error_code error;
@@ -317,6 +361,7 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
     key_builder.add(
         "accellera-compatibility",
         fsim_systemc_accellera_compatibility_identity());
+    key_builder.add("scv-compatibility", fsim_scv_compatibility_identity());
     key_builder.add("toolchain", to_string(toolchain));
     if (toolchain == HostToolchain::msvc) {
         key_builder.add("msvc-runtime", msvc_runtime_option());
@@ -358,6 +403,7 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
     host_builder.add(
         "accellera-compatibility",
         fsim_systemc_accellera_compatibility_identity());
+    host_builder.add("scv-compatibility", fsim_scv_compatibility_identity());
     host_builder.add("toolchain", to_string(toolchain));
     if (toolchain == HostToolchain::msvc) {
         host_builder.add("msvc-runtime", msvc_runtime_option());

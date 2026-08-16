@@ -22,6 +22,7 @@
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc/incremental.hpp"
+#include "fsim/systemc/scv.hpp"
 
 #if defined(__has_feature)
 #if __has_feature(address_sanitizer)
@@ -573,6 +574,48 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     assert(systemc_design_metadata->systemc_plugins.size() == 1);
     assert(systemc_design_metadata->systemc_plugins.front().logical_library == "vendor");
     assert(systemc_design_metadata->systemc_plugins.front().factories == std::vector<std::string> { "first" });
+    assert(systemc_design_metadata->systemc_plugins.front().scv_compatibility
+        == fsim_scv_compatibility_identity());
+
+    const auto relocated_systemc_design = directory
+        / support::path_from_utf8("relocated-\xc2\xb5.fsimdesign");
+    copy_tree(systemc_design, relocated_systemc_design);
+    diagnostic::Engine relocated_systemc_diagnostics;
+    const auto relocated_systemc = app::load_design_artifact(
+        relocated_systemc_design, relocated_systemc_diagnostics);
+    assert(relocated_systemc && !relocated_systemc_diagnostics.has_error());
+    assert(relocated_systemc->systemc_plugins.size() == 1);
+
+    const auto stale_scv_design = directory / "stale-scv.fsimdesign";
+    copy_tree(systemc_design, stale_scv_design);
+    make_tree_writable(stale_scv_design);
+    auto stale_scv_metadata = *systemc_design_metadata;
+    auto& stale_scv_identity =
+        stale_scv_metadata.systemc_plugins.front().scv_compatibility;
+    const auto stdlib = stale_scv_identity.find("|stdlib=");
+    assert(stdlib != std::string::npos);
+    stale_scv_identity[stdlib + 8U] =
+        stale_scv_identity[stdlib + 8U] == 'x' ? 'y' : 'x';
+    stale_scv_metadata.design_digest =
+        artifact::compute_design_digest(stale_scv_metadata);
+    {
+        const auto bytes = artifact::serialize_design_metadata(stale_scv_metadata);
+        std::ofstream design_metadata_output(
+            stale_scv_design / artifact::kDesignMetadataFilename,
+            std::ios::binary | std::ios::trunc);
+        design_metadata_output.write(
+            bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        assert(design_metadata_output);
+    }
+    diagnostic::Engine stale_scv_diagnostics;
+    assert(!app::load_design_artifact(
+        stale_scv_design, stale_scv_diagnostics));
+    assert(std::ranges::any_of(
+        stale_scv_diagnostics.diagnostics(), [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SCV-A001"
+                && diagnostic.message.find("standard library mismatch")
+                    != std::string::npos;
+        }));
 
     const auto stale_systemc_design = directory / "stale-incremental.fsimdesign";
     copy_tree(systemc_design, stale_systemc_design);

@@ -36,6 +36,7 @@ include(cmake/FsimDependencies.cmake)
 include(cmake/FsimTcl.cmake)
 include(cmake/FsimUvmSources.cmake)
 include(cmake/FsimSystemCAccellera.cmake)
+include(cmake/FsimScv.cmake)
 
 option(FSIM_BUILD_TESTS "Build fsim's unit and integration tests" ${BUILD_TESTING})
 option(FSIM_BUILD_FUZZERS "Build Clang/libFuzzer targets" OFF)
@@ -97,6 +98,19 @@ set(
 fsim_systemc_add_official_runtime(
   "${FSIM_SYSTEMC_3_0_2_ARCHIVE}" "${FSIM_SYSTEMC_WORK_ROOT}")
 
+set(
+  FSIM_SCV_2_0_1_ARCHIVE
+  "${PROJECT_SOURCE_DIR}/third_party/scv-2.0.1/scv-2.0.1.tar.gz"
+  CACHE FILEPATH
+  "Offline official Accellera SCV 2.0.1 source archive"
+)
+fsim_scv_validate_archive("${FSIM_SCV_2_0_1_ARCHIVE}")
+set(
+  FSIM_SCV_WORK_ROOT
+  "${CMAKE_BINARY_DIR}/_deps/fsim_scv_2_0_1"
+  CACHE PATH
+  "Isolated extraction and manifest root for official SCV 2.0.1"
+)
 # The Windows SystemC package deliberately exposes SystemC::systemc as a
 # static convenience launcher containing main(). fsim and its libraries own
 # their entrypoints, so they must consume only the shared core/import target.
@@ -107,6 +121,9 @@ if(WIN32)
 else()
   set(FSIM_SYSTEMC_INTERNAL_RUNTIME_TARGET SystemC::systemc)
 endif()
+
+fsim_scv_add_official_runtime(
+  "${FSIM_SCV_2_0_1_ARCHIVE}" "${FSIM_SCV_WORK_ROOT}")
 
 add_library(
   fsim_systemc_accellera_runtime
@@ -634,7 +651,8 @@ add_library(
       src/runtime/fst_reader.cpp
       src/runtime/fst_value_encoder.cpp
       src/runtime/fst_writer.cpp
-      src/runtime/trace_model.cpp
+    src/runtime/trace_model.cpp
+    src/runtime/transaction_record.cpp
     src/runtime/vcd_writer.cpp
 )
 add_library(fsim::runtime ALIAS fsim_runtime)
@@ -787,6 +805,7 @@ fsim_configure_library(fsim_platform)
 target_link_libraries(fsim_platform PRIVATE ${CMAKE_DL_LIBS})
 target_link_libraries(
   fsim_runtime
+  PUBLIC fsim_diagnostic
   PRIVATE fsim_boost_pfr_headers fsim_platform fsim_support
 )
 
@@ -816,7 +835,9 @@ add_library(
 )
 fsim_configure_library(fsim_systemc_plugin_exports)
 target_link_libraries(
-  fsim_systemc_plugin_exports PUBLIC "${FSIM_SYSTEMC_INTERNAL_RUNTIME_TARGET}"
+  fsim_systemc_plugin_exports
+  PUBLIC "${FSIM_SYSTEMC_INTERNAL_RUNTIME_TARGET}"
+  PRIVATE scv
 )
 target_link_libraries(
   fsim_systemc_headers
@@ -846,6 +867,15 @@ add_library(
     src/systemc/plugin_compiler_dependencies.cpp
     src/systemc/plugin_compiler_process.cpp
     src/systemc/plugin_loader.cpp
+    src/systemc/scv_artifact.cpp
+    src/systemc/scv_backend_protocol.cpp
+    src/systemc/scv_backend_transport.cpp
+    src/systemc/scv_constraints.cpp
+    src/systemc/scv_extensions.cpp
+    src/systemc/scv_random.cpp
+    src/systemc/scv_recording.cpp
+    src/systemc/scv_resources.cpp
+    src/systemc/scv_smart_ptr.cpp
 )
 add_library(fsim::systemc ALIAS fsim_systemc)
 fsim_configure_library(fsim_systemc)
@@ -893,6 +923,8 @@ target_compile_definitions(
     FSIM_SYSTEMC_INSTALLED_HEADER_PATH="${CMAKE_INSTALL_FULL_INCLUDEDIR}"
     FSIM_SYSTEMC_UPSTREAM_HEADER_PATH="${FSIM_SYSTEMC_OFFICIAL_SOURCE_DIR}/src"
     FSIM_SYSTEMC_INSTALLED_UPSTREAM_HEADER_PATH="${CMAKE_INSTALL_FULL_INCLUDEDIR}"
+    FSIM_SCV_HEADER_PATH="${FSIM_SCV_BUILD_SOURCE_DIR}/src"
+    FSIM_INSTALLED_SCV_HEADER_PATH="${CMAKE_INSTALL_FULL_INCLUDEDIR}"
     FSIM_SYSTEMC_DEFAULT_COMPILER="${CMAKE_CXX_COMPILER}"
     FSIM_SYSTEMC_DEFAULT_COMPILE_OPTIONS="${FSIM_SYSTEMC_DEFAULT_COMPILE_OPTIONS_ENCODED}"
     FSIM_SYSTEMC_DEFAULT_DEFINES="${FSIM_SYSTEMC_DEFAULT_DEFINES_ENCODED}"
@@ -902,6 +934,8 @@ target_compile_definitions(
     FSIM_SYSTEMC_INSTALLED_ACCELERA_LIBRARY_PATH="${FSIM_SYSTEMC_INSTALLED_ACCELERA_LINK_LIBRARY}"
     FSIM_SYSTEMC_OFFICIAL_LIBRARY_PATH="$<TARGET_LINKER_FILE:${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}>"
     FSIM_SYSTEMC_INSTALLED_OFFICIAL_LIBRARY_PATH="${FSIM_SYSTEMC_INSTALLED_OFFICIAL_LINK_LIBRARY}"
+    FSIM_SCV_LIBRARY_PATH="$<TARGET_LINKER_FILE:scv>"
+    FSIM_INSTALLED_SCV_LIBRARY_PATH="${CMAKE_INSTALL_FULL_LIBDIR}/$<TARGET_LINKER_FILE_NAME:scv>"
     FSIM_SYSTEMC_RUNTIME_IDENTITY="${FSIM_SYSTEMC_RUNTIME_IDENTITY}"
 )
 target_link_libraries(
@@ -913,6 +947,7 @@ target_link_libraries(
     fsim_diagnostic
     fsim_object_cache
     fsim_runtime
+    scv
 )
 add_library(fsim_api SHARED src/api/api.cpp src/api/api_session.cpp)
 add_library(fsim::api ALIAS fsim_api)
@@ -1088,6 +1123,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_trace_control.cpp
       src/app/application_trace_hierarchy.cpp
       src/app/application_trace_observation.cpp
+      src/app/application_scv_trace.cpp
       src/app/application_systemc_trace.cpp
       src/app/application_run.cpp
       src/app/application_semantic.cpp

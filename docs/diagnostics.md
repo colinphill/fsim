@@ -2569,6 +2569,38 @@ one stable diagnostic from the five-code FST reader family.
 
 | Code | Severity | Meaning |
 |---|---|---|
+| `FSIM-SCV-C001` | error | An SCV producer identity is missing, malformed, trailing, or differs in SCV release/header/source/patch/tree, SystemC runtime/source/bridge, TLM, compiler, standard library, adapter ABI, plug-in ABI, artifact schema, or cache schema. |
+| `FSIM-SCV-A001` | error | A mapped, incremental, or embedded design artifact carries a missing, oversized, malformed, stale, or incompatible SCV producer identity; the native payload is rejected before it is opened or published. |
+| `FSIM-SCV-B001` | error | An SCV backend island, hierarchy, object, stream, generator, sequence, or transaction identity is empty, unbounded, non-canonical, or lacks its required parent. |
+| `FSIM-SCV-B002` | error | An SCV backend operation or receipt has an unsupported schema/enum/flag, invalid direction/status/correlation, missing or extraneous stable identities, invalid simulation coordinates, bad magic, or malformed framing. |
+| `FSIM-SCV-B003` | error | SCV backend limits, fixed header, reserved bytes, message size, or bounded opaque payload are inconsistent or exceed the configured resource budget. |
+| `FSIM-SCV-R001` | error | An SCV random seed path has a missing or malformed stable island, object, or canonical thread identity. |
+| `FSIM-SCV-R002` | error | An SCV random distribution, bag, bound, exclusion, weight, or replay membership is invalid. |
+| `FSIM-SCV-R003` | error | An SCV random identity, domain, draw, cycle, or replay resource limit is inconsistent or exhausted. |
+| `FSIM-SCV-P001` | error | A native SCV smart-pointer kind, name, object identity, or opaque handle is invalid or stale. |
+| `FSIM-SCV-P002` | error | A native SCV smart-pointer assignment or extension operation has an incompatible kind, path, index, or value type. |
+| `FSIM-SCV-P003` | error | A native SCV smart-pointer handle, extension-depth, or generation resource limit is inconsistent or exhausted. |
+| `FSIM-SCV-Q001` | error | An SCV constraint variable, target, domain, term, clause, distribution, solve order, arithmetic bound, solution, or publication is malformed or incompatible. |
+| `FSIM-SCV-Q002` | error | A bounded SCV constraint problem is contradictory or otherwise unsatisfiable; no native value is changed. |
+| `FSIM-SCV-Q003` | error | SCV constraint variable, clause, domain, search, or elapsed-work limits are inconsistent or exhausted; no native value is changed. |
+| `FSIM-SCV-X001` | error | An SCV extension snapshot owner or hierarchy became invalid or stale before a complete snapshot could be published. |
+| `FSIM-SCV-X002` | error | An SCV extension reports a malformed field, array-element, scalar-child, type, range, or value relationship. |
+| `FSIM-SCV-X003` | error | SCV extension node, hierarchy-depth, value-width, plane-word, or string limits are inconsistent or exceeded; no partial snapshot is published. |
+| `FSIM-SCV-T001` | error | A language-neutral transaction record has bad magic, an unsupported schema, or a missing stable stream, generator, or transaction identity. |
+| `FSIM-SCV-T002` | error | A transaction record has malformed timing, typed-value shape, ordering, relation, correlated-object, reserved, framing, truncation, or canonical-high-bit data. |
+| `FSIM-SCV-T003` | error | Transaction record message, collection, string, value-width, or plane-word limits are inconsistent or exceeded. |
+| `FSIM-SCV-N001` | error | A native SCV database, stream, generator, transaction handle, stable identity, name, relation target, coordinate, or lifecycle state is invalid or stale. |
+| `FSIM-SCV-N002` | error | A native SCV begin, end, attribute, or relation callback is missing, mismatched, unsupported, or produces an invalid common transaction record. |
+| `FSIM-SCV-N003` | error | Native SCV stream, generator, handle, completed-record, attribute, relation, name, or record limits are inconsistent or exhausted. |
+| `FSIM-SCV-L001` | error | SCV trace selection, observer, submission, close, or callback-reentry state carries an invalid identity, coordinate, limit, token, or lifecycle transition. |
+| `FSIM-SCV-L002` | error | SCV trace correlation has duplicate or regressing transactions, invalid SystemC signal/port or TLM identity/time, invalid VCD/FST association, or a malformed resulting common record. |
+| `FSIM-SCV-L003` | error | SCV trace selection, observer, correlation, waveform, sequence, or pending-record limits are exhausted; bounded backpressure rejects the submission without changing the queue. |
+| `FSIM-SCV-W001` | error | An SCV transport envelope has bad magic/schema/framing, invalid island/sequence identity, an invalid common-record payload, or exceeds its message budget. |
+| `FSIM-SCV-W002` | error | An SCV direct/worker-loopback transport has invalid kind/ownership, receives a foreign island, duplicate or regressing island sequence, or invalid/duplicate merge input. |
+| `FSIM-SCV-W003` | error | SCV transport message, queue, byte, record, or merge limits are inconsistent/exhausted, or a disconnected/crashed transport cannot accept work; no queue state changes. |
+| `FSIM-SCV-E001` | error | An SCV resource probe has an invalid island, empty workload, or out-of-range failure injection point. |
+| `FSIM-SCV-E002` | error | An SCV resource probe could not contain or recover from an injected producer, consumer, recording, transport, solver, or ownership failure. |
+| `FSIM-SCV-E003` | error | An SCV resource-probe transaction, attribute, solver, queue, message, byte, or memory-accounting limit is inconsistent, exhausted, or overflowed. |
 | `FSIM-SC-A001` | error | A validated SystemC plug-in registered no module factory. |
 | `FSIM-SC-A002` | error | A requested SystemC hierarchy has no compiled plug-in or registered factory. |
 | `FSIM-SC-A004` | error | A typed SystemC factory failed during module construction or declared invalid HDL-proxy contents, bindings, or construction actuals. |

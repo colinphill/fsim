@@ -1,0 +1,11 @@
+--- a/src/scv/scv_bag.h
++++ b/src/scv/scv_bag.h
+@@ -207,7 +207,7 @@ private:
+   mutable bool _rlock;
+   mutable bool _randomOwner;
+   unsigned long _seed;
+-  scv_random* _randomP;
++  mutable scv_random* _randomP;
+ 
+ inline  void incPeek() const {
+   ++_lastPeek;

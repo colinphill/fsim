@@ -272,6 +272,8 @@ int main(const int argc, char** argv)
     auto first_metadata = fsim::systemc::load_incremental_object_metadata(
         first_request.output, diagnostics);
     assert(first_metadata.has_value());
+    assert(first_metadata->scv_compatibility
+        == fsim_scv_compatibility_identity());
     assert(first_metadata->inputs.size() > 1);
     assert(first_metadata->compilation_digest
         == fsim::systemc::compute_incremental_object_digest(*first_metadata));
@@ -279,6 +281,31 @@ int main(const int argc, char** argv)
     auto first_decoded = fsim::systemc::deserialize_incremental_object_metadata(
         first_round_trip, "first-round-trip", diagnostics);
     assert(first_decoded == first_metadata);
+
+    const auto incompatible_scv_object = root / "incompatible-scv.fsimscobj";
+    copy_tree(first_request.output, incompatible_scv_object);
+    make_writable(incompatible_scv_object);
+    auto incompatible_scv_metadata = *first_metadata;
+    const auto scv_version =
+        incompatible_scv_metadata.scv_compatibility.find("|scv=2.0.1|");
+    assert(scv_version != std::string::npos);
+    incompatible_scv_metadata.scv_compatibility.replace(
+        scv_version, 11, "|scv=2.0.2|");
+    incompatible_scv_metadata.input_digest =
+        fsim::systemc::compute_incremental_object_input_digest(
+            incompatible_scv_metadata);
+    incompatible_scv_metadata.compilation_digest =
+        fsim::systemc::compute_incremental_object_digest(
+            incompatible_scv_metadata);
+    write_file(
+        incompatible_scv_object
+            / fsim::systemc::kIncrementalObjectMetadataFilename,
+        fsim::systemc::serialize_incremental_object_metadata(
+            incompatible_scv_metadata));
+    fsim::diagnostic::Engine incompatible_scv_diagnostics;
+    assert(!fsim::systemc::load_incremental_object_metadata(
+        incompatible_scv_object, incompatible_scv_diagnostics));
+    assert(incompatible_scv_diagnostics.has_error());
 
     fsim::diagnostic::Engine overwrite_diagnostics;
     assert(!fsim::systemc::compile_incremental_object(
@@ -354,6 +381,8 @@ int main(const int argc, char** argv)
     auto plugin_metadata = fsim::systemc::load_incremental_plugin_metadata(
         link_request.output, diagnostics);
     assert(plugin_metadata.has_value());
+    assert(plugin_metadata->scv_compatibility
+        == fsim_scv_compatibility_identity());
     assert(plugin_metadata->object_digests.size() == 2);
     assert(plugin_metadata->factories.size() == 2);
     assert(plugin_metadata->factories[0].name == "first");

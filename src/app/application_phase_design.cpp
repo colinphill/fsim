@@ -9,6 +9,7 @@
 #include "fsim/artifact/object.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/systemc/scv_artifact.hpp"
 #include "fsim/version.hpp"
 
 #include <fstream>
@@ -136,6 +137,11 @@ namespace {
         RehydratedSystemC result;
         std::map<std::string, std::shared_ptr<systemc::HierarchyRegistry>> by_library;
         for (const auto& record : metadata.systemc_plugins) {
+            if (!systemc::validate_scv_artifact_compatibility(
+                    record.scv_compatibility,
+                    "embedded .fsimdesign SystemC plug-in", diagnostics)) {
+                return std::nullopt;
+            }
             const auto plugin_directory = directory / record.directory;
             auto plugin_metadata = systemc::load_incremental_plugin_metadata(
                 plugin_directory, diagnostics);
@@ -152,6 +158,8 @@ namespace {
                 || plugin_metadata->link_digest != record.link_digest
                 || plugin_metadata->compiler_fingerprint
                     != record.compiler_fingerprint
+                || plugin_metadata->scv_compatibility
+                    != record.scv_compatibility
                 || plugin_metadata->library_checksum != record.library_checksum
                 || support::Sha256::hex(support::Sha256::digest(metadata_bytes))
                     != record.metadata_checksum
@@ -617,6 +625,7 @@ bool publish_design_artifact(
         record.input_digest = plugin->input_digest;
         record.link_digest = plugin->link_digest;
         record.compiler_fingerprint = plugin->compiler_fingerprint;
+        record.scv_compatibility = plugin->scv_compatibility;
         record.directory = embedded;
         record.metadata_checksum = support::Sha256::hex(
             support::Sha256::digest(metadata_bytes));

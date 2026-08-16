@@ -1,0 +1,37 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "fsim-scv-2.0.1-source",
+  "documentNamespace": "https://fsim.dev/spdx/scv-2.0.1/7bd1c4037f3c108d02f45cae003d112efdb788d469cb029fada247d330ca4881",
+  "creationInfo": {
+    "created": "2026-08-16T00:00:00Z",
+    "creators": ["Tool: fsim SCV provenance harness"]
+  },
+  "packages": [
+    {
+      "name": "SCV",
+      "SPDXID": "SPDXRef-Package-SCV-2.0.1",
+      "versionInfo": "2.0.1",
+      "supplier": "Organization: Accellera Systems Initiative Inc.",
+      "downloadLocation": "https://www.accellera.org/images/downloads/standards/systemc/scv-2.0.1.tar.gz",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "7bd1c4037f3c108d02f45cae003d112efdb788d469cb029fada247d330ca4881"
+        }
+      ],
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/scv@2.0.1?download_url=https%3A%2F%2Fwww.accellera.org%2Fimages%2Fdownloads%2Fstandards%2Fsystemc%2Fscv-2.0.1.tar.gz"
+        }
+      ]
+    }
+  ]
+}

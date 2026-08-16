@@ -5,3 +5,7 @@ third_party/ieee-1076-2019/** -text
 # files as well as the archive. Do not let checkout line-ending policy rewrite
 # those reviewed bytes on Windows.
 third_party/systemc-3.0.2/** -text
+
+# The governed SCV bundle carries pinned byte digests for its provenance
+# files as well as the archive. Preserve those bytes on every platform.
+third_party/scv-2.0.1/** -text whitespace=-trailing-space

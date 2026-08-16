@@ -4,6 +4,7 @@
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/project/project.hpp"
 #include "fsim/systemc/hierarchy.hpp"
+#include "fsim/systemc/scv.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -16,8 +17,8 @@
 
 namespace fsim::systemc {
 
-inline constexpr std::uint32_t kIncrementalObjectFormatVersion = 1;
-inline constexpr std::uint32_t kIncrementalPluginFormatVersion = 1;
+inline constexpr std::uint32_t kIncrementalObjectFormatVersion = 2;
+inline constexpr std::uint32_t kIncrementalPluginFormatVersion = 2;
 inline constexpr std::string_view kIncrementalObjectMetadataFilename =
     "fsim-systemc-object.bin";
 inline constexpr std::string_view kIncrementalPluginMetadataFilename =
@@ -35,6 +36,7 @@ struct IncrementalObjectMetadata {
   std::uint32_t format{kIncrementalObjectFormatVersion};
   std::uint32_t runtime_abi{};
   std::uint32_t systemc_abi{};
+  std::string scv_compatibility;
   std::string producer;
   std::string toolchain;
   std::string target;
@@ -77,6 +79,7 @@ struct IncrementalPluginMetadata {
   std::uint32_t format{kIncrementalPluginFormatVersion};
   std::uint32_t runtime_abi{};
   std::uint32_t systemc_abi{};
+  std::string scv_compatibility;
   std::string producer;
   std::string logical_library;
   std::string toolchain;

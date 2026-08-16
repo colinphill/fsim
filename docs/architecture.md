@@ -886,6 +886,17 @@ inside an island unless an explicit bridge serializes it. Post-binding signal,
 port, export and alias inventories feed debugger, VCD and FST observation at
 quiescent safe points.
 
+The official SCV 2.0.1 shared runtime is layered on that same island and
+SystemC/TLM ownership. Stable adapter IDs replace native pointers at every fsim
+boundary. Native randomization, smart pointers, constraints, extensions,
+transaction databases, streams, generators and callbacks remain in-island;
+pointer-free transaction records retain exact time/delta/region, typed
+attributes, relations and correlated SystemC/TLM objects. Direct and loopback
+record transports use one canonical codec, deterministic ordering and bounded
+retryable backpressure. Producer identity covers the pinned SCV archive,
+governed patch, compiler/standard library, SystemC/TLM runtime and every
+adapter, plug-in, artifact and cache schema.
+
 This protocol is designed for a later worker process without changing the
 SystemC/TLM or artifact ABI. The v2 runtime does not automatically partition a
 design, launch one kernel per worker, or run a conservative parallel scheduler;

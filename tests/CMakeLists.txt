@@ -1002,6 +1002,33 @@ add_test(
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckSystemCAccelleraInventory.cmake"
 )
 add_test(
+  NAME fsim.scv-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckScvInventory.cmake"
+)
+add_test(
+  NAME fsim.scv-portability-contract
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckScvPortabilityContract.cmake"
+)
+add_test(
+  NAME fsim.scv-closure-contract
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/tests/scv/scv_closure_test.cmake"
+)
+set_tests_properties(
+  fsim.scv-closure-contract
+  PROPERTIES
+    TIMEOUT 1200
+    LABELS "scv;systemc;closure;documentation;inventory;resources;positive;negative;fast"
+)
+add_test(
   NAME fsim.systemc-accellera-portability-contract
   COMMAND
     "${CMAKE_COMMAND}"
@@ -1015,6 +1042,51 @@ add_test(
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
     -P "${PROJECT_SOURCE_DIR}/tests/systemc/systemc_upstream_provenance_test.cmake"
+)
+add_test(
+  NAME fsim.scv-upstream-provenance
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/tests/scv/scv_upstream_provenance_test.cmake"
+)
+add_test(
+  NAME fsim.scv-patch-governance
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/tests/scv/scv_patch_governance_test.cmake"
+)
+if(WIN32)
+  set(FSIM_INSTALLED_SCV_RUNTIME_DIR "${CMAKE_INSTALL_BINDIR}")
+else()
+  set(FSIM_INSTALLED_SCV_RUNTIME_DIR "${CMAKE_INSTALL_LIBDIR}")
+endif()
+add_test(
+  NAME fsim.scv.installed_consumer
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CONFIG=$<CONFIG>"
+    "-DFSIM_BINDIR=${CMAKE_INSTALL_BINDIR}"
+    "-DFSIM_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+    "-DFSIM_INCLUDEDIR=${CMAKE_INSTALL_INCLUDEDIR}"
+    "-DFSIM_SCV_LIBRARY_NAME=$<TARGET_FILE_NAME:scv>"
+    "-DFSIM_SCV_RUNTIME_DIR=${FSIM_INSTALLED_SCV_RUNTIME_DIR}"
+    "-DFSIM_SYSTEMC_LIBRARY_NAME=$<TARGET_FILE_NAME:${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}>"
+    "-DFSIM_SYSTEMC_RUNTIME_DIR=${FSIM_INSTALLED_SCV_RUNTIME_DIR}"
+    "-DFSIM_CMAKE_GENERATOR=${CMAKE_GENERATOR}"
+    "-DFSIM_CMAKE_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+    "-DFSIM_CMAKE_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+    "-DFSIM_CMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+    "-DFSIM_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+    "-DFSIM_CXX_FLAGS=${CMAKE_CXX_FLAGS}"
+    "-DFSIM_EXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}"
+    "-DFSIM_MSVC_RUNTIME_LIBRARY=${CMAKE_MSVC_RUNTIME_LIBRARY}"
+    -P "${PROJECT_SOURCE_DIR}/tests/scv/scv_installed_consumer_test.cmake"
 )
 add_test(
   NAME fsim.systemc.accellera_closure
@@ -1031,6 +1103,23 @@ set_tests_properties(
   fsim.systemc.accellera_closure
   PROPERTIES
     LABELS "systemc;accellera;tlm;closure;recursive-closure;retained-log;linux;windows"
+    TIMEOUT 7200
+)
+add_test(
+  NAME fsim.scv.closure
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/scv-closure-evidence"
+    -DFSIM_DEDUPLICATED_CTEST=ON
+    -P "${PROJECT_SOURCE_DIR}/cmake/RunScvClosure.cmake"
+)
+set_tests_properties(
+  fsim.scv.closure
+  PROPERTIES
+    LABELS "scv;systemc;tlm;closure;recursive-closure;retained-log;linux;windows"
     TIMEOUT 7200
 )
 add_test(
@@ -1469,12 +1558,34 @@ set_tests_properties(
   PROPERTIES LABELS "fast;systemc;accellera;tlm;backend;inventory;positive;negative;protocol;phase;artifact;diagnostics;resources;cmake"
 )
 set_tests_properties(
+  fsim.scv-inventory
+  PROPERTIES LABELS "fast;systemc;scv;tlm;backend;inventory;positive;negative;protocol;phase;artifact;diagnostics;resources;cmake"
+)
+set_tests_properties(
+  fsim.scv-portability-contract
+  PROPERTIES LABELS "fast;systemc;scv;compatibility;cache;relocation;positive;negative;phase;artifact;diagnostics;resources;cmake"
+)
+set_tests_properties(
   fsim.systemc-accellera-portability-contract
   PROPERTIES LABELS "fast;systemc;accellera;compatibility;abi;cache;install;positive;negative;phase;artifact;diagnostics;resources;cmake"
 )
 set_tests_properties(
   fsim.systemc-upstream-provenance
   PROPERTIES LABELS "fast;systemc;accellera;upstream;provenance;license;sbom;offline;positive;negative;resources;cmake"
+)
+set_tests_properties(
+  fsim.scv-upstream-provenance
+  PROPERTIES LABELS "fast;systemc;scv;accellera;upstream;provenance;license;sbom;offline;positive;negative;resources;cmake"
+)
+set_tests_properties(
+  fsim.scv-patch-governance
+  PROPERTIES LABELS "fast;systemc;scv;accellera;upstream;compatibility;patch;governance;positive;negative;resources;cmake"
+)
+set_tests_properties(
+  fsim.scv.installed_consumer
+  PROPERTIES
+    LABELS "systemc;scv;accellera;runtime;shared;install;relocation;positive;negative;artifact;cmake"
+    TIMEOUT 1200
 )
 set_tests_properties(
   fsim.application-regression-dedup-contract
@@ -1802,6 +1913,373 @@ set_tests_properties(
   fsim.systemc.shared_runtime
   PROPERTIES LABELS "fast;systemc;accellera;runtime;shared;identity;positive;negative"
 )
+
+add_executable(
+  fsim_scv_shared_runtime_tests
+  scv/scv_shared_runtime_test.cpp
+)
+fsim_configure_test(fsim_scv_shared_runtime_tests)
+target_link_libraries(
+  fsim_scv_shared_runtime_tests
+  PRIVATE SCV::scv
+)
+fsim_link_systemc_launcher(fsim_scv_shared_runtime_tests)
+add_test(
+  NAME fsim.scv.shared_runtime
+  COMMAND fsim_scv_shared_runtime_tests
+)
+set_tests_properties(
+  fsim.scv.shared_runtime
+  PROPERTIES LABELS "fast;systemc;scv;accellera;runtime;shared;patch;positive"
+)
+
+add_executable(
+  fsim_scv_compatibility_tests
+  scv/scv_compatibility_test.cpp
+)
+fsim_configure_test(fsim_scv_compatibility_tests)
+target_link_libraries(
+  fsim_scv_compatibility_tests
+  PRIVATE SCV::scv
+)
+fsim_link_systemc_launcher(fsim_scv_compatibility_tests)
+add_test(
+  NAME fsim.scv.compatibility
+  COMMAND fsim_scv_compatibility_tests
+)
+set_tests_properties(
+  fsim.scv.compatibility
+  PROPERTIES LABELS "fast;systemc;scv;compatibility;abi;cache;artifact;positive;negative"
+)
+
+add_executable(
+  fsim_scv_plugin_compiler_tests
+  scv/scv_plugin_compiler_test.cpp
+)
+fsim_configure_test(fsim_scv_plugin_compiler_tests)
+target_compile_definitions(
+  fsim_scv_plugin_compiler_tests
+  PRIVATE
+    "FSIM_TEST_CXX_COMPILER=\"${CMAKE_CXX_COMPILER}\""
+    "FSIM_TEST_SCV_LIBRARY_PATH=\"$<TARGET_LINKER_FILE:scv>\""
+)
+target_link_libraries(
+  fsim_scv_plugin_compiler_tests
+  PRIVATE fsim_systemc
+)
+add_test(
+  NAME fsim.scv.plugin_compiler
+  COMMAND fsim_scv_plugin_compiler_tests
+)
+set_tests_properties(
+  fsim.scv.plugin_compiler
+  PROPERTIES
+    LABELS "systemc;scv;compiler;plugin;incremental;cache;dependency;shared;positive;negative"
+    TIMEOUT 1200
+)
+
+add_executable(fsim_scv_artifact_tests scv/scv_artifact_test.cpp)
+fsim_configure_test(fsim_scv_artifact_tests)
+target_link_libraries(
+  fsim_scv_artifact_tests
+  PRIVATE fsim_library fsim_systemc
+)
+add_test(NAME fsim.scv.artifact COMMAND fsim_scv_artifact_tests)
+set_tests_properties(
+  fsim.scv.artifact
+  PROPERTIES
+    TIMEOUT 1200
+    LABELS "scv;systemc;artifact;relocation;cache;positive;negative;fast"
+)
+
+add_executable(
+  fsim_scv_backend_protocol_tests
+  scv/scv_backend_protocol_test.cpp
+)
+fsim_configure_test(fsim_scv_backend_protocol_tests)
+target_link_libraries(
+  fsim_scv_backend_protocol_tests
+  PRIVATE fsim_systemc
+)
+add_test(
+  NAME fsim.scv.backend_protocol
+  COMMAND fsim_scv_backend_protocol_tests
+)
+set_tests_properties(
+  fsim.scv.backend_protocol
+  PROPERTIES
+    TIMEOUT 1200
+    LABELS "scv;systemc;backend;protocol;serialization;resources;positive;negative;fast"
+)
+
+add_executable(
+  fsim_scv_application_tests
+  app/scv_application_test.cpp
+)
+fsim_configure_test(fsim_scv_application_tests)
+target_link_libraries(fsim_scv_application_tests PRIVATE fsim_systemc)
+add_test(
+  NAME fsim.application.scv_protocol
+  COMMAND fsim_scv_application_tests
+)
+set_tests_properties(
+  fsim.application.scv_protocol
+  PROPERTIES
+    TIMEOUT 1200
+    LABELS "application;scv;systemc;backend;protocol;ordering;positive;fast"
+)
+
+add_executable(
+  fsim_scv_randomization_tests
+  scv/scv_randomization_test.cpp
+)
+fsim_configure_test(fsim_scv_randomization_tests)
+target_link_libraries(fsim_scv_randomization_tests PRIVATE fsim_systemc)
+add_test(
+  NAME fsim.scv.randomization
+  COMMAND fsim_scv_randomization_tests
+)
+set_tests_properties(
+  fsim.scv.randomization
+  PROPERTIES
+    TIMEOUT 1200
+    LABELS "scv;systemc;randomization;distribution;bag;determinism;replay;resources;positive;negative;fast"
+)
+
+add_executable(
+  fsim_scv_randomization_application_tests
+  app/scv_randomization_application_test.cpp
+)
+fsim_configure_test(fsim_scv_randomization_application_tests)
+target_link_libraries(fsim_scv_randomization_application_tests PRIVATE fsim_systemc)
+add_test(
+  NAME fsim.application.scv_randomization
+  COMMAND fsim_scv_randomization_application_tests
+)
+set_tests_properties(
+  fsim.application.scv_randomization
+  PROPERTIES
+    TIMEOUT 1200
+    LABELS "application;scv;systemc;randomization;determinism;ordering;positive;fast"
+)
+
+add_executable(
+  fsim_scv_smart_ptr_tests
+  scv/scv_smart_ptr_test.cpp
+)
+fsim_configure_test(fsim_scv_smart_ptr_tests)
+target_link_libraries(fsim_scv_smart_ptr_tests PRIVATE fsim_systemc)
+add_test(
+  NAME fsim.scv.smart_ptr
+  COMMAND fsim_scv_smart_ptr_tests
+)
+set_tests_properties(
+  fsim.scv.smart_ptr
+  PROPERTIES
+    TIMEOUT 1200
+    LABELS "scv;systemc;smart-pointer;ownership;extension;randomization;teardown;resources;positive;negative;fast"
+)
+
+add_executable(
+  fsim_scv_constraints_tests
+  scv/scv_constraints_test.cpp
+)
+fsim_configure_test(fsim_scv_constraints_tests)
+target_link_libraries(fsim_scv_constraints_tests PRIVATE fsim_systemc)
+add_test(
+  NAME fsim.scv.constraints
+  COMMAND fsim_scv_constraints_tests
+)
+set_tests_properties(
+  fsim.scv.constraints
+  PROPERTIES
+    TIMEOUT 1200
+    LABELS "scv;systemc;constraints;distribution;ordering;transactional;replay;resources;positive;negative;fast"
+)
+
+add_executable(
+  fsim_scv_extensions_tests
+  scv/scv_extensions_test.cpp
+)
+fsim_configure_test(fsim_scv_extensions_tests)
+target_link_libraries(fsim_scv_extensions_tests PRIVATE fsim_systemc)
+add_test(
+  NAME fsim.scv.extensions
+  COMMAND fsim_scv_extensions_tests
+)
+set_tests_properties(
+  fsim.scv.extensions
+  PROPERTIES
+    TIMEOUT 1200
+    LABELS "scv;systemc;introspection;extension;wide-value;unknown;resources;positive;negative;fast"
+)
+
+add_executable(
+  fsim_scv_introspection_application_tests
+  app/scv_introspection_application_test.cpp
+)
+fsim_configure_test(fsim_scv_introspection_application_tests)
+target_link_libraries(fsim_scv_introspection_application_tests PRIVATE fsim_systemc)
+add_test(
+  NAME fsim.application.scv_introspection
+  COMMAND fsim_scv_introspection_application_tests
+)
+set_tests_properties(
+  fsim.application.scv_introspection
+  PROPERTIES
+    TIMEOUT 1200
+    LABELS "application;scv;systemc;introspection;extension;wide-value;unknown;positive;fast"
+)
+
+add_executable(
+  fsim_transaction_record_tests
+  runtime/transaction_record_test.cpp
+)
+fsim_configure_test(fsim_transaction_record_tests)
+target_link_libraries(fsim_transaction_record_tests PRIVATE fsim_runtime)
+add_test(
+  NAME fsim.runtime.transaction_record
+  COMMAND fsim_transaction_record_tests
+)
+set_tests_properties(
+  fsim.runtime.transaction_record
+  PROPERTIES
+    TIMEOUT 1200
+    LABELS "runtime;scv;transaction;record;serialization;ordering;resources;positive;negative;fast"
+)
+
+add_executable(
+  fsim_scv_recording_application_tests
+  app/scv_recording_application_test.cpp
+)
+fsim_configure_test(fsim_scv_recording_application_tests)
+target_link_libraries(fsim_scv_recording_application_tests PRIVATE fsim_systemc)
+add_test(
+  NAME fsim.application.scv_recording
+  COMMAND fsim_scv_recording_application_tests
+)
+set_tests_properties(
+  fsim.application.scv_recording
+  PROPERTIES
+    TIMEOUT 1200
+    LABELS "application;scv;transaction;record;serialization;ordering;positive;fast"
+)
+
+add_executable(
+  fsim_scv_recording_tests
+  scv/scv_recording_test.cpp
+)
+fsim_configure_test(fsim_scv_recording_tests)
+target_link_libraries(fsim_scv_recording_tests PRIVATE fsim_systemc)
+add_test(
+  NAME fsim.scv.recording
+  COMMAND fsim_scv_recording_tests
+)
+set_tests_properties(
+  fsim.scv.recording
+  PROPERTIES
+    TIMEOUT 1200
+    LABELS "scv;systemc;transaction;recording;callback;relation;resources;positive;negative;fast"
+)
+
+add_executable(
+  fsim_scv_backend_transport_tests
+  scv/scv_backend_transport_test.cpp
+)
+fsim_configure_test(fsim_scv_backend_transport_tests)
+target_link_libraries(fsim_scv_backend_transport_tests PRIVATE fsim_systemc)
+add_test(
+  NAME fsim.scv.backend_transport
+  COMMAND fsim_scv_backend_transport_tests
+)
+set_tests_properties(
+  fsim.scv.backend_transport
+  PROPERTIES
+    TIMEOUT 1200
+    LABELS "scv;systemc;backend;transport;loopback;serialization;merge;replay;backpressure;disconnect;crash;resources;positive;negative;fast"
+)
+
+add_executable(
+  fsim_scv_resource_tests
+  scv/scv_resource_test.cpp
+)
+fsim_configure_test(fsim_scv_resource_tests)
+target_link_libraries(fsim_scv_resource_tests PRIVATE fsim_systemc)
+add_test(
+  NAME fsim.scv.resources
+  COMMAND fsim_scv_resource_tests
+)
+set_tests_properties(
+  fsim.scv.resources
+  PROPERTIES
+    TIMEOUT 1200
+    LABELS "scv;systemc;performance;recording;solver;transport;backpressure;failure;recovery;determinism;resources;positive;negative;fast"
+)
+
+add_executable(
+  fsim_scv_corpus_tests
+  scv/scv_corpus_test.cpp
+)
+fsim_configure_test(fsim_scv_corpus_tests)
+target_link_libraries(fsim_scv_corpus_tests PRIVATE fsim_systemc)
+add_test(NAME fsim.scv.corpus COMMAND fsim_scv_corpus_tests)
+set_tests_properties(
+  fsim.scv.corpus
+  PROPERTIES
+    TIMEOUT 1200
+    LABELS "scv;systemc;corpus;randomization;constraints;introspection;recording;tlm;replay;teardown;platform;positive;negative;fast"
+)
+
+set(FSIM_SCV_OFFICIAL_EXAMPLE_ROOT
+    "${FSIM_SCV_OFFICIAL_SOURCE_DIR}/examples")
+set(FSIM_SCV_OFFICIAL_EXAMPLES
+  "hello|general/hello/main.cpp"
+  "introspection|extensions/introspection1/test.cpp"
+  "randomization|randomization/ex_04_simplerand/test.cc"
+  "transactions|transactions/overview/main.cpp"
+)
+foreach(FSIM_SCV_OFFICIAL_EXAMPLE IN LISTS FSIM_SCV_OFFICIAL_EXAMPLES)
+  string(REPLACE "|" ";" FSIM_SCV_OFFICIAL_FIELDS
+         "${FSIM_SCV_OFFICIAL_EXAMPLE}")
+  list(GET FSIM_SCV_OFFICIAL_FIELDS 0 FSIM_SCV_OFFICIAL_NAME)
+  list(GET FSIM_SCV_OFFICIAL_FIELDS 1 FSIM_SCV_OFFICIAL_PATH)
+  set(FSIM_SCV_OFFICIAL_TARGET
+      "fsim_scv_official_${FSIM_SCV_OFFICIAL_NAME}")
+  add_executable(
+    "${FSIM_SCV_OFFICIAL_TARGET}"
+    "${FSIM_SCV_OFFICIAL_EXAMPLE_ROOT}/${FSIM_SCV_OFFICIAL_PATH}"
+  )
+  fsim_configure_test("${FSIM_SCV_OFFICIAL_TARGET}")
+  target_compile_definitions(
+    "${FSIM_SCV_OFFICIAL_TARGET}" PRIVATE SC_ALLOW_DEPRECATED_IEEE_API
+  )
+  if(MSVC)
+    target_compile_options(
+      "${FSIM_SCV_OFFICIAL_TARGET}" PRIVATE /wd4100 /wd4365
+    )
+  else()
+    target_compile_options(
+      "${FSIM_SCV_OFFICIAL_TARGET}"
+      PRIVATE -Wno-unused-parameter -Wno-sign-conversion
+    )
+  endif()
+  target_link_libraries("${FSIM_SCV_OFFICIAL_TARGET}" PRIVATE SCV::scv)
+  fsim_link_systemc_launcher("${FSIM_SCV_OFFICIAL_TARGET}")
+  set(FSIM_SCV_OFFICIAL_WORK_DIR
+      "${CMAKE_CURRENT_BINARY_DIR}/scv-official-${FSIM_SCV_OFFICIAL_NAME}")
+  file(MAKE_DIRECTORY "${FSIM_SCV_OFFICIAL_WORK_DIR}")
+  add_test(
+    NAME "fsim.scv.official_${FSIM_SCV_OFFICIAL_NAME}"
+    COMMAND "${FSIM_SCV_OFFICIAL_TARGET}"
+  )
+  set_tests_properties(
+    "fsim.scv.official_${FSIM_SCV_OFFICIAL_NAME}"
+    PROPERTIES
+      TIMEOUT 1200
+      WORKING_DIRECTORY "${FSIM_SCV_OFFICIAL_WORK_DIR}"
+      LABELS "scv;systemc;accellera;official;example;corpus;platform;positive;fast"
+  )
+endforeach()
 
 add_executable(
   fsim_systemc_compatibility_tests
@@ -2604,6 +3082,30 @@ if(TARGET fsim_application)
   set_tests_properties(
     fsim.application.trace_observation
     PROPERTIES LABELS "fast;trace;vcd;fst;callbacks;uvm;class;container;coverage;assertion;sdf;atomic;negative"
+  )
+
+  add_executable(
+    fsim_scv_trace_application_tests
+    app/scv_trace_application_test.cpp
+  )
+  fsim_configure_test(fsim_scv_trace_application_tests)
+  target_include_directories(
+    fsim_scv_trace_application_tests
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/app"
+  )
+  target_link_libraries(
+    fsim_scv_trace_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.scv_trace
+    COMMAND fsim_scv_trace_application_tests
+  )
+  set_tests_properties(
+    fsim.application.scv_trace
+    PROPERTIES
+      TIMEOUT 1200
+      LABELS "fast;application;scv;systemc;tlm;trace;vcd;fst;debugger;selection;callbacks;backpressure;lifecycle;positive;negative"
   )
 
   add_executable(
@@ -4489,6 +4991,7 @@ endif()
 # completion instead of starting nested CTest processes.
 set(FSIM_RECURSIVE_CLOSURE_TESTS
   fsim.systemc.accellera_closure
+  fsim.scv.closure
   fsim.sdf-closure
   fsim.sdf-application-closure
   fsim.sdf-vital-closure
@@ -4536,6 +5039,9 @@ endfunction()
 fsim_require_fixture_regex(
   fsim.systemc.accellera_closure fsim_systemc_accellera_closure_witnesses
   "^fsim\\.(systemc\\.(accellera_corpus|upstream\\.(simple_fifo|event_list|tlm_fifo)|shared_runtime|compatibility|kernel_backend_.*|tlm[12]_backend|shared-runtime-contract|abi-c|plugin|compiler|incremental|matrix)|systemc-accellera-(inventory|portability-contract)|systemc-upstream-provenance|systemc-portability-contract|installed-public-contract|resource-portability-contract|application\\.(systemc_trace|systemc_matrix|systemc_datatypes|systemc_tlm1|typed_boundaries|artifact_phases))$")
+fsim_require_fixture_regex(
+  fsim.scv.closure fsim_scv_closure_witnesses
+  "^fsim\\.(scv(-.*)?|scv\\..*|application\\.scv_.*|runtime\\.transaction_record|diagnostics-catalog)$")
 fsim_require_fixture_regex(
   fsim.sdf-closure fsim_sdf_closure_witnesses
   "^fsim\\.(frontend\\.sdf.*|application\\.sdf_.*|application$|application\\.artifact_phases$|project$|library\\.artifact$|artifact\\.design$|diagnostics-catalog$|source-line-budget$|sdf-inventory$|resource-portability-contract$)")

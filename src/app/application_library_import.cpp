@@ -5,6 +5,7 @@
 #include "fsim/library/portable_unit.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/systemc/scv_artifact.hpp"
 #include "fsim/systemc_abi.h"
 
 #include <fstream>
@@ -294,6 +295,10 @@ namespace {
         diagnostic::Engine fingerprint_diagnostics;
         const auto fingerprint = systemc::plugin_host_fingerprint(
             config.systemc, config.base_directory, fingerprint_diagnostics);
+        if (!systemc::validate_scv_artifact_compatibility(
+                native.scv_compatibility, "mapped SystemC library", diagnostics)) {
+            return false;
+        }
         if (!fingerprint.has_value()
             || native.runtime_abi != runtime_abi_version
             || native.systemc_abi != FSIM_SYSTEMC_ABI_VERSION

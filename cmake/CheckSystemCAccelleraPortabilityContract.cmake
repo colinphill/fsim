@@ -62,7 +62,7 @@ fsim_require_tokens(include/fsim/systemc/accellera.hpp
   "backend_port"
   "SC_FSIM_EXPORT_AS")
 fsim_require_tokens(include/fsim/systemc_abi.h
-  "FSIM_SYSTEMC_ABI_VERSION 3u")
+  "FSIM_SYSTEMC_ABI_VERSION 4u")
 fsim_forbid_tokens(include/fsim/systemc_abi.h
   "fsim_sc_module_factory_v1"
   "(*register_factory)("
@@ -219,7 +219,7 @@ fsim_require_tokens(tests/systemc/systemc_compatibility_test.cpp
   "SC_VERSION_MAJOR == 3"
   "SC_VERSION_MINOR == 0"
   "SC_VERSION_PATCH == 2"
-  "FSIM_SYSTEMC_ABI_VERSION == 3u"
+  "FSIM_SYSTEMC_ABI_VERSION == 4u"
   "unknown-stdlib"
   "wrong_bridge"
   "wrong_stdlib")

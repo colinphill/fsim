@@ -201,6 +201,16 @@ namespace {
             std::next(settings.include_directories.begin()),
             std::move(upstream_header));
 #endif
+#if defined(FSIM_SCV_HEADER_PATH)
+        auto scv_header = std::filesystem::path { FSIM_SCV_HEADER_PATH };
+#if defined(FSIM_INSTALLED_SCV_HEADER_PATH)
+        std::error_code scv_header_error;
+        if (!std::filesystem::is_directory(scv_header, scv_header_error)) {
+            scv_header = FSIM_INSTALLED_SCV_HEADER_PATH;
+        }
+#endif
+        settings.include_directories.push_back(std::move(scv_header));
+#endif
         settings.link_options.clear();
         settings.libraries.clear();
         return settings;
@@ -230,6 +240,22 @@ namespace {
         std::error_code error;
         if (!std::filesystem::is_regular_file(result, error)) {
             result = FSIM_SYSTEMC_INSTALLED_OFFICIAL_LIBRARY_PATH;
+        }
+#endif
+        return result;
+#else
+        return { };
+#endif
+    }
+
+    std::filesystem::path scv_runtime_library()
+    {
+#if defined(FSIM_SCV_LIBRARY_PATH)
+        auto result = std::filesystem::path { FSIM_SCV_LIBRARY_PATH };
+#if defined(FSIM_INSTALLED_SCV_LIBRARY_PATH)
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(result, error)) {
+            result = FSIM_INSTALLED_SCV_LIBRARY_PATH;
         }
 #endif
         return result;
@@ -716,6 +742,7 @@ namespace {
         IncrementalObjectMetadata metadata;
         metadata.runtime_abi = runtime_abi_version;
         metadata.systemc_abi = FSIM_SYSTEMC_ABI_VERSION;
+        metadata.scv_compatibility = fsim_scv_compatibility_identity();
         metadata.toolchain = std::string { to_string(toolchain) };
         metadata.target = target_identity();
         metadata.compiler_fingerprint = std::move(*fingerprint);
@@ -738,6 +765,7 @@ namespace {
         IncrementalPluginMetadata plugin;
         plugin.runtime_abi = runtime_abi_version;
         plugin.systemc_abi = FSIM_SYSTEMC_ABI_VERSION;
+        plugin.scv_compatibility = fsim_scv_compatibility_identity();
         plugin.logical_library = request.logical_library;
         plugin.link_options = request.settings.link_options;
         plugin.libraries = request.settings.libraries;
@@ -922,6 +950,7 @@ bool compile_incremental_object(
     IncrementalObjectMetadata metadata;
     metadata.runtime_abi = runtime_abi_version;
     metadata.systemc_abi = FSIM_SYSTEMC_ABI_VERSION;
+    metadata.scv_compatibility = fsim_scv_compatibility_identity();
     metadata.producer = std::string { "fsim " } + std::string { version };
     metadata.toolchain = std::string { to_string(toolchain) };
     metadata.target = target_identity();
@@ -985,6 +1014,7 @@ bool link_incremental_plugin(
     if (std::ranges::any_of(metadata, [&](const auto& object) {
             return object.runtime_abi != first.runtime_abi
                 || object.systemc_abi != first.systemc_abi
+                || object.scv_compatibility != first.scv_compatibility
                 || object.toolchain != first.toolchain
                 || object.target != first.target
                 || object.compiler_fingerprint != first.compiler_fingerprint;
@@ -1032,6 +1062,7 @@ bool link_incremental_plugin(
     const auto support = plugin_export_library();
     const auto accellera_runtime = accellera_runtime_library();
     const auto official_runtime = official_runtime_library();
+    const auto scv_runtime = scv_runtime_library();
     std::error_code error;
     const auto entry_point_count = std::ranges::count_if(
         metadata, [](const auto& object) {
@@ -1072,6 +1103,13 @@ bool link_incremental_plugin(
             official_runtime);
         return false;
     }
+    if (scv_runtime.empty()
+        || !std::filesystem::is_regular_file(scv_runtime, error)) {
+        report(
+            diagnostics, kLinkCode,
+            "cannot locate the governed official SCV runtime", scv_runtime);
+        return false;
+    }
     const auto scratch = scratch_root(
         request.scratch_directory, base, diagnostics);
     if (scratch.empty()) {
@@ -1095,6 +1133,7 @@ bool link_incremental_plugin(
         }
         argv.push_back(path_argument(accellera_runtime));
         argv.push_back(path_argument(official_runtime));
+        argv.push_back(path_argument(scv_runtime));
         argv.push_back("/Fe" + path_argument(output));
         argv.emplace_back("/link");
         argv.emplace_back("/INCREMENTAL:NO");
@@ -1120,6 +1159,7 @@ bool link_incremental_plugin(
         }
         argv.push_back(path_argument(accellera_runtime));
         argv.push_back(path_argument(official_runtime));
+        argv.push_back(path_argument(scv_runtime));
         argv.emplace_back("-o");
         argv.push_back(path_argument(output));
         argv.insert(
@@ -1156,6 +1196,7 @@ bool link_incremental_plugin(
     IncrementalPluginMetadata plugin;
     plugin.runtime_abi = runtime_abi_version;
     plugin.systemc_abi = FSIM_SYSTEMC_ABI_VERSION;
+    plugin.scv_compatibility = fsim_scv_compatibility_identity();
     plugin.producer = std::string { "fsim " } + std::string { version };
     plugin.logical_library = request.logical_library;
     plugin.toolchain = first.toolchain;

@@ -235,6 +235,7 @@ std::string object_input_digest(const IncrementalObjectMetadata& metadata) {
   writer.string("fsim-systemc-object-input-v1");
   writer.u32(metadata.runtime_abi);
   writer.u32(metadata.systemc_abi);
+  writer.string(metadata.scv_compatibility);
   writer.string(metadata.toolchain);
   writer.string(metadata.target);
   writer.string(metadata.compiler_fingerprint);
@@ -261,6 +262,7 @@ std::string plugin_input_digest(const IncrementalPluginMetadata& metadata) {
   writer.string("fsim-systemc-plugin-input-v1");
   writer.u32(metadata.runtime_abi);
   writer.u32(metadata.systemc_abi);
+  writer.string(metadata.scv_compatibility);
   writer.string(metadata.logical_library);
   writer.string(metadata.toolchain);
   writer.string(metadata.target);
@@ -300,6 +302,15 @@ bool validate_object(
     report(
         diagnostics, kSchemaCode,
         "incompatible .fsimscobj format or runtime/SystemC ABI", source);
+  }
+  if (!fsim_scv_accepts_compatibility_identity(
+          metadata.scv_compatibility.c_str())) {
+    report(
+        diagnostics, kSchemaCode,
+        std::string { fsim_scv_compatibility_diagnostic(
+            metadata.scv_compatibility.c_str()) }
+            + " in .fsimscobj producer",
+        source);
   }
   if (metadata.producer.empty() || metadata.toolchain.empty()
       || metadata.target.empty() || !checksum(metadata.compiler_fingerprint)
@@ -347,6 +358,15 @@ bool validate_plugin(
     report(
         diagnostics, kSchemaCode,
         "incompatible .fsimscplugin format or runtime/SystemC ABI", source);
+  }
+  if (!fsim_scv_accepts_compatibility_identity(
+          metadata.scv_compatibility.c_str())) {
+    report(
+        diagnostics, kSchemaCode,
+        std::string { fsim_scv_compatibility_diagnostic(
+            metadata.scv_compatibility.c_str()) }
+            + " in .fsimscplugin producer",
+        source);
   }
   if (metadata.producer.empty() || !library_name(metadata.logical_library)
       || metadata.toolchain.empty() || metadata.target.empty()
@@ -604,6 +624,7 @@ std::string serialize_incremental_object_metadata(
   writer.u32(metadata.format);
   writer.u32(metadata.runtime_abi);
   writer.u32(metadata.systemc_abi);
+  writer.string(metadata.scv_compatibility);
   writer.string(metadata.producer);
   writer.string(metadata.toolchain);
   writer.string(metadata.target);
@@ -627,6 +648,7 @@ std::string serialize_incremental_plugin_metadata(
   writer.u32(metadata.format);
   writer.u32(metadata.runtime_abi);
   writer.u32(metadata.systemc_abi);
+  writer.string(metadata.scv_compatibility);
   writer.string(metadata.producer);
   writer.string(metadata.logical_library);
   writer.string(metadata.toolchain);
@@ -665,13 +687,15 @@ deserialize_incremental_object_metadata(
   const auto format = reader.u32();
   const auto runtime = reader.u32();
   const auto abi = reader.u32();
+  auto scv_compatibility = reader.string();
   auto producer = reader.string();
   auto toolchain = reader.string();
   auto target = reader.string();
   auto compiler = reader.string();
   auto input_digest = reader.string();
   auto digest = reader.string();
-  if (!format || !runtime || !abi || !producer || !toolchain || !target
+  if (!format || !runtime || !abi || !scv_compatibility || !producer
+      || !toolchain || !target
       || !compiler || !input_digest || !digest) {
     report(diagnostics, kSchemaCode, "truncated .fsimscobj metadata", source_name);
     return std::nullopt;
@@ -679,6 +703,7 @@ deserialize_incremental_object_metadata(
   metadata.format = *format;
   metadata.runtime_abi = *runtime;
   metadata.systemc_abi = *abi;
+  metadata.scv_compatibility = std::move(*scv_compatibility);
   metadata.producer = std::move(*producer);
   metadata.toolchain = std::move(*toolchain);
   metadata.target = std::move(*target);
@@ -726,6 +751,7 @@ deserialize_incremental_plugin_metadata(
   const auto format = reader.u32();
   const auto runtime = reader.u32();
   const auto abi = reader.u32();
+  auto scv_compatibility = reader.string();
   auto producer = reader.string();
   auto library = reader.string();
   auto toolchain = reader.string();
@@ -733,14 +759,16 @@ deserialize_incremental_plugin_metadata(
   auto compiler = reader.string();
   auto input_digest = reader.string();
   auto digest = reader.string();
-  if (!format || !runtime || !abi || !producer || !library || !toolchain
-      || !target || !compiler || !input_digest || !digest) {
+  if (!format || !runtime || !abi || !scv_compatibility || !producer
+      || !library || !toolchain || !target || !compiler || !input_digest
+      || !digest) {
     report(diagnostics, kSchemaCode, "truncated .fsimscplugin metadata", source_name);
     return std::nullopt;
   }
   metadata.format = *format;
   metadata.runtime_abi = *runtime;
   metadata.systemc_abi = *abi;
+  metadata.scv_compatibility = std::move(*scv_compatibility);
   metadata.producer = std::move(*producer);
   metadata.logical_library = std::move(*library);
   metadata.toolchain = std::move(*toolchain);

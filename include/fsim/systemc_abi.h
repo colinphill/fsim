@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define FSIM_SYSTEMC_ABI_VERSION 3u
+#define FSIM_SYSTEMC_ABI_VERSION 4u
 
 typedef uint64_t fsim_sc_handle_v1;
 
@@ -201,6 +201,9 @@ typedef struct fsim_sc_host_v1 {
     fsim_sc_status_v1 (*current_time_femtoseconds)(
         void* context,
         uint64_t* result);
+
+    /* Complete SCV/SystemC/TLM/compiler producer identity for this process. */
+    const char* scv_compatibility_identity;
 } fsim_sc_host_v1;
 
 typedef struct fsim_sc_registrar_v1 {

@@ -11740,7 +11740,7 @@ carry an explicit evidence-backed scope disposition approved by the user.
   No Release build/test, sanitizer, hosted-CI/workflow action, reset, commit or
   push ran. Preserve Changes 1-19 and proceed only to Change 20's last-log
   audit, local repairs and final qualification.
-- **Change 20: In progress; Windows repair locally qualified.** The last completed
+- **Change 20: Complete.** The last completed
   hosted log was inspected once at the boundary and every observed Linux and
   Windows failure was reproduced or audited locally. Portable trace roots,
   CRLF-normalized FST provenance, official three-language hierarchy assertions,
@@ -12018,55 +12018,444 @@ carry an explicit evidence-backed scope disposition approved by the user.
   Debug and sanitizer were not rerun. The repair is committed and pushed as
   `604a3618c14f85fda1f6c3433b1798443057530b`.
 
-  The Windows restart must verify that the documentation handoff commit has
-  `604a3618c14f85fda1f6c3433b1798443057530b` as its live parent. Two
-  read-only GitHub queries immediately after the repair push found no run for
-  that SHA; no CI state was changed. Wait for every Windows job on the handoff
-  SHA to complete and inspect all six finalized logs before closing Batch 172
-  or starting Batch 173. Any follow-up repair remains Release-only: do not
-  rerun Debug or sanitizer, avoid non-semantic repository-header formatting,
-  retain every 120-minute workflow timeout, and keep the legacy SystemC
-  interface absent.
+  The Windows continuation then migrated the Windows matrix to LLVM-MinGW in
+  `534ddb83d7d473aacd405de997023d1e980a0e44`, repaired Windows LLVM package
+  discovery in `e1ae900aaa1d248d055ccd0a586f9e82a724f0fd`, and corrected VHPI
+  teardown under LLVM libc++ in
+  `771b7afc19af6c5c71332cf28460437174b00b0a`. The user confirms the resulting
+  hosted matrix is clean across the board. The live `codex/v2` branch and its
+  tracking ref are synchronized at that final Batch 172 tip; no additional CI
+  inspection is required before Batch 173 Change 1. Batch 172 is closed with
+  the legacy SystemC interface still absent and every workflow job timeout at
+  120 minutes.
 
-### Batch 173 - SCV 2.0.1 compatibility, recording, and verification closure - CI monitoring boundary
+### Batch 173 - SCV 2.0.1 compatibility, recording, and verification closure - local closeout boundary
 
-- **Changes 1-4:** vendor the official SCV 2.0.1 source archive with a pinned
-  digest and audited license/notice/SBOM provenance. First build it unmodified
-  against the pinned SystemC 3.0.2 runtime; if compatibility repairs are
-  required, carry only minimal reviewed patches with upstream source digest,
-  patch digest, rationale, tests and removal criteria. Build one shared SCV
-  library against fsim's one shared SystemC library, install supported public
-  headers and CMake/pkg-config metadata, and forbid private or duplicate kernel
-  copies.
-- **Changes 5-8:** version SCV plug-in, artifact and cache identities against
-  SystemC, SCV, compiler/stdlib and patch-set ABIs. Verify source and incremental
-  plug-ins, mapped libraries, relocation, stale/corrupt cache rejection and
-  clear mismatch diagnostics across supported Linux and Windows toolchains.
-- **Changes 9-12:** support and test `scv_smart_ptr`, constraints,
-  distributions, bags, deterministic random seeds with stable per-island
-  derivation, and `scv_extensions` introspection without arbitrary value-width
-  caps. Support transaction streams, generators, handles, attributes and
-  relations; route them through a common language-neutral transaction record
-  correlated with SystemC/TLM objects and waveform time/delta identity while
-  preserving SCV's native in-island behavior.
-- **Changes 13-16:** keep every SCV transaction and inspection record
-  serializable and free of raw upstream pointers, prove the same results through
-  the in-process and worker-loopback backends, deterministically merge records
-  by time/delta/island/sequence, and co-locate native SCV/TLM graphs. Preserve
-  independent kernel ownership, explicit partition boundaries and a worker-
-  process transport that can later host deterministic conservative parallel
-  simulation; the actual partitioner, kernel-per-worker launcher and parallel
-  scheduler remain post-v2 and require no SCV/TLM ABI redesign.
-- **Changes 17-19:** run official examples/regressions and fsim randomization,
-  introspection, recording, signal/wave/transaction-correlation, seed/replay,
-  teardown/leak, installed/relocation and compiler/platform matrices. Measure
-  recording disabled/enabled overhead, transaction volume, memory and bounded
-  backpressure; prove failure containment, deterministic output and complete
-  debuggability of SCV/TLM activity alongside all SystemC signals and ports.
-- **Change 20:** run the LLVM-disabled sanitizer, full exact-LLVM Debug/Release,
-  SystemC/TLM/SCV, plug-in/ABI, installed/relocation, recording/debug,
-  determinism, resource and release gates, commit/push once, then inspect and
-  repair all non-documentation CI jobs.
+- **Locked scope:** integrate the official SCV 2.0.1 release with the one
+  governed Accellera SystemC 3.0.2 runtime, preserve native SCV/SystemC/TLM
+  behavior inside an island, and publish only stable pointer-free records across
+  fsim's backend and artifact boundaries. Randomization, constraints,
+  introspection and transaction recording are in scope; a partitioner,
+  kernel-per-worker launcher and parallel scheduler remain post-v2. Changes
+  1-19 use focused Debug validation only. This batch runs no Release build or
+  test, sanitizer, or hosted-CI monitoring; those obligations move explicitly
+  to final release Batch 177. Existing headers receive no formatting-only
+  churn.
+- **Change 1: Complete.** Freeze an eighteen-row ownership ledger assigning
+  Changes 2-19 one-to-one across official SCV provenance, compatibility-patch
+  governance, one shared runtime/install surface, compatibility/ABI/cache
+  identity, source and incremental producers, mapped artifacts and relocation,
+  backend protocol identities, deterministic randomization, smart-pointer
+  lifetime, constraints/distributions, extension introspection, the common
+  transaction-record model, native recording APIs, trace/debug correlation,
+  loopback serialization/merge, corpus/platform/teardown, performance/resource
+  containment and documentation/closure. Every active row names implementation,
+  positive, negative, protocol, phase, artifact, diagnostic and resource owners
+  before semantic work begins. The registered inventory contract freezes the
+  exact release/profile/domain fields and all twenty change boundaries. The
+  direct workflow-independent contract and its registered Debug test pass with
+  eighteen active rows, zero preserved rows and normalized SHA-256
+  `e16bc1a45eb2cda64aa56bb89dcaf0dbe8fcd353b55402cb090660d010e0380e`;
+  the SCV and retained SystemC inventory pair passes 2/2 in 0.04 seconds after
+  a Debug-only regeneration. No SCV source, Release build/test, sanitizer,
+  hosted-CI action, commit, push or header formatting belongs to this planning-
+  only change. Preserve Change 1 in the intentionally dirty worktree and
+  proceed only to Change 2's official upstream provenance boundary.
+- **Change 2: Complete.** Vendor the exact official Accellera SCV 2.0.1 source
+  archive with its authoritative 2017-12-08 release/download identity, byte
+  size, SHA-256 and deterministic extracted-tree identity. Accellera distributes
+  this release as a direct standards archive rather than an authoritative public
+  source tag/commit, so the boundary does not invent either. The governed
+  bundle retains the exact Apache-2.0 license and notice, upstream URL/version
+  manifest and SPDX 2.3 component. Its archive is 2,835,735 bytes at SHA-256
+  `7bd1c4037f3c108d02f45cae003d112efdb788d469cb029fada247d330ca4881`;
+  the 578-file extracted tree is
+  `85cc2e4e3ee1893878de2567f253003859c847a151f080e48f185825c34f933c`.
+  Package metadata and release notes identify 2.0.1 while the byte-pinned legacy
+  `scv_ver.h` still identifies 2.0.0 dated 20140417; provenance preserves and
+  tests that upstream inconsistency instead of silently rewriting it. Offline
+  materialization and distinct corrupt, wrong-version, incomplete and unsafe-
+  root rejection pass directly and through the registered Debug provenance
+  gate. After Debug-only regeneration, SCV inventory plus retained SCV/SystemC
+  provenance pass 3/3 in 0.65 seconds. The ledger now preserves Change 2 with
+  seventeen active rows at normalized SHA-256
+  `6644d790c9e687fe6e404e52f8668a88f6818b7f406bf449e8c75ca0fac7ad48`.
+  No source patch, compilation, Release test, sanitizer, hosted-CI action,
+  commit, push or header formatting ran. Preserve Changes 1-2 in the dirty
+  worktree and proceed only to Change 3's unmodified-build/patch-governance
+  boundary.
+- **Change 3: Complete.** Compile the byte-pinned release unmodified against
+  the governed SystemC 3.0.2 runtime before admitting any patch. The official
+  Autotools build configures with GCC 13 and builds its shared and static SCV
+  libraries with eight workers from the exact 578-file tree in 18.02 seconds;
+  the retained transcript is
+  `build/llvm22-ninja-debug/tests/scv-2.0.1-unmodified-gcc/unmodified-build.log`.
+  Its legacy configure layer rejects `clang++-22` before source compilation
+  because it does not recognize Clang and searches the obsolete `lib/gnu`
+  SystemC layout. The external CMake build then exposes one source defect under
+  Clang 22: the const `scv_bag::peekRandom()` path assigns its cached random
+  generator pointer. One generated, all-platform compatibility patch makes
+  only that pointer `mutable`; it is applied to an isolated copy and leaves the
+  pristine archive tree untouched. `PATCHES.txt` pins the patch, input, output
+  and patched-tree identities plus rationale, probes and removal criteria at
+  SHA-256
+  `15625eaeef9c640b3e446ff4f1350795e1afb103ad4cfcd40d8329a4c9d20b29`;
+  the patched 578-file tree is
+  `b8ee86c4050b7a77e39fcbba25fc553d477074b323349885a7634844ecd6a112`.
+  Changed manifests, patches, inputs, outputs and source trees reject before
+  build. The Change 4 closure below supersedes the earlier provisional
+  zero-patch conclusion and retains the unmodified GCC proof as the required
+  pre-patch baseline.
+- **Change 4: Complete.** Build and install exactly one shared SCV library
+  against fsim's governed shared SystemC runtime. The adapter closes the exact
+  90-source runtime set, emits `SCV::scv` as `libscv` 2.0.1 with ABI soname 2,
+  and confines the two required legacy-C warning suppressions to SCV's C
+  sources. A generated `scv_config.h` is written only when its contents change,
+  so ordinary regeneration does not rebuild the runtime. The install carries
+  supported headers, Apache license/notice, relocatable CMake metadata with the
+  exact `SystemCLanguage` 3.0.2.20251031 dependency, and relative pkg-config
+  metadata. Its `$ORIGIN` lookup resolves exactly one SCV and one SystemC
+  shared runtime. An external consumer stages the install, relocates it to a
+  non-ASCII path, rejects source/build-prefix leaks, configures via
+  `find_package(SCV 2.0.1 EXACT)`, builds with eight workers and executes the
+  patched const-bag probe. The final focused Debug inventory, provenance,
+  patch, shared-runtime and relocated-consumer slice passes 5/5 in 5.15
+  seconds. The ledger preserves Changes 2-4 with fifteen active rows at
+  normalized SHA-256
+  `6300b075542373e11d08846af3c4a6a71f4e6f992b1a441aa368b33a58778868`.
+  No Release test, sanitizer, hosted-CI action, commit, push or header formatting
+  ran. Preserve Changes 1-4 and proceed only to Change 5's compatibility,
+  ABI and cache identities.
+- **Change 5: Complete.** Define one canonical SCV producer identity over the
+  SCV release and legacy header version, official archive, governed patch and
+  patched tree, SystemC runtime/source/bridge, TLM release, compiler, standard
+  library, adapter ABI, plug-in ABI, artifact schema and cache schema. The
+  public `fsim/systemc/scv.hpp` adapter exports the identity, exact acceptance
+  and field-specific `FSIM-SCV-C001` diagnostics; its sixteen-field mutation
+  matrix rejects every mismatch. SystemC's append-only host ABI advances to 4
+  and carries the complete identity, which the loader validates before opening
+  a native image and macro-generated plug-ins validate before registration.
+  Incremental object and plug-in formats advance to 2, serialize the identity,
+  include it in cold/warm input digests and reject a self-consistent but stale
+  SCV producer before payload loading. Source plug-in cache keys also include
+  the identity. Installed CMake and pkg-config metadata expose the four SCV
+  adapter/plug-in/artifact/cache schema versions and pinned source identities;
+  the relocated consumer calls the exported compatibility surface. The focused
+  Debug compatibility, ABI, plug-in, compiler, incremental, install,
+  provenance, inventory and retained portability/source-audit slice passes
+  14/14 in 30.72 seconds. Rebuilding the focused targets immediately reports
+  no work and `git diff --check` passes. The ledger preserves Changes 2-5 with
+  fourteen active rows at normalized SHA-256
+  `a1298f8b6451de50392ce385c358f2453a43649bae361a9f4262a42c099044fa`.
+  No Release-configuration build/test, sanitizer, hosted-CI action, commit,
+  push or formatting-only header churn ran. Preserve Changes 1-5 and proceed
+  only to Change 6's SCV source/incremental producer pipeline.
+- **Change 6: Complete.** Compile and link SCV source plug-ins plus separately
+  compiled incremental objects through the governed compiler pipeline. The
+  generated source plan and direct incremental linker carry the exact governed
+  SCV include root and shared library once beside the existing SystemC runtime.
+  A macro-export SCV plug-in exercises a const bag, dependency header and the
+  canonical compatibility surface. Source plug-in and separately compiled
+  object/link paths pass cold, warm and dependency-edited cache probes; both
+  loaded factories return the host's canonical identity pointer, proving that
+  they resolve the same loaded shared SCV runtime. Incremental metadata retains
+  the exact identity and the existing plug-in/compiler/incremental regressions
+  remain green. The final focused Debug inventory and producer slice passes
+  5/5 in 37.61 seconds. The ledger preserves Changes 2-6 with thirteen active
+  rows at normalized SHA-256
+  `2d9947833dbba4902b56fa49a4d81d452e5e00b37b233dd9b2dce65132ea1a55`.
+  No Release-configuration build/test, sanitizer, hosted-CI action, commit,
+  push or formatting-only header churn ran. Preserve Changes 1-6 and proceed
+  only to Change 7's mapped-artifact and relocation boundary.
+- **Change 7: Complete.** Retain SCV plug-ins through mapped libraries,
+  incremental objects, linked plug-ins and standalone designs. Mapped-library
+  format 5 and design format 11 carry the canonical SCV identity explicitly;
+  the design digest and embedded plug-in metadata cover the same value. A
+  bounded artifact gate reports `FSIM-SCV-A001` and rejects missing, oversized,
+  stale or incompatible identities before opening a native payload. Exact
+  mapped images remain reusable while cross-compiler native images use the
+  existing portable source fallback; a stale canonical SCV compiler field
+  instead rejects without publishing a cache file. Relocated non-ASCII mapped
+  libraries and designs, source-hidden non-project reuse, corrupt payloads,
+  future schemas and stale embedded design identities are covered without
+  duplicating the existing application regressions. The final focused Debug
+  artifact, library, application, producer, incremental, inventory and
+  portability slice passes 10/10 in 57.22 seconds. A repeated focused build is
+  a no-op and `git diff --check` passes. The ledger preserves Changes 2-7 with
+  twelve active rows at normalized SHA-256
+  `b8f1a4ab9eee8a5b26c16d3beb7dca0e8a4f5abe076be7929441b5e93457228d`.
+  The two existing artifact headers changed only for their owning schema fields
+  and received no formatting-only churn. No Release-configuration build/test,
+  sanitizer, hosted-CI action, reset, commit or push ran. Preserve Changes 1-7
+  and proceed only to Change 8's pointer-free backend protocol identities.
+- **Change 8: Complete.** The public schema-1 SCV backend protocol derives
+  deterministic pointer-free island, hierarchy, object, stream, generator and
+  transaction identities from bounded canonical inputs. Its fixed 160-byte
+  little-endian header carries ten strictly shaped request/receipt/event
+  operations, sequence/correlation identity and exact time/delta/region order;
+  unsupported schemas/operations, malformed identity shapes, invalid status or
+  correlation, reserved data, bad framing and resource excess reject through
+  `FSIM-SCV-B001` through `FSIM-SCV-B003`. Unit coverage round-trips every
+  operation and corrupts each wire boundary; application coverage proves
+  deterministic phase ordering. The portability contract independently rejects
+  upstream SCV/SystemC types and pointers in the protocol surface. The final
+  focused Debug inventory, portability, protocol, application, retained kernel
+  protocol and artifact slice passes 7/7 in 0.06 seconds. A repeated focused
+  build is a no-op and `git diff --check` passes. The ledger preserves Changes
+  2-8 with eleven active rows at normalized SHA-256
+  `8e4add4d122acabbdb70249e29ec2a4f8b83c90f4a2b6c4d5ce55012313d0066`.
+  Formatting was confined to new implementation/test files; the new public
+  header was already formatter-clean and no existing header was reformatted.
+  No Release-configuration build/test, sanitizer, hosted-CI action, reset,
+  commit or push ran. Preserve Changes 1-8 and proceed only to Change 9's
+  deterministic randomization boundary.
+- **Change 9: Complete.** A pointer-free SCV random service derives root,
+  island, object and canonical thread seeds with SHA-256 domain separation and
+  no process-global ordinal. Its fixed SplitMix64 transition and unbiased
+  bounded selection have frozen seed/output vectors, explicit draw ceilings and
+  canonical snapshots that reject foreign seeds, corrupt state and excessive
+  replay. Sorted unique weighted domains reject zero/overflowing weights,
+  preserve exclusions and drive both replacement distributions and explicit-
+  reset without-replacement bags. Bag replay retains cycle, remaining values,
+  weights and stream position transactionally. Application coverage interleaves
+  independent islands/objects in different orders and proves identical local
+  results even when an unrelated stream consumes extra draws. The final focused
+  Debug inventory, portability, randomization, application, backend protocol
+  and artifact slice passes 6/6 in 0.06 seconds. A repeated focused build is a
+  no-op, all four new files are formatter-clean and `git diff --check` passes.
+  The ledger preserves Changes 2-9 with ten active rows at normalized SHA-256
+  `8b26fc04f68c88bb0176a5ce873dc643dee550754bd6ef06aa94a137cdc0529f`.
+  No existing header was reformatted. No Release-configuration build/test,
+  sanitizer, hosted-CI action, reset, commit or push ran. Preserve Changes 1-9
+  and proceed only to Change 10's native `scv_smart_ptr` ownership boundary.
+- **Change 10: Complete.** One explicit native registry owns real Accellera
+  `scv_smart_ptr` scalar and aggregate payloads behind bounded generational
+  handles associated with stable Change 8 object IDs. Copy construction and
+  matching-kind assignment preserve upstream shared-object semantics; failed
+  cross-kind assignment is transactional. Opaque field/element paths expose
+  typed metadata and checked values for scalar, nested-record and fixed-array
+  extensions, plus native enable/disable/randomize control, without exporting
+  any upstream type or raw pointer from the public boundary. Live-payload
+  accounting proves alias teardown, destination replacement, stale-handle,
+  registry destruction, invalid-limit and handle-exhaustion paths return to
+  baseline. The final focused Debug inventory, portability, smart-pointer,
+  deterministic-randomization, application, backend protocol and artifact
+  slice passes 7/7 in 0.06 seconds. A repeated focused build is a no-op, all
+  four owning files are formatter-clean and `git diff --check` passes. The
+  ledger preserves Changes 2-10 with nine active rows at normalized SHA-256
+  `7719821746d0e1fcb34d6e654bbe21213573f3737b228e771ca5456379fb5c39`.
+  No existing header was reformatted. No Release-configuration build/test,
+  sanitizer, hosted-CI action, reset, commit or push ran. Preserve Changes 1-10
+  and proceed only to Change 11's constraints/distributions boundary.
+- **Change 11: Complete.** A bounded SCV constraint request maps stable native
+  handles/extension paths onto fsim's retained solver with signed 64-bit
+  domains, weighted distributions, explicit solve-before edges and hard/soft
+  clauses. Linear terms express scalar predicates, composite sums and
+  referenced-variable relations; endpoint preflight rejects arithmetic overflow,
+  duplicate domains, alias targets, malformed identities/paths/weights and
+  cyclic or invalid ordering. Every target and original value is validated
+  before solving, the complete deterministic solution is staged before native
+  assignment, and an unexpected publication failure rolls prior writes back.
+  Contradictory and search/elapsed-work-exhausted solves publish nothing through
+  `FSIM-SCV-Q001` through `FSIM-SCV-Q003`; identical selection replays the exact
+  assignments. Application coverage constrains a real aliased native
+  `scv_smart_ptr` extension. The final focused Debug inventory, portability,
+  constraints, smart-pointer, randomization, application, backend protocol and
+  artifact slice passes 8/8 in 0.07 seconds. A repeated focused build is a
+  no-op, all owning files are formatter-clean and `git diff --check` passes.
+  The ledger preserves Changes 2-11 with eight active rows at normalized
+  SHA-256
+  `ff3826aa3671470b66b14846c5c2e9d068f306a87edd2d34ef676eed551cf14a`.
+  No existing header was reformatted. No Release-configuration build/test,
+  sanitizer, hosted-CI action, reset, commit or push ran. Preserve Changes 1-11
+  and proceed only to Change 12's extension-introspection boundary.
+- **Change 12: Complete.** A pointer-free flat snapshot walks real native
+  `scv_extensions` iteratively and retains stable parent IDs, field/element
+  relation and ordinal, names, nominal types, kinds, signedness and packed
+  `[width-1:0]` ranges. Scalar Boolean/signed/unsigned, enum value/name, string,
+  record/class and fixed-array nodes are covered alongside a 257-bit SystemC
+  value and a 193-bit four-state vector whose canonical aval/bval words preserve
+  exact 0/1/X/Z planes above 64 bits. The owning native fixture initializes
+  values through the official extension write interface with randomization
+  disabled, proving readback rather than host layout. Explicit node, depth,
+  value-bit, plane-word, per-string and total-string ceilings reject stale,
+  malformed or excessive trees through `FSIM-SCV-X001` through
+  `FSIM-SCV-X003` without returning a partial snapshot. The final focused Debug
+  inventory, portability, extensions, application, smart-pointer, constraints,
+  backend protocol and artifact slice passes 8/8 in 0.07 seconds. A repeated
+  focused build is a no-op, all owning files are formatter-clean and
+  `git diff --check` passes. The ledger preserves Changes 2-12 with seven active
+  rows at normalized SHA-256
+  `8b0789fc631ae75a649e47e3bfc0e1f7f71169a64f296ea7d4f161cd46b29dd1`.
+  No unrelated existing header was reformatted. No Release-configuration
+  build/test, sanitizer, hosted-CI action, reset, commit or push ran. Preserve
+  Changes 1-12 and proceed only to Change 13's common transaction-record model.
+- **Change 13: Complete.** Schema-1 `TransactionRecord` is a language-neutral,
+  pointer-free model with stable stream/generator/transaction IDs, exact begin/
+  end time-delta-region coordinates, ordered attributes and relations, and
+  ordered correlated SystemC/TLM-1/TLM-2 object IDs. Typed Boolean, signed,
+  unsigned, enum, string, bit-vector and logic-vector values preserve nominal
+  type, width, signedness, text and canonical aval/bval words. Strict validation
+  owns temporal consistency, unique ordering, reserved/high bits and explicit
+  message, collection, string, width and plane budgets. Canonical little-endian
+  serialization is byte-deterministic; bad/future magic/schema, corrupt
+  reserved fields, malformed planes, truncation and trailing data reject through
+  `FSIM-SCV-T001` through `FSIM-SCV-T003`. Application coverage sorts and
+  round-trips records by begin time/delta/region and stable IDs. The final
+  focused Debug inventory, portability, transaction-record, application,
+  backend protocol and artifact slice passes 6/6 in 0.06 seconds. The focused
+  rebuild is a no-op, all four owning files are formatter-clean and
+  `git diff --check` passes. The ledger preserves Changes 2-13 with six active
+  rows at normalized SHA-256
+  `6d6e9bb7890f9600817067d0d5ce8a20fda71532bac7c0e7dafa19f155c53f37`.
+  No existing header was reformatted. No Release-configuration build/test,
+  sanitizer, hosted-CI action, reset, commit or push ran. Preserve Changes 1-13
+  and proceed only to Change 14's native SCV recording API.
+- **Change 14: Complete.** One bounded registry owns real native SCV transaction
+  databases, streams, signed begin/end generators and reference-counted handles
+  behind Change 8 stable island, stream, generator and transaction identities.
+  SCV's synchronous begin/end, typed Boolean/signed/unsigned/string attribute
+  and relation callbacks are the sole publication path into Change 13 records;
+  native callback values and identities are checked against their adapter
+  context before the canonical attributes/relations are sorted and validated.
+  Recording suspension suppresses partial records, explicit release retains
+  upstream handle lifetime, and invalid/stale state, callback mismatch and
+  stream/generator/handle/record/attribute/relation resource exhaustion reject
+  through `FSIM-SCV-N001` through `FSIM-SCV-N003`. Application coverage
+  round-trips a callback-produced record without publishing signal activity or
+  advancing/changing co-located kernel semantics. The final focused Debug
+  inventory, portability, native-recording, application, transaction-record,
+  backend-protocol and artifact slice passes 7/7 in 0.06 seconds. The focused
+  rebuild is a no-op, all four owning files are formatter-clean and
+  `git diff --check` passes. The ledger preserves Changes 2-14 with five active
+  rows at normalized SHA-256
+  `a5a415e665a580cfa1166662e14c8bd12204932dd9ff5658fe97ab09fe11bc30`.
+  No existing header was reformatted. No Release-configuration build/test,
+  sanitizer, hosted-CI action, reset, commit or push ran. Preserve Changes 1-14
+  and proceed only to Change 15's trace/debug correlation boundary.
+- **Change 15: Complete.** A bounded application correlation service decorates
+  common SCV records with stable SystemC signal/port identities, typed native
+  TLM-1/TLM-2 transaction identities and exact VCD/FST signal/time/delta/region
+  associations. Per-generator selection barriers provide deterministic late
+  enablement; accepted records remain strictly ordered and unique, debugger
+  inspection returns a stable pending snapshot, and observer failures are
+  contained without undoing or duplicating the accepted record. Flush and
+  close preserve order, while a full queue returns explicit retryable bounded
+  backpressure without changing queue or sequence state. Invalid lifecycle,
+  correlation/order and resource cases reject through `FSIM-SCV-L001` through
+  `FSIM-SCV-L003`. The final focused Debug inventory, portability, SCV trace,
+  native recording, retained trace observation/control/SystemC trace,
+  SystemC/TLM, backend-protocol and artifact slice passes 10/10 in 2.97
+  seconds. The one stale merged application host was relinked locally before
+  its retained TLM case passed; the final focused rebuild is a no-op, owning
+  files are formatter-clean and `git diff --check` passes. The ledger preserves
+  Changes 2-15 with four active rows at normalized SHA-256
+  `7afa66c38315615ba920133528f9022800c20eb64c8f7cecc33fe529dc9732ec`.
+  No existing header was reformatted. No Release-configuration build/test,
+  sanitizer, hosted-CI action, reset, commit or push ran. Preserve Changes 1-15
+  and proceed only to Change 16's backend serialization/merge boundary.
+- **Change 16: Complete.** A schema-1, fixed 64-byte transport envelope carries
+  the exact Change 13 serialization plus stable island and sequence identity.
+  Direct and worker-loopback transports both serialize then deserialize through
+  that one path and produce byte-identical receipts; loopbacks reject foreign
+  islands and preserve independent ownership without introducing a partitioner
+  or scheduler. Fresh replay is deterministic, per-island duplicate/regressing
+  sequences reject, and merge orders by begin time, delta, region, island and
+  sequence. Disconnected/crashed endpoints and full record/byte queues return
+  explicit status without changing queued records or sequence state, and may
+  resume without corrupting retained work. Wire, ownership/order and resource
+  failures use `FSIM-SCV-W001` through `FSIM-SCV-W003`. The final focused Debug
+  inventory, portability, transport, native-recording, application,
+  transaction-record, backend-protocol and artifact slice passes 8/8 in 0.06
+  seconds. The focused rebuild is a no-op, all four owning files are formatter-
+  clean and `git diff --check` passes. The ledger preserves Changes 2-16 with
+  three active rows at normalized SHA-256
+  `30eed0ddf21251d9c4373e3ef2bf1fc3b1e2adfe3b656bcf91d62100b1423f22`.
+  No existing header was reformatted. No Release-configuration build/test,
+  sanitizer, hosted-CI action, reset, commit or push ran. Preserve Changes 1-16
+  and proceed only to Change 17's corpus/platform/teardown boundary.
+- **Change 17: Complete.** Four unmodified official SCV 2.0.1 examples cover
+  hello/runtime linkage, extension introspection, deterministic randomization
+  and native transaction recording directly from the pinned source tree. Only
+  target-local legacy-example warning compatibility is applied: unused
+  parameters, signed index conversion and SystemC's explicit deprecated-API
+  opt-in; neither upstream source nor project-wide warnings change. The fsim
+  corpus composes deterministic seeds, native smart-pointer teardown,
+  constraints, extension snapshots, recording and byte-identical direct/
+  loopback replay, returning live payloads and handles to baseline. Retained
+  provenance/patch, installed non-ASCII relocation, shared-runtime,
+  compatibility, compiler/cache, artifact, randomization, introspection,
+  recording, trace and backend tests form the registered Linux/Windows target
+  matrix; current Clang Debug execution passes here, while the user-directed
+  Windows/Release execution is deferred to final Batch 177. The final focused
+  Debug SCV matrix passes 26/26 in 15.22 seconds. The focused build is a no-op,
+  the owning corpus is formatter-clean and `git diff --check` passes. The ledger
+  preserves Changes 2-17 with two active rows at normalized SHA-256
+  `88ffd8869d6427ea734bd7c2bd5c6cb400524253f22332fc405dcf8e935badbe`.
+  No existing header or upstream source was reformatted. No Release build/test,
+  sanitizer, hosted-CI action, reset, commit or push ran. Preserve Changes 1-17
+  and proceed only to Change 18's performance/resource containment boundary.
+- **Change 18: Complete.** A bounded resource probe measures attempted,
+  recorded and transported transaction volume, native callback count,
+  canonical serialized bytes, elapsed enabled/disabled recording work, queue
+  peaks, approximate queue memory and solver resource exhaustion. Explicit
+  transaction, attribute, record-count, byte and solver ceilings replace hidden
+  caps. Full record and byte queues return retryable backpressure, drain, and
+  accept the same sequence without loss; injected invalid-producer and
+  disconnected-consumer attempts leave no live handle or changed queue and the
+  following operation recovers. Repeated 64-transaction runs produce identical
+  32,448-byte output and SHA-256
+  `08de48315d224e3a9340adecaec8c3bb747dc84b43b1a08e6c23a99d264f42a2`;
+  the four-record queue peaks at 2,028 bytes with fifteen backpressure events,
+  while disabled recording publishes zero records and bytes. A deliberately
+  contradictory solve reaches its explicit search ceiling without changing
+  native state. `FSIM-SCV-E001` through `FSIM-SCV-E003` own malformed probes,
+  containment failures and resource exhaustion. The final focused Debug
+  diagnostics, inventory, portability, artifact, protocol, constraint,
+  transaction, recording, transport, resource and corpus slice passes 12/12 in
+  0.30 seconds. The ledger preserves Changes 2-18 with one active row at
+  normalized SHA-256
+  `0f8950033a1d15b1f49ac4da59bf1675578818c192d12aa0576954ded98d4e2e`.
+  No existing header was reformatted. No Release build/test, sanitizer,
+  hosted-CI action, reset, commit or push ran. Preserve Changes 1-18 and proceed
+  only to Change 19's documentation/closure handoff.
+- **Change 19: Complete.** Architecture, language support, README and the
+  twelve-row public feature/evidence matrix now publish the exact governed SCV
+  source, one-patch policy, shared runtime, producer/artifact identities,
+  pointer-free backend, randomization, native ownership, constraints,
+  introspection, records, correlation, transport and resource boundary. The
+  release audit freezes archive/tree/patch identities, removal criteria, the
+  32-code diagnostic family, deterministic resource baseline and explicit
+  Batch 177 Release/sanitizer/hosted-CI deferral. A registered four-stage
+  closure retains governance, behavior, official-example and co-located
+  SystemC/TLM logs when invoked directly; ordinary regression uses fixtures so
+  each witness runs once and the closure driver does not recursively duplicate
+  tests. The exact Batch 174 restart checkpoint is synchronized in
+  `docs/v2-resume.md`. Direct focused Debug closure passes 33/33 across the
+  four retained stages in 10.08 seconds; the fixture-driven registered form
+  passes 31/31 in 14.97 seconds and the closure driver itself takes 0.01
+  seconds without nested execution. All eighteen inventory rows are preserved
+  with zero active obligations at normalized SHA-256
+  `78fda3ccb3264ad3833ddb7334f1b49cdd3c63970fb7aaacd32b8c8b6ad997b0`.
+  Preserve Changes 1-19 and proceed only to Change 20's fresh full Debug
+  qualification and single commit/push; do not run Release, sanitizer or hosted
+  CI in this batch.
+- **Change 20: Complete.** One clean-first exact-LLVM 22.1.8 Debug build
+  completes warning-free at 2,383/2,383 steps with eight workers. The first
+  complete regression exposes only static audit drift caused by the reviewed
+  SCV additions: the tenth fixture-backed closure driver, 2,548 diagnostics,
+  1,143 bounded sources, 431 authored test/control files, 1,361 SPDX-owned
+  files, the refreshed feature-matrix digest and the VHDL/PSL closure-ledger
+  digest. The audit also finds and repairs the missing SPDX notice in
+  `scv.pc.in`. All fifteen initially affected audit tests pass 15/15 after the
+  repair, and the final complete Debug regression passes 276/276 in 169.55
+  seconds, including SystemC/TLM/SCV, plug-in/ABI, installed/relocation,
+  recording/debug, determinism, resource and de-duplicated closure gates.
+  Retained direct SCV closure evidence remains under
+  `build/llvm22-ninja-debug/tests/scv-closure-evidence`. The accumulated batch
+  receives one commit and one push at this boundary. No Release build/test,
+  sanitizer, or hosted-CI inspection runs; Batch 177 owns all three deferred
+  final-release obligations.
 
 ### Batch 174 - v2 artifact, ABI, and migration freeze
 
@@ -12137,8 +12526,10 @@ carry an explicit evidence-backed scope disposition approved by the user.
   foreign-interface, standard-mode, SDF, FST, artifact, debug/trace or platform
   gap remains.
 - **Changes 5-8:** repeat clean exact-LLVM Linux Debug/Release, Windows hosted
-  MSVC/clang-cl Debug/Release, interpreter/O0/O2/debug, sanitizer evidence from
-  Batches 170, 172 and 173, and all release-candidate smoke workflows.
+  MSVC/clang-cl Debug/Release, interpreter/O0/O2/debug and all release-candidate
+  smoke workflows. Run the fresh sanitizer and Release qualification deferred
+  from Batch 173 here, then monitor and repair the complete hosted Linux/Windows
+  CI matrix as final-release evidence.
 - **Changes 9-12:** verify deterministic source and binary archives, SBOM/
   licenses, upstream source/patch identities, install layouts, ABI/schema
   versions, migrations, artifact digests, examples, and offline reproducibility.
@@ -12147,9 +12538,10 @@ carry an explicit evidence-backed scope disposition approved by the user.
 - **Changes 17-19:** freeze final docs/changelog/support policy, mark all v2
   roadmap items complete, prepare the exact release commit/tag notes, and record
   clean-context evidence.
-- **Change 20:** run the final full Debug/Release and release gates, commit and
-  push once, create and push annotated tag `v2.0.0`, verify the tag/artifacts,
-  and declare v2 complete. This non-monitoring batch runs no new sanitizer.
+- **Change 20:** run the final full Debug/Release and release gates, confirm the
+  deferred Batch 173 sanitizer/Release/hosted-CI evidence remains green, commit
+  and push once, create and push annotated tag `v2.0.0`, verify the tag,
+  artifacts and complete hosted matrix, and declare v2 complete.
 
 ## Forward priority order
 

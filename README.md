@@ -476,7 +476,10 @@ The current tree contains:
 - official `SC_METHOD`, `SC_THREAD`, and `SC_CTHREAD` execution with native
   Accellera events, primitive-channel updates, signals, ports, exports,
   lifecycle ordering, and TLM-1/TLM-2 activity synchronized at explicit common
-  scheduler safe points.
+  scheduler safe points;
+- governed SCV 2.0.1 randomization, smart pointers, constraints, extension
+  introspection, native transaction recording, pointer-free correlation and
+  deterministic direct/loopback record transport with bounded backpressure.
 
 SystemC source is compiled against the official Accellera 3.0.2 headers and
 runtime. HDL instances may bind to typed SystemC factories, and either HDL or
@@ -487,6 +490,14 @@ simulation context. The bridge synchronizes boundary values, pending native
 activity, and time with the common HDL scheduler while retaining stable mixed-
 language hierarchy and trace/debug identities. The former fsim SystemC facade,
 custom kernel, and Boost.Context execution path have been removed.
+
+SCV links to that same official runtime. Its upstream source and one governed
+compatibility patch are digest-pinned; source plug-ins, incremental objects,
+mapped artifacts and standalone designs retain the complete producer identity.
+Native SCV/SystemC/TLM state stays in-island while stable transaction records
+feed debugger and VCD/FST correlation. See the
+[Batch 173 SCV closure audit](docs/v2-scv-release-audit.md) for the exact
+supported surface, resource baseline and final-release deferrals.
 
 Bounded scalar VHDL generic and integral SystemVerilog parameter actuals
 transfer across explicit HDL bindings before port widths are checked. Typed
@@ -919,6 +930,7 @@ compression.
 - [Standard Delay Format support](docs/sdf.md)
 - [Batch 169 SDF application release audit](docs/v2-sdf-application-release-audit.md)
 - [Batch 170 SDF/VITAL release audit](docs/v2-sdf-vital-release-audit.md)
+- [Batch 173 SCV release audit](docs/v2-scv-release-audit.md)
 - [Language support and feature status](docs/language-support.md)
 - [Feature matrix and test evidence](docs/feature-matrix.md)
 - [v1 conformance provenance audit](docs/v1-conformance-audit.md)

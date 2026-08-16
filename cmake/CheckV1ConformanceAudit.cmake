@@ -10,6 +10,7 @@ set(FSIM_AUDIT "${FSIM_SOURCE_DIR}/docs/v1-conformance-audit.md")
 set(FSIM_REPOSITORY_LICENSE "${FSIM_SOURCE_DIR}/LICENSE")
 set(FSIM_IEEE_ROOT "${FSIM_SOURCE_DIR}/third_party/ieee-1076-2019")
 set(FSIM_SYSTEMC_ROOT "${FSIM_SOURCE_DIR}/third_party/systemc-3.0.2")
+set(FSIM_SCV_ROOT "${FSIM_SOURCE_DIR}/third_party/scv-2.0.1")
 foreach(FSIM_INPUT IN ITEMS
     "${FSIM_AUDIT}"
     "${FSIM_REPOSITORY_LICENSE}"
@@ -23,7 +24,12 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_SYSTEMC_ROOT}/README.md"
     "${FSIM_SYSTEMC_ROOT}/SOURCE_MANIFEST.txt"
     "${FSIM_SYSTEMC_ROOT}/systemc-3.0.2.spdx.json"
-    "${FSIM_SYSTEMC_ROOT}/systemc-3.0.2.tar.gz")
+    "${FSIM_SYSTEMC_ROOT}/systemc-3.0.2.tar.gz"
+    "${FSIM_SCV_ROOT}/LICENSE"
+    "${FSIM_SCV_ROOT}/NOTICE"
+    "${FSIM_SCV_ROOT}/SOURCE_MANIFEST.txt"
+    "${FSIM_SCV_ROOT}/scv-2.0.1.spdx.json"
+    "${FSIM_SCV_ROOT}/scv-2.0.1.tar.gz")
   if(NOT EXISTS "${FSIM_INPUT}")
     message(FATAL_ERROR "v1 conformance audit input not found: ${FSIM_INPUT}")
   endif()
@@ -123,14 +129,15 @@ endforeach()
 file(GLOB FSIM_THIRD_PARTY_ENTRIES LIST_DIRECTORIES TRUE
   "${FSIM_SOURCE_DIR}/third_party/*")
 list(LENGTH FSIM_THIRD_PARTY_ENTRIES FSIM_THIRD_PARTY_COUNT)
-if(NOT FSIM_THIRD_PARTY_COUNT EQUAL 2)
+if(NOT FSIM_THIRD_PARTY_COUNT EQUAL 3)
   message(FATAL_ERROR
-    "expected exactly two reviewed third-party roots, found "
+    "expected exactly three reviewed third-party roots, found "
     "${FSIM_THIRD_PARTY_COUNT}")
 endif()
 foreach(FSIM_THIRD_PARTY_ENTRY IN LISTS FSIM_THIRD_PARTY_ENTRIES)
   if(NOT FSIM_THIRD_PARTY_ENTRY STREQUAL FSIM_IEEE_ROOT
-      AND NOT FSIM_THIRD_PARTY_ENTRY STREQUAL FSIM_SYSTEMC_ROOT)
+      AND NOT FSIM_THIRD_PARTY_ENTRY STREQUAL FSIM_SYSTEMC_ROOT
+      AND NOT FSIM_THIRD_PARTY_ENTRY STREQUAL FSIM_SCV_ROOT)
     message(FATAL_ERROR
       "unreviewed third-party root present: ${FSIM_THIRD_PARTY_ENTRY}")
   endif()

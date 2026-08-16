@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/systemc/plugin_loader.hpp"
+#include "fsim/systemc/scv.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -214,6 +215,12 @@ std::unique_ptr<Plugin> Plugin::load(
         || registrar.register_elaboration_factory == nullptr
         || registrar.register_factory_parameter == nullptr) {
         error = "SystemC host/registrar ABI mismatch";
+        return nullptr;
+    }
+    if (!fsim_scv_accepts_compatibility_identity(
+            host.scv_compatibility_identity)) {
+        error = fsim_scv_compatibility_diagnostic(
+            host.scv_compatibility_identity);
         return nullptr;
     }
 

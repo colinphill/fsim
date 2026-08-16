@@ -12,7 +12,7 @@
 
 namespace fsim::library {
 
-inline constexpr std::uint32_t kFormatVersion = 4;
+inline constexpr std::uint32_t kFormatVersion = 5;
 inline constexpr std::uint32_t kPortableSchemaVersion = 10;
 inline constexpr std::string_view kMetadataFilename = "fsim-library.toml";
 
@@ -75,6 +75,7 @@ struct NativeArtifact {
   std::string checksum;
   std::uint32_t runtime_abi{};
   std::uint32_t systemc_abi{};
+  std::string scv_compatibility;
   std::string compiler_fingerprint;
   std::string llvm_version;
   std::string target;

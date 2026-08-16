@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/systemc/hierarchy.hpp"
 #include "fsim/systemc/plugin_loader.hpp"
+#include "fsim/systemc/scv.hpp"
 
 #include "fsim/runtime/simir.hpp"
 
@@ -136,6 +137,7 @@ int main(int argc, char** argv)
     host.abi_version = FSIM_SYSTEMC_ABI_VERSION;
     host.struct_size =
         static_cast<decltype(host.struct_size)>(sizeof(host) + 64);
+    host.scv_compatibility_identity = fsim_scv_compatibility_identity();
 
     fsim_sc_registrar_v1 registrar {};
     registrar.abi_version = FSIM_SYSTEMC_ABI_VERSION;
@@ -167,6 +169,19 @@ int main(int argc, char** argv)
     assert(!fsim::systemc::Plugin::load(
         macro_plugin_path, incompatible_host, registrar, error));
     assert(error == "SystemC host/registrar ABI mismatch");
+
+    auto wrong_scv_identity =
+        std::string { fsim_scv_compatibility_identity() };
+    const auto scv_version = wrong_scv_identity.find("|scv=2.0.1|");
+    assert(scv_version != std::string::npos);
+    wrong_scv_identity.replace(scv_version, 11, "|scv=2.0.2|");
+    auto incompatible_scv_host = host;
+    incompatible_scv_host.scv_compatibility_identity =
+        wrong_scv_identity.c_str();
+    error.clear();
+    assert(!fsim::systemc::Plugin::load(
+        macro_plugin_path, incompatible_scv_host, registrar, error));
+    assert(error == "FSIM-SCV-C001 SCV version mismatch");
 
     error.clear();
     assert(!fsim::systemc::Plugin::load(

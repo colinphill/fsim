@@ -6,6 +6,7 @@
 #include "fsim/library/portable_unit.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/systemc/scv.hpp"
 #include "fsim/systemc_abi.h"
 #include "fsim/version.hpp"
 #if defined(FSIM_HAS_LLVM)
@@ -158,8 +159,9 @@ namespace {
             metadata.native_artifacts.push_back({ "systemc_plugin", artifact,
                 support::Sha256::hex(support::Sha256::digest(*bytes)),
                 runtime_abi_version, FSIM_SYSTEMC_ABI_VERSION,
-                compiled.host_fingerprint, { }, application_detail::target_name(), { },
-                "compiler-default", { }, { }, { } });
+                fsim_scv_compatibility_identity(), compiled.host_fingerprint,
+                { }, application_detail::target_name(), { }, "compiler-default",
+                { }, { }, { } });
             payloads.push_back({ artifact, std::move(*bytes) });
             break;
         }
@@ -281,7 +283,7 @@ namespace {
                 / (key + ".o");
             metadata.native_artifacts.push_back({ "llvm_object", artifact,
                 support::Sha256::hex(support::Sha256::digest(raw)),
-                runtime_abi_version, 0, { }, host.llvm_version, host.target,
+                runtime_abi_version, 0, { }, { }, host.llvm_version, host.target,
                 host.data_layout, host.cpu, feature_identity(host.features),
                 optimization == compiler::JitOptimizationLevel::o0 ? "O0" : "O2",
                 key });

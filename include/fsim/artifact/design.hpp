@@ -14,7 +14,7 @@
 
 namespace fsim::artifact {
 
-inline constexpr std::uint32_t kDesignFormatVersion = 10;
+inline constexpr std::uint32_t kDesignFormatVersion = 11;
 inline constexpr std::string_view kDesignMetadataFilename = "fsim-design.bin";
 
 struct DesignRoot {
@@ -99,6 +99,7 @@ struct DesignSystemCPlugin {
   std::string input_digest;
   std::string link_digest;
   std::string compiler_fingerprint;
+  std::string scv_compatibility;
   std::filesystem::path directory;
   std::string metadata_checksum;
   std::string library_checksum;

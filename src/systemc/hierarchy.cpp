@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_internal.hpp"
 #include "context_activation.hpp"
+#include "fsim/systemc/scv.hpp"
 
 #include <atomic>
 
@@ -238,6 +239,7 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
         registry_wait_for_input_or_native_activity;
     host.current_time_femtoseconds =
         registry_current_time_femtoseconds;
+    host.scv_compatibility_identity = fsim_scv_compatibility_identity();
 
     Impl staged_registrations;
     fsim_sc_registrar_v1 registrar{};

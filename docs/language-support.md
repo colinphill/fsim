@@ -2301,6 +2301,18 @@ scheduler safe points. Direct and serialized-loopback backends use the same
 bounded pointer-free protocol and retain exact time, delta, island, endpoint,
 sequence and transaction identities.
 
+The governed SCV 2.0.1 profile adds deterministic randomization and bags,
+native smart-pointer lifetime, bounded constraints and distributions, extension
+introspection, transaction recording and SystemC/TLM/VCD/FST correlation.
+Native SCV objects never cross an island boundary; common records serialize
+stable identities, typed values and exact scheduler coordinates. Explicit
+transaction, attribute, solver and queue limits provide retryable backpressure
+and containment for producer, consumer and worker failures. The official and
+fsim corpora, provenance, patch, installation, artifact and resource contracts
+are documented in [the Batch 173 closure audit](v2-scv-release-audit.md).
+Batch 173 closes focused Debug evidence; Windows, Release, sanitizer and hosted
+CI execution are final Batch 177 obligations.
+
 `SC_FSIM_EXPORT` and `SC_FSIM_EXPORT_AS` publish one or more factories through
 a deterministic descriptor registry and automatically discover an optional
 factory-parameter schema. The former `hdl_instance` facade, handwritten entry

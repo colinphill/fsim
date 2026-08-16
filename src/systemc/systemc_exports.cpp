@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/systemc/accellera.hpp"
+#include "fsim/systemc/scv.hpp"
 
 #include <algorithm>
 #include <string_view>
@@ -29,6 +30,13 @@ extern "C" FSIM_SC_EXPORT fsim_sc_status_v1 fsim_plugin_init_v1(
     const fsim_sc_host_v1* host,
     fsim_sc_registrar_v1* registrar) {
     try {
+        if (host == nullptr || registrar == nullptr
+            || host->abi_version != FSIM_SYSTEMC_ABI_VERSION
+            || registrar->abi_version != FSIM_SYSTEMC_ABI_VERSION
+            || !fsim_scv_accepts_compatibility_identity(
+                host->scv_compatibility_identity)) {
+            return FSIM_SC_ABI_MISMATCH;
+        }
         const auto* const runtime_identity =
             fsim_systemc_accellera_runtime_identity();
         const auto* const compatibility_identity =

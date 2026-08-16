@@ -1,0 +1,16 @@
+schema=fsim-scv-accellera-source-v1
+name=SCV
+version=2.0.1
+release_date=2017-12-08
+release_id=Accellera-download-2017-12-08
+upstream_url=https://www.accellera.org/images/downloads/standards/systemc/scv-2.0.1.tar.gz
+archive=scv-2.0.1.tar.gz
+archive_size=2835735
+archive_sha256=7bd1c4037f3c108d02f45cae003d112efdb788d469cb029fada247d330ca4881
+source_root=scv-2.0.1
+tree_files=578
+tree_sha256=85cc2e4e3ee1893878de2567f253003859c847a151f080e48f185825c34f933c
+license=Apache-2.0
+license_sha256=4b4fe282d05e6f3f63e36b124565a5d07727e84bc32fe30e2937ca0f84a34601
+notice_sha256=6b6ca891607a6d5e59b4af51edd5a2a486e414b115e0d5358ee78e906c31ac0f
+purl=pkg:generic/scv@2.0.1?download_url=https%3A%2F%2Fwww.accellera.org%2Fimages%2Fdownloads%2Fstandards%2Fsystemc%2Fscv-2.0.1.tar.gz

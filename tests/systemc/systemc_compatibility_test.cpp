@@ -16,7 +16,7 @@
 static_assert(SC_VERSION_MAJOR == 3);
 static_assert(SC_VERSION_MINOR == 0);
 static_assert(SC_VERSION_PATCH == 2);
-static_assert(FSIM_SYSTEMC_ABI_VERSION == 3u);
+static_assert(FSIM_SYSTEMC_ABI_VERSION == 4u);
 static_assert(fsim::systemc::accellera_version == "3.0.2");
 static_assert(fsim::systemc::accellera_bridge_revision == 2u);
 static_assert(

@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(SystemCLanguage 3.0.2.20251031 EXACT CONFIG)
+set(SCV_COMPATIBILITY_SCHEMA "fsim-scv-compatibility-v1")
+set(SCV_SOURCE_SHA256 "@FSIM_SCV_ARCHIVE_SHA256@")
+set(SCV_PATCH_SHA256 "@FSIM_SCV_PATCH_MANIFEST_SHA256@")
+set(SCV_PATCHED_TREE_SHA256 "@FSIM_SCV_PATCHED_TREE_SHA256@")
+set(SCV_ADAPTER_ABI_VERSION 1)
+set(SCV_PLUGIN_ABI_VERSION 1)
+set(SCV_ARTIFACT_SCHEMA_VERSION 1)
+set(SCV_CACHE_SCHEMA_VERSION 1)
+include("${CMAKE_CURRENT_LIST_DIR}/SCVTargets.cmake")
+check_required_components(SCV)

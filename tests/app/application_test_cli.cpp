@@ -5,6 +5,7 @@
 #include "fsim/library/portable_unit.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/systemc/hierarchy.hpp"
+#include "fsim/systemc/scv.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -226,6 +227,8 @@ void ApplicationTestFixture::test_preprocessing_debug_and_cli()
         }));
     assert(systemc_metadata->native_artifacts.size() == 1);
     assert(systemc_metadata->native_artifacts.front().kind == "systemc_plugin");
+    assert(systemc_metadata->native_artifacts.front().scv_compatibility
+        == fsim_scv_compatibility_identity());
     auto nonportable_systemc_config = config;
     nonportable_systemc_config.systemc.defines.push_back("PRODUCER_ONLY=1");
     fsim::diagnostic::Engine nonportable_systemc_diagnostics;
@@ -266,6 +269,45 @@ void ApplicationTestFixture::test_preprocessing_debug_and_cli()
     assert(
         mapped_systemc->systemc_plugins.front().parent_path().parent_path()
         == exported_systemc_library / "native");
+    const auto stale_scv_library =
+        directory / "models-systemc-stale-scv.fsimlib";
+    clone_library_writable(exported_systemc_library, stale_scv_library);
+    auto stale_scv_metadata = *systemc_metadata;
+    auto& stale_scv_identity =
+        stale_scv_metadata.native_artifacts.front().scv_compatibility;
+    const auto scv_compiler = stale_scv_identity.find("|compiler=");
+    assert(scv_compiler != std::string::npos);
+    stale_scv_identity[scv_compiler + 10U] =
+        stale_scv_identity[scv_compiler + 10U] == 'x' ? 'y' : 'x';
+    const auto stale_scv_metadata_path =
+        stale_scv_library / fsim::library::kMetadataFilename;
+    std::filesystem::permissions(
+        stale_scv_metadata_path, std::filesystem::perms::owner_write,
+        std::filesystem::perm_options::add);
+    {
+        std::ofstream output(stale_scv_metadata_path, std::ios::binary);
+        output << fsim::library::serialize_metadata(stale_scv_metadata);
+        assert(output.good());
+    }
+    auto stale_scv_config = mapped_systemc_config;
+    stale_scv_config.project.name = "mapped-systemc-stale-scv";
+    stale_scv_config.build.cache_path = directory / "mapped-systemc-stale-cache";
+    stale_scv_config.library_mappings.front().path = stale_scv_library;
+    fsim::diagnostic::Engine stale_scv_diagnostics;
+    assert(!fsim::app::build_project(stale_scv_config, stale_scv_diagnostics));
+    assert(std::ranges::any_of(
+        stale_scv_diagnostics.diagnostics(), [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SCV-A001"
+                && diagnostic.message.find("compiler mismatch")
+                    != std::string::npos;
+        }));
+    const auto stale_cache_has_file =
+        std::filesystem::exists(stale_scv_config.build.cache_path)
+        && std::ranges::any_of(
+            std::filesystem::recursive_directory_iterator(
+                stale_scv_config.build.cache_path),
+            [](const auto& entry) { return entry.is_regular_file(); });
+    assert(!stale_cache_has_file);
     const auto incompatible_systemc_library = directory / "models-systemc-incompatible.fsimlib";
     clone_library_writable(
         exported_systemc_library, incompatible_systemc_library);
