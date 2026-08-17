@@ -5363,6 +5363,17 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     the Tcl version-selection and Windows LLVM policy contracts pass 2/2.
     Refresh the final archives, commit/push the consolidated repair, and wait
     for every job in a fresh nine-lane run before creating the tag.
+87. Run `32024860916` proves the SCV compilation and fsim-owned warning repairs
+    in all four Windows lanes. Every lane then reaches the same
+    `fsim_scv_shared_runtime_tests` link failure: MinGW's generated SCV import
+    library omits the required C++ and data symbols despite the generic CMake
+    auto-export property. Retain that property and add MinGW's explicit
+    `LINKER:--export-all-symbols` option. CUDD is now warning-clean; the one
+    remaining bundled Tcl zlib keyword warning shows the configure-only flag
+    did not reach extension sub-makes, so pass
+    `CFLAGS+=-Wno-c++-keyword` directly to both build and install. The Windows
+    and Tcl contracts freeze the exact policies. Refresh archives/gates,
+    commit/push, and require a complete green nine-lane run before tagging.
 
 ## Batch 176 closeout checkpoint - activate Batch 177 after the single push
 

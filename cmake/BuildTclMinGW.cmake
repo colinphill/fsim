@@ -26,7 +26,6 @@ if(MODE STREQUAL "configure")
     COMMAND
       "${CMAKE_COMMAND}" -E env
       "CC=${CC}" "AR=${AR}" "RANLIB=${RANLIB}" "RC=${RC}"
-      "CFLAGS=-Wno-c++-keyword"
       "${GIT_BASH}" "${SOURCE_DIR}/win/configure"
       --build=x86_64-w64-mingw32
       --host=x86_64-w64-mingw32
@@ -39,7 +38,9 @@ if(MODE STREQUAL "configure")
   )
 elseif(MODE STREQUAL "build")
   execute_process(
-    COMMAND "${MAKE}" "-j${JOBS}" binaries "SHELL=${MAKE_SHELL}"
+    COMMAND
+      "${MAKE}" "-j${JOBS}" binaries "SHELL=${MAKE_SHELL}"
+      "CFLAGS+=-Wno-c++-keyword"
     WORKING_DIRECTORY "${BINARY_DIR}"
     COMMAND_ECHO STDOUT
     RESULT_VARIABLE result
@@ -49,6 +50,7 @@ elseif(MODE STREQUAL "install")
     COMMAND
       "${MAKE}" install-binaries install-libraries install-headers
       "SHELL=${MAKE_SHELL}"
+      "CFLAGS+=-Wno-c++-keyword"
       "TCL_EXE=${BINARY_DIR}/tclsh90s.exe"
     WORKING_DIRECTORY "${BINARY_DIR}"
     COMMAND_ECHO STDOUT

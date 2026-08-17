@@ -74,9 +74,15 @@ foreach(FSIM_WARNING_POLICY IN ITEMS
   endif()
 endforeach()
 string(FIND
-  "${FSIM_TCL_MINGW_ADAPTER_CONTENTS}" "CFLAGS=-Wno-c++-keyword" FSIM_INDEX)
+  "${FSIM_TCL_MINGW_ADAPTER_CONTENTS}"
+  "CFLAGS+=-Wno-c++-keyword" FSIM_INDEX)
 if(FSIM_INDEX EQUAL -1)
   message(FATAL_ERROR "Tcl lost Windows third-party warning isolation")
+endif()
+string(FIND
+  "${FSIM_SCV_ADAPTER_CONTENTS}" "LINKER:--export-all-symbols" FSIM_INDEX)
+if(FSIM_INDEX EQUAL -1)
+  message(FATAL_ERROR "SCV lost its MinGW DLL export policy")
 endif()
 string(FIND
   "${FSIM_SCV_PLUGIN_TEST_CONTENTS}"

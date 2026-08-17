@@ -14097,6 +14097,17 @@ carry an explicit evidence-backed scope disposition approved by the user.
     pass locally. Commit and push this final warning-clean repair and require a
     complete new nine-lane run before tagging.
 
+    Run `32024860916` confirms warning-clean SCV compilation in all four
+    Windows lanes, then each reaches the shared-runtime link and fails because
+    MinGW's import library omits SCV C++ and data symbols. CMake's generic
+    `WINDOWS_EXPORT_ALL_SYMBOLS` property is retained, and the MinGW SCV link
+    now also requests `--export-all-symbols` explicitly. The only remaining
+    third-party diagnostic is the Tcl bundled-zlib keyword warning: its flag
+    reached configure but not extension sub-makes, so the adapter now passes
+    `CFLAGS+=-Wno-c++-keyword` directly to both build and install. The Windows
+    contract freezes both corrections. Push the repair and require another
+    complete nine-lane run before tagging.
+
 ## Forward priority order
 
 1. **Completed in Batch 136:** read-only out-of-tree `.fsimlib` directory

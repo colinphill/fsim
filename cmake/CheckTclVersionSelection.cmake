@@ -28,7 +28,7 @@ foreach(required_policy IN ITEMS
   endif()
 endforeach()
 string(FIND
-  "${tcl_mingw_adapter}" "CFLAGS=-Wno-c++-keyword"
+  "${tcl_mingw_adapter}" "CFLAGS+=-Wno-c++-keyword"
   mingw_warning_policy_index
 )
 if(mingw_warning_policy_index EQUAL -1)
