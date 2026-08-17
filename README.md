@@ -495,9 +495,10 @@ activity, and time with the common HDL scheduler while retaining stable mixed-
 language hierarchy and trace/debug identities. The former fsim SystemC facade,
 custom kernel, and Boost.Context execution path have been removed.
 
-SCV links to that same official runtime. Its upstream source and one governed
-compatibility patch are digest-pinned; source plug-ins, incremental objects,
-mapped artifacts and standalone designs retain the complete producer identity.
+SCV links to that same official runtime. Its upstream source and two governed
+compatibility patches are digest-pinned: const-safe bag randomization and the
+C++20 nested-extension constructor spelling. Source plug-ins, incremental
+objects, mapped artifacts and standalone designs retain the complete producer identity.
 Native SCV/SystemC/TLM state stays in-island while stable transaction records
 feed debugger and VCD/FST correlation. See the
 [Batch 173 SCV closure audit](docs/v2-scv-release-audit.md) for the exact
@@ -570,7 +571,7 @@ manually smoke-test an older LLVM while
 bootstrapping, but that is not a supported project configuration and must not
 be used to claim v1 compatibility.
 
-The planned release dependency pins are CLI11 2.6.2, toml++ 3.4.0, Accellera
+The release dependency pins are CLI11 2.6.2, toml++ 3.4.0, Accellera
 SystemC 3.0.2, and Catch2 3.15.2. CMake first uses an installed exact SystemC
 3.0.2 package and otherwise fetches the official pinned source archive with
 SHA-256 verification.
@@ -666,7 +667,7 @@ ctest --preset windows-llvm-mingw --parallel 12
 ```
 
 The `ci-sanitizers` preset runs the non-LLVM suite locally with GCC ASan/UBSan
-at each scheduled ten-batch boundary; the hosted CI workflow excludes
+at scheduled release boundaries; the ordinary hosted CI workflow excludes
 sanitizer instrumentation. The `ci-fuzz` preset additionally requires Clang
 and its libFuzzer/compiler-rt development package; it recompiles an isolated
 coverage-instrumented copy of the frontend without ASan or UBSan, so fuzzers
@@ -674,6 +675,10 @@ and ordinary tests may be enabled in the same build without adding a
 libFuzzer entry point to normal executables.
 
 ## Command-line use
+
+The [user and platform guide](docs/user-platform-guide.md) records the current
+release configuration matrix, resource budgets, cache and Windows recovery,
+migration policy, and failure-triage workflow.
 
 The primary interface is:
 
@@ -913,8 +918,8 @@ VCD comparison, and bidirectional bounded VHDL/SystemVerilog
 construction-actual/cache tests are also automated. Exhaustive semantic
 fixtures are automated. Batch 175's checked Linux Debug performance matrix
 covers Clang 22 and GCC 13 with retained time/RSS/throughput provenance;
-Windows MSVC/clang-cl measurements and all Release, sanitizer, release-gate
-and hosted-CI evidence remain explicitly deferred to final Batch 177.
+Current Windows LLVM-MinGW measurements and all Release, sanitizer, release-
+gate and hosted-CI evidence remain explicitly deferred to final Batch 177.
 
 The [three-language hierarchy tutorial](examples/three_language_hierarchy/README.md)
 builds on that slice with a SystemVerilog top, a SystemC factory and method,
@@ -931,6 +936,10 @@ compression.
 - [Implementation plan and progress](docs/implementation-plan.md)
 - [Deterministic cross-language semantics](docs/cross-language-semantics.md)
 - [Diagnostic code catalog](docs/diagnostics.md)
+- [User, platform, migration, and troubleshooting guide](docs/user-platform-guide.md)
+- [Release evidence and post-v2 boundary](docs/release-and-post-v2.md)
+- [v2.0 release-candidate changelog](docs/changelog-v2.md)
+- [v2.0 release-candidate known issues](docs/known-issues-v2.md)
 - [VCD and FST tracing](docs/tracing.md)
 - [Public tracing API](docs/api.md)
 - [Batch 171 FST release audit](docs/v2-fst-release-audit.md)

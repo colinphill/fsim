@@ -3,10 +3,10 @@
 
 ## Status and invariants
 
-This document records both the v1 architecture and the smaller implementation
-present in this repository. “Current” means code exists in the vertical slice;
-“v1 target” means the interface or semantic rule is intentional but its full
-implementation is not complete.
+This document records the current bounded v2 architecture. Dated batch audits
+and stable symbols or structure prefixes whose names contain `v1` remain as
+historical/protocol identities; they do not describe an earlier supported
+runtime. “Current” means implementation plus linked executable evidence.
 
 The normative compact inventory of current public layouts and symbols,
 installed targets, artifact/schema identities, native-versus-portable policy,
@@ -57,17 +57,17 @@ than independent semantic definitions.
 
 ## Compilation pipeline
 
-| Stage | Responsibility | Vertical-slice status |
+| Stage | Responsibility | Current status |
 |---|---|---|
 | Source manager | Files, source locations, include and macro ancestry | Exact ordered compilation-unit/transitive snapshots, owning VHDL/SV/SystemC source records, and interned include/macro ancestry are current |
-| Language frontend | Tokenization, preprocessing, parsing, name/type rules | Hand-written bounded VHDL and SV parsers, a multi-root SV preprocessor, and complete owning typed HIR for the v1 profile are current |
-| SDF ingestion | Revision parsing, exact normalization, hierarchy/endpoint resolution, portable annotation state | Clean-room SDF 4.0 plus explicit 2.1/3.0 adapters, immutable IR, mixed Verilog/VHDL/SystemC mappings, and checksummed library/design/cache persistence are current; Batches 169-170 own timing application |
-| Design elaboration | Candidate resolution, specialization, hierarchy, bindings, drivers, stable IDs | Recursive VHDL/SV/SystemC hierarchy, configurable complete-scope logical-library resolution with explicit overrides and lazy read-only mapped libraries, dense instance-specific specialization records, bounded scalar VHDL generic and integral SV parameter specialization, executable conditional/iterative/selection generate expansion, construction-actual transfer across all three languages, port aliasing, strength/charge provenance, and boundary checks are current; general generic/parameter typing remains planned |
+| Language frontend | Tokenization, preprocessing, parsing, name/type rules | Hand-written bounded VHDL and Verilog/SystemVerilog parsers, a multi-root preprocessor, selectable revision environments, and owning typed HIR for the current profiles are implemented |
+| SDF ingestion | Revision parsing, exact normalization, hierarchy/endpoint resolution, portable annotation state | Clean-room SDF 4.0 plus explicit 2.1/3.0 adapters, immutable IR, Verilog/SystemVerilog/VHDL-VITAL and mixed-language application, and checksummed library/design/cache persistence are current |
+| Design elaboration | Candidate resolution, specialization, hierarchy, bindings, drivers, stable IDs | Recursive VHDL/SV/SystemC hierarchy, configurable complete-scope logical-library resolution with explicit overrides and lazy read-only mapped libraries, dense instance-specific specialization records, bounded scalar VHDL generic and integral SV parameter specialization, executable conditional/iterative/selection generate expansion, construction-actual transfer across all three languages, port aliasing, strength/charge provenance, and boundary checks are current; general generic/parameter typing is outside the bounded v2 profile |
 | SimIR lowering | Explicit reads, writes, waits, branches, assertions and yields | A typed executable subset is current |
 | Reference engine | Execute any supported SimIR with deterministic scheduling | Current |
 | LLVM engine | Compile each design-unit specialization and execute via ORC | The application groups eligible processes from each bounded elaborated specialization into one LLVM module while retaining typed per-process interpreter fallback; update/delayed writes plus dynamic/static sensitivity waits are current |
 | Runtime | Time, deltas, resolution, callbacks, force/deposit and diagnostics | Scheduler, domain-preserving process-owned driver slots, exact nine-state `std_logic`, wired and strength-aware four-state Verilog resolution, cycle-safe transmission graphs, `trireg` retention/decay, committed value changes, deposit, and force/release masking are current |
-| Visibility | C API, debugger safe points and VCD | Executable session API, VCD, and a scope/signal-oriented REPL with source/time/signal breakpoints, all four step modes, and bounded packed process-local reads are current; complete local scopes/types are planned |
+| Visibility | C API, debugger safe points, VCD and FST | Size-gated session APIs, deterministic VCD/FST, callbacks, and the REPL expose hierarchy/provenance, source/time/signal breakpoints, all four step modes, trace selection, packed locals, containers, classes, coverage/assertion and native transaction views within their documented bounds |
 
 The language-specific HIR retains resolved symbols, types, overload choices,
 constant values, and legality results. The common `DesignIR` owns dense
@@ -327,9 +327,10 @@ array, string, alias, and type-parameter forms. Packed and unpacked dimensions,
 signedness, queue bounds, associative index types, member offsets, and enum
 literal values remain independently source-addressable. Generate regions own
 their scopes, declarations, instances, process identities, concurrent
-statements, and nested alternatives. The bounded v1 profile has no classes;
-unsupported class syntax is rejected before HIR construction. Expression and
-statement fields use stable identity slots filled by the owning executable
+statements, and nested alternatives. The current bounded class object model
+retains nested declarations, inheritance, methods, constraints, randomization,
+properties and handles in owning SystemVerilog HIR. Expression and statement
+fields use stable identity slots filled by the owning executable
 SystemVerilog HIR layer without retaining parser storage.
 
 That executable layer preserves every bounded expression form, including
@@ -424,7 +425,8 @@ compilation-unit policy, defines, and include settings enter the provenance
 key. Package visibility may recurse through other constant-only project
 packages; the full acyclic source closure is retained, while a visibility cycle
 is diagnosed with its package chain. General project package bodies,
-types/subprograms, and full VHDL visibility remain future semantic-layer work.
+type/subprogram profiles beyond the governed subset, and unrestricted VHDL
+visibility remain outside the current semantic layer.
 The official IEEE-P1076 `1076-2019` source snapshot is retained
 byte-for-byte under `third_party/ieee-1076-2019` with its Apache-2.0 license,
 authors, exact checksums, and dependency-ordered inventory. Bundling is not
@@ -1442,8 +1444,8 @@ native-cache and checkpoint records.
 Observation catalogs stable path/check/violation objects during publication.
 Debugger, callback, internal-trace, VPI and VCD consumers record source spans,
 values, time, delta, scheduler region and order into preallocated storage.
-Disabled observation performs neither per-event lookup nor allocation. Batch
-170 adds structural VITAL target/model plans, exact reannotation, both
+Disabled observation performs neither per-event lookup nor allocation. The
+current structural VITAL layer adds target/model plans, exact reannotation, both
 directions of VHDL-Verilog/SystemVerilog/SystemC boundaries, VHPI/VPI timing
 objects, common observation and schema-1 portable phase/archive facades without
 adding parse or hierarchy work to the event hot path.
@@ -1520,8 +1522,8 @@ chain, so disjoint nested targets remain independently owned while debugger
 and VCD views retain the deterministic whole-object packed representation.
 
 Simulation time is an unsigned 64-bit tick count at one elaborated global
-resolution. The v1 elaborator will select the finest declared VHDL, SV, or
-SystemC precision when the manifest says `auto`. It will apply SV
+resolution. The elaborator selects the finest declared VHDL, SV, or SystemC
+precision when the manifest says `auto`. It applies SV
 `timeprecision` rounding before converting to ticks, require VHDL and SystemC
 delays to be exactly representable, and diagnose overflow before an event is
 scheduled. The current slice accepts Verilog/SystemVerilog `` `timescale``
@@ -2545,8 +2547,9 @@ it at a safe point. The command-scoped signal-handler guard restores the host's
 previous handler on every exit path. Tests raise SIGINT through the real handler
 and require both the interpreter and O0 JIT debugger to stop at tick 0, resume
 to terminal completion, and restore a preinstalled handler. The `locals`
-command reads declared packed process variables through an engine-neutral
-interface; richer local types remain planned.
+command reads bounded debug-visible process values through an engine-neutral
+interface. Types outside the explicit debugger value model are reported as
+unsupported instead of being projected through a host layout.
 
 ## Tcl automation
 
@@ -2589,9 +2592,10 @@ opt-out.
 ## Platform boundary
 
 The supported release targets are Linux x86-64 with GCC or Clang and Windows
-x86-64 with MSVC or clang-cl. Filesystem, dynamic-library loading, process
-invocation, Unicode path handling, and signal/console interruption stay behind
-platform-specific boundaries. Public C, CLI, Tcl, project/cache, diagnostics,
+x86-64 with pinned LLVM-MinGW 20260616 UCRT. Filesystem, dynamic-library
+loading, process invocation, Unicode path handling, and signal/console
+interruption stay behind platform-specific boundaries. Public C, CLI, Tcl,
+project/cache, diagnostics,
 and language-file paths use UTF-8; one conversion seam creates native
 `std::filesystem::path` values, while Windows command-line and environment
 inputs enter through UTF-16 APIs. SystemC source compilation passes argument
@@ -2608,17 +2612,23 @@ clean/no-op builds, representative elaboration/simulation, UVM, SystemC/SCV/
 SDF/FST, duration/delta, width/hierarchy, bridge and resource workloads.
 Correctness tests remain the authority for language and resource behavior: a
 performance threshold must never relax a diagnostic, limit or deterministic
-output contract. Windows MSVC and clang-cl observations are intentionally not
-inferred from Linux; their rows remain active until measured in final Batch
-177, which also owns Release, sanitizer, release-gate and hosted-CI evidence.
+output contract. The historical Batch 175 Windows MSVC/clang-cl rows are not
+release-support claims after the LLVM-MinGW migration. The frozen
+qualification ledger maps all twelve deferred workloads to the current
+LLVM-MinGW 20260616 targets; MSVC and clang-cl remain source/command
+portability contracts and are retired as package targets. Final Batch 177 owns
+measured Windows, Release, sanitizer, release-gate and hosted-CI evidence. The
+checked support matrix and candidate identities are frozen in
+`packaging/v2-support-matrix.tsv` and `packaging/v2-release-record.txt`.
 
 The current
 compiler component produces checksummed, content-keyed shared libraries with
 per-key locking, and project builds invoke it for SystemC source sets.
-GCC-like builds use compiler-emitted dependency files and content-hash the
-complete reported closure, including implicit system headers. MSVC and
-clang-cl use `/sourceDependencies` JSON plus conservative roots for
-unresolved constructs. Source content and path-addressed
+GCC-like builds, including the supported LLVM-MinGW compiler, use
+compiler-emitted dependency files and content-hash the complete reported
+closure, including implicit system headers. Native MSVC command planning uses
+`/sourceDependencies` JSON plus conservative roots for unresolved constructs.
+Source content and path-addressed
 linked inputs also participate in the key; options or inputs whose dependency
 closure cannot be proved make a build non-cacheable. GCC-like tracked inputs
 using `__DATE__`, `__TIME__`, or `__TIMESTAMP__` are likewise non-cacheable.
@@ -2655,7 +2665,8 @@ proven dependency model.
 The checked portability inventory and 20-row differential corpus live in
 [`v1-portability-audit.md`](v1-portability-audit.md) and
 [`v1-portability-corpus.txt`](v1-portability-corpus.txt). Local builds use at
-least eight workers and an eight-job Ninja link/archive pool. Hosted builds use
-four workers; every MSVC-compatible test executable reserves an 8 MiB stack,
-and separately named large tests retain explicit timeout and phase-trace
-contracts. Batch 130 owns fresh hosted Linux/Windows execution.
+least eight workers and an eight-job Ninja link/archive pool. Hosted builds and
+tests use four workers; Windows test executables reserve 128 MiB of stack
+address space, and separately named large tests retain explicit timeout and
+phase-trace contracts. All four hosted jobs have 120-minute limits. Final Batch
+177 owns fresh hosted Linux/Windows execution.

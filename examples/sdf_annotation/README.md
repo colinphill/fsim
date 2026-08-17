@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # SDF annotation control example
 
-This example shows the public Batch 169 control surfaces without duplicating a
-standard-cell corpus. Replace `cells.sdf`, `fsim.toml`, the root and cell glob
-with the identities from your design.
+This example shows the current public SDF control surfaces without duplicating
+a standard-cell corpus. Replace `cells.sdf`, `fsim.toml`, the root and cell
+glob with the identities from your design.
 
 Project CLI:
 
@@ -35,4 +35,6 @@ its prefix size and `FSIM_API_VERSION`; see `include/fsim/api.h`.
 
 The control layer is bounded and transactional. A rejected selector, duplicate,
 phase transition or report limit leaves the previously published request
-unchanged. VHDL/VITAL targets are intentionally outside this Batch 169 example.
+unchanged. Use the sibling
+[mixed VHDL/VITAL example](../sdf_vital_mixed/README.md) for a clean-room timing
+cell and mixed-language target.

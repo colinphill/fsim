@@ -22,7 +22,6 @@ language = "vhdl"
 standard = "2008"
 library = "work"
 files = ["counter.vhd"]
-compilation_unit = "source-set"
 
 # Unique child names resolve across languages in logical library work.
 

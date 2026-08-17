@@ -101,9 +101,10 @@ Each C++ translation unit gets its own `.fsimscobj`; repeat `systemc compile`
 for additional files and pass the ordered objects to one `systemc link`.
 Unchanged translation units are independently reusable in project mode. The
 link phase loads the candidate image before publication and records the sorted
-factory names and parameter schemas. Macro exports may span translation units;
-a legacy handwritten `fsim_plugin_init_v1` remains supported but cannot be
-combined with macro exports in the same plug-in.
+factory names and parameter schemas. Macro exports may span translation units
+and synthesize the sole current `fsim_plugin_init_v1` ABI entry point. A low-
+level source may implement that same current entry point directly, but it is
+mutually exclusive with macro exports and is not the removed SystemC facade.
 
 The final format-2 `.fsimdesign` embeds only the selected `models` plug-in.
 After elaboration, the original C++ source, `.fsimscobj`, and

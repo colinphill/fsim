@@ -17,6 +17,9 @@ set(FSIM_RECURSIVE_DRIVERS
   RunSdfApplicationClosure.cmake
   RunSdfVitalClosure.cmake
   RunFstClosure.cmake
+  RunCleanMachineInstallClosure.cmake
+  RunCompatibilitySmokeClosure.cmake
+  RunOfflineProducerConsumerClosure.cmake
   RunScvClosure.cmake
   RunVhdlStandardModeClosureMatrix.cmake
   RunVerilogSystemVerilogStandardModeClosureMatrix.cmake
@@ -132,4 +135,4 @@ foreach(FSIM_DRIVER IN LISTS FSIM_RECURSIVE_DRIVERS)
 endforeach()
 
 message(STATUS
-  "regression de-duplication: unique commands, application partitions and ten fixture-backed closure drivers are present")
+  "regression de-duplication: unique commands, application partitions and thirteen fixture-backed closure drivers are present")

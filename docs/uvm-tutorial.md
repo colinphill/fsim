@@ -197,12 +197,13 @@ fail with cataloged `FSIM-UVM-CLI-*` or `FSIM-UVM-CMD-*` diagnostics.
 ## 8. Keep automation bounded
 
 Governed package analysis is intentionally memory bounded but is not small.
-The retained closure runs peak below 4.30 GiB for UVM 1.2 and 4.87 GiB for UVM
-2020-3.1, with zero swaps. The project matrix applies a 6 GiB child-process
-address-space ceiling, a 1,200-second limit per stage, and a 7,200-second limit
-per release matrix. Apply equivalent or stricter limits in CI, preserve logs,
-and avoid parallelizing two full release matrices on a host that cannot provide
-their combined resident memory.
+The retained Batch 175 Clang measurements peak at 4,631,912 KiB for the UVM 1.2
+matrix and 5,220,824 KiB for the UVM 2020-3.1 direct witness, with zero swaps.
+The project matrix applies a 6 GiB child-process address-space ceiling, a
+1,200-second limit per stage, and a 7,200-second limit per release matrix. Apply
+equivalent or stricter limits in CI, preserve logs, and avoid parallelizing two
+full release matrices on a host that cannot provide their combined resident
+memory.
 
 For a reliable pass, require all of the following:
 

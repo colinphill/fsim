@@ -11,6 +11,22 @@ endforeach()
 include("${FSIM_SOURCE_DIR}/cmake/FsimDependencies.cmake")
 include("${FSIM_SOURCE_DIR}/cmake/FsimTclVersion.cmake")
 
+file(READ "${FSIM_SOURCE_DIR}/cmake/FsimTcl.cmake" tcl_adapter)
+foreach(required_policy IN ITEMS
+    "CMAKE_GENERATOR MATCHES \"Makefiles\""
+    "BUILD_JOB_SERVER_AWARE TRUE"
+    "--unset=MAKEFLAGS"
+    "--unset=MAKELEVEL"
+    "\"\${FSIM_MAKE_EXECUTABLE}\" -j1")
+  string(FIND "${tcl_adapter}" "${required_policy}" policy_index)
+  if(policy_index EQUAL -1)
+    message(
+      FATAL_ERROR
+      "fetched Tcl build lost jobserver policy: ${required_policy}"
+    )
+  endif()
+endforeach()
+
 file(REMOVE_RECURSE "${FSIM_WORK_DIR}")
 foreach(version IN ITEMS 8.6.18 9.0.3 9.0.4 9.0.5 9.1.0)
   set(include_dir "${FSIM_WORK_DIR}/${version}")

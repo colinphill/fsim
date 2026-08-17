@@ -1,6 +1,10 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # v1 Linux and Windows portability audit
 
+> Historical record: this document freezes the Batch 129 v1 audit. For the
+> current v2 toolchain, resource and final-qualification boundary, use the
+> [release evidence and post-v2 guide](release-and-post-v2.md).
+
 This is the Batch 129 portability inventory and repair queue. The
 [feature matrix](feature-matrix.md) remains the release authority. This audit
 does not broaden the supported host contract: fsim v1 supports 64-bit x86-64

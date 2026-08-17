@@ -1,10 +1,10 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # fsim feature matrix
 
-This matrix is the source-of-truth inventory for the architecture vertical
-slice. It deliberately separates syntax that is represented by a frontend from
-syntax that is elaborated and executed. A feature is not a v1 promise merely
-because its parser accepts an example.
+This matrix is the source-of-truth inventory for the current bounded v2
+surface. It deliberately separates syntax that is represented by a frontend
+from syntax that is elaborated and executed. A feature is not a support promise
+merely because its parser accepts an example.
 
 ## Status and evidence
 
@@ -14,15 +14,17 @@ The status column uses these terms:
   component-execution evidence.
 - **parse**: the frontend or manifest loader represents the form, but complete
   legality checking, elaboration, or execution is not demonstrated.
-- **v1 target**: required for v1, but the row is not implemented or not
-  sufficiently evidenced.
-- **deferred**: intentionally outside the v1 release scope.
+- **deferred**: intentionally outside the current v2 release scope.
 
 Evidence columns mean:
 
 - **P+**: a source or input is accepted and its representation is checked.
 - **P-**: an invalid or unsupported form is rejected with a targeted
   diagnostic.
+
+- **E**: elaboration/lowering behavior is checked.
+- **R**: runtime behavior is checked. An LLVM-only component test is identified
+  as such; it is not interpreter/JIT differential evidence.
 
 Batch 166's governed older-VHDL extension is published in the two 17-row
 standard-mode/package inventories plus four-row revision and package corpora
@@ -33,9 +35,6 @@ caches, relocation and platform/resource contracts. The Synopsys package rows
 are explicitly non-standard compatibility behavior; configured memory, work,
 trace and timeout ceilings are physical evidence boundaries, not language
 width or legality restrictions.
-- **E**: elaboration/lowering behavior is checked.
-- **R**: runtime behavior is checked. An LLVM-only component test is identified
-  as such; it is not interpreter/JIT differential evidence.
 
 `—` is an evidence gap, not “not applicable.” An implementation source link
 without an automated test is also identified as a gap.
@@ -1559,7 +1558,7 @@ active obligations and normalized SHA-256
 | V2-FST-171-03 | Project, CLI, Tcl, debugger, native C, C++ and non-project phases share transactional format, compression, selection, lifecycle, status and report controls | execute | [public control matrix](../tests/app/trace_api_application_test.cpp) | [control and failure-containment matrix](../tests/app/trace_control_application_test.cpp) | [public control model](../src/app/application_trace_api.cpp) | [compile/elaborate/simulate and artifact differential](../tests/app/application_test_non_project_cli.cpp) |
 | V2-FST-171-04 | Trace identity persists through all five archive kinds, source hiding and relocation; deterministic compression is platform-independent and the bounded reader rejects all corrupt/resource profiles transactionally | execute | [archive and reader equivalence](../tests/app/trace_archive_application_test.cpp), [reader matrix](../tests/runtime/fst_reader_tests.cpp) | [every-prefix, checksum, identity, I/O and limit negatives](../tests/runtime/fst_reader_tests.cpp) | [archive codec](../src/app/application_trace_archive.cpp), [reader](../src/runtime/fst_reader.cpp), [compression](../src/runtime/fst_compression.cpp) | [retained four-log closure](../cmake/RunFstClosure.cmake), [Batch 171 release audit](v2-fst-release-audit.md) |
 
-## Completed v1 feature groups
+## Current foundational feature groups
 
 | ID | Required feature group | Status | P+ | P- | E | R |
 |---|---|---|---|---|---|---|
@@ -1573,10 +1572,10 @@ active obligations and normalized SHA-256
 | V1-SV-08 | Bounded v1 mutable strings, deterministic files, static/dynamic/associative arrays, queues, and memory-file operations | execute | [string/file/container HIR suites](../tests/frontend) | [string/file/container/memory diagnostic and runtime rejection matrices](diagnostics.md) | [string/file/container elaboration suites](../tests/elaboration) | [mutable string differential](../tests/app/sv_mutable_string_application_test.cpp), [file differential](../tests/app/sv_file_application_test.cpp), [container differential](../tests/app/sv_container_application_test.cpp) |
 | V1-SV-09 | Deterministic basic random functions, display/stop/severity tasks, and immediate assertions | execute | [random, output, severity-task, and assertion-action HIR](../tests/frontend/frontend_tests.cpp) | [bounded random/output/assertion diagnostics](diagnostics.md) | [typed random/output/report/action lowering](../src/elaboration) | [interpreter/LLVM O0/O2/CLI/API differentials](../tests/app/assertion_application_test.cpp) |
 
-## Required v1 rows not yet implemented
+## Current VHDL-2008 closure rows
 
-The following rows are part of the v1 contract and remain release-blocking.
-They do not become supported when a permissive parser happens to consume them.
+Every row below is executable and remains part of the current contract. A
+permissive parser does not extend the precisely bounded support in a row.
 
 ### VHDL-2008
 
@@ -1606,49 +1605,49 @@ They do not become supported when a permissive parser happens to consume them.
 | V1-CM-09 | Linux x86-64 GCC/Clang and Windows x86-64 LLVM-MinGW Debug/Release with and without LLVM 22.1.8 | execute | [Linux/Windows Debug+Release and exact-LLVM workflow definitions](../.github/workflows/ci.yml), [portability inventory](v1-portability-audit.md) | [Windows source-portability, LLVM-MinGW, SystemC, tool, and resource contracts](../cmake/CheckMsvcDebugContract.cmake) | [complete ABI target identities, four-worker Windows builds/tests, and eight-link local pool](../cmake/CheckWindowsLlvmContract.cmake) | [20-row Debug/Release/interpreter/O0/O2/cache/API/ABI/plug-in/debugger/VCD/path/newline corpus](v1-portability-corpus.txt) |
 | V1-CM-10 | Interactive and batch Tcl automation over the common project/session/debug model, including hierarchy/value access, run/stop/step, breakpoints, mutation, trace selection, diagnostics, callbacks, script arguments, and deterministic failure exit status | execute | [interactive/batch/script arguments plus transactional project load, hierarchy/value, run/stop/step, mutation, breakpoint, trace configuration/selection, diagnostic, and safe/value/assertion/lifecycle callback commands](../tests/app/tcl_application_test.cpp) | [batch/callback failure containment, failed project-load transaction, incomplete input, late trace configuration, callback reentrancy, unknown paths, and execution-mode conflict handling](../tests/app/tcl_application_test.cpp) | [shared application, debugger, safe-point multiplexer, trace, diagnostic, assertion, and callback adapters](../src/app/tcl.cpp) | [real Tcl project/control/debug/trace/callback/assertion lifecycle tests](../tests/app/tcl_application_test.cpp) |
 
-## Explicitly deferred beyond v1
+## Current deliberate exclusions
 
 | ID | Area | Deferred feature | Status |
 |---|---|---|---|
-| D-VH-01 | VHDL | PSL, VHPI, VHDL-AMS, SDF, proprietary packages, and proprietary pragma semantics beyond the reviewed compatibility surface | deferred |
-| D-SV-01 | SystemVerilog | Remaining UVM policy classes and full 1.2/2020 conformance closure beyond the Batch 161 object/factory/config/report/phase/TLM/sequence/register boundary | deferred |
-| D-SV-02 | Verilog/SystemVerilog | SDF parsing and annotation beyond the governed Batch 168/169 profiles and application surface | deferred |
+| D-VH-01 | VHDL | VHDL-AMS, PSL beyond the governed embedded digital subset, post-2008 language features, and proprietary packages/pragmas outside the reviewed compatibility surface | deferred |
+| D-SV-01 | SystemVerilog | UVM releases and proprietary UVM extensions outside the governed UVM 1.2 and IEEE 1800.2-2020-3.1 source/API surfaces | deferred |
+| D-SV-02 | Verilog/SystemVerilog/VHDL | SDF and vendor timing behavior outside the governed 2.1/3.0/4.0 Verilog/SystemVerilog/VHDL-VITAL application inventories | deferred |
 | D-SV-03 | SystemVerilog data model | Complete residual nested/tagged aggregate legality and cross-language dynamic string/aggregate/container profiles outside the governed Batch 152/164 surfaces | deferred |
 | D-SV-04 | SystemVerilog file and memory extensions | Standard descriptor aliases, unrestricted host paths, unbounded I/O, and memory-file operations on multidimensional, string-element, or unpacked-aggregate memories | deferred |
 | D-SV-05 | SystemVerilog procedural extensions | Runtime-variable/real delay expressions, edge-qualified general expressions in mixed event lists, runtime-selected force/release, simultaneous re-entry of one lexical fork site, nondeterministic container `shuffle`, nonlocal or suspending references, nested/nonintegral static locals, and suspending static tasks | deferred |
-| D-SC-01 | SystemC | Accellera ABI/kernel compatibility, TLM, AMS, CCI, dynamic processes, and arbitrary custom primitive-channel interfaces/binding beyond the bounded registered update callback | deferred |
+| D-SC-01 | SystemC | AMS, CCI, and arbitrary custom primitive-channel/interface adaptation outside the official Accellera 3.0.2 SystemC/TLM and governed SCV bridge | deferred |
 | D-CM-01 | Platform | ARM64 and parallel simulation | deferred |
-| D-CM-02 | Products | GUI/waveform viewer, reverse execution, standalone AOT executables, coverage, and standardized plug-in APIs | deferred |
-| D-CM-03 | Automation | Interactive/batch Python bindings, packaging, notebook integration, and a stable Python ABI over the native session model | post-v1 |
+| D-CM-02 | Products | GUI/waveform viewer, reverse execution, standalone AOT executables, expanded coverage products, and additional standardized plug-in families | deferred |
+| D-CM-03 | Automation | Interactive/batch Python bindings, notebook integration, and a stable Python ABI over the native session model | post-v2 |
 
-Deferred rows are not release blockers unless the v1 scope is explicitly
-changed and the row is promoted to a required section.
-
-The later v2 Batch 163 closure supersedes the broad `D-VH-01` PSL/VHPI
-deferral for its documented digital subset only. Batch 168 supersedes the SDF
-parsing portions of `D-VH-01` and `D-SV-02`, and Batch 169 supersedes the
-governed Verilog/SystemVerilog application portion: SDF 2.1/3.0/4.0 parsing,
-normalization, mixed-language hierarchy resolution, portable persistence and
-Verilog/SystemVerilog runtime timing application are implemented. Batch 170
-still owns VHDL/VITAL application and timing that crosses a VHDL boundary. The
-authoritative
+Deferred rows are not release blockers unless the v2 scope is explicitly
+changed and the row is promoted to a required section. Governed embedded PSL,
+VHPI, UVM 1.2/2020, SystemC/TLM/SCV, functional coverage, and SDF 2.1/3.0/4.0
+Verilog/SystemVerilog/VHDL-VITAL timing application are current and therefore
+are not listed as broad deferrals. The authoritative
 [`vhdl_psl_gap_inventory.tsv`](../tests/feature_matrix/vhdl_psl_gap_inventory.tsv)
 now contains 29 supported VHDL-2008/embedded-PSL rows, zero unresolved active
 rows, and four narrower deferrals; the 44-row
 [`vhdl_psl_release_closure.tsv`](../tests/feature_matrix/vhdl_psl_release_closure.tsv)
 governs engine, artifact, platform, resource, and installed-public evidence.
-VHDL-AMS, SDF backannotation, PSL beyond that embedded subset, and post-2008/
-vendor extensions remain deferred. See [`vhdl-psl.md`](vhdl-psl.md) and
+VHDL-AMS, PSL beyond that embedded subset, and post-2008/vendor extensions
+remain deferred. See [`vhdl-psl.md`](vhdl-psl.md) and
 [`sdf.md`](sdf.md) for the current boundaries.
 
 ## Release-gate rule
 
-**fsim v1 must not be released while any row marked `v1 target` remains, or
-while any required language construct lacks P+, P-, E, or R evidence.**
+**fsim v2 must not be released while any required current row lacks P+, P-, E,
+or R evidence, or while an active closure inventory row remains unexplained.**
 
 For R evidence, every semantic simulation case must run through both the SimIR
 interpreter and the LLVM 22.1.8 JIT and compare final values, assertions,
 scheduling observations, and trace events. All required rows must pass on
-Ubuntu x86-64/GCC and Windows x86-64/MSVC in Debug and Release. A construct
-that is silently accepted, discarded, or only parser-tested fails the gate.
-Deferred rows are excluded unless promoted into the v1 scope.
+supported Linux configurations and the pinned Windows LLVM-MinGW matrix in
+Debug and Release. A construct that is silently accepted, discarded, or only
+parser-tested fails the gate.
+Deferred rows are excluded unless promoted into the v2 scope. Batch 177 owns
+the final Release, sanitizer, and hosted-platform execution evidence. The
+candidate's seven platform dispositions, nineteen qualification rows and
+forty-four Linux performance rows are frozen by
+[`v2-release-record.txt`](../packaging/v2-release-record.txt); the record does
+not convert an unavailable platform row into evidence.

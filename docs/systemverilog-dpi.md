@@ -1,15 +1,16 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # SystemVerilog DPI-C support
 
-Batch 156 provides a bounded, checked DPI-C boundary for SystemVerilog-2017.
-It retains imports and exports in their exact compilation-unit, package,
+Fsim v2 provides a bounded, checked DPI-C boundary for selectable
+SystemVerilog-2005/2009/2012/2017 profiles. It retains imports and exports in
+their exact revision, compatibility profile, compilation-unit, package,
 module, interface, or program scope; validates callable profiles; marshals
 supported values without host-layout aliases; and loads portable C/C++ shared
 libraries through a versioned C ABI.
 
-The boundary participates in Batch 165's zero-active-row SystemVerilog release
-contract. Its bounded profile and configured materialization/work ceilings are
-explicit API/resource limits, not general SystemVerilog legality limits. See
+The boundary participates in the frozen SystemVerilog release contract. Its
+bounded profile and configured materialization/work ceilings are explicit API/
+resource limits, not general SystemVerilog legality limits. See
 the [SystemVerilog release audit](v1-systemverilog-release-audit.md) for the
 governed clause, arbitrary-width, engine, artifact, and public-API evidence.
 
@@ -49,15 +50,16 @@ two-state-unknown profiles transactionally.
 | Dimension | Covered behavior |
 |---|---|
 | Linux/POSIX | C++20, PIC, hidden-by-default compilation, explicit default-visible C exports, local eager loading, `.so` artifact |
-| Windows/MSVC | C++20, EH, explicit `/Gd`, `__cdecl`, `__declspec(dllexport)`, safe DLL-directory loading, `.dll` artifact |
+| Windows/LLVM-MinGW | C++20 UCRT, C calling convention, explicit exported symbols, safe DLL-directory loading, `.dll` artifact; MSVC-style plans remain source-portability checks, not release-package evidence |
 | Interpreter | Scalar values traverse the owning aval/bval marshal/unmarshal path before the real C ABI call |
 | Compiled O0/O2 | The same leased callable and exact values cross both compiled-call paths |
 | Multiple roots | Distinct simulation identities and current-scope contexts invoke the same plug-in without aliasing |
 | Suspension/re-entry | A scheduled imported task resumes through the real symbol; nested callbacks restore task and caller scope |
 
-The local Change 19 checkpoint validates the exact-LLVM Debug runtime and
-source-policy gates. Full non-sanitized Debug and Release regressions belong to
-Change 20. Batch 156 is not a sanitizer or hosted-CI monitoring boundary.
+The retained implementation evidence covers exact-LLVM Debug runtime and
+source-policy gates plus full non-sanitized Debug and Release regressions.
+Final fresh sanitizer and hosted Linux/Windows CI execution remains a Batch 177
+release obligation.
 
 ## Source inventory
 
@@ -72,5 +74,7 @@ Change 20. Batch 156 is not a sanitizer or hosted-CI monitoring boundary.
   `dpi_test_plugin.cpp`/`dpi_test_plugin_c.c` fixture, and
   `dpi_bad_abi_plugin.cpp`.
 
-Unrestricted foreign profiles, varargs, producer-specific extensions, VPI,
-VHPI, and UVM library/runtime behavior remain outside Batch 156.
+Unrestricted foreign profiles, varargs and producer-specific extensions remain
+outside the bounded DPI-C contract. VPI, VHPI and UVM are separate current v2
+interfaces documented in `systemverilog-vpi.md`, `vhdl-vhpi.md` and
+`systemverilog-uvm.md`; they are not DPI extensions.

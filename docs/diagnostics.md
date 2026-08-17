@@ -16,8 +16,10 @@ The Batch 175 performance-baseline gate is a qualification/test contract, not
 a production diagnostic family. Its wall-time, peak-memory and throughput
 threshold failures do not introduce `FSIM-*` codes and may not suppress or
 weaken the resource, overflow, cache-lock, external-process or trace errors
-cataloged below. Linux Clang/GCC thresholds are checked in; Windows MSVC and
-clang-cl thresholds remain pending real Batch 177 measurements.
+cataloged below. Linux Clang/GCC thresholds are checked in; current Windows
+LLVM-MinGW thresholds remain pending real Batch 177 measurements. Historical
+MSVC/clang-cl-only rows require an explicit migration or retirement disposition
+rather than an inferred result.
 
 Source and manifest paths carried by text or JSON diagnostics are normalized
 UTF-8 generic paths on Linux and Windows. A leading UTF-8 BOM is transport
@@ -338,7 +340,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SDF-PULSE-003` | error | A PATHPULSE, PATHPULSEPERCENT, or RETAIN threshold list has unsupported arity, duplicate ownership, or a reject value greater than its error value. |
 | `FSIM-SDF-PULSE-004` | error | Exact pulse-percentage conversion or pulse application exceeds its configured tick, path, transition-value, or identity-byte limit. |
 | `FSIM-SDF-PRECEDENCE-001` | error | SDF timing precedence receives an invalid command-selected delay policy or a zero effective-value or identity resource limit. |
-| `FSIM-SDF-PRECEDENCE-002` | error | The command-selected min/typ/max mode conflicts with the planned SDF value selection, or enabled pulse rejection targets disabled specify paths. |
+| `FSIM-SDF-PRECEDENCE-002` | error | The command-selected min/typ/max mode conflicts with the effective SDF value selection, or enabled pulse rejection targets disabled specify paths. |
 | `FSIM-SDF-PRECEDENCE-003` | error | SDF precedence finds an unsupported, missing, stale or mismatched specify-path, timing-check, delay-list or pulse/RETAIN source profile. |
 | `FSIM-SDF-PRECEDENCE-004` | error | Effective SDF precedence values or their immutable semantic identities exceed the configured resource limit. |
 | `FSIM-SDF-SCHEDULING-001` | error | SDF runtime scheduling receives missing or incomplete effective precedence, or a zero target, value, or identity resource limit. |
@@ -2793,6 +2795,15 @@ The inventory gate also requires each row's positive, execution,
 arbitrary-width, include/profile-provenance and artifact-mismatch anchors; a
 matching code or coordinate without the remaining evidence cannot satisfy the
 corpus.
+
+## Release-status boundary
+
+A stable diagnostic proves a bounded rejection contract, not a platform or
+release result. Candidate support and unavailable evidence are recorded in
+[`v2-support-matrix.tsv`](../packaging/v2-support-matrix.tsv) and
+[`v2-release-record.txt`](../packaging/v2-release-record.txt). Batch 176 local
+Linux Debug results must not be described as Windows, Release, sanitizer or
+hosted-CI evidence; final Batch 177 owns those executions.
 
 The Batch 167 serial closure matrix requires the corpus and diagnostic anchors
 in the same retained run as older-mode frontend/application behavior,

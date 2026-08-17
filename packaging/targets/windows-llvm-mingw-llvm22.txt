@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+schema=fsim-package-target-v1
+target_id=windows-x86_64-llvm-mingw-20260616-llvm22
+host=windows-x86_64
+toolchain_family=LLVM-MinGW
+toolchain_release=20260616
+compiler_version=22.1.8
+target_triple=x86_64-w64-windows-gnu
+crt=ucrt
+llvm_mode=ON
+llvm_version=22.1.8
+llvm_package=mingw-w64-clang-x86_64-llvm-22.1.8-2
+tcl_mode=ON
+configurations=Debug,Release
+archive_format=zip
+toolchain_archive_url=https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-x86_64.zip
+toolchain_archive_sha256=b9b68a4d276e16fa25802aaba458e4638f64b3884c290aaccdc2d87083b6ca35
+job_timeout_minutes=120
+hosted_workers=4
+warning_log_owner=batch177-retained-compiler-linker-and-test-log
+batch176_evidence=definition-and-static-portability-only
+batch177_required=debug-build,release-build,binary-archive,install-smoke,warning-audit,hosted-windows-matrix
+signature=unsigned-release-candidate

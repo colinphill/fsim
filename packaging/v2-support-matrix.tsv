@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+target	package_status	batch176_evidence	batch177_required
+linux-x86_64-gcc13-no-llvm	candidate-definition	debug-package-fixture	release-build,archive,install-smoke,hosted-disposition
+linux-x86_64-gcc13-llvm22	candidate-definition	debug-package-fixture	release-build,archive,install-smoke,hosted-disposition
+linux-x86_64-clang22-llvm22	candidate-definition	debug-package-and-fixture	release-build,archive,install-smoke,hosted-disposition
+windows-x86_64-llvm-mingw-20260616-no-llvm	definition-only	static-portability-only	debug-build,release-build,archive,install-smoke,warning-audit,hosted-disposition
+windows-x86_64-llvm-mingw-20260616-llvm22	definition-only	static-portability-only	debug-build,release-build,archive,install-smoke,warning-audit,hosted-disposition
+windows-x86_64-msvc	retired-package-target	source-command-portability-only	none
+windows-x86_64-clang-cl	retired-package-target	source-command-portability-only	none

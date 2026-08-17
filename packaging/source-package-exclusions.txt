@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# schema=fsim-source-package-exclusions-v1
+# kind<TAB>value<TAB>reason
+root	.agents	workspace agent state
+root	.cache	local tool cache
+root	.codex	workspace Codex state
+root	.fsim-cache	generated simulator cache
+root	.git	version-control metadata
+root	.idea	local IDE state
+root	.vscode	local IDE state
+root	build	generated build tree
+root	compile_commands.json	generated compilation database
+root-prefix	build-	generated named build tree
+segment	.fsim-cache	generated nested simulator cache
+segment	__pycache__	generated Python bytecode cache
+suffix	.dll	generated native library
+suffix	.dylib	generated native library
+suffix	.fst	generated waveform
+suffix	.o	generated native object
+suffix	.obj	generated native object
+suffix	.pyc	generated Python bytecode
+suffix	.so	generated native library
+suffix	.swp	local editor state
+suffix	.tmp	local temporary file
+suffix	.user	local IDE state
+suffix	.vcd	generated waveform

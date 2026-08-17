@@ -2,8 +2,9 @@
 # Verilog-2005 closure audit
 
 This audit closes Batch 164's governed IEEE 1364-2005 residual-language and
-literal-width boundary. SDF belongs to Batch 170; removed TF/ACC interfaces and
-informative optional annex services remain post-v2 compatibility work.
+literal-width boundary. Current SDF timing application extends that closed
+base without reopening it. Removed TF/ACC interfaces and informative optional
+annex services remain outside v2.
 
 ## Inventories
 

@@ -1,6 +1,10 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Final v1 platform and resource audit
 
+> Historical record: this document freezes the Batch 130 v1 audit. Its worker,
+> timeout and toolchain values are not current release policy. Use the
+> [release evidence and post-v2 guide](release-and-post-v2.md).
+
 This is the Batch 130 Task 8 static reconciliation of the bounded hosted
 build/test contract. It inspects checked-in configuration and executable phase
 ownership; it does not query or claim a current GitHub Actions result.

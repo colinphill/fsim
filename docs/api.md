@@ -5,6 +5,21 @@ All public tracing surfaces apply one immutable request and report one common
 status. They do not expose writer implementation objects, native handles, host
 compression state, or producer paths.
 
+## Stability and ownership
+
+The installed, cross-build native ABI is the C11/C++-callable `fsim::api`
+target and `fsim/api.h`. Its trace records are size-gated append-only prefixes;
+the [ABI and schema reference](abi-schema-reference.md) owns their exact sizes,
+symbols, lifetimes, and rejection policy.
+
+The C++ types below are the source-level application control model used by the
+CLI, Tcl, debugger, tests, and C adapter. They are tied to the exact fsim source
+and build and do not promise a stable C++ binary layout. No C++ exception,
+`std::filesystem::path`, writer object, or borrowed native handle crosses the
+installed C ABI. Inputs are copied or validated before publication; status and
+report views remain owned by the simulation or returned value documented by
+their surface.
+
 ## C++ control
 
 `include/fsim/app/trace_api.hpp` defines `TraceControlRequest`,
@@ -81,3 +96,12 @@ failure, `FstReaderResult` contains no trace and exactly one stable diagnostic.
 
 See [VCD and FST tracing](tracing.md) for configuration, supported values,
 determinism, lifecycle, and executable evidence.
+
+## Release qualification boundary
+
+The installed C ABI and exact-build C++ surfaces above are current v2
+contracts; platform qualification is recorded separately. The frozen
+[support matrix](../packaging/v2-support-matrix.tsv) and
+[candidate record](../packaging/v2-release-record.txt) do not infer Windows or
+Release behavior from local Linux Debug execution. Final Batch 177 owns every
+Release build/test/gate, sanitizer and hosted Linux/Windows result.

@@ -1,8 +1,10 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Vertical-slice example
 
-This directory is the first executable mixed-language architecture gate, not a
-claim of complete v1 language support.
+This directory is the compact executable VHDL-2008/SystemVerilog-2017 starting
+point. It demonstrates one mixed-language hierarchy, shared scheduling,
+current project syntax, multiple-root overrides, optimized execution, tracing
+and source-aware debugging without requiring a binding manifest.
 
 - `tb.sv` is the SV executable top. It drives the clock/reset, instantiates a
   VHDL-bound counter and an SV child, uses integer delays, and calls `$finish`.
@@ -27,9 +29,10 @@ build/dev/fsim run   -p examples/vertical_slice/fsim.toml
 build/dev/fsim debug -p examples/vertical_slice/fsim.toml
 ```
 
-The current `run` and `debug` commands execute this design with the reference
-SimIR interpreter. The run writes `vertical_slice.vcd` in this directory and
-resolves:
+`run` uses the manifest's optimized O2 engine and native cache; `debug` uses
+source-instrumented O0 execution over the same elaborated design. Both retain
+the same SimIR behavior and hierarchy. The run writes `vertical_slice.vcd` in
+this directory and resolves:
 
 ```text
 tb.u_counter -> vhdl:work.counter(rtl)
@@ -59,7 +62,10 @@ Both copies are resolved before either hierarchy is constructed. A run would
 place them in one scheduler and expose their objects beneath `left.*` and
 `right.*`; the first `$finish` remains terminal for that shared simulation.
 
-This example deliberately uses equal-width, descending packed vectors and
-whole-signal connections. Parameters/generics, expression actuals, arbitrary
-vector-direction conversion, multi-driver resolution, and SystemC factory
-instances are outside this architecture gate.
+This small example deliberately uses equal-width, descending packed vectors
+and whole-signal connections so its waveform is easy to inspect. The simulator
+also supports parameters/generics, expression actuals, vector-direction
+conversion, multi-driver resolution and SystemC factory instances; the
+[manifest-free phase tutorial](../non_project_phases/README.md) and
+[three-language tutorial](../three_language_hierarchy/README.md) exercise the
+artifact and SystemC extensions without obscuring this first run.

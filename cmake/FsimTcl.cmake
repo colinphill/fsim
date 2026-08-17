@@ -184,6 +184,16 @@ function(fsim_add_fetched_tcl)
       tcl_library_name
     )
     set(tcl_library "${tcl_install}/lib/${tcl_library_name}")
+    # A Makefiles parent already owns the GNU Make jobserver. Mark the external
+    # build as jobserver-aware and let its recursive make inherit that budget;
+    # non-Makefile parents (notably Ninja) still need an explicit eight-worker
+    # Tcl build. The install targets only copy the completed products, so run
+    # them serially with stale parent jobserver state removed.
+    if(CMAKE_GENERATOR MATCHES "Makefiles")
+      set(tcl_build_command "${FSIM_MAKE_EXECUTABLE}" binaries)
+    else()
+      set(tcl_build_command "${FSIM_MAKE_EXECUTABLE}" -j8 binaries)
+    endif()
     ExternalProject_Add(
       fsim_tcl_external
       URL "${tcl_url}"
@@ -195,9 +205,12 @@ function(fsim_add_fetched_tcl)
         "--prefix=<INSTALL_DIR>"
         --disable-shared
         --enable-64bit
-      BUILD_COMMAND "${FSIM_MAKE_EXECUTABLE}" -j8 binaries
+      BUILD_COMMAND ${tcl_build_command}
+      BUILD_JOB_SERVER_AWARE TRUE
       INSTALL_COMMAND
-        "${FSIM_MAKE_EXECUTABLE}"
+        "${CMAKE_COMMAND}" -E env
+        --unset=MAKEFLAGS --unset=MAKELEVEL --
+        "${FSIM_MAKE_EXECUTABLE}" -j1
         install-binaries install-libraries install-headers
       INSTALL_DIR "${tcl_install}"
       INSTALL_BYPRODUCTS "${tcl_library}"

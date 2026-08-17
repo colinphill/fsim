@@ -115,12 +115,17 @@ inspect it as text. Useful paths include:
 three_language_tb.stimulus
 three_language_tb.observed
 three_language_tb.bridge_value
+three_language_tb.u_bridge.source
+three_language_tb.u_bridge.result
 three_language_tb.u_vhdl.value
 three_language_tb.u_vhdl.result
 ```
 
-The internal SystemC signal and the VHDL ports change in later deltas than the
-SV stimulus, making the two boundary crossings visible.
+The SystemC boundary ports and VHDL ports change in later deltas than the SV
+stimulus, making both crossings and their top-level aliases visible. Adding a
+native `sc_signal` beneath `u_bridge` exposes that object through the same
+frozen Accellera hierarchy inventory; VCD/FST selection never polls or flattens
+the native object into an HDL signal.
 
 The sibling `fsim-fst.toml` manifest uses the same three-language sources and
 selection but records deterministic FST:

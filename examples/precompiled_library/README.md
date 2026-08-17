@@ -36,12 +36,13 @@ its elaboration search list. Its local `tb` therefore resolves
 writes `consumer/precompiled_library.vcd`; the child output is the inverse of
 the input throughout the two stimulus intervals.
 
-To demonstrate relocation, move the complete artifact and override the
-manifest mapping without editing the project:
+To demonstrate relocation while preserving the published read-only source
+artifact, copy the complete directory with its modes and override the manifest
+mapping without editing the project:
 
 ```sh
 mkdir -p examples/precompiled_library/relocated
-mv examples/precompiled_library/artifacts/vendor.fsimlib \
+cp -a examples/precompiled_library/artifacts/vendor.fsimlib \
   examples/precompiled_library/relocated/vendor.fsimlib
 build/dev/fsim run \
   -p examples/precompiled_library/consumer/fsim.toml \

@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+schema=fsim-package-target-v1
+target_id=linux-x86_64-gcc13-no-llvm
+host=linux-x86_64
+compiler_family=GCC
+compiler_version=13
+llvm_mode=OFF
+llvm_version=none
+configurations=Debug,Release
+archive_format=zip
+job_timeout_minutes=120
+local_workers_minimum=8
+hosted_workers=4
+batch176_evidence=debug-package-fixture
+batch177_required=release-build,release-archive,install-smoke,hosted-linux-gcc
+signature=unsigned-release-candidate

@@ -932,6 +932,199 @@ add_test(
 )
 
 add_test(
+  NAME fsim.source-package-manifest
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSourcePackageManifest.cmake"
+)
+set_tests_properties(
+  fsim.source-package-manifest
+  PROPERTIES
+    LABELS "fast;package;source;manifest;license;notice;sbom;patch;positive;negative;resources;cmake"
+)
+
+if(WIN32)
+  set(FSIM_BINARY_INSTALL_API_DIR "${CMAKE_INSTALL_BINDIR}")
+else()
+  set(FSIM_BINARY_INSTALL_API_DIR "${CMAKE_INSTALL_LIBDIR}")
+endif()
+add_test(
+  NAME fsim.binary-install-ownership
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/binary-install-ownership"
+    "-DFSIM_CONFIG=$<CONFIG>"
+    "-DFSIM_BINDIR=${CMAKE_INSTALL_BINDIR}"
+    "-DFSIM_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+    "-DFSIM_INCLUDEDIR=${CMAKE_INSTALL_INCLUDEDIR}"
+    "-DFSIM_DOCDIR=${CMAKE_INSTALL_DOCDIR}"
+    "-DFSIM_DATADIR=${CMAKE_INSTALL_DATADIR}"
+    "-DFSIM_EXECUTABLE_NAME=$<TARGET_FILE_NAME:fsim>"
+    "-DFSIM_API_LIBRARY_NAME=$<TARGET_FILE_NAME:fsim_api>"
+    "-DFSIM_API_LIBRARY_DIR=${FSIM_BINARY_INSTALL_API_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckBinaryInstallOwnership.cmake"
+)
+set_tests_properties(
+  fsim.binary-install-ownership
+  PROPERTIES
+    LABELS "install;uninstall;package;manifest;cmake;pkgconfig;examples;license;notice;sbom;positive;negative;resources"
+    TIMEOUT 1200
+)
+
+add_test(
+  NAME fsim.installed-pkg-config-consumer
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/installed-pkg-config-consumer"
+    "-DFSIM_CONFIG=$<CONFIG>"
+    "-DFSIM_BINDIR=${CMAKE_INSTALL_BINDIR}"
+    "-DFSIM_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+    "-DFSIM_C_COMPILER=${CMAKE_C_COMPILER}"
+    "-DFSIM_C_FLAGS=${CMAKE_C_FLAGS}"
+    "-DFSIM_EXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}"
+    "-DFSIM_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
+    "-DFSIM_HOST_WINDOWS=${WIN32}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckInstalledPkgConfigConsumer.cmake"
+)
+set_tests_properties(
+  fsim.installed-pkg-config-consumer
+  PROPERTIES
+    LABELS "install;package;pkgconfig;api;c;consumer;offline;relocation;positive;resources"
+    TIMEOUT 1200
+)
+
+add_test(
+  NAME fsim.deterministic-packaging
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/deterministic-packaging"
+    "-DFSIM_CONFIG=$<CONFIG>"
+    "-DFSIM_PLATFORM=${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}"
+    "-DFSIM_COMPILER=${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}"
+    -DFSIM_PACKAGE_FIXTURE_MODE=ON
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckDeterministicPackaging.cmake"
+)
+set_tests_properties(
+  fsim.deterministic-packaging
+  PROPERTIES
+    LABELS "package;source;binary;debug;archive;reproducibility;manifest;install;license;notice;sbom;positive;negative;resources"
+    TIMEOUT 7200
+)
+
+add_test(
+  NAME fsim.linux-package-definitions
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckLinuxPackageDefinitions.cmake"
+)
+set_tests_properties(
+  fsim.linux-package-definitions
+  PROPERTIES
+    LABELS "fast;package;linux;gcc;clang;llvm;debug;manifest;positive;negative;resources;cmake"
+)
+
+add_test(
+  NAME fsim.windows-package-definitions
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckWindowsPackageDefinitions.cmake"
+)
+set_tests_properties(
+  fsim.windows-package-definitions
+  PROPERTIES
+    LABELS "fast;package;windows;llvm;mingw;debug;manifest;warnings;portability;positive;negative;resources;cmake"
+)
+
+add_test(
+  NAME fsim.offline-producer-consumer-closure
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/offline-producer-consumer-closure"
+    -DFSIM_DEDUPLICATED_CTEST=ON
+    -P "${PROJECT_SOURCE_DIR}/cmake/RunOfflineProducerConsumerClosure.cmake"
+)
+set_tests_properties(
+  fsim.offline-producer-consumer-closure
+  PROPERTIES
+    LABELS "closure;install;package;offline;producer;consumer;artifact;library;systemc;scv;pkgconfig;deduplication"
+    TIMEOUT 7200
+)
+
+add_test(
+  NAME fsim.clean-machine-install-closure
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/clean-machine-install-closure"
+    -DFSIM_DEDUPLICATED_CTEST=ON
+    -P "${PROJECT_SOURCE_DIR}/cmake/RunCleanMachineInstallClosure.cmake"
+)
+set_tests_properties(
+  fsim.clean-machine-install-closure
+  PROPERTIES
+    LABELS "closure;install;package;examples;clean-machine;debug;artifact;library;relocation;debugger;vcd;fst;uninstall;deduplication"
+    TIMEOUT 7200
+)
+
+add_test(
+  NAME fsim.compatibility-smoke-closure
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/compatibility-smoke-closure"
+    -DFSIM_DEDUPLICATED_CTEST=ON
+    -P "${PROJECT_SOURCE_DIR}/cmake/RunCompatibilitySmokeClosure.cmake"
+)
+set_tests_properties(
+  fsim.compatibility-smoke-closure
+  PROPERTIES
+    LABELS "closure;debug;systemc;tlm;scv;dpi;vpi;vhpi;offline;compiler;cache;abi;producer;transactions;containment;deduplication"
+    TIMEOUT 7200
+)
+
+add_test(
+  NAME fsim.release-candidate-log-audit
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_EVIDENCE_DIR=${PROJECT_SOURCE_DIR}/build/qualification"
+    "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/release-candidate-log-audit"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckReleaseCandidateLogAudit.cmake"
+)
+set_tests_properties(
+  fsim.release-candidate-log-audit
+  PROPERTIES
+    LABELS "fast;candidate;audit;debug;logs;warnings;failures;resources;positive;negative;cmake"
+)
+
+add_test(
+  NAME fsim.v2-release-records
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV2ReleaseRecords.cmake"
+)
+set_tests_properties(
+  fsim.v2-release-records
+  PROPERTIES
+    LABELS "fast;candidate;records;package;support;platform;examples;license;notice;sbom;archive;signature;debug;cmake"
+)
+
+add_test(
   NAME fsim.ieee-package-inventory
   COMMAND
     "${CMAKE_COMMAND}"
@@ -2032,6 +2225,16 @@ set_tests_properties(
 set_tests_properties(
   fsim.installed-public-contract
   PROPERTIES LABELS "fast;release;install;api;abi;cli;packages;portability;cmake"
+)
+# CMake writes one build-tree install_manifest.txt for every --install call.
+# Keep staged prefixes independent while serializing only that shared manifest.
+set_tests_properties(
+  fsim.binary-install-ownership
+  fsim.installed-pkg-config-consumer
+  fsim.deterministic-packaging
+  fsim.scv.installed_consumer
+  fsim.installed-public-contract
+  PROPERTIES RESOURCE_LOCK fsim_install_manifest
 )
 set_tests_properties(
   fsim.msvc-debug-contract
@@ -5325,6 +5528,10 @@ set(FSIM_RECURSIVE_CLOSURE_TESTS
   fsim.systemverilog-closure-matrix
   fsim.verilog-closure-matrix
   fsim.fst-closure)
+list(APPEND FSIM_RECURSIVE_CLOSURE_TESTS
+  fsim.offline-producer-consumer-closure
+  fsim.clean-machine-install-closure
+  fsim.compatibility-smoke-closure)
 
 function(fsim_append_fixture_setup FSIM_TEST FSIM_FIXTURE)
   if(TEST "${FSIM_TEST}")
@@ -5364,6 +5571,18 @@ endfunction()
 fsim_require_fixture_regex(
   fsim.systemc.accellera_closure fsim_systemc_accellera_closure_witnesses
   "^fsim\\.(systemc\\.(accellera_corpus|upstream\\.(simple_fifo|event_list|tlm_fifo)|shared_runtime|compatibility|kernel_backend_.*|tlm[12]_backend|shared-runtime-contract|abi-c|plugin|compiler|incremental|matrix)|systemc-accellera-(inventory|portability-contract)|systemc-upstream-provenance|systemc-portability-contract|installed-public-contract|resource-portability-contract|application\\.(systemc_trace|systemc_matrix|systemc_datatypes|systemc_tlm1|typed_boundaries|artifact_phases))$")
+fsim_require_fixture_regex(
+  fsim.offline-producer-consumer-closure
+  fsim_offline_producer_consumer_closure_witnesses
+  "^fsim\\.(source-package-manifest|binary-install-ownership|installed-public-contract|installed-pkg-config-consumer|artifact\\.(object|design)|library\\.artifact|application\\.artifact_phases|source-hidden-relocation-contract|systemc\\.(compiler|incremental)|scv\\.(plugin_compiler|artifact|installed_consumer)|systemc-upstream-provenance|scv-upstream-provenance|scv-patch-governance)$")
+fsim_require_fixture_regex(
+  fsim.clean-machine-install-closure
+  fsim_clean_machine_install_closure_witnesses
+  "^fsim\\.(binary-install-ownership|installed-public-contract|installed-pkg-config-consumer|application|non-project-restartability-contract|library\\.artifact|sdf-application-inventory|sdf-vital-inventory|application\\.(sdf_control|sdf_vital_corpus|systemc_matrix)|artifact\\.(object|design)|application\\.artifact_phases|source-hidden-relocation-contract|application\\.(trace_control|fst_corpus|vcd_control)|tool-portability-contract)$")
+fsim_require_fixture_regex(
+  fsim.compatibility-smoke-closure
+  fsim_compatibility_smoke_closure_witnesses
+  "^fsim\\.(systemc\\.(compatibility|compiler|incremental|kernel_backend_(execution|session)|tlm[12]_backend|shared-runtime-contract|plugin|abi-c)|systemc-portability-contract|scv\\.(compatibility|plugin_compiler|artifact|backend_protocol|backend_transport|recording|installed_consumer)|runtime\\.transaction_record|runtime|application\\.vpi|foreign-abi-freeze|native-producer-policy|schema-producer-diagnostics|cache-corruption-isolation-contract)$")
 fsim_require_fixture_regex(
   fsim.scv.closure fsim_scv_closure_witnesses
   "^fsim\\.(scv(-.*)?|scv\\..*|application\\.scv_.*|runtime\\.transaction_record|diagnostics-catalog)$")

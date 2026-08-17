@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+schema=fsim-package-policy-v1
+release_identity=fsim-v2.0.0-rc
+archive_format=zip
+archive_compression=python-zipfile-deflate-level-9
+entry_order=utf8-bytewise-ascending
+entry_mtime=2000-01-01T00:00:00Z
+regular_file_mode=0644
+executable_file_mode=0755
+directory_entries=implicit
+host_owner_identity=not-encoded
+source_entry_limit=5000
+binary_entry_limit=5000
+source_archive_byte_limit=67108864
+binary_archive_byte_limit=536870912
+path_byte_limit=1024
+checksum=sha256
+signature=unsigned-release-candidate

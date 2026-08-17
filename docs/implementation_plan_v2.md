@@ -13269,96 +13269,377 @@ carry an explicit evidence-backed scope disposition approved by the user.
   only interfaces and artifacts. Tutorials, documentation, source/binary
   packaging, installation, discovery, notices, reproducibility, clean-machine
   smokes and release records must agree with executable behavior. Changes 1-19
-  remain one recoverable worktree; Change 20 alone owns the local Debug/Release
+  remain one recoverable worktree; Change 20 alone owns the local Debug
   candidate gates, one commit and one push. Use at least eight local workers,
   preserve 120-minute command timeouts, avoid formatting-only public-header
-  edits, and do not execute or monitor hosted CI. Fresh sanitizers and the
-  complete hosted Linux/Windows matrix remain final Batch 177 work. Real
-  Windows archive/smoke results may not be inferred from Linux evidence.
+  edits, and do not configure, build or test Release, run sanitizers, or
+  execute or monitor hosted CI. Every Release qualification and the complete
+  hosted Linux/Windows matrix remain final Batch 177 work. Real Windows
+  archive/smoke results may not be inferred from Linux evidence.
 1. **Planning and ownership only.** Start from clean synchronized Batch 175
    closeout `e5f7c6cdd79ac931ffde2e73902082b19bee7ca9`. Record this exact
    twenty-change contract and the Batch 176 restart checkpoint in a
    documentation-only precursor commit and push before implementation. Do not
    change source, public headers, ABI/schema, examples, packaging, build logic
    or tests in this change.
-2. Audit and update the core Verilog, VHDL, SystemVerilog and mixed-language
-   tutorials/examples for current CLI syntax, explicit roots, logical
-   libraries, older-standard selection, non-project compile/elaborate/simulate
-   phases, portable artifacts, relocation, mapped libraries and debugger use.
-3. Audit and update SystemC/TLM/SCV tutorials/examples for the official
-   Accellera-only interface, opaque backend, plug-in compilation/cache,
-   multiple roots, complete signal/port waveform visibility, transaction
-   recording, selection, backpressure and source-hidden relocation.
-4. Audit and update UVM, DPI-C, VPI, VHPI, SDF/VITAL and FST tutorials/examples
-   so direct, interpreter/LLVM O0/O2, cold/warm, debug/trace and artifact flows
-   use supported current-only syntax with exact expected output and failure
-   guidance.
-5. Complete the user, platform, migration and troubleshooting guides, including
-   supported compiler/runtime combinations, 120-minute CI job limits, resource
-   budgets, cache recovery, Windows path/lock behavior and actionable failure
-   triage without promising unverified compatibility.
-6. Complete language and standard-mode documentation across VHDL-2008,
-   Verilog-1995/2001/2001-noconfig/2005, SystemVerilog-2005/2009/2012/2017,
-   UVM 1.2/2020, SDF/VITAL and current-only artifact semantics; remove every
-   stale v1 limitation claim contradicted by executable evidence.
-7. Complete architecture, public C/C++ API, ABI/schema, plug-in, SystemC/TLM/
-   SCV, DPI/VPI/VHPI, debugger, tracing and artifact documentation with exact
-   ownership, lifecycle, compatibility, relocation and failure boundaries.
-8. Complete diagnostics, release, worker-ready and post-v2 parallelism
-   documentation. Keep cataloged codes, resource limits and supported current
-   execution distinct from optional future process partitioning, AOT,
-   expanded coverage products and Python/notebook packaging.
-9. Define and validate the source-package manifest: authored source, CMake and
-   pkg-config metadata, runtime data, examples, licenses, upstream notices,
-   governed patches, SBOM inputs and exclusions. Reject missing, unexpected,
-   duplicated, path-unsafe or nondeterministically ordered entries.
-10. Define and validate binary install/uninstall ownership for executables,
-    libraries, mapped-library/runtime data, public headers, CMake exports,
-    pkg-config files, licenses/notices and examples. Prove staged discovery and
-    complete removal without touching files outside the install manifest.
-11. Exercise installed and offline producer/consumer workflows through CMake
-    and pkg-config, including object/library/design artifacts, mapped logical
-    libraries, SystemC/TLM/SCV plug-ins and all required pinned upstream source
-    archives without network dependence.
-12. Freeze deterministic source/binary packaging rules: normalized paths,
-    permissions, timestamps, ownership, entry order, compression parameters,
-    package identity and repeated-build digests. Add exact positive and
-    corruption/nondeterminism negative owners without weakening artifact
-    resource limits.
-13. Build and verify reproducible Linux release-candidate source and binary
-    archives for the supported exact-LLVM Clang and GCC families, retaining
-    commands, manifests, sizes, digests, signatures or explicit unsigned-
-    candidate disposition, and toolchain/runtime provenance.
-14. Build and verify the corresponding Windows MSVC and clang-cl release-
-    candidate archives with `/bigobj`, clean `NDEBUG`/`UNDEBUG` ownership,
-    120-minute job limits, deterministic manifests and retained warning logs.
-    Keep this change active until real Windows execution is available.
-15. Run clean-machine staged-install smokes for CLI discovery, every maintained
-    tutorial/example, non-project phases, mapped libraries, portable artifacts,
-    relocation, debugger, VCD/FST output and uninstall isolation on each
-    available release-candidate platform/toolchain.
-16. Run clean-machine plug-in and compatibility smokes for official SystemC
-    3.0.2, TLM, SCV 2.0.1, DPI-C, VPI and VHPI, including offline compilation,
-    cache reconstruction, ABI/producer rejection, transaction visibility and
-    failure containment without any legacy SystemC facade.
-17. Audit every retained release-candidate build, package, install and smoke
-    log. Classify compiler warnings, correctness failures, performance/resource
-    regressions and harness defects; repair each issue and rerun focused owners
-    on every affected available toolchain before broad gates.
-18. Freeze the changelog, known issues, support/platform matrices, package and
-    SBOM manifests, license/upstream notices, archive/signature identities,
-    example outputs and explicit Batch 177 deferrals. Add machine-checked
-    counts/digests and leave no unexplained or inferred platform claim.
-19. Synchronize README, architecture, language/API/platform/release guides,
-    diagnostics, inventories and the exact Batch 177 restart handoff. Run the
-    focused documentation, packaging, install, reproducibility, source and
-    catalog gates; retain initial failures and repaired evidence.
-20. Run fresh full non-sanitized Debug/Release builds, regressions and all local
-    release-candidate gates with at least eight workers and retained logs.
-    Repair every failure, close or explicitly transfer every unavailable
-    Windows row to Batch 177, commit and push the accumulated v2.0 release
-    candidate once, and do not execute or monitor hosted CI. Batch 177 alone
-    owns fresh sanitizers and final hosted-CI execution/monitoring.
+2. **Complete.** Audit and update the core Verilog, VHDL, SystemVerilog and
+   mixed-language tutorials/examples for current CLI syntax, roots, logical
+   libraries, standard selection, non-project phases, artifacts, relocation
+   and debugger use. Remove the vertical slice's stale v1/interpreter-only
+   description and the Verilog tutorial's stale pre-backannotation roadmap
+   claim. Isolated vertical-slice check/run/two-root commands pass after
+   removing a meaningless VHDL `compilation_unit` option that emitted
+   `FSIM-FE-CU-0001`; isolated manifest-free compile/elaborate/simulate passes
+   under compiled, interpreter and debug engines. The precompiled-library
+   producer/check/run flow passes, and its relocation tutorial now uses
+   `cp -a` because the published artifact is intentionally read-only; the
+   relocated consumer preserves the tick-2 result. Registered documentation,
+   restartability, mixed-language, non-project and library-artifact owners pass
+   6/6 in 5.77 seconds. Retained focused evidence has SHA-256
+   `adc095b901b44576b31d2b08dcde91f5509f4b47e42ccadc1c2a11b64c737175`.
+   Preserve Change 2 in the accumulated worktree and proceed only to Change 3.
+3. **Complete.** Audit and update SystemC/TLM/SCV tutorials/examples for the
+   official Accellera-only interface, opaque backend, plug-in/cache, complete
+   signal/port visibility, transactions, selection, backpressure and
+   relocation. Correct public ABI 3 to ABI 4, one-patch SCV text to the governed
+   two-patch C++20 contract, and misleading claims that the current sole
+   `fsim_plugin_init_v1` entry point is itself a legacy interface or absent.
+   The former facade remains removed; normal macro linking synthesizes the
+   current entry point, while a mutually exclusive low-level direct definition
+   uses that same ABI. An isolated three-language check/build/VCD/FST/debug flow
+   passes with exact tick-3 transcript and time-1/delta-2 breakpoint; its VCD
+   contains both SystemC boundary ports and VHDL paths. The manifest-free
+   SystemC object/link/design flow also passes. Registered provenance, patch,
+   install, plug-in/cache, TLM1/TLM2, SCV transaction/selection/backpressure,
+   trace and legacy-facade-rejection owners pass 35/35 in 15.00 seconds.
+   Retained focused evidence SHA-256 values are
+   `2d3a893e558eea22d840b517f1ca5f86e8f9696b228c9d0bba15e2be28d22141`,
+   `8f7b8bab655493693827c5e114e8142632268e937d9435d93192e2521abacf1d`
+   and `a80126d1174426b62d879cae3c48d6e6dd48c45d72eb302c0fb9196d739271a5`.
+   No source, public-header, Release, sanitizer or hosted-CI work ran.
+4. **Complete.** Audit and update UVM, DPI-C, VPI, VHPI, SDF/VITAL and FST
+   tutorials/examples so direct, interpreter/LLVM O0/O2, cold/warm, debug/trace
+   and artifact flows describe current v2 behavior. Replace completed-batch
+   future tense in SDF/DPI guides, connect the generic SDF control example to
+   the mixed VITAL example, distinguish VPI/VHPI/UVM from DPI extensions, and
+   update the UVM resource guidance to the retained 4,631,912/5,220,824 KiB
+   measurements. The first focused slice accidentally included the release-
+   labeled UVM closure audit; it correctly exposed the Change 18 inventory
+   baseline still expecting 1,407 rather than 1,414 authored files. Retain that
+   failure without advancing the later freeze. The corrected frontend/runtime/
+   API, UVM documentation/source/platform/inventory, VPI, SDF/VITAL and FST
+   tutorial/interface slice passes 21/21 in 6.29 seconds. Initial/final log
+   SHA-256 values are
+   `18ee36ff6519a8aa8d0d504a62b82634b7542326573cbda8d01e554d15630fd9`
+   and `5000a551ffcff302b189dad3db840878c319d9ff457a81e5f7071db6582ef684`.
+   No Release configuration, sanitizer or hosted-CI work ran.
+5. **Complete.** Add one current user/platform/migration/troubleshooting guide
+   covering the supported Linux GCC/Clang and pinned Windows LLVM-MinGW release
+   configurations, optional exact LLVM 22.1.8 backend, official SystemC/SCV/Tcl
+   set, first-run paths, 120-minute hosted-job limit, worker/simulation/memory
+   budgets, cache/artifact recovery, Windows paths and loaded-DLL locks,
+   current-only source migration and actionable failure triage. Distinguish the
+   retained MSVC-compatible source/command contracts from release support;
+   native MSVC and clang-cl are not current package targets after the deliberate
+   LLVM-MinGW CI migration. Align Change 14 and final Batch 177 with that live
+   target without rewriting the historical Batch 175 ledger early; Change 18
+   owns an explicit remap or retirement of its twelve Windows-dependent rows.
+   README links the guide and clarifies that ASan/UBSan is a scheduled local
+   release-boundary preset, not ordinary hosted instrumentation. Diagnostic,
+   Windows LLVM, tool and resource portability contracts pass 4/4 in 0.31
+   seconds; retained log SHA-256 is
+   `9bc2cffcbc59a79f5d1eeabe507d4326925ce340afe2d03623402149c179dad0`.
+   No source, public header, build logic, Release configuration, sanitizer,
+   hosted-CI action, commit or push ran. Preserve Changes 2-5 and proceed only
+   to Change 6's language and standard-mode documentation.
+6. **Complete.** Reconcile language and standard-mode documentation with the
+   live parsers and inventories: VHDL-1987/1993/2000/2002/2008,
+   Verilog-1995/2001/2001-noconfig/2005,
+   SystemVerilog-2005/2009/2012/2017, UVM 1.2/IEEE 1800.2-2020-3.1,
+   SDF 2.1/3.0/4.0 with current Verilog/SystemVerilog/VHDL-VITAL application,
+   and official SystemC 3.0.2/SCV 2.0.1. Replace the duplicated early-slice
+   language table and obsolete v1 target/deferral sections with one current
+   boundary index, exact selectable-profile table, current-only artifact
+   rejection/regeneration policy and deliberate exclusions. Update the feature
+   matrix's terminology, VHDL/UVM/SDF/SystemC exclusions, release rule and
+   pinned Windows target; remove pre-backannotation claims from the Verilog and
+   VHDL/PSL support/audit guides. Static standard-mode, SDF/VITAL, gap and
+   documentation owners pass 10/10 in 0.35 seconds. Retained log SHA-256 is
+   `25e74b412869ca178e205e908055563f82731d8119d040e8734b0c01ee3295c1`.
+   No source, public header, build logic, Release configuration, sanitizer,
+   hosted-CI action, commit or push ran. Preserve Changes 2-6 and proceed only
+   to Change 7's architecture/API/ABI/plug-in documentation.
+7. **Complete.** Reconcile architecture, API, ABI/schema, plug-in, debugger,
+   tracing and artifact documentation with the current implementation. Mark
+   stable `v1` symbol/record suffixes as protocol identities rather than legacy
+   runtime support; update the pipeline for current SDF timing application,
+   class HIR, visibility, time selection and debugger rejection behavior.
+   Align the platform/cache/stack boundary with pinned Windows LLVM-MinGW,
+   GCC-style dependency files, native-MSVC-only `/sourceDependencies`, four
+   120-minute hosted jobs and the current 128 MiB Windows test-stack reserve.
+   Document `fsim::api`/`fsim/api.h` as the installed size-gated ABI and the
+   C++ trace model as exact-build source API without stable C++ layout. Extend
+   DPI to all selectable SystemVerilog profiles, VPI to all selectable
+   Verilog/SystemVerilog profiles, and describe the supported LLVM-MinGW DLL
+   boundary without claiming an MSVC package. The Batch 174 ABI/schema
+   reference already holds the exact current layouts, formats, lifecycle,
+   transactionality, relocation and regeneration rules. FST, ABI/schema, core
+   API, SystemC/foreign ABI, producer-diagnostic and reference owners pass 7/7
+   in 0.11 seconds; retained log SHA-256 is
+   `80a90393a8e4f6096db8edf79a38844da93ea7506d5e933a10d679e8ea27e6d6`.
+   No source, public header, build logic, Release configuration, sanitizer,
+   hosted-CI action, commit or push ran. Preserve Changes 2-7 and proceed only
+   to Change 8's diagnostics/release/worker/post-v2 documentation.
+8. **Complete.** Complete diagnostics, release, worker-ready and post-v2
+   parallelism documentation. New `docs/release-and-post-v2.md` separates the
+   deterministic single-scheduler v2 execution contract from build/test
+   parallelism and from optional future process partitioning, worker launch/
+   recovery, conservative scheduling, AOT executables, expanded coverage
+   products and Python/notebook packaging. It records that pointer-free bounded
+   SystemC request/response protocols are worker-ready without promising a
+   process launcher or distributed runtime. The diagnostic catalog now assigns
+   current Windows thresholds to LLVM-MinGW and describes SDF value selection
+   as effective current state. Historical v1 portability/resource audits are
+   explicitly marked as snapshots, not current policy. Per the final boundary,
+   Batch 176 now forbids every Release configure/build/test/gate as well as
+   sanitizers and hosted-CI work; Change 20 is Debug-only and Batch 177 owns all
+   deferred Release qualification. Diagnostic, source-budget, resource, CTest
+   uniqueness and SystemC backend/binding inventories pass 6/6 in 2.81 seconds;
+   retained log SHA-256 is
+   `695634ef18115c9c8f34145198233ddaa3bbeb0e319b767cb58235db4d2f54c1`.
+   No source, public header, build logic, Release configuration, sanitizer,
+   hosted-CI action, commit or push ran. Preserve Changes 2-8 and proceed only
+   to Change 9's source-package manifest.
+9. **Complete.** Define and validate the source-package manifest. The checked
+   line-oriented `packaging/source-package-manifest.txt` owns 1,472 sorted
+   files across authored source, CMake and pkg-config metadata, runtime data,
+   examples, licenses, upstream notices, governed SCV patches and SPDX SBOM
+   inputs; `source-package-exclusions.txt` now owns 23 generated/workspace
+   rules, including Python bytecode produced only by release-tool validation.
+   `FsimSourcePackage.cmake` rejects unknown top-level entries, missing roots,
+   excluded generated content and symbolic links. The registered validator
+   rejects path-unsafe, duplicate, out-of-order, missing and unexpected entries
+   without embedding the manifest in a C++ string, and freezes required
+   SystemC/SCV/IEEE license, notice, provenance, patch and SBOM paths. Repeated
+   generation preserves manifest SHA-256
+   `eedcc29b5280180fb801b0dd2eca76daf2016e5ef7fb432d900e82b536576e2d`.
+   The manifest, source-line, SystemC/SCV provenance and SCV patch slice passes
+   5/5 in 1.40 seconds; retained log SHA-256 is
+   `2864aba50c59fd828152ffd13d62d658f2d61f3e3358bd79a10f460bdc273779`.
+   No Release, sanitizer, hosted-CI, commit or push action ran. Preserve Changes
+   2-9 and proceed only to Change 10's binary install/uninstall ownership.
+10. **Complete.** Define and validate binary install/uninstall ownership.
+    `fsim.pc` is installed as relocatable pkg-config metadata; maintained
+    examples, IEEE runtime data, SystemC/SCV licenses, notices, provenance,
+    patch and SPDX inputs have explicit destinations. The first exact staged
+    audit found duplicate ownership of `fsim/systemc/scv.hpp` and root
+    `LICENSE`/`README.md`; the directory install now excludes the SCV-owned
+    header and the upstream SystemC documentation installs only below
+    `third-party/systemc-3.0.2`. The registered ownership test proves 539 unique
+    installed files exactly match CMake's manifest, excludes generated example
+    caches/waveforms, checks required CLI/library/header/CMake/pkg-config/data/
+    example/notice paths, performs manifest-driven removal, removes empty staged
+    directories and preserves an outside sentinel. Source manifest, binary
+    ownership and existing installed-public owners pass 3/3 in 5.32 seconds;
+    retained log SHA-256 is
+    `17c2f9c7c5ae5cfd5b0f1322fb7ff3ac2251cc786a7ea339be0682953eae3286`.
+    The existing installed-public owner carries a historical `release` label
+    but executed solely from the Debug tree; no Release configuration/build/
+    test, sanitizer, hosted-CI, commit or push action ran. Preserve Changes 2-10
+    and proceed only to Change 11's offline installed producer/consumer flows.
+11. **Complete.** Exercise installed and offline producer/consumer workflows
+    through CMake and pkg-config. A real relocated Linux pkg-config consumer
+    compiles and runs the installed C API with network proxy routes disabled;
+    Windows without pkg-config retains an explicit metadata-only result for
+    final Batch 177 rather than inventing execution. A four-stage closure owns
+    installed CMake/pkg-config discovery, object/library/design and mapped-
+    library artifacts, SystemC/TLM/SCV compilation/link/artifact/installed
+    consumers, and the pinned SystemC/SCV archives, patches and provenance.
+    Direct retained execution passes all 17 witnesses with console/result
+    SHA-256 values
+    `16777cb5a7fd96d1b0593aa10aba0ea80bb1f46d5cce12b5657d57d3910bd75d`
+    and
+    `e3edd476d3b459fb0b7dd5542651d355219f10d9520b46d57281bf96a3834d48`.
+    In ordinary regression the closure is an eleventh fixture-backed sentinel:
+    17 witnesses run once and the non-recursive sentinel completes in 0.01
+    seconds; its 18/18 log SHA-256 is
+    `0edcc50d1d55c13a2bb91624f9d7b4ed28fb961133ed6f3aa6f7bbfa3d238b18`.
+    The first de-duplication audit expected the former ten drivers; adding the
+    new driver to that exact inventory repairs it, and de-duplication/command-
+    uniqueness owners pass 2/2. No Release, sanitizer, hosted-CI, commit or push
+    action ran. Preserve Changes 2-11 and proceed only to Change 12's
+    deterministic package rules.
+12. **Complete.** Freeze deterministic source/binary packaging rules in
+    `packaging/package-policy.txt`: safe UTF-8 sorted paths, fixed 2000-01-01
+    timestamps, 0644/0755 modes, implicit directories, no host-owner identity,
+    ZIP deflate level 9, SHA-256, unsigned-candidate disposition and explicit
+    entry/byte/path limits. CMake/libarchive ZIP first failed repeated-digest
+    proof because it retained creation-time metadata; the checked release-tool
+    writer now sets every ZIP field explicitly and adds no Python runtime/API
+    dependency. The first full Debug binary package exceeded 512 MiB because
+    five 540 MiB command executables were byte-identical. Linux installation
+    now stores `fsim` once and records four relative alias symlinks; Windows
+    retains real executables. Full proof produces identical 1,479-entry,
+    13,325,782-byte source archives with SHA-256
+    `f04e88934a40e25717138501c79bbee5ce85a4267858f2c0e8ebeac12b412eb5`
+    and identical 540-entry, 347,068,610-byte Debug binary archives with SHA-256
+    `46ec87fde9e79e9de365330fd4f12c5fe96af9d244e136064489c213a2cc5dfa`.
+    Fixed extraction, changed-mtime, order-rejection and corruption-digest
+    negatives pass; full result SHA-256 is
+    `c82f2f831f8a7cc1cc99b253ba3ba55d0de618abbaf09083a7d06b7414ac1785`.
+    Ordinary regression applies the same writer to the full source and a
+    five-file binary fixture in 5.11 seconds instead of rebuilding the 347 MiB
+    Debug archive; the source/binary/install/uniqueness slice passes 5/5 in
+    5.05 seconds with log SHA-256
+    `a64e5d88f2292235b570c97ae0900f4a9981050a2974333335ab4a2dc011ee5e`.
+    No Release, sanitizer, hosted-CI, commit or push action ran. Preserve
+    Changes 2-12 and proceed only to Change 13's Linux package definitions and
+    retained candidate disposition.
+13. **Complete.** Prepare and verify three deterministic Linux package-target
+    definitions: Clang 22.1.8 with exact LLVM 22.1.8, GCC 13.3 with exact LLVM
+    22.1.8, and GCC 13.3 without LLVM. Each descriptor freezes ZIP format,
+    Debug/Release configuration inventory, at least eight local workers, four
+    hosted workers, a 120-minute job limit, unsigned-candidate disposition and
+    the exact Release/archive/install/hosted work assigned to Batch 177. The
+    registered validator rejects missing, malformed, empty and duplicate keys,
+    target-set drift, wrong LLVM identity and any Batch 176 Release/hosted
+    overclaim. Current Clang+LLVM, GCC+LLVM and GCC-without-LLVM Debug trees each
+    pass source-manifest, binary-install, deterministic-package and Linux-target
+    owners 4/4 in 4.78, 4.67 and 4.69 seconds. Retained log SHA-256 values are
+    `9f5d1194d0397b508291e23939bb3f298ba08d96a5e11e2a99f33ba1f182923c`,
+    `08f9974e732892d9805cf95ab919836372ea1a1ce56ab6bfdd4f4ba7b4fdd862`
+    and
+    `2659af2bf9646cb2b89e3ddda41b1700881dbe137e4f5243b53a5b9246f7733b`.
+    The no-LLVM tree required a complete 1,204-step eight-worker Debug refresh,
+    which completed warning-clean. The current source manifest has 1,483
+    ordered entries and SHA-256
+    `f0744f518f4d993b13d58c1ebbce21ac2e9f96a108e9c81b2516d95d2f65ca4f`;
+    Change 18 will freeze its final post-Change-17 identity. No Release,
+    sanitizer, Windows/hosted-CI, commit or push action ran. Preserve Changes
+    2-13 and proceed only to Change 14's Windows package definitions.
+14. **Complete.** Define the two pinned Windows x86-64 LLVM-MinGW 20260616 UCRT
+    package targets with LLVM disabled or exact LLVM 22.1.8 enabled. Each owns
+    the verified upstream ZIP URL and SHA-256, Clang 22.1.8 GNU Windows triple,
+    Tcl, deterministic ZIP format, Debug/Release configuration inventory, four
+    hosted workers, 120-minute timeout, unsigned-candidate disposition and a
+    Batch 177 compiler/linker/test warning-log owner. The validator freezes the
+    two-target set, toolchain installer/workflow identity, all four hosted
+    timeouts, checksum validation and exact Batch 177 Debug/Release/archive/
+    install/warning/hosted obligations. It also statically preserves project-
+    wide `/bigobj` and the forced assertion header that avoids conflicting
+    MSVC `/DNDEBUG` plus `/UNDEBUG` warnings; native MSVC/clang-cl remains a
+    source-portability contract rather than a package claim. Clang+LLVM,
+    GCC+LLVM and GCC-without-LLVM Debug trees pass source-manifest, MSVC Debug,
+    Windows LLVM and package-definition owners 4/4 in 0.90, 0.89 and 0.89
+    seconds. Retained log SHA-256 values are
+    `8488414369586efd3a76e056065514034d21048013b0125a6f4c29b309fdd2c7`,
+    `50732d1a989a060ddbbc4bbdb14350d7e709b607ed3745550b50125f8640cab1`
+    and
+    `b59f3d76c781c5fda4f19f791d94ac7efd378b5701f1278d9930683108f16389`.
+    No Windows execution, Release, sanitizer, hosted-CI, commit or push action
+    ran. Preserve Changes 2-14 and proceed only to Change 15's Debug/fixture
+    clean-machine staged-install smokes.
+15. **Complete.** Add one fixture-backed clean-machine install closure with an
+    exact six-example inventory and 19 unique witnesses: three staged install/
+    discovery/uninstall owners, eight tutorial/example owners, four portable-
+    artifact/relocation owners and four debugger/VCD/FST/portability owners.
+    Its first Clang pass incorrectly selected the two static SDF release audits;
+    retain their expected provisional 1,407-versus-1,428 inventory failure and
+    replace them with non-Release SDF/VITAL inventory plus executable control/
+    corpus owners. The first no-LLVM pass then exposed a real harness race:
+    parallel `cmake --install` tests rewrote the build tree's shared
+    `install_manifest.txt`. A narrow CTest resource lock now serializes only the
+    five install-manifest owners while all other witnesses remain parallel.
+    Repaired Clang+LLVM, GCC+LLVM and GCC-without-LLVM Debug closures pass all
+    19 witnesses in 151.83, 269.87 and 265.46 aggregate stage seconds; console
+    SHA-256 values are
+    `0c0633848b4fee97163ab367c7130a6aa8d005f082da9779a49af96b2ccc34a9`,
+    `9e2a655d91f05a471ac1767e7048d71fde287fe2dd2589fb116f9f0203a59943`
+    and
+    `23c2f05e4ab0628db5a9cf5a6b22bb2dab4d52fe479d91ac5b9afabcef7626d5`.
+    Repaired Clang/GCC+LLVM install slices pass 3/3 in 6.61/4.74 seconds;
+    de-duplication and unique-command owners pass 2/2. No Release build/test,
+    sanitizer, Windows/hosted-CI, commit or push action ran. Preserve Changes
+    2-15 and proceed only to Change 16's Debug/fixture plug-in and compatibility
+    smokes.
+16. **Complete.** Add a thirteenth fixture-backed closure with 25 direct,
+    unique compatibility witnesses: nine official SystemC 3.0.2/TLM compiler,
+    incremental/cache/session/execution/shared-runtime owners; eight SCV 2.0.1
+    compile/install/artifact/protocol/transport/recording/transaction owners;
+    five DPI-C/VPI/VHPI runtime, application, ABI and producer-diagnostic
+    owners; and three plug-in/strict-C-ABI/cache-corruption containment owners.
+    Before executing, the driver statically requires the complete removed-
+    facade token/path rejection loop. Clang+LLVM, GCC+LLVM and GCC-without-LLVM
+    Debug closures pass all 25 in 28.19, 35.37 and 35.45 aggregate stage
+    seconds. Console SHA-256 values are
+    `85207a01259ed16f36bbddba8bf3fa1928f87a90235889d16df1c380366deaee`,
+    `06e068e6e46caf7d186b62c426bec8723cb7022c2ea76c85d5ca1da64f0074e8`
+    and
+    `5b9cdf97a5d5c4705ee647b10c02f67b9cf29b55d34de0652098bff5a19f8bca`.
+    No legacy SystemC facade, Release build/test, sanitizer, Windows/hosted-CI,
+    commit or push action ran. Preserve Changes 2-16 and proceed only to Change
+    17's retained-log audit and focused repair.
+17. **Complete.** Machine-audit all 69 retained Change 2-16 candidate logs.
+    Sixty-two are marker-clean; seven expected records cover five repaired
+    issue classes: the removed VHDL compilation-unit warning, read-only library
+    relocation procedure, premature UVM inventory owner, premature SDF release-
+    audit owners and the parallel install-manifest race. The audit rejects any
+    unclassified compiler warning, diagnostic/error, CMake/ninja/test failure,
+    assertion, exception, crash, timeout or kill marker; verifies every repair
+    log exists; records SHA-256 for each audited log; and permits policy-only
+    validation in a clean checkout without local retained evidence. No final
+    correctness failure or compiler warning remains. The longest retained
+    CTest stage is 265.48 seconds, below the 120-minute limit, with no resource
+    regression. The 69-row result SHA-256 is
+    `f419a3bfb0765826b384cd65c6723c39ee98ef846b05b21431596cd7ef5546c1`.
+    Audit, source-manifest, de-duplication and command-uniqueness owners pass
+    4/4 in 3.51 seconds; retained log SHA-256 is
+    `d3b50ab0f5e58dfefe3d0adf06fa8d1e571f5c1c3416f6873b69b367bf4da796`.
+    No Release build/test, sanitizer, Windows/hosted-CI, commit or push action
+    ran. Preserve Changes 2-17 and proceed only to Change 18's final release-
+    record freeze.
+18. **Complete.** Freeze the changelog, known issues, support/platform
+    matrices, package and SBOM manifests, license/upstream notices, archive/
+    signature identities, example outputs and explicit Batch 177 deferrals.
+    The machine-checked candidate record owns 1,495 source paths, seven
+    platform rows, six example-output rows, nineteen qualification rows and
+    forty-four Linux performance rows. All twelve deferred qualification rows
+    now name the current LLVM-MinGW 20260616 target; no Windows execution is
+    inferred. Every Release build/test/gate, sanitizer, final archive/install
+    smoke, hosted Linux/Windows result, version/tag and signature disposition
+    remains assigned to Batch 177.
+19. **Complete.** Synchronize README, architecture, language/API/platform/
+    release guides, diagnostics, inventories and the exact Batch 177 restart
+    handoff. Current entry points link the checked support, qualification and
+    candidate records and distinguish diagnostic/source portability from
+    platform execution. The focused documentation, packaging, install,
+    reproducibility, source, catalog, inventory and de-duplication slice passes
+    27/27; the prepared restart contract activates only after the Debug-only
+    Change 20 commit/push and transfers every Release, sanitizer and hosted-CI
+    action to Batch 177.
+20. **Complete.** Run fresh full non-sanitized Debug builds, regressions and
+    every local non-Release release-candidate gate with at least eight workers
+    and retained logs. Clang 22.1.8 plus exact LLVM 22.1.8 builds all 2,391
+    steps warning-clean in 15:07.21 and passes 288/288 non-Release tests in
+    168.99 seconds after repairing an SCV documentation-closure token. GCC
+    13.3 plus exact LLVM 22.1.8 initially exposed two nested Tcl GNU Make
+    jobserver warnings; the external build now inherits a Makefiles parent
+    jobserver, retains explicit eight-worker compilation under Ninja and
+    isolates the copy-only install step from stale jobserver state. The fresh
+    repaired GCC+LLVM build is warning-clean in 14:46.86 and passes 288/288 in
+    304.31 seconds. The independent GCC 13.3 LLVM/Tcl-disabled Debug build is
+    warning-clean in 14:22.57 and passes 285/285 in 295.46 seconds. Typed
+    boundaries passes in every complete regression, including 97.77 seconds
+    under GCC+LLVM and 82.35 seconds without LLVM; the corresponding SystemC
+    matrices pass in 304.29 and 295.43 seconds. The final 79-owner non-Release
+    candidate/source/catalog/inventory/package/install/reproducibility/
+    portability/de-duplication gate passes in 150.57 seconds. The retained-log
+    audit preserves the original 69-log Change 2-16 identity and additionally
+    classifies twelve Changes 17-20 logs as ten clean plus the repaired SCV and
+    Tcl records. The 1,495-path source manifest and all frozen release-record
+    identities remain exact. Commit and push the accumulated candidate once;
+    no Release build/test/gate, sanitizer or hosted-CI execution/inspection/
+    monitoring ran. Batch 177 owns all such deferred work.
 
 ### Batch 177 - v2.0 final qualification and release
 
@@ -13367,14 +13648,16 @@ carry an explicit evidence-backed scope disposition approved by the user.
   foreign-interface, standard-mode, SDF, FST, artifact, debug/trace or platform
   gap remains.
 - **Changes 5-8:** repeat clean exact-LLVM Linux Debug/Release, Windows hosted
-  MSVC/clang-cl Debug/Release, interpreter/O0/O2/debug and all release-candidate
-  smoke workflows. Run every fresh sanitizer, Release qualification, release
-  gate and hosted-CI execution/monitoring task deferred from Batches 173-176
+  LLVM-MinGW Debug/Release with and without exact LLVM 22.1.8,
+  interpreter/O0/O2/debug and all release-candidate
+  smoke workflows. Run every Release build/test/gate, fresh sanitizer and
+  hosted-CI execution/monitoring task deferred from Batches 173-176
   here, then monitor and repair the complete hosted Linux/Windows CI matrix as
   final-release evidence. Consume the twelve explicitly deferred Batch 175
-  Windows qualification rows here, including MSVC/clang-cl warning closure,
-  correctness/stress workloads and measured performance thresholds; do not
-  infer them from Linux evidence.
+  Windows qualification rows here by mapping applicable correctness/stress/
+  performance ownership to the current LLVM-MinGW target or retiring an
+  MSVC/clang-cl-specific row with an explicit target-migration disposition; do
+  not infer any Windows result from Linux evidence.
 - **Changes 9-12:** verify deterministic source and binary archives, SBOM/
   licenses, upstream source/patch identities, install layouts, ABI/schema
   versions, migrations, artifact digests, examples, and offline reproducibility.

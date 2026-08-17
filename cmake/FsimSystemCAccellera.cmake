@@ -607,12 +607,17 @@ macro(fsim_systemc_add_official_runtime archive work_root)
   # and produces an unusable launcher/runtime pair. Limit the compatibility
   # override to the governed subdirectory and restore the parent value below.
   set(FSIM_SYSTEMC_PARENT_MSVC "${MSVC}")
+  set(FSIM_SYSTEMC_PARENT_INSTALL_DOCDIR "${CMAKE_INSTALL_DOCDIR}")
+  set(CMAKE_INSTALL_DOCDIR
+      "${CMAKE_INSTALL_DOCDIR}/third-party/systemc-3.0.2")
   if(WIN32 AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
     set(MSVC TRUE)
   endif()
   add_subdirectory(
     "${FSIM_SYSTEMC_OFFICIAL_SOURCE_DIR}"
     "${CMAKE_BINARY_DIR}/_deps/fsim_systemc_3_0_2-build")
+  set(CMAKE_INSTALL_DOCDIR "${FSIM_SYSTEMC_PARENT_INSTALL_DOCDIR}")
+  unset(FSIM_SYSTEMC_PARENT_INSTALL_DOCDIR)
   set(MSVC "${FSIM_SYSTEMC_PARENT_MSVC}")
   unset(FSIM_SYSTEMC_PARENT_MSVC)
 

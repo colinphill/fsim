@@ -19,13 +19,16 @@ Its 578-file extracted tree has SHA-256
 The exact Apache-2.0 license, notice, source manifest, SPDX 2.3 package record,
 and pristine archive are retained under `third_party/scv-2.0.1`.
 
-An unmodified GCC 13 build against SystemC 3.0.2 is retained before patching.
-Clang 22 correctly rejects lazy assignment through the const
-`scv_bag::peekRandom()` path, so the isolated build tree receives one generated
-all-platform patch making only the cached random-generator pointer mutable.
-`PATCHES.txt` freezes the patch, input, output and patched-tree digests,
-rationale, probes and removal criteria. Remove it only when a governed official
-SCV release makes that pointer mutable or removes the const assignment.
+An unmodified pre-C++20 GCC 13 build against SystemC 3.0.2 is retained before
+patching. Clang 22 correctly rejects lazy assignment through the const
+`scv_bag::peekRandom()` path, and GCC 13 in the required C++20 mode rejects the
+template-id spelling of constructors in the nested `scv_extensions`
+specialization. The isolated build tree therefore receives two generated all-
+platform patches: one makes only the cached random-generator pointer mutable,
+and one uses the injected class name for those two constructors. `PATCHES.txt`
+freezes both patch/input/output identities, the complete patched-tree digest,
+rationales, probes and independent removal criteria. Remove either patch only
+when a governed official SCV release corrects its corresponding source defect.
 
 ## Supported boundary
 

@@ -1260,12 +1260,30 @@ install(
 install(
   DIRECTORY include/fsim/systemc/
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/fsim/systemc"
+  PATTERN "scv.hpp" EXCLUDE
 )
 if(FSIM_COMMAND_TARGETS)
-  install(
-    TARGETS ${FSIM_COMMAND_TARGETS}
-    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
-  )
+  if(WIN32)
+    install(
+      TARGETS ${FSIM_COMMAND_TARGETS}
+      RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+    )
+  else()
+    install(
+      TARGETS fsim
+      RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+    )
+    foreach(alias_name IN ITEMS fsim-vhdl fsim-sv fsim-elab fsim-run)
+      install(CODE "
+        set(FSIM_ALIAS_PATH
+          \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/${alias_name}\")
+        file(REMOVE \"\${FSIM_ALIAS_PATH}\")
+        file(CREATE_LINK fsim \"\${FSIM_ALIAS_PATH}\" SYMBOLIC)
+        list(APPEND CMAKE_INSTALL_MANIFEST_FILES
+          \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/${alias_name}\")
+      ")
+    endforeach()
+  endif()
 endif()
 if(FSIM_WITH_BUNDLED_TCL)
   install(
@@ -1303,11 +1321,20 @@ write_basic_package_version_file(
   VERSION "${PROJECT_VERSION}"
   COMPATIBILITY SameMajorVersion
 )
+configure_file(
+  "${PROJECT_SOURCE_DIR}/cmake/fsim.pc.in"
+  "${PROJECT_BINARY_DIR}/fsim.pc"
+  @ONLY
+)
 install(
   FILES
     "${PROJECT_BINARY_DIR}/fsimConfig.cmake"
     "${PROJECT_BINARY_DIR}/fsimConfigVersion.cmake"
   DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/fsim"
+)
+install(
+  FILES "${PROJECT_BINARY_DIR}/fsim.pc"
+  DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig"
 )
 install(
   FILES LICENSE README.md
@@ -1321,4 +1348,29 @@ install(
 install(
   DIRECTORY third_party/ieee-1076-2019/
   DESTINATION "${CMAKE_INSTALL_DATADIR}/fsim/vhdl/ieee-1076-2019"
+)
+install(
+  FILES
+    third_party/systemc-3.0.2/SOURCE_MANIFEST.txt
+    third_party/systemc-3.0.2/systemc-3.0.2.spdx.json
+  DESTINATION "${CMAKE_INSTALL_DOCDIR}/third-party/systemc-3.0.2"
+)
+install(
+  FILES
+    third_party/scv-2.0.1/PATCHES.txt
+    third_party/scv-2.0.1/SOURCE_MANIFEST.txt
+    third_party/scv-2.0.1/scv-2.0.1.spdx.json
+  DESTINATION "${CMAKE_INSTALL_DOCDIR}/third-party/scv-2.0.1"
+)
+install(
+  DIRECTORY examples/
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/fsim/examples"
+  PATTERN ".fsim-cache" EXCLUDE
+  PATTERN "*.dll" EXCLUDE
+  PATTERN "*.dylib" EXCLUDE
+  PATTERN "*.fst" EXCLUDE
+  PATTERN "*.o" EXCLUDE
+  PATTERN "*.obj" EXCLUDE
+  PATTERN "*.so" EXCLUDE
+  PATTERN "*.vcd" EXCLUDE
 )

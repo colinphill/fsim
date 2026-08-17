@@ -255,7 +255,7 @@ if(FSIM_ELABORATION_INDEX EQUAL -1)
 endif()
 
 message(STATUS
-  "MSVC Debug contract: /bigobj covers every target and the common 8 MiB "
+  "MSVC Debug contract: /bigobj covers every target and the common 128 MiB "
   "stack policy covers C/C++ test hosts; "
   "SystemC enum metadata crosses the integer validation seam explicitly and "
   "interface-kind selection uses an explicit constexpr fallback; "

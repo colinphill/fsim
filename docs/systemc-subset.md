@@ -141,7 +141,7 @@ fsim_sc_status_v1 fsim_plugin_init_v1(
     fsim_sc_registrar_v1* registrar);
 ```
 
-ABI version 3 uses fixed-width integers, C pointers, callbacks, and explicit
+ABI version 4 uses fixed-width integers, C pointers, callbacks, and explicit
 byte views. The registrar publishes typed factory schemas. During construction,
 the official bridge registers root modules and boundary ports and returns
 stable opaque handles. At runtime, the host supplies boundary reads and writes,

@@ -2,11 +2,12 @@
 # Standard Delay Format support
 
 Fsim accepts SDF 4.0 directly and SDF 2.1 and 3.0 through explicit revision
-adapters. Batch 168 owns parsing, exact normalization, hierarchy resolution and
-portable source identity. Batch 169 applies that immutable representation to
-Verilog-1995/2001/2001-noconfig/2005 and SystemVerilog-2005/2009/2012/2017
-timing. VHDL/VITAL targets and timing that crosses a VHDL boundary remain
-implemented by Batch 170 without widening the selected SDF or HDL revision.
+adapters. The current v2 implementation preserves exact normalization,
+hierarchy resolution and portable source identity, applies that immutable
+representation to Verilog-1995/2001/2001-noconfig/2005 and
+SystemVerilog-2005/2009/2012/2017 timing, and covers VHDL/VITAL targets plus
+timing that crosses a VHDL boundary without widening the selected SDF or HDL
+revision.
 
 ## Supported input and value policy
 
@@ -50,8 +51,8 @@ identity and does not allocate observation records.
 
 ## VHDL/VITAL and mixed-language timing application
 
-Batch 170 extends the same exact target/value pipeline to VHDL 87, 93, 2000,
-2002 and 2008 VITAL cells and to paths crossing VHDL-Verilog,
+The same exact target/value pipeline covers VHDL 87, 93, 2000, 2002 and 2008
+VITAL cells and paths crossing VHDL-Verilog,
 VHDL-SystemVerilog and VHDL-SystemC boundaries in either direction. Structural
 call, port, generic, process and wrapper governance identifies standard cells,
 primitives, state tables and memory paths; model names are not guessed.

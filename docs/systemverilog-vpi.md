@@ -1,10 +1,11 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # SystemVerilog VPI support
 
-fsim v2 provides a simulation-owned, versioned VPI boundary for
-Verilog-2005 and SystemVerilog-2017. The implementation uses stable integer
-identities and owning C++ services; neither a plug-in nor an artifact receives
-addresses of simulator objects.
+fsim v2 provides a simulation-owned, versioned VPI boundary for selectable
+Verilog-1995/2001/2001-noconfig/2005 and
+SystemVerilog-2005/2009/2012/2017 profiles. The implementation uses stable
+integer identities and owning C++ services; neither a plug-in nor an artifact
+receives addresses of simulator objects.
 
 This API is part of the governed SystemVerilog-2017 closure surface. Vector
 descriptors preserve every host-addressable word and state plane; their
