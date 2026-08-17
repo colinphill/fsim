@@ -5390,7 +5390,12 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     the existing metadata-only pkg-config contract before host-tool discovery,
     and the artifact payload stream is scoped closed before cleanup. Debug and
     Release focused builds plus all six affected tests pass locally; the
-    Windows contract freezes all four portability repairs.
+    Windows contract freezes all four portability repairs. Replacement run
+    `32033353806` confirms 302/302 in Windows Release/no-LLVM, then exposes a
+    packaging-only relative-path defect: the archive helper changes directory
+    before resolving the workflow's relative work-root manifest and output.
+    Deterministic packaging now normalizes its source, binary and work roots to
+    absolute paths on entry; the Windows contract pins all three roots.
 
 ## Batch 176 closeout checkpoint - activate Batch 177 after the single push
 

@@ -29,6 +29,8 @@ set(FSIM_PERFORMANCE_BASELINES
     "${FSIM_SOURCE_DIR}/cmake/CheckV2PerformanceBaselines.cmake")
 set(FSIM_ABI_EVIDENCE
     "${FSIM_SOURCE_DIR}/cmake/CheckAbiSchemaEvidenceMatrix.cmake")
+set(FSIM_DETERMINISTIC_PACKAGING
+    "${FSIM_SOURCE_DIR}/cmake/CheckDeterministicPackaging.cmake")
 foreach(FSIM_INPUT IN ITEMS
     "${FSIM_ROOT}"
     "${FSIM_TEST_CMAKE}"
@@ -48,7 +50,8 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_PKG_CONFIG_CONSUMER}"
     "${FSIM_RELEASE_RECORDS}"
     "${FSIM_PERFORMANCE_BASELINES}"
-    "${FSIM_ABI_EVIDENCE}")
+    "${FSIM_ABI_EVIDENCE}"
+    "${FSIM_DETERMINISTIC_PACKAGING}")
   if(NOT EXISTS "${FSIM_INPUT}")
     message(FATAL_ERROR "Windows LLVM contract input is missing: ${FSIM_INPUT}")
   endif()
@@ -74,6 +77,8 @@ file(READ "${FSIM_RELEASE_RECORDS}" FSIM_RELEASE_RECORDS_CONTENTS)
 file(READ "${FSIM_PERFORMANCE_BASELINES}"
   FSIM_PERFORMANCE_BASELINES_CONTENTS)
 file(READ "${FSIM_ABI_EVIDENCE}" FSIM_ABI_EVIDENCE_CONTENTS)
+file(READ "${FSIM_DETERMINISTIC_PACKAGING}"
+  FSIM_DETERMINISTIC_PACKAGING_CONTENTS)
 
 foreach(FSIM_HOST_POLICY IN ITEMS
     "NOT CMAKE_SIZEOF_VOID_P EQUAL 8"
@@ -136,6 +141,15 @@ string(FIND "${FSIM_SCV_ARTIFACT_TEST_CONTENTS}"
 if(FSIM_INDEX EQUAL -1)
   message(FATAL_ERROR "SCV artifact reader lost its scoped Windows lifetime")
 endif()
+foreach(FSIM_PACKAGE_ROOT IN ITEMS
+    FSIM_SOURCE_DIR FSIM_WORK_DIR FSIM_BINARY_DIR)
+  string(FIND "${FSIM_DETERMINISTIC_PACKAGING_CONTENTS}"
+    "cmake_path(ABSOLUTE_PATH ${FSIM_PACKAGE_ROOT}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "deterministic packaging lost absolute ${FSIM_PACKAGE_ROOT}")
+  endif()
+endforeach()
 foreach(FSIM_TARGET IN ITEMS
     "x86_64-w64-windows-gnu"
     "x86_64-pc-windows-msvc"

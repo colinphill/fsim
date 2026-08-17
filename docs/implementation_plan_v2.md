@@ -14121,7 +14121,12 @@ carry an explicit evidence-backed scope disposition approved by the user.
     performance and ABI/schema text before hashing, take the Windows
     metadata-only pkg-config branch before host-tool discovery, and scope the
     artifact stream before cleanup. The Windows contract freezes the fixes;
-    focused Debug and Release checks pass locally.
+    focused Debug and Release checks pass locally. Replacement run
+    `32033353806` passes all 302 Windows Release/no-LLVM tests, then fails only
+    because the archive helper resolves a relative manifest after changing its
+    working directory. Normalize deterministic packaging's source, binary and
+    work roots to absolute paths at script entry and freeze that policy in the
+    Windows contract.
 
 ## Forward priority order
 
