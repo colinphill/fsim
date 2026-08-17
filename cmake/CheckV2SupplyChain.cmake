@@ -166,8 +166,8 @@ foreach(FSIM_LINE IN LISTS FSIM_PATCH_LINES)
   endif()
   math(EXPR FSIM_PATCH_COUNT "${FSIM_PATCH_COUNT} + 1")
 endforeach()
-if(NOT FSIM_PATCH_COUNT EQUAL 4)
-  message(FATAL_ERROR "SCV supply-chain audit requires four governed patches")
+if(NOT FSIM_PATCH_COUNT EQUAL 5)
+  message(FATAL_ERROR "SCV supply-chain audit requires five governed patches")
 endif()
 
 set(FSIM_SOURCE_ROOT "fsim-v2.0.0-source")
@@ -328,5 +328,5 @@ file(WRITE "${FSIM_RELEASE_DIR}/v2-supply-chain.tsv" "${FSIM_RESULT}")
 list(LENGTH FSIM_EXPECTED_DOCUMENT_PATHS FSIM_DOCUMENT_COUNT)
 message(STATUS
   "v2 supply chain: source=${FSIM_SOURCE_ARCHIVE_COUNT}, binaries=3x542, "
-  "documents=${FSIM_DOCUMENT_COUNT}, sboms=2, patches=4, "
+  "documents=${FSIM_DOCUMENT_COUNT}, sboms=2, patches=5, "
   "signature=unsigned-release")

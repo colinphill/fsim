@@ -5228,7 +5228,7 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     boundary. They distinguish completed local Debug/Release/sanitizer/package
     qualification from the platform-specific post-push Windows requirement,
     retain 120-minute hosted limits, and name official Accellera SystemC/TLM
-    plus governed four-patch SCV as the only native surface. The ten-owner
+    plus governed SCV as the only native surface. The ten-owner
     documentation/package/platform freeze passes in 9.39 seconds; log SHA-256
     is
     `88db4bd48ac2c9ca52f68803f65368dacfc5da7e247efc9c57126739e34de6dd`.
@@ -5313,6 +5313,42 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     restarted or monitored and no tag exists yet. After the push, require all
     nine hosted lanes and every Windows-specific archive/install row to finish
     green before creating the annotated `v2.0.0` tag.
+83. The sole planned release commit `71419aa` was pushed and started CI run
+    `32019400715`. Fuzz passed, but all four LLVM-MinGW jobs stopped during the
+    SCV build before compiling fsim: official SCV excludes MinGW from its
+    Windows fallback while LLVM-MinGW UCRT has no POSIX `rand_r`. All four logs
+    report the same four undeclared `rand_r` calls in `scv_random.cpp`; this is
+    one shared upstream portability defect, not four independent failures.
+84. New governed patch `scv-windows-rand-r.patch` widens the existing upstream
+    Windows fallback to every `_WIN32` compiler without changing its random
+    implementation. Patch/input/output SHA-256 identities are
+    `b9ccb67d2b7bd3cf9d479ed5fd8726775daf2dd61abcf66a72901797df5cb84f`,
+    `949cda9eb9eee1fdc90b5bf7a174e72949b7da40a740ee1ae6a1f4250a58cf9d`
+    and
+    `0f4cf39d1a7b3ca7f7a2ace1634a7738a20097d476beca3587cb5730876dcda7`.
+    The five-patch manifest is
+    `bda0f09d9071884b00423c8e1e7c9f43746ab350b138ae7b01f84766d03941e3`;
+    its exact 578-file materialized tree is
+    `760660f1beb27fc7166784f57239bbccbb319b884822dc8623e166ddad2a9a8c`.
+85. The source manifest now owns 1,499 paths at SHA-256
+    `b67e2aafa376c3d71228fca5e06837778b9955b5f747196adc92bf6fd63fafb1`.
+    The synchronized SystemC ABI contract digest is
+    `5ae25eba227d702884c3ab55efef73e7dd4a6f772decded9063ac50dea274f5e`.
+    An eight-worker affected Debug build completes 183/183; source ownership,
+    release records, patch governance, ABI freeze, SCV smart-pointer and public
+    SCV/SystemC compatibility owners pass 7/7. The Clang+LLVM, GCC+LLVM and
+    GCC-no-LLVM Release trees refresh warning-clean at log SHA-256 identities
+    `872274fb7ca0ba50101860d2b456f68f34d102f65abd108551a3e0bd62184c49`,
+    `e5961e0dce0cfbda95958b629769737762219428d356256a0399c7d6a256bfe8`
+    and
+    `28bb648cc29f72b3864db2bae959de55a0e548237ae7465efc667ac4e2888780`.
+    All four deterministic archives, the five-patch supply chain and all three
+    install/reproducibility lanes pass. The final registered release
+    cross-check passes 12/12 at retained-log SHA-256
+    `23bf7094f79c9a3109142076d248bc331fda81cbc2df02c9cf68ce4a62811bc7`.
+    Do not rerun full Debug, Release or sanitizer regressions. Make the
+    necessary repair commit/push and monitor a complete replacement nine-lane
+    run. Do not create the tag until every replacement job is green.
 
 ## Batch 176 closeout checkpoint - activate Batch 177 after the single push
 

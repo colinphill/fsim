@@ -13997,7 +13997,7 @@ carry an explicit evidence-backed scope disposition approved by the user.
     evidence, changelog and known issues now describe the final current-only
     v2.0.0 boundary: local Debug/Release/sanitizer/package qualification is
     complete, Windows claims remain platform-specific post-push evidence, and
-    official Accellera SystemC/TLM plus governed four-patch SCV are the sole
+    official Accellera SystemC/TLM plus governed SCV are the sole
     native interfaces. The documentation/package/Windows/resource freeze gate
     passes 10/10 in 9.39 seconds at retained-log SHA-256
     `88db4bd48ac2c9ca52f68803f65368dacfc5da7e247efc9c57126739e34de6dd`.
@@ -14059,6 +14059,29 @@ carry an explicit evidence-backed scope disposition approved by the user.
     nine-lane hosted run including all four Windows configurations, and the
     annotated tag remain the rest of this Change 20 boundary; no tag is
     authorized until every hosted lane is green.
+
+    Commit `71419aa` was pushed and started run `32019400715`. Fuzz passed,
+    while all four LLVM-MinGW jobs stopped at the same SCV compile error before
+    any fsim source compiled: upstream `scv_random.cpp` excludes MinGW from its
+    Windows `rand_r` fallback even though LLVM-MinGW UCRT supplies no POSIX
+    `rand_r`. A fifth exact governed patch applies the existing upstream
+    Windows fallback to every `_WIN32` compiler. Its patch/input/output
+    identities are
+    `b9ccb67d2b7bd3cf9d479ed5fd8726775daf2dd61abcf66a72901797df5cb84f`,
+    `949cda9eb9eee1fdc90b5bf7a174e72949b7da40a740ee1ae6a1f4250a58cf9d`
+    and
+    `0f4cf39d1a7b3ca7f7a2ace1634a7738a20097d476beca3587cb5730876dcda7`.
+    The five-patch manifest and exact 578-file tree identities are
+    `bda0f09d9071884b00423c8e1e7c9f43746ab350b138ae7b01f84766d03941e3`
+    and
+    `760660f1beb27fc7166784f57239bbccbb319b884822dc8623e166ddad2a9a8c`.
+    Local materialization, source ownership, release records, ABI freeze,
+    public SCV/SystemC compatibility and randomization pass 7/7. The affected
+    Clang+LLVM, GCC+LLVM and GCC-no-LLVM Release trees refresh warning-clean;
+    all four deterministic archives, the five-patch supply chain, all three
+    install/reproducibility lanes and the final 12/12 release cross-check pass.
+    Commit and push the repair, then require a completely green replacement
+    nine-lane run before tagging.
 
 ## Forward priority order
 

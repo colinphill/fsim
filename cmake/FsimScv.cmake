@@ -20,11 +20,11 @@ set(FSIM_SCV_LICENSE_EXPRESSION "Apache-2.0")
 set(FSIM_SCV_SBOM_PURL
     "pkg:generic/scv@2.0.1?download_url=https%3A%2F%2Fwww.accellera.org%2Fimages%2Fdownloads%2Fstandards%2Fsystemc%2Fscv-2.0.1.tar.gz")
 set(FSIM_SCV_PATCH_SCHEMA "fsim-scv-patch-set-v1")
-set(FSIM_SCV_PATCH_COUNT 4)
+set(FSIM_SCV_PATCH_COUNT 5)
 set(FSIM_SCV_PATCH_MANIFEST_SHA256
-    "61f2a7a414b317bba1f566bfd855c0ae1329c6f848d8bf5fa22b584c2f71969a")
+    "bda0f09d9071884b00423c8e1e7c9f43746ab350b138ae7b01f84766d03941e3")
 set(FSIM_SCV_PATCHED_TREE_SHA256
-    "e7590f83e157e7df3362c9987ccc55b6b50328d51ec809c489e9ab1b2f80c598")
+    "760660f1beb27fc7166784f57239bbccbb319b884822dc8623e166ddad2a9a8c")
 set(FSIM_SCV_BAG_PATCH_SHA256
     "f931c715608578638a7d49c88d20a9d323aa836023cac0af64c078c21f3a39fb")
 set(FSIM_SCV_BAG_INPUT_SHA256
@@ -49,6 +49,12 @@ set(FSIM_SCV_RANGE_SIZE_INPUT_SHA256
     "5e0407c4076e2c9d6d7644ab1d75d3a64d5f209e205bef1b06b2f19e13ebbef1")
 set(FSIM_SCV_RANGE_SIZE_OUTPUT_SHA256
     "00f3691467099f783716d0a2267cd76a5cdf08f998213f4e7b7c7ba0a0274a73")
+set(FSIM_SCV_WINDOWS_RAND_PATCH_SHA256
+    "b9ccb67d2b7bd3cf9d479ed5fd8726775daf2dd61abcf66a72901797df5cb84f")
+set(FSIM_SCV_WINDOWS_RAND_INPUT_SHA256
+    "949cda9eb9eee1fdc90b5bf7a174e72949b7da40a740ee1ae6a1f4250a58cf9d")
+set(FSIM_SCV_WINDOWS_RAND_OUTPUT_SHA256
+    "0f4cf39d1a7b3ca7f7a2ace1634a7738a20097d476beca3587cb5730876dcda7")
 set(
   FSIM_SCV_REQUIRED_FILES
   "LICENSE|4b4fe282d05e6f3f63e36b124565a5d07727e84bc32fe30e2937ca0f84a34601"
@@ -300,11 +306,12 @@ function(fsim_scv_patch_governance_error root manifest output_error)
           "patch=scv-int-range-overflow|${FSIM_SCV_INT_RANGE_PATCH_SHA256}|src/scv/scv_constraint.cpp|${FSIM_SCV_INT_RANGE_INPUT_SHA256}|${FSIM_SCV_INT_RANGE_OUTPUT_SHA256}"
           "patch=scv-range-size-overflow|${FSIM_SCV_RANGE_SIZE_PATCH_SHA256}|src/scv/scv_constraint_range.cpp|${FSIM_SCV_RANGE_SIZE_INPUT_SHA256}|${FSIM_SCV_RANGE_SIZE_OUTPUT_SHA256}"
           "patch=scv-nested-extension-constructors|${FSIM_SCV_NESTED_EXTENSION_PATCH_SHA256}|src/scv/_scv_introspection.h|${FSIM_SCV_NESTED_EXTENSION_INPUT_SHA256}|${FSIM_SCV_NESTED_EXTENSION_OUTPUT_SHA256}"
+          "patch=scv-windows-rand-r|${FSIM_SCV_WINDOWS_RAND_PATCH_SHA256}|src/scv/scv_random.cpp|${FSIM_SCV_WINDOWS_RAND_INPUT_SHA256}|${FSIM_SCV_WINDOWS_RAND_OUTPUT_SHA256}"
           "unmodified_linux_result=shared-and-static-library-build-pass"
           "llvm22_configure_result=blocked-before-source-compilation"
           "gcc13_cxx20_result=blocked-by-template-id-constructor-spelling"
-          "decision=external-cmake-adapter-with-four-generated-source-patches"
-          "positive_probe=patched-exact-tree-builds-with-clang-and-gcc-and-preserves-const-peek-randomization-nested-extension-construction-full-width-int-randomization-and-overflow-safe-interval-sizing"
+          "decision=external-cmake-adapter-with-five-generated-source-patches"
+          "positive_probe=patched-exact-tree-builds-with-clang-gcc-and-llvm-mingw-and-preserves-const-peek-randomization-nested-extension-construction-full-width-int-randomization-overflow-safe-interval-sizing-and-windows-random-stream-compilation"
           "negative_probe=changed-manifest-patch-input-output-or-source-tree-rejected-before-build"
           "removal_criteria=")
         string(FIND "${manifest_text}" "${token}" token_index)
@@ -329,10 +336,13 @@ function(fsim_scv_patch_governance_error root manifest output_error)
           "${manifest_root}/patches/scv-int-range-overflow.patch")
       set(range_size_patch
           "${manifest_root}/patches/scv-range-size-overflow.patch")
+      set(windows_rand_patch
+          "${manifest_root}/patches/scv-windows-rand-r.patch")
       set(nested_extension_patch
           "${manifest_root}/patches/scv-nested-extension-constructors.patch")
       if(NOT EXISTS "${bag_patch}" OR NOT EXISTS "${int_range_patch}" OR
          NOT EXISTS "${range_size_patch}" OR
+         NOT EXISTS "${windows_rand_patch}" OR
          NOT EXISTS "${nested_extension_patch}")
         set(error "SCV compatibility patch set is incomplete")
       else()
@@ -348,6 +358,11 @@ function(fsim_scv_patch_governance_error root manifest output_error)
         if(NOT range_size_patch_digest STREQUAL
            FSIM_SCV_RANGE_SIZE_PATCH_SHA256)
           set(error "SCV range-size compatibility patch SHA-256 mismatch")
+        endif()
+        file(SHA256 "${windows_rand_patch}" windows_rand_patch_digest)
+        if(NOT windows_rand_patch_digest STREQUAL
+           FSIM_SCV_WINDOWS_RAND_PATCH_SHA256)
+          set(error "SCV Windows rand_r compatibility patch SHA-256 mismatch")
         endif()
         file(SHA256 "${nested_extension_patch}" nested_extension_patch_digest)
         if(NOT nested_extension_patch_digest STREQUAL
@@ -485,6 +500,29 @@ function(fsim_scv_apply_governed_patches root manifest output_root)
   file(SHA256 "${range_size_source}" range_size_output_digest)
   if(NOT range_size_output_digest STREQUAL FSIM_SCV_RANGE_SIZE_OUTPUT_SHA256)
     message(FATAL_ERROR "SCV range-size patch output SHA-256 mismatch")
+  endif()
+  set(windows_rand_source "${patched_root}/src/scv/scv_random.cpp")
+  file(SHA256 "${windows_rand_source}" windows_rand_input_digest)
+  if(NOT windows_rand_input_digest STREQUAL FSIM_SCV_WINDOWS_RAND_INPUT_SHA256)
+    message(FATAL_ERROR "SCV Windows rand_r patch input SHA-256 mismatch")
+  endif()
+  file(READ "${windows_rand_source}" windows_rand_contents)
+  set(old_windows_rand
+      "#if (((defined _MSC_VER) || (defined _WIN32)) && !defined __MINGW32__)")
+  set(new_windows_rand
+      "#if ((defined _MSC_VER) || (defined _WIN32))")
+  string(FIND "${windows_rand_contents}" "${old_windows_rand}"
+         windows_rand_offset)
+  if(windows_rand_offset EQUAL -1)
+    message(FATAL_ERROR "SCV Windows rand_r patch anchor is missing")
+  endif()
+  string(REPLACE "${old_windows_rand}" "${new_windows_rand}"
+         windows_rand_contents "${windows_rand_contents}")
+  file(CONFIGURE OUTPUT "${windows_rand_source}"
+       CONTENT "${windows_rand_contents}" @ONLY NEWLINE_STYLE LF)
+  file(SHA256 "${windows_rand_source}" windows_rand_output_digest)
+  if(NOT windows_rand_output_digest STREQUAL FSIM_SCV_WINDOWS_RAND_OUTPUT_SHA256)
+    message(FATAL_ERROR "SCV Windows rand_r patch output SHA-256 mismatch")
   endif()
   fsim_scv_compute_tree_identity(
     "${patched_root}" patched_count patched_digest)

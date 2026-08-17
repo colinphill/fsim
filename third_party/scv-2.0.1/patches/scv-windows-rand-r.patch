@@ -1,0 +1,11 @@
+--- a/src/scv/scv_random.cpp
++++ b/src/scv/scv_random.cpp
+@@ -54,7 +54,7 @@
+ #include <cstring>
+ 
+ 
+-#if (((defined _MSC_VER) || (defined _WIN32)) && !defined __MINGW32__)
++#if ((defined _MSC_VER) || (defined _WIN32))
+ inline int rand_r(unsigned int *) { return rand(); }
+ #endif
+ 
