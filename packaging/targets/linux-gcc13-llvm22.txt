@@ -13,4 +13,4 @@ local_workers_minimum=8
 hosted_workers=4
 batch176_evidence=debug-package-fixture
 batch177_required=release-build,release-archive,install-smoke,hosted-linux-llvm22
-signature=unsigned-release-candidate
+signature=unsigned-release

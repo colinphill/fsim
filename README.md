@@ -917,9 +917,10 @@ committed-change callbacks, and final values. Assertion metadata, normalized
 VCD comparison, and bidirectional bounded VHDL/SystemVerilog
 construction-actual/cache tests are also automated. Exhaustive semantic
 fixtures are automated. Batch 175's checked Linux Debug performance matrix
-covers Clang 22 and GCC 13 with retained time/RSS/throughput provenance;
-Current Windows LLVM-MinGW measurements and all Release, sanitizer, release-
-gate and hosted-CI evidence remain explicitly deferred to final Batch 177.
+covers Clang 22 and GCC 13 with retained time/RSS/throughput provenance. Final
+local Debug/Release, sanitizer, package, install and supply-chain gates are
+qualified separately. Windows LLVM-MinGW behavior is claimed only from its own
+post-push hosted rows; no Linux result substitutes for it.
 
 The [three-language hierarchy tutorial](examples/three_language_hierarchy/README.md)
 builds on that slice with a SystemVerilog top, a SystemC factory and method,
@@ -938,8 +939,8 @@ compression.
 - [Diagnostic code catalog](docs/diagnostics.md)
 - [User, platform, migration, and troubleshooting guide](docs/user-platform-guide.md)
 - [Release evidence and post-v2 boundary](docs/release-and-post-v2.md)
-- [v2.0 release-candidate changelog](docs/changelog-v2.md)
-- [v2.0 release-candidate known issues](docs/known-issues-v2.md)
+- [v2.0.0 release notes](docs/changelog-v2.md)
+- [v2.0.0 known issues](docs/known-issues-v2.md)
 - [VCD and FST tracing](docs/tracing.md)
 - [Public tracing API](docs/api.md)
 - [Batch 171 FST release audit](docs/v2-fst-release-audit.md)

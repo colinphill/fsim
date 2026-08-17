@@ -50,8 +50,8 @@ fsim_scv_require_tokens("third_party/scv-2.0.1/SOURCE_MANIFEST.txt"
   "tree_files=578"
   "license=Apache-2.0")
 fsim_scv_require_tokens("third_party/scv-2.0.1/PATCHES.txt"
-  "patch_count=2"
-  "decision=external-cmake-adapter-with-two-generated-source-patches"
+  "patch_count=4"
+  "decision=external-cmake-adapter-with-four-generated-source-patches"
   "platform_scope=all-supported-compilers"
   "removal_criteria=remove-each-patch-only")
 fsim_scv_require_tokens("docs/architecture.md"
@@ -62,7 +62,7 @@ fsim_scv_require_tokens("docs/language-support.md"
   "SCV 2.0.1"
   "randomization"
   "transaction recording"
-  "Batch 177")
+  "post-push gate")
 fsim_scv_require_tokens("docs/feature-matrix.md"
   "SCV-001"
   "SCV-012"

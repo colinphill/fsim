@@ -83,9 +83,9 @@ list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX
   "/examples/three_language_hierarchy/three_language\\.vcd$")
 list(REMOVE_DUPLICATES FSIM_AUTHORED_FILES)
 list(LENGTH FSIM_AUTHORED_FILES FSIM_AUTHORED_COUNT)
-if(NOT FSIM_AUTHORED_COUNT EQUAL 1407)
+if(NOT FSIM_AUTHORED_COUNT EQUAL 1434)
   message(FATAL_ERROR
-    "authored SDF application inventory changed: expected 1407 files, "
+    "authored SDF application inventory changed: expected 1434 files, "
     "found ${FSIM_AUTHORED_COUNT}")
 endif()
 foreach(FSIM_FILE IN LISTS FSIM_AUTHORED_FILES)
@@ -128,7 +128,7 @@ foreach(FSIM_PUBLIC_DOCUMENT IN ITEMS
   string(APPEND FSIM_PUBLIC_TEXT "${FSIM_PUBLIC_DOCUMENT_TEXT}\n")
 endforeach()
 foreach(FSIM_DOC_TOKEN IN ITEMS
-    "Batch 169 applies that immutable representation"
+    "Batch 169 applies the exact SDF 2.1/3.0/4.0 representation"
     "Verilog and SystemVerilog SDF timing application in v2"
     "SDF timing-application pipeline"
     "Verilog and SystemVerilog SDF application"

@@ -6,6 +6,7 @@
 #include "fsim/app/sdf_control.hpp"
 #include "fsim/support/environment.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/version.hpp"
 
 #include <algorithm>
 #include <array>
@@ -375,7 +376,8 @@ namespace {
             }
             return set_result(
                 interpreter,
-                "0.1.0-dev (C API " + std::to_string(FSIM_API_VERSION) + ")");
+                std::string(fsim::version) + " (C API "
+                    + std::to_string(FSIM_API_VERSION) + ")");
         } catch (...) {
             Tcl_SetObjResult(
                 interpreter,

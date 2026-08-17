@@ -121,6 +121,7 @@ foreach(FSIM_REQUIRED IN ITEMS
     cmake/RunCompatibilitySmokeClosure.cmake
     cmake/CheckReleaseCandidateLogAudit.cmake
     cmake/CheckV2ReleaseRecords.cmake
+    cmake/CheckV2SupplyChain.cmake
     packaging/source-package-exclusions.txt
     packaging/source-package-manifest.txt
     packaging/v2-release-record.txt
@@ -142,7 +143,9 @@ foreach(FSIM_REQUIRED IN ITEMS
     third_party/scv-2.0.1/NOTICE
     third_party/scv-2.0.1/PATCHES.txt
     third_party/scv-2.0.1/patches/scv-bag-mutable-random.patch
+    third_party/scv-2.0.1/patches/scv-int-range-overflow.patch
     third_party/scv-2.0.1/patches/scv-nested-extension-constructors.patch
+    third_party/scv-2.0.1/patches/scv-range-size-overflow.patch
     third_party/scv-2.0.1/scv-2.0.1.spdx.json)
   list(FIND FSIM_MANIFEST_FILES "${FSIM_REQUIRED}" FSIM_REQUIRED_INDEX)
   if(FSIM_REQUIRED_INDEX EQUAL -1)

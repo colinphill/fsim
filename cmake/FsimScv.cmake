@@ -20,11 +20,11 @@ set(FSIM_SCV_LICENSE_EXPRESSION "Apache-2.0")
 set(FSIM_SCV_SBOM_PURL
     "pkg:generic/scv@2.0.1?download_url=https%3A%2F%2Fwww.accellera.org%2Fimages%2Fdownloads%2Fstandards%2Fsystemc%2Fscv-2.0.1.tar.gz")
 set(FSIM_SCV_PATCH_SCHEMA "fsim-scv-patch-set-v1")
-set(FSIM_SCV_PATCH_COUNT 2)
+set(FSIM_SCV_PATCH_COUNT 4)
 set(FSIM_SCV_PATCH_MANIFEST_SHA256
-    "b5954d8b0dc9f26f4e02c2a24063e742bbdcaa094c3c34fba8f2f7b1935ef57b")
+    "61f2a7a414b317bba1f566bfd855c0ae1329c6f848d8bf5fa22b584c2f71969a")
 set(FSIM_SCV_PATCHED_TREE_SHA256
-    "4dea71f4e320539aae40a12209445519193da9cd237512f79a1377a5174cb3ea")
+    "e7590f83e157e7df3362c9987ccc55b6b50328d51ec809c489e9ab1b2f80c598")
 set(FSIM_SCV_BAG_PATCH_SHA256
     "f931c715608578638a7d49c88d20a9d323aa836023cac0af64c078c21f3a39fb")
 set(FSIM_SCV_BAG_INPUT_SHA256
@@ -37,6 +37,18 @@ set(FSIM_SCV_NESTED_EXTENSION_INPUT_SHA256
     "b970da079e8b103d83acc9114ac592b6f8e44c668a63d07bbffa4831942289ae")
 set(FSIM_SCV_NESTED_EXTENSION_OUTPUT_SHA256
     "8b17414a6495c541a2d351a485b9320b4704c73016fdac280846f778da6f4a77")
+set(FSIM_SCV_INT_RANGE_PATCH_SHA256
+    "3d46addd533b114bd33ddf06bb6f557b1eec28c3d82a7bb1a9d90797021d7492")
+set(FSIM_SCV_INT_RANGE_INPUT_SHA256
+    "d50879a72da809902148a30834028aa0d81091d92395dc4a2ce977c12c7107e0")
+set(FSIM_SCV_INT_RANGE_OUTPUT_SHA256
+    "d7aaaceeb9110159cab65c78e11dbfbb52d25ad920dafc6aaf195074448ac44a")
+set(FSIM_SCV_RANGE_SIZE_PATCH_SHA256
+    "9303202ba36d8deb38aad33226dea17c96198f14061eb21ad83e9358fdfc5f5a")
+set(FSIM_SCV_RANGE_SIZE_INPUT_SHA256
+    "5e0407c4076e2c9d6d7644ab1d75d3a64d5f209e205bef1b06b2f19e13ebbef1")
+set(FSIM_SCV_RANGE_SIZE_OUTPUT_SHA256
+    "00f3691467099f783716d0a2267cd76a5cdf08f998213f4e7b7c7ba0a0274a73")
 set(
   FSIM_SCV_REQUIRED_FILES
   "LICENSE|4b4fe282d05e6f3f63e36b124565a5d07727e84bc32fe30e2937ca0f84a34601"
@@ -285,12 +297,14 @@ function(fsim_scv_patch_governance_error root manifest output_error)
           "upstream_tree_sha256=${FSIM_SCV_TREE_SHA256}"
           "patch_count=${FSIM_SCV_PATCH_COUNT}"
           "patch=scv-bag-mutable-random|${FSIM_SCV_BAG_PATCH_SHA256}|src/scv/scv_bag.h|${FSIM_SCV_BAG_INPUT_SHA256}|${FSIM_SCV_BAG_OUTPUT_SHA256}"
+          "patch=scv-int-range-overflow|${FSIM_SCV_INT_RANGE_PATCH_SHA256}|src/scv/scv_constraint.cpp|${FSIM_SCV_INT_RANGE_INPUT_SHA256}|${FSIM_SCV_INT_RANGE_OUTPUT_SHA256}"
+          "patch=scv-range-size-overflow|${FSIM_SCV_RANGE_SIZE_PATCH_SHA256}|src/scv/scv_constraint_range.cpp|${FSIM_SCV_RANGE_SIZE_INPUT_SHA256}|${FSIM_SCV_RANGE_SIZE_OUTPUT_SHA256}"
           "patch=scv-nested-extension-constructors|${FSIM_SCV_NESTED_EXTENSION_PATCH_SHA256}|src/scv/_scv_introspection.h|${FSIM_SCV_NESTED_EXTENSION_INPUT_SHA256}|${FSIM_SCV_NESTED_EXTENSION_OUTPUT_SHA256}"
           "unmodified_linux_result=shared-and-static-library-build-pass"
           "llvm22_configure_result=blocked-before-source-compilation"
           "gcc13_cxx20_result=blocked-by-template-id-constructor-spelling"
-          "decision=external-cmake-adapter-with-two-generated-source-patches"
-          "positive_probe=patched-exact-tree-builds-with-clang-and-gcc-and-preserves-const-peek-randomization-and-nested-extension-construction"
+          "decision=external-cmake-adapter-with-four-generated-source-patches"
+          "positive_probe=patched-exact-tree-builds-with-clang-and-gcc-and-preserves-const-peek-randomization-nested-extension-construction-full-width-int-randomization-and-overflow-safe-interval-sizing"
           "negative_probe=changed-manifest-patch-input-output-or-source-tree-rejected-before-build"
           "removal_criteria=")
         string(FIND "${manifest_text}" "${token}" token_index)
@@ -311,14 +325,29 @@ function(fsim_scv_patch_governance_error root manifest output_error)
           "SCV patch count mismatch: expected ${FSIM_SCV_PATCH_COUNT}, found ${patch_count}")
     else()
       set(bag_patch "${manifest_root}/patches/scv-bag-mutable-random.patch")
+      set(int_range_patch
+          "${manifest_root}/patches/scv-int-range-overflow.patch")
+      set(range_size_patch
+          "${manifest_root}/patches/scv-range-size-overflow.patch")
       set(nested_extension_patch
           "${manifest_root}/patches/scv-nested-extension-constructors.patch")
-      if(NOT EXISTS "${bag_patch}" OR NOT EXISTS "${nested_extension_patch}")
+      if(NOT EXISTS "${bag_patch}" OR NOT EXISTS "${int_range_patch}" OR
+         NOT EXISTS "${range_size_patch}" OR
+         NOT EXISTS "${nested_extension_patch}")
         set(error "SCV compatibility patch set is incomplete")
       else()
         file(SHA256 "${bag_patch}" bag_patch_digest)
         if(NOT bag_patch_digest STREQUAL FSIM_SCV_BAG_PATCH_SHA256)
           set(error "SCV bag compatibility patch SHA-256 mismatch")
+        endif()
+        file(SHA256 "${int_range_patch}" int_range_patch_digest)
+        if(NOT int_range_patch_digest STREQUAL FSIM_SCV_INT_RANGE_PATCH_SHA256)
+          set(error "SCV int-range compatibility patch SHA-256 mismatch")
+        endif()
+        file(SHA256 "${range_size_patch}" range_size_patch_digest)
+        if(NOT range_size_patch_digest STREQUAL
+           FSIM_SCV_RANGE_SIZE_PATCH_SHA256)
+          set(error "SCV range-size compatibility patch SHA-256 mismatch")
         endif()
         file(SHA256 "${nested_extension_patch}" nested_extension_patch_digest)
         if(NOT nested_extension_patch_digest STREQUAL
@@ -374,7 +403,8 @@ function(fsim_scv_apply_governed_patches root manifest output_root)
   if(bag_patched_contents STREQUAL bag_contents)
     message(FATAL_ERROR "SCV bag compatibility patch made no change")
   endif()
-  file(WRITE "${bag_header}" "${bag_patched_contents}")
+  file(CONFIGURE OUTPUT "${bag_header}" CONTENT "${bag_patched_contents}"
+       @ONLY NEWLINE_STYLE LF)
   file(SHA256 "${bag_header}" bag_output_digest)
   if(NOT bag_output_digest STREQUAL FSIM_SCV_BAG_OUTPUT_SHA256)
     message(FATAL_ERROR "SCV bag patch output SHA-256 mismatch")
@@ -404,11 +434,57 @@ function(fsim_scv_apply_governed_patches root manifest output_root)
          nested_extension_contents "${nested_extension_contents}")
   string(REPLACE "${old_copy_constructor}" "${new_copy_constructor}"
          nested_extension_contents "${nested_extension_contents}")
-  file(WRITE "${nested_extension_header}" "${nested_extension_contents}")
+  file(CONFIGURE OUTPUT "${nested_extension_header}"
+       CONTENT "${nested_extension_contents}" @ONLY NEWLINE_STYLE LF)
   file(SHA256 "${nested_extension_header}" nested_extension_output_digest)
   if(NOT nested_extension_output_digest STREQUAL
      FSIM_SCV_NESTED_EXTENSION_OUTPUT_SHA256)
     message(FATAL_ERROR "SCV nested-extension patch output SHA-256 mismatch")
+  endif()
+  set(int_range_source "${patched_root}/src/scv/scv_constraint.cpp")
+  file(SHA256 "${int_range_source}" int_range_input_digest)
+  if(NOT int_range_input_digest STREQUAL FSIM_SCV_INT_RANGE_INPUT_SHA256)
+    message(FATAL_ERROR "SCV int-range patch input SHA-256 mismatch")
+  endif()
+  file(READ "${int_range_source}" int_range_contents)
+  set(old_int_range
+      "    int ub = (0x1 << (s->get_bitwidth()-1) ) -1;")
+  set(new_int_range
+      "    int ub = (0x1U << (s->get_bitwidth()-1) ) -1U;")
+  string(FIND "${int_range_contents}" "${old_int_range}" int_range_offset)
+  if(int_range_offset EQUAL -1)
+    message(FATAL_ERROR "SCV int-range patch anchor is missing")
+  endif()
+  string(REPLACE "${old_int_range}" "${new_int_range}"
+         int_range_contents "${int_range_contents}")
+  file(CONFIGURE OUTPUT "${int_range_source}" CONTENT "${int_range_contents}"
+       @ONLY NEWLINE_STYLE LF)
+  file(SHA256 "${int_range_source}" int_range_output_digest)
+  if(NOT int_range_output_digest STREQUAL FSIM_SCV_INT_RANGE_OUTPUT_SHA256)
+    message(FATAL_ERROR "SCV int-range patch output SHA-256 mismatch")
+  endif()
+  set(range_size_source
+      "${patched_root}/src/scv/scv_constraint_range.cpp")
+  file(SHA256 "${range_size_source}" range_size_input_digest)
+  if(NOT range_size_input_digest STREQUAL FSIM_SCV_RANGE_SIZE_INPUT_SHA256)
+    message(FATAL_ERROR "SCV range-size patch input SHA-256 mismatch")
+  endif()
+  file(READ "${range_size_source}" range_size_contents)
+  set(old_range_size
+      "      _tmp = _upperbound - _lowerbound;  \\")
+  set(new_range_size
+      "      _tmp = static_cast<SizeT>(_upperbound) - static_cast<SizeT>(_lowerbound);  \\")
+  string(FIND "${range_size_contents}" "${old_range_size}" range_size_offset)
+  if(range_size_offset EQUAL -1)
+    message(FATAL_ERROR "SCV range-size patch anchor is missing")
+  endif()
+  string(REPLACE "${old_range_size}" "${new_range_size}"
+         range_size_contents "${range_size_contents}")
+  file(CONFIGURE OUTPUT "${range_size_source}"
+       CONTENT "${range_size_contents}" @ONLY NEWLINE_STYLE LF)
+  file(SHA256 "${range_size_source}" range_size_output_digest)
+  if(NOT range_size_output_digest STREQUAL FSIM_SCV_RANGE_SIZE_OUTPUT_SHA256)
+    message(FATAL_ERROR "SCV range-size patch output SHA-256 mismatch")
   endif()
   fsim_scv_compute_tree_identity(
     "${patched_root}" patched_count patched_digest)

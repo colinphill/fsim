@@ -53,7 +53,7 @@ foreach(FSIM_TARGET_FILE IN LISTS FSIM_TARGET_FILES)
      OR NOT FSIM_VALUE_job_timeout_minutes STREQUAL "120"
      OR NOT FSIM_VALUE_local_workers_minimum STREQUAL "8"
      OR NOT FSIM_VALUE_hosted_workers STREQUAL "4"
-     OR NOT FSIM_VALUE_signature STREQUAL "unsigned-release-candidate"
+     OR NOT FSIM_VALUE_signature STREQUAL "unsigned-release"
      OR NOT FSIM_VALUE_batch177_required MATCHES "release-build"
      OR NOT FSIM_VALUE_batch177_required MATCHES "release-archive"
      OR NOT FSIM_VALUE_batch177_required MATCHES "install-smoke")

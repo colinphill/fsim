@@ -1,9 +1,11 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# v2.0 release-candidate changelog
+# fsim v2.0.0 release notes
 
-This is the frozen Batch 176 candidate summary. Batch 177 owns the final
-Release qualification, hosted Linux/Windows matrix, sanitizers, version/tag and
-signed-or-explicitly-unsigned final disposition.
+fsim 2.0.0 is the current-only mixed-language release. Local Clang/GCC Debug,
+Release, LLVM-disabled, exact-LLVM 22.1.8, ASan/UBSan, deterministic package,
+install and supply-chain qualification is complete. The final commit is pushed
+before the pinned hosted Linux/LLVM-MinGW matrix runs; the tag is created only
+after those platform-specific rows are green.
 
 ## Language and execution
 
@@ -30,10 +32,23 @@ signed-or-explicitly-unsigned final disposition.
   licenses/notices/SBOMs and deterministic ZIP metadata.
 - Six installed examples cover project/non-project phases, portable artifacts,
   library relocation, three-language hierarchy, SDF control and VITAL timing.
-- Linux GCC 13 and Clang 22 package definitions plus pinned Windows LLVM-MinGW
-  20260616 UCRT definitions assign every unavailable or Release result to final
-  Batch 177 without inference.
+- Linux GCC 13 and Clang 22 release archives are deterministic and relocatable.
+  Pinned Windows LLVM-MinGW 20260616 UCRT archives are produced only by their
+  own green post-push Release lanes; Linux evidence is never substituted.
+- Release archives and the annotated tag have an explicit `unsigned-release`
+  disposition. No detached cryptographic signature is claimed.
 
-See [known issues](known-issues-v2.md), the
-[release boundary](release-and-post-v2.md), and the
-[platform guide](user-platform-guide.md) before qualification or distribution.
+## Annotated tag message
+
+```text
+fsim v2.0.0
+
+Current-only VHDL, Verilog, SystemVerilog, UVM, SDF, VITAL, FST,
+SystemC 3.0.2, TLM and SCV 2.0.1 release with deterministic artifacts,
+cataloged diagnostics and bounded single-scheduler execution.
+
+Signature disposition: unsigned-release.
+```
+
+See [known issues](known-issues-v2.md), the [release evidence](release-and-post-v2.md),
+and the [platform guide](user-platform-guide.md) before distribution.

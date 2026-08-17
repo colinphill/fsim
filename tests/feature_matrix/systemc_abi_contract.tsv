@@ -15,8 +15,8 @@ scv	version	2.0.1
 scv	header-version	2.0.0-20140417
 scv	archive-sha256	7bd1c4037f3c108d02f45cae003d112efdb788d469cb029fada247d330ca4881
 scv	tree-sha256	85cc2e4e3ee1893878de2567f253003859c847a151f080e48f185825c34f933c
-scv	patch-manifest-sha256	b5954d8b0dc9f26f4e02c2a24063e742bbdcaa094c3c34fba8f2f7b1935ef57b
-scv	patched-tree-sha256	4dea71f4e320539aae40a12209445519193da9cd237512f79a1377a5174cb3ea
+scv	patch-manifest-sha256	61f2a7a414b317bba1f566bfd855c0ae1329c6f848d8bf5fa22b584c2f71969a
+scv	patched-tree-sha256	e7590f83e157e7df3362c9987ccc55b6b50328d51ec809c489e9ab1b2f80c598
 scv	compatibility-fields	16-exact-ordered-fields
 layout	fsim_sc_value_view_v1	size=32,align=8
 layout	fsim_sc_host_v1	size=152,align=8,scv-identity-offset=144

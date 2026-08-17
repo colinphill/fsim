@@ -20,4 +20,4 @@ hosted_workers=4
 warning_log_owner=batch177-retained-compiler-linker-and-test-log
 batch176_evidence=definition-and-static-portability-only
 batch177_required=debug-build,release-build,binary-archive,install-smoke,warning-audit,hosted-windows-matrix
-signature=unsigned-release-candidate
+signature=unsigned-release

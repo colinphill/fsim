@@ -1,11 +1,10 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # User, platform, migration, and troubleshooting guide
 
-This guide describes the current v2 release-candidate interface. It separates
+This guide describes the current v2.0.0 interface. It separates
 supported release configurations from source-portability checks and records
-recovery steps that preserve artifact and cache identity. The final Batch 177
-qualification remains the authority for release binaries and measured Windows
-results.
+recovery steps that preserve artifact and cache identity. Retained release
+qualification remains the authority for binaries and measured Windows results.
 
 ## Supported configurations
 
@@ -26,7 +25,7 @@ binary target. Do not report an MSVC/clang-cl result, threshold, or package as
 supported without a real final-release run and an updated support matrix.
 
 The native integration set is fixed to Accellera SystemC 3.0.2, the governed
-SCV 2.0.1 source and two compatibility patches, and Tcl 9.0.4 or a later 9.0
+SCV 2.0.1 source and four compatibility patches, and Tcl 9.0.4 or a later 9.0
 patch release. The old fsim SystemC facade and custom kernel are not supported.
 The current plug-in ABI is the official Accellera bridge described in the
 [SystemC guide](systemc-subset.md).
@@ -74,8 +73,8 @@ payload, recursion, allocation, or collection limit.
 
 The largest retained UVM 1.2 and UVM 2020 Debug qualification runs used
 4,631,912 KiB and 5,220,824 KiB peak RSS respectively. The governed ceiling is
-6 GiB. These are Linux measurements, not inferred Windows thresholds; final
-Batch 177 owns the Windows measurements and Release/sanitizer evidence.
+6 GiB. These are Linux measurements, not inferred Windows thresholds. Windows
+measurements require the pinned LLVM-MinGW hosted lanes.
 
 ## Cache and artifact recovery
 
@@ -176,12 +175,11 @@ limit or deleting state. When reporting a native or Windows issue, include the
 shortest reproducer and the diagnostic path exactly as rendered; do not infer
 Windows behavior from a Linux pass.
 
-## Candidate and final-release records
+## Release records
 
 The [support matrix](../packaging/v2-support-matrix.tsv),
-[candidate release record](../packaging/v2-release-record.txt),
+[release record](../packaging/v2-release-record.txt),
 [changelog](changelog-v2.md), and [known issues](known-issues-v2.md) are the
-current qualification entry points. Batch 176 freezes package definitions and
-local Debug evidence only. Batch 177 must replace every deferred Release,
-sanitizer and hosted Linux/Windows obligation with retained execution before a
-final platform or release claim is made.
+current qualification entry points. Local Debug/Release, sanitizer, package,
+install and supply-chain evidence is retained. Post-push hosted Linux/Windows
+rows must complete before the annotated `v2.0.0` tag is published.

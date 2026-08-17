@@ -2304,11 +2304,11 @@ See [the SystemC guide](systemc-subset.md) and
 
 The feature matrices map supported boundaries to positive, negative,
 elaboration, execution, artifact, cache, debug, trace, resource, and platform
-owners. Local Linux Debug evidence remains distinct from the final candidate
-gates. Batch 177 owns fresh Release, sanitizer, hosted Linux and pinned Windows
-LLVM-MinGW execution; no Windows threshold or compatibility result may be
-inferred from Linux evidence. The frozen
+owners. Local Linux Debug/Release and sanitizer evidence is complete. Pinned
+Windows LLVM-MinGW execution remains a platform-specific post-push gate; no
+Windows threshold or compatibility result may be inferred from Linux evidence.
+The frozen
 [`v2-support-matrix.tsv`](../packaging/v2-support-matrix.tsv),
 [`v2_qualification_inventory.tsv`](../tests/feature_matrix/v2_qualification_inventory.tsv)
 and [`v2-release-record.txt`](../packaging/v2-release-record.txt) are the
-machine-checked candidate dispositions.
+machine-checked release dispositions.

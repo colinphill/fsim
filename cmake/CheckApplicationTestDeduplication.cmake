@@ -7,6 +7,8 @@ endif()
 set(FSIM_APPLICATION_TEST
   "${FSIM_SOURCE_DIR}/tests/app/application_test.cpp")
 set(FSIM_TEST_CMAKE "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
+set(FSIM_RUNTIME_TEST_CMAKE
+  "${FSIM_SOURCE_DIR}/tests/runtime/CMakeLists.txt")
 set(FSIM_EVIDENCE_MATRIX
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/abi_schema_evidence_matrix.tsv")
 set(FSIM_COMMAND_GATE
@@ -28,15 +30,34 @@ set(FSIM_RECURSIVE_DRIVERS
 set(FSIM_INPUTS
   "${FSIM_APPLICATION_TEST}"
   "${FSIM_TEST_CMAKE}"
+  "${FSIM_RUNTIME_TEST_CMAKE}"
   "${FSIM_EVIDENCE_MATRIX}"
   "${FSIM_COMMAND_GATE}")
 foreach(FSIM_DRIVER IN LISTS FSIM_RECURSIVE_DRIVERS)
   list(APPEND FSIM_INPUTS "${FSIM_SOURCE_DIR}/cmake/${FSIM_DRIVER}")
 endforeach()
+
 foreach(FSIM_INPUT IN LISTS FSIM_INPUTS)
   if(NOT EXISTS "${FSIM_INPUT}")
     message(FATAL_ERROR
       "application de-duplication input is missing: ${FSIM_INPUT}")
+  endif()
+endforeach()
+
+file(READ "${FSIM_RUNTIME_TEST_CMAKE}" FSIM_RUNTIME_TEST_CMAKE_TEXT)
+foreach(FSIM_TOKEN IN ITEMS
+    "fsim.runtime"
+    "fsim.runtime.fst_reader"
+    "fsim_compatibility_smoke_closure_witnesses"
+    "fsim_verilog_systemverilog_standard_mode_closure_witnesses"
+    "fsim_systemverilog_closure_witnesses"
+    "fsim_verilog_closure_witnesses"
+    "fsim_fst_closure_witnesses")
+  string(FIND "${FSIM_RUNTIME_TEST_CMAKE_TEXT}" "${FSIM_TOKEN}"
+    FSIM_TOKEN_INDEX)
+  if(FSIM_TOKEN_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "regression de-duplication lost child-directory fixture token: ${FSIM_TOKEN}")
   endif()
 endforeach()
 
@@ -100,7 +121,9 @@ file(READ "${FSIM_COMMAND_GATE}" FSIM_COMMAND_GATE_TEXT)
 foreach(FSIM_TOKEN IN ITEMS
     "--show-only=json-v1"
     "FSIM_CANONICAL_COMMAND"
-    "duplicate CTest command owners")
+    "duplicate CTest command owners"
+    "fsim_require_fixture_setup"
+    "fsim.runtime.fst_reader")
   string(FIND "${FSIM_COMMAND_GATE_TEXT}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)
   if(FSIM_TOKEN_INDEX EQUAL -1)
     message(FATAL_ERROR

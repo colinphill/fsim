@@ -77,9 +77,9 @@ list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX
   "/examples/three_language_hierarchy/three_language\\.vcd$")
 list(REMOVE_DUPLICATES FSIM_AUTHORED_FILES)
 list(LENGTH FSIM_AUTHORED_FILES FSIM_AUTHORED_COUNT)
-if(NOT FSIM_AUTHORED_COUNT EQUAL 1407)
+if(NOT FSIM_AUTHORED_COUNT EQUAL 1434)
   message(FATAL_ERROR
-    "authored license inventory changed: expected 1407 files, "
+    "authored license inventory changed: expected 1434 files, "
     "found ${FSIM_AUTHORED_COUNT}")
 endif()
 foreach(FSIM_FILE IN LISTS FSIM_AUTHORED_FILES)
@@ -125,4 +125,4 @@ endforeach()
 
 message(STATUS
   "final inventory audit: 2548 diagnostics, 1149 bounded sources, "
-  "1407 SPDX-owned files, 31 reviewed IEEE files, and 100 conformance expectations")
+  "1434 SPDX-owned files, 31 reviewed IEEE files, and 100 conformance expectations")

@@ -13643,33 +13643,422 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 177 - v2.0 final qualification and release
 
-- **Changes 1-4:** audit every v2 priority and deferred-row disposition against
-  executable evidence, confirming no required language, UVM, SystemC/TLM/SCV,
-  foreign-interface, standard-mode, SDF, FST, artifact, debug/trace or platform
-  gap remains.
-- **Changes 5-8:** repeat clean exact-LLVM Linux Debug/Release, Windows hosted
-  LLVM-MinGW Debug/Release with and without exact LLVM 22.1.8,
-  interpreter/O0/O2/debug and all release-candidate
-  smoke workflows. Run every Release build/test/gate, fresh sanitizer and
-  hosted-CI execution/monitoring task deferred from Batches 173-176
-  here, then monitor and repair the complete hosted Linux/Windows CI matrix as
-  final-release evidence. Consume the twelve explicitly deferred Batch 175
-  Windows qualification rows here by mapping applicable correctness/stress/
-  performance ownership to the current LLVM-MinGW target or retiring an
-  MSVC/clang-cl-specific row with an explicit target-migration disposition; do
-  not infer any Windows result from Linux evidence.
-- **Changes 9-12:** verify deterministic source and binary archives, SBOM/
-  licenses, upstream source/patch identities, install layouts, ABI/schema
-  versions, migrations, artifact digests, examples, and offline reproducibility.
-- **Changes 13-16:** close any final release blockers transactionally and rerun
-  every affected focused, full, portability, conformance, and packaging gate.
-- **Changes 17-19:** freeze final docs/changelog/support policy, mark all v2
-  roadmap items complete, prepare the exact release commit/tag notes, and record
-  clean-context evidence.
-- **Change 20:** run the final full Debug/Release and release gates, confirm all
-  sanitizer/Release/hosted-CI evidence deferred from Batches 173-176 remains
-  green, commit and push once, create and push annotated tag `v2.0.0`, verify
-  the tag, artifacts and complete hosted matrix, and declare v2 complete.
+- **Locked scope:** qualify and publish the current-only v2.0 release. Preserve
+  the official Accellera SystemC 3.0.2/TLM and governed SCV 2.0.1 interfaces,
+  removed legacy facade/custom kernel, frozen ABI/schema/artifact/cache
+  identities, deterministic one-scheduler semantics and explicit resource
+  limits. Changes 1-19 remain one recoverable worktree; Change 20 alone owns
+  the release commit/push and annotated `v2.0.0` tag. Use at least eight local
+  workers and 120-minute command timeouts; hosted jobs use four workers and
+  120-minute job timeouts. Avoid formatting-only public-header churn. No Linux
+  result may satisfy a Windows row.
+1. **Complete.** Audit the frozen Batch 176 candidate, seven support rows,
+   nineteen qualification rows, forty-four Linux performance rows and all
+   twelve forward priorities before Release or hosted execution. The exact
+   candidate identities remain unchanged. Fifty-five unique non-Release
+   priority/ABI/schema/inventory owners pass in 9.25 seconds; retained log
+   SHA-256 is
+   `af19567511022913423568ff1ae2ac8d4bad0a7bd2b3dde671a7eac94ac7bbfe`.
+   All seven preserved qualification rows have real retained logs, while all
+   twelve current LLVM-MinGW rows have no invented evidence and remain
+   deferred. Package/target/support/example/qualification/performance digests
+   exactly match the candidate record; ledger-audit log SHA-256 is
+   `7df47fc66d6ad31d78496e0cf0b04983efcf3065207caf8f6d02597cf101ea21`.
+   No Release configuration, sanitizer, archive, hosted-CI, commit or push ran.
+2. **Complete.** The combined selectable-standard VHDL/Verilog/SystemVerilog,
+   UVM and mixed-language closure selects 61 unique fixture-resolved owners.
+   Its initial 60/61 result exposed one synchronized-inventory defect in
+   `fsim.uvm-closure-audit`: five coupled release owners still expected 1,407
+   authored files instead of the live 1,433. The initial log is retained at
+   SHA-256
+   `eabbabb351dfa03116dcdfc65c2e634a5a7b286558c62137ec569eb8c854c077`.
+   The V1 inventory, UVM closure, SDF application, SDF VITAL and FST audits now
+   share 1,433 authored files; FST also shares the live 633 test/control files
+   and thirteen fixture-backed closure drivers. Their direct final audit passes
+   in 3.63 seconds and registered owners pass 5/5 in 1.23 seconds, with log
+   SHA-256 identities
+   `41a2b9efc6b5eb82327043d064fb9dacc4ef20fe461fd5b92fa7e0b3259d3c4c`
+   and
+   `ae8f330110a58d59c36a6f0b951d8b0fb9a1db1d72524220c4315d2bece9dbf1`.
+   The SDF application audit now pins the durable current documentation phrase
+   rather than obsolete wording. The final exact closure passes 61/61 in 57.89
+   seconds at 522,528 KiB peak RSS and zero swaps; its warning/error-clean log
+   SHA-256 is
+   `8762f1cf3481333a1ac86bdf3ffc99bfe5345066797693dfff9cbd4e438988ce`.
+   No Release configuration, sanitizer, archive, hosted-CI, commit or push ran.
+3. **Complete.** Graph and generated-CTest inventory audit mapped the native
+   SystemC/TLM/SCV, DPI-C/VPI/VHPI, plug-in/cache and installed API/ABI seams.
+   It exposed that parent-directory fixture registration could not attach
+   `fsim.runtime` or `fsim.runtime.fst_reader`, both created in the runtime
+   child directory. Five de-duplicated closure drivers therefore suppressed
+   nested CTest without selecting one promised witness. Fixture ownership now
+   resides with those child tests, and the generated-command audit requires
+   all five relationships. The affected driver selections advance from
+   16/14/23/9/25 to 17/15/24/10/26 unique tests; the focused dynamic de-
+   duplication gate passes 2/2 in 4.71 seconds with log SHA-256
+   `acf1497ff0ad4872ce9389a91aa03d46c3ee9e8babe2e70907e5252268526f43`.
+   The final fixture-resolved Change 3 audit passes 39/39 in 18.04 seconds at
+   278,668 KiB peak RSS and zero swaps. It includes complete runtime foreign-
+   ABI coverage, official SystemC/TLM and SCV compatibility, native compile/
+   link/cache corruption and containment, installed C/C++/pkg-config consumers,
+   ABI/schema inventories, relocation and resource negatives, and the removed-
+   legacy-facade contract. Its warning/error-clean log SHA-256 is
+   `2cc26d1b4d5683262c8f49fb2e0561f3c2f360077f591582d90c053f25000e4e`.
+   No product compile, Release configuration, sanitizer, archive, hosted-CI,
+   commit or push ran.
+4. **Complete.** A fixture-resolved audit covers SDF application/VITAL, FST,
+   artifact/schema corruption and relocation, debugger/trace observation,
+   interpreter/O0/O2/cold/warm modes, package definitions and Linux/Windows
+   portability. It passes 73/73 in 3.85 seconds at 249,496 KiB peak RSS and
+   zero swaps; its warning/error-clean log SHA-256 is
+   `afc8338f8b57e411dda792637bbd85b1f97bdca381a03531e7fb27b52310718d`.
+   The release guide and candidate record now freeze thirty exact Changes 5-12
+   execution lanes, each with platform, toolchain, configuration, workers,
+   120-minute timeout, action, artifact, retained log and completion boundary.
+   Their normalized SHA-256 is
+   `e02bdc6d451800585fe54fdfd75e8c050cfb7673e6225377f414eafa6e3f9f79`.
+   Nine hosted lanes and every Windows-only archive/install lane explicitly
+   complete only after Change 20's sole branch push; no hosted result is
+   inferred from the current uncommitted worktree. All four workflow jobs and
+   five maintained package targets retain 120-minute limits. No Release build,
+   sanitizer, archive, hosted execution, commit or push ran.
+5. **Complete.** The fresh clean-first Clang 22.1.8 plus exact LLVM 22.1.8
+   Linux Debug build completes 2,391/2,391 steps with eight workers in 14:32.00
+   at 6,977,396 KiB peak RSS and zero swaps. Its warning/error-clean retained
+   log SHA-256 is
+   `831ff6f7c6f986c34f9e6a2720240b570fb2c5a0792c49b54efe9d107417ba5e`.
+   The regenerated tree registers 312 tests. Their initial 304/312 run exposes
+   two synchronized audit defects: seven direct/composed V1 release owners pin
+   the pre-Batch-176 feature-matrix digest, and the resource owner pins an old
+   8 MiB output sentence despite verifying the live 128 MiB Windows stack.
+   The initial log SHA-256 is
+   `a0a1134ffc3932b334ba3f4fcda39a32fcb88b6b200a9fa527acd01db7180663`.
+   All four digest consumers now share the reviewed
+   `dddb62ed63296b973dfbc6aa649162a9f2b634645e88098645acc6e4ba905e3e`
+   identity, and the live resource/V1/SDF-VITAL contracts report 128 MiB while
+   historical v1 records remain unchanged. The first repair rerun passes six
+   of eight and exposes the second defect at SHA-256
+   `98fb65148d120814ce3934e9b4b5f87e48966e56a7bdd24ab3f1e45d00d7ea2e`;
+   the final affected slice passes 3/3 in 9.89 seconds at SHA-256
+   `ba27d6c2a5e3fb9e38621df7b027aaae0631352e09ce88b8b0b0b8c0e65ca29f`.
+   The complete fixture-resolved Debug regression then passes 312/312 in
+   166.29 CTest seconds and 2:46.30 wall time at 3,766,072 KiB peak RSS and
+   zero swaps. It owns the interpreter/O0/O2/debug/cold/warm candidate smokes;
+   its warning/error-clean log SHA-256 is
+   `6141361aab8da7aed270c8f665bcb6ca36e427c262679ea4722089f3bc72ef32`.
+6. **Complete.** Initial Release configuration exposed Clang 22 selecting the
+   incomplete host GCC 14 libstdc++ installation; its retained failure log
+   SHA-256 is
+   `65a5ead44557e26d280061c6a9cafcdd1fdc0d9f1da5629e7ffafac980c2cf1e`.
+   The final configuration explicitly selects GCC 13 for C++ and applies the
+   Clang GCC-install suppression to C, C++ and ASM; its log SHA-256 is
+   `6bad9c0db1770614e8c8cbcfa93323fa9218b7c098c5c8eeb446268503754c68`.
+   The first clean-first build stopped when sandbox DNS blocked the pinned Tcl
+   download, retained at SHA-256
+   `4c6e0de67f52299d2418fc70fc5799133b92fbf6d2081b9fab80db99ddf52fad`.
+   The approved retry hash-verified Tcl 9.0.4 and built successfully but exposed
+   one SystemC QuickThreads ASM warning, retained at SHA-256
+   `b741c724b4e6415a56f0b14b25b6d9d2624c7ae7e2d18d9dbbce084cd79f50c6`.
+   With the ASM flag corrected, the fresh clean-first eight-worker Clang
+   22.1.8 plus exact LLVM 22.1.8 Linux Release build completes 2,391/2,391
+   steps in 12:00.79 at 6,954,252 KiB peak RSS and zero swaps. Its warning/
+   error-clean log SHA-256 is
+   `3942182c5269f664984b8b11130492c86a48f98468d2160e17d839d57b91cec1`.
+   The complete Release regression and every deferred Release-labeled gate
+   pass 312/312 in 169.69 CTest seconds and 2:49.69 wall time at 3,782,356 KiB
+   peak RSS and zero swaps. Its warning/error/assertion-failure/exception-clean
+   retained log SHA-256 is
+   `81c7e94bcb2ad497c11ca1b98d9f0c19e43af00b369523ef67eac9d529d0aa55`.
+7. **Complete.** GCC/G++ 13.3 plus exact LLVM 22.1.8 Release configures at
+   retained-log SHA-256
+   `f72087c5127f3d4750df5c4e49b2aeef5550ba5bf02f3ce98290c9951c4d654c`,
+   builds warning-clean in 12:34.57 at 2,257,036 KiB peak RSS and zero swaps
+   (`d0a06dc3a4c0c4aacb1bdcb2cf2ff132f32a4733ab02eb764a8c6fb6f1359bb1`),
+   and passes 312/312 Release tests/package smokes in 4:55.20 wall time at
+   3,791,800 KiB and zero swaps
+   (`8c0d6578fa6817aa30775d3d0da5125ee9dbf82a7a7ae8dd57401adeb3fb86c9`).
+   The independent LLVM-disabled Release tree configures at
+   `979e6176b2a2ddd431a44cf72c649961c8e3cadb1be610ff0cee80ec548cfbd7`;
+   after one retained sandbox-DNS failure it builds all 1,220 steps in
+   11:27.21 at 2,257,144 KiB and zero swaps
+   (`75d72d3b3e3da5544a3616cca8374a88289ae30ae1aa5c9e721d598faf8306eb`)
+   and passes 311/311 in 4:37.71 wall time at 3,618,728 KiB and zero swaps
+   (`8915082b43ef076686914345a65e01fc4c8cfa51219c7be836bbac130bb48161`).
+   The fresh LLVM-disabled GCC ASan/UBSan build initially completes 1,211
+   steps in 33:58.54 at 10,290,716 KiB and exposes two sequential signed-
+   overflow defects in official SCV full-width integer range creation and
+   interval sizing. Two exact generated-source patches use unsigned-domain
+   arithmetic while preserving the full-range zero-size sentinel. The final
+   governed four-patch manifest/tree identities are
+   `61f2a7a414b317bba1f566bfd855c0ae1329c6f848d8bf5fa22b584c2f71969a`
+   and
+   `e7590f83e157e7df3362c9987ccc55b6b50328d51ec809c489e9ab1b2f80c598`;
+   the source record now owns 1,497 paths at
+   `06f71e0ba3d4a6cf37b4f5d567dd8e9483b8672d239cf2da0e42840b479ecc68`.
+   The final configure and focused build logs have SHA-256
+   `ea37b92581b9e92fc7f35c2007b1a0d508651777a579578c2ceb616064f7b3f0`
+   and
+   `41332f1a48826b95d397fa877ccd04a5f4e714137e79a80be61367e2b1c9b3c9`;
+   smart-pointer plus patch governance pass 2/2 at
+   `8fbb14cbfcec1b81d888ccb730b4cdba061ec438f5d077a3d6bd77d21e980fee`.
+   The complete affected build passes 413/413 in 14:32.95 at 10,291,016 KiB
+   and zero swaps; log SHA-256 is
+   `0cd35baa13ffe50a3c35e6a2dbeb83fa3c10b38e3b9593236407c17d424c5fde`.
+   An initial complete four-patch run retains the expected stale release-
+   record and ABI-contract digest failures at
+   `13c81bccf0412919bef3015b321e648ae16375664d23ded22d3b611e2d9f863b`;
+   their repaired focused owners pass 2/2 at
+   `4b019422e957535abbc4ed65cddc4184d7dac6989b3034e4a2f107f1cb75b220`.
+   The final halt-on-error sanitizer regression passes 309/309 in 1,803.62
+   CTest seconds and 30:03.66 wall time at 5,033,132 KiB peak RSS and zero
+   swaps. Its sanitizer/warning/error/failure-clean log SHA-256 is
+   `02cd19258e657da4b13c51da8c21ad53134959e9d92b1d14fc99453e8d5d56c0`.
+8. **Complete.** Validate and freeze the complete hosted Linux plus LLVM-MinGW
+   20260616 Windows Debug/Release, LLVM-on/off commands, artifact upload
+   ownership and nine-job log inventory. The four workflow definitions expand
+   to exactly nine explicit lanes: GCC LLVM-off Debug/Release, GCC plus LLVM
+   22.1.8 Debug/Release, Clang RelWithDebInfo fuzz, and LLVM-MinGW 20260616
+   Debug/Release with LLVM 22.1.8 on/off. Every lane initializes its exact
+   retained Change 20 log before dependency setup, appends toolchain,
+   configure, build and test/fuzz output under failure-preserving shell policy,
+   and has one `always()` `actions/upload-artifact@v7` owner with missing-file
+   rejection. The release-record contract derives the nine unique artifact/log
+   pairs from the frozen execution matrix, requires their adjacent workflow
+   mappings, exact configurations/commands, four 120-minute job definitions,
+   four lane-log upload steps and the current recursive-closure de-duplication
+   policy.
+   Windows package, LLVM, MSVC Debug/Release and resource/portability contracts
+   share the new explicit matrix representation. The complete static gate
+   passes 8/8 in 0.37 seconds at 21,968 KiB peak RSS and zero swaps; its
+   warning/error/failure-clean retained log SHA-256 is
+   `a25e9476a03b30d6ce18f3bb4cb4d3daf6a24cbec0595af1945cab1f0e23090d`.
+   No hosted lane was executed or inspected: because Changes 1-19 remain
+   uncommitted, all nine lanes and the twelve deferred Windows evidence rows
+   still execute only after Change 20's sole branch push, and no Linux result
+   may satisfy a Windows row.
+9. **Complete.** Produce and verify the deterministic final source archive from
+   the checked manifest, including repeated-build identity, safe extraction and
+   offline source reconstruction. The existing deterministic packaging owner
+   now supports an exact source-only release mode and requires final root
+   `fsim-v2.0.0-source` plus artifact
+   `build/release/fsim-v2.0.0-source.zip`. It stages all 1,497 sorted manifest
+   paths twice with normalized modes and timestamp, requires byte-identical
+   archives, checks the 64 MiB/5,000-entry ceilings and exact archive order,
+   rejects absolute, drive-qualified, traversal, nested-traversal, backslash,
+   duplicate-separator, duplicate and reversed manifests, preflights all paths
+   before extraction, revalidates the extracted manifest, and configures that
+   reconstructed tree with tests, Tcl, LLVM and UVM disabled plus FetchContent
+   fully disconnected. The package policy freezes the final root/artifact and
+   extraction/reconstruction contracts at SHA-256
+   `fe8539a5f83e154febe8acf316085bbdcb20f147495bef401a62b474c986bd8e`.
+   The focused registered packaging owner passes in 8.18 seconds. Lane
+   `E177-19` then publishes a 13,375,522-byte, 1,497-entry candidate whose two
+   independent staging archives and published copy share SHA-256
+   `3030a6c128e326a5f3e7c6a7987d651926af7298d069f1862bd914056fd01cd6`.
+   The source-only run completes in 7.88 seconds at 29,980 KiB peak RSS and
+   zero swaps; its warning/error/failure-clean retained log SHA-256 is
+   `8b9bf244eb517d395580802c175fc5ece5f44a2a397bc6aec5633eec9fce7b41`.
+   This proves the Change 9 mechanism and candidate; every subsequent source
+   change intentionally invalidates that byte identity, so Changes 16/19/20
+   must regenerate and refreeze the final archive rather than reusing it.
+10. **Complete.** Produce deterministic Linux binary archives for all three
+    supported local targets and prepare the two Windows LLVM-MinGW Release
+    archive/upload lanes. The common packaging owner now has mutually exclusive
+    source-only and binary-only release modes, safe package/output names,
+    configuration-derived result kinds, two independently staged archives,
+    exact order/count/size checks, and path plus relative-symlink-target
+    preflight before publication. The policy freezes all five Linux/Windows
+    artifact names and binary extraction contract; its SHA-256 is
+    `fe8539a5f83e154febe8acf316085bbdcb20f147495bef401a62b474c986bd8e`.
+    The three already-qualified Linux Release installs each contain 542
+    entries. Clang 22.1.8 plus LLVM 22.1.8 publishes 25,562,708 bytes at
+    SHA-256
+    `24d63b12ee89590de182252f727a5987422a442cb3b36f8e8aa814af871a858a`;
+    GCC 13.3 plus LLVM 22.1.8 publishes 31,040,780 bytes at
+    `042948c319d9eaf778653de88bacfb4e3ca78ef7bab3f0c4a4cc8ff503ab1528`;
+    GCC 13.3 without LLVM publishes 30,060,759 bytes at
+    `6086abeef81f26eb71260eda033c1023a1b1229ae1f359c2d5ac939e2fa185b0`.
+    In every lane both staging ZIPs and the published copy are byte-identical;
+    their warning/error/failure-clean retained-log SHA-256 identities are
+    `f42d49c7435602f68a94d582847571f760c6c0c02c6b38cef2de153959c6a426`,
+    `484d0978b97926a68303d12fd72037b57cc96cdd3782b41ddf9421ef08e91518`
+    and
+    `3b28e2f9382aff572a409edac9ecb6bc2b30600b604540cd221f3ccffb5ea9c5`.
+    The final source/package/Linux/Windows/workflow/MSVC/LLVM/resource gate
+    passes 11/11 in 9.55 seconds at 29,792 KiB peak RSS and zero swaps; log
+    SHA-256 is
+    `6c31eb81e2b9d70fa607570ba7fa9bd6c29c92f5e2a8dcd0d49ac98286e156a3`.
+    The two Windows Release entries own exact package/archive/log fields,
+    binary-only commands and one conditional archive upload carrying the ZIP
+    and log. They remain unexecuted until Change 20's sole branch push; no
+    Linux archive substitutes for them. Later affected repairs require
+    regeneration at Changes 16/19/20.
+11. **Complete.** Verify SBOMs, licenses, notices, upstream SystemC/SCV
+    source and patch identities, package contents and signature inputs against
+    the final archives. The dedicated supply-chain audit passes for the current
+    1,498-entry source candidate and all three 542-entry Linux binary
+    candidates, including two SBOMs, four governed patches, 68 installed
+    documents and the unsigned-candidate disposition. The first registered
+    cross-check retains the expected 1,433-to-1,434 authored-inventory failure
+    at SHA-256
+    `b4610c279873e8734fb544f9d8e4f97ff71bd01ad46083c62444bf05faeeb902`;
+    the first five-owner repair retains the subsequent 633-to-634 FST test/
+    control delta at
+    `9ec3fc3ccad7086748efd054b0996792be3c57fe7e9c76adf1e865fcc6b51300`.
+    All live consumers now share 1,434/634 while historical Change 2 records
+    remain unchanged. The focused owners pass 5/5 at log SHA-256
+    `3fba10cbde75a94cd4f8403f4a94e0a690fe46b54046092aa81dbfe212efe37b`.
+    The refreshed 1,498-entry source archive has Change 11 qualification
+    SHA-256
+    `321318f5a175ee13182c2459071dca8daef5afda0852b3b32015dd77d34b1628`;
+    supply-chain log/record SHA-256 identities are
+    `cf8605405159b27f02cc32a771822a3be507d869312299d8865cc7a3e4cb9f1a`
+    and
+    `50f774cc4e3811df2832fadc6efe3c17693d0c8d5e591c80bc387626b4670480`.
+    The complete final registered cross-check passes 12/12 in 7.62 seconds at
+    27,552 KiB peak RSS and zero swaps; its log SHA-256 is
+    `5e0d94dff73adf1a12be3fd1c2f9864198a1ca81d0cfab5aa51cf57b92e042f2`.
+    Later source changes require the planned Changes 16/19/20 regeneration.
+12. **Complete.** Verify installed layouts, pkg-config/CMake discovery, ABI/schema versions,
+    migrations, artifact/cache regeneration, frozen examples and offline
+    producer/consumer reproducibility across all three local Linux targets.
+    Prepare the same two Windows package lanes and complete them from their
+    retained post-push Change 20 executions. The release-record checker now
+    reuses each already-retained full Release regression instead of rerunning
+    it: 39 exact install/discovery/schema/migration/artifact/cache/example
+    witnesses must have passed once, after which the current 542-entry archive
+    is extracted, checked for relocatable metadata and all six examples,
+    exercised through offline CLI aliases and removed in isolation. All three
+    Linux lanes pass for the 312/312 Clang+LLVM, 312/312 GCC+LLVM and 311/311
+    GCC-no-LLVM regressions. Their archive SHA-256 identities are
+    `4a894b64a975d4fa8b538d224515188593411a5b03a493567fdc2574078db005`,
+    `565b6bd07227135f819a7114d30f89282aa321a9c90818eaaeba86070b7a7384`
+    and
+    `da572b4afcdc8c4aefbb0ac571b49273b547b24e99a931aceeee3960c8954697`;
+    install-log identities are
+    `4a38b491a130be590aed267b5f836f0876d2357e090bad8e02a954eeb94d31a8`,
+    `a4936ad97b7ec00fc638abc87a19983f7d99201e7b82c5bad9e6cfbd588351a9`
+    and
+    `81a6aee9b5ad329eb614c9ca27a6077f5ca1e3b6b3393a4b4e09c5b886be80fc`.
+    Eight static package/Windows/CTest owners pass at retained-log SHA-256
+    `bd7ac056c658aad13cbe70e1f664839aefacdc3d1d94684a8b090ad16c02f4da`.
+    The two LLVM-MinGW Release lanes own equivalent post-push Change 20 install
+    logs and do not duplicate their full regression.
+13. **Complete.** The most recent completed hosted run, CI run 31989675659 at
+    candidate SHA `48d01736e27bebf21f1981b6f1bedd532d35b2a3`, was inspected
+    before the batch commit. Its four LLVM-MinGW configurations all stopped
+    during configure because `file(WRITE)` translated governed SCV patch
+    outputs to CRLF before their LF-defined SHA-256 check. All four generated
+    patch outputs now use `file(CONFIGURE ... NEWLINE_STYLE LF)`. The four
+    Linux regressions exposed five shared stale/contaminated contracts rather
+    than independent product failures: the workflow downloaded `llvm.sh` into
+    the source root, and the inventory, feature-matrix, resource-policy and FST
+    evidence owners retained pre-Batch-177 values. LLVM provisioning now uses
+    `RUNNER_TEMP`; the four current audit repairs from Changes 2/5/11 cover all
+    remaining Linux diagnostics. No hosted run was restarted before Change 20.
+14. **Complete.** Fresh source-package and SCV materialization plus every
+    affected FST, SDF application/VITAL, UVM, V1 release/inventory/resource and
+    portability owner pass 10/10 in 6.80 seconds. The SCV test requires four LF
+    write policies, rejects carriage returns in every governed output and
+    retains its existing changed-manifest/source-tree negatives. Retained-log
+    SHA-256 is
+    `3123b91b91a3196770c6d475d66abd2b33c0c7f8d0ac86b21bca49b07e0abc05`.
+15. **Complete.** The complete affected workflow/package/portability surface
+    passes 9/9 in 1.38 seconds: source manifest, V2 release records, SCV patch
+    governance, V1 portability, Windows package/LLVM, MSVC Debug/Release and
+    the resource contract. Retained-log SHA-256 is
+    `9132ce5a2fda6f488ed7b34c3e1624b265865a92f9a8dba335c679886f4c8c01`.
+    The repairs change hosted provisioning and configure-time text
+    normalization only; Linux generated SCV bytes and every product executable
+    remain identical. Therefore the already-complete full Debug, three full
+    Release and sanitizer regressions remain applicable rather than being
+    duplicated. Change 20 still owns fresh final Debug/Release qualification.
+16. **Complete.** Re-audit leaves zero unresolved local release blockers. The
+    deterministic refresh publishes a 1,498-entry, 13,391,806-byte source
+    qualification archive at
+    `a244796f8d8080386dc5d22bc529e31e3c5825aa75c596cd436667d9de0ce4bf`.
+    The three 542-entry Linux binary qualification archives are respectively
+    25,568,853/31,046,917/30,066,896 bytes at SHA-256
+    `f6503b74b7e14e2107600296c2f3a1c13c4f5e1df498d7153a301a145631950f`,
+    `3d73cd877e2fdfc3f7bab1c4e9bb4bb8e434a77685f4a25af8245f2e2aa6119d`
+    and
+    `4be84d060a621231d330877ee14ad0bcefdc12e326fd334a94c3fc9c50c79a1c`.
+    Supply-chain validation covers 68 installed documents, two SBOMs, four
+    governed patches and the unsigned disposition; all three install lanes
+    retain 39 exact witnesses and pass offline relocation/uninstall. The final
+    source/package/provenance/inventory cross-check passes 13/13 in 15.89
+    seconds at retained-log SHA-256
+    `3c78c62b934ed0c8afe5b0ff016045bf34cf2e22ab1b011d5a8f473a4cf8d705`.
+    These are Change 16 qualification identities; Changes 17-19 intentionally
+    invalidate source/document bytes, so Changes 19/20 regenerate them. Real
+    Windows results remain explicitly deferred to post-push Change 20 and are
+    not replaced by Linux evidence.
+17. **Complete.** README, architecture, language/API/platform guides, release
+    evidence, changelog and known issues now describe the final current-only
+    v2.0.0 boundary: local Debug/Release/sanitizer/package qualification is
+    complete, Windows claims remain platform-specific post-push evidence, and
+    official Accellera SystemC/TLM plus governed four-patch SCV are the sole
+    native interfaces. The documentation/package/Windows/resource freeze gate
+    passes 10/10 in 9.39 seconds at retained-log SHA-256
+    `88db4bd48ac2c9ca52f68803f65368dacfc5da7e247efc9c57126739e34de6dd`.
+18. **Complete.** All twelve forward priorities are explicitly complete through
+    the final Change 20 gate. The v2.0.0 release notes contain the exact
+    annotated-tag message and `unsigned-release` disposition; the release
+    checker rejects development-version and current release-candidate claims.
+    Its focused owner passes at retained-log SHA-256
+    `6bb65467a4552dbd5bae3d335c240796e19883ddaa0b3d0eeb27ed9fcb0c4880`.
+19. **Complete.** CMake, the public version header, runtime/Tcl checks,
+    pkg-config/install ownership and the release record now share version
+    `2.0.0`. Package policy and all five target descriptors use final identity
+    `fsim-v2.0.0` with explicit `unsigned-release`; no signature artifact is
+    inferred. The record pins the annotated `v2.0.0` tag kind, exact six final
+    archive names, and SHA-256 identities for release notes, known issues and
+    the release guide. Reconfiguration publishes `Version: 2.0.0`; the final
+    version/signature/package/platform freeze passes 12/12 in 10.96 seconds at
+    retained-log SHA-256
+    `7dc5acb00b81964bdc9b22b7083a2587543a4d95e42ba79d69d1dc574a03d5e0`.
+    No build, commit, push or tag ran. The clean-context Change 20 handoff is
+    synchronized in `docs/v2-resume.md`; fresh builds own the final binary and
+    archive bytes.
+20. **Local qualification complete; post-push release boundary pending.** The
+    fresh clean-first exact-LLVM Debug build completes 2,391/2,391 steps with
+    eight workers in 15:59.41 at 6,977,232 KiB peak RSS and zero swaps. Its
+    warning/error-clean log SHA-256 is
+    `7a36168bb00ac25732c703063f90f4f369252804ad601df19322552741af7c2a`.
+    The first complete Debug run exposed only two stale final-version
+    assertions: the SCV closure still required a historical batch phrase and
+    Tcl still returned the development version. Their repair routes CLI and
+    Tcl through `fsim::version`; the expanded affected gate passes 49/49 at
+    log SHA-256
+    `50b05c02932492f0f23333d9f837ea04c61e3e4fa33d292dcfd1d76f8ce2c8ab`.
+    The next full run passes 308 tests and exposes one additional stale
+    installed-public `0.1.0-dev` assertion plus three dependency skips. That
+    check now consumes `PROJECT_VERSION`; the exact failed/skipped slice and
+    all fixtures pass 60/60 at log SHA-256
+    `153c23092dda406e85e1bd3af8704a06d4493eed38d234ade4ae219dc5b2b392`.
+    This supplies passing evidence for all 312 Debug owners without a third
+    duplicate whole-suite run.
+
+    The final clean-first Clang 22.1.8 plus exact LLVM 22.1.8 Release build
+    completes 2,391/2,391 steps with eight workers in 15:48.55 at 6,954,272
+    KiB peak RSS and zero swaps; its diagnostic-clean retained log SHA-256 is
+    `a29da9c0cfebfc1d1faf2f5eaced8dde4d9e2ac0f4d2b97b9930c4e252895f97`.
+    The complete Release regression passes 312/312 in 199.14 seconds at
+    3,794,624 KiB peak RSS and zero swaps, including typed boundaries, SDF
+    VITAL, official SystemC/TLM, governed SCV, FST and every release/platform
+    contract. Its retained log SHA-256 is
+    `b6d6fc68642930b6f864b3c882994509dfb64ac5a538de86ceba7eeef6601917`.
+    Final GCC+LLVM and GCC-no-LLVM package trees refresh warning-clean with
+    eight workers in 6:21.57 and 5:42.32; their log SHA-256 identities are
+    `5317e47e51a8b31ec09897b67ad2d45f5b3a649367d3690466ab7bd5491c12dc`
+    and
+    `661256a205ac8b045ad6964542883887bc7c76280fd5f6571200da855b7fedba`.
+    All three final Linux trees report `fsim 2.0.0 (C API 1)`. The retained
+    309/309 sanitizer result remains applicable and was not duplicated.
+    Final archives, release cross-checks, the sole commit/push, complete
+    nine-lane hosted run including all four Windows configurations, and the
+    annotated tag remain the rest of this Change 20 boundary; no tag is
+    authorized until every hosted lane is green.
 
 ## Forward priority order
 
@@ -13684,17 +14073,17 @@ carry an explicit evidence-backed scope disposition approved by the user.
    VHDL-2008/PSL digital surface.
 5. **Batches 144-146 complete:** Verilog-2005 UDP, strength/switch, and specify
    timing; Batch 164 closes the residual current-standard surface.
-6. **Batches 147-165:** SystemVerilog-2017 class, constraint, data, procedural,
+6. **Batches 147-165 complete:** SystemVerilog-2017 class, constraint, data, procedural,
    interface, assertion, coverage, DPI/VPI/VHPI, UVM, and residual language
    closure.
-7. **Batches 166-167:** older VHDL, Verilog, and SystemVerilog standards.
-8. **Batches 168-170:** SDF 4.0 with 2.1/3.0 input compatibility and complete
+7. **Batches 166-167 complete:** older VHDL, Verilog, and SystemVerilog standards.
+8. **Batches 168-170 complete:** SDF 4.0 with 2.1/3.0 input compatibility and complete
    Verilog/SystemVerilog/VHDL/VITAL/mixed annotation.
-9. **Batch 171:** deterministic FST tracing for the complete trace model.
-10. **Batch 172:** Accellera SystemC 3.0.2, native TLM 1.0/2.0, the opaque
+9. **Batch 171 complete:** deterministic FST tracing for the complete trace model.
+10. **Batch 172 complete:** Accellera SystemC 3.0.2, native TLM 1.0/2.0, the opaque
     worker-ready backend, and complete SystemC signal/port trace visibility.
-11. **Batch 173:** SCV 2.0.1 compatibility, governed patches, verification and
+11. **Batch 173 complete:** SCV 2.0.1 compatibility, governed patches, verification and
     transaction-recording closure.
-12. **Batches 174-177:** ABI/artifact migration freeze, cross-platform
+12. **Batches 174-177 complete through the final Change 20 gate:** ABI/artifact migration freeze, cross-platform
     qualification, release candidate packaging/documentation, and v2.0 final
     release.

@@ -15,6 +15,13 @@ foreach(input IN ITEMS "${module}" "${archive}" "${patch_manifest}")
 endforeach()
 
 include("${module}")
+file(READ "${module}" module_text)
+string(REGEX MATCHALL "NEWLINE_STYLE LF" lf_write_policies "${module_text}")
+list(LENGTH lf_write_policies lf_write_policy_count)
+if(NOT lf_write_policy_count EQUAL 4)
+  message(FATAL_ERROR
+    "SCV patch materialization must force LF for all four governed outputs")
+endif()
 set(work_root "${FSIM_BINARY_DIR}/tests/scv-2.0.1-patch-governance")
 fsim_scv_materialize_source("${archive}" "${work_root}"
                             materialized_root materialized_manifest)
@@ -38,22 +45,46 @@ if(NOT nested_extension_output_digest STREQUAL
    FSIM_SCV_NESTED_EXTENSION_OUTPUT_SHA256)
   message(FATAL_ERROR "SCV nested-extension compatibility output drifted")
 endif()
+file(SHA256 "${adapted_root}/src/scv/scv_constraint.cpp"
+  int_range_output_digest)
+if(NOT int_range_output_digest STREQUAL FSIM_SCV_INT_RANGE_OUTPUT_SHA256)
+  message(FATAL_ERROR "SCV int-range compatibility output drifted")
+endif()
+file(SHA256 "${adapted_root}/src/scv/scv_constraint_range.cpp"
+  range_size_output_digest)
+if(NOT range_size_output_digest STREQUAL FSIM_SCV_RANGE_SIZE_OUTPUT_SHA256)
+  message(FATAL_ERROR "SCV range-size compatibility output drifted")
+endif()
+foreach(relative_path IN ITEMS
+    src/scv/scv_bag.h
+    src/scv/_scv_introspection.h
+    src/scv/scv_constraint.cpp
+    src/scv/scv_constraint_range.cpp)
+  file(READ "${adapted_root}/${relative_path}" adapted_contents)
+  string(FIND "${adapted_contents}" "\r" carriage_return_index)
+  if(NOT carriage_return_index EQUAL -1)
+    message(FATAL_ERROR
+      "SCV governed output contains a platform-dependent CR: ${relative_path}")
+  endif()
+endforeach()
 fsim_scv_validate_source_tree("${materialized_root}")
 
 file(READ "${patch_manifest}" patch_manifest_text)
 foreach(token IN ITEMS
-    "patch_count=2"
+    "patch_count=4"
     "patch=scv-bag-mutable-random|${FSIM_SCV_BAG_PATCH_SHA256}|src/scv/scv_bag.h|${FSIM_SCV_BAG_INPUT_SHA256}|${FSIM_SCV_BAG_OUTPUT_SHA256}"
+    "patch=scv-int-range-overflow|${FSIM_SCV_INT_RANGE_PATCH_SHA256}|src/scv/scv_constraint.cpp|${FSIM_SCV_INT_RANGE_INPUT_SHA256}|${FSIM_SCV_INT_RANGE_OUTPUT_SHA256}"
+    "patch=scv-range-size-overflow|${FSIM_SCV_RANGE_SIZE_PATCH_SHA256}|src/scv/scv_constraint_range.cpp|${FSIM_SCV_RANGE_SIZE_INPUT_SHA256}|${FSIM_SCV_RANGE_SIZE_OUTPUT_SHA256}"
     "patch=scv-nested-extension-constructors|${FSIM_SCV_NESTED_EXTENSION_PATCH_SHA256}|src/scv/_scv_introspection.h|${FSIM_SCV_NESTED_EXTENSION_INPUT_SHA256}|${FSIM_SCV_NESTED_EXTENSION_OUTPUT_SHA256}"
     "unmodified_linux_compiler=g++-13"
     "unmodified_linux_systemc=3.0.2"
     "unmodified_linux_result=shared-and-static-library-build-pass"
     "llvm22_configure_blockers=unrecognized-clang-compiler,legacy-lib-gnu-layout"
     "gcc13_cxx20_result=blocked-by-template-id-constructor-spelling"
-    "decision=external-cmake-adapter-with-two-generated-source-patches"
+    "decision=external-cmake-adapter-with-four-generated-source-patches"
     "rationale="
     "platform_scope=all-supported-compilers"
-    "positive_probe=patched-exact-tree-builds-with-clang-and-gcc-and-preserves-const-peek-randomization-and-nested-extension-construction"
+    "positive_probe=patched-exact-tree-builds-with-clang-and-gcc-and-preserves-const-peek-randomization-nested-extension-construction-full-width-int-randomization-and-overflow-safe-interval-sizing"
     "negative_probe=changed-manifest-patch-input-output-or-source-tree-rejected-before-build"
     "removal_criteria=")
   string(FIND "${patch_manifest_text}" "${token}" token_index)

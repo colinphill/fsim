@@ -68,7 +68,7 @@ foreach(FSIM_TARGET_FILE IN LISTS FSIM_TARGET_FILES)
         "definition-and-static-portability-only"
      OR NOT FSIM_VALUE_batch177_required STREQUAL
         "debug-build,release-build,binary-archive,install-smoke,warning-audit,hosted-windows-matrix"
-     OR NOT FSIM_VALUE_signature STREQUAL "unsigned-release-candidate")
+     OR NOT FSIM_VALUE_signature STREQUAL "unsigned-release")
     message(FATAL_ERROR
       "Windows package target policy drifted: ${FSIM_TARGET_FILE}")
   endif()
@@ -114,11 +114,23 @@ foreach(FSIM_WORKFLOW_POLICY IN ITEMS
     "llvm-mingw-20260616-ucrt-x86_64.zip"
     "b9b68a4d276e16fa25802aaba458e4638f64b3884c290aaccdc2d87083b6ca35"
     "mingw-w64-clang-x86_64-llvm-22.1.8-2"
-    "- Debug"
-    "- Release"
-    "- 'ON'"
-    "- 'OFF'"
+    "configuration: Debug"
+    "configuration: Release"
+    "llvm_mode: 'ON'"
+    "llvm_mode: 'OFF'"
     "-DFSIM_TCL_MODE=ON"
+    "fsim-v2.0.0-windows-x86_64-llvm-mingw-no-llvm.zip"
+    "fsim-v2.0.0-windows-x86_64-llvm-mingw-llvm22.zip"
+    "batch177-change20-windows-no-llvm-install.log"
+    "batch177-change20-windows-llvm22-install.log"
+    "-DFSIM_BINARY_ONLY=ON"
+    "-DFSIM_BINARY_PACKAGE_NAME=\${{ matrix.binary_package }}"
+    "Create deterministic Windows binary archive"
+    "Audit deterministic Windows install lane"
+    "-DFSIM_CHANGE12_LANE=ON"
+    "Upload deterministic Windows binary archive"
+    "actions/upload-artifact@v7"
+    "if-no-files-found: error"
     "--parallel 4")
   string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_WORKFLOW_POLICY}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
@@ -173,6 +185,7 @@ endif()
 
 message(STATUS
   "Windows package definitions: 2 LLVM-MinGW 20260616 UCRT targets; all 4 "
-  "hosted timeouts are 120 minutes; /bigobj and warning-clean test assertion "
+  "hosted timeouts are 120 minutes; four retained Windows lane artifacts and "
+  "two Release binary archives, /bigobj and warning-clean test assertion "
   "policy are statically owned; every real Windows result is deferred to "
-  "Batch 177")
+  "Batch 177 Change 20")

@@ -24,24 +24,61 @@ jobs:
         include:
           - configuration: Debug
             preset: ci-linux
+            artifact: github-linux-gcc-debug
+            retained_log: build/qualification/batch177-change20-hosted-linux-gcc-debug.log
           - configuration: Release
             preset: ci-linux-release
+            artifact: github-linux-gcc-release
+            retained_log: build/qualification/batch177-change20-hosted-linux-gcc-release.log
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
 
+      - name: Initialize retained lane log
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "${{ matrix.retained_log }}")"
+          printf 'artifact=%s\nconfiguration=%s\n' \
+            "${{ matrix.artifact }}" \
+            "${{ matrix.configuration }}" > "${{ matrix.retained_log }}"
+
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --preset "${{ matrix.preset }}" 2>&1 \
+            | tee -a "${{ matrix.retained_log }}"
 
       - name: Build
-        run: cmake --build --preset ${{ matrix.preset }} --parallel 4
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build --preset "${{ matrix.preset }}" --parallel 4 2>&1 \
+            | tee -a "${{ matrix.retained_log }}"
 
       - name: Test
-        run: ctest --preset ${{ matrix.preset }} -LE '^recursive-closure$'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --preset "${{ matrix.preset }}" -LE '^recursive-closure$' 2>&1 \
+            | tee -a "${{ matrix.retained_log }}"
 
       - name: Final closure checks
         if: matrix.configuration == 'Debug'
-        run: ctest --preset ${{ matrix.preset }} -L '^recursive-closure$'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --preset "${{ matrix.preset }}" -L '^recursive-closure$' 2>&1 \
+            | tee -a "${{ matrix.retained_log }}"
+
+      - name: Upload retained lane log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.retained_log }}
+          if-no-files-found: error
 
   linux-llvm22:
     name: Ubuntu / GCC / LLVM 22.1.8 / ${{ matrix.configuration }}
@@ -53,76 +90,145 @@ jobs:
         include:
           - configuration: Debug
             build_dir: build/ci-linux-llvm22-debug
+            artifact: github-linux-llvm22-debug
+            retained_log: build/qualification/batch177-change20-hosted-linux-llvm22-debug.log
           - configuration: Release
             build_dir: build/ci-linux-llvm22-release
+            artifact: github-linux-llvm22-release
+            retained_log: build/qualification/batch177-change20-hosted-linux-llvm22-release.log
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
+
+      - name: Initialize retained lane log
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "${{ matrix.retained_log }}")"
+          printf 'artifact=%s\nconfiguration=%s\n' \
+            "${{ matrix.artifact }}" \
+            "${{ matrix.configuration }}" > "${{ matrix.retained_log }}"
 
       - name: Install LLVM 22.1.8 development package
         shell: bash
         run: |
           set -euo pipefail
-          wget --quiet https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 22
-          sudo apt-get install --yes --no-install-recommends llvm-22-dev
+          {
+            llvm_installer="${RUNNER_TEMP}/llvm-22-installer.sh"
+            wget --quiet --output-document="${llvm_installer}" \
+              https://apt.llvm.org/llvm.sh
+            chmod +x "${llvm_installer}"
+            sudo "${llvm_installer}" 22
+            sudo apt-get install --yes --no-install-recommends llvm-22-dev
 
-          installed_version=$(/usr/lib/llvm-22/bin/llvm-config --version)
-          if [[ "${installed_version}" != "22.1.8" ]]; then
-            echo "Expected LLVM 22.1.8, found ${installed_version}" >&2
-            exit 1
-          fi
+            installed_version=$(/usr/lib/llvm-22/bin/llvm-config --version)
+            if [[ "${installed_version}" != "22.1.8" ]]; then
+              echo "Expected LLVM 22.1.8, found ${installed_version}" >&2
+              exit 1
+            fi
+          } 2>&1 | tee -a "${{ matrix.retained_log }}"
 
       - name: Configure with required LLVM backend
-        run: >
-          cmake -S . -B ${{ matrix.build_dir }} -G Ninja
-          -DCMAKE_BUILD_TYPE=${{ matrix.configuration }}
-          -DCMAKE_C_COMPILER=gcc
-          -DCMAKE_CXX_COMPILER=g++
-          -DFSIM_BUILD_TESTS=ON
-          -DFSIM_LLVM_MODE=ON
-          -DFSIM_WARNINGS_AS_ERRORS=ON
-          -DLLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B "${{ matrix.build_dir }}" -G Ninja \
+            -DCMAKE_BUILD_TYPE="${{ matrix.configuration }}" \
+            -DCMAKE_C_COMPILER=gcc \
+            -DCMAKE_CXX_COMPILER=g++ \
+            -DFSIM_BUILD_TESTS=ON \
+            -DFSIM_LLVM_MODE=ON \
+            -DFSIM_WARNINGS_AS_ERRORS=ON \
+            -DLLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm 2>&1 \
+            | tee -a "${{ matrix.retained_log }}"
 
       - name: Build
-        run: cmake --build ${{ matrix.build_dir }} --parallel 4
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build "${{ matrix.build_dir }}" --parallel 4 2>&1 \
+            | tee -a "${{ matrix.retained_log }}"
 
       - name: Test
-        run: >
-          ctest --test-dir ${{ matrix.build_dir }}
-          --output-on-failure
-          -LE '^recursive-closure$'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir "${{ matrix.build_dir }}" \
+            --output-on-failure \
+            -LE '^recursive-closure$' 2>&1 \
+            | tee -a "${{ matrix.retained_log }}"
+
+      - name: Upload retained lane log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.retained_log }}
+          if-no-files-found: error
 
   linux-fuzz:
     name: Ubuntu / Clang / frontend fuzz smoke
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    env:
+      FSIM_ARTIFACT: github-linux-fuzz
+      FSIM_RETAINED_LOG: build/qualification/batch177-change20-hosted-linux-fuzz.log
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
 
-      - name: Install Clang
+      - name: Initialize retained lane log
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends \
-            clang \
-            libclang-rt-dev
+          set -euo pipefail
+          mkdir -p "$(dirname "${FSIM_RETAINED_LOG}")"
+          printf 'artifact=%s\nconfiguration=RelWithDebInfo\n' \
+            "${FSIM_ARTIFACT}" > "${FSIM_RETAINED_LOG}"
+
+      - name: Install Clang
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends \
+              clang \
+              libclang-rt-dev
+            clang --version
+          } 2>&1 | tee -a "${FSIM_RETAINED_LOG}"
 
       - name: Configure
-        run: cmake --preset ci-fuzz
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --preset ci-fuzz 2>&1 | tee -a "${FSIM_RETAINED_LOG}"
 
       - name: Build
-        run: cmake --build --preset ci-fuzz --parallel 4
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build --preset ci-fuzz --parallel 4 2>&1 \
+            | tee -a "${FSIM_RETAINED_LOG}"
 
       - name: Fuzz lexer and parser
-        run: >
-          build/ci-fuzz/tests/fuzz/fsim_frontend_fuzz
-          -runs=20000
-          -seed=1
-          -timeout=10
-          -max_len=65536
-          tests/fuzz/corpus/frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          build/ci-fuzz/tests/fuzz/fsim_frontend_fuzz \
+            -runs=20000 \
+            -seed=1 \
+            -timeout=10 \
+            -max_len=65536 \
+            tests/fuzz/corpus/frontend 2>&1 \
+            | tee -a "${FSIM_RETAINED_LOG}"
+
+      - name: Upload retained lane log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.FSIM_ARTIFACT }}
+          path: ${{ env.FSIM_RETAINED_LOG }}
+          if-no-files-found: error
 
   windows-llvm-mingw:
     name: Windows / LLVM-MinGW / ${{ matrix.configuration }} / LLVM ${{ matrix.llvm_mode }}
@@ -131,15 +237,51 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        configuration:
-          - Debug
-          - Release
-        llvm_mode:
-          - 'ON'
-          - 'OFF'
+        include:
+          - configuration: Debug
+            llvm_mode: 'OFF'
+            build_dir: build/ci-windows-llvm-mingw-Debug-llvm-OFF
+            artifact: github-windows-debug-llvm-off
+            retained_log: build/qualification/batch177-change20-hosted-windows-debug-llvm-off.log
+          - configuration: Debug
+            llvm_mode: 'ON'
+            build_dir: build/ci-windows-llvm-mingw-Debug-llvm-ON
+            artifact: github-windows-debug-llvm-on
+            retained_log: build/qualification/batch177-change20-hosted-windows-debug-llvm-on.log
+          - configuration: Release
+            llvm_mode: 'OFF'
+            build_dir: build/ci-windows-llvm-mingw-Release-llvm-OFF
+            artifact: github-windows-release-llvm-off
+            retained_log: build/qualification/batch177-change20-hosted-windows-release-llvm-off.log
+            binary_package: fsim-v2.0.0-windows-x86_64-llvm-mingw-no-llvm
+            binary_archive: fsim-v2.0.0-windows-x86_64-llvm-mingw-no-llvm.zip
+            binary_log: build/qualification/batch177-change20-windows-no-llvm-archive.log
+            install_log: build/qualification/batch177-change20-windows-no-llvm-install.log
+            expected_tests: '311'
+          - configuration: Release
+            llvm_mode: 'ON'
+            build_dir: build/ci-windows-llvm-mingw-Release-llvm-ON
+            artifact: github-windows-release-llvm-on
+            retained_log: build/qualification/batch177-change20-hosted-windows-release-llvm-on.log
+            binary_package: fsim-v2.0.0-windows-x86_64-llvm-mingw-llvm22
+            binary_archive: fsim-v2.0.0-windows-x86_64-llvm-mingw-llvm22.zip
+            binary_log: build/qualification/batch177-change20-windows-llvm22-archive.log
+            install_log: build/qualification/batch177-change20-windows-llvm22-install.log
+            expected_tests: '312'
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
+
+      - name: Initialize retained lane log
+        shell: pwsh
+        run: |
+          $logPath = "${{ matrix.retained_log }}"
+          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $logPath) | Out-Null
+          @(
+            "artifact=${{ matrix.artifact }}"
+            "configuration=${{ matrix.configuration }}"
+            "llvm_mode=${{ matrix.llvm_mode }}"
+          ) | Set-Content -LiteralPath $logPath -Encoding utf8
 
       - name: Install and validate LLVM-MinGW 20260616
         shell: pwsh
@@ -148,7 +290,9 @@ jobs:
             -Release "20260616" `
             -Version "22.1.8" `
             -ArchiveUrl "https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-x86_64.zip" `
-            -Sha256 "b9b68a4d276e16fa25802aaba458e4638f64b3884c290aaccdc2d87083b6ca35"
+            -Sha256 "b9b68a4d276e16fa25802aaba458e4638f64b3884c290aaccdc2d87083b6ca35" `
+            2>&1 | Tee-Object -FilePath "${{ matrix.retained_log }}" -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Initialize the matching MinGW LLVM development environment
         id: msys2
@@ -163,17 +307,19 @@ jobs:
         shell: msys2 {0}
         run: |
           set -euo pipefail
-          pacman -U --noconfirm --needed \
-            https://mirror.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-llvm-libs-22.1.8-2-any.pkg.tar.zst \
-            https://mirror.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-llvm-tools-22.1.8-2-any.pkg.tar.zst \
-            https://mirror.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-llvm-22.1.8-2-any.pkg.tar.zst
-          test "$(/clang64/bin/llvm-config.exe --version)" = "22.1.8"
-          /clang64/bin/lli.exe --version
+          {
+            pacman -U --noconfirm --needed \
+              https://mirror.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-llvm-libs-22.1.8-2-any.pkg.tar.zst \
+              https://mirror.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-llvm-tools-22.1.8-2-any.pkg.tar.zst \
+              https://mirror.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-llvm-22.1.8-2-any.pkg.tar.zst
+            test "$(/clang64/bin/llvm-config.exe --version)" = "22.1.8"
+            /clang64/bin/lli.exe --version
+          } 2>&1 | tee -a "${{ matrix.retained_log }}"
 
       - name: Configure
         shell: pwsh
         run: |
-          $buildDirectory = "build/ci-windows-llvm-mingw-${{ matrix.configuration }}-llvm-${{ matrix.llvm_mode }}"
+          $buildDirectory = "${{ matrix.build_dir }}"
           $arguments = @(
             "-S", ".",
             "-B", $buildDirectory,
@@ -197,13 +343,17 @@ jobs:
             }
             $arguments += "-DLLVM_DIR=$llvmDirectory"
           }
-          & cmake @arguments
+          & cmake @arguments 2>&1 `
+            | Tee-Object -FilePath "${{ matrix.retained_log }}" -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build
         shell: pwsh
         run: |
           $env:PATH = "$env:LLVM_MINGW_ROOT/bin;$env:LLVM_MINGW_ROOT/busybox/bin;$env:PATH"
-          cmake --build "build/ci-windows-llvm-mingw-${{ matrix.configuration }}-llvm-${{ matrix.llvm_mode }}" --parallel 4
+          & cmake --build "${{ matrix.build_dir }}" --parallel 4 2>&1 `
+            | Tee-Object -FilePath "${{ matrix.retained_log }}" -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test
         shell: pwsh
@@ -211,4 +361,77 @@ jobs:
           CTEST_OUTPUT_ON_FAILURE: '1'
         run: |
           $env:PATH = "$env:LLVM_MINGW_ROOT/bin;$env:LLVM_MINGW_ROOT/busybox/bin;$env:PATH"
-          ctest --test-dir "build/ci-windows-llvm-mingw-${{ matrix.configuration }}-llvm-${{ matrix.llvm_mode }}" --parallel 4 --progress --output-on-failure -LE '^recursive-closure$'
+          & ctest --test-dir "${{ matrix.build_dir }}" --parallel 4 --progress --output-on-failure -LE '^recursive-closure$' 2>&1 `
+            | Tee-Object -FilePath "${{ matrix.retained_log }}" -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Create deterministic Windows binary archive
+        if: matrix.configuration == 'Release'
+        shell: pwsh
+        run: |
+          $archiveLog = "${{ matrix.binary_log }}"
+          @(
+            "package=${{ matrix.binary_package }}"
+            "archive=${{ matrix.binary_archive }}"
+          ) | Set-Content -LiteralPath $archiveLog -Encoding utf8
+          $arguments = @(
+            "-DFSIM_SOURCE_DIR=$env:GITHUB_WORKSPACE",
+            "-DFSIM_BINARY_DIR=${{ matrix.build_dir }}",
+            "-DFSIM_WORK_DIR=${{ matrix.build_dir }}/release-package",
+            "-DFSIM_CONFIG=Release",
+            "-DFSIM_PLATFORM=Windows-x86_64",
+            "-DFSIM_COMPILER=LLVM-MinGW-20260616",
+            "-DFSIM_BINARY_ONLY=ON",
+            "-DFSIM_BINARY_PACKAGE_NAME=${{ matrix.binary_package }}",
+            "-DFSIM_BINARY_ARCHIVE_OUTPUT=$env:GITHUB_WORKSPACE/${{ matrix.binary_archive }}",
+            "-P", "cmake/CheckDeterministicPackaging.cmake"
+          )
+          & cmake @arguments 2>&1 `
+            | Tee-Object -FilePath $archiveLog -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Audit deterministic Windows install lane
+        if: matrix.configuration == 'Release'
+        shell: pwsh
+        run: |
+          $installLog = "${{ matrix.install_log }}"
+          @(
+            "package=${{ matrix.binary_package }}"
+            "archive=${{ matrix.binary_archive }}"
+            "regression_log=${{ matrix.retained_log }}"
+          ) | Set-Content -LiteralPath $installLog -Encoding utf8
+          $arguments = @(
+            "-DFSIM_SOURCE_DIR=$env:GITHUB_WORKSPACE",
+            "-DFSIM_CHANGE12_LANE=ON",
+            "-DFSIM_CHANGE12_BINARY_DIR=${{ matrix.build_dir }}",
+            "-DFSIM_CHANGE12_ARCHIVE=$env:GITHUB_WORKSPACE/${{ matrix.binary_archive }}",
+            "-DFSIM_CHANGE12_ARCHIVE_ROOT=${{ matrix.binary_package }}",
+            "-DFSIM_CHANGE12_REGRESSION_LOG=$env:GITHUB_WORKSPACE/${{ matrix.retained_log }}",
+            "-DFSIM_CHANGE12_WORK_DIR=${{ matrix.build_dir }}/change12-install-audit",
+            "-DFSIM_CHANGE12_EXPECTED_TESTS=${{ matrix.expected_tests }}",
+            "-DFSIM_CHANGE12_TOOLCHAIN=LLVM-MinGW-20260616-LLVM-${{ matrix.llvm_mode }}",
+            "-DFSIM_CHANGE12_EXECUTABLE_SUFFIX=.exe",
+            "-P", "cmake/CheckV2ReleaseRecords.cmake"
+          )
+          & cmake @arguments 2>&1 `
+            | Tee-Object -FilePath $installLog -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload deterministic Windows binary archive
+        if: always() && matrix.configuration == 'Release'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.binary_archive }}
+          path: |
+            ${{ matrix.binary_archive }}
+            ${{ matrix.binary_log }}
+            ${{ matrix.install_log }}
+          if-no-files-found: error
+
+      - name: Upload retained lane log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.retained_log }}
+          if-no-files-found: error

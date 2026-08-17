@@ -39,10 +39,10 @@ static_assert(
     == "7bd1c4037f3c108d02f45cae003d112efdb788d469cb029fada247d330ca4881");
 static_assert(
     fsim::systemc::scv_patch_sha256
-    == "b5954d8b0dc9f26f4e02c2a24063e742bbdcaa094c3c34fba8f2f7b1935ef57b");
+    == "61f2a7a414b317bba1f566bfd855c0ae1329c6f848d8bf5fa22b584c2f71969a");
 static_assert(
     fsim::systemc::scv_patched_tree_sha256
-    == "4dea71f4e320539aae40a12209445519193da9cd237512f79a1377a5174cb3ea");
+    == "e7590f83e157e7df3362c9987ccc55b6b50328d51ec809c489e9ab1b2f80c598");
 
 static_assert(sizeof(fsim_sc_value_view_v1) == 32U);
 static_assert(alignof(fsim_sc_value_view_v1) == 8U);

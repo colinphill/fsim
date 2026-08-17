@@ -130,7 +130,7 @@ file(READ "${FSIM_STAGE}/${FSIM_LIBDIR}/pkgconfig/fsim.pc" FSIM_PC)
 foreach(FSIM_TOKEN IN ITEMS
     "prefix=\${pcfiledir}/../.."
     "Name: fsim"
-    "Version: 0.1.0"
+    "Version: 2.0.0"
     "Libs: -L\${libdir} -lfsim_api")
   string(FIND "${FSIM_PC}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)
   if(FSIM_TOKEN_INDEX EQUAL -1)

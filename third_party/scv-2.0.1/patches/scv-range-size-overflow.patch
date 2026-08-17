@@ -1,0 +1,10 @@
+--- a/src/scv/scv_constraint_range.cpp
++++ b/src/scv/scv_constraint_range.cpp
+@@ -114,6 +114,6 @@
+       _tmp = 0;  \
+     } else {  \
+-      _tmp = _upperbound - _lowerbound;  \
++      _tmp = static_cast<SizeT>(_upperbound) - static_cast<SizeT>(_lowerbound);  \
+       if (Discrete) _tmp += 1;  \
+     }  \
+     return _tmp;  \

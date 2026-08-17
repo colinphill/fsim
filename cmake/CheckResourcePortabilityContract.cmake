@@ -76,6 +76,18 @@ file(READ "${FSIM_FOOTPRINT}" FSIM_FOOTPRINT_CONTENTS)
 file(READ "${FSIM_TEST_CMAKE}" FSIM_TEST_CMAKE_CONTENTS)
 file(READ "${FSIM_FUZZ_CMAKE}" FSIM_FUZZ_CMAKE_CONTENTS)
 file(READ "${FSIM_WORKFLOW}" FSIM_WORKFLOW_CONTENTS)
+
+foreach(FSIM_RUNNER_TEMP_POLICY IN ITEMS
+    "llvm_installer=\"\${RUNNER_TEMP}/llvm-22-installer.sh\""
+    "--output-document=\"\${llvm_installer}\""
+    "sudo \"\${llvm_installer}\" 22")
+  string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_RUNNER_TEMP_POLICY}"
+    FSIM_RUNNER_TEMP_INDEX)
+  if(FSIM_RUNNER_TEMP_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "LLVM provisioning lost runner-temp source-tree isolation: ${FSIM_RUNNER_TEMP_POLICY}")
+  endif()
+endforeach()
 file(READ "${FSIM_SCOPED}" FSIM_SCOPED_CONTENTS)
 file(READ "${FSIM_SYSTEMC}" FSIM_SYSTEMC_CONTENTS)
 file(READ "${FSIM_COVERAGE}" FSIM_COVERAGE_CONTENTS)
@@ -262,6 +274,6 @@ endif()
 message(STATUS
   "resource portability contract: five four-worker build/test steps, "
   "120-minute hosted jobs, "
-  "eight-link pool, compact Debug objects, 8 MiB Windows stacks, bounded "
+  "eight-link pool, compact Debug objects, 128 MiB Windows stacks, bounded "
   "large-test and FST value/change/hierarchy storage, pinned Boost headers, "
   "and scoped/SystemC phase traces are present")

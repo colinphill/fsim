@@ -300,3 +300,10 @@ v2 Batch 168 through Change 19 advances the synchronized live inventory to
 authored test/control files. Historical batch baselines above remain recorded
 at the point they were established; the table and machine gate carry the
 current release totals.
+
+v2 Batch 176 completes the source/package/install/reproducibility contracts and
+advances the synchronized final-candidate inventory to 2,548 diagnostics,
+1,149 bounded C/C++ sources, 1,434 SPDX-owned files and 634 CMake/test-control
+files. The separate conformance inventory remains 436 authored test/control
+owners, 100 expectations in 28 fixtures owned by 27 CTests, ten reviewed source
+IDs and six exclusions.

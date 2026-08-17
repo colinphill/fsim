@@ -148,17 +148,25 @@ endforeach()
 foreach(FSIM_JOB_POLICY IN ITEMS
     "windows-llvm-mingw:"
     "timeout-minutes: 120"
-    "- Debug"
-    "- Release"
+    "configuration: Debug"
+    "configuration: Release"
     "llvm_mode:"
-    "- 'ON'"
-    "- 'OFF'"
+    "llvm_mode: 'ON'"
+    "llvm_mode: 'OFF'"
     "llvm-mingw-20260616-ucrt-x86_64.zip"
     "mingw-w64-clang-x86_64-llvm-22.1.8-2"
     "/clang64/bin/lli.exe --version"
     "id: msys2"
     "steps.msys2.outputs.msys2-location"
     "LLVMConfig.cmake was not installed at"
+    "github-windows-debug-llvm-off"
+    "github-windows-debug-llvm-on"
+    "github-windows-release-llvm-off"
+    "github-windows-release-llvm-on"
+    "fsim-v2.0.0-windows-x86_64-llvm-mingw-no-llvm.zip"
+    "fsim-v2.0.0-windows-x86_64-llvm-mingw-llvm22.zip"
+    "-DFSIM_BINARY_ONLY=ON"
+    "actions/upload-artifact@v7"
     "--parallel 4")
   string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_JOB_POLICY}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
@@ -177,4 +185,5 @@ endif()
 message(STATUS
   "Windows LLVM contract: x64 GNU Windows ABI target, native PE/COFF target and "
   "cache identity, strict C layout, safe DLL ownership, atomic cache replace, "
-  "O0/O2/debug provenance, and LLVM-MinGW hosted matrix are present")
+  "O0/O2/debug provenance, four retained LLVM-MinGW hosted artifacts and two "
+  "Release binary archive lanes are present")

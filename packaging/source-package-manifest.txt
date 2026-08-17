@@ -92,6 +92,7 @@ cmake/CheckV1VhdlRelease.cmake
 cmake/CheckV2PerformanceBaselines.cmake
 cmake/CheckV2QualificationInventory.cmake
 cmake/CheckV2ReleaseRecords.cmake
+cmake/CheckV2SupplyChain.cmake
 cmake/CheckVerilogClosureAudit.cmake
 cmake/CheckVerilogDocumentation.cmake
 cmake/CheckVerilogGapInventory.cmake
@@ -1487,7 +1488,9 @@ third_party/scv-2.0.1/NOTICE
 third_party/scv-2.0.1/PATCHES.txt
 third_party/scv-2.0.1/SOURCE_MANIFEST.txt
 third_party/scv-2.0.1/patches/scv-bag-mutable-random.patch
+third_party/scv-2.0.1/patches/scv-int-range-overflow.patch
 third_party/scv-2.0.1/patches/scv-nested-extension-constructors.patch
+third_party/scv-2.0.1/patches/scv-range-size-overflow.patch
 third_party/scv-2.0.1/scv-2.0.1.spdx.json
 third_party/scv-2.0.1/scv-2.0.1.tar.gz
 third_party/systemc-3.0.2/LICENSE

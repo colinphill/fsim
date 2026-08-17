@@ -1,0 +1,11 @@
+--- a/src/scv/scv_constraint.cpp
++++ b/src/scv/scv_constraint.cpp
+@@ -3625,7 +3625,7 @@ _scv_constraint_range_generator_unsigned_ll* _scv_constraint_data::get_unsigned
+ 
+ _scv_constraint_range_generator_int* _scv_constraint_data::get_int_generator(scv_extensions_if* s) {
+   if (!_range_gen.igen) {
+-    int ub = (0x1 << (s->get_bitwidth()-1) ) -1;
++    int ub = (0x1U << (s->get_bitwidth()-1) ) -1U;
+     int lb = (0-ub-1);
+     if (s->is_bool()) { lb = 0; ub = 1; }
+     _range_gen.igen = new _scv_constraint_range_generator_int(lb, ub,

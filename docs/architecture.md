@@ -2616,9 +2616,10 @@ output contract. The historical Batch 175 Windows MSVC/clang-cl rows are not
 release-support claims after the LLVM-MinGW migration. The frozen
 qualification ledger maps all twelve deferred workloads to the current
 LLVM-MinGW 20260616 targets; MSVC and clang-cl remain source/command
-portability contracts and are retired as package targets. Final Batch 177 owns
-measured Windows, Release, sanitizer, release-gate and hosted-CI evidence. The
-checked support matrix and candidate identities are frozen in
+portability contracts and are retired as package targets. Local Debug/Release,
+sanitizer, release-gate and package evidence is complete. Measured Windows
+behavior remains owned only by the pinned post-push LLVM-MinGW lanes. The
+checked support matrix and release identities are frozen in
 `packaging/v2-support-matrix.tsv` and `packaging/v2-release-record.txt`.
 
 The current

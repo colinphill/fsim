@@ -171,7 +171,7 @@ void test_systemverilog_vpi_io_descriptors() {
               == std::vector<std::string>{
                   "fsim", "+seed=7", "--trace"}
           && io.product() == "fsim-test"
-          && io.version() == "0.1.0-dev",
+          && io.version() == "2.0.0",
       "VPI I/O argv or canonical product/version identity changed");
 }
 

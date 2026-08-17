@@ -3,6 +3,7 @@
 
 #include "fsim/api.h"
 #include "fsim/support/path.hpp"
+#include "fsim/version.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -1586,7 +1587,8 @@ int run(
             return kUsageError;
         }
         if (invocation->version) {
-            output << "fsim 0.1.0-dev (C API " << FSIM_API_VERSION << ")\n";
+            output << "fsim " << fsim::version << " (C API "
+                   << FSIM_API_VERSION << ")\n";
             return kSuccess;
         }
         if (invocation->help) {

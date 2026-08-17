@@ -37,7 +37,24 @@ toolchain triage. Local builds use at least eight workers when the host permits;
 every maintained hosted job has a 120-minute timeout. Simulation remains
 single-scheduler regardless of build or test parallelism.
 
-## Batch 176 release-candidate boundary
+## v2.0.0 final release freeze
+
+Batch 177 has completed local Clang/GCC Debug, Release, exact-LLVM,
+LLVM-disabled, ASan/UBSan, deterministic archive, installed-consumer and
+supply-chain qualification. The compiled version and package identity are
+`2.0.0`; archives and the annotated tag use the explicit `unsigned-release`
+disposition. The final source and three Linux archive byte identities are
+refreshed after documentation freeze and again after the Change 20 clean
+builds.
+
+The latest completed hosted run at the pre-release base was audited before the
+release commit. Its Linux contract failures and Windows SCV CRLF materialization
+failure are repaired locally. The nine pinned hosted lanes still run only from
+the sole pushed release commit. A Windows row is complete only from its own
+LLVM-MinGW result, and the annotated tag is not published until that matrix is
+green.
+
+## Historical Batch 176 release-candidate boundary
 
 Batch 176 prepares documentation, package definitions, deterministic manifests,
 install/uninstall ownership, offline inputs and Debug/fixture smoke evidence.
@@ -93,35 +110,104 @@ specific repaired class and final log are present. Clean checkouts validate the
 same policy without requiring ignored local build evidence; release records
 carry normalized SHA-256 identities for the locally retained audit.
 
-## Frozen candidate records
+## Frozen release records
 
-`packaging/v2-release-record.txt` is the machine-checked Batch 176 candidate
-index. It freezes 1,495 source paths, seven support rows, six maintained
+`packaging/v2-release-record.txt` is the machine-checked v2.0.0 release index.
+It freezes 1,498 source paths, seven support rows, six maintained
 example outputs, nineteen qualification rows, forty-four Linux performance
 rows, package-target identities, retained-log audit identity, upstream SBOMs,
-licenses/notices and the Debug archive proofs. The candidate is explicitly
-unsigned. `packaging/v2-support-matrix.tsv` distinguishes Linux candidate
+licenses/notices and the retained qualification proofs. The release is
+explicitly unsigned. `packaging/v2-support-matrix.tsv` distinguishes Linux
 definitions, definition-only LLVM-MinGW targets and retired MSVC/clang-cl
 package targets; it contains no inferred execution.
 
-See the [candidate changelog](changelog-v2.md) and
+See the [release notes](changelog-v2.md) and
 [known issues](known-issues-v2.md). Any content or count change requires the
-source manifest and candidate record to be regenerated and revalidated before
-the final Batch 177 qualification.
+source manifest and release record to be regenerated and revalidated before
+publication.
 
-## Final Batch 177 evidence
+## Batch 177 execution evidence
 
-Batch 177 owns every Release build, test, qualification and release gate
-deferred from Batches 173-176. It also owns fresh sanitizers, the complete
-hosted Linux and Windows LLVM-MinGW matrix, CI restart/monitoring and repair,
-final Release package/archive/install smokes, and the release tag. All hosted
-jobs retain 120-minute limits. A platform row is complete only from its own
-retained execution; no Linux result may be copied into a Windows row.
+Batch 177 completes every Release build, test, qualification and release gate
+deferred from Batches 173-176. Local sanitizer and Release/package/install
+lanes are complete. The hosted Linux and Windows LLVM-MinGW matrix, final
+post-push archive capture and release tag remain Change 20 operations. All
+hosted jobs retain 120-minute limits. A platform row is complete only from its
+own retained execution; no Linux result may be copied into a Windows row.
 
 Release evidence must retain the exact command, toolchain and dependency
 identity, configuration, manifest or test selection, exit status, elapsed time,
 warning/failure disposition and log digest. A green summary cannot override an
 error marker, crash, missing expected output or incomplete test inventory.
+
+The following execution matrix is frozen before any Batch 177 Release,
+sanitizer, archive or hosted lane begins. Changes 1-19 remain uncommitted, so a
+hosted or Windows-only lane cannot qualify their content before Change 20's
+single push. Such lanes retain their original functional change ownership but
+use the explicit `post-push-hosted-change20` completion boundary.
+
+```text
+id	change	state	platform	toolchain	configuration	workers	timeout_minutes	action	artifact	retained_log	completion_boundary
+E177-01	B177-C05	planned	linux-x86_64	clang-22.1.8+llvm-22.1.8	Debug	8	120	clean-first-build	build/llvm22-ninja-debug	build/qualification/batch177-change05-clang-debug-build.log	local-change05
+E177-02	B177-C05	planned	linux-x86_64	clang-22.1.8+llvm-22.1.8	Debug	8	120	full-regression-and-execution-smokes	build/llvm22-ninja-debug	build/qualification/batch177-change05-clang-debug-regression.log	local-change05
+E177-03	B177-C06	planned	linux-x86_64	clang-22.1.8+llvm-22.1.8	Release	8	120	clean-first-build	build/clang22-llvm22-ninja-release	build/qualification/batch177-change06-clang-release-build.log	local-change06
+E177-04	B177-C06	planned	linux-x86_64	clang-22.1.8+llvm-22.1.8	Release	8	120	full-regression-and-release-gates	build/clang22-llvm22-ninja-release	build/qualification/batch177-change06-clang-release-regression.log	local-change06
+E177-05	B177-C07	planned	linux-x86_64	gcc-13.3+llvm-22.1.8	Release	8	120	clean-first-build	build/gcc-release	build/qualification/batch177-change07-gcc-llvm-release-build.log	local-change07
+E177-06	B177-C07	planned	linux-x86_64	gcc-13.3+llvm-22.1.8	Release	8	120	full-regression-and-package-smoke	build/gcc-release	build/qualification/batch177-change07-gcc-llvm-release-regression.log	local-change07
+E177-07	B177-C07	planned	linux-x86_64	gcc-13.3-no-llvm	Release	8	120	clean-first-build	build/ci-linux-release	build/qualification/batch177-change07-gcc-no-llvm-release-build.log	local-change07
+E177-08	B177-C07	planned	linux-x86_64	gcc-13.3-no-llvm	Release	8	120	full-regression-and-package-smoke	build/ci-linux-release	build/qualification/batch177-change07-gcc-no-llvm-release-regression.log	local-change07
+E177-09	B177-C07	planned	linux-x86_64	gcc-13.3-asan-ubsan	Debug	8	120	full-sanitizer-regression	build/ci-sanitizers	build/qualification/batch177-change07-gcc-asan-ubsan.log	local-change07
+E177-10	B177-C08	planned	linux-x86_64	github-ubuntu-gcc-no-llvm	Debug	4	120	hosted-build-test-closure	github-linux-gcc-debug	build/qualification/batch177-change20-hosted-linux-gcc-debug.log	post-push-hosted-change20
+E177-11	B177-C08	planned	linux-x86_64	github-ubuntu-gcc-no-llvm	Release	4	120	hosted-build-test	github-linux-gcc-release	build/qualification/batch177-change20-hosted-linux-gcc-release.log	post-push-hosted-change20
+E177-12	B177-C08	planned	linux-x86_64	github-ubuntu-gcc+llvm-22.1.8	Debug	4	120	hosted-build-test	github-linux-llvm22-debug	build/qualification/batch177-change20-hosted-linux-llvm22-debug.log	post-push-hosted-change20
+E177-13	B177-C08	planned	linux-x86_64	github-ubuntu-gcc+llvm-22.1.8	Release	4	120	hosted-build-test	github-linux-llvm22-release	build/qualification/batch177-change20-hosted-linux-llvm22-release.log	post-push-hosted-change20
+E177-14	B177-C08	planned	linux-x86_64	github-ubuntu-clang-fuzz	RelWithDebInfo	4	120	hosted-frontend-fuzz-smoke	github-linux-fuzz	build/qualification/batch177-change20-hosted-linux-fuzz.log	post-push-hosted-change20
+E177-15	B177-C08	planned	windows-x86_64	llvm-mingw-20260616-no-llvm	Debug	4	120	hosted-build-test	github-windows-debug-llvm-off	build/qualification/batch177-change20-hosted-windows-debug-llvm-off.log	post-push-hosted-change20
+E177-16	B177-C08	planned	windows-x86_64	llvm-mingw-20260616+llvm-22.1.8	Debug	4	120	hosted-build-test	github-windows-debug-llvm-on	build/qualification/batch177-change20-hosted-windows-debug-llvm-on.log	post-push-hosted-change20
+E177-17	B177-C08	planned	windows-x86_64	llvm-mingw-20260616-no-llvm	Release	4	120	hosted-build-test	github-windows-release-llvm-off	build/qualification/batch177-change20-hosted-windows-release-llvm-off.log	post-push-hosted-change20
+E177-18	B177-C08	planned	windows-x86_64	llvm-mingw-20260616+llvm-22.1.8	Release	4	120	hosted-build-test	github-windows-release-llvm-on	build/qualification/batch177-change20-hosted-windows-release-llvm-on.log	post-push-hosted-change20
+E177-19	B177-C09	planned	all	source-manifest-v1	all	1	120	deterministic-source-archive	build/release/fsim-v2.0.0-source.zip	build/qualification/batch177-change09-source-archive.log	local-change09
+E177-20	B177-C10	planned	linux-x86_64	clang-22.1.8+llvm-22.1.8	Release	1	120	deterministic-binary-archive	build/release/fsim-v2.0.0-linux-x86_64-clang22-llvm22.zip	build/qualification/batch177-change10-linux-clang22-llvm22-archive.log	local-change10
+E177-21	B177-C10	planned	linux-x86_64	gcc-13.3+llvm-22.1.8	Release	1	120	deterministic-binary-archive	build/release/fsim-v2.0.0-linux-x86_64-gcc13-llvm22.zip	build/qualification/batch177-change10-linux-gcc13-llvm22-archive.log	local-change10
+E177-22	B177-C10	planned	linux-x86_64	gcc-13.3-no-llvm	Release	1	120	deterministic-binary-archive	build/release/fsim-v2.0.0-linux-x86_64-gcc13-no-llvm.zip	build/qualification/batch177-change10-linux-gcc13-no-llvm-archive.log	local-change10
+E177-23	B177-C10	planned	windows-x86_64	llvm-mingw-20260616-no-llvm	Release	4	120	deterministic-binary-archive	fsim-v2.0.0-windows-x86_64-llvm-mingw-no-llvm.zip	build/qualification/batch177-change20-windows-no-llvm-archive.log	post-push-hosted-change20
+E177-24	B177-C10	planned	windows-x86_64	llvm-mingw-20260616+llvm-22.1.8	Release	4	120	deterministic-binary-archive	fsim-v2.0.0-windows-x86_64-llvm-mingw-llvm22.zip	build/qualification/batch177-change20-windows-llvm22-archive.log	post-push-hosted-change20
+E177-25	B177-C11	planned	all	supply-chain-record-v1	all	1	120	sbom-license-notice-signature-audit	packaging/v2-release-record.txt	build/qualification/batch177-change11-supply-chain.log	local-change11
+E177-26	B177-C12	planned	linux-x86_64	clang-22.1.8+llvm-22.1.8	Release	8	120	install-discovery-example-uninstall-reproducibility	build/release/fsim-v2.0.0-linux-x86_64-clang22-llvm22.zip	build/qualification/batch177-change12-linux-clang22-llvm22-install.log	local-change12
+E177-27	B177-C12	planned	linux-x86_64	gcc-13.3+llvm-22.1.8	Release	8	120	install-discovery-example-uninstall-reproducibility	build/release/fsim-v2.0.0-linux-x86_64-gcc13-llvm22.zip	build/qualification/batch177-change12-linux-gcc13-llvm22-install.log	local-change12
+E177-28	B177-C12	planned	linux-x86_64	gcc-13.3-no-llvm	Release	8	120	install-discovery-example-uninstall-reproducibility	build/release/fsim-v2.0.0-linux-x86_64-gcc13-no-llvm.zip	build/qualification/batch177-change12-linux-gcc13-no-llvm-install.log	local-change12
+E177-29	B177-C12	planned	windows-x86_64	llvm-mingw-20260616-no-llvm	Release	4	120	install-discovery-example-uninstall-reproducibility	fsim-v2.0.0-windows-x86_64-llvm-mingw-no-llvm.zip	build/qualification/batch177-change20-windows-no-llvm-install.log	post-push-hosted-change20
+E177-30	B177-C12	planned	windows-x86_64	llvm-mingw-20260616+llvm-22.1.8	Release	4	120	install-discovery-example-uninstall-reproducibility	fsim-v2.0.0-windows-x86_64-llvm-mingw-llvm22.zip	build/qualification/batch177-change20-windows-llvm22-install.log	post-push-hosted-change20
+```
+
+The normalized thirty-row matrix has SHA-256
+`e02bdc6d451800585fe54fdfd75e8c050cfb7673e6225377f414eafa6e3f9f79`.
+
+The hosted workflow statically maps rows `E177-10` through `E177-18` one-to-one
+to nine unique artifact and retained-log identities. Each lane creates its log
+before dependency setup, appends toolchain, configure, build and test or fuzz
+output with native command failures preserved, and uploads the log through its
+own matrix-expanded `actions/upload-artifact@v7` owner under `always()` with
+missing-file rejection. This prepares evidence capture only; the nine hosted
+lanes remain unexecuted until the post-push Change 20 boundary.
+
+The source-package lane publishes `build/release/fsim-v2.0.0-source.zip` with
+root `fsim-v2.0.0-source`. Its checked policy requires two independently staged
+byte-identical ZIPs, exact manifest order and normalized metadata, preflighted
+safe paths before extraction, unsafe-manifest rejection, extracted-manifest
+reconstruction and a configure with FetchContent fully disconnected. Any later
+source change invalidates the release bytes and requires regeneration at the
+final freeze; a prior Change 9 digest is evidence for the mechanism, not
+permission to reuse stale release content.
+
+The binary-package policy fixes five final archive names. All three local Linux
+Release targets use binary-only deterministic staging with exact package roots,
+normalized metadata, repeated byte identity and safe path/relative-symlink
+preflight. The two LLVM-MinGW Release workflow entries carry their own package,
+archive and log identities; after successful hosted tests they execute the same
+binary-only owner and conditionally upload the ZIP plus retained archive log.
+Those Windows archives remain absent until the post-push Change 20 execution,
+and no Linux archive may substitute for either one.
 
 ## Optional post-v2 work
 

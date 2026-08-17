@@ -60,7 +60,7 @@ int main()
             output,
             error);
         assert(result == 0);
-        assert(output.str().find("0.1.0-dev (C API 1)") != std::string::npos);
+        assert(output.str().find("2.0.0 (C API 1)") != std::string::npos);
         assert(error.str().empty());
     }
     {

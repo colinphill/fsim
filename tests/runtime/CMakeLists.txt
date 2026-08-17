@@ -152,6 +152,15 @@ add_dependencies(
   fsim_vpi_reference_cpp_plugin)
 fsim_configure_test(fsim_runtime_tests)
 add_test(NAME fsim.runtime COMMAND fsim_runtime_tests)
+# These recursive closure drivers are registered by the parent test directory,
+# but their runtime witness is registered here. Attach the setup ownership in
+# the creating directory so selecting any driver executes this witness exactly
+# once before the driver's de-duplicated completion check.
+set_tests_properties(
+  fsim.runtime
+  PROPERTIES FIXTURES_SETUP
+    "fsim_compatibility_smoke_closure_witnesses;fsim_verilog_systemverilog_standard_mode_closure_witnesses;fsim_systemverilog_closure_witnesses;fsim_verilog_closure_witnesses"
+)
 
 add_executable(fsim_trace_model_tests trace_model_tests.cpp)
 target_link_libraries(fsim_trace_model_tests PRIVATE fsim_runtime)
@@ -210,6 +219,8 @@ fsim_configure_test(fsim_fst_reader_tests)
 add_test(NAME fsim.runtime.fst_reader COMMAND fsim_fst_reader_tests)
 set_tests_properties(
   fsim.runtime.fst_reader
-  PROPERTIES LABELS
+  PROPERTIES
+    FIXTURES_SETUP "fsim_fst_closure_witnesses"
+    LABELS
     "fast;runtime;fst;reader;value;positive;negative;equivalence;determinism;compression;metadata;alias;lifecycle;resource"
 )

@@ -54,7 +54,7 @@ if(NOT FSIM_PKG_CONFIG_EXECUTABLE)
       endif()
     endforeach()
     message(STATUS
-      "installed pkg-config consumer: metadata-only on Windows without pkg-config; final Batch 177 owns the real Windows tool result")
+      "installed pkg-config consumer: metadata-only on Windows without pkg-config; a real Windows claim requires its own hosted result")
     return()
   endif()
   message(FATAL_ERROR "pkg-config or pkgconf is required for this consumer")

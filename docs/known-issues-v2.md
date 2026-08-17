@@ -1,13 +1,13 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# v2.0 release-candidate known issues and exclusions
+# v2.0.0 known issues and exclusions
 
-This list separates candidate limitations from defects. A final v2.0 claim may
-remove a row only with Batch 177 evidence.
+This list records current release limits rather than deferred v1 work.
 
-- No Batch 176 Release build, archive, install smoke, sanitizer or hosted-CI
-  result exists. Batch 177 owns all of them, including every Windows result.
-- Candidate ZIPs are explicitly unsigned. Batch 177 records the final signature
-  or preserves an explicit unsigned disposition; no signature is inferred.
+- Release ZIPs and the annotated tag use the explicit `unsigned-release`
+  disposition. No detached cryptographic signature is published or inferred.
+- The final pinned Linux/Windows hosted matrix runs from the sole release
+  commit. Until those post-push rows are green, no Windows archive or final tag
+  claim is complete.
 - Windows packages target pinned LLVM-MinGW 20260616 UCRT. Native MSVC and
   clang-cl retain checked source/command portability contracts but are retired
   as package targets and have no current binary-package claim.
@@ -15,8 +15,8 @@ remove a row only with Batch 177 evidence.
   reject incompatible compiler, target, ABI, schema or content identities and
   must be regenerated from portable inputs.
 - Windows pkg-config execution depends on an available pkg-config client. The
-  metadata contract is checked in Batch 176; any real Windows consumer claim
-  requires Batch 177 execution.
+  metadata contract is always checked; a real Windows consumer claim requires
+  its own retained hosted execution.
 - Deterministic ZIP creation is an internal Python release-tool step. It does
   not add Python runtime bindings or a simulator dependency.
 - Simulation uses one deterministic scheduler/time domain. Distributed worker
@@ -24,5 +24,3 @@ remove a row only with Batch 177 evidence.
   remain post-v2 work.
 - Only official Accellera SystemC/TLM/SCV interfaces are supported. The removed
   fsim SystemC facade/custom-kernel API is intentionally not compatible.
-- The source tree and installed command still carry the development version
-  identity until Batch 177 performs the final version/tag transition.

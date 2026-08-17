@@ -99,9 +99,9 @@ determinism, lifecycle, and executable evidence.
 
 ## Release qualification boundary
 
-The installed C ABI and exact-build C++ surfaces above are current v2
+The installed C ABI and exact-build C++ surfaces above are current v2.0.0
 contracts; platform qualification is recorded separately. The frozen
 [support matrix](../packaging/v2-support-matrix.tsv) and
-[candidate record](../packaging/v2-release-record.txt) do not infer Windows or
-Release behavior from local Linux Debug execution. Final Batch 177 owns every
-Release build/test/gate, sanitizer and hosted Linux/Windows result.
+[release record](../packaging/v2-release-record.txt) do not infer Windows
+behavior from Linux execution. Pinned LLVM-MinGW claims require their own
+post-push hosted result.
