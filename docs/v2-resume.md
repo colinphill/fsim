@@ -5370,10 +5370,15 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     auto-export property. Retain that property and add MinGW's explicit
     `LINKER:--export-all-symbols` option. CUDD is now warning-clean; the one
     remaining bundled Tcl zlib keyword warning shows the configure-only flag
-    did not reach extension sub-makes, so pass
-    `CFLAGS+=-Wno-c++-keyword` directly to both build and install. The Windows
-    and Tcl contracts freeze the exact policies. Refresh archives/gates,
-    commit/push, and require a complete green nine-lane run before tagging.
+    appeared before Tcl's own warning group. Run `32028833926` proves that a
+    command-line `CFLAGS+=-Wno-c++-keyword` is not safe: it overrides Tcl's
+    generated `CFLAGS`, removes `-DMP_FIXED_CUTOFFS`, and leaves four libtommath
+    cutoff symbols undefined in every Windows lane before the SCV link. The
+    adapter now appends an `override CFLAGS_WARNING` rule to the generated
+    Makefile after configure, preserving Tcl's generated build flags while
+    placing the suppression after `-Wc++-compat`. The Windows and Tcl contracts
+    freeze the corrected policy. Refresh archives/gates, commit/push, and
+    require a complete green nine-lane run before tagging.
 
 ## Batch 176 closeout checkpoint - activate Batch 177 after the single push
 

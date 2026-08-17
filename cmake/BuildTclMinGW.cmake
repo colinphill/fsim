@@ -40,7 +40,6 @@ elseif(MODE STREQUAL "build")
   execute_process(
     COMMAND
       "${MAKE}" "-j${JOBS}" binaries "SHELL=${MAKE_SHELL}"
-      "CFLAGS+=-Wno-c++-keyword"
     WORKING_DIRECTORY "${BINARY_DIR}"
     COMMAND_ECHO STDOUT
     RESULT_VARIABLE result
@@ -50,7 +49,6 @@ elseif(MODE STREQUAL "install")
     COMMAND
       "${MAKE}" install-binaries install-libraries install-headers
       "SHELL=${MAKE_SHELL}"
-      "CFLAGS+=-Wno-c++-keyword"
       "TCL_EXE=${BINARY_DIR}/tclsh90s.exe"
     WORKING_DIRECTORY "${BINARY_DIR}"
     COMMAND_ECHO STDOUT
@@ -62,4 +60,11 @@ endif()
 
 if(NOT result EQUAL 0)
   message(FATAL_ERROR "Tcl MinGW ${MODE} failed with exit code ${result}")
+endif()
+
+if(MODE STREQUAL "configure")
+  file(
+    APPEND "${BINARY_DIR}/Makefile"
+    "\noverride CFLAGS_WARNING += -Wno-c++-keyword\n"
+  )
 endif()

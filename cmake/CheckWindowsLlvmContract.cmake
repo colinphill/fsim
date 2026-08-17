@@ -75,7 +75,7 @@ foreach(FSIM_WARNING_POLICY IN ITEMS
 endforeach()
 string(FIND
   "${FSIM_TCL_MINGW_ADAPTER_CONTENTS}"
-  "CFLAGS+=-Wno-c++-keyword" FSIM_INDEX)
+  "override CFLAGS_WARNING += -Wno-c++-keyword" FSIM_INDEX)
 if(FSIM_INDEX EQUAL -1)
   message(FATAL_ERROR "Tcl lost Windows third-party warning isolation")
 endif()

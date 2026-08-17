@@ -14102,11 +14102,15 @@ carry an explicit evidence-backed scope disposition approved by the user.
     MinGW's import library omits SCV C++ and data symbols. CMake's generic
     `WINDOWS_EXPORT_ALL_SYMBOLS` property is retained, and the MinGW SCV link
     now also requests `--export-all-symbols` explicitly. The only remaining
-    third-party diagnostic is the Tcl bundled-zlib keyword warning: its flag
-    reached configure but not extension sub-makes, so the adapter now passes
-    `CFLAGS+=-Wno-c++-keyword` directly to both build and install. The Windows
-    contract freezes both corrections. Push the repair and require another
-    complete nine-lane run before tagging.
+    third-party diagnostic is the Tcl bundled-zlib keyword warning: the flag
+    precedes Tcl's own `-Wc++-compat` warning group. Run `32028833926` shows
+    that passing `CFLAGS+=-Wno-c++-keyword` on the make command line overrides
+    Tcl's generated flags, drops `-DMP_FIXED_CUTOFFS`, and leaves four
+    libtommath cutoff symbols undefined in every Windows lane. The adapter now
+    appends an `override CFLAGS_WARNING` rule to the generated Makefile after
+    configure, preserving the generated flags and ordering the suppression
+    last. The Windows and Tcl contracts freeze both corrections. Push the
+    repair and require another complete nine-lane run before tagging.
 
 ## Forward priority order
 
