@@ -14126,7 +14126,13 @@ carry an explicit evidence-backed scope disposition approved by the user.
     because the archive helper resolves a relative manifest after changing its
     working directory. Normalize deterministic packaging's source, binary and
     work roots to absolute paths at script entry and freeze that policy in the
-    Windows contract.
+    Windows contract. Run `32036926475` proves that repair by creating its
+    1,245-entry Windows archive after a green 302/302 regression, then exposes
+    a stale install-audit count: the matrix still expects the full 311-test
+    generated inventory even though hosted regression deliberately excludes
+    nine recursive-closure owners. Use exact hosted counts 302/303 for the
+    LLVM-off/on regression evidence while retaining the separate 311/312
+    generated-inventory audit.
 
 ## Forward priority order
 

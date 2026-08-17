@@ -123,6 +123,8 @@ foreach(FSIM_WORKFLOW_POLICY IN ITEMS
     "fsim-v2.0.0-windows-x86_64-llvm-mingw-llvm22.zip"
     "batch177-change20-windows-no-llvm-install.log"
     "batch177-change20-windows-llvm22-install.log"
+    "expected_tests: '302'"
+    "expected_tests: '303'"
     "-DFSIM_BINARY_ONLY=ON"
     "-DFSIM_BINARY_PACKAGE_NAME=\${{ matrix.binary_package }}"
     "Create deterministic Windows binary archive"

@@ -5147,9 +5147,10 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     `f5c5795f08a6244b9530a1dacb1b1eba9c2fbb83211741496c751dca1f7d134b`
     and
     `5487c6658921df1079e479cbf5cd8dff137fe1b4cdfe2b086097cbfc16dd647a`.
-62. The Windows LLVM-MinGW Release matrix now owns exact 311/312 expected-test
-    counts and two separate Change 20 install logs. After its one full
-    regression and deterministic archive step, each lane invokes the same
+62. The Windows LLVM-MinGW Release matrix now owns exact 302/303 de-duplicated
+    expected-test counts (from 311/312 generated inventories) and two separate
+    Change 20 install logs. After its one hosted regression and deterministic
+    archive step, each lane invokes the same
     archive/evidence audit and uploads the install log with the ZIP and archive
     log. Static V2 record, Windows package/LLVM, MSVC Debug/Release, resource,
     source-manifest and generated-CTest uniqueness owners pass 8/8 in 6.52
@@ -5395,7 +5396,13 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     packaging-only relative-path defect: the archive helper changes directory
     before resolving the workflow's relative work-root manifest and output.
     Deterministic packaging now normalizes its source, binary and work roots to
-    absolute paths on entry; the Windows contract pins all three roots.
+    absolute paths on entry; the Windows contract pins all three roots. Run
+    `32036926475` then passes the same 302/302 Windows regression and creates
+    its 1,245-entry binary archive, but its install audit still expects the
+    pre-exclusion 311-test inventory. Align the two Windows Release audit
+    counts with the hosted recursive-closure exclusion: 302 without LLVM and
+    303 with LLVM, while generated inventory inspection continues to cover all
+    311/312 registered tests.
 
 ## Batch 176 closeout checkpoint - activate Batch 177 after the single push
 

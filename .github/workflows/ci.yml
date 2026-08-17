@@ -257,7 +257,7 @@ jobs:
             binary_archive: fsim-v2.0.0-windows-x86_64-llvm-mingw-no-llvm.zip
             binary_log: build/qualification/batch177-change20-windows-no-llvm-archive.log
             install_log: build/qualification/batch177-change20-windows-no-llvm-install.log
-            expected_tests: '311'
+            expected_tests: '302'
           - configuration: Release
             llvm_mode: 'ON'
             build_dir: build/ci-windows-llvm-mingw-Release-llvm-ON
@@ -267,7 +267,7 @@ jobs:
             binary_archive: fsim-v2.0.0-windows-x86_64-llvm-mingw-llvm22.zip
             binary_log: build/qualification/batch177-change20-windows-llvm22-archive.log
             install_log: build/qualification/batch177-change20-windows-llvm22-install.log
-            expected_tests: '312'
+            expected_tests: '303'
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
