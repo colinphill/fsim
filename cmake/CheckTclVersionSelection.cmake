@@ -12,6 +12,7 @@ include("${FSIM_SOURCE_DIR}/cmake/FsimDependencies.cmake")
 include("${FSIM_SOURCE_DIR}/cmake/FsimTclVersion.cmake")
 
 file(READ "${FSIM_SOURCE_DIR}/cmake/FsimTcl.cmake" tcl_adapter)
+file(READ "${FSIM_SOURCE_DIR}/cmake/BuildTclMinGW.cmake" tcl_mingw_adapter)
 foreach(required_policy IN ITEMS
     "CMAKE_GENERATOR MATCHES \"Makefiles\""
     "BUILD_JOB_SERVER_AWARE TRUE"
@@ -26,6 +27,13 @@ foreach(required_policy IN ITEMS
     )
   endif()
 endforeach()
+string(FIND
+  "${tcl_mingw_adapter}" "CFLAGS=-Wno-c++-keyword"
+  mingw_warning_policy_index
+)
+if(mingw_warning_policy_index EQUAL -1)
+  message(FATAL_ERROR "fetched MinGW Tcl lost its warning-isolation policy")
+endif()
 
 file(REMOVE_RECURSE "${FSIM_WORK_DIR}")
 foreach(version IN ITEMS 8.6.18 9.0.3 9.0.4 9.0.5 9.1.0)

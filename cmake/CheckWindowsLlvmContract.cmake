@@ -15,6 +15,10 @@ set(FSIM_LIBRARY "${FSIM_SOURCE_DIR}/src/platform/dynamic_library.cpp")
 set(FSIM_ABI "${FSIM_SOURCE_DIR}/include/fsim/compiler/jit_runtime.h")
 set(FSIM_ABI_TEST "${FSIM_SOURCE_DIR}/tests/compiler/jit_runtime_c_test.c")
 set(FSIM_JIT_TEST "${FSIM_SOURCE_DIR}/tests/compiler/llvm_jit_cache_test.cpp")
+set(FSIM_SCV_ADAPTER "${FSIM_SOURCE_DIR}/cmake/FsimScv.cmake")
+set(FSIM_TCL_MINGW_ADAPTER "${FSIM_SOURCE_DIR}/cmake/BuildTclMinGW.cmake")
+set(FSIM_SCV_PLUGIN_TEST
+    "${FSIM_SOURCE_DIR}/tests/scv/scv_plugin_compiler_test.cpp")
 foreach(FSIM_INPUT IN ITEMS
     "${FSIM_ROOT}"
     "${FSIM_TEST_CMAKE}"
@@ -26,7 +30,10 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_LIBRARY}"
     "${FSIM_ABI}"
     "${FSIM_ABI_TEST}"
-    "${FSIM_JIT_TEST}")
+    "${FSIM_JIT_TEST}"
+    "${FSIM_SCV_ADAPTER}"
+    "${FSIM_TCL_MINGW_ADAPTER}"
+    "${FSIM_SCV_PLUGIN_TEST}")
   if(NOT EXISTS "${FSIM_INPUT}")
     message(FATAL_ERROR "Windows LLVM contract input is missing: ${FSIM_INPUT}")
   endif()
@@ -43,6 +50,9 @@ file(READ "${FSIM_LIBRARY}" FSIM_LIBRARY_CONTENTS)
 file(READ "${FSIM_ABI}" FSIM_ABI_CONTENTS)
 file(READ "${FSIM_ABI_TEST}" FSIM_ABI_TEST_CONTENTS)
 file(READ "${FSIM_JIT_TEST}" FSIM_JIT_TEST_CONTENTS)
+file(READ "${FSIM_SCV_ADAPTER}" FSIM_SCV_ADAPTER_CONTENTS)
+file(READ "${FSIM_TCL_MINGW_ADAPTER}" FSIM_TCL_MINGW_ADAPTER_CONTENTS)
+file(READ "${FSIM_SCV_PLUGIN_TEST}" FSIM_SCV_PLUGIN_TEST_CONTENTS)
 
 foreach(FSIM_HOST_POLICY IN ITEMS
     "NOT CMAKE_SIZEOF_VOID_P EQUAL 8"
@@ -52,6 +62,28 @@ foreach(FSIM_HOST_POLICY IN ITEMS
     message(FATAL_ERROR "host lost Windows LLVM x64 policy: ${FSIM_HOST_POLICY}")
   endif()
 endforeach()
+
+foreach(FSIM_WARNING_POLICY IN ITEMS
+    "-Wno-format"
+    "-Wno-inconsistent-dllimport")
+  string(FIND
+    "${FSIM_SCV_ADAPTER_CONTENTS}" "${FSIM_WARNING_POLICY}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "SCV lost Windows third-party warning isolation: ${FSIM_WARNING_POLICY}")
+  endif()
+endforeach()
+string(FIND
+  "${FSIM_TCL_MINGW_ADAPTER_CONTENTS}" "CFLAGS=-Wno-c++-keyword" FSIM_INDEX)
+if(FSIM_INDEX EQUAL -1)
+  message(FATAL_ERROR "Tcl lost Windows third-party warning isolation")
+endif()
+string(FIND
+  "${FSIM_SCV_PLUGIN_TEST_CONTENTS}"
+  "#if !defined(_WIN32)\nvoid make_writable" FSIM_INDEX)
+if(FSIM_INDEX EQUAL -1)
+  message(FATAL_ERROR "SCV plugin cleanup helper lost its Windows guard")
+endif()
 foreach(FSIM_TARGET IN ITEMS
     "x86_64-w64-windows-gnu"
     "x86_64-pc-windows-msvc"
@@ -185,5 +217,5 @@ endif()
 message(STATUS
   "Windows LLVM contract: x64 GNU Windows ABI target, native PE/COFF target and "
   "cache identity, strict C layout, safe DLL ownership, atomic cache replace, "
-  "O0/O2/debug provenance, four retained LLVM-MinGW hosted artifacts and two "
-  "Release binary archive lanes are present")
+  "O0/O2/debug provenance, third-party warning isolation, four retained "
+  "LLVM-MinGW hosted artifacts and two Release binary archive lanes are present")

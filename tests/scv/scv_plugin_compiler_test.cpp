@@ -68,6 +68,7 @@ void check_shared_identity(const std::filesystem::path& path)
     assert(identity() == fsim_scv_compatibility_identity());
 }
 
+#if !defined(_WIN32)
 void make_writable(const std::filesystem::path& root)
 {
     std::error_code error;
@@ -82,6 +83,7 @@ void make_writable(const std::filesystem::path& root)
         root, std::filesystem::perms::owner_all,
         std::filesystem::perm_options::add, error);
 }
+#endif
 
 } // namespace
 

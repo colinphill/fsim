@@ -26,6 +26,7 @@ if(MODE STREQUAL "configure")
     COMMAND
       "${CMAKE_COMMAND}" -E env
       "CC=${CC}" "AR=${AR}" "RANLIB=${RANLIB}" "RC=${RC}"
+      "CFLAGS=-Wno-c++-keyword"
       "${GIT_BASH}" "${SOURCE_DIR}/win/configure"
       --build=x86_64-w64-mingw32
       --host=x86_64-w64-mingw32

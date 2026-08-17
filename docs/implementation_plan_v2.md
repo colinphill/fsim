@@ -14083,6 +14083,20 @@ carry an explicit evidence-backed scope disposition approved by the user.
     Commit and push the repair, then require a completely green replacement
     nine-lane run before tagging.
 
+    Replacement run `32022126089` proves the fifth patch carries all four
+    Windows lanes past SCV. Each then stops in the same fsim-owned test because
+    `make_writable` is defined on Windows although its only call is already
+    non-Windows-only. Guarding the definition with the call removes the
+    `-Werror,-Wunused-function` failure. Every Windows log also reports the
+    same third-party-only warning inventory: 51 legacy CUDD Win64 format
+    diagnostics, two CUDD import-attribute diagnostics and one bundled Tcl
+    zlib keyword diagnostic. Windows-Clang-only SCV C compile options and the
+    MinGW Tcl configure flags now isolate exactly those upstream warning
+    classes; the Windows contract freezes the guard and all three options.
+    Focused Debug/Release plugin builds and tests plus the Tcl/Windows contracts
+    pass locally. Commit and push this final warning-clean repair and require a
+    complete new nine-lane run before tagging.
+
 ## Forward priority order
 
 1. **Completed in Batch 136:** read-only out-of-tree `.fsimlib` directory

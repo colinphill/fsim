@@ -692,6 +692,15 @@ macro(fsim_scv_add_official_runtime archive work_root)
       scv PRIVATE
       "$<$<COMPILE_LANGUAGE:C>:-Wno-deprecated-non-prototype>"
       "$<$<COMPILE_LANGUAGE:C>:-Wno-void-pointer-to-enum-cast>")
+    if(WIN32)
+      # CUDD 2.3.0 predates Win64's LLP64 data model and declares its own
+      # POSIX process stubs. Keep those governed third-party diagnostics from
+      # obscuring warnings in fsim-owned sources.
+      target_compile_options(
+        scv PRIVATE
+        "$<$<COMPILE_LANGUAGE:C>:-Wno-format>"
+        "$<$<COMPILE_LANGUAGE:C>:-Wno-inconsistent-dllimport>")
+    endif()
   endif()
   target_include_directories(
     scv

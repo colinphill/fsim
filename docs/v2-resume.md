@@ -5349,6 +5349,20 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     Do not rerun full Debug, Release or sanitizer regressions. Make the
     necessary repair commit/push and monitor a complete replacement nine-lane
     run. Do not create the tag until every replacement job is green.
+86. Replacement run `32022126089` carries all four Windows lanes beyond the
+    repaired SCV `rand_r` compilation, then every one stops at the same
+    `-Werror,-Wunused-function`: `make_writable` is defined on Windows although
+    its only use is already guarded for non-Windows cleanup. All four logs also
+    have the same third-party warning inventory: 51 legacy CUDD Win64 format
+    warnings, two CUDD import-attribute warnings and one bundled Tcl zlib
+    keyword warning. The helper definition now shares its use-site guard.
+    Windows-Clang-only CUDD options suppress `-Wformat` and
+    `-Winconsistent-dllimport`, while the MinGW Tcl configure owns
+    `-Wno-c++-keyword`; fsim-owned warnings remain errors. The Debug and Release
+    plugin targets build and `fsim.scv.plugin_compiler` passes in both trees;
+    the Tcl version-selection and Windows LLVM policy contracts pass 2/2.
+    Refresh the final archives, commit/push the consolidated repair, and wait
+    for every job in a fresh nine-lane run before creating the tag.
 
 ## Batch 176 closeout checkpoint - activate Batch 177 after the single push
 
