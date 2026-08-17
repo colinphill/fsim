@@ -14136,7 +14136,19 @@ carry an explicit evidence-backed scope disposition approved by the user.
     correction, then exposes a transient Windows `MoveFileExW` failure in one
     of four serialized `fsim.cache` publishers. Retry only access, sharing and
     lock violations for a bounded 500 ms; retain immediate failure for every
-    permanent error.
+    permanent error. Replacement run `32042354841` validates that retry: the
+    Windows LLVM-on Debug lane and both Release lanes build cleanly, while the
+    Release regressions pass 302/302 and 303/303 and produce matching
+    1,245-entry archives. Their install audits fail only because the common
+    Change 12 checker hardcodes the 542-entry Linux archive inventory. Require
+    an explicit numeric expected archive-entry count for every Change 12 lane,
+    pass and freeze 1,245 in both Windows Release rows, and retain 542 for the
+    three completed Linux audits. Classify the Debug/LLVM-off setup failure as
+    external HTTP-429 action-download throttling; no checkout or project command
+    ran in that job. A warnings-as-errors GCC Debug configure, both direct
+    static audits, the registered 2/2 Windows-package/release-record gate and
+    `git diff --check` pass. No product source changed; push the repair and
+    require a complete nine-lane rerun before tagging.
 
 ## Forward priority order
 

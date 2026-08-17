@@ -258,6 +258,7 @@ jobs:
             binary_log: build/qualification/batch177-change20-windows-no-llvm-archive.log
             install_log: build/qualification/batch177-change20-windows-no-llvm-install.log
             expected_tests: '302'
+            expected_archive_entries: '1245'
           - configuration: Release
             llvm_mode: 'ON'
             build_dir: build/ci-windows-llvm-mingw-Release-llvm-ON
@@ -268,6 +269,7 @@ jobs:
             binary_log: build/qualification/batch177-change20-windows-llvm22-archive.log
             install_log: build/qualification/batch177-change20-windows-llvm22-install.log
             expected_tests: '303'
+            expected_archive_entries: '1245'
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
@@ -409,6 +411,7 @@ jobs:
             "-DFSIM_CHANGE12_REGRESSION_LOG=$env:GITHUB_WORKSPACE/${{ matrix.retained_log }}",
             "-DFSIM_CHANGE12_WORK_DIR=${{ matrix.build_dir }}/change12-install-audit",
             "-DFSIM_CHANGE12_EXPECTED_TESTS=${{ matrix.expected_tests }}",
+            "-DFSIM_CHANGE12_EXPECTED_ARCHIVE_ENTRIES=${{ matrix.expected_archive_entries }}",
             "-DFSIM_CHANGE12_TOOLCHAIN=LLVM-MinGW-20260616-LLVM-${{ matrix.llvm_mode }}",
             "-DFSIM_CHANGE12_EXECUTABLE_SUFFIX=.exe",
             "-P", "cmake/CheckV2ReleaseRecords.cmake"

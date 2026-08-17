@@ -125,11 +125,13 @@ foreach(FSIM_WORKFLOW_POLICY IN ITEMS
     "batch177-change20-windows-llvm22-install.log"
     "expected_tests: '302'"
     "expected_tests: '303'"
+    "expected_archive_entries: '1245'"
     "-DFSIM_BINARY_ONLY=ON"
     "-DFSIM_BINARY_PACKAGE_NAME=\${{ matrix.binary_package }}"
     "Create deterministic Windows binary archive"
     "Audit deterministic Windows install lane"
     "-DFSIM_CHANGE12_LANE=ON"
+    "-DFSIM_CHANGE12_EXPECTED_ARCHIVE_ENTRIES=\${{ matrix.expected_archive_entries }}"
     "Upload deterministic Windows binary archive"
     "actions/upload-artifact@v7"
     "if-no-files-found: error"
@@ -140,6 +142,14 @@ foreach(FSIM_WORKFLOW_POLICY IN ITEMS
       "workflow lost Windows package policy: ${FSIM_WORKFLOW_POLICY}")
   endif()
 endforeach()
+string(REGEX MATCHALL "expected_archive_entries:[ ]*'1245'"
+  FSIM_ARCHIVE_ENTRY_ROWS "${FSIM_WORKFLOW_CONTENTS}")
+list(LENGTH FSIM_ARCHIVE_ENTRY_ROWS FSIM_ARCHIVE_ENTRY_ROW_COUNT)
+if(NOT FSIM_ARCHIVE_ENTRY_ROW_COUNT EQUAL 2)
+  message(FATAL_ERROR
+    "Windows archive-entry inventory drifted: expected 2, found "
+    "${FSIM_ARCHIVE_ENTRY_ROW_COUNT}")
+endif()
 string(REGEX MATCHALL "timeout-minutes:[ ]*([0-9]+)" FSIM_TIMEOUT_ROWS
   "${FSIM_WORKFLOW_CONTENTS}")
 list(LENGTH FSIM_TIMEOUT_ROWS FSIM_TIMEOUT_COUNT)

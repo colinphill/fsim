@@ -5406,7 +5406,22 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     contract, then fails one of four concurrent `fsim.cache` publishers at the
     final Windows file replacement. Keep cache locking unchanged, but retry
     `MoveFileExW` for at most 500 ms only on transient access, sharing and lock
-    violations; permanent errors still return immediately.
+    violations; permanent errors still return immediately. Replacement run
+    `32042354841` proves the bounded retry: Windows Debug/LLVM-on and both
+    Release configurations build warning-clean, and the Release lanes pass
+    302/302 and 303/303 before producing the same deterministic 1,245-entry
+    archives. Both install audits then reject those archives because the shared
+    Change 12 checker still hardcodes the 542-entry Linux package inventory.
+    Give every Change 12 invocation an explicit numeric archive-entry contract,
+    freeze 1,245 for both Windows Release lanes, and retain 542 for the three
+    completed Linux audits. The remaining Windows Debug/LLVM-off failure is
+    hosted infrastructure: `msys2/setup-msys2` download attempts received HTTP
+    429 before checkout or any project command. A warnings-as-errors GCC Debug
+    configure and the focused Windows-package/release-record gate pass 2/2;
+    direct script execution and `git diff --check` also pass. No product source
+    changed, so the fresh hosted matrix owns the next build/test evidence.
+    Commit/push the audit repair and require a complete nine-lane run before
+    tagging.
 
 ## Batch 176 closeout checkpoint - activate Batch 177 after the single push
 

@@ -354,6 +354,7 @@ fsim_require_workflow_occurrences(
 fsim_require_workflow_occurrences(
   "Audit deterministic Windows install lane" 1)
 fsim_require_workflow_occurrences("timeout-minutes: 120" 4)
+fsim_require_workflow_occurrences("expected_archive_entries: '1245'" 2)
 foreach(FSIM_HOSTED_COMMAND IN ITEMS
     "cmake --preset \"\${{ matrix.preset }}\""
     "cmake --build --preset \"\${{ matrix.preset }}\" --parallel 4"
@@ -384,6 +385,7 @@ foreach(FSIM_WINDOWS_ARCHIVE_COMMAND IN ITEMS
     "-DFSIM_CHANGE12_ARCHIVE=\$env:GITHUB_WORKSPACE/\${{ matrix.binary_archive }}"
     "-DFSIM_CHANGE12_ARCHIVE_ROOT=\${{ matrix.binary_package }}"
     "-DFSIM_CHANGE12_EXPECTED_TESTS=\${{ matrix.expected_tests }}"
+    "-DFSIM_CHANGE12_EXPECTED_ARCHIVE_ENTRIES=\${{ matrix.expected_archive_entries }}"
     "-DFSIM_CHANGE12_EXECUTABLE_SUFFIX=.exe"
     "name: \${{ matrix.binary_archive }}"
     "\${{ matrix.binary_log }}"
@@ -625,6 +627,7 @@ if(FSIM_CHANGE12_LANE)
       FSIM_CHANGE12_BINARY_DIR FSIM_CHANGE12_ARCHIVE
       FSIM_CHANGE12_ARCHIVE_ROOT FSIM_CHANGE12_REGRESSION_LOG
       FSIM_CHANGE12_WORK_DIR FSIM_CHANGE12_EXPECTED_TESTS
+      FSIM_CHANGE12_EXPECTED_ARCHIVE_ENTRIES
       FSIM_CHANGE12_TOOLCHAIN)
     if(NOT DEFINED ${FSIM_REQUIRED} OR "${${FSIM_REQUIRED}}" STREQUAL "")
       message(FATAL_ERROR "${FSIM_REQUIRED} is required for a Change 12 lane")
@@ -636,6 +639,9 @@ if(FSIM_CHANGE12_LANE)
   endif()
   if(NOT FSIM_CHANGE12_EXPECTED_TESTS MATCHES "^[0-9]+$")
     message(FATAL_ERROR "Change 12 expected-test count is not numeric")
+  endif()
+  if(NOT FSIM_CHANGE12_EXPECTED_ARCHIVE_ENTRIES MATCHES "^[0-9]+$")
+    message(FATAL_ERROR "Change 12 expected archive-entry count is not numeric")
   endif()
 
   file(READ "${FSIM_CHANGE12_REGRESSION_LOG}" FSIM_CHANGE12_LOG)
@@ -738,9 +744,11 @@ if(FSIM_CHANGE12_LANE)
   string(REPLACE "\n" ";" FSIM_CHANGE12_ENTRIES
     "${FSIM_CHANGE12_LIST_OUTPUT}")
   list(LENGTH FSIM_CHANGE12_ENTRIES FSIM_CHANGE12_ENTRY_COUNT)
-  if(NOT FSIM_CHANGE12_ENTRY_COUNT EQUAL 542)
+  if(NOT FSIM_CHANGE12_ENTRY_COUNT EQUAL
+     FSIM_CHANGE12_EXPECTED_ARCHIVE_ENTRIES)
     message(FATAL_ERROR
-      "Change 12 archive requires 542 entries, found ${FSIM_CHANGE12_ENTRY_COUNT}")
+      "Change 12 archive requires ${FSIM_CHANGE12_EXPECTED_ARCHIVE_ENTRIES} "
+      "entries, found ${FSIM_CHANGE12_ENTRY_COUNT}")
   endif()
   string(REPLACE "." "\\." FSIM_CHANGE12_ROOT_REGEX
     "${FSIM_CHANGE12_ARCHIVE_ROOT}")
