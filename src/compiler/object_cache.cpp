@@ -373,13 +373,24 @@ bool atomic_replace_file(
     std::error_code& error) noexcept {
     error.clear();
 #if defined(_WIN32)
-    if (MoveFileExW(
-            source.c_str(), destination.c_str(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        return true;
+    constexpr DWORD maximum_attempts = 101;
+    for (DWORD attempt = 0; attempt < maximum_attempts; ++attempt) {
+        if (MoveFileExW(
+                source.c_str(), destination.c_str(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            return true;
+        }
+        const auto native_error = GetLastError();
+        const bool transient = native_error == ERROR_ACCESS_DENIED
+            || native_error == ERROR_SHARING_VIOLATION
+            || native_error == ERROR_LOCK_VIOLATION;
+        if (!transient || attempt + 1 == maximum_attempts) {
+            error = std::error_code{
+                static_cast<int>(native_error), std::system_category()};
+            return false;
+        }
+        Sleep(5);
     }
-    error =
-        std::error_code{static_cast<int>(GetLastError()), std::system_category()};
     return false;
 #else
     if (::rename(source.c_str(), destination.c_str()) == 0) {

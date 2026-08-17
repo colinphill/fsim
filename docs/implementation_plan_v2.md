@@ -14132,7 +14132,11 @@ carry an explicit evidence-backed scope disposition approved by the user.
     generated inventory even though hosted regression deliberately excludes
     nine recursive-closure owners. Use exact hosted counts 302/303 for the
     LLVM-off/on regression evidence while retaining the separate 311/312
-    generated-inventory audit.
+    generated-inventory audit. Replacement run `32039775530` accepts that
+    correction, then exposes a transient Windows `MoveFileExW` failure in one
+    of four serialized `fsim.cache` publishers. Retry only access, sharing and
+    lock violations for a bounded 500 ms; retain immediate failure for every
+    permanent error.
 
 ## Forward priority order
 

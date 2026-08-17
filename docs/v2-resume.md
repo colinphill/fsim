@@ -5402,7 +5402,11 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     pre-exclusion 311-test inventory. Align the two Windows Release audit
     counts with the hosted recursive-closure exclusion: 302 without LLVM and
     303 with LLVM, while generated inventory inspection continues to cover all
-    311/312 registered tests.
+    311/312 registered tests. Replacement run `32039775530` accepts that
+    contract, then fails one of four concurrent `fsim.cache` publishers at the
+    final Windows file replacement. Keep cache locking unchanged, but retry
+    `MoveFileExW` for at most 500 ms only on transient access, sharing and lock
+    violations; permanent errors still return immediately.
 
 ## Batch 176 closeout checkpoint - activate Batch 177 after the single push
 
