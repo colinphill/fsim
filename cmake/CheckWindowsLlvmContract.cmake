@@ -19,6 +19,16 @@ set(FSIM_SCV_ADAPTER "${FSIM_SOURCE_DIR}/cmake/FsimScv.cmake")
 set(FSIM_TCL_MINGW_ADAPTER "${FSIM_SOURCE_DIR}/cmake/BuildTclMinGW.cmake")
 set(FSIM_SCV_PLUGIN_TEST
     "${FSIM_SOURCE_DIR}/tests/scv/scv_plugin_compiler_test.cpp")
+set(FSIM_SCV_ARTIFACT_TEST
+    "${FSIM_SOURCE_DIR}/tests/scv/scv_artifact_test.cpp")
+set(FSIM_PKG_CONFIG_CONSUMER
+    "${FSIM_SOURCE_DIR}/cmake/CheckInstalledPkgConfigConsumer.cmake")
+set(FSIM_RELEASE_RECORDS
+    "${FSIM_SOURCE_DIR}/cmake/CheckV2ReleaseRecords.cmake")
+set(FSIM_PERFORMANCE_BASELINES
+    "${FSIM_SOURCE_DIR}/cmake/CheckV2PerformanceBaselines.cmake")
+set(FSIM_ABI_EVIDENCE
+    "${FSIM_SOURCE_DIR}/cmake/CheckAbiSchemaEvidenceMatrix.cmake")
 foreach(FSIM_INPUT IN ITEMS
     "${FSIM_ROOT}"
     "${FSIM_TEST_CMAKE}"
@@ -33,7 +43,12 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_JIT_TEST}"
     "${FSIM_SCV_ADAPTER}"
     "${FSIM_TCL_MINGW_ADAPTER}"
-    "${FSIM_SCV_PLUGIN_TEST}")
+    "${FSIM_SCV_PLUGIN_TEST}"
+    "${FSIM_SCV_ARTIFACT_TEST}"
+    "${FSIM_PKG_CONFIG_CONSUMER}"
+    "${FSIM_RELEASE_RECORDS}"
+    "${FSIM_PERFORMANCE_BASELINES}"
+    "${FSIM_ABI_EVIDENCE}")
   if(NOT EXISTS "${FSIM_INPUT}")
     message(FATAL_ERROR "Windows LLVM contract input is missing: ${FSIM_INPUT}")
   endif()
@@ -53,6 +68,12 @@ file(READ "${FSIM_JIT_TEST}" FSIM_JIT_TEST_CONTENTS)
 file(READ "${FSIM_SCV_ADAPTER}" FSIM_SCV_ADAPTER_CONTENTS)
 file(READ "${FSIM_TCL_MINGW_ADAPTER}" FSIM_TCL_MINGW_ADAPTER_CONTENTS)
 file(READ "${FSIM_SCV_PLUGIN_TEST}" FSIM_SCV_PLUGIN_TEST_CONTENTS)
+file(READ "${FSIM_SCV_ARTIFACT_TEST}" FSIM_SCV_ARTIFACT_TEST_CONTENTS)
+file(READ "${FSIM_PKG_CONFIG_CONSUMER}" FSIM_PKG_CONFIG_CONSUMER_CONTENTS)
+file(READ "${FSIM_RELEASE_RECORDS}" FSIM_RELEASE_RECORDS_CONTENTS)
+file(READ "${FSIM_PERFORMANCE_BASELINES}"
+  FSIM_PERFORMANCE_BASELINES_CONTENTS)
+file(READ "${FSIM_ABI_EVIDENCE}" FSIM_ABI_EVIDENCE_CONTENTS)
 
 foreach(FSIM_HOST_POLICY IN ITEMS
     "NOT CMAKE_SIZEOF_VOID_P EQUAL 8"
@@ -89,6 +110,31 @@ string(FIND
   "#if !defined(_WIN32)\nvoid make_writable" FSIM_INDEX)
 if(FSIM_INDEX EQUAL -1)
   message(FATAL_ERROR "SCV plugin cleanup helper lost its Windows guard")
+endif()
+foreach(FSIM_NORMALIZED_DIGEST_CONTENTS IN ITEMS
+    FSIM_RELEASE_RECORDS_CONTENTS
+    FSIM_PERFORMANCE_BASELINES_CONTENTS
+    FSIM_ABI_EVIDENCE_CONTENTS)
+  foreach(FSIM_NORMALIZED_DIGEST_POLICY IN ITEMS
+      "string(REPLACE \"\\r\\n\" \"\\n\""
+      "string(SHA256")
+    string(FIND "${${FSIM_NORMALIZED_DIGEST_CONTENTS}}"
+      "${FSIM_NORMALIZED_DIGEST_POLICY}" FSIM_INDEX)
+    if(FSIM_INDEX EQUAL -1)
+      message(FATAL_ERROR
+        "Windows text digest lost ${FSIM_NORMALIZED_DIGEST_POLICY}")
+    endif()
+  endforeach()
+endforeach()
+string(FIND "${FSIM_PKG_CONFIG_CONSUMER_CONTENTS}"
+  "if(FSIM_HOST_WINDOWS)\n  file(READ" FSIM_INDEX)
+if(FSIM_INDEX EQUAL -1)
+  message(FATAL_ERROR "Windows pkg-config consumer lost metadata-first policy")
+endif()
+string(FIND "${FSIM_SCV_ARTIFACT_TEST_CONTENTS}"
+  "relocated_bytes.assign(" FSIM_INDEX)
+if(FSIM_INDEX EQUAL -1)
+  message(FATAL_ERROR "SCV artifact reader lost its scoped Windows lifetime")
 endif()
 foreach(FSIM_TARGET IN ITEMS
     "x86_64-w64-windows-gnu"

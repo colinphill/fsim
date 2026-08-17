@@ -103,13 +103,15 @@ int main()
     const auto relocated_metadata = fsim::library::load_metadata(
         relocated, "scv_models", relocation_diagnostics);
     assert(relocated_metadata == metadata && !relocation_diagnostics.has_error());
-    std::ifstream relocated_payload(
-        relocated / metadata.native_artifacts.front().artifact,
-        std::ios::binary);
-    const std::string relocated_bytes {
-        std::istreambuf_iterator<char> { relocated_payload },
-        std::istreambuf_iterator<char> { }
-    };
+    std::string relocated_bytes;
+    {
+        std::ifstream relocated_payload(
+            relocated / metadata.native_artifacts.front().artifact,
+            std::ios::binary);
+        relocated_bytes.assign(
+            std::istreambuf_iterator<char> { relocated_payload },
+            std::istreambuf_iterator<char> { });
+    }
     assert(relocated_bytes == native_bytes);
 
     auto stale_identity = relocated_metadata->native_artifacts.front()

@@ -407,7 +407,12 @@ foreach(FSIM_BATCH177_TOKEN IN ITEMS
 endforeach()
 
 function(fsim_require_record_digest record_key relative_path)
-  file(SHA256 "${FSIM_SOURCE_DIR}/${relative_path}" FSIM_ACTUAL_SHA256)
+  file(READ "${FSIM_SOURCE_DIR}/${relative_path}" FSIM_ACTUAL_CONTENTS)
+  string(REPLACE "\r\n" "\n" FSIM_ACTUAL_CONTENTS
+    "${FSIM_ACTUAL_CONTENTS}")
+  string(REPLACE "\r" "\n" FSIM_ACTUAL_CONTENTS
+    "${FSIM_ACTUAL_CONTENTS}")
+  string(SHA256 FSIM_ACTUAL_SHA256 "${FSIM_ACTUAL_CONTENTS}")
   if(NOT FSIM_ACTUAL_SHA256 STREQUAL "${FSIM_RECORD_${record_key}}")
     message(FATAL_ERROR
       "v2 release digest drifted for ${relative_path}: "

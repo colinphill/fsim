@@ -5379,6 +5379,18 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     placing the suppression after `-Wc++-compat`. The Windows and Tcl contracts
     freeze the corrected policy. Refresh archives/gates, commit/push, and
     require a complete green nine-lane run before tagging.
+88. Run `32029881245` confirms that all four Windows builds pass the repaired
+    Tcl compile and SCV shared-runtime link. The first completed Windows
+    Release/no-LLVM lane then exposes five primary test failures plus three
+    dependent closure skips: three pinned text digests hash checkout-native
+    CRLF bytes, an incidental MSYS `pkg-config` is selected for a native
+    Unicode install path, and `fsim.scv.artifact` removes its temporary tree
+    while the payload stream is still open. Release-record, performance and
+    ABI/schema text digests now normalize CRLF/CR before hashing. Windows uses
+    the existing metadata-only pkg-config contract before host-tool discovery,
+    and the artifact payload stream is scoped closed before cleanup. Debug and
+    Release focused builds plus all six affected tests pass locally; the
+    Windows contract freezes all four portability repairs.
 
 ## Batch 176 closeout checkpoint - activate Batch 177 after the single push
 

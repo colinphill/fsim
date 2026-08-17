@@ -14112,6 +14112,17 @@ carry an explicit evidence-backed scope disposition approved by the user.
     last. The Windows and Tcl contracts freeze both corrections. Push the
     repair and require another complete nine-lane run before tagging.
 
+    Run `32029881245` carries all Windows builds beyond both repaired Tcl and
+    SCV link boundaries. Its first completed Release/no-LLVM test lane exposes
+    three checkout-native CRLF digest mismatches, an incidental MSYS
+    `pkg-config` invocation against a native Unicode path, and an SCV artifact
+    cleanup attempted while its input stream is still open; three closure
+    skips depend only on the pkg-config failure. Normalize the release-record,
+    performance and ABI/schema text before hashing, take the Windows
+    metadata-only pkg-config branch before host-tool discovery, and scope the
+    artifact stream before cleanup. The Windows contract freezes the fixes;
+    focused Debug and Release checks pass locally.
+
 ## Forward priority order
 
 1. **Completed in Batch 136:** read-only out-of-tree `.fsimlib` directory

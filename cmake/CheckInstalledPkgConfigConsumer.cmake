@@ -40,23 +40,24 @@ if(NOT EXISTS "${FSIM_PC}")
   message(FATAL_ERROR "installed fsim.pc is missing: ${FSIM_PC}")
 endif()
 
+if(FSIM_HOST_WINDOWS)
+  file(READ "${FSIM_PC}" FSIM_PC_CONTENTS)
+  foreach(FSIM_TOKEN IN ITEMS
+      "prefix=\${pcfiledir}/../.."
+      "Cflags: -I\${includedir}"
+      "Libs: -L\${libdir} -lfsim_api")
+    string(FIND "${FSIM_PC_CONTENTS}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)
+    if(FSIM_TOKEN_INDEX EQUAL -1)
+      message(FATAL_ERROR "Windows fsim.pc omits ${FSIM_TOKEN}")
+    endif()
+  endforeach()
+  message(STATUS
+    "installed pkg-config consumer: metadata-only on Windows; the native hosted lane owns this result")
+  return()
+endif()
+
 find_program(FSIM_PKG_CONFIG_EXECUTABLE NAMES pkg-config pkgconf)
 if(NOT FSIM_PKG_CONFIG_EXECUTABLE)
-  if(FSIM_HOST_WINDOWS)
-    file(READ "${FSIM_PC}" FSIM_PC_CONTENTS)
-    foreach(FSIM_TOKEN IN ITEMS
-        "prefix=\${pcfiledir}/../.."
-        "Cflags: -I\${includedir}"
-        "Libs: -L\${libdir} -lfsim_api")
-      string(FIND "${FSIM_PC_CONTENTS}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)
-      if(FSIM_TOKEN_INDEX EQUAL -1)
-        message(FATAL_ERROR "Windows fsim.pc omits ${FSIM_TOKEN}")
-      endif()
-    endforeach()
-    message(STATUS
-      "installed pkg-config consumer: metadata-only on Windows without pkg-config; a real Windows claim requires its own hosted result")
-    return()
-  endif()
   message(FATAL_ERROR "pkg-config or pkgconf is required for this consumer")
 endif()
 
