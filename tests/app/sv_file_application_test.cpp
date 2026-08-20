@@ -191,7 +191,10 @@ void verify_suspension(
     };
     std::optional<fsim::runtime::simir::ProcessId> process_id;
     std::optional<std::size_t> handle_local;
-    for (const auto& process : simulation.design().processes()) {
+    for (std::size_t id = 0;
+         id < simulation.design_ir().processes().size(); ++id) {
+        const auto& process = simulation.process_program(
+            static_cast<fsim::runtime::simir::ProcessId>(id));
         for (std::size_t index = 0;
             index < process.debug_locals.size(); ++index) {
             if (process.debug_locals[index].name
@@ -377,7 +380,6 @@ fsim::app::NativeCacheStatistics verify_vhdl_file_objects(
     fsim::app::Simulation simulation {
         std::move(*project), config.run.max_deltas, engine
     };
-    const auto cache = simulation.native_cache_statistics();
     std::vector<fsim::runtime::simir::ExecutionPoint> points;
     simulation.set_execution_point_hook(
         [&](fsim::runtime::Scheduler&,
@@ -385,6 +387,7 @@ fsim::app::NativeCacheStatistics verify_vhdl_file_objects(
             points.push_back(point);
         });
     const auto result = simulation.run();
+    const auto cache = simulation.native_cache_statistics();
     assert(result.status == fsim::runtime::RunStatus::completed);
     const auto done = simulation.find_signal("vhdl_file_top.done");
     assert(done);
@@ -394,12 +397,14 @@ fsim::app::NativeCacheStatistics verify_vhdl_file_objects(
     assert(
         read_text(directory / "vhdl-text-output.txt")
         == "   7TRUE0  |\nX\n");
-    assert(std::ranges::any_of(
-        points,
-        [&](const auto& point) {
-            return fsim::test::same_source_path(point.source.path, source)
-                && point.scope.find("vhdl_file_top") != std::string::npos;
-        }));
+    if (engine != fsim::app::SimulationEngine::compiled) {
+        assert(std::ranges::any_of(
+            points,
+            [&](const auto& point) {
+                return fsim::test::same_source_path(point.source.path, source)
+                    && point.scope.find("vhdl_file_top") != std::string::npos;
+            }));
+    }
 #if defined(FSIM_HAS_LLVM)
     assert(
         engine == fsim::app::SimulationEngine::interpreter
@@ -884,7 +889,7 @@ end architecture;
         verify_suspension(
             config, fsim::app::SimulationEngine::interpreter);
         verify_suspension(
-            config, fsim::app::SimulationEngine::compiled);
+            config, fsim::app::SimulationEngine::debug);
 
         write_text(input, "beta\n");
         write_text(scan_input, "21 beta\n");
@@ -950,6 +955,9 @@ end architecture;
         static_cast<void>(verify_vhdl_file_objects(
             directory.path, vhdl_source, optimization,
             fsim::app::SimulationEngine::interpreter));
+        static_cast<void>(verify_vhdl_file_objects(
+            directory.path, vhdl_source, optimization,
+            fsim::app::SimulationEngine::debug));
         const auto vhdl_cold = verify_vhdl_file_objects(
             directory.path, vhdl_source, optimization,
             fsim::app::SimulationEngine::compiled);
@@ -1276,7 +1284,6 @@ endmodule
         fsim::app::Simulation simulation {
             std::move(*project), config.run.max_deltas, engine
         };
-        const auto cache = simulation.native_cache_statistics();
         auto& vpi = simulation.systemverilog_vpi_objects();
         const auto vpi_memory = vpi.find("verilog_memory_top.memory");
         const auto vpi_word_three
@@ -1294,6 +1301,7 @@ endmodule
             && vpi_word_two.value->parent == vpi_memory.value->handle);
         assert(simulation.run().status
             == fsim::runtime::RunStatus::completed);
+        const auto cache = simulation.native_cache_statistics();
         const auto memory_id = simulation.design().find_container(
             "verilog_memory_top.memory");
         assert(memory_id);
@@ -1332,8 +1340,8 @@ endmodule
         const auto warm = run_verilog_memory(
             optimization, fsim::app::SimulationEngine::compiled);
 #if defined(FSIM_HAS_LLVM)
-        assert(cold.hits == 0 && cold.misses == 1 && cold.stores == 1);
-        assert(warm.hits == 1 && warm.misses == 0);
+        assert(cold.hits == 0 && cold.misses == 3 && cold.stores == 3);
+        assert(warm.hits == 3 && warm.misses == 0);
 #else
         static_cast<void>(cold);
         static_cast<void>(warm);

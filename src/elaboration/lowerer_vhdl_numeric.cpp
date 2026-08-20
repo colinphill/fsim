@@ -129,20 +129,49 @@ Lowerer::lower_vhdl_numeric_function_expression(
             *source, value_width, signed_operand);
         const auto restored = resize_register(
             narrowed, *width, signed_operand);
+        const auto self_equal = allocate_register(
+            1, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::equal, self_equal, *source, *source });
+        const auto one = allocate_register(
+            1, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(LoadConstant {
+            one, PackedLogic4(1, Logic4::one) });
+        const auto known = allocate_register(
+            1, frontend::ValueDomain::Boolean);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::case_equal, known, self_equal, one });
+        process_.operations.emplace_back(Assert {
+            known,
+            "numeric_std.to_integer detected a metavalue and returned zero",
+            AssertionSeverity::warning,
+            numeric_source_location(expression.operands.front().span) });
         const auto fits = allocate_register(
             1, frontend::ValueDomain::Logic4);
         process_.operations.emplace_back(Binary {
             BinaryOperator::equal, fits, *source, restored });
+        const auto fits_or_unknown = allocate_register(
+            1, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(ConditionalSelect {
+            fits_or_unknown, known, fits, one });
         process_.operations.emplace_back(Assert {
-            fits,
-            "VHDL numeric to_integer operand is unknown or outside the "
-            "predefined integer range",
+            fits_or_unknown,
+            "VHDL numeric to_integer operand is outside the predefined "
+            "integer range",
             AssertionSeverity::failure,
             numeric_source_location(expression.operands.front().span) });
         const auto resized = resize_register(narrowed, 32, signed_operand);
+        const auto zero = allocate_register(
+            32, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(LoadConstant {
+            zero, PackedLogic4(32, Logic4::zero) });
+        const auto selected = allocate_register(
+            32, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(ConditionalSelect {
+            selected, known, resized, zero });
         const auto result = allocate_register(
             32, frontend::ValueDomain::Integer);
-        process_.operations.emplace_back(CopyRegister { result, resized });
+        process_.operations.emplace_back(CopyRegister { result, selected });
         return result;
     }
 

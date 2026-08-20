@@ -32,15 +32,6 @@ struct RandomDistributionResult {
 
 void validate_container_value(const ContainerValue& value);
 
-[[nodiscard]] std::optional<std::size_t>
-container_signal_bridge_width(const ContainerType& type);
-[[nodiscard]] PackedLogic4 pack_container_signal_value(
-    const ContainerValue& value,
-    bool logic9);
-void unpack_container_signal_value(
-    ContainerValue& value,
-    const PackedLogic4& packed);
-
 [[nodiscard]] std::string error_text(ProcessId process,
     InstructionIndex instruction,
     const std::string& message);
@@ -123,17 +114,6 @@ void unpack_container_signal_value(
 [[nodiscard]] std::uint32_t dynamic_index_offset(
     const PackedLogic4& index,
     const DynamicIndex& selection);
-
-[[nodiscard]] PackedLogic4 dynamic_part_select_value(
-    const PackedLogic4& source,
-    const PackedLogic4& base,
-    std::int64_t left,
-    std::int64_t right,
-    std::uint32_t base_offset,
-    std::uint32_t width,
-    bool increasing,
-    bool source_descending,
-    bool two_state);
 
 [[nodiscard]] PackedLogic4 dynamic_part_insert_value(
     PackedLogic4 target,
@@ -237,7 +217,7 @@ void validate_container_value(const ContainerValue& value);
 [[nodiscard]] PackedLogic4 default_container_element(
     const ContainerType& type);
 
-struct Interpreter::Impl {
+struct Interpreter::Impl : SchedulerBatchTask {
     struct ExecutionContext;
 
     struct ProcessFrame {
@@ -248,6 +228,11 @@ struct Interpreter::Impl {
     };
 
     struct ProcessState {
+        struct DeferredExecutor {
+            std::function<bool()> ready;
+            std::function<std::unique_ptr<ProcessExecutor>()> take;
+        };
+
         struct CallableFrameState {
             std::uint32_t identity { };
             std::vector<RegisterId> packed_ids;
@@ -264,8 +249,10 @@ struct Interpreter::Impl {
         InstructionIndex pc { };
         std::shared_ptr<ProcessFrame> frame;
         std::unique_ptr<ProcessExecutor> executor;
+        std::optional<DeferredExecutor> deferred_executor;
         std::vector<Sensitivity> dynamic_sensitivity;
         std::vector<bool> dynamic_triggered;
+        std::uint64_t static_trigger_mask { Process::full_static_trigger_mask };
         SourceLocation current_source;
         std::string current_scope;
         bool queued { };
@@ -304,6 +291,14 @@ struct Interpreter::Impl {
         std::optional<std::uint64_t> waiting_fork_group;
         std::optional<ProcessId> waiting_process;
         std::set<ProcessId> process_waiters;
+        std::uint64_t profile_calls { };
+        std::uint64_t profile_interpreter_operations { };
+        std::uint64_t profile_native_resumes { };
+        std::uint64_t profile_updates { };
+        std::uint64_t profile_total_nanoseconds { };
+        std::uint64_t profile_native_nanoseconds { };
+        bool track_interpreter_operations { };
+        std::uint64_t interpreter_operations { };
     };
 
     struct MailboxReader {
@@ -379,13 +374,104 @@ struct Interpreter::Impl {
     struct Fanout {
         ProcessId process { };
         EdgeKind edge = EdgeKind::any;
+        std::uint64_t static_trigger_mask { Process::full_static_trigger_mask };
+    };
+
+    struct StaticSensitivityCohort {
+        std::vector<ProcessId> members;
+        std::vector<ProcessId> ready;
+        std::uint64_t fanout_visit { };
+    };
+
+    struct NativeStaticRegion {
+        std::vector<ProcessId> members;
+        std::vector<std::unique_ptr<ProcessExecutionContext>> contexts;
+        std::vector<ProcessCohortResumeEntry> entries;
+        std::vector<std::uint8_t> active;
+        std::vector<std::size_t> ready_offsets;
+        bool prepared { };
     };
 
     struct PendingUpdate {
+        enum Flag : std::uint8_t {
+            has_driver = 1U << 0U,
+            has_offset = 1U << 1U,
+            has_packed_value = 1U << 2U,
+        };
+
         SignalId signal { };
+        ProcessId driver { };
+        std::uint32_t offset { };
+        std::uint32_t packed_value { };
+        Logic4Word word;
+        std::uint8_t flags { };
+
+        PendingUpdate(
+            SignalId signal_value,
+            std::optional<ProcessId> driver_value,
+            std::optional<std::size_t> offset_value,
+            Logic4Word word_value,
+            std::optional<std::size_t> packed_value_index)
+            : signal(signal_value)
+            , driver(driver_value.value_or(0U))
+            , offset(static_cast<std::uint32_t>(offset_value.value_or(0U)))
+            , packed_value(static_cast<std::uint32_t>(
+                  packed_value_index.value_or(0U)))
+            , word(word_value)
+            , flags(static_cast<std::uint8_t>(
+                  (driver_value
+                          ? static_cast<std::uint8_t>(has_driver)
+                          : std::uint8_t { })
+                  | (offset_value
+                          ? static_cast<std::uint8_t>(has_offset)
+                          : std::uint8_t { })
+                  | (packed_value_index
+                          ? static_cast<std::uint8_t>(has_packed_value)
+                          : std::uint8_t { })))
+        {
+            if ((offset_value
+                    && *offset_value
+                        > std::numeric_limits<std::uint32_t>::max())
+                || (packed_value_index
+                    && *packed_value_index
+                        > std::numeric_limits<std::uint32_t>::max())) {
+                throw std::length_error(
+                    "pending update metadata exceeds its compact representation");
+            }
+        }
+
+        [[nodiscard]] bool driver_present() const noexcept
+        {
+            return (flags & has_driver) != 0U;
+        }
+        [[nodiscard]] bool offset_present() const noexcept
+        {
+            return (flags & has_offset) != 0U;
+        }
+        [[nodiscard]] bool packed_value_present() const noexcept
+        {
+            return (flags & has_packed_value) != 0U;
+        }
+    };
+
+    static_assert(sizeof(PendingUpdate) <= 48U);
+
+    struct PendingDriverCommit {
         std::optional<ProcessId> driver;
-        std::optional<std::size_t> offset;
         PackedLogic4 value;
+    };
+
+    struct DirectSingleDriverRoute {
+        ProcessId process { };
+        PackedLogic4* value { };
+    };
+
+    struct DirectSingleDriverLogic9WordUpdate {
+        std::array<std::uint64_t, 4U> planes { };
+        std::uint64_t mask { };
+        std::uint32_t width { };
+        ProcessId process { };
+        std::uint32_t active { };
     };
 
     enum class PendingEventKind : std::uint8_t {
@@ -459,7 +545,7 @@ struct Interpreter::Impl {
     struct ProjectedTransaction {
         std::uint64_t id { };
         SimulationTick time { };
-        PackedLogic4 value;
+        Logic9 value { Logic9::x };
         ScheduledTaskHandle handle;
     };
 
@@ -490,12 +576,41 @@ struct Interpreter::Impl {
     std::vector<ContainerObject> container_objects;
     std::vector<std::optional<ContainerSignalAlias>>
         container_signal_aliases;
+    std::vector<std::optional<std::uint64_t>>
+        container_materialized_revisions;
+    std::vector<std::vector<ContainerObjectId>>
+        signal_container_aliases;
     std::filesystem::path file_root;
     std::vector<std::string> plusargs;
     SystemVerilogTimeFormat time_format;
     std::map<FileHandle, FileState> files;
     FileHandle next_file_handle { 1 };
     std::uint32_t next_multichannel_channel { 1 };
+    std::vector<std::uint64_t> direct_signal_aval;
+    std::vector<std::uint64_t> direct_signal_bval;
+    std::vector<std::uint64_t> direct_signal_logic9_plane0;
+    std::vector<std::uint64_t> direct_signal_logic9_plane1;
+    std::vector<std::uint64_t> direct_signal_logic9_plane2;
+    std::vector<std::uint64_t> direct_signal_logic9_plane3;
+    // The dense planes are authoritative between native phase boundaries for
+    // eligible one-word signals. Packed mirrors are materialized lazily only
+    // when a generic observer crosses back into the interpreter/runtime API.
+    std::vector<std::uint64_t> direct_signal_last_aval;
+    std::vector<std::uint64_t> direct_signal_last_bval;
+    std::vector<std::uint64_t> direct_signal_last_logic9_plane0;
+    std::vector<std::uint64_t> direct_signal_last_logic9_plane1;
+    std::vector<std::uint64_t> direct_signal_last_logic9_plane2;
+    std::vector<std::uint64_t> direct_signal_last_logic9_plane3;
+    std::vector<std::uint8_t> direct_signal_materialization_pending;
+    std::vector<std::uint64_t> direct_wide_signal_aval;
+    std::vector<std::uint64_t> direct_wide_signal_bval;
+    std::vector<std::uint64_t> direct_wide_signal_logic9_plane2;
+    std::vector<std::uint64_t> direct_wide_signal_logic9_plane3;
+    std::vector<std::uint32_t> direct_wide_signal_offsets;
+    std::vector<ProcessId> direct_single_driver_processes;
+    std::vector<ProcessId> stable_single_writer_processes;
+    std::vector<std::uint32_t> signal_writer_counts;
+    std::uint64_t signal_writer_revision { };
     std::vector<PackedLogic4> driven_values;
     std::vector<std::map<ProcessId, PackedLogic4>> driver_values;
     std::vector<std::map<ProcessId, DriveStrength>> driver_strengths;
@@ -505,8 +620,10 @@ struct Interpreter::Impl {
     std::vector<std::optional<ScheduledTaskHandle>> charge_decay_handles;
     std::vector<std::optional<PackedLogic4>> charge_values;
     std::vector<PackedLogic4> signal_last_values;
+    std::vector<std::uint64_t> signal_value_revisions;
     std::vector<PackedLogic4> sampled_values;
     std::vector<PackedLogic4> sampled_defaults;
+    bool requires_sampled_values { };
     std::map<SampledHistoryKey, SampledHistoryState> sampled_histories;
     std::vector<std::optional<PackedLogic4>> forced_values;
     std::vector<PackedLogic4> forced_masks;
@@ -525,6 +642,26 @@ struct Interpreter::Impl {
     std::uint64_t next_fork_group { 1 };
     std::uint32_t next_process_generation { 1 };
     std::vector<std::vector<Fanout>> static_fanout;
+    // Exact static-sensitivity cohorts span the complete elaborated design,
+    // including aliases which resolve to the same clock SignalId across
+    // hierarchy. Cohorts batch scheduler dispatch while retaining each
+    // member's process identity, frame, driver ownership, and program counter.
+    std::vector<StaticSensitivityCohort> static_sensitivity_cohorts;
+    std::vector<std::size_t> static_sensitivity_cohort_by_process;
+    std::unordered_map<std::string, std::size_t>
+        static_sensitivity_cohort_by_key;
+    std::uint64_t static_fanout_visit_generation { };
+    std::vector<NativeStaticRegion> native_static_regions;
+    std::vector<std::size_t> native_static_region_by_process;
+    std::vector<std::size_t> native_static_region_offset_by_process;
+    bool native_static_regions_built { };
+    std::uint64_t native_static_region_attempts { };
+    std::uint64_t native_static_region_calls { };
+    std::uint64_t native_static_region_ready { };
+    std::uint64_t native_static_region_consumed { };
+    std::array<std::uint64_t, 5U> native_static_region_declines { };
+    static constexpr std::uint64_t native_static_region_payload
+        = UINT64_C(1) << 63U;
     std::vector<std::vector<Fanout>> dynamic_fanout;
     std::vector<std::vector<ProcessId>> container_dynamic_fanout;
     std::vector<EventState> event_states;
@@ -535,6 +672,32 @@ struct Interpreter::Impl {
         SimulationTick, std::uint64_t>>>
         signal_transactions;
     std::vector<PendingUpdate> pending_updates;
+    std::vector<PackedLogic4> pending_update_values;
+    // Update-phase scratch is indexed by the dense signal identity and reused
+    // across deltas. Only touched entries are reset after publication, avoiding
+    // per-delta map/set construction and whole-container snapshots.
+    std::vector<std::optional<PackedLogic4>> unresolved_update_scratch;
+    std::vector<std::vector<PendingDriverCommit>> driver_update_scratch;
+    std::vector<DirectSingleDriverRoute> direct_single_driver_routes;
+    std::vector<ProcessNativeWordUpdate>
+        direct_single_driver_word_scratch;
+    std::vector<DirectSingleDriverLogic9WordUpdate>
+        direct_single_driver_logic9_word_scratch;
+    std::vector<SignalId> unresolved_update_signals;
+    // Ordinary single-driver Verilog nets do not need a temporary
+    // per-driver collection or a resolution pass. Native word updates stage
+    // their final value here, while retaining the driver slot for VPI/debug
+    // observation at the update boundary.
+    std::vector<SignalId> direct_single_driver_update_signals;
+    std::vector<SignalId> native_word_update_signals;
+    std::uint32_t native_word_update_count { };
+    std::vector<SignalId> native_logic9_word_update_signals;
+    std::uint32_t native_logic9_word_update_count { };
+    std::vector<bool> direct_single_driver_commit_marked;
+    std::vector<SignalId> driver_update_signals;
+    std::vector<SignalId> resolved_update_signals;
+    std::vector<bool> resolved_update_marked;
+    std::vector<std::pair<SignalId, PackedLogic4>> update_commit_scratch;
     std::unordered_set<std::uint64_t> pending_channel_updates;
     std::unordered_map<
         InertialDriverKey,
@@ -553,6 +716,9 @@ struct Interpreter::Impl {
         projected_drivers;
     std::uint64_t next_projected_transaction_id { 1 };
     SignalChangeHook signal_change_hook;
+    NativeSignalObservationRequiredHook
+        native_signal_observation_required_hook;
+    NativeSignalObservationAnyHook native_signal_observation_any_hook;
     StoredSignalChangeHook stored_signal_change_hook;
     DriverChangeHook driver_change_hook;
     EventTriggerHook event_trigger_hook;
@@ -582,16 +748,93 @@ struct Interpreter::Impl {
     std::optional<std::pair<SimulationTick, std::uint64_t>>
         monitor_publication;
     bool update_commit_scheduled { };
+    bool has_bidirectional_switches { };
     bool switch_refreshing { };
     bool started { };
+    bool validation_only { };
     bool stopped_by_design { };
     bool finals_ran { };
+    bool process_profile_enabled { };
+    bool process_profile_reported { };
+    bool update_profile_enabled { };
+    bool update_profile_reported { };
+    std::uint64_t update_profile_commits { };
+    std::uint64_t update_profile_updates { };
+    std::uint64_t update_profile_whole { };
+    std::uint64_t update_profile_slices { };
+    std::uint64_t update_profile_unresolved { };
+    std::uint64_t update_profile_resolved { };
+    std::uint64_t update_profile_resolved_single_driver { };
+    std::uint64_t update_profile_bits { };
+    bool native_phase_profile_enabled { };
+    std::uint64_t native_phase_profile_attempts { };
+    std::uint64_t native_phase_profile_published { };
+    std::uint64_t native_phase_profile_rejected_structure { };
+    std::uint64_t native_phase_profile_rejected_observer { };
+    std::uint64_t native_phase_profile_rejected_route { };
+    std::uint64_t native_phase_profile_rejected_semantics { };
+    std::uint64_t native_phase_profile_rejected_runtime { };
+    std::uint64_t native_phase_profile_single_resumes { };
+    std::uint64_t native_phase_profile_cohort_resumes { };
+    std::uint64_t native_phase_profile_cohort_members { };
+    bool native_process_count_profile_enabled { };
+    std::vector<std::uint64_t> native_process_resume_counts;
+    std::vector<std::uint64_t> native_process_single_resume_counts;
+    std::vector<std::uint64_t> native_process_single_static_wait_counts;
+    std::vector<std::uint64_t> native_process_cohort_resume_counts;
+    std::vector<std::uint64_t> native_process_cohort_static_wait_counts;
+    std::vector<std::uint64_t> native_process_word_fanout_ready_counts;
+    std::vector<std::unordered_map<SignalId, std::uint64_t>>
+        native_process_static_trigger_counts;
+    std::vector<ProcessId> native_process_single_wave_processes;
+    std::vector<std::size_t> native_process_single_wave_offsets;
+    std::optional<std::pair<SimulationTick, std::uint64_t>>
+        native_process_single_wave_identity;
+    std::array<std::uint64_t, 6> native_process_single_boundary_counts { };
+    std::array<std::uint64_t, 6> native_process_cohort_boundary_counts { };
+    std::array<std::uint64_t, 9> native_process_simir_boundary_groups { };
+    std::array<std::uint64_t, 32> native_process_scheduling_boundaries { };
+    std::uint64_t native_process_word_changes { };
+    std::uint64_t native_process_word_fanout_matches { };
+    std::uint64_t native_process_word_fanout_ready { };
+    bool native_update_profile_enabled { };
+    std::uint64_t native_update_profile_calls { };
+    std::uint64_t native_update_profile_fallbacks { };
+    std::uint64_t native_update_profile_batches { };
+    std::uint64_t native_update_profile_slots { };
+    std::uint64_t native_update_profile_inactive { };
+    std::uint64_t native_update_profile_untouched { };
+    std::uint64_t native_update_profile_unchanged { };
+    std::uint64_t native_update_profile_unchanged_direct_word { };
+    std::uint64_t native_update_profile_unchanged_direct_packed { };
+    std::uint64_t native_update_profile_unchanged_unresolved { };
+    std::uint64_t native_update_profile_unchanged_resolved { };
+    std::uint64_t native_update_profile_direct_word { };
+    std::uint64_t native_update_profile_direct_packed { };
+    std::uint64_t native_update_profile_unresolved { };
+    std::uint64_t native_update_profile_resolved { };
+    std::uint64_t native_update_profile_schedule_requests { };
+    std::uint64_t native_update_profile_schedule_coalesced { };
+    std::uint64_t native_update_profile_commits { };
+    std::uint64_t native_update_profile_commit_word_signals { };
+    std::uint64_t native_update_profile_commit_value_signals { };
+    std::uint64_t native_update_profile_word_calls { };
+    std::uint64_t native_update_profile_words { };
+    std::uint64_t native_update_profile_word_fallbacks { };
+    std::uint64_t native_update_profile_word_scalar { };
+    std::uint64_t native_update_profile_word_unchanged { };
+    std::uint64_t native_update_profile_word_direct { };
+    std::uint64_t native_update_profile_word_unresolved { };
+    std::uint64_t native_update_profile_word_resolved { };
+    bool jit_skip_callable_frames { };
     std::set<std::uint32_t> program_owners;
     std::set<std::uint32_t> exited_programs;
 
     [[nodiscard]] Signal& get_signal(SignalId id);
 
     [[nodiscard]] const Signal& get_signal(SignalId id) const;
+
+    void materialize_direct_signal(SignalId id);
 
     [[nodiscard]] ProcessState& get_process(ProcessId id);
 
@@ -631,8 +874,20 @@ struct Interpreter::Impl {
         ContainerObjectId id) const;
     [[nodiscard]] const ContainerValue&
     read_container_object_value(ContainerObjectId id);
+    [[nodiscard]] bool read_container_object_element(
+        ContainerObjectId id,
+        std::size_t ordinal,
+        PackedLogic4& result);
     void write_container_object_value(
         ContainerObjectId id, const ContainerValue& value);
+    void write_container_object_element_value(
+        ContainerObjectId id,
+        const PackedLogic4& index,
+        bool signed_index,
+        bool linear_index,
+        const PackedLogic4& value,
+        ProcessId process,
+        InstructionIndex instruction);
 
     void set_file_root(std::filesystem::path root);
     [[nodiscard]] FileHandle open_file(
@@ -693,6 +948,7 @@ struct Interpreter::Impl {
     void execute_container(ProcessState&, const LocateContainer&);
     void execute_container(ProcessState&, const ContainerRead&);
     void execute_container(ProcessState&, const ContainerWrite&);
+    void execute_container(ProcessState&, const WriteContainerObjectElement&);
     void execute_container(ProcessState&, const ContainerStringRead&);
     void execute_container(ProcessState&, const ContainerStringWrite&);
     void execute_container(ProcessState&, const ContainerElementRead&);
@@ -731,6 +987,8 @@ struct Interpreter::Impl {
         ProcessState& process,
         const RegisterId destination,
         const PackedLogic4& value);
+
+    void install_deferred_executor(ProcessState& process);
 
     void execute_sampled_read(
         ProcessState& process,
@@ -793,14 +1051,34 @@ struct Interpreter::Impl {
     void request_channel_update(
         ProcessId process, std::uint64_t channel);
     void execute(ProcessId id);
+    void execute_static_cohort(std::span<const ProcessId> processes);
+    [[nodiscard]] SchedulerBatchResult execute(
+        Scheduler&, std::span<const std::uint64_t> cohort_ids) override;
+    [[nodiscard]] bool handle_executor_resume(
+        ProcessState& process, const ProcessResumeResult& boundary);
+
+    void report_process_profile();
+
+    void report_update_profile();
 
     void queue_at(ProcessId id, SimulationTick time);
 
     void queue_next_delta(ProcessId id);
 
+    void queue_static_next_delta(ProcessId id);
+    void queue_static_cohort_next_delta(std::size_t cohort);
+    void build_native_static_regions();
+    [[nodiscard]] std::size_t execute_native_static_region(
+        std::size_t region, std::span<const ProcessId> ready);
+    [[nodiscard]] std::uint64_t next_static_fanout_visit();
+
     void queue_current(ProcessId id);
 
     void queue_active_current(ProcessId id);
+
+    void queue_static_active_current(ProcessId id);
+
+    void register_static_sensitivity_cohort(ProcessId id);
 
     [[nodiscard]] bool handle_fork_boundary(
         ProcessState& process,
@@ -891,6 +1169,26 @@ struct Interpreter::Impl {
     void publish(
         SignalId signal_id, PackedLogic4 value,
         bool notify_fanout = true);
+    void publish_normalized(
+        SignalId signal_id, PackedLogic4 value,
+        bool notify_fanout = true);
+    void publish_normalized_word(
+        SignalId signal_id, Logic4Word value,
+        bool notify_fanout = true);
+    [[nodiscard]] bool can_publish_native_word(
+        SignalId signal_id, ProcessId process) noexcept;
+    [[nodiscard]] bool native_word_publication_phase_eligible() noexcept;
+    [[nodiscard]] bool can_publish_native_word_prevalidated(
+        SignalId signal_id, ProcessId process) noexcept;
+    [[nodiscard]] bool can_publish_native_logic9_word(
+        SignalId signal_id, ProcessId process) noexcept;
+    [[nodiscard]] bool can_publish_blocking_word(SignalId signal_id) noexcept;
+    void publish_native_word(SignalId signal_id, Logic4Word value);
+    void publish_native_logic9_word(SignalId signal_id, Logic9Word value);
+    void note_signal_transaction(SignalId signal_id, bool notify_fanout);
+    void publish_value_change(SignalId signal_id, bool notify_fanout);
+    void refresh_direct_signal_planes(SignalId signal_id);
+    void publish_container_signal_aliases(SignalId signal_id);
 
     [[nodiscard]] PackedLogic4 apply_force(
         SignalId signal_id, PackedLogic4 value) const;
@@ -918,6 +1216,9 @@ struct Interpreter::Impl {
 
     void commit(SignalId signal_id, PackedLogic4 value);
 
+    void commit_direct_single_driver(
+        SignalId signal_id, PackedLogic4 value);
+
     void refresh_switch_network();
 
     void commit_resolved(SignalId signal_id, PackedLogic4 value);
@@ -928,6 +1229,8 @@ struct Interpreter::Impl {
     PackedLogic4& driver_slot(
         const ProcessId process,
         const SignalId signal_id);
+
+    void refresh_direct_single_driver_route(SignalId signal_id);
 
     [[nodiscard]] PackedLogic4 resolved_driver_value(
         const SignalId signal_id) const;
@@ -1034,6 +1337,19 @@ struct Interpreter::Impl {
         const SignalId signal_id,
         PackedLogic4 value,
         const std::size_t offset);
+
+    void stage_update_words(
+        ProcessId process,
+        std::span<const ProcessUpdateWord> updates);
+    void stage_validated_update_words(
+        ProcessId process,
+        std::span<const ProcessUpdateWord> updates);
+    [[nodiscard]] bool stage_validated_update_slot_batches(
+        std::span<const ProcessUpdateSlotBatch> batches);
+    [[nodiscard]] bool stage_validated_logic9_update_batch(
+        const ProcessLogic9UpdateBatch& batch);
+    [[nodiscard]] bool stage_validated_logic9_update_batches(
+        std::span<const ProcessLogic9UpdateBatch> batches);
 
     void schedule_inertial(
         const ProcessId process,

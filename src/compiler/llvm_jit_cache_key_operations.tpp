@@ -515,6 +515,27 @@ for (const auto& operation : process.operations) {
                     value.string_index ? 1U : 0U);
             } else if constexpr (std::is_same_v<
                                      OperationType,
+                                     runtime::simir::WriteContainerObjectElement>) {
+                builder.add("operation", "WriteContainerObjectElement");
+                add_key_u64(builder, "object", value.object);
+                add_key_u64(builder, "index", value.index);
+                add_key_u64(builder, "source", value.source);
+                add_key_u64(
+                    builder, "linear-index",
+                    value.linear_index ? 1U : 0U);
+                add_key_u64(
+                    builder, "signed-index",
+                    value.signed_index ? 1U : 0U);
+                add_key_u64(
+                    builder, "has-transaction-signal",
+                    value.transaction_signal.has_value() ? 1U : 0U);
+                if (value.transaction_signal) {
+                    add_key_u64(
+                        builder, "transaction-signal",
+                        *value.transaction_signal);
+                }
+            } else if constexpr (std::is_same_v<
+                                     OperationType,
                                      runtime::simir::ContainerStringRead>) {
                 builder.add("operation", "ContainerStringRead");
                 add_key_u64(builder, "destination", value.destination);
@@ -1639,6 +1660,9 @@ for (const auto& operation : process.operations) {
                 for (const auto id : value.containers) {
                     add_key_u64(builder, "container", id);
                 }
+                add_key_u64(
+                    builder, "native-isolated",
+                    value.native_isolated ? 1U : 0U);
             } else if constexpr (
                 std::is_same_v<OperationType, CallableFramePop>) {
                 builder.add("operation", "CallableFramePop");

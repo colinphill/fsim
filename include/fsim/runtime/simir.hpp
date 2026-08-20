@@ -352,6 +352,17 @@ struct ContainerWrite {
     bool string_index { };
 };
 
+/// Update one packed/scalar element of a container object without
+/// materializing the complete object in a temporary container register.
+struct WriteContainerObjectElement {
+    ContainerObjectId object { };
+    RegisterId index { };
+    RegisterId source { };
+    bool signed_index { true };
+    bool linear_index { };
+    std::optional<SignalId> transaction_signal;
+};
+
 struct ContainerStringRead {
     StringRegisterId destination { };
     ContainerRegisterId source { };
@@ -452,6 +463,17 @@ struct LoadMemory {
 /// recursively representable as packed leaves.
 [[nodiscard]] std::optional<std::size_t>
 container_packed_element_width(const ContainerType& type);
+
+/// Return the packed signal width required to represent a fixed container.
+[[nodiscard]] std::optional<std::size_t>
+container_signal_bridge_width(const ContainerType& type);
+
+/// Pack and unpack fixed-container leaves in declaration order for a signal
+/// alias used by elaborated static unpacked arrays.
+[[nodiscard]] PackedLogic4 pack_container_signal_value(
+    const ContainerValue& value, bool logic9);
+void unpack_container_signal_value(
+    ContainerValue& value, const PackedLogic4& packed);
 
 /// Parse bounded IEEE-style read-memory text into a fixed unpacked array.
 /// Tokens may contain underscores, X/Z/? digits, comments, and @addresses.
@@ -604,6 +626,20 @@ struct DynamicPartSelect {
     bool two_state { };
     std::uint32_t base_offset { };
 };
+
+/// Apply the language-neutral dynamic part-select rules to an already
+/// materialized packed value. This is shared by the interpreter and narrow
+/// native callbacks so indexed reads never require a whole-array frame copy.
+[[nodiscard]] PackedLogic4 dynamic_part_select_value(
+    const PackedLogic4& source,
+    const PackedLogic4& base,
+    std::int64_t left,
+    std::int64_t right,
+    std::uint32_t base_offset,
+    std::uint32_t width,
+    bool increasing,
+    bool source_descending,
+    bool two_state);
 
 /// Runtime base and fixed-width metadata shared by indexed part-select writes.
 struct DynamicPartIndex {
@@ -1243,6 +1279,11 @@ struct CallableFramePush {
     std::vector<RegisterId> packed;
     std::vector<StringRegisterId> strings;
     std::vector<ContainerRegisterId> containers;
+    // The elaborator assigns disjoint registers to each callable identity.
+    // Optimized native lowering may therefore keep an acyclic call chain in
+    // generated code without taking host-owned register snapshots. Hand-built
+    // SimIR remains conservative unless it explicitly proves this property.
+    bool native_isolated { };
 };
 
 /// Restore the most recently saved invocation of one automatic callable while
@@ -1706,6 +1747,8 @@ struct Sensitivity {
 #include "fsim/runtime/simir_debug.hpp"
 #include "fsim/runtime/simir_specify.hpp"
 struct Process {
+    static constexpr std::uint64_t full_static_trigger_mask
+        = UINT64_C(1) << 63U;
     ProcessId id { };
     std::string name;
     /// Canonical source-language identity for native-code cache separation.
@@ -1720,6 +1763,19 @@ struct Process {
     std::vector<DebugContainerLocal> debug_container_locals;
     std::vector<ContainerType> container_register_types;
     std::vector<Sensitivity> static_sensitivity;
+    /// Callback-free statement ranges which may be skipped by a compiled
+    /// executor when none of their exact static sensitivities triggered the
+    /// current activation. Bit 63 requests a full activation; bits 0..62 map
+    /// to the canonical sorted static_sensitivity vector. The interpreter
+    /// deliberately ignores this optional lowering hint.
+    struct StaticTriggerRegion {
+        InstructionIndex begin { };
+        InstructionIndex end { };
+        std::uint64_t mask { };
+        friend bool operator==(
+            const StaticTriggerRegion&, const StaticTriggerRegion&) = default;
+    };
+    std::vector<StaticTriggerRegion> static_trigger_regions;
     std::vector<Operation> operations;
     /// Static packed regions driven by this process. Dynamic or whole-object
     /// targets retain one `whole` region for conservative ownership.
@@ -1812,6 +1868,25 @@ struct ProcessResumeResult {
     ExternalSuspension external;
 };
 
+class ProcessExecutor;
+
+/// One independently owned process activation within a scheduler cohort.
+///
+/// The scheduler preserves process order and process-local execution contexts;
+/// an alternate executor may use this view to amortize an execution boundary
+/// across processes that became runnable from the same static event.
+struct ProcessCohortResumeEntry {
+    ProcessExecutor* executor { };
+    ProcessExecutionContext* context { };
+    InstructionIndex start_instruction { };
+    ProcessResumeResult result;
+    std::exception_ptr failure;
+    bool* queued { };
+    bool* waiting_on_static { };
+    ProcessStatus* status { };
+    std::uint8_t* active { };
+};
+
 enum class ExecutionPointKind : std::uint8_t {
     statement,
     call,
@@ -1876,6 +1951,41 @@ public:
     [[nodiscard]] virtual ProcessResumeResult
     resume(ProcessExecutionContext& context,
         InstructionIndex start_instruction) = 0;
+
+    /// Resume an ordered set of independently owned processes as one cohort.
+    /// Returning zero declines the cohort and leaves every entry untouched.
+    /// A nonzero return is the number of leading entries executed; failures
+    /// are captured in the corresponding entry so earlier results remain
+    /// visible to the scheduler in canonical order.
+    [[nodiscard]] virtual std::size_t resume_cohort(
+        std::span<ProcessCohortResumeEntry>)
+    {
+        return 0U;
+    }
+
+    /// Resume the selected members of a stable region. Each entry supplies a
+    /// persistent active byte; returning zero declines region execution.
+    [[nodiscard]] virtual std::size_t resume_region(
+        std::span<ProcessCohortResumeEntry>,
+        std::span<const std::size_t>)
+    {
+        return 0U;
+    }
+
+    /// Whether resume_cohort() applies each entry's scheduler-state
+    /// transition immediately around that member's native activation.
+    /// A state-aware executor must leave every unexecuted entry untouched.
+    [[nodiscard]] virtual bool cohort_manages_process_state() const noexcept
+    {
+        return false;
+    }
+
+    /// Opaque execution-domain identity used only to form compatible cohort
+    /// runs. A null domain declines cohort execution.
+    [[nodiscard]] virtual const void* cohort_domain() const noexcept
+    {
+        return nullptr;
+    }
 
     /// Execute a previously requested primitive-channel update. Only
     /// alternate-language executors which expose such channels override this.
@@ -1996,6 +2106,16 @@ private:
 class Interpreter {
 public:
     using SignalChangeHook = std::function<void(SignalId, const PackedLogic4&, SimulationTick)>;
+    /// Returns true when an installed application bridge currently has a real
+    /// observer for this signal. This lets dormant VPI/trace bridge hooks stay
+    /// installed without forcing native updates through packed publication.
+    using NativeSignalObservationRequiredHook
+        = std::function<bool(SignalId)>;
+    /// Returns true when any installed application bridge currently observes
+    /// native signal publication. The update phase uses this scheduler-safe
+    /// aggregate query to avoid repeating the per-signal callback when no
+    /// observer exists anywhere.
+    using NativeSignalObservationAnyHook = std::function<bool()>;
     /// Observes a change to the stored, unforced driver state. Unlike
     /// SignalChangeHook this also fires when a force masks the effective value.
     using StoredSignalChangeHook
@@ -2083,6 +2203,10 @@ public:
         ContainerObject object);
     void add_container_signal_alias(ContainerSignalAlias alias);
     [[nodiscard]] ProcessId add_process(Process process);
+    /// Register and validate one process topology without retaining its
+    /// program or allocating its execution frame. The interpreter becomes a
+    /// validation-only builder and cannot subsequently start.
+    [[nodiscard]] ProcessId validate_process(const Process& process);
     [[nodiscard]] std::uint32_t add_module_path(ModulePath path);
     [[nodiscard]] std::uint32_t add_module_timing_check(
         ModuleTimingCheck check);
@@ -2129,6 +2253,22 @@ public:
     /// is allowed only before start and at most once per process.
     void set_process_executor(
         ProcessId process, std::unique_ptr<ProcessExecutor> executor);
+
+    /// Prepare an alternate executor without delaying simulation startup.
+    /// The interpreter remains active until ready() reports completion, then
+    /// migrates the lexical frame and installs the prepared executor at the
+    /// next scheduler-owned process boundary. Both callbacks must be safe to
+    /// destroy without first being invoked.
+    void set_deferred_process_executor(
+        ProcessId process,
+        std::function<bool()> ready,
+        std::function<std::unique_ptr<ProcessExecutor>()> take);
+
+    /// Install every ready deferred executor before simulation starts. This
+    /// preserves eager debugger and fork semantics for callers that explicitly
+    /// wait for native compilation while allowing other callers to overlap
+    /// materialization with scheduler execution.
+    void materialize_ready_process_executors();
 
     void start();
     [[nodiscard]] RunResult
@@ -2182,6 +2322,18 @@ public:
     /// Return the static design process that owns a dynamic fork child. Static
     /// processes map to themselves.
     [[nodiscard]] ProcessId design_process(ProcessId process) const;
+    /// Return the immutable SimIR program owned by a static design process.
+    /// The reference remains valid for the lifetime of this interpreter.
+    [[nodiscard]] const Process& process_program(ProcessId process) const;
+    /// Return the next SimIR instruction for a scheduler-owned process.
+    [[nodiscard]] InstructionIndex process_instruction(
+        ProcessId process) const;
+    /// Enable and inspect lightweight interpreter-operation accounting for a
+    /// process awaiting adaptive native promotion. Accounting is local to the
+    /// scheduler thread and is sampled only from deferred-executor callbacks.
+    void track_process_interpreter_operations(ProcessId process);
+    [[nodiscard]] std::uint64_t process_interpreter_operations(
+        ProcessId process) const;
     /// Return the top-level dynamic child that owns an execution descendant.
     /// Static processes map to themselves. This is the stable identity of one
     /// overlapping temporal attempt across nested lowering forks.
@@ -2203,6 +2355,10 @@ public:
     [[nodiscard]] Scheduler& scheduler() noexcept;
     [[nodiscard]] const Scheduler& scheduler() const noexcept;
     void set_signal_change_hook(SignalChangeHook hook);
+    void set_native_signal_observation_required_hook(
+        NativeSignalObservationRequiredHook hook);
+    void set_native_signal_observation_any_hook(
+        NativeSignalObservationAnyHook hook);
     void set_stored_signal_change_hook(StoredSignalChangeHook hook);
     void set_driver_change_hook(DriverChangeHook hook);
     void set_event_trigger_hook(EventTriggerHook hook);
@@ -2229,6 +2385,8 @@ public:
     void set_class_static_method_call_hook(ClassStaticMethodCallHook hook);
 
 private:
+    [[nodiscard]] ProcessId
+    add_process_impl(const Process& process, Process* owned_process);
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

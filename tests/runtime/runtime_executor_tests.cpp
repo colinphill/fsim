@@ -31,6 +31,100 @@ namespace {
 
 } // namespace
 
+void test_simir_deferred_executor_state_handoff()
+{
+    using namespace fsim::runtime;
+    using namespace fsim::runtime::simir;
+
+    class DeferredExecutor final : public ProcessExecutor {
+    public:
+        DeferredExecutor(
+            const SignalId output,
+            bool& installed)
+            : output_(output)
+            , installed_(installed)
+        {
+            installed_ = true;
+        }
+
+        void redirect(const InstructionIndex instruction) override
+        {
+            redirected_to_ = instruction;
+        }
+
+        void write_register(
+            const RegisterId id,
+            const PackedLogic4& value) override
+        {
+            require(id == 0, "deferred executor migrated an unknown register");
+            value_ = value;
+        }
+
+        [[nodiscard]] PackedLogic4 read_register(
+            const RegisterId id,
+            const std::size_t) const override
+        {
+            require(id == 0, "deferred executor read an unknown register");
+            return value_;
+        }
+
+        [[nodiscard]] ProcessResumeResult resume(
+            ProcessExecutionContext& context,
+            const InstructionIndex start_instruction) override
+        {
+            require(
+                redirected_to_ == 2 && start_instruction == 2,
+                "deferred executor must start at the interpreter continuation");
+            require(
+                value_.to_msb_string() == "1010",
+                "deferred executor must receive initialized lexical state");
+            context.write_update(output_, value_);
+            ProcessResumeResult result { 3, 4 };
+            result.external.kind = ExternalSuspendKind::halt;
+            return result;
+        }
+
+    private:
+        SignalId output_ { };
+        bool& installed_;
+        InstructionIndex redirected_to_ { };
+        PackedLogic4 value_;
+    };
+
+    Interpreter interpreter;
+    const auto output = interpreter.add_signal(
+        { "deferred_output", PackedLogic4(4, Logic4::zero) });
+    Process process;
+    process.id = 0;
+    process.name = "deferred_executor_handoff";
+    process.register_count = 1;
+    process.operations = {
+        LoadConstant { 0, PackedLogic4::from_msb_string("1010") },
+        WaitFor { 1 },
+        WriteBlocking { output, 0 },
+        Halt { },
+    };
+    const auto process_id = interpreter.add_process(std::move(process));
+
+    std::size_t readiness_checks = 0;
+    bool installed = false;
+    interpreter.set_deferred_process_executor(
+        process_id,
+        [&] { return ++readiness_checks >= 2; },
+        [&] {
+            return std::make_unique<DeferredExecutor>(output, installed);
+        });
+
+    const auto result = interpreter.run();
+    require(
+        result.status == RunStatus::completed && result.time == 1,
+        "deferred executor handoff must preserve scheduler progress");
+    require(installed, "ready deferred executor must be installed");
+    require(
+        interpreter.signal_value(output).to_msb_string() == "1010",
+        "deferred executor must publish the migrated value");
+}
+
 void test_simir_alternate_executor_event_replacement_and_cancel()
 {
     using namespace fsim::runtime;

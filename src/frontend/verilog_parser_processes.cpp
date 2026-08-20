@@ -847,8 +847,6 @@ void VerilogParser::parse_fatal_arguments(Statement& statement)
         if (at(TokenKind::StringLiteral)) {
             statement.output_text = decoded_string_literal_text(advance());
         } else {
-            // Accept and ignore the standard numeric finish control while
-            // retaining one bounded constant-string display message.
             (void)parse_expression();
             if (match(TokenKind::Comma)) {
                 if (at(TokenKind::StringLiteral)) {
@@ -858,13 +856,15 @@ void VerilogParser::parse_fatal_arguments(Statement& statement)
                 }
             }
         }
+        while (match(TokenKind::Comma)) {
+            statement.task_arguments.push_back(parse_expression());
+        }
     }
     expect(
         TokenKind::RightParen,
         "')' after $fatal arguments",
         "FSIM-SV-PARSE-115");
 }
-
 void VerilogParser::parse_nonfatal_report_arguments(
     Statement& statement,
     const Token& task)
@@ -880,12 +880,7 @@ void VerilogParser::parse_nonfatal_report_arguments(
             statement.value = parse_expression();
         }
         while (match(TokenKind::Comma)) {
-            error(
-                previous(),
-                "FSIM-SV-SEM-043",
-                task.text
-                    + " currently accepts at most one literal message");
-            (void)parse_expression();
+            statement.task_arguments.push_back(parse_expression());
         }
     }
     expect(
@@ -1732,6 +1727,18 @@ std::optional<Statement> VerilogParser::parse_statement()
                         [&consumes_value](const auto& conversion) {
                             return consumes_value(conversion.format);
                         }));
+                    const auto time_conversions =
+                        static_cast<std::size_t>(std::ranges::count_if(
+                            parsed_format.conversions,
+                            [](const auto& conversion) {
+                                return conversion.format
+                                    == OutputFormat::Time;
+                            }));
+                    auto explicit_time_values = values.size() > required_values
+                        ? std::min(
+                              time_conversions,
+                              values.size() - required_values)
+                        : std::size_t { 0 };
                     if (!parsed_format.valid) {
                         error(
                             format_token,
@@ -1773,7 +1780,11 @@ std::optional<Statement> VerilogParser::parse_statement()
                             ++index) {
                             auto& conversion = parsed_format.conversions[index];
                             Expression value;
-                            if (consumes_value(conversion.format)) {
+                            if (consumes_value(conversion.format)
+                                || (conversion.format
+                                        == OutputFormat::Time
+                                    && explicit_time_values != 0U
+                                    && explicit_time_values-- > 0U)) {
                                 value = std::move(values[value_index++]);
                             }
                             statement.output_values.push_back(

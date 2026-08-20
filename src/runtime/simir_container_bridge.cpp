@@ -139,9 +139,7 @@ PackedLogic4 pack_container_signal_value(
               "container boundary leaf width exceeds its descriptor"};
         }
         cursor -= element.width();
-        for (std::size_t bit = 0; bit < element.width(); ++bit) {
-          result.set(cursor + bit, element.get(bit));
-        }
+        result.insert_bits(element, cursor);
       });
   if (cursor != 0) {
     throw std::invalid_argument{
@@ -168,9 +166,13 @@ void unpack_container_signal_value(
               "container boundary leaf width exceeds its descriptor"};
         }
         cursor -= element.width();
-        PackedLogic4 replacement(element.width(), Logic4::zero);
-        for (std::size_t bit = 0; bit < element.width(); ++bit) {
-          replacement.set(bit, packed.get(cursor + bit));
+        auto replacement = packed.extract_bits(cursor, element.width());
+        if (replacement.is_logic9()) {
+          PackedLogic4 logic4(replacement.width(), Logic4::zero);
+          for (std::size_t bit = 0; bit < replacement.width(); ++bit) {
+            logic4.set(bit, replacement.get(bit));
+          }
+          replacement = std::move(logic4);
         }
         element = std::move(replacement);
       });

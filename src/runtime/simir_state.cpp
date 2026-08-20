@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
 
+#include <cstdlib>
+
 namespace fsim::runtime::simir {
 
 [[nodiscard]] std::size_t Interpreter::Impl::InertialDriverKeyHash::operator()(
@@ -37,8 +39,21 @@ Interpreter::Impl::Impl(
     const std::uint64_t seed)
     : scheduler(options)
     , root_seed(seed)
+    , process_profile_enabled(std::getenv("FSIM_PROFILE_PROCESSES") != nullptr)
+    , update_profile_enabled(std::getenv("FSIM_PROFILE_UPDATES") != nullptr)
+    , native_phase_profile_enabled(
+          std::getenv("FSIM_PROFILE_NATIVE_PHASE") != nullptr)
+    , native_process_count_profile_enabled(
+          std::getenv("FSIM_PROFILE_NATIVE_PROCESS_COUNTS") != nullptr)
+    , native_update_profile_enabled(
+          std::getenv("FSIM_PROFILE_NATIVE_UPDATES") != nullptr)
+    , jit_skip_callable_frames(
+          std::getenv("FSIM_JIT_SKIP_CALLABLE_FRAMES") != nullptr)
 {
     scheduler.set_slot_start_hook([this](Scheduler&) {
+        if (!requires_sampled_values) {
+            return;
+        }
         sampled_values.clear();
         sampled_values.reserve(signals.size());
         for (const auto& signal : signals) {
@@ -52,6 +67,7 @@ Interpreter::Impl::Impl(
     if (id >= signals.size()) {
         throw std::out_of_range("invalid SimIR signal ID");
     }
+    materialize_direct_signal(id);
     return signals[id];
 }
 
@@ -60,7 +76,56 @@ Interpreter::Impl::Impl(
     if (id >= signals.size()) {
         throw std::out_of_range("invalid SimIR signal ID");
     }
+    const_cast<Impl*>(this)->materialize_direct_signal(id);
     return signals[id];
+}
+
+void Interpreter::Impl::materialize_direct_signal(const SignalId id)
+{
+    if (id >= direct_signal_materialization_pending.size()
+        || direct_signal_materialization_pending[id] == 0U) {
+        return;
+    }
+    const auto width = signals[id].initial_value.width();
+    if (signals[id].value_kind == ValueKind::logic9) {
+        const auto current = Logic9Word {
+            width,
+            { direct_signal_logic9_plane0[id],
+                direct_signal_logic9_plane1[id],
+                direct_signal_logic9_plane2[id],
+                direct_signal_logic9_plane3[id] }
+        };
+        const auto previous = Logic9Word {
+            width,
+            { direct_signal_last_logic9_plane0[id],
+                direct_signal_last_logic9_plane1[id],
+                direct_signal_last_logic9_plane2[id],
+                direct_signal_last_logic9_plane3[id] }
+        };
+        signals[id].initial_value.assign_logic9_word(current);
+        signal_last_values[id].assign_logic9_word(previous);
+        driven_values[id].assign_logic9_word(current);
+        const auto& route = direct_single_driver_routes[id];
+        if (route.value != nullptr) {
+            route.value->assign_logic9_word(current);
+        }
+        direct_signal_materialization_pending[id] = 0U;
+        return;
+    }
+    const auto current = Logic4Word {
+        width, direct_signal_aval[id], direct_signal_bval[id]
+    };
+    const auto previous = Logic4Word {
+        width, direct_signal_last_aval[id], direct_signal_last_bval[id]
+    };
+    signals[id].initial_value.assign_word(current);
+    signal_last_values[id].assign_word(previous);
+    driven_values[id].assign_word(current);
+    const auto& route = direct_single_driver_routes[id];
+    if (route.value != nullptr) {
+        route.value->assign_word(current);
+    }
+    direct_signal_materialization_pending[id] = 0U;
 }
 
 [[nodiscard]] Interpreter::Impl::ProcessState&
@@ -415,6 +480,62 @@ void Interpreter::Impl::mark_dynamic_event_resume(
         [](const bool triggered) { return triggered; });
 }
 
+void Interpreter::Impl::register_static_sensitivity_cohort(
+    const ProcessId id)
+{
+    const auto& process = get_process(id).program;
+    static_sensitivity_cohort_by_process.resize(
+        processes.size(), std::numeric_limits<std::size_t>::max());
+    if (process.static_sensitivity.empty()) {
+        return;
+    }
+
+    auto sensitivity = process.static_sensitivity;
+    std::ranges::sort(
+        sensitivity,
+        { },
+        [](const Sensitivity& entry) {
+            return std::pair {
+                entry.signal,
+                static_cast<std::underlying_type_t<EdgeKind>>(entry.edge)
+            };
+        });
+    sensitivity.erase(
+        std::ranges::unique(
+            sensitivity,
+            { },
+            [](const Sensitivity& entry) {
+                return std::pair {
+                    entry.signal,
+                    static_cast<std::underlying_type_t<EdgeKind>>(entry.edge)
+                };
+            })
+            .begin(),
+        sensitivity.end());
+
+    std::string key;
+    key += process.postponed ? 'p'
+        : process.reactive ? 'r'
+        : process.observed ? 'o'
+                           : 'a';
+    for (const auto& entry : sensitivity) {
+        key += std::to_string(static_cast<std::size_t>(entry.signal));
+        key += ':';
+        key += std::to_string(static_cast<std::underlying_type_t<EdgeKind>>(
+            entry.edge));
+        key += ';';
+    }
+    const auto [found, inserted]
+        = static_sensitivity_cohort_by_key.try_emplace(
+            std::move(key), static_sensitivity_cohorts.size());
+    if (inserted) {
+        static_sensitivity_cohorts.emplace_back();
+    }
+    const auto cohort = found->second;
+    static_sensitivity_cohorts[cohort].members.push_back(id);
+    static_sensitivity_cohort_by_process[id] = cohort;
+}
+
 void Interpreter::Impl::queue_at(ProcessId id, SimulationTick time)
 {
     auto& process = get_process(id);
@@ -465,6 +586,110 @@ void Interpreter::Impl::queue_next_delta(ProcessId id)
         });
 }
 
+void Interpreter::Impl::queue_static_next_delta(const ProcessId id)
+{
+    auto& process = get_process(id);
+    if (process.halted || process.queued) {
+        return;
+    }
+    const auto no_cohort = std::numeric_limits<std::size_t>::max();
+    const auto cohort = id < static_sensitivity_cohort_by_process.size()
+        ? static_sensitivity_cohort_by_process[id]
+        : no_cohort;
+    if (cohort == no_cohort
+        || static_sensitivity_cohorts[cohort].members.size() < 2U) {
+        const auto no_region = std::numeric_limits<std::size_t>::max();
+        const auto region = id < native_static_region_by_process.size()
+            ? native_static_region_by_process[id]
+            : no_region;
+        if (region != no_region) {
+            process.queued = true;
+            const auto offset = native_static_region_offset_by_process[id];
+            native_static_regions[region].active[offset] = 1U;
+            const auto fallback = [this, id, region, offset](Scheduler&) {
+                native_static_regions[region].active[offset] = 0U;
+                auto& state = get_process(id);
+                state.queued = false;
+                state.waiting_on_static = false;
+                remove_dynamic_wait(state);
+                execute(id);
+            };
+            scheduler.schedule_next_delta_batchable(
+                SchedulerPhase::active, id, *this,
+                native_static_region_payload
+                    | static_cast<std::uint64_t>(id),
+                fallback);
+            return;
+        }
+        queue_next_delta(id);
+        return;
+    }
+
+    queue_static_cohort_next_delta(cohort);
+}
+
+void Interpreter::Impl::queue_static_cohort_next_delta(
+    const std::size_t cohort_id)
+{
+    auto& cohort = static_sensitivity_cohorts.at(cohort_id);
+    if (!cohort.ready.empty()) {
+        return;
+    }
+
+    cohort.ready.reserve(cohort.members.size());
+    for (const auto member : cohort.members) {
+        auto& candidate = get_process(member);
+        if (candidate.halted || candidate.queued
+            || !candidate.waiting_on_static) {
+            continue;
+        }
+        candidate.queued = true;
+        cohort.ready.push_back(member);
+    }
+    if (cohort.ready.empty()) {
+        return;
+    }
+    const auto& process = get_process(cohort.ready.front());
+    const auto phase = process.program.postponed
+        ? SchedulerPhase::postponed
+        : process.program.reactive
+        ? SchedulerPhase::reactive
+        : process.program.observed
+        ? SchedulerPhase::observed
+        : SchedulerPhase::active;
+    const auto order = cohort.ready.front();
+    const auto execute_one = [this, cohort_id](Scheduler&) {
+        auto& scheduled_cohort
+            = static_sensitivity_cohorts[cohort_id];
+        auto ready = std::move(scheduled_cohort.ready);
+        scheduled_cohort.ready.clear();
+        static_cast<void>(execute_static_cohort(ready));
+    };
+    static const bool static_phase_batches_enabled
+        = std::getenv("FSIM_DISABLE_STATIC_PHASE_BATCH") == nullptr;
+    if (static_phase_batches_enabled) {
+        static_assert(sizeof(std::size_t) <= sizeof(std::uint64_t));
+        scheduler.schedule_next_delta_batchable(
+            phase, order, *this,
+            static_cast<std::uint64_t>(cohort_id), execute_one);
+    } else {
+        scheduler.schedule_next_delta(phase, order, execute_one);
+    }
+}
+
+std::uint64_t Interpreter::Impl::next_static_fanout_visit()
+{
+    ++static_fanout_visit_generation;
+    if (static_fanout_visit_generation != 0U) {
+        return static_fanout_visit_generation;
+    }
+    static_fanout_visit_generation = 1U;
+    for (auto& cohort : static_sensitivity_cohorts) {
+        cohort.fanout_visit = 0U;
+    }
+    return static_fanout_visit_generation;
+}
+
 void Interpreter::Impl::queue_current(ProcessId id)
 {
     auto& process = get_process(id);
@@ -507,6 +732,51 @@ void Interpreter::Impl::queue_active_current(ProcessId id)
         });
 }
 
+void Interpreter::Impl::queue_static_active_current(const ProcessId id)
+{
+    auto& process = get_process(id);
+    if (process.halted || process.queued) {
+        return;
+    }
+    const auto no_cohort = std::numeric_limits<std::size_t>::max();
+    const auto cohort = id < static_sensitivity_cohort_by_process.size()
+        ? static_sensitivity_cohort_by_process[id]
+        : no_cohort;
+    if (cohort == no_cohort
+        || static_sensitivity_cohorts[cohort].members.size() < 2U) {
+        queue_active_current(id);
+        return;
+    }
+
+    std::vector<ProcessId> ready;
+    ready.reserve(static_sensitivity_cohorts[cohort].members.size());
+    for (const auto member : static_sensitivity_cohorts[cohort].members) {
+        auto& candidate = get_process(member);
+        if (candidate.halted || candidate.queued
+            || !candidate.waiting_on_static) {
+            continue;
+        }
+        candidate.queued = true;
+        ready.push_back(member);
+    }
+    if (ready.empty()) {
+        return;
+    }
+    const auto phase = process.program.postponed
+        ? SchedulerPhase::postponed
+        : process.program.reactive
+        ? SchedulerPhase::reactive
+        : process.program.observed
+        ? SchedulerPhase::observed
+        : SchedulerPhase::active;
+    const auto order = ready.front();
+    scheduler.schedule(
+        phase, order,
+        [this, ready = std::move(ready)](Scheduler&) {
+            static_cast<void>(execute_static_cohort(ready));
+        });
+}
+
 void Interpreter::Impl::trigger_event(const SignalId event)
 {
     const auto& source = get_signal(event);
@@ -531,8 +801,9 @@ void Interpreter::Impl::trigger_event(const SignalId event)
         };
         for (const auto& sensitivity : static_fanout[member]) {
             auto& process = get_process(sensitivity.process);
+            process.static_trigger_mask |= sensitivity.static_trigger_mask;
             if (process.waiting_on_static) {
-                queue_active_current(sensitivity.process);
+                queue_static_active_current(sensitivity.process);
             }
         }
     }
@@ -977,24 +1248,485 @@ void Interpreter::Impl::publish(
         throw std::invalid_argument("SimIR signal assignment width mismatch");
     }
     value = normalize_signal_value(signal_id, std::move(value));
+    publish_normalized(signal_id, std::move(value), notify_fanout);
+}
+
+void Interpreter::Impl::publish_normalized(
+    const SignalId signal_id,
+    PackedLogic4 value,
+    const bool notify_fanout)
+{
+    note_signal_transaction(signal_id, notify_fanout);
+    auto& signal = signals[signal_id];
+    if (signal.initial_value == value) {
+        return;
+    }
+    signal_last_values[signal_id] = std::move(signal.initial_value);
+    signal.initial_value = std::move(value);
+    refresh_direct_signal_planes(signal_id);
+    publish_value_change(signal_id, notify_fanout);
+}
+
+void Interpreter::Impl::publish_normalized_word(
+    const SignalId signal_id,
+    const Logic4Word value,
+    const bool notify_fanout)
+{
+    note_signal_transaction(signal_id, notify_fanout);
+    auto& signal = signals[signal_id];
+    const auto current = signal.initial_value.unchecked_low_word();
+    if (current == value) {
+        return;
+    }
+    if (native_process_count_profile_enabled) {
+        ++native_process_word_changes;
+    }
+    signal_last_values[signal_id].assign_word(current);
+    signal.initial_value.assign_word(value);
+    const auto encoded = signal.initial_value.unchecked_low_word();
+    direct_signal_aval[signal_id] = encoded.aval;
+    direct_signal_bval[signal_id] = encoded.bval;
+    publish_value_change(signal_id, notify_fanout);
+}
+
+bool Interpreter::Impl::can_publish_native_word(
+    const SignalId signal_id,
+    const ProcessId process) noexcept
+{
+    if (has_bidirectional_switches || requires_sampled_values
+        || !module_paths.empty() || !module_timing_checks.empty()
+        || monitor) {
+        if (native_phase_profile_enabled) {
+            ++native_phase_profile_rejected_structure;
+        }
+        return false;
+    }
+    if (native_signal_observation_required_hook) {
+        if (native_signal_observation_required_hook(signal_id)) {
+            if (native_phase_profile_enabled) {
+                ++native_phase_profile_rejected_observer;
+            }
+            return false;
+        }
+    } else if (signal_change_hook || stored_signal_change_hook
+        || driver_change_hook || scalar_signal_change_hook
+        || container_object_change_hook) {
+        if (native_phase_profile_enabled) {
+            ++native_phase_profile_rejected_observer;
+        }
+        return false;
+    }
+    return can_publish_native_word_prevalidated(signal_id, process);
+}
+
+bool Interpreter::Impl::native_word_publication_phase_eligible() noexcept
+{
+    if (has_bidirectional_switches || requires_sampled_values
+        || !module_paths.empty() || !module_timing_checks.empty()
+        || monitor) {
+        return false;
+    }
+    if (native_signal_observation_any_hook) {
+        return !native_signal_observation_any_hook();
+    }
+    if (native_signal_observation_required_hook) {
+        return false;
+    }
+    return !signal_change_hook && !stored_signal_change_hook
+        && !driver_change_hook && !scalar_signal_change_hook
+        && !container_object_change_hook;
+}
+
+bool Interpreter::Impl::can_publish_native_word_prevalidated(
+    const SignalId signal_id,
+    const ProcessId process) noexcept
+{
+    if (signal_id >= signals.size()
+        || signal_id >= direct_single_driver_routes.size()
+        || signal_id >= dynamic_fanout.size()
+        || signal_id >= signal_container_aliases.size()
+        || !dynamic_fanout[signal_id].empty()
+        || !signal_container_aliases[signal_id].empty()) {
+        if (native_phase_profile_enabled) {
+            ++native_phase_profile_rejected_structure;
+        }
+        return false;
+    }
+    const auto& signal = signals[signal_id];
+    const auto& route = direct_single_driver_routes[signal_id];
+    if (route.value == nullptr || route.process != process) {
+        if (native_phase_profile_enabled) {
+            ++native_phase_profile_rejected_route;
+        }
+        return false;
+    }
+    if (signal.resolution != ResolutionKind::sv_wire
+        && signal.value_kind == ValueKind::logic4
+        && signal.systemverilog_scalar == SystemVerilogScalarKind::None) {
+        if (native_phase_profile_enabled) {
+            ++native_phase_profile_rejected_semantics;
+        }
+        return false;
+    }
+    if (signal.resolution != ResolutionKind::sv_wire
+        || signal.value_kind != ValueKind::logic4
+        || signal.systemverilog_scalar != SystemVerilogScalarKind::None
+        || signal.event_variable || signal.implicit_driver
+        || signal.charge_strength || external_driver_values[signal_id]
+        || forced_values[signal_id]
+        || !forced_driver_values[signal_id].empty()
+        || signal.initial_value.width() == 0U
+        || signal.initial_value.width() > 64U) {
+        if (native_phase_profile_enabled) {
+            ++native_phase_profile_rejected_runtime;
+        }
+        return false;
+    }
+    return true;
+}
+
+bool Interpreter::Impl::can_publish_native_logic9_word(
+    const SignalId signal_id,
+    const ProcessId process) noexcept
+{
+    if (has_bidirectional_switches || requires_sampled_values
+        || !module_paths.empty() || !module_timing_checks.empty()
+        || monitor || signal_id >= signals.size()
+        || signal_id >= direct_single_driver_routes.size()
+        || signal_id >= dynamic_fanout.size()
+        || signal_id >= signal_container_aliases.size()
+        || !dynamic_fanout[signal_id].empty()
+        || !signal_container_aliases[signal_id].empty()) {
+        return false;
+    }
+    if (native_signal_observation_required_hook) {
+        if (native_signal_observation_required_hook(signal_id)) {
+            return false;
+        }
+    } else if (signal_change_hook || stored_signal_change_hook
+        || driver_change_hook || scalar_signal_change_hook
+        || container_object_change_hook) {
+        return false;
+    }
+    const auto& signal = signals[signal_id];
+    const auto& route = direct_single_driver_routes[signal_id];
+    return route.value != nullptr && route.process == process
+        && signal.resolution == ResolutionKind::std_logic
+        && signal.value_kind == ValueKind::logic9
+        && signal.systemverilog_scalar == SystemVerilogScalarKind::None
+        && !signal.event_variable && !signal.implicit_driver
+        && !signal.charge_strength && !external_driver_values[signal_id]
+        && !forced_values[signal_id]
+        && forced_driver_values[signal_id].empty()
+        && signal.initial_value.width() != 0U
+        && signal.initial_value.width() <= 64U;
+}
+
+bool Interpreter::Impl::can_publish_blocking_word(
+    const SignalId signal_id) noexcept
+{
+    if (signal_id >= signals.size()
+        || signal_id >= dynamic_fanout.size()
+        || signal_id >= signal_container_aliases.size()
+        || has_bidirectional_switches || requires_sampled_values
+        || !module_paths.empty() || !module_timing_checks.empty()
+        || monitor
+        || !dynamic_fanout[signal_id].empty()
+        || !signal_container_aliases[signal_id].empty()) {
+        return false;
+    }
+    if (native_signal_observation_required_hook) {
+        if (native_signal_observation_required_hook(signal_id)) {
+            return false;
+        }
+    } else if (signal_change_hook || stored_signal_change_hook
+        || driver_change_hook || scalar_signal_change_hook
+        || container_object_change_hook) {
+        return false;
+    }
+    const auto& signal = signals[signal_id];
+    return signal.resolution == ResolutionKind::none
+        && signal.value_kind == ValueKind::logic4
+        && signal.systemverilog_scalar == SystemVerilogScalarKind::None
+        && !signal.event_variable && !signal.implicit_driver
+        && !signal.charge_strength && !external_driver_values[signal_id]
+        && !forced_values[signal_id]
+        && forced_driver_values[signal_id].empty()
+        && signal.initial_value.width() != 0U
+        && signal.initial_value.width() <= 64U;
+}
+
+void Interpreter::Impl::publish_native_word(
+    const SignalId signal_id,
+    Logic4Word value)
+{
+    const bool has_static_fanout = !static_fanout[signal_id].empty();
+    note_signal_transaction(signal_id, has_static_fanout);
+    const auto width = signals[signal_id].initial_value.width();
+    const auto mask = width == 64U
+        ? std::numeric_limits<std::uint64_t>::max()
+        : (UINT64_C(1) << width) - UINT64_C(1);
+    value.aval &= mask;
+    value.bval &= mask;
+    const auto current = Logic4Word {
+        width, direct_signal_aval[signal_id], direct_signal_bval[signal_id]
+    };
+    if (current == value) {
+        return;
+    }
+
+    direct_signal_last_aval[signal_id] = current.aval;
+    direct_signal_last_bval[signal_id] = current.bval;
+    direct_signal_aval[signal_id] = value.aval;
+    direct_signal_bval[signal_id] = value.bval;
+    const auto wide_offset = direct_wide_signal_offsets[signal_id];
+    direct_wide_signal_aval[wide_offset] = value.aval;
+    direct_wide_signal_bval[wide_offset] = value.bval;
+    direct_signal_materialization_pending[signal_id] = 1U;
+
+    ++signal_value_revisions[signal_id];
+    if (signal_value_revisions[signal_id] == 0U) {
+        signal_value_revisions[signal_id] = 1U;
+        std::ranges::fill(
+            container_materialized_revisions, std::nullopt);
+    }
+    signal_events[signal_id]
+        = std::pair { scheduler.now(), scheduler.delta() + 1U };
+    scheduler.note_signal_change(signal_id);
+
+    if (!has_static_fanout) {
+        return;
+    }
+
+    static const bool group_static_fanout
+        = std::getenv("FSIM_DISABLE_FANOUT_COHORT_GROUPING") == nullptr;
+    const auto visit = next_static_fanout_visit();
+    const auto no_cohort = std::numeric_limits<std::size_t>::max();
+    const auto decode_low = [](const Logic4Word word) {
+        const bool aval = (word.aval & UINT64_C(1)) != 0U;
+        const bool bval = (word.bval & UINT64_C(1)) != 0U;
+        return bval ? (aval ? Logic4::x : Logic4::z)
+                    : (aval ? Logic4::one : Logic4::zero);
+    };
+    const auto old_low = decode_low(current);
+    const auto new_low = decode_low(value);
+    for (const auto& sensitivity : static_fanout[signal_id]) {
+        if (sensitivity.edge == EdgeKind::transaction) {
+            continue;
+        }
+        if (sensitivity.edge != EdgeKind::any
+            && (width != 1U
+                || !edge_matches(sensitivity.edge, old_low, new_low))) {
+            continue;
+        }
+        auto& triggered_process = get_process(sensitivity.process);
+        triggered_process.static_trigger_mask
+            |= sensitivity.static_trigger_mask;
+        if (native_process_count_profile_enabled) {
+            ++native_process_word_fanout_matches;
+            auto& profiled_process = get_process(sensitivity.process);
+            if (profiled_process.waiting_on_static) {
+                ++native_process_word_fanout_ready;
+                if (sensitivity.process
+                    >= native_process_word_fanout_ready_counts.size()) {
+                    native_process_word_fanout_ready_counts.resize(
+                        static_cast<std::size_t>(sensitivity.process) + 1U);
+                    native_process_static_trigger_counts.resize(
+                        static_cast<std::size_t>(sensitivity.process) + 1U);
+                }
+                ++native_process_word_fanout_ready_counts[
+                    sensitivity.process];
+                ++native_process_static_trigger_counts[
+                    sensitivity.process][signal_id];
+            }
+        }
+        const auto cohort
+            = sensitivity.process < static_sensitivity_cohort_by_process.size()
+            ? static_sensitivity_cohort_by_process[sensitivity.process]
+            : no_cohort;
+        if (group_static_fanout && cohort != no_cohort
+            && static_sensitivity_cohorts[cohort].members.size() >= 2U) {
+            auto& grouped = static_sensitivity_cohorts[cohort];
+            if (grouped.fanout_visit != visit) {
+                grouped.fanout_visit = visit;
+                queue_static_cohort_next_delta(cohort);
+            }
+            continue;
+        }
+        auto& process_state = get_process(sensitivity.process);
+        if (process_state.waiting_on_static) {
+            queue_static_next_delta(sensitivity.process);
+        }
+    }
+}
+
+void Interpreter::Impl::publish_native_logic9_word(
+    const SignalId signal_id,
+    Logic9Word value)
+{
+    static const bool group_static_fanout
+        = std::getenv("FSIM_DISABLE_FANOUT_COHORT_GROUPING") == nullptr;
+    const bool has_static_fanout = !static_fanout[signal_id].empty();
+    note_signal_transaction(signal_id, has_static_fanout);
+    const auto width = signals[signal_id].initial_value.width();
+    const auto mask = width == 64U
+        ? std::numeric_limits<std::uint64_t>::max()
+        : (UINT64_C(1) << width) - UINT64_C(1);
+    value.width = width;
+    for (auto& plane : value.planes) {
+        plane &= mask;
+    }
+    const auto current = Logic9Word {
+        width,
+        { direct_signal_logic9_plane0[signal_id],
+            direct_signal_logic9_plane1[signal_id],
+            direct_signal_logic9_plane2[signal_id],
+            direct_signal_logic9_plane3[signal_id] }
+    };
+    if ((((current.planes[0] ^ value.planes[0])
+              | (current.planes[1] ^ value.planes[1])
+              | (current.planes[2] ^ value.planes[2])
+              | (current.planes[3] ^ value.planes[3]))
+            & mask)
+        == 0U) {
+        return;
+    }
+    direct_signal_last_logic9_plane0[signal_id] = current.planes[0];
+    direct_signal_last_logic9_plane1[signal_id] = current.planes[1];
+    direct_signal_last_logic9_plane2[signal_id] = current.planes[2];
+    direct_signal_last_logic9_plane3[signal_id] = current.planes[3];
+    direct_signal_logic9_plane0[signal_id] = value.planes[0];
+    direct_signal_logic9_plane1[signal_id] = value.planes[1];
+    direct_signal_logic9_plane2[signal_id] = value.planes[2];
+    direct_signal_logic9_plane3[signal_id] = value.planes[3];
+    direct_signal_materialization_pending[signal_id] = 1U;
+
+    ++signal_value_revisions[signal_id];
+    if (signal_value_revisions[signal_id] == 0U) {
+        signal_value_revisions[signal_id] = 1U;
+        std::ranges::fill(
+            container_materialized_revisions, std::nullopt);
+    }
+    signal_events[signal_id]
+        = std::pair { scheduler.now(), scheduler.delta() + 1U };
+    scheduler.note_signal_change(signal_id);
+
+    if (!has_static_fanout) {
+        return;
+    }
+
+    const auto decode_low = [](const Logic9Word& word) {
+        std::uint8_t encoded { };
+        for (std::size_t plane = 0; plane < word.planes.size(); ++plane) {
+            encoded |= static_cast<std::uint8_t>(
+                (word.planes[plane] & UINT64_C(1)) << plane);
+        }
+        const auto logic9
+            = encoded <= static_cast<std::uint8_t>(Logic9::dont_care)
+            ? static_cast<Logic9>(encoded)
+            : Logic9::x;
+        return to_logic4(logic9);
+    };
+    const auto old_low = decode_low(current);
+    const auto new_low = decode_low(value);
+    const auto visit = next_static_fanout_visit();
+    const auto no_cohort = std::numeric_limits<std::size_t>::max();
+    for (const auto& sensitivity : static_fanout[signal_id]) {
+        if (sensitivity.edge == EdgeKind::transaction) {
+            continue;
+        }
+        if (sensitivity.edge != EdgeKind::any
+            && (width != 1U
+                || !edge_matches(sensitivity.edge, old_low, new_low))) {
+            continue;
+        }
+        auto& triggered_process = get_process(sensitivity.process);
+        triggered_process.static_trigger_mask
+            |= sensitivity.static_trigger_mask;
+        if (native_process_count_profile_enabled
+            && triggered_process.waiting_on_static) {
+            if (sensitivity.process
+                >= native_process_static_trigger_counts.size()) {
+                native_process_static_trigger_counts.resize(
+                    static_cast<std::size_t>(sensitivity.process) + 1U);
+            }
+            ++native_process_static_trigger_counts[
+                sensitivity.process][signal_id];
+        }
+        const auto cohort
+            = sensitivity.process < static_sensitivity_cohort_by_process.size()
+            ? static_sensitivity_cohort_by_process[sensitivity.process]
+            : no_cohort;
+        if (group_static_fanout && cohort != no_cohort
+            && static_sensitivity_cohorts[cohort].members.size() >= 2U) {
+            auto& grouped = static_sensitivity_cohorts[cohort];
+            if (grouped.fanout_visit != visit) {
+                grouped.fanout_visit = visit;
+                queue_static_cohort_next_delta(cohort);
+            }
+            continue;
+        }
+        if (triggered_process.waiting_on_static) {
+            queue_static_next_delta(sensitivity.process);
+        }
+    }
+}
+
+void Interpreter::Impl::note_signal_transaction(
+    const SignalId signal_id,
+    const bool notify_fanout)
+{
+    static const bool group_static_fanout
+        = std::getenv("FSIM_DISABLE_FANOUT_COHORT_GROUPING") == nullptr;
     signal_transactions[signal_id] = std::pair { scheduler.now(), scheduler.delta() + 1 };
-    if (notify_fanout) {
+    if (notify_fanout && !static_fanout[signal_id].empty()) {
+        const auto visit = next_static_fanout_visit();
+        const auto no_cohort = std::numeric_limits<std::size_t>::max();
         for (const auto& sensitivity : static_fanout[signal_id]) {
             if (sensitivity.edge != EdgeKind::transaction) {
                 continue;
             }
+            auto& triggered_process = get_process(sensitivity.process);
+            triggered_process.static_trigger_mask
+                |= sensitivity.static_trigger_mask;
+            const auto cohort
+                = sensitivity.process
+                        < static_sensitivity_cohort_by_process.size()
+                ? static_sensitivity_cohort_by_process[
+                      sensitivity.process]
+                : no_cohort;
+            if (group_static_fanout && cohort != no_cohort
+                && static_sensitivity_cohorts[cohort].members.size()
+                    >= 2U) {
+                auto& grouped = static_sensitivity_cohorts[cohort];
+                if (grouped.fanout_visit != visit) {
+                    grouped.fanout_visit = visit;
+                    queue_static_cohort_next_delta(cohort);
+                }
+                continue;
+            }
             auto& process = get_process(sensitivity.process);
             if (process.waiting_on_static) {
-                queue_next_delta(sensitivity.process);
+                queue_static_next_delta(sensitivity.process);
             }
         }
     }
-    if (signal.initial_value == value) {
-        return;
+}
+
+void Interpreter::Impl::publish_value_change(
+    const SignalId signal_id,
+    const bool notify_fanout)
+{
+    static const bool group_static_fanout
+        = std::getenv("FSIM_DISABLE_FANOUT_COHORT_GROUPING") == nullptr;
+    auto& signal = signals[signal_id];
+    const auto& old_value = signal_last_values[signal_id];
+    ++signal_value_revisions[signal_id];
+    if (signal_value_revisions[signal_id] == 0U) {
+        signal_value_revisions[signal_id] = 1U;
+        std::ranges::fill(
+            container_materialized_revisions, std::nullopt);
     }
-    const auto old_value = signal.initial_value;
-    signal_last_values[signal_id] = old_value;
-    signal.initial_value = std::move(value);
     signal_events[signal_id] = std::pair { scheduler.now(), scheduler.delta() + 1 };
     scheduler.note_signal_change(signal_id);
     evaluate_module_timing_checks(signal_id, old_value, signal.initial_value);
@@ -1017,18 +1749,51 @@ void Interpreter::Impl::publish(
     }
 
     if (notify_fanout) {
+        const auto visit = next_static_fanout_visit();
+        const auto no_cohort = std::numeric_limits<std::size_t>::max();
         for (const auto& sensitivity : static_fanout[signal_id]) {
             if (sensitivity.edge == EdgeKind::transaction) {
-                continue;
-            }
-            auto& process = get_process(sensitivity.process);
-            if (!process.waiting_on_static) {
                 continue;
             }
             if (sensitivity.edge != EdgeKind::any && (old_value.width() != 1 || !edge_matches(sensitivity.edge, old_value.get(0), signal.initial_value.get(0)))) {
                 continue;
             }
-            queue_next_delta(sensitivity.process);
+            auto& triggered_process = get_process(sensitivity.process);
+            triggered_process.static_trigger_mask
+                |= sensitivity.static_trigger_mask;
+            if (native_process_count_profile_enabled) {
+                auto& profiled_process = get_process(sensitivity.process);
+                if (profiled_process.waiting_on_static) {
+                    if (sensitivity.process
+                        >= native_process_static_trigger_counts.size()) {
+                        native_process_static_trigger_counts.resize(
+                            static_cast<std::size_t>(sensitivity.process)
+                            + 1U);
+                    }
+                    ++native_process_static_trigger_counts[
+                        sensitivity.process][signal_id];
+                }
+            }
+            const auto cohort
+                = sensitivity.process
+                        < static_sensitivity_cohort_by_process.size()
+                ? static_sensitivity_cohort_by_process[
+                      sensitivity.process]
+                : no_cohort;
+            if (group_static_fanout && cohort != no_cohort
+                && static_sensitivity_cohorts[cohort].members.size()
+                    >= 2U) {
+                auto& grouped = static_sensitivity_cohorts[cohort];
+                if (grouped.fanout_visit != visit) {
+                    grouped.fanout_visit = visit;
+                    queue_static_cohort_next_delta(cohort);
+                }
+                continue;
+            }
+            auto& process = get_process(sensitivity.process);
+            if (process.waiting_on_static) {
+                queue_static_next_delta(sensitivity.process);
+            }
         }
         // Copy because queue_next_delta removes a process from every dynamic list.
         const auto dynamic = dynamic_fanout[signal_id];
@@ -1048,6 +1813,47 @@ void Interpreter::Impl::publish(
             }
         }
     }
+}
+
+void Interpreter::Impl::refresh_direct_signal_planes(
+    const SignalId signal_id)
+{
+    const auto& value = signals[signal_id].initial_value;
+    if (value.is_logic9()) {
+        if (value.width() <= 64U) {
+            const auto word = value.logic9_low_word();
+            direct_signal_logic9_plane0[signal_id] = word.planes[0];
+            direct_signal_logic9_plane1[signal_id] = word.planes[1];
+            direct_signal_logic9_plane2[signal_id] = word.planes[2];
+            direct_signal_logic9_plane3[signal_id] = word.planes[3];
+        }
+        const auto offset = direct_wide_signal_offsets[signal_id];
+        const auto plane0 = value.logic9_plane_words(0U);
+        const auto plane1 = value.logic9_plane_words(1U);
+        const auto plane2 = value.logic9_plane_words(2U);
+        const auto plane3 = value.logic9_plane_words(3U);
+        std::ranges::copy(
+            plane0, direct_wide_signal_aval.begin() + offset);
+        std::ranges::copy(
+            plane1, direct_wide_signal_bval.begin() + offset);
+        std::ranges::copy(
+            plane2, direct_wide_signal_logic9_plane2.begin() + offset);
+        std::ranges::copy(
+            plane3, direct_wide_signal_logic9_plane3.begin() + offset);
+        return;
+    }
+    if (value.width() <= 64U) {
+        const auto word = value.unchecked_low_word();
+        direct_signal_aval[signal_id] = word.aval;
+        direct_signal_bval[signal_id] = word.bval;
+    }
+    const auto offset = direct_wide_signal_offsets[signal_id];
+    const auto aval = value.aval_words();
+    const auto bval = value.bval_words();
+    std::ranges::copy(
+        aval, direct_wide_signal_aval.begin() + offset);
+    std::ranges::copy(
+        bval, direct_wide_signal_bval.begin() + offset);
 }
 
 } // namespace fsim::runtime::simir

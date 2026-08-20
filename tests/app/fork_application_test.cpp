@@ -118,7 +118,7 @@ Capture execute(
     assert(result);
     const auto lifecycle = simulation.find_signal("fork_processes.lifecycle");
     assert(lifecycle);
-    const auto& process = simulation.design().processes().front();
+    const auto& process = simulation.process_program(0U);
     const auto local = std::find_if(
         process.debug_locals.begin(), process.debug_locals.end(),
         [](const auto& value) { return value.name == "root.shared"; });
@@ -150,7 +150,8 @@ Capture execute(
             capture.points.push_back(point);
             if (point.process != point.design_process) {
                 assert(point.design_process == 0);
-                assert(!simulation.design().processes().at(point.design_process).name.empty());
+                assert(!simulation.process_program(
+                    point.design_process).name.empty());
                 (void)simulation.read_process_local(
                     point.process, local_index);
                 capture.child_debug_safe = true;

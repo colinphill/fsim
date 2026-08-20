@@ -491,11 +491,17 @@ namespace codec_detail {
                 }
                 write(static_cast<std::underlying_type_t<Value>>(value));
             } else if constexpr (std::is_integral_v<Value>) {
-                if constexpr (std::is_signed_v<Value>) {
-                    u64(std::bit_cast<std::uint64_t>(
-                        static_cast<std::int64_t>(value)));
-                } else {
-                    u64(static_cast<std::uint64_t>(value));
+                // Integral fields dominate elaborated runtime payloads.  Their
+                // C++ types already define the portable artifact width, so do
+                // not inflate every uint8/uint32 field to eight bytes.  Keep
+                // the byte order explicit and retain u64 for sequence/string
+                // lengths, whose archive width is intentionally fixed.
+                using Unsigned = std::make_unsigned_t<Value>;
+                const auto encoded = std::bit_cast<Unsigned>(value);
+                for (unsigned shift = 0;
+                     shift < sizeof(Value) * 8U; shift += 8U) {
+                    bytes_.push_back(static_cast<char>(
+                        (encoded >> shift) & static_cast<Unsigned>(0xffU)));
                 }
             } else if constexpr (std::same_as<Value, std::string>) {
                 u64(value.size());
@@ -629,23 +635,20 @@ namespace codec_detail {
                     return valid_archive_enum(value)
                         || fail("design state contains an invalid scalar enumeration");
                 } else if constexpr (std::is_integral_v<Value>) {
+                    if (remaining() < sizeof(Value)) {
+                        return fail("design state is truncated");
+                    }
+                    using Unsigned = std::make_unsigned_t<Value>;
+                    static_assert(sizeof(Value) <= sizeof(std::uint64_t));
                     std::uint64_t encoded { };
-                    if (!u64(encoded)) {
-                        return false;
+                    for (unsigned shift = 0;
+                         shift < sizeof(Value) * 8U; shift += 8U) {
+                        encoded |= static_cast<std::uint64_t>(
+                            static_cast<unsigned char>(bytes_[position_++]))
+                            << shift;
                     }
-                    if constexpr (std::is_signed_v<Value>) {
-                        const auto decoded = std::bit_cast<std::int64_t>(encoded);
-                        if (decoded < std::numeric_limits<Value>::min()
-                            || decoded > std::numeric_limits<Value>::max()) {
-                            return fail("design state integer is outside the host range");
-                        }
-                        value = static_cast<Value>(decoded);
-                    } else {
-                        if (encoded > std::numeric_limits<Value>::max()) {
-                            return fail("design state integer is outside the host range");
-                        }
-                        value = static_cast<Value>(encoded);
-                    }
+                    value = std::bit_cast<Value>(
+                        static_cast<Unsigned>(encoded));
                     return true;
                 } else if constexpr (std::same_as<Value, std::string>) {
                     std::uint64_t size { };

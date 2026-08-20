@@ -5,6 +5,29 @@ namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
 
+namespace {
+
+frontend::Type signal_type(const SignalInfo& info) {
+    frontend::Type type;
+    type.domain = info.source_domain;
+    type.spelling = info.type_name;
+    type.systemverilog_scalar = info.systemverilog_scalar;
+    type.systemverilog_net_type = info.systemverilog_net_type;
+    type.packed_range = info.packed_range;
+    type.is_signed = info.is_signed;
+    type.nominal_type = info.nominal_type;
+    type.enumeration_literals = info.enumeration_literals;
+    type.enumeration_range = info.enumeration_range;
+    type.packed_members = info.packed_members;
+    type.integer_range = info.integer_range;
+    type.vhdl_array = info.vhdl_array;
+    type.vhdl_access = info.vhdl_access;
+    type.vhdl_physical = info.vhdl_physical;
+    return type;
+}
+
+} // namespace
+
 void HierarchyBuilder::note_boundary_driver(
     const SignalId signal,
     const Binding* binding,
@@ -68,11 +91,12 @@ bool HierarchyBuilder::connect_verilog_memory_word_port(
     if (actual == parent_containers.end()) {
         return false;
     }
-    if (port.direction != frontend::PortDirection::Input) {
+    if (port.direction != frontend::PortDirection::Input
+        && port.direction != frontend::PortDirection::Output) {
         report(
             "FSIM-ELAB-BIND-027",
             "memory-word port actual '" + path + "." + port.name
-                + "' is supported only for an input port",
+                + "' is supported only for an input or output port",
             connection.value.span);
         return true;
     }
@@ -87,7 +111,7 @@ bool HierarchyBuilder::connect_verilog_memory_word_port(
         || !index || *index < low || *index > high) {
         report(
             "FSIM-ELAB-BIND-027",
-            "memory-word input port actual '" + path + "." + port.name
+            "memory-word port actual '" + path + "." + port.name
                 + "' requires a locally static in-range index into a fixed "
                   "packed-word memory",
             connection.value.span);
@@ -146,20 +170,24 @@ bool HierarchyBuilder::connect_verilog_memory_word_port(
             ValueKind::logic4 });
         design_.signal_by_name_.emplace(
             transaction_name, transaction);
-    }
-    for (auto& process : design_.processes_) {
-        for (auto& operation : process.operations) {
-            visit_operation(
-                [&](auto& candidate) {
-                    using Operation = std::decay_t<decltype(candidate)>;
-                    if constexpr (std::is_same_v<
-                                      Operation, WriteContainerObject>) {
-                        if (candidate.object == actual->second) {
-                            candidate.transaction_signal = transaction;
+        // Parent processes are complete before child ports are connected.
+        // Patch them once when the shared transaction signal is created;
+        // rescanning for every selected word makes generated memory banks
+        // quadratic in the already-elaborated process count.
+        for (auto& process : design_.processes_) {
+            for (auto& operation : process.operations) {
+                visit_operation(
+                    [&](auto& candidate) {
+                        using Operation = std::decay_t<decltype(candidate)>;
+                        if constexpr (std::is_same_v<
+                                          Operation, WriteContainerObject>) {
+                            if (candidate.object == actual->second) {
+                                candidate.transaction_signal = transaction;
+                            }
                         }
-                    }
-                },
-                operation);
+                    },
+                    operation);
+            }
         }
     }
 
@@ -172,6 +200,75 @@ bool HierarchyBuilder::connect_verilog_memory_word_port(
             connection.span);
         return true;
     }
+
+    const auto direct_packed_alias = std::find_if(
+        design_.container_signal_aliases_.rbegin(),
+        design_.container_signal_aliases_.rend(),
+        [&](const ContainerSignalAlias& candidate) {
+            return candidate.object == actual->second
+                && candidate.readable && candidate.writable;
+        });
+    if (direct_packed_alias != design_.container_signal_aliases_.rend()) {
+        const auto ordinal = static_cast<std::size_t>(
+            type.index_left >= type.index_right
+                ? static_cast<std::int64_t>(type.index_left) - *index
+                : *index - static_cast<std::int64_t>(type.index_left));
+        const auto packed_width
+            = design_.signal_info_.at(direct_packed_alias->signal).width;
+        const auto word_width = type.element_width;
+        const auto element_count = static_cast<std::size_t>(
+            static_cast<std::int64_t>(high)
+            - static_cast<std::int64_t>(low) + 1);
+        if (word_width != 0U && ordinal < element_count
+            && (ordinal + 1U) <= packed_width / word_width
+            && packed_width % word_width == 0U
+            && packed_width - (ordinal + 1U) * word_width
+                <= std::numeric_limits<std::uint32_t>::max()
+            && word_width <= std::numeric_limits<std::uint32_t>::max()) {
+            const auto offset = static_cast<std::uint32_t>(
+                packed_width - (ordinal + 1U) * word_width);
+            Process bridge;
+            bridge.id = static_cast<ProcessId>(design_.processes_.size());
+            bridge.name = path + "." + port.name
+                + "$packed_memory_word_bridge";
+            if (port.direction == frontend::PortDirection::Input) {
+                bridge.register_count = 2;
+                bridge.register_value_kinds = {
+                    ValueKind::logic4, value_kind(word_info.source_domain)
+                };
+                bridge.static_sensitivity.push_back(
+                    Sensitivity {
+                        direct_packed_alias->signal, EdgeKind::any });
+                bridge.operations.emplace_back(
+                    ReadSignal { 0, direct_packed_alias->signal });
+                bridge.operations.emplace_back(Extract {
+                    1, 0, offset, static_cast<std::uint32_t>(word_width) });
+                bridge.operations.emplace_back(WriteUpdate { *formal, 1 });
+                bridge.driver_regions.push_back(Process::DriverRegion {
+                    *formal, 0,
+                    static_cast<std::uint32_t>(word_width), true });
+                result.read_only_signals.insert(*formal);
+            } else {
+                bridge.register_count = 1;
+                bridge.register_value_kinds.push_back(
+                    value_kind(word_info.source_domain));
+                bridge.static_sensitivity.push_back(
+                    Sensitivity { *formal, EdgeKind::any });
+                bridge.operations.emplace_back(ReadSignal { 0, *formal });
+                bridge.operations.emplace_back(WriteUpdateSlice {
+                    direct_packed_alias->signal, 0, offset });
+                bridge.driver_regions.push_back(Process::DriverRegion {
+                    direct_packed_alias->signal, offset,
+                    static_cast<std::uint32_t>(word_width), false });
+            }
+            bridge.operations.emplace_back(WaitSensitivity { });
+            bridge.operations.emplace_back(Jump { 0 });
+            design_.specializations_.back().processes.push_back(bridge.id);
+            design_.processes_.push_back(std::move(bridge));
+            return true;
+        }
+    }
+
     Process bridge;
     bridge.id = static_cast<ProcessId>(design_.processes_.size());
     bridge.name = path + "." + port.name + "$memory_word_bridge";
@@ -181,23 +278,246 @@ bool HierarchyBuilder::connect_verilog_memory_word_port(
     bridge.register_value_kinds = {
         ValueKind::logic4, value_kind(word_info.source_domain)
     };
-    bridge.static_sensitivity.push_back(
-        Sensitivity { transaction, EdgeKind::transaction });
     bridge.operations.emplace_back(
         LoadConstant { 0, integer_value(*index) });
-    bridge.operations.emplace_back(
-        ReadContainerObject { 0, actual->second });
-    bridge.operations.emplace_back(ContainerRead { 1, 0, 0, true });
-    bridge.operations.emplace_back(WriteUpdate { *formal, 1 });
+    bridge.operations.emplace_back(ReadContainerObject { 0, actual->second });
+    if (port.direction == frontend::PortDirection::Input) {
+        const auto packed_alias = std::find_if(
+            design_.container_signal_aliases_.rbegin(),
+            design_.container_signal_aliases_.rend(),
+            [&](const ContainerSignalAlias& candidate) {
+                return candidate.object == actual->second
+                    && candidate.readable;
+            });
+        bridge.static_sensitivity.push_back(
+            Sensitivity {
+                packed_alias
+                        != design_.container_signal_aliases_.rend()
+                    ? packed_alias->signal
+                    : transaction,
+                packed_alias
+                        != design_.container_signal_aliases_.rend()
+                    ? EdgeKind::any
+                    : EdgeKind::transaction });
+        bridge.operations.emplace_back(ContainerRead { 1, 0, 0, true });
+        bridge.operations.emplace_back(WriteUpdate { *formal, 1 });
+    } else {
+        bridge.static_sensitivity.push_back(
+            Sensitivity { *formal, EdgeKind::any });
+        bridge.operations.emplace_back(ReadSignal { 1, *formal });
+        bridge.operations.emplace_back(ContainerWrite { 0, 0, 1, true });
+        bridge.operations.emplace_back(WriteContainerObject {
+            actual->second, 0, transaction });
+    }
     bridge.operations.emplace_back(WaitSensitivity { });
     bridge.operations.emplace_back(Jump { 0 });
-    bridge.driver_regions.push_back(Process::DriverRegion {
-        *formal,
-        0,
-        static_cast<std::uint32_t>(type.element_width),
-        true });
+    if (port.direction == frontend::PortDirection::Input) {
+        bridge.driver_regions.push_back(Process::DriverRegion {
+            *formal,
+            0,
+            static_cast<std::uint32_t>(type.element_width),
+            true });
+    }
     design_.specializations_.back().processes.push_back(bridge.id);
     design_.processes_.push_back(std::move(bridge));
+    if (port.direction == frontend::PortDirection::Input) {
+        result.read_only_signals.insert(*formal);
+    }
+    return true;
+}
+
+bool HierarchyBuilder::connect_verilog_expression_port(
+    const frontend::SignalDeclaration& port,
+    const frontend::PortConnection& connection,
+    const std::string& path,
+    const SignalMap& parent_signals,
+    PortAliases& result)
+{
+    if (connection.kind != frontend::PortActualKind::Expression
+        || (connection.value.kind == frontend::ExpressionKind::Identifier
+            && parent_signals.contains(connection.value.text))) {
+        return false;
+    }
+
+    const bool selected =
+        (connection.value.kind == frontend::ExpressionKind::Index
+            && connection.value.operands.size() == 2)
+        || (connection.value.kind == frontend::ExpressionKind::Slice
+            && connection.value.operands.size() == 3);
+    const auto static_integer = [](const frontend::Expression& expression) {
+        if (const auto direct = constant_index(expression)) {
+            return direct;
+        }
+        std::string error;
+        const auto value = evaluate_systemverilog_constant_expression(
+            expression, { }, { }, error);
+        return value ? value->integer_value()
+                     : std::optional<std::int64_t> { };
+    };
+    if (port.direction == frontend::PortDirection::Output && selected
+        && connection.value.operands.front().kind
+            == frontend::ExpressionKind::Identifier) {
+        const auto actual = parent_signals.find(
+            connection.value.operands.front().text);
+        if (actual == parent_signals.end()) {
+            return false;
+        }
+        const auto actual_info = design_.signal_info_.at(actual->second);
+        const auto actual_range = actual_info.packed_range.value_or(
+            frontend::PackedRange {
+                static_cast<std::int64_t>(actual_info.width) - 1,
+                0,
+                true });
+        std::optional<std::uint64_t> offset;
+        std::optional<std::uint64_t> width;
+        if (connection.value.kind == frontend::ExpressionKind::Index) {
+            const auto index = static_integer(connection.value.operands[1]);
+            if (index && *index >= std::min(actual_range.left, actual_range.right)
+                && *index <= std::max(actual_range.left, actual_range.right)) {
+                offset = index_distance(*index, actual_range.right);
+                width = 1;
+            }
+        } else {
+            auto left = static_integer(connection.value.operands[1]);
+            auto right = static_integer(connection.value.operands[2]);
+            if ((connection.value.text == "+:"
+                    || connection.value.text == "-:")
+                && left && right && *right > 0) {
+                const auto base = *left;
+                const auto distance = *right - 1;
+                if (connection.value.text == "+:"
+                    && base <= std::numeric_limits<std::int64_t>::max()
+                            - distance) {
+                    const auto lower = base;
+                    const auto upper = base + distance;
+                    left = actual_range.descending ? upper : lower;
+                    right = actual_range.descending ? lower : upper;
+                } else if (connection.value.text == "-:"
+                    && base >= std::numeric_limits<std::int64_t>::min()
+                            + distance) {
+                    const auto lower = base - distance;
+                    const auto upper = base;
+                    left = actual_range.descending ? upper : lower;
+                    right = actual_range.descending ? lower : upper;
+                } else {
+                    left.reset();
+                    right.reset();
+                }
+            }
+            if (left && right
+                && (*left == *right
+                    || (*left > *right) == actual_range.descending)
+                && *left >= std::min(actual_range.left, actual_range.right)
+                && *left <= std::max(actual_range.left, actual_range.right)
+                && *right >= std::min(actual_range.left, actual_range.right)
+                && *right <= std::max(actual_range.left, actual_range.right)) {
+                offset = index_distance(*right, actual_range.right);
+                width = index_distance(*left, *right) + 1;
+            }
+        }
+        if (!offset || !width || *width == 0
+            || *offset > std::numeric_limits<std::uint32_t>::max()
+            || *width > std::numeric_limits<std::uint32_t>::max()) {
+            report(
+                "FSIM-ELAB-BIND-027",
+                "selected output port actual '" + path + "." + port.name
+                    + "' requires a locally static in-range packed selection",
+                connection.value.span);
+            return true;
+        }
+        auto selected_info = actual_info;
+        selected_info.width = static_cast<std::size_t>(*width);
+        selected_info.packed_range = *width == 1
+            ? std::optional<frontend::PackedRange> { }
+            : std::optional<frontend::PackedRange> {
+                  frontend::PackedRange {
+                      static_cast<std::int64_t>(*width) - 1, 0, true } };
+        selected_info.is_signed = false;
+        const auto diagnostics_before = diagnostics_.size();
+        validate_boundary_type(
+            port, selected_info, path, connection.span, false);
+        if (diagnostics_.size() != diagnostics_before) {
+            return true;
+        }
+        const auto formal = add_owned_signal(port, path, result.signals);
+        if (!formal) {
+            return true;
+        }
+        Process bridge;
+        bridge.id = static_cast<ProcessId>(design_.processes_.size());
+        bridge.name = path + "." + port.name + "$selected_output_bridge";
+        bridge.register_count = 1;
+        bridge.register_value_kinds.push_back(value_kind(port.type.domain));
+        bridge.static_sensitivity.push_back(
+            Sensitivity { *formal, EdgeKind::any });
+        bridge.operations.emplace_back(ReadSignal { 0, *formal });
+        bridge.operations.emplace_back(WriteUpdateSlice {
+            actual->second, 0, static_cast<std::uint32_t>(*offset) });
+        bridge.operations.emplace_back(WaitSensitivity { });
+        bridge.operations.emplace_back(Jump { 0 });
+        bridge.driver_regions.push_back(Process::DriverRegion {
+            actual->second,
+            static_cast<std::uint32_t>(*offset),
+            static_cast<std::uint32_t>(*width),
+            false });
+        design_.specializations_.back().processes.push_back(bridge.id);
+        design_.processes_.push_back(std::move(bridge));
+        return true;
+    }
+
+    if (port.direction != frontend::PortDirection::Input) {
+        return false;
+    }
+    const auto formal = add_owned_signal(port, path, result.signals);
+    if (!formal) {
+        return true;
+    }
+    std::string constant_error;
+    const auto constant = evaluate_systemverilog_constant_expression(
+        connection.value, { }, { }, constant_error);
+    const auto converted = constant
+        ? convert_systemverilog_parameter_value(
+              *constant, port.type, constant_error)
+        : std::nullopt;
+    if (converted) {
+        design_.signals_.at(*formal).initial_value = converted->packed;
+        result.read_only_signals.insert(*formal);
+        return true;
+    }
+    auto expression = connection.value;
+    std::size_t alias_index = 0;
+    std::function<void(frontend::Expression&)> rewrite;
+    rewrite = [&](frontend::Expression& candidate) {
+        if (candidate.kind == frontend::ExpressionKind::Identifier) {
+            if (const auto parent = parent_signals.find(candidate.text);
+                parent != parent_signals.end()) {
+                std::string alias;
+                do {
+                    alias = "__fsim_sv_port_actual_"
+                        + std::to_string(result.vhdl_input_drivers.size())
+                        + "_" + std::to_string(alias_index++);
+                } while (result.signals.contains(alias));
+                result.signals.emplace(alias, parent->second);
+                candidate.text = std::move(alias);
+            }
+        }
+        for (auto& operand : candidate.operands) {
+            rewrite(operand);
+        }
+    };
+    rewrite(expression);
+    frontend::Statement driver;
+    driver.kind = frontend::StatementKind::Assignment;
+    driver.label = "$port_input_driver";
+    driver.assignment_kind = frontend::AssignmentKind::Continuous;
+    driver.target = frontend::Expression {
+        frontend::ExpressionKind::Identifier,
+        port.name,
+        { },
+        connection.span };
+    driver.value = std::move(expression);
+    driver.span = connection.span;
+    result.vhdl_input_drivers.push_back(std::move(driver));
     result.read_only_signals.insert(*formal);
     return true;
 }
@@ -223,6 +543,10 @@ bool HierarchyBuilder::connect_vhdl_expression_port(
                 && connection.value.operands.size() == 2
                 && connection.value.operands.front().kind
                     == frontend::ExpressionKind::Identifier)
+            || (connection.value.kind == frontend::ExpressionKind::Slice
+                && connection.value.operands.size() == 3
+                && connection.value.operands.front().kind
+                    == frontend::ExpressionKind::Identifier)
             || (connection.value.kind == frontend::ExpressionKind::Call
                 && connection.value.operands.size() == 1
                 && parent_signals.contains(connection.value.text)))) {
@@ -233,7 +557,13 @@ bool HierarchyBuilder::connect_vhdl_expression_port(
                 : connection.value.operands.front().text);
         const auto index = constant_index(
             connection.value.operands[parsed_as_call ? 0 : 1]);
-        if (actual == parent_signals.end() || !index) {
+        const bool parsed_as_slice = connection.value.kind
+            == frontend::ExpressionKind::Slice;
+        const auto slice_right = parsed_as_slice
+            ? constant_index(connection.value.operands[2])
+            : std::optional<std::int64_t>{};
+        if (actual == parent_signals.end() || !index
+            || (parsed_as_slice && !slice_right)) {
             report(
                 "FSIM-ELAB-VHPORT-002",
                 "VHDL selected output port actual for '" + path + "."
@@ -245,7 +575,29 @@ bool HierarchyBuilder::connect_vhdl_expression_port(
         const auto& actual_info = design_.signal_info_.at(actual->second);
         std::optional<std::uint64_t> selected_offset;
         SignalInfo selected_info = actual_info;
-        if (actual_info.vhdl_array
+        if (parsed_as_slice && actual_info.packed_range) {
+            const auto low = std::min(
+                actual_info.packed_range->left,
+                actual_info.packed_range->right);
+            const auto high = std::max(
+                actual_info.packed_range->left,
+                actual_info.packed_range->right);
+            if (*index >= low && *index <= high
+                && *slice_right >= low && *slice_right <= high
+                && ((connection.value.text == "downto"
+                        && *index >= *slice_right)
+                    || (connection.value.text == "to"
+                        && *index <= *slice_right))) {
+                selected_offset = index_distance(
+                    *slice_right,
+                    actual_info.packed_range->right);
+                selected_info.width = static_cast<std::size_t>(
+                    index_distance(*index, *slice_right) + 1U);
+                selected_info.packed_range = port.type.packed_range;
+                selected_info.vhdl_array.reset();
+                selected_info.packed_members.clear();
+            }
+        } else if (actual_info.vhdl_array
             && actual_info.vhdl_array->dimensions.size() == 1
             && actual_info.vhdl_array->dimensions.front().range) {
             const auto& dimension = actual_info.vhdl_array->dimensions.front();
@@ -344,8 +696,6 @@ bool HierarchyBuilder::connect_vhdl_expression_port(
             false });
         design_.specializations_.back().processes.push_back(bridge.id);
         design_.processes_.push_back(std::move(bridge));
-        note_boundary_driver(
-            actual->second, nullptr, path, connection.span);
         return true;
     }
     if (port.direction != frontend::PortDirection::Input) {
@@ -388,6 +738,27 @@ bool HierarchyBuilder::connect_vhdl_expression_port(
     std::string error;
     auto value = static_vhdl_value(
         expression, port.type, error);
+    if (!value) {
+        const auto evaluated =
+            evaluate_systemverilog_constant_function_expression(
+                expression,
+                { },
+                { },
+                dependency_owner.functions,
+                error);
+        if (evaluated) {
+            std::string conversion_error;
+            if (const auto converted =
+                    convert_systemverilog_parameter_value(
+                        *evaluated,
+                        port.type,
+                        conversion_error)) {
+                value = converted->packed;
+            } else {
+                error = std::move(conversion_error);
+            }
+        }
+    }
     const auto signal = add_owned_signal(
         port, path, result.signals);
     if (!signal) {
@@ -420,6 +791,13 @@ bool HierarchyBuilder::connect_vhdl_expression_port(
                 + "_" + std::to_string(alias_index++);
         } while (result.signals.contains(alias));
         result.signals.emplace(alias, parent->second);
+        const auto& info = design_.signal_info_.at(parent->second);
+        result.vhdl_input_aliases.emplace_back(
+            alias,
+            signal_type(info),
+            frontend::PortDirection::Unknown,
+            false,
+            info.declaration_span);
         name = std::move(alias) + suffix;
         mapped_signal = true;
     };

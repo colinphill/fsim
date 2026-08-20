@@ -1,10 +1,178 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_internal.hpp"
 
+#include "fsim/support/sha256.hpp"
+
+#include <set>
+
 namespace fsim::elaboration::elaboration_detail {
 namespace {
 
 using Value = SystemVerilogConstantValue;
+using CallCache = std::unordered_map<std::string, Value>;
+
+thread_local CallCache* active_fold_call_cache { };
+thread_local std::vector<std::unique_ptr<CallCache>>
+    active_elaboration_call_caches;
+
+void append_key_component(
+    std::string& key,
+    const std::string_view component)
+{
+    key += std::to_string(component.size());
+    key += ':';
+    key += component;
+}
+
+void append_expression_behavior(
+    std::string& identity,
+    const frontend::Expression& expression,
+    std::set<std::string>& identifiers)
+{
+    append_key_component(identity,
+        std::to_string(static_cast<unsigned>(expression.kind)));
+    append_key_component(identity, expression.text);
+    append_key_component(identity, expression.nominal_type);
+    if (expression.kind == frontend::ExpressionKind::Identifier) {
+        identifiers.insert(expression.text);
+    }
+    for (const auto& operand : expression.operands) {
+        append_expression_behavior(identity, operand, identifiers);
+    }
+    for (const auto& choices :
+        expression.aggregate_choice_expressions) {
+        for (const auto& choice : choices) {
+            append_expression_behavior(identity, choice, identifiers);
+        }
+    }
+}
+
+void append_statement_behavior(
+    std::string& identity,
+    const frontend::Statement& statement,
+    std::set<std::string>& identifiers)
+{
+    append_key_component(identity,
+        std::to_string(static_cast<unsigned>(statement.kind)));
+    append_key_component(identity, statement.label);
+    append_key_component(identity, statement.task_name);
+    append_key_component(identity, statement.procedure_name);
+    append_key_component(identity, statement.loop_variable);
+    append_key_component(identity,
+        std::to_string(statement.loop_descending));
+    append_key_component(identity,
+        std::to_string(statement.loop_limit_exclusive));
+    append_expression_behavior(identity, statement.target, identifiers);
+    append_expression_behavior(identity, statement.value, identifiers);
+    append_expression_behavior(identity, statement.condition, identifiers);
+    append_expression_behavior(
+        identity, statement.loop_initial, identifiers);
+    append_expression_behavior(
+        identity, statement.loop_limit, identifiers);
+    for (const auto& argument : statement.task_arguments) {
+        append_expression_behavior(identity, argument, identifiers);
+    }
+    for (const auto& association : statement.procedure_arguments) {
+        append_expression_behavior(
+            identity, association.value, identifiers);
+    }
+    for (const auto& declaration : statement.declarations) {
+        append_key_component(identity,
+            vhdl_type_identity(declaration.type));
+        if (declaration.initializer) {
+            append_expression_behavior(
+                identity, *declaration.initializer, identifiers);
+        }
+    }
+    for (const auto& alternative : statement.case_alternatives) {
+        for (const auto& choice : alternative.choices) {
+            append_expression_behavior(identity, choice, identifiers);
+        }
+        for (const auto& nested : alternative.statements) {
+            append_statement_behavior(identity, nested, identifiers);
+        }
+    }
+    for (const auto& nested : statement.statements) {
+        append_statement_behavior(identity, nested, identifiers);
+    }
+    for (const auto& nested : statement.else_statements) {
+        append_statement_behavior(identity, nested, identifiers);
+    }
+}
+
+struct CallableBehaviorIdentity {
+    std::string digest;
+    std::set<std::string> identifiers;
+};
+
+CallableBehaviorIdentity callable_behavior_identity(
+    const frontend::FunctionDeclaration& function)
+{
+    std::string identity;
+    std::set<std::string> identifiers;
+    append_key_component(identity, function.name);
+    append_key_component(identity, function.specialization_identity);
+    append_key_component(identity,
+        vhdl_type_identity(function.return_type));
+    for (const auto& argument : function.arguments) {
+        append_key_component(identity, argument.name);
+        append_key_component(identity,
+            vhdl_type_identity(argument.type));
+        if (argument.default_value) {
+            append_expression_behavior(
+                identity, *argument.default_value, identifiers);
+        }
+    }
+    for (const auto& constant : function.constants) {
+        append_key_component(identity, constant.name);
+        append_key_component(identity,
+            vhdl_type_identity(constant.type));
+        append_expression_behavior(
+            identity, constant.default_value, identifiers);
+    }
+    for (const auto& variable : function.variables) {
+        append_key_component(identity, variable.name);
+        append_key_component(identity,
+            vhdl_type_identity(variable.type));
+        if (variable.initializer) {
+            append_expression_behavior(
+                identity, *variable.initializer, identifiers);
+        }
+    }
+    for (const auto& statement : function.statements) {
+        append_statement_behavior(identity, statement, identifiers);
+    }
+    for (const auto& nested : function.functions) {
+        const auto nested_identity = callable_behavior_identity(nested);
+        append_key_component(identity, nested_identity.digest);
+        identifiers.insert(
+            nested_identity.identifiers.begin(),
+            nested_identity.identifiers.end());
+    }
+    const auto digest = support::Sha256::hex(
+        support::Sha256::digest(identity));
+    return { digest, std::move(identifiers) };
+}
+
+class FoldCallCacheScope final {
+public:
+    explicit FoldCallCacheScope(CallCache& cache)
+        : previous_ { active_fold_call_cache }
+    {
+        active_fold_call_cache = &cache;
+    }
+
+    FoldCallCacheScope(const FoldCallCacheScope&) = delete;
+    FoldCallCacheScope& operator=(const FoldCallCacheScope&) = delete;
+
+    ~FoldCallCacheScope()
+    {
+        active_fold_call_cache = previous_;
+    }
+
+private:
+    CallCache* previous_ { };
+};
 
 enum class Flow {
     normal,
@@ -14,6 +182,24 @@ enum class Flow {
     failed,
 };
 
+[[nodiscard]] bool callable_name_matches(
+    const std::string_view declared,
+    const std::string_view referenced,
+    const frontend::Language language) {
+    if (declared == referenced) {
+        return true;
+    }
+    const auto leaf_name = [](const std::string_view name) {
+        const auto separator = name.find_last_of(".:");
+        return separator == std::string_view::npos
+            ? name : name.substr(separator + 1U);
+    };
+    return language != frontend::Language::Vhdl2008
+        && leaf_name(declared) == leaf_name(referenced)
+        && (declared.find_first_of(".[") != std::string_view::npos
+            || referenced.find_first_of(".[") != std::string_view::npos);
+}
+
 class ConstantFunctionEvaluator final {
 public:
     ConstantFunctionEvaluator(
@@ -22,7 +208,12 @@ public:
         const ConstantEnvironment& fallback)
         : functions_(functions),
           globals_(globals),
-          fallback_(fallback) {}
+          fallback_(fallback),
+          call_cache_(!active_elaboration_call_caches.empty()
+                  ? *active_elaboration_call_caches.back()
+                  : active_fold_call_cache != nullptr
+                      ? *active_fold_call_cache : owned_call_cache_)
+    {}
 
     std::optional<Value> evaluate(
         const Expression& expression,
@@ -31,11 +222,232 @@ public:
     }
 
 private:
+    struct FixedArrayLayout {
+        const frontend::Type* element_type { };
+        std::int64_t left { };
+        std::int64_t right { };
+        std::uint32_t element_width { };
+        std::uint32_t total_width { };
+    };
+
+    [[nodiscard]] std::optional<FixedArrayLayout>
+    fixed_array_layout(
+        const frontend::Type& type,
+        const SystemVerilogConstantEnvironment& environment) const {
+        std::optional<std::int64_t> left;
+        std::optional<std::int64_t> right;
+        const frontend::Type* element_type = nullptr;
+        if (type.vhdl_array
+            && type.vhdl_array->dimensions.size() == 1U
+            && type.vhdl_array->dimensions.front().range
+            && !type.vhdl_array->dimensions.front().null
+            && type.vhdl_array->element_types.size() == 1U
+            && !type.vhdl_array->element_types.front().vhdl_array) {
+            left = type.vhdl_array->dimensions.front().range->left;
+            right = type.vhdl_array->dimensions.front().range->right;
+            element_type = &type.vhdl_array->element_types.front();
+        } else if (type.systemverilog_container
+                   && type.systemverilog_container->kind
+                       == frontend::SystemVerilogContainerKind::StaticArray
+                   && type.systemverilog_container->element_types.size()
+                       == 1U
+                   && !type.systemverilog_container->element_types.front()
+                           .systemverilog_container) {
+            const auto& container = *type.systemverilog_container;
+            element_type = &container.element_types.front();
+            if (!container.static_range_expressions.empty()) {
+            std::string ignored;
+            const auto left_value =
+                evaluate_systemverilog_constant_expression(
+                    container.static_range_expressions.front().left,
+                    environment,
+                    fallback_,
+                    ignored);
+            const auto right_value = left_value
+                ? evaluate_systemverilog_constant_expression(
+                      container.static_range_expressions.front().right,
+                      environment,
+                      fallback_,
+                      ignored)
+                : std::nullopt;
+            if (left_value) {
+                left = left_value->integer_value();
+            }
+            if (right_value) {
+                right = right_value->integer_value();
+            }
+            } else if (container.static_range) {
+                left = container.static_range->left;
+                right = container.static_range->right;
+            }
+        } else {
+            return std::nullopt;
+        }
+        const auto element_width = element_type->width();
+        if (!left || !right || !element_width || *element_width == 0U
+            || *element_width > std::numeric_limits<std::uint32_t>::max()) {
+            return std::nullopt;
+        }
+        const auto count = index_distance(*left, *right) + 1U;
+        if (count == 0U
+            || count > std::numeric_limits<std::uint32_t>::max()
+                    / *element_width) {
+            return std::nullopt;
+        }
+        return FixedArrayLayout {
+            element_type,
+            *left,
+            *right,
+            static_cast<std::uint32_t>(*element_width),
+            static_cast<std::uint32_t>(count * *element_width)
+        };
+    }
+
+    [[nodiscard]] static std::optional<std::uint32_t>
+    fixed_array_offset(
+        const FixedArrayLayout& layout,
+        const std::int64_t index) {
+        const auto low = std::min(layout.left, layout.right);
+        const auto high = std::max(layout.left, layout.right);
+        if (index < low || index > high) {
+            return std::nullopt;
+        }
+        const auto position = layout.right >= index
+            ? static_cast<std::uint64_t>(layout.right - index)
+            : static_cast<std::uint64_t>(index - layout.right);
+        return static_cast<std::uint32_t>(
+            position * layout.element_width);
+    }
+
     std::optional<Value> evaluate_expression(
         const Expression& expression,
         const SystemVerilogConstantEnvironment& environment,
         std::string& error,
         const frontend::Type* expected_type = nullptr) {
+        if (expression.kind == ExpressionKind::Identifier
+            && !environment.contains(expression.text)) {
+            std::vector<const frontend::FunctionDeclaration*> matches;
+            for (const auto& function : functions_) {
+                if (callable_name_matches(
+                        function.name, expression.text, function.language)
+                    && function.arguments.empty()) {
+                    matches.push_back(&function);
+                }
+            }
+            for (const auto* active : call_stack_) {
+                for (const auto& nested : active->functions) {
+                    if (callable_name_matches(
+                            nested.name, expression.text, nested.language)
+                        && nested.arguments.empty()) {
+                        matches.push_back(&nested);
+                    }
+                }
+            }
+            if (matches.size() == 1U) {
+                return evaluate_call(
+                    *matches.front(),
+                    Expression{
+                        ExpressionKind::Call,
+                        expression.text,
+                        {},
+                        expression.span},
+                    environment,
+                    expected_type,
+                    error);
+            }
+            if (matches.size() > 1U) {
+                error = "zero-argument constant function reference '"
+                    + expression.text + "' is ambiguous";
+                return std::nullopt;
+            }
+        }
+        if (expression.kind == ExpressionKind::Call
+            && expression.operands.size() == 1U
+            && !type_scopes_.empty()) {
+            const auto type = type_scopes_.back()->find(expression.text);
+            if (type != type_scopes_.back()->end()
+                && (type->second->packed_range
+                    || fixed_array_layout(*type->second, environment))) {
+                return evaluate_expression(
+                    Expression{
+                        ExpressionKind::Index,
+                        "index",
+                        {Expression{
+                             ExpressionKind::Identifier,
+                             expression.text,
+                             {},
+                             expression.span},
+                         expression.operands.front()},
+                        expression.span},
+                    environment,
+                    error,
+                    expected_type);
+            }
+        }
+        if (expected_type != nullptr
+            && (expression.kind == ExpressionKind::Aggregate
+                || expression.kind == ExpressionKind::StringLiteral
+                || expression.kind == ExpressionKind::LogicLiteral)) {
+            if (auto packed = static_vhdl_value(
+                    expression, *expected_type, error)) {
+                return Value{
+                    std::move(*packed),
+                    expected_type->is_signed,
+                    false,
+                    expected_type->domain,
+                    expected_type->nominal_type,
+                    expression.span};
+            }
+            if (expression.kind == ExpressionKind::Aggregate) {
+                return std::nullopt;
+            }
+        }
+        if (expression.kind == ExpressionKind::Index
+            && expression.operands.size() == 2U
+            && expression.operands.front().kind
+                == ExpressionKind::Identifier
+            && !type_scopes_.empty()) {
+            const auto& name = expression.operands.front().text;
+            const auto type = type_scopes_.back()->find(name);
+            const auto base = environment.find(name);
+            const auto layout = type != type_scopes_.back()->end()
+                ? fixed_array_layout(*type->second, environment)
+                : std::nullopt;
+            if (layout && base != environment.end()) {
+                const auto index = evaluate_expression(
+                    expression.operands[1], environment, error);
+                const auto integer = index
+                    ? index->integer_value() : std::nullopt;
+                const auto offset = integer
+                    ? fixed_array_offset(*layout, *integer)
+                    : std::nullopt;
+                if (!offset) {
+                    error = "constant function fixed-array index is outside "
+                            "the declared range";
+                    return std::nullopt;
+                }
+                auto packed = runtime::PackedLogic4(
+                    layout->element_width, runtime::Logic4::zero);
+                for (std::uint32_t bit = 0;
+                     bit < layout->element_width; ++bit) {
+                    const auto state = base->second.packed.get_logic9(
+                        static_cast<std::size_t>(*offset + bit));
+                    if (packed.is_logic9()) {
+                        packed.set_logic9(bit, state);
+                    } else {
+                        packed.set(bit, runtime::to_logic4(state));
+                    }
+                }
+                return Value {
+                    std::move(packed),
+                    layout->element_type->is_signed,
+                    false,
+                    layout->element_type->domain,
+                    layout->element_type->nominal_type,
+                    expression.span
+                };
+            }
+        }
         const bool packed_query =
             expression.kind == ExpressionKind::Call
             && (expression.text == "$bits"
@@ -54,24 +466,185 @@ private:
                 expression, environment, fallback_, error);
         }
         if (expression.kind == ExpressionKind::Call) {
+            const auto separator = expression.text.find_last_of(".:");
+            const auto intrinsic = expression.text.substr(
+                separator == std::string::npos ? 0U : separator + 1U);
+            const bool sized_numeric = intrinsic == "to_unsigned"
+                || intrinsic == "to_signed" || intrinsic == "resize";
+            if ((intrinsic == "maximum" || intrinsic == "minimum")
+                && expression.operands.size() == 2U) {
+                const auto left = evaluate_expression(
+                    expression.operands[0], environment, error);
+                const auto right = evaluate_expression(
+                    expression.operands[1], environment, error);
+                const auto left_integer = left
+                    ? left->integer_value() : std::nullopt;
+                const auto right_integer = right
+                    ? right->integer_value() : std::nullopt;
+                if (!left_integer || !right_integer) {
+                    error = intrinsic
+                        + " requires two known integer arguments";
+                    return std::nullopt;
+                }
+                const auto result = intrinsic == "maximum"
+                    ? std::max(*left_integer, *right_integer)
+                    : std::min(*left_integer, *right_integer);
+                return Value{
+                    integer_value(result),
+                    true,
+                    false,
+                    frontend::ValueDomain::Integer,
+                    {},
+                    expression.span};
+            }
+            if (sized_numeric && expression.operands.size() == 2U) {
+                const auto source = evaluate_expression(
+                    expression.operands[0], environment, error);
+                const auto size_value = evaluate_expression(
+                    expression.operands[1], environment, error);
+                const auto size = size_value
+                    ? size_value->integer_value() : std::nullopt;
+                if (!source || !size || *size <= 0
+                    || static_cast<std::uint64_t>(*size)
+                        > std::numeric_limits<std::uint32_t>::max()) {
+                    error = intrinsic
+                        + " requires a value and a positive static size";
+                    return std::nullopt;
+                }
+                const auto width = static_cast<std::uint32_t>(*size);
+                auto packed = runtime::PackedLogic4(
+                    width, runtime::Logic4::zero);
+                if (source->packed.is_logic9()) {
+                    packed = packed.promoted_to_logic9();
+                }
+                const bool signed_result = intrinsic == "to_signed"
+                    || (intrinsic == "resize" && source->is_signed);
+                if (signed_result && source->width != 0U
+                    && source->packed.get_logic9(source->width - 1U)
+                        == runtime::Logic9::one) {
+                    if (packed.is_logic9()) {
+                        packed.fill(runtime::Logic9::one);
+                    } else {
+                        packed.fill(runtime::Logic4::one);
+                    }
+                }
+                for (std::uint32_t bit = 0;
+                     bit < std::min(width, source->width); ++bit) {
+                    const auto state = source->packed.get_logic9(bit);
+                    if (packed.is_logic9()) {
+                        packed.set_logic9(bit, state);
+                    } else {
+                        packed.set(bit, runtime::to_logic4(state));
+                    }
+                }
+                return Value{
+                    std::move(packed),
+                    signed_result,
+                    false,
+                    expected_type != nullptr
+                        ? expected_type->domain
+                        : frontend::ValueDomain::Logic9,
+                    expected_type != nullptr
+                        ? expected_type->nominal_type : std::string{},
+                    expression.span};
+            }
+            const bool vector_conversion = intrinsic == "std_logic_vector"
+                || intrinsic == "std_ulogic_vector"
+                || intrinsic == "unsigned" || intrinsic == "signed";
+            if (vector_conversion && expression.operands.size() == 1U) {
+                auto value = evaluate_expression(
+                    expression.operands.front(), environment, error);
+                if (!value) {
+                    return std::nullopt;
+                }
+                value->is_signed = intrinsic == "signed";
+                value->domain = expected_type != nullptr
+                    ? expected_type->domain
+                    : frontend::ValueDomain::Logic9;
+                value->nominal_type = expected_type != nullptr
+                    ? expected_type->nominal_type : std::string{};
+                value->source = expression.span;
+                return value;
+            }
+            if (intrinsic == "to_integer"
+                && expression.operands.size() == 1U) {
+                const auto source = evaluate_expression(
+                    expression.operands.front(), environment, error);
+                const auto integer = source
+                    ? source->integer_value() : std::nullopt;
+                if (!integer) {
+                    error = "to_integer requires a known bounded vector";
+                    return std::nullopt;
+                }
+                return Value{
+                    integer_value(*integer),
+                    true,
+                    false,
+                    frontend::ValueDomain::Integer,
+                    {},
+                    expression.span};
+            }
             std::optional<Value> selected;
             std::size_t matches = 0;
             bool named_function = false;
             std::string candidate_error;
+            std::vector<const frontend::FunctionDeclaration*> candidates;
+            candidates.reserve(functions_.size() + 8U);
+            const auto append_candidate =
+                [&](const frontend::FunctionDeclaration& function) {
+                  const auto duplicate = std::ranges::any_of(
+                      candidates,
+                      [&](const auto* existing) {
+                        return existing->name == function.name
+                            && existing->arguments.size()
+                                == function.arguments.size()
+                            && existing->span.begin.offset
+                                == function.span.begin.offset
+                            && existing->span.end.offset
+                                == function.span.end.offset
+                            && frontend::physical_source(existing->span)
+                                == frontend::physical_source(function.span)
+                            && existing->specialization_identity
+                                == function.specialization_identity;
+                      });
+                  if (!duplicate) {
+                    candidates.push_back(&function);
+                  }
+                };
             for (const auto& function : functions_) {
-                if (function.name != expression.text) {
+                append_candidate(function);
+            }
+            for (const auto* active : call_stack_) {
+                for (const auto& nested : active->functions) {
+                    append_candidate(nested);
+                }
+            }
+            for (const auto* candidate : candidates) {
+                const auto& function = *candidate;
+                if (!callable_name_matches(
+                        function.name, expression.text, function.language)) {
                     continue;
                 }
                 named_function = true;
-                if (expected_type != nullptr
+                const bool contextual_vhdl_array_result =
+                    expected_type != nullptr
                     && function.language
                         == frontend::Language::Vhdl2008
+                    && unconstrained_vhdl_builtin_array(
+                        function.return_type)
+                    && expected_type->width().value_or(0U) != 0U;
+                const bool contextual_vhdl_result_mismatch =
+                    expected_type != nullptr
+                    && function.language
+                        == frontend::Language::Vhdl2008
+                    && !contextual_vhdl_array_result
                     && (function.return_type.domain
                             != expected_type->domain
                         || ((!function.return_type.nominal_type.empty()
                              || !expected_type->nominal_type.empty())
                             && function.return_type.nominal_type
-                                != expected_type->nominal_type))) {
+                                != expected_type->nominal_type));
+                if (contextual_vhdl_result_mismatch) {
                     continue;
                 }
                 bool obvious_match =
@@ -129,6 +702,7 @@ private:
                     function,
                     expression,
                     environment,
+                    expected_type,
                     current_error);
                 if (!value) {
                     if (candidate_error.empty()) {
@@ -288,7 +862,75 @@ private:
                     folded, environment, fallback_, error);
             }
         }
+        if (expression.kind == ExpressionKind::Binary
+            && expression.operands.size() == 2U
+            && !call_stack_.empty()
+            && call_stack_.back()->language
+                == frontend::Language::Vhdl2008
+            && (expression.text == "mod"
+                || expression.text == "rem")) {
+            const auto left = evaluate_expression(
+                expression.operands[0], environment, error);
+            const auto right = left
+                ? evaluate_expression(
+                      expression.operands[1], environment, error)
+                : std::nullopt;
+            const auto dividend = left
+                ? left->integer_value() : std::nullopt;
+            const auto divisor = right
+                ? right->integer_value() : std::nullopt;
+            if (dividend && divisor) {
+                if (*divisor == 0) {
+                    error = "division by zero in VHDL constant expression";
+                    return std::nullopt;
+                }
+                const auto remainder = *divisor == -1
+                    ? std::int64_t { 0 }
+                    : *dividend % *divisor;
+                const auto result = expression.text == "mod"
+                        && remainder != 0
+                        && ((*dividend < 0) != (*divisor < 0))
+                    ? remainder + *divisor
+                    : remainder;
+                return Value {
+                    integer_value(result),
+                    true,
+                    false,
+                    frontend::ValueDomain::Integer,
+                    { },
+                    expression.span
+                };
+            }
+        }
         auto folded = expression;
+        if (folded.kind == ExpressionKind::Binary) {
+            if (!call_stack_.empty()
+                && call_stack_.back()->language
+                    == frontend::Language::Vhdl2008
+                && folded.text == "&") {
+                folded.kind = ExpressionKind::Concatenation;
+                folded.text = "concat";
+            } else if (folded.text == "mod" || folded.text == "rem") {
+                folded.text = "%";
+            } else if (folded.text == "xor") {
+                folded.text = "^";
+            } else if (folded.text == "and") {
+                folded.text = "&";
+            } else if (folded.text == "or") {
+                folded.text = "|";
+            } else if (folded.text == "sll") {
+                folded.text = "<<";
+            } else if (folded.text == "srl") {
+                folded.text = ">>";
+            } else if (folded.text == "=") {
+                folded.text = "==";
+            } else if (folded.text == "/=") {
+                folded.text = "!=";
+            }
+        } else if (folded.kind == ExpressionKind::Unary
+                   && folded.text == "not") {
+            folded.text = "~";
+        }
         for (auto& operand : folded.operands) {
             const auto value =
                 evaluate_expression(operand, environment, error);
@@ -312,8 +954,12 @@ private:
                 choice = value->expression(choice.span);
             }
         }
-        return evaluate_systemverilog_constant_expression(
+        auto value = evaluate_systemverilog_constant_expression(
             folded, environment, fallback_, error);
+        if (!value) {
+            error += " while evaluating '" + expression.text + "'";
+        }
+        return value;
     }
 
     struct ConstantPatternMatch {
@@ -604,11 +1250,29 @@ private:
             : std::string{name.substr(separator + 2)};
     }
 
+    static bool unconstrained_vhdl_builtin_array(
+        const frontend::Type& type) {
+        const auto separator = type.spelling.find_last_of('.');
+        const auto name = std::string_view{type.spelling}.substr(
+            separator == std::string::npos ? 0U : separator + 1U);
+        return !type.packed_range && !type.vhdl_array
+            && (name == "bit_vector" || name == "std_logic_vector"
+                || name == "std_ulogic_vector" || name == "signed"
+                || name == "unsigned");
+    }
+
     std::optional<Value> evaluate_call(
-        const frontend::FunctionDeclaration& function,
+        const frontend::FunctionDeclaration& declared_function,
         const Expression& call,
         const SystemVerilogConstantEnvironment& caller,
+        const frontend::Type* expected_type,
         std::string& error) {
+        std::optional<frontend::FunctionDeclaration> specialized_function;
+        if (declared_function.language == frontend::Language::Vhdl2008) {
+            specialized_function.emplace(declared_function);
+        }
+        const auto& function = specialized_function
+            ? *specialized_function : declared_function;
         if (!function.automatic
             && function.language != frontend::Language::Verilog2005) {
             error = "static or implicit-lifetime function '"
@@ -677,7 +1341,122 @@ private:
                 return std::nullopt;
             }
         }
-        auto environment = globals_;
+        if (function.language == frontend::Language::Vhdl2008) {
+            auto& mutable_function = *specialized_function;
+            const auto simple_type_name = [](const std::string_view spelling) {
+              const auto separator = spelling.find_last_of('.');
+              return spelling.substr(
+                  separator == std::string_view::npos
+                      ? 0U : separator + 1U);
+            };
+            const auto unconstrained_builtin_array =
+                [&](const frontend::Type& type) {
+                  const auto name = simple_type_name(type.spelling);
+                  return !type.packed_range && !type.vhdl_array
+                      && (name == "bit_vector"
+                          || name == "std_logic_vector"
+                          || name == "std_ulogic_vector"
+                          || name == "signed"
+                          || name == "unsigned");
+                };
+            ConstantEnvironment formal_environment;
+            ConstantDomainEnvironment formal_domains;
+            for (std::size_t index = 0;
+                 index < mutable_function.arguments.size(); ++index) {
+                auto& formal = mutable_function.arguments[index];
+                const auto actual = evaluate_expression(
+                    *actuals[index], caller, error);
+                if (!actual) {
+                    error = "constant function argument '" + formal.name
+                        + "': " + error;
+                    return std::nullopt;
+                }
+                if (unconstrained_builtin_array(formal.type)) {
+                    formal.type.packed_range = frontend::PackedRange{
+                        static_cast<std::int64_t>(actual->width - 1U),
+                        0,
+                        true};
+                    formal.type.domain = actual->domain;
+                    formal.type.is_signed = actual->is_signed;
+                }
+                if (formal.type.domain
+                    == frontend::ValueDomain::Integer) {
+                    if (const auto integer = actual->integer_value()) {
+                        formal_environment.insert_or_assign(
+                            formal.name, *integer);
+                        formal_domains.insert_or_assign(
+                            formal.name,
+                            ConstantTypeInfo{
+                                frontend::ValueDomain::Integer,
+                                false,
+                                {}});
+                    }
+                }
+            }
+            if (unconstrained_builtin_array(mutable_function.return_type)
+                && expected_type != nullptr
+                && expected_type->width().value_or(0U) != 0U) {
+                mutable_function.return_type = *expected_type;
+            }
+            std::vector<Diagnostic> ignored_diagnostics;
+            for (auto& constant : mutable_function.constants) {
+                substitute_parameters(
+                    constant.type,
+                    formal_environment,
+                    formal_domains,
+                    ignored_diagnostics,
+                    frontend::Language::Vhdl2008);
+                substitute_parameters(
+                    constant.default_value,
+                    formal_environment,
+                    formal_domains,
+                    frontend::Language::Vhdl2008);
+                std::string ignored;
+                if (const auto value = evaluate_constant_expression(
+                        constant.default_value,
+                        formal_environment,
+                        ignored)) {
+                    formal_environment.insert_or_assign(
+                        constant.name, *value);
+                    formal_domains.insert_or_assign(
+                        constant.name,
+                        ConstantTypeInfo{
+                            constant.type.domain,
+                            false,
+                            constant.type.nominal_type});
+                }
+            }
+            for (auto& alias : mutable_function.type_aliases) {
+                substitute_parameters(
+                    alias.type,
+                    formal_environment,
+                    formal_domains,
+                    ignored_diagnostics,
+                    frontend::Language::Vhdl2008);
+            }
+            for (auto& variable : mutable_function.variables) {
+                substitute_parameters(
+                    variable,
+                    formal_environment,
+                    formal_domains,
+                    ignored_diagnostics,
+                    frontend::Language::Vhdl2008);
+            }
+            substitute_parameters(
+                mutable_function.return_type,
+                formal_environment,
+                formal_domains,
+                ignored_diagnostics,
+                frontend::Language::Vhdl2008);
+            substitute_parameters(
+                mutable_function.statements,
+                formal_environment,
+                formal_domains,
+                ignored_diagnostics,
+                frontend::Language::Vhdl2008);
+        }
+        std::vector<Value> converted_arguments;
+        converted_arguments.reserve(function.arguments.size());
         for (std::size_t index = 0;
              index < function.arguments.size(); ++index) {
             auto value = converted(
@@ -692,16 +1471,88 @@ private:
                     + error;
                 return std::nullopt;
             }
-            environment.insert_or_assign(
-                function.arguments[index].name,
-                std::move(*value));
+            converted_arguments.push_back(std::move(*value));
         }
-        if (std::ranges::find(call_stack_, &function)
-            != call_stack_.end()) {
+        if (std::ranges::any_of(
+                call_stack_, [&](const auto* active) {
+                    return active->name == function.name
+                        && active->arguments.size()
+                            == function.arguments.size();
+                })) {
             error =
                 "recursive constant function call involving '"
                 + function.name + "'";
             return std::nullopt;
+        }
+
+        std::optional<std::string> cache_key{std::in_place};
+        const auto append_cache_component =
+            [&](const std::string_view component) {
+              append_key_component(*cache_key, component);
+            };
+        auto behavior = callable_behaviors_.find(&declared_function);
+        if (behavior == callable_behaviors_.end()) {
+            behavior = callable_behaviors_.emplace(
+                &declared_function,
+                callable_behavior_identity(declared_function)).first;
+        }
+        append_cache_component(behavior->second.digest);
+        for (const auto& identifier : behavior->second.identifiers) {
+            if (const auto found = caller.find(identifier);
+                found != caller.end()) {
+                append_cache_component(identifier);
+                append_cache_component(found->second.canonical());
+                continue;
+            }
+            if (const auto found = globals_.find(identifier);
+                found != globals_.end()) {
+                append_cache_component(identifier);
+                append_cache_component(found->second.canonical());
+                continue;
+            }
+            if (const auto found = fallback_.find(identifier);
+                found != fallback_.end()) {
+                append_cache_component(identifier);
+                append_cache_component(std::to_string(found->second));
+            }
+        }
+        append_cache_component(
+            std::to_string(static_cast<unsigned>(
+                declared_function.language)));
+        append_cache_component(declared_function.name);
+        append_cache_component(
+            frontend::physical_source(declared_function.span));
+        append_cache_component(std::to_string(
+            declared_function.span.begin.offset));
+        append_cache_component(std::to_string(
+            declared_function.span.end.offset));
+        append_cache_component(std::to_string(
+            declared_function.arguments.size()));
+        if (function.language == frontend::Language::Vhdl2008) {
+            append_cache_component("vhdl-call-v1");
+        }
+        append_cache_component(
+            vhdl_type_identity(function.return_type));
+        for (const auto& argument : function.arguments) {
+            append_cache_component(
+                vhdl_type_identity(argument.type));
+        }
+        for (const auto& value : converted_arguments) {
+            append_cache_component(value.canonical());
+        }
+        const auto cached = call_cache_.find(*cache_key);
+        if (cached != call_cache_.end()) {
+            auto result = cached->second;
+            result.source = call.span;
+            return result;
+        }
+
+        auto environment = globals_;
+        for (std::size_t index = 0;
+             index < function.arguments.size(); ++index) {
+            environment.insert_or_assign(
+                function.arguments[index].name,
+                std::move(converted_arguments[index]));
         }
         call_stack_.push_back(&function);
         struct Pop {
@@ -737,36 +1588,110 @@ private:
             types.insert_or_assign(
                 variable.name, &variable.type);
         }
+        for (const auto& constant : function.constants) {
+            types.insert_or_assign(
+                constant.name, &constant.type);
+        }
         collect_declarations(
             collect_declarations, function.statements);
+        type_scopes_.push_back(&types);
+        struct PopTypes {
+            std::vector<const std::unordered_map<
+                std::string, const frontend::Type*>*>& stack;
+            ~PopTypes() { stack.pop_back(); }
+        } pop_types { type_scopes_ };
 
         const auto initialize =
             [&](const frontend::VariableDeclaration& variable)
                 -> bool {
+              const auto layout = fixed_array_layout(
+                  variable.type, environment);
+              const auto declared_width = variable.type.width();
+              const auto width = layout
+                  ? static_cast<std::uint64_t>(layout->total_width)
+                  : static_cast<std::uint64_t>(
+                        declared_width.value_or(32));
+              if (width == 0
+                  || width > std::numeric_limits<std::uint32_t>::max()) {
+                  error = "constant function variable '" + variable.name
+                      + "' has an invalid zero or oversized packed width";
+                  return false;
+              }
               Value value{
                   0,
                   0,
                   0,
-                  static_cast<std::uint32_t>(
-                      variable.type.width().value_or(32)),
-                  variable.type.is_signed,
+                  static_cast<std::uint32_t>(width),
+                  layout ? false : variable.type.is_signed,
                   false,
                   variable.span};
               if (variable.initializer) {
-                  const auto initial = converted(
-                      *variable.initializer,
-                      variable.type,
-                      environment,
-                      error);
-                  if (!initial) {
-                      return false;
+                  bool initialized = false;
+                  if (layout
+                      && variable.initializer->kind
+                          == ExpressionKind::Aggregate
+                      && variable.initializer->operands.size() == 1U
+                      && variable.initializer->aggregate_choices.size()
+                          == 1U
+                      && variable.initializer->aggregate_choices.front()
+                          == "others") {
+                      const auto element = converted(
+                          variable.initializer->operands.front(),
+                          *layout->element_type,
+                          environment,
+                          error);
+                      if (!element
+                          || element->width != layout->element_width) {
+                          return false;
+                      }
+                      for (std::uint32_t offset = 0;
+                           offset < layout->total_width;
+                           offset += layout->element_width) {
+                          for (std::uint32_t bit = 0;
+                               bit < layout->element_width; ++bit) {
+                              const auto state =
+                                  element->packed.get_logic9(bit);
+                              if (value.packed.is_logic9()) {
+                                  value.packed.set_logic9(
+                                      offset + bit, state);
+                              } else {
+                                  value.packed.set(
+                                      offset + bit,
+                                      runtime::to_logic4(state));
+                              }
+                          }
+                      }
+                      value.refresh_low_word_mirrors();
+                      initialized = true;
                   }
-                  value = *initial;
+                  if (!initialized) {
+                      const auto initial = converted(
+                          *variable.initializer,
+                          variable.type,
+                          environment,
+                          error);
+                      if (!initial) {
+                          return false;
+                      }
+                      value = *initial;
+                  }
               }
               environment.insert_or_assign(
                   variable.name, std::move(value));
               return true;
             };
+        for (const auto& constant : function.constants) {
+            frontend::VariableDeclaration local_constant;
+            local_constant.name = constant.name;
+            local_constant.type = constant.type;
+            local_constant.initializer = constant.default_value;
+            local_constant.span = constant.span;
+            if (!initialize(local_constant)) {
+                error = "constant function local constant '"
+                    + constant.name + "': " + error;
+                return std::nullopt;
+            }
+        }
         for (const auto& variable : function.variables) {
             if (!initialize(variable)) {
                 return std::nullopt;
@@ -808,6 +1733,8 @@ private:
             result,
             error);
         if (flow == Flow::failed) {
+            error = "constant function '" + function.name
+                + "': " + error;
             return std::nullopt;
         }
         if (!result) {
@@ -826,8 +1753,20 @@ private:
                 + "' did not assign a result";
             return std::nullopt;
         }
-        return convert_systemverilog_parameter_value(
+        if (function.language == frontend::Language::Vhdl2008
+            && unconstrained_vhdl_builtin_array(
+                function.return_type)) {
+            call_cache_.try_emplace(
+                std::move(*cache_key), *result);
+            return result;
+        }
+        auto converted_result = convert_systemverilog_parameter_value(
             *result, function.return_type, error);
+        if (converted_result && cache_key) {
+            call_cache_.try_emplace(
+                std::move(*cache_key), *converted_result);
+        }
+        return converted_result;
     }
 
     Flow execute_statements(
@@ -841,6 +1780,11 @@ private:
             const auto flow = execute_statement(
                 statement, environment, types, result, error);
             if (flow != Flow::normal) {
+                if (flow == Flow::failed) {
+                    error = "line "
+                        + std::to_string(statement.span.begin.line)
+                        + ": " + error;
+                }
                 return flow;
             }
         }
@@ -883,20 +1827,44 @@ private:
                        || (statement.target.kind == ExpressionKind::Slice
                            && statement.target.operands.size() == 3U)) {
                 const auto base = environment.find(root->text);
-                const auto selected = base != environment.end()
+                const auto layout = type != types.end()
+                    ? fixed_array_layout(*type->second, environment)
+                    : std::nullopt;
+                std::optional<std::uint32_t> array_offset;
+                if (layout
+                    && statement.target.kind == ExpressionKind::Index) {
+                    const auto index = evaluate_expression(
+                        statement.target.operands[1], environment, error);
+                    const auto integer = index
+                        ? index->integer_value() : std::nullopt;
+                    array_offset = integer
+                        ? fixed_array_offset(*layout, *integer)
+                        : std::nullopt;
+                    if (!array_offset) {
+                        error = "constant function fixed-array assignment "
+                                "index is outside the declared range";
+                        return Flow::failed;
+                    }
+                }
+                const auto selected = layout
+                    ? std::optional<Value> { Value {
+                          0,
+                          0,
+                          0,
+                          layout->element_width,
+                          layout->element_type->is_signed,
+                          false,
+                          statement.target.span } }
+                    : base != environment.end()
                     ? evaluate_expression(
                           statement.target, environment, error)
-                    : std::nullopt;
-                const auto raw = selected
-                    ? evaluate_expression(
-                          statement.value, environment, error)
                     : std::nullopt;
                 if (base == environment.end()) {
                     error =
                         "constant function selected assignment target '"
                         + root->text + "' has no current value";
                 }
-                if (!selected || !raw) {
+                if (!selected) {
                     return Flow::failed;
                 }
                 frontend::Type selected_type{
@@ -908,15 +1876,22 @@ private:
                         0,
                         true},
                     false};
-                const auto replacement =
-                    convert_systemverilog_parameter_value(
-                        *raw, selected_type, error);
+                const auto replacement = converted(
+                    statement.value,
+                    layout ? *layout->element_type : selected_type,
+                    environment,
+                    error);
                 if (!replacement) {
                     return Flow::failed;
                 }
                 std::vector<std::uint32_t> offsets;
                 offsets.reserve(selected->width);
-                if (statement.target.kind == ExpressionKind::Index) {
+                if (layout) {
+                    for (std::uint32_t bit = 0;
+                         bit < layout->element_width; ++bit) {
+                        offsets.push_back(*array_offset + bit);
+                    }
+                } else if (statement.target.kind == ExpressionKind::Index) {
                     const auto index = evaluate_expression(
                         statement.target.operands[1], environment, error);
                     const auto position =
@@ -994,7 +1969,7 @@ private:
                             static_cast<std::uint32_t>(source));
                     }
                 }
-                auto updated = base->second;
+                auto& updated = base->second;
                 for (std::uint32_t bit = 0;
                      bit < offsets.size();
                      ++bit) {
@@ -1008,7 +1983,12 @@ private:
                 }
                 updated.refresh_low_word_mirrors();
                 updated.source = statement.target.span;
-                value = std::move(updated);
+                if (root->text == call_stack_.back()->name
+                    || root->text
+                        == result_alias(call_stack_.back()->name)) {
+                    result = updated;
+                }
+                return Flow::normal;
             } else {
                 error =
                     "constant functions support one packed bit/part-select "
@@ -1027,11 +2007,17 @@ private:
             return Flow::normal;
         }
         if (statement.kind == StatementKind::Return) {
-            const auto value = converted(
-                statement.value,
-                call_stack_.back()->return_type,
-                environment,
-                error);
+            const auto& return_type = call_stack_.back()->return_type;
+            const auto value = call_stack_.back()->language
+                        == frontend::Language::Vhdl2008
+                    && unconstrained_vhdl_builtin_array(return_type)
+                ? evaluate_expression(
+                      statement.value, environment, error)
+                : converted(
+                      statement.value,
+                      return_type,
+                      environment,
+                      error);
             if (!value) {
                 return Flow::failed;
             }
@@ -1387,7 +2373,14 @@ private:
     const std::vector<frontend::FunctionDeclaration>& functions_;
     const SystemVerilogConstantEnvironment& globals_;
     const ConstantEnvironment& fallback_;
+    CallCache owned_call_cache_;
+    CallCache& call_cache_;
+    std::unordered_map<
+        const frontend::FunctionDeclaration*,
+        CallableBehaviorIdentity> callable_behaviors_;
     std::vector<const frontend::FunctionDeclaration*> call_stack_;
+    std::vector<const std::unordered_map<
+        std::string, const frontend::Type*>*> type_scopes_;
 };
 
 void fold_expression(
@@ -1410,7 +2403,12 @@ void fold_expression(
         || std::ranges::none_of(
             functions,
             [&](const auto& function) {
-                return function.name == expression.text
+                return (function.language == frontend::Language::Vhdl2008
+                            ? function.name == expression.text
+                            : callable_name_matches(
+                                  function.name,
+                                  expression.text,
+                                  function.language))
                     && !function.return_type.systemverilog_container;
             })) {
         return;
@@ -1532,121 +2530,167 @@ void fold_generate_body(
     const std::vector<frontend::FunctionDeclaration>& functions,
     const SystemVerilogConstantEnvironment& environment,
     const ConstantEnvironment& fallback) {
+    std::optional<std::vector<frontend::FunctionDeclaration>>
+        owned_visible_functions;
+    const auto* visible_functions = &functions;
+    std::set<std::string> local_function_names;
+    for (const auto& function : body.functions) {
+        if (function.language != frontend::Language::Vhdl2008) {
+            local_function_names.insert(function.name);
+        }
+    }
+    if (!local_function_names.empty()) {
+        owned_visible_functions = functions;
+        std::erase_if(
+            *owned_visible_functions,
+            [&](const auto& function) {
+                return std::ranges::any_of(
+                    local_function_names,
+                    [&](const auto& local_name) {
+                        return callable_name_matches(
+                            function.name, local_name, function.language);
+                    });
+            });
+        for (const auto& function : body.functions) {
+            if (function.language != frontend::Language::Vhdl2008) {
+                owned_visible_functions->push_back(function);
+            }
+        }
+        visible_functions = &*owned_visible_functions;
+    }
     for (auto& alias : body.type_aliases) {
-        fold_type(alias.type, functions, environment, fallback);
+        fold_type(alias.type, *visible_functions, environment, fallback);
     }
     for (auto& constant : body.constants) {
         fold_type(
-            constant.type, functions, environment, fallback);
+            constant.type, *visible_functions, environment, fallback);
         fold_expression(
             constant.default_value,
-            functions,
+            *visible_functions,
             environment,
             fallback);
     }
     for (auto& signal : body.signals) {
         fold_type(
-            signal.type, functions, environment, fallback);
+            signal.type, *visible_functions, environment, fallback);
     }
     for (auto& function : body.functions) {
         fold_type(
-            function.return_type, functions, environment, fallback);
+            function.return_type,
+            *visible_functions,
+            environment,
+            fallback);
         for (auto& argument : function.arguments) {
             fold_type(
-                argument.type, functions, environment, fallback);
+                argument.type, *visible_functions, environment, fallback);
             if (argument.default_value) {
                 fold_expression(
                     *argument.default_value,
-                    functions,
+                    *visible_functions,
                     environment,
                     fallback);
             }
         }
         for (auto& variable : function.variables) {
             fold_type(
-                variable.type, functions, environment, fallback);
+                variable.type, *visible_functions, environment, fallback);
             if (variable.initializer) {
                 fold_expression(
                     *variable.initializer,
-                    functions,
+                    *visible_functions,
                     environment,
                     fallback);
             }
         }
         fold_statements(
-            function.statements, functions, environment, fallback);
+            function.statements,
+            *visible_functions,
+            environment,
+            fallback);
     }
     for (auto& task : body.tasks) {
         for (auto& argument : task.arguments) {
             fold_type(
-                argument.type, functions, environment, fallback);
+                argument.type, *visible_functions, environment, fallback);
             if (argument.default_value) {
                 fold_expression(
                     *argument.default_value,
-                    functions,
+                    *visible_functions,
                     environment,
                     fallback);
             }
         }
         for (auto& variable : task.variables) {
             fold_type(
-                variable.type, functions, environment, fallback);
+                variable.type, *visible_functions, environment, fallback);
             if (variable.initializer) {
                 fold_expression(
                     *variable.initializer,
-                    functions,
+                    *visible_functions,
                     environment,
                     fallback);
             }
         }
         fold_statements(
-            task.statements, functions, environment, fallback);
+            task.statements,
+            *visible_functions,
+            environment,
+            fallback);
     }
     fold_statements(
         body.concurrent_statements,
-        functions,
+        *visible_functions,
         environment,
         fallback);
     for (auto& process : body.processes) {
         for (auto& variable : process.variables) {
             fold_type(
-                variable.type, functions, environment, fallback);
+                variable.type, *visible_functions, environment, fallback);
             if (variable.initializer) {
                 fold_expression(
                     *variable.initializer,
-                    functions,
+                    *visible_functions,
                     environment,
                     fallback);
             }
         }
         fold_statements(
             process.statements,
-            functions,
+            *visible_functions,
             environment,
             fallback);
     }
     for (auto& instance : body.instances) {
         for (auto& override : instance.parameter_overrides) {
             fold_expression(
-                override.value, functions, environment, fallback);
+                override.value,
+                *visible_functions,
+                environment,
+                fallback);
         }
         for (auto& connection : instance.connections) {
             fold_expression(
-                connection.value, functions, environment, fallback);
+                connection.value,
+                *visible_functions,
+                environment,
+                fallback);
         }
     }
     for (auto& declaration : body.verilog_defparams) {
         for (auto& segment : declaration.path) {
             for (auto& index : segment.indices) {
                 fold_expression(
-                    index, functions, environment, fallback);
+                    index, *visible_functions, environment, fallback);
             }
         }
         fold_expression(
-            declaration.value, functions, environment, fallback);
+            declaration.value,
+            *visible_functions,
+            environment,
+            fallback);
     }
     fold_generate_regions(
-        body.generate_regions, functions, environment, fallback);
+        body.generate_regions, *visible_functions, environment, fallback);
 }
 
 void fold_generate_regions(
@@ -1661,6 +2705,22 @@ void fold_generate_regions(
             region.condition, functions, environment, fallback);
         fold_expression(
             region.iteration, functions, environment, fallback);
+        if (region.kind == frontend::GenerateKind::Conditional) {
+            std::string error;
+            ConstantFunctionEvaluator evaluator {
+                functions, environment, fallback };
+            if (const auto condition = evaluator.evaluate(
+                    region.condition, error)) {
+                if (const auto truth = condition->truth_value()) {
+                    fold_generate_body(
+                        *truth ? region.then_body : region.else_body,
+                        functions,
+                        environment,
+                        fallback);
+                    continue;
+                }
+            }
+        }
         fold_generate_body(
             region.then_body, functions, environment, fallback);
         fold_generate_body(
@@ -1688,6 +2748,17 @@ void fold_generate_regions(
 
 } // namespace
 
+ConstantFunctionMemoizationScope::ConstantFunctionMemoizationScope()
+{
+    active_elaboration_call_caches.push_back(
+        std::make_unique<CallCache>());
+}
+
+ConstantFunctionMemoizationScope::~ConstantFunctionMemoizationScope()
+{
+    active_elaboration_call_caches.pop_back();
+}
+
 std::optional<SystemVerilogConstantValue>
 evaluate_systemverilog_constant_function_expression(
     const Expression& expression,
@@ -1701,11 +2772,24 @@ evaluate_systemverilog_constant_function_expression(
 }
 
 void fold_systemverilog_constant_functions(
+    frontend::GenerateBody& body,
+    const std::vector<frontend::FunctionDeclaration>& functions,
+    const SystemVerilogConstantEnvironment& environment,
+    const ConstantEnvironment& fallback_environment) {
+    CallCache call_cache;
+    const FoldCallCacheScope cache_scope { call_cache };
+    fold_generate_body(
+        body, functions, environment, fallback_environment);
+}
+
+void fold_systemverilog_constant_functions(
     DesignUnit& unit,
     const SystemVerilogConstantEnvironment& environment,
     const ConstantEnvironment& fallback_environment,
     std::vector<Diagnostic>&) {
-    const auto functions = unit.functions;
+    CallCache call_cache;
+    const FoldCallCacheScope cache_scope { call_cache };
+    const auto& functions = unit.functions;
     for (auto& parameter : unit.parameters) {
         fold_type(
             parameter.type,

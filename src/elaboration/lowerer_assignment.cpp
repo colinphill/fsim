@@ -9,6 +9,10 @@ using namespace elaboration_detail;
 void Lowerer::validate_read_only_signal_writes(
     const frontend::SourceSpan& source)
 {
+    if (process_.name.find("$port_input_driver")
+        != std::string::npos) {
+        return;
+    }
     std::set<SignalId> reported;
     const auto check = [&](const SignalId signal) {
         if (read_only_signals_.contains(signal)
@@ -49,7 +53,15 @@ std::optional<std::int64_t>
 Lowerer::static_integer_value(const Expression& expression)
 {
     if (language_ != frontend::Language::Vhdl2008) {
-        return constant_index(expression);
+        if (const auto direct = constant_index(expression)) {
+            return direct;
+        }
+        std::string error;
+        const auto evaluated =
+            evaluate_systemverilog_constant_expression(
+                expression, { }, { }, error);
+        return evaluated ? evaluated->integer_value()
+                         : std::optional<std::int64_t> { };
     }
     auto folded = expression;
     const auto fold_attributes =
@@ -222,25 +234,19 @@ void Lowerer::lower_assignment(const Statement& statement)
     auto target_name = base->text;
     const auto container_local = container_locals_.find(target_name);
     const auto container_object = container_objects_.find(target_name);
+    const bool targets_container_object
+        = container_local == container_locals_.end()
+        && container_object != container_objects_.end();
     if (container_local != container_locals_.end()
         || container_object != container_objects_.end()) {
-        if (read_only_container_objects_.contains(
+        if (targets_container_object
+            && read_only_container_objects_.contains(
                 target_name)) {
             report(
                 "FSIM-ELAB-SVPORT-009",
                 "an input container port is read-only within its "
                 "module",
                 statement.target.span);
-            return;
-        }
-        if (statement.assignment_kind
-                != AssignmentKind::Blocking
-            || statement.procedural_assignment_control
-                != frontend::ProceduralAssignmentControl::None) {
-            report(
-                "FSIM-ELAB-SVCONTAINER-009",
-                "container assignments must be blocking and time-free",
-                statement.span);
             return;
         }
         const auto* source_type = object_type(target_name);
@@ -255,10 +261,208 @@ void Lowerer::lower_assignment(const Statement& statement)
                     == ContainerElementKind::Packed
                 || runtime_type->element_kind
                     == ContainerElementKind::Scalar
-            ? std::optional<std::size_t> {
-                  runtime_type->element_width
-              }
-            : std::nullopt;
+            ? runtime_type->element_width
+            : 0U;
+        if (targets_container_object
+            && runtime_type->fixed
+            && runtime_type->dimensions.size() == 1U
+            && element_width != 0U
+            && statement.target.kind == ExpressionKind::Index
+            && statement.target.operands.size() == 2U
+            && packed_selections.size() == 1U
+            && statement.procedural_assignment_control
+                == frontend::ProceduralAssignmentControl::None) {
+            const auto alias = std::find_if(
+                design_.container_signal_aliases_.rbegin(),
+                design_.container_signal_aliases_.rend(),
+                [&](const ContainerSignalAlias& candidate) {
+                    return candidate.object == container_object->second
+                        && candidate.readable && candidate.writable;
+                });
+            if (alias != design_.container_signal_aliases_.rend()) {
+                const auto [left, right] = runtime_type->dimensions.front();
+                const auto low = std::min(left, right);
+                const auto high = std::max(left, right);
+                const auto count = static_cast<std::uint64_t>(
+                    static_cast<std::int64_t>(high) - low + 1);
+                const auto total_width = count * element_width;
+                if (total_width
+                    > std::numeric_limits<std::uint32_t>::max()) {
+                    report(
+                        "FSIM-ELAB-SVCONTAINER-009",
+                        "static-array packed storage exceeds the executable "
+                        "signal width limit",
+                        statement.span);
+                    return;
+                }
+                auto element_type = *source_type;
+                if (source_type->systemverilog_container
+                    && source_type->systemverilog_container
+                           ->element_types.size() == 1U) {
+                    element_type = source_type->systemverilog_container
+                                       ->element_types.front();
+                }
+                element_type.systemverilog_container.reset();
+                auto value = lower_expression(
+                    statement.value, element_width, &element_type);
+                if (!value) {
+                    return;
+                }
+                if (register_width(*value) != element_width) {
+                    *value = resize_register(
+                        *value, element_width,
+                        is_signed_expression(statement.value));
+                }
+                const auto blocking = statement.assignment_kind
+                    == AssignmentKind::Blocking;
+                if (const auto selected = static_integer_value(
+                        statement.target.operands[1])) {
+                    if (*selected < low || *selected > high) {
+                        report(
+                            "FSIM-ELAB-SVCONTAINER-009",
+                            "static-array assignment index is out of range",
+                            statement.target.operands[1].span);
+                        return;
+                    }
+                    const auto ordinal = left >= right
+                        ? static_cast<std::uint64_t>(left - *selected)
+                        : static_cast<std::uint64_t>(*selected - left);
+                    const auto offset = static_cast<std::uint32_t>(
+                        (count - 1U - ordinal) * element_width);
+                    if (blocking) {
+                        process_.operations.emplace_back(
+                            WriteBlockingSlice {
+                                alias->signal, *value, offset });
+                    } else {
+                        process_.operations.emplace_back(
+                            WriteUpdateSlice {
+                                alias->signal, *value, offset });
+                    }
+                    return;
+                }
+                auto index = lower_expression(
+                    statement.target.operands[1], 32U);
+                if (!index) {
+                    return;
+                }
+                if (register_width(*index) != 32U) {
+                    *index = resize_register(
+                        *index, 32U,
+                        is_signed_expression(
+                            statement.target.operands[1]));
+                }
+                process_.operations.emplace_back(IntegerCheck {
+                    *index, low, high });
+                const auto declared_left = allocate_register(
+                    32U, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(LoadConstant {
+                    declared_left, integer_value(left) });
+                const auto ordinal = allocate_register(
+                    32U, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(IntegerBinary {
+                    IntegerBinaryOperator::subtract,
+                    ordinal,
+                    left >= right ? declared_left : *index,
+                    left >= right ? *index : declared_left });
+                const auto last = allocate_register(
+                    32U, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(LoadConstant {
+                    last,
+                    integer_value(static_cast<std::int64_t>(count - 1U)) });
+                const auto reverse_ordinal = allocate_register(
+                    32U, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(IntegerBinary {
+                    IntegerBinaryOperator::subtract,
+                    reverse_ordinal, last, ordinal });
+                const auto width = allocate_register(
+                    32U, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(LoadConstant {
+                    width,
+                    integer_value(static_cast<std::int64_t>(
+                        element_width)) });
+                const auto packed_base = allocate_register(
+                    32U, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(IntegerBinary {
+                    IntegerBinaryOperator::multiply,
+                    packed_base, reverse_ordinal, width });
+                const DynamicPartIndex selection {
+                    packed_base,
+                    static_cast<std::int64_t>(total_width - 1U),
+                    0,
+                    0,
+                    static_cast<std::uint32_t>(element_width),
+                    true,
+                    true };
+                if (blocking) {
+                    process_.operations.emplace_back(
+                        WriteBlockingDynamicPartSlice {
+                            alias->signal, *value, selection });
+                } else {
+                    process_.operations.emplace_back(
+                        WriteUpdateDynamicPartSlice {
+                            alias->signal, *value, selection });
+                }
+                return;
+            }
+        }
+        if (targets_container_object
+            && runtime_type->fixed
+            && runtime_type->dimensions.size() <= 1U
+            && element_width != 0U
+            && statement.target.kind == ExpressionKind::Index
+            && statement.target.operands.size() == 2U
+            && packed_selections.size() == 1U
+            && statement.assignment_kind == AssignmentKind::Blocking
+            && statement.procedural_update_kind
+                == frontend::ProceduralUpdateKind::None
+            && statement.procedural_assignment_control
+                == frontend::ProceduralAssignmentControl::None) {
+            auto element_type = *source_type;
+            if (source_type->systemverilog_container
+                && source_type->systemverilog_container
+                       ->element_types.size() == 1U) {
+                element_type = source_type->systemverilog_container
+                                   ->element_types.front();
+            }
+            element_type.systemverilog_container.reset();
+            auto value = lower_expression(
+                statement.value, element_width, &element_type);
+            auto index = lower_expression(
+                statement.target.operands[1], 32U);
+            if (!value || !index) {
+                return;
+            }
+            if (register_width(*value) != element_width) {
+                *value = resize_register(
+                    *value, element_width,
+                    is_signed_expression(statement.value));
+            }
+            if (register_width(*index) != 32U) {
+                *index = resize_register(
+                    *index, 32U,
+                    is_signed_expression(
+                        statement.target.operands[1]));
+            }
+            process_.operations.emplace_back(
+                WriteContainerObjectElement {
+                    container_object->second,
+                    *index,
+                    *value,
+                    true,
+                    false,
+                    std::nullopt });
+            return;
+        }
+        if (statement.assignment_kind
+                != AssignmentKind::Blocking
+            || statement.procedural_assignment_control
+                != frontend::ProceduralAssignmentControl::None) {
+            report(
+                "FSIM-ELAB-SVCONTAINER-009",
+                "container assignments must be blocking and time-free",
+                statement.span);
+            return;
+        }
         ContainerRegisterId target { };
         if (container_local != container_locals_.end()) {
             target = container_local->second;
@@ -268,7 +472,7 @@ void Lowerer::lower_assignment(const Statement& statement)
                 ReadContainerObject {
                     target, container_object->second });
         }
-        const auto object = container_object != container_objects_.end()
+        const auto object = targets_container_object
             ? std::optional<ContainerObjectId> {
                   container_object->second
               }
@@ -695,11 +899,10 @@ void Lowerer::lower_assignment(const Statement& statement)
                                     statement.target.operands[1]),
                         false,
                         string_index });
-                if (container_object
-                    != container_objects_.end()) {
+                if (object) {
                     process_.operations.emplace_back(
                         WriteContainerObject {
-                            container_object->second, target, std::nullopt });
+                            *object, target, std::nullopt });
                 }
                 return;
             }
@@ -766,10 +969,10 @@ void Lowerer::lower_assignment(const Statement& statement)
                 statement.target.span);
             return;
         }
-        if (container_object != container_objects_.end()) {
+        if (object) {
             process_.operations.emplace_back(
                 WriteContainerObject {
-                    container_object->second, target, std::nullopt });
+                    *object, target, std::nullopt });
         }
         return;
     }

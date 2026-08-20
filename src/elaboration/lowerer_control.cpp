@@ -152,6 +152,13 @@ void Lowerer::lower_loop(const Statement& statement)
         initial = evaluate_constant_expression(
             statement.loop_initial, { }, error);
         if (!initial) {
+            if (language_ != frontend::Language::Vhdl2008
+                && statement.target.valid()
+                && statement.value.valid()
+                && statement.condition.valid()) {
+                lower_runtime_for(statement);
+                return;
+            }
             report(
                 "FSIM-ELAB-071",
                 "cannot evaluate sequential for-loop initial bound: "
@@ -165,6 +172,13 @@ void Lowerer::lower_loop(const Statement& statement)
         if (!limit) {
             if (statement.loop_repeat) {
                 lower_runtime_repeat(statement);
+                return;
+            }
+            if (language_ != frontend::Language::Vhdl2008
+                && statement.target.valid()
+                && statement.value.valid()
+                && statement.condition.valid()) {
+                lower_runtime_for(statement);
                 return;
             }
             report(
@@ -1030,6 +1044,38 @@ void Lowerer::lower_loop(const Statement& statement)
                     }
                     continue;
                 }
+                if (choice.kind == ExpressionKind::Call
+                    && (choice.text == "'range"
+                        || choice.text == "'reverse_range")) {
+                    const auto selected =
+                        vhdl_array_attribute_range(choice, true);
+                    if (!selected) {
+                        valid = false;
+                        continue;
+                    }
+                    const bool reverse =
+                        choice.text == "'reverse_range";
+                    const auto left = reverse
+                        ? selected->right : selected->left;
+                    const auto right = reverse
+                        ? selected->left : selected->right;
+                    const bool descending = reverse
+                        ? !selected->descending : selected->descending;
+                    const bool null = descending
+                        ? left < right : left > right;
+                    if (null) {
+                        continue;
+                    }
+                    auto index = left;
+                    while (true) {
+                        insert_index(index, value, choice.span);
+                        if (index == right) {
+                            break;
+                        }
+                        index += descending ? -1 : 1;
+                    }
+                    continue;
+                }
                 if (choice.kind == ExpressionKind::Binary
                     && (choice.text == "to"
                         || choice.text == "downto")) {
@@ -1291,6 +1337,14 @@ void Lowerer::lower_loop(const Statement& statement)
 
     void Lowerer::lower_if(const Statement& statement)
     {
+        if (const auto static_condition =
+                static_integer_value(statement.condition)) {
+            lower_statements(
+                *static_condition != 0
+                    ? statement.statements
+                    : statement.else_statements);
+            return;
+        }
         const auto condition = lower_condition(
             statement.condition,
             statement.vhdl_conditional_assignment

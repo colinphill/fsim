@@ -3,9 +3,40 @@
 
 #include <iostream>
 
+namespace {
+
+void test_process_program_ownership_transfer()
+{
+    const auto parsed = fsim::frontend::parse_text(
+        "process_ownership_transfer.sv",
+        "module process_ownership_transfer; initial begin #1; end endmodule",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(parsed.ok());
+    auto elaborated = fsim::elaboration::elaborate(
+        parsed.design, "process_ownership_transfer");
+    assert(elaborated.ok() && elaborated.design);
+    assert(elaborated.design->processes().size() == 1U);
+    const auto process_name = elaborated.design->processes().front().name;
+    const auto operation_count
+        = elaborated.design->processes().front().operations.size();
+
+    auto interpreter
+        = std::move(*elaborated.design).create_interpreter();
+    assert(elaborated.design->processes().empty());
+    assert(interpreter->process_program(0U).name == process_name);
+    assert(interpreter->process_program(0U).operations.size()
+        == operation_count);
+    const auto result = interpreter->run();
+    assert(result.status == fsim::runtime::RunStatus::completed);
+    assert(result.time == 1U);
+}
+
+} // namespace
+
 int main()
 {
     using namespace fsim::tests::elaboration;
+    test_process_program_ownership_transfer();
     test_specialization_and_packages();
     test_verilog_specify_specialization();
     test_systemverilog_typed_constants();

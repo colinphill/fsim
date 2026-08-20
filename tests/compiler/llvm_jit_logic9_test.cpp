@@ -123,6 +123,133 @@ void test_logic9_at_level(
     assert(runtime.formatted_logic9_values.size() == 1);
     assert(runtime.formatted_logic9_values.front() == planes(source));
 
+    Process direct_process;
+    direct_process.id = 107;
+    direct_process.name = "logic9_direct_update_accumulator";
+    direct_process.register_count = 3;
+    direct_process.register_value_kinds.assign(3U, ValueKind::logic9);
+    const auto direct_whole = PackedLogic4::from_logic9_msb_string(
+        "U01ZWLH-");
+    const auto direct_slice = PackedLogic4::from_logic9_msb_string("10");
+    const auto direct_projected = PackedLogic4::from_logic9_msb_string("HL");
+    direct_process.operations = {
+        LoadConstant { 0, direct_whole },
+        WriteUpdate { 0, 0 },
+        LoadConstant { 1, direct_slice },
+        WriteUpdateSlice { 0, 1, 2 },
+        LoadConstant { 2, direct_projected },
+        WriteProjectedSlice {
+            0, 2, 6, 0U, 0U, ProjectedDelayMode::inertial },
+        Halt { }
+    };
+    const std::array<std::uint32_t, 1> direct_widths { 8U };
+    const std::array<ValueKind, 1> direct_kinds { ValueKind::logic9 };
+    LlvmJitOptions direct_options { optimization, { } };
+    direct_options.require_direct_update_slots = true;
+    LlvmJit direct_jit { direct_options };
+    const auto direct_symbol = std::string { symbol } + "_direct_update";
+    direct_jit.add_process(
+        direct_symbol, direct_process, direct_widths, direct_kinds);
+    const auto direct_handle = direct_jit.lookup(direct_symbol);
+    assert((direct_jit.frame_layout(direct_handle).direct_update_signals
+        == std::vector<SignalId> { 0U }));
+    TestRuntime direct_runtime;
+    auto direct_descriptor = abi(direct_runtime);
+    fsim_jit_update_slot_v1 direct_slot { };
+    std::array<std::uint64_t, 1> direct_active_words { };
+    direct_descriptor.direct_update_slots = &direct_slot;
+    direct_descriptor.direct_update_slot_count = 1U;
+    direct_descriptor.direct_update_active_words
+        = direct_active_words.data();
+    direct_descriptor.direct_update_active_word_count = 1U;
+    assert(direct_jit.execute(direct_handle, direct_descriptor)
+        == JitExecutionStatus::completed);
+    auto direct_expected = direct_whole;
+    for (std::size_t bit = 0; bit < direct_slice.width(); ++bit) {
+        direct_expected.set_logic9(
+            2U + bit, direct_slice.get_logic9(bit));
+    }
+    for (std::size_t bit = 0; bit < direct_projected.width(); ++bit) {
+        direct_expected.set_logic9(
+            6U + bit, direct_projected.get_logic9(bit));
+    }
+    const auto expected_direct_word = direct_expected.logic9_low_word();
+    assert((direct_runtime.logic9_signals[0]
+        == std::array<std::uint64_t, 4> { }));
+    assert(direct_slot.mask == UINT64_C(0xff));
+    assert(direct_slot.active == 0U);
+    assert(direct_active_words[0] == 0U);
+    assert(direct_slot.aval == expected_direct_word.planes[0]);
+    assert(direct_slot.bval == expected_direct_word.planes[1]);
+    assert(direct_slot.logic9_plane2 == expected_direct_word.planes[2]);
+    assert(direct_slot.logic9_plane3 == expected_direct_word.planes[3]);
+
+    const auto rhs_states = PackedLogic4::from_logic9_msb_string(
+        "UX01ZWLH-");
+    constexpr std::array<Logic9, 9> states {
+        Logic9::u,
+        Logic9::x,
+        Logic9::zero,
+        Logic9::one,
+        Logic9::z,
+        Logic9::w,
+        Logic9::l,
+        Logic9::h,
+        Logic9::dont_care
+    };
+    for (std::size_t left = 0; left < states.size(); ++left) {
+        Process binary;
+        binary.id = static_cast<ProcessId>(100U + left);
+        binary.name = "logic9_binary_truth_table";
+        binary.register_count = 5;
+        binary.register_value_kinds.assign(5U, ValueKind::logic9);
+        auto lhs_states = rhs_states;
+        lhs_states.fill(states[left]);
+        binary.operations = {
+            LoadConstant { 0, lhs_states },
+            LoadConstant { 1, rhs_states },
+            Binary { BinaryOperator::bit_and, 2, 0, 1 },
+            Binary { BinaryOperator::bit_or, 3, 0, 1 },
+            Binary { BinaryOperator::bit_xor, 4, 0, 1 },
+            WriteBlocking { 0, 2 },
+            WriteBlocking { 1, 3 },
+            WriteBlocking { 2, 4 },
+            Halt { }
+        };
+        const auto binary_symbol = std::string { symbol }
+            + "_binary_" + std::to_string(left);
+        const std::array<std::uint32_t, 3> binary_widths { 9, 9, 9 };
+        const std::array<ValueKind, 3> binary_kinds {
+            ValueKind::logic9, ValueKind::logic9, ValueKind::logic9
+        };
+        assert(jit.supports_process(binary, binary_widths, binary_kinds));
+        jit.add_process(
+            binary_symbol, binary, binary_widths, binary_kinds);
+
+        using Logic9Binary = Logic9 (*)(Logic9, Logic9) noexcept;
+        auto expected_binary = [&](const Logic9Binary operation) {
+            auto result = rhs_states;
+            for (std::size_t bit = 0; bit < result.width(); ++bit) {
+                result.set_logic9(
+                    bit,
+                    operation(
+                        lhs_states.get_logic9(bit),
+                        rhs_states.get_logic9(bit)));
+            }
+            return planes(result);
+        };
+        TestRuntime binary_runtime;
+        auto binary_descriptor = abi(binary_runtime);
+        assert(jit.execute(jit.lookup(binary_symbol), binary_descriptor)
+            == JitExecutionStatus::completed);
+        assert(binary_runtime.logic9_signals[0]
+            == expected_binary(runtime::logic_and));
+        assert(binary_runtime.logic9_signals[1]
+            == expected_binary(runtime::logic_or));
+        assert(binary_runtime.logic9_signals[2]
+            == expected_binary(runtime::logic_xor));
+    }
+
     auto missing_exact_callback = descriptor;
     missing_exact_callback.read_signal_logic9 = nullptr;
     expect_error(
@@ -1344,12 +1471,12 @@ void test_rejections()
     jit.add_process("wide", too_wide, widths);
     TestRuntime wide_runtime;
     auto wide_descriptor = abi(wide_runtime);
-    wide_descriptor.execute_signal_operation = nullptr;
+    wide_descriptor.read_signal_packed = nullptr;
     expect_fatal_error(
         [&] {
             (void)jit.execute(jit.lookup("wide"), wide_descriptor);
         },
-        "requires execute_signal_operation");
+        "requires read_signal_packed");
 
     Process zero_width;
     zero_width.id = 0;
@@ -1508,7 +1635,7 @@ void test_rejections()
             jit.add_process("path_use_before_definition",
                 path_use_before_definition, byte_signal);
         },
-        "register may be used before definition on a control-flow path");
+        "register 1 may be used before definition on a control-flow path");
 
     Process zero_time_cycle;
     zero_time_cycle.id = 0;

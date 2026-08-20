@@ -212,6 +212,84 @@ endmodule
     assert(has_operation(static_cast<ProcessSetRandState*>(nullptr)));
     assert(has_operation(static_cast<ProcessSrandom*>(nullptr)));
 
+    const auto bounded_task = fsim::frontend::parse_text(
+        "bounded-task-fork.sv",
+        R"(
+module bounded_task_fork;
+  logic [2:0] result;
+  task automatic update_result;
+    fork
+      #1 result[0] = 1'b1;
+      #2 result[1] = 1'b1;
+    join
+    result[2] = 1'b1;
+  endtask
+  initial begin
+    result = '0;
+    update_result();
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(bounded_task.ok());
+    const auto bounded_task_elaborated = fsim::elaboration::elaborate(
+        bounded_task.design, "bounded_task_fork");
+    assert(bounded_task_elaborated.ok());
+    auto bounded_task_interpreter =
+        bounded_task_elaborated.design->create_interpreter();
+    const auto bounded_task_result = bounded_task_interpreter->run();
+    assert(
+        bounded_task_result.status == fsim::runtime::RunStatus::completed
+        && bounded_task_result.time == 2);
+    const auto bounded_task_value =
+        bounded_task_elaborated.design->find_signal("result");
+    assert(bounded_task_value);
+    assert(
+        bounded_task_interpreter->signal_value(*bounded_task_value).low_word().aval
+        == 7);
+
+    const auto bounded_task_frame = fsim::frontend::parse_text(
+        "bounded-task-fork-frame.sv",
+        R"(
+module bounded_task_fork_frame;
+  reg [7:0] memory[0:3];
+  reg [7:0] observed;
+  task automatic capture;
+    integer index;
+    begin
+      for (index = 0; index < 4; index = index + 1)
+        memory[index] = index + 8'h41;
+      fork
+        begin
+          index = 0;
+          observed = memory[index];
+        end
+        #1;
+      join
+    end
+  endtask
+  initial begin
+    capture();
+    assert (observed == 8'h41);
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(bounded_task_frame.ok());
+    const auto bounded_task_frame_elaborated =
+        fsim::elaboration::elaborate(
+            bounded_task_frame.design,
+            "bounded_task_fork_frame");
+    assert(bounded_task_frame_elaborated.ok());
+    auto bounded_task_frame_interpreter =
+        bounded_task_frame_elaborated.design->create_interpreter();
+    const auto bounded_task_frame_result =
+        bounded_task_frame_interpreter->run();
+    assert(
+        bounded_task_frame_result.status
+            == fsim::runtime::RunStatus::completed
+        && bounded_task_frame_result.time == 1);
+
     const auto callable = fsim::frontend::parse_text(
         "callable_fork.sv",
         R"(

@@ -6,7 +6,7 @@ using namespace runtime::simir;
 using namespace elaboration_detail;
 
 void Lowerer::collect_class_tasks(
-    const std::vector<Statement>& statements)
+    const std::span<const Statement> statements)
 {
     for (const auto& statement : statements) {
         if (statement.kind == StatementKind::TaskCall
@@ -1149,7 +1149,8 @@ void Lowerer::lower_task_call(const Statement& statement)
             frame.invocation_identity,
             frame.invocation_packed,
             frame.invocation_strings,
-            frame.invocation_containers });
+            frame.invocation_containers,
+            true });
         if (!frame.invocation_layout_finalized) {
             frame.invocation_push_sites.push_back(push_site);
         }
@@ -1449,7 +1450,8 @@ void Lowerer::lower_task_body(const std::size_t task_index)
             frame.invocation_identity,
             frame.invocation_packed,
             frame.invocation_strings,
-            frame.invocation_containers
+            frame.invocation_containers,
+            true
         };
     }
     frame.invocation_push_sites.clear();

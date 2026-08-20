@@ -118,6 +118,15 @@ module generated_case #(parameter MODE = 1) (
   endgenerate
 endmodule
 
+module attributed_generated;
+  generate
+    (* ram_style = "distributed" *) logic direct_memory;
+    if (1) begin : selected
+      (* ram_style = "block" *) logic branch_memory;
+    end
+  endgenerate
+endmodule
+
 module implicit_generated #(parameter ENABLED = 1);
   if (ENABLED) begin : implicit_scope
     localparam int BASE = 5;
@@ -178,6 +187,31 @@ module direct_generated;
       localparam int NESTED_VALUE = DIRECT_BASE;
       logic [3:0] nested_value;
       initial nested_value = NESTED_VALUE;
+    end
+  endgenerate
+endmodule
+
+module reed_solomon_generate_shapes #(
+  parameter COUNT = 2,
+  parameter MODE = 0
+) (
+  input wire source,
+  output wire result
+);
+  generate
+    if (MODE == 0)
+      assign result = source;
+    else if (MODE == 1)
+      assign result = ~source;
+    else begin : generated_lanes
+      genvar lane_index;
+      wire [7:0] lane_values [0:COUNT-1];
+      for (lane_index = 0;
+           lane_index < COUNT;
+           lane_index = lane_index + 1) begin : lane
+        assign lane_values[lane_index] = {8{source}};
+      end
+      assign result = lane_values[0][0];
     end
   endgenerate
 endmodule
@@ -362,6 +396,36 @@ endmodule
                  .then_body.constants.size()
               == 1,
       "direct and named SystemVerilog generate blocks");
+  const auto* sv_reed_solomon_shapes =
+      systemverilog.design.find(
+          UnitKind::VerilogModule,
+          "reed_solomon_generate_shapes");
+  require(
+      sv_reed_solomon_shapes != nullptr
+          && sv_reed_solomon_shapes->generate_regions.size() == 1
+          && sv_reed_solomon_shapes->generate_regions.front()
+                 .then_body.concurrent_statements.size()
+              == 1
+          && sv_reed_solomon_shapes->generate_regions.front()
+                 .else_body.generate_regions.size()
+              == 1
+          && sv_reed_solomon_shapes->generate_regions.front()
+                 .else_body.generate_regions.front()
+                 .else_body.variables.size()
+              == 1
+          && sv_reed_solomon_shapes->generate_regions.front()
+                 .else_body.generate_regions.front()
+                 .else_body.variables.front().name
+              == "lane_values"
+          && sv_reed_solomon_shapes->generate_regions.front()
+                 .else_body.generate_regions.front()
+                 .else_body.generate_regions.size()
+              == 1
+          && sv_reed_solomon_shapes->generate_regions.front()
+                 .else_body.generate_regions.front()
+                 .else_body.generate_regions.front().variable
+              == "lane_index",
+      "direct branches, else-if, local genvar, and generated net arrays parse");
 
   const auto vhdl = parse_text(
       "generate.vhd",
@@ -1693,6 +1757,31 @@ endmodule
               == 8
           && formatted_statements[18].output_values[0].zero_pad,
       "%t current-time substitution and width metadata");
+
+  const auto explicit_time_format = parse_text(
+      "explicit_time_format.sv",
+      R"(
+module explicit_time_format;
+  logic [7:0] data;
+  logic flag;
+  initial $display("t=%0t data=%x flag=%b", $time, data, flag);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(explicit_time_format.ok(),
+      "an explicit $time argument must align with %t");
+  const auto& explicit_time_values = explicit_time_format.design.units
+      .front().processes.front().statements.front().output_values;
+  require(
+      explicit_time_values.size() == 3
+          && explicit_time_values[0].format == OutputFormat::Time
+          && explicit_time_values[0].value.text == "$time"
+          && explicit_time_values[1].format
+              == OutputFormat::Hexadecimal
+          && explicit_time_values[1].value.text == "data"
+          && explicit_time_values[2].format == OutputFormat::Binary
+          && explicit_time_values[2].value.text == "flag",
+      "explicit %t values must not shift later formatted arguments");
 
   const auto invalid_format_width = parse_text(
       "invalid_format_width.sv",

@@ -78,19 +78,35 @@ load_register(llvm::IRBuilder<>& builder,
     const RegisterId id)
 {
     const auto& slot = registers[id];
+    auto& context = builder.getContext();
+    auto* i64 = llvm::Type::getInt64Ty(context);
+    auto* aval_pointer = builder.CreateGEP(
+        i64, slot.aval_base, constant_i64(context, slot.word_offset),
+        "register.aval.pointer");
+    auto* bval_pointer = builder.CreateGEP(
+        i64, slot.bval_base, constant_i64(context, slot.word_offset),
+        "register.bval.pointer");
     auto* integer = packed_integer_type(builder.getContext(), slot.width);
     llvm::Value* zero = llvm::ConstantInt::get(integer, 0);
-    auto* aval = builder.CreateLoad(integer, slot.aval, "register.aval");
-    auto* bval = builder.CreateLoad(integer, slot.bval, "register.bval");
+    auto* aval = builder.CreateLoad(integer, aval_pointer, "register.aval");
+    auto* bval = builder.CreateLoad(integer, bval_pointer, "register.bval");
     aval->setAlignment(llvm::Align { 8 });
     bval->setAlignment(llvm::Align { 8 });
     llvm::Value* logic9_plane2 = zero;
     llvm::Value* logic9_plane3 = zero;
     if (slot.kind == ValueKind::logic9) {
+        auto* plane2_pointer = builder.CreateGEP(
+            i64, slot.logic9_plane2_base,
+            constant_i64(context, slot.word_offset),
+            "register.logic9.plane2.pointer");
+        auto* plane3_pointer = builder.CreateGEP(
+            i64, slot.logic9_plane3_base,
+            constant_i64(context, slot.word_offset),
+            "register.logic9.plane3.pointer");
         auto* plane2 = builder.CreateLoad(
-            integer, slot.logic9_plane2, "register.logic9.plane2");
+            integer, plane2_pointer, "register.logic9.plane2");
         auto* plane3 = builder.CreateLoad(
-            integer, slot.logic9_plane3, "register.logic9.plane3");
+            integer, plane3_pointer, "register.logic9.plane3");
         plane2->setAlignment(llvm::Align { 8 });
         plane3->setAlignment(llvm::Align { 8 });
         logic9_plane2 = plane2;
@@ -226,40 +242,80 @@ load_register(llvm::IRBuilder<>& builder,
     };
 }
 
-[[nodiscard]] EncodedValue map_logic9_binary(
+[[nodiscard]] EncodedValue lower_logic9_binary(
     llvm::IRBuilder<>& builder,
     const EncodedValue& lhs,
     const EncodedValue& rhs,
-    const std::array<std::array<Logic9, 9>, 9>& table)
+    const BinaryOperator operation)
 {
-    auto* zero = packed_constant(builder.getContext(), lhs.width, 0);
-    std::array<llvm::Value*, 4> result {
-        zero, zero, zero, zero
+    assert(lhs.width == rhs.width);
+    assert(operation == BinaryOperator::bit_and
+        || operation == BinaryOperator::bit_or
+        || operation == BinaryOperator::bit_xor);
+
+    struct LogicClasses {
+        llvm::Value* u;
+        llvm::Value* zero;
+        llvm::Value* one;
     };
-    std::array<llvm::Value*, 9> left_masks { };
-    std::array<llvm::Value*, 9> right_masks { };
-    for (std::uint8_t state = 0; state < 9; ++state) {
-        left_masks[state] = logic9_state_mask(builder, lhs, state);
-        right_masks[state] = logic9_state_mask(builder, rhs, state);
+
+    auto* mask = packed_mask(builder.getContext(), lhs.width);
+    auto* zero = packed_constant(builder.getContext(), lhs.width, 0);
+    const auto classes = [&](const EncodedValue& value) {
+        auto* not_plane3 = builder.CreateNot(value.logic9_plane3);
+        auto* strong_or_weak_zero = builder.CreateAnd(
+            builder.CreateAnd(value.bval, builder.CreateNot(value.aval)),
+            not_plane3);
+        auto* strong_or_weak_one = builder.CreateAnd(
+            builder.CreateAnd(value.bval, value.aval), not_plane3);
+        auto* any_plane = builder.CreateOr(
+            builder.CreateOr(value.aval, value.bval),
+            builder.CreateOr(
+                value.logic9_plane2, value.logic9_plane3));
+        return LogicClasses {
+            builder.CreateAnd(builder.CreateNot(any_plane), mask),
+            builder.CreateAnd(strong_or_weak_zero, mask),
+            builder.CreateAnd(strong_or_weak_one, mask)
+        };
+    };
+    const auto left = classes(lhs);
+    const auto right = classes(rhs);
+
+    llvm::Value* result_zero = nullptr;
+    llvm::Value* result_one = nullptr;
+    llvm::Value* result_u = nullptr;
+    if (operation == BinaryOperator::bit_and) {
+        result_zero = builder.CreateOr(left.zero, right.zero);
+        result_one = builder.CreateAnd(left.one, right.one);
+        result_u = builder.CreateAnd(
+            builder.CreateNot(result_zero),
+            builder.CreateOr(left.u, right.u));
+    } else if (operation == BinaryOperator::bit_or) {
+        result_zero = builder.CreateAnd(left.zero, right.zero);
+        result_one = builder.CreateOr(left.one, right.one);
+        result_u = builder.CreateAnd(
+            builder.CreateNot(result_one),
+            builder.CreateOr(left.u, right.u));
+    } else {
+        result_zero = builder.CreateOr(
+            builder.CreateAnd(left.zero, right.zero),
+            builder.CreateAnd(left.one, right.one));
+        result_one = builder.CreateOr(
+            builder.CreateAnd(left.zero, right.one),
+            builder.CreateAnd(left.one, right.zero));
+        result_u = builder.CreateOr(left.u, right.u);
     }
-    for (std::uint8_t left = 0; left < 9; ++left) {
-        for (std::uint8_t right = 0; right < 9; ++right) {
-            auto* selected = builder.CreateAnd(
-                left_masks[left], right_masks[right]);
-            const auto encoded = static_cast<std::uint8_t>(table[left][right]);
-            for (std::size_t plane = 0; plane < result.size(); ++plane) {
-                if (((encoded >> plane) & 1U) != 0) {
-                    result[plane] = builder.CreateOr(result[plane], selected);
-                }
-            }
-        }
-    }
+
+    auto* result_x = builder.CreateAnd(
+        builder.CreateNot(builder.CreateOr(
+            builder.CreateOr(result_zero, result_one), result_u)),
+        mask);
     return {
-        result[0],
-        result[1],
+        builder.CreateAnd(builder.CreateOr(result_one, result_x), mask),
+        builder.CreateAnd(builder.CreateOr(result_zero, result_one), mask),
         lhs.width,
-        result[2],
-        result[3],
+        zero,
+        zero,
         ValueKind::logic9
     };
 }
@@ -269,23 +325,57 @@ void store_register(llvm::IRBuilder<>& builder,
     const RegisterId id, EncodedValue value)
 {
     const auto& slot = registers[id];
+    auto& context = builder.getContext();
+    auto* i64 = llvm::Type::getInt64Ty(context);
+    auto* aval_pointer = builder.CreateGEP(
+        i64, slot.aval_base, constant_i64(context, slot.word_offset),
+        "register.aval.pointer");
+    auto* bval_pointer = builder.CreateGEP(
+        i64, slot.bval_base, constant_i64(context, slot.word_offset),
+        "register.bval.pointer");
     value = coerce_value_kind(builder, value, slot.kind);
-    auto* aval = builder.CreateStore(value.aval, slot.aval);
-    auto* bval = builder.CreateStore(value.bval, slot.bval);
+    if (slot.width > 64U && slot.width % 64U != 0U) {
+        auto* const storage_type = packed_integer_type(
+            context, ((slot.width + 63U) / 64U) * 64U);
+        value.aval = builder.CreateZExt(value.aval, storage_type);
+        value.bval = builder.CreateZExt(value.bval, storage_type);
+        if (slot.kind == ValueKind::logic9) {
+            value.logic9_plane2 = builder.CreateZExt(
+                value.logic9_plane2, storage_type);
+            value.logic9_plane3 = builder.CreateZExt(
+                value.logic9_plane3, storage_type);
+        }
+    }
+    auto* aval = builder.CreateStore(value.aval, aval_pointer);
+    auto* bval = builder.CreateStore(value.bval, bval_pointer);
     aval->setAlignment(llvm::Align { 8 });
     bval->setAlignment(llvm::Align { 8 });
     if (slot.kind == ValueKind::logic9) {
+        auto* plane2_pointer = builder.CreateGEP(
+            i64, slot.logic9_plane2_base,
+            constant_i64(context, slot.word_offset),
+            "register.logic9.plane2.pointer");
+        auto* plane3_pointer = builder.CreateGEP(
+            i64, slot.logic9_plane3_base,
+            constant_i64(context, slot.word_offset),
+            "register.logic9.plane3.pointer");
         auto* logic9_plane2 = builder.CreateStore(
-            value.logic9_plane2, slot.logic9_plane2);
+            value.logic9_plane2, plane2_pointer);
         auto* logic9_plane3 = builder.CreateStore(
-            value.logic9_plane3, slot.logic9_plane3);
+            value.logic9_plane3, plane3_pointer);
         logic9_plane2->setAlignment(llvm::Align { 8 });
         logic9_plane3->setAlignment(llvm::Align { 8 });
     }
-    builder.CreateStore(
-        llvm::ConstantInt::get(
-            llvm::Type::getInt8Ty(builder.getContext()), 1),
-        slot.initialized);
+    if (slot.initialized_base != nullptr) {
+        auto* initialized_pointer = builder.CreateGEP(
+            llvm::Type::getInt8Ty(context), slot.initialized_base,
+            constant_i64(context, slot.index),
+            "register.initialized.pointer");
+        builder.CreateStore(
+            llvm::ConstantInt::get(
+                llvm::Type::getInt8Ty(context), 1),
+            initialized_pointer);
+    }
 }
 
 [[nodiscard]] std::uint64_t width_mask(const std::uint32_t width) noexcept
@@ -432,28 +522,12 @@ void store_register(llvm::IRBuilder<>& builder,
             builder.CreateAnd(
                 builder.CreateOr(lhs.bval, rhs.bval), mask),
             zero);
-        llvm::Value* result_aval = zero;
-        EncodedBit carry { llvm::ConstantInt::getFalse(context),
-            llvm::ConstantInt::getFalse(context) };
-        for (std::uint32_t bit = 0; bit < lhs.width; ++bit) {
-            const auto left = bit_at(builder, lhs, bit);
-            const auto right = bit_at(builder, rhs, bit);
-            const auto partial = bit_xor(builder, left, right);
-            const auto sum = bit_xor(builder, partial, carry);
-            const auto carry_generate = bit_and(builder, left, right);
-            const auto carry_propagate = bit_and(builder, carry, bit_or(builder, left, right));
-            carry = bit_or(builder, carry_generate, carry_propagate);
-
-            auto* shift = packed_constant(context, lhs.width, bit);
-            auto* aval = builder.CreateShl(
-                builder.CreateZExt(
-                    sum.aval, packed_integer_type(context, lhs.width)),
-                shift);
-            result_aval = builder.CreateOr(result_aval, aval);
-        }
+        auto* known_result = builder.CreateAdd(
+            builder.CreateAnd(lhs.aval, mask),
+            builder.CreateAnd(rhs.aval, mask));
         return {
             builder.CreateSelect(
-                unknown, mask, builder.CreateAnd(result_aval, mask)),
+                unknown, mask, builder.CreateAnd(known_result, mask)),
             builder.CreateSelect(
                 unknown, mask, zero),
             lhs.width

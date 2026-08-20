@@ -15,7 +15,7 @@ void run_at_level(const JitOptimizationLevel optimization,
   assert(jit.lookup(symbol) == handle);
   expect_fatal_error(
       [&] { jit.add_process(symbol, process, widths); },
-      "duplicate LLVM process symbol");
+      "duplicate LLVM process");
 
   TestRuntime runtime;
   runtime.signals[0] = {0x35, 0};
@@ -579,6 +579,146 @@ run_interpreter_branch(const UnknownBranchPolicy unknown_policy,
   const auto result = interpreter.run();
   assert(result.status == fsim::runtime::RunStatus::completed);
   return encode(interpreter.signal_value(output));
+}
+
+void test_native_callable_regions() {
+  Process process;
+  process.id = 12;
+  process.name = "native_callable_region";
+  process.register_count = 4;
+  process.operations = {
+      LoadConstant{3, PackedLogic4::from_aval_bval(8, 7, 0)},
+      CallableFramePush{1, {0, 1}, {}, {}, true},
+      LoadConstant{1, PackedLogic4::from_aval_bval(8, 11, 0)},
+      Call{9, 4, {}},
+      CopyRegister{2, 1},
+      CallableFramePop{1, {2}, {}, {}},
+      WriteBlocking{0, 2},
+      WriteBlocking{1, 3},
+      Halt{},
+      DebugPoint{
+          DebugPointKind::call,
+          SourceLocation{"native_callable.simir", 1, 1}},
+      LoadConstant{1, PackedLogic4::from_aval_bval(8, 42, 0)},
+      Return{{}},
+  };
+
+  const std::array<std::uint32_t, 2> widths{8, 8};
+  LlvmJit jit{LlvmJitOptions{JitOptimizationLevel::o1, {}}};
+  jit.add_process("native_callable_region", process, widths);
+  const auto handle = jit.lookup("native_callable_region");
+  const auto layout = jit.frame_layout(handle);
+  std::vector<std::uint64_t> aval(layout.register_count);
+  std::vector<std::uint64_t> bval(layout.register_count);
+  std::vector<std::uint8_t> initialized(layout.register_count);
+  fsim_jit_frame_v1 frame{};
+  jit.initialize_frame(handle, frame, aval, bval, initialized);
+
+  TestRuntime runtime;
+  auto descriptor = abi(runtime);
+  descriptor.flags = FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS;
+  auto result = new_resume_result();
+  assert(jit.resume(handle, descriptor, frame, result)
+         == JitResumeStatus::debug_point);
+  assert(result.instruction == 9);
+  assert(frame.program_counter == 10);
+  assert(frame.native_call_depth == 1);
+  assert(frame.native_return_stack[0] == 4);
+  assert(jit.resume(handle, descriptor, frame, result)
+         == JitResumeStatus::completed);
+  assert(frame.native_call_depth == 0);
+  assert((runtime.signals[0] == EncodedSignal{42, 0}));
+  assert((runtime.signals[1] == EncodedSignal{7, 0}));
+
+  auto conservative = process;
+  conservative.id = 13;
+  conservative.name = "conservative_callable_region";
+  fsim::runtime::simir::operation_get<CallableFramePush>(
+      conservative.operations[1]).native_isolated = false;
+  LlvmJit conservative_jit{
+      LlvmJitOptions{JitOptimizationLevel::o1, {}}};
+  conservative_jit.add_process(
+      "conservative_callable_region", conservative, widths);
+  const auto conservative_handle = conservative_jit.lookup(
+      "conservative_callable_region");
+  const auto conservative_layout = conservative_jit.frame_layout(
+      conservative_handle);
+  std::vector<std::uint64_t> conservative_aval(
+      conservative_layout.register_count);
+  std::vector<std::uint64_t> conservative_bval(
+      conservative_layout.register_count);
+  std::vector<std::uint8_t> conservative_initialized(
+      conservative_layout.register_count);
+  fsim_jit_frame_v1 conservative_frame{};
+  conservative_jit.initialize_frame(
+      conservative_handle,
+      conservative_frame,
+      conservative_aval,
+      conservative_bval,
+      conservative_initialized);
+  TestRuntime conservative_runtime;
+  auto conservative_descriptor = abi(conservative_runtime);
+  auto conservative_result = new_resume_result();
+  assert(conservative_jit.resume(
+             conservative_handle,
+             conservative_descriptor,
+             conservative_frame,
+             conservative_result)
+         == JitResumeStatus::simir_boundary);
+  assert(conservative_result.instruction == 1);
+  assert(conservative_frame.program_counter == 1);
+  assert(conservative_frame.native_call_depth == 0);
+
+  Process nested_suspend;
+  nested_suspend.id = 14;
+  nested_suspend.name = "native_callable_nested_suspend";
+  nested_suspend.operations = {
+      CallableFramePush{1, {}, {}, {}, true},
+      Call{5, 2, {}},
+      CallableFramePop{1, {}, {}, {}},
+      Halt{},
+      Halt{},
+      CallableFramePush{2, {}, {}, {}, true},
+      Call{10, 7, {}},
+      CallableFramePop{2, {}, {}, {}},
+      Return{{}},
+      Halt{},
+      Yield{},
+      Return{{}},
+  };
+  for (const auto optimization : {
+           JitOptimizationLevel::o0,
+           JitOptimizationLevel::o2,
+       }) {
+    LlvmJit nested_jit{LlvmJitOptions{optimization, {}}};
+    nested_jit.add_process(
+        "native_callable_nested_suspend", nested_suspend,
+        std::array<std::uint32_t, 0>{});
+    const auto nested_handle = nested_jit.lookup(
+        "native_callable_nested_suspend");
+    const auto nested_layout = nested_jit.frame_layout(nested_handle);
+    std::vector<std::uint64_t> nested_aval(nested_layout.register_count);
+    std::vector<std::uint64_t> nested_bval(nested_layout.register_count);
+    std::vector<std::uint8_t> nested_initialized(
+        nested_layout.register_count);
+    fsim_jit_frame_v1 nested_frame{};
+    nested_jit.initialize_frame(
+        nested_handle, nested_frame, nested_aval, nested_bval,
+        nested_initialized);
+    TestRuntime nested_runtime;
+    auto nested_descriptor = abi(nested_runtime);
+    auto nested_result = new_resume_result();
+    assert(nested_jit.resume(
+               nested_handle, nested_descriptor, nested_frame, nested_result)
+           == JitResumeStatus::yielded);
+    assert(nested_result.instruction == 10);
+    assert(nested_frame.program_counter == 11);
+    assert(nested_frame.native_call_depth == 2);
+    assert(nested_jit.resume(
+               nested_handle, nested_descriptor, nested_frame, nested_result)
+           == JitResumeStatus::completed);
+    assert(nested_frame.native_call_depth == 0);
+  }
 }
 
 void test_control_flow_at_level(const JitOptimizationLevel optimization,
@@ -1258,6 +1398,142 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
              loop_handle, loop_descriptor, loop_frame, loop_result) ==
          JitResumeStatus::yielded);
   assert((loop_runtime.signals[0] == EncodedSignal{0, 0}));
+}
+
+void test_process_cohort_resume_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol_prefix)
+{
+  LlvmJit jit { LlvmJitOptions { optimization, { } } };
+  const std::array<std::uint32_t, 2> widths { 1U, 1U };
+  std::array<JitProcessHandle, 2> handles;
+  for (std::size_t index = 0; index < handles.size(); ++index) {
+    Process process;
+    process.id = static_cast<ProcessId>(index);
+    process.name = "cohort_" + std::to_string(index);
+    process.register_count = 1U;
+    process.static_sensitivity.push_back(
+        { 0U, EdgeKind::posedge });
+    process.operations = {
+        LoadConstant { 0U, PackedLogic4::from_msb_string("1") },
+        WriteBlocking { static_cast<SignalId>(index), 0U },
+        WaitSensitivity { },
+        Jump { 0U },
+    };
+    const auto symbol = std::string { symbol_prefix } + "_cohort_"
+        + std::to_string(index);
+    // Separate modules exercise a wrapper spanning hierarchy/module ownership.
+    jit.add_process(symbol, process, widths);
+    handles[index] = jit.lookup(symbol);
+  }
+
+  struct Frame {
+    std::vector<std::uint64_t> aval;
+    std::vector<std::uint64_t> bval;
+    std::vector<std::uint8_t> initialized;
+    fsim_jit_frame_v1 value { };
+  };
+  std::array<Frame, 2> frames;
+  for (std::size_t index = 0; index < frames.size(); ++index) {
+    const auto layout = jit.frame_layout(handles[index]);
+    frames[index].aval.resize(layout.register_word_count);
+    frames[index].bval.resize(layout.register_word_count);
+    frames[index].initialized.resize(layout.register_count);
+    jit.initialize_frame(
+        handles[index], frames[index].value,
+        frames[index].aval, frames[index].bval,
+        frames[index].initialized);
+  }
+
+  std::array<TestRuntime, 2> runtimes;
+  std::array<fsim_jit_runtime_v1, 2> descriptors {
+      abi(runtimes[0]), abi(runtimes[1])
+  };
+  std::array<fsim_jit_resume_result_v1, 2> results {
+      new_resume_result(), new_resume_result()
+  };
+  std::array<std::uint8_t, 2> queued { 1U, 1U };
+  std::array<std::uint8_t, 2> waiting { 1U, 1U };
+  std::array<std::uint8_t, 2> process_status { 2U, 2U };
+  std::array<fsim::compiler::JitProcessCohortResumeEntry, 2> cohort {
+      fsim::compiler::JitProcessCohortResumeEntry {
+          jit.bind(handles[0]), descriptors[0],
+          frames[0].value, results[0], &queued[0], &waiting[0],
+          &process_status[0] },
+      fsim::compiler::JitProcessCohortResumeEntry {
+          jit.bind(handles[1]), descriptors[1],
+          frames[1].value, results[1], &queued[1], &waiting[1],
+          &process_status[1] },
+  };
+  assert(jit.resume_cohort_prevalidated(cohort) == cohort.size());
+  for (std::size_t index = 0; index < cohort.size(); ++index) {
+    assert(cohort[index].status
+           == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY);
+    assert(results[index].instruction == 2U);
+    assert(frames[index].value.program_counter == 3U);
+    assert((runtimes[index].signals[index] == EncodedSignal { 1U, 0U }));
+    assert(queued[index] == 0U);
+    assert(waiting[index] == 1U);
+    assert(process_status[index] == 2U);
+  }
+
+  const auto bound_cohort = jit.bind_cohort_prevalidated(cohort);
+  assert(bound_cohort);
+  runtimes[0].signals[0] = { 0U, 0U };
+  runtimes[1].signals[1] = { 0U, 0U };
+  results = { new_resume_result(), new_resume_result() };
+  queued = { 1U, 1U };
+  waiting = { 1U, 1U };
+  process_status = { 2U, 2U };
+  assert(jit.resume_cohort_prevalidated(bound_cohort, cohort)
+         == cohort.size());
+  for (std::size_t index = 0; index < cohort.size(); ++index) {
+    assert(cohort[index].status
+           == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY);
+    assert(results[index].instruction == 2U);
+    assert(frames[index].value.program_counter == 3U);
+    assert((runtimes[index].signals[index] == EncodedSignal { 1U, 0U }));
+    assert(queued[index] == 0U);
+    assert(waiting[index] == 1U);
+    assert(process_status[index] == 2U);
+  }
+
+  runtimes[0].signals[0] = { 0U, 0U };
+  runtimes[1].signals[1] = { 0U, 0U };
+  results = { new_resume_result(), new_resume_result() };
+  queued = { 1U, 1U };
+  waiting = { 1U, 1U };
+  process_status = { 2U, 2U };
+  std::array<std::uint8_t, 2> active { 0U, 1U };
+  std::array<fsim::compiler::JitProcessCohortResumeEntry, 2> region {
+      fsim::compiler::JitProcessCohortResumeEntry {
+          jit.bind(handles[0]), descriptors[0],
+          frames[0].value, results[0], &queued[0], &waiting[0],
+          &process_status[0], &active[0] },
+      fsim::compiler::JitProcessCohortResumeEntry {
+          jit.bind(handles[1]), descriptors[1],
+          frames[1].value, results[1], &queued[1], &waiting[1],
+          &process_status[1], &active[1] },
+  };
+  region[0].status = std::numeric_limits<std::uint32_t>::max();
+  const std::array<std::size_t, 1> active_indices { 1U };
+  assert(jit.resume_region_prevalidated(region, active_indices)
+         == region.size());
+  assert(active[0] == 0U);
+  assert(queued[0] == 1U);
+  assert(waiting[0] == 1U);
+  assert(process_status[0] == 2U);
+  assert(region[0].status == std::numeric_limits<std::uint32_t>::max());
+  assert((runtimes[0].signals[0] == EncodedSignal { 0U, 0U }));
+  assert(active[1] == 0U);
+  assert(queued[1] == 0U);
+  assert(waiting[1] == 1U);
+  assert(process_status[1] == 2U);
+  assert(region[1].status
+         == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY);
+  assert(results[1].instruction == 2U);
+  assert((runtimes[1].signals[1] == EncodedSignal { 1U, 0U }));
+
 }
 
 void test_class_service_boundaries_at_level(

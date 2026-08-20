@@ -399,6 +399,16 @@ Lowerer::lower_container_expression(
         return std::nullopt;
     }
     const auto destination = allocate_container_register(*runtime_type);
+    const auto alias = std::find_if(
+        design_.container_signal_aliases_.rbegin(),
+        design_.container_signal_aliases_.rend(),
+        [&](const ContainerSignalAlias& candidate) {
+            return candidate.object == object->second
+                && candidate.readable;
+        });
+    if (alias != design_.container_signal_aliases_.rend()) {
+        implicit_signal_dependencies_.push_back(alias->signal);
+    }
     process_.operations.emplace_back(
         ReadContainerObject { destination, object->second });
     return destination;

@@ -37,9 +37,16 @@ extern "C" {
 #define FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY UINT32_C(15)
 
 #define FSIM_JIT_INVALID_INSTRUCTION UINT32_MAX
+#define FSIM_JIT_NATIVE_CALL_STACK_CAPACITY_V1 UINT32_C(64)
 #define FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS UINT32_C(1)
 #define FSIM_JIT_PROJECTED_TRANSPORT UINT32_C(0)
 #define FSIM_JIT_PROJECTED_INERTIAL UINT32_C(1)
+#define FSIM_JIT_PACKED_SIGNAL_WRITE_BLOCKING UINT32_C(0)
+#define FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE UINT32_C(1)
+#define FSIM_JIT_PACKED_SIGNAL_WRITE_AFTER UINT32_C(2)
+#define FSIM_JIT_PACKED_SIGNAL_WRITE_BLOCKING_SLICE UINT32_C(3)
+#define FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE_SLICE UINT32_C(4)
+#define FSIM_JIT_PACKED_SIGNAL_WRITE_AFTER_SLICE UINT32_C(5)
 
 typedef struct fsim_jit_projected_element_v1 {
   uint64_t aval;
@@ -56,6 +63,32 @@ typedef struct fsim_jit_logic9_projected_element_v1 {
   fsim_jit_logic9_word_v1 value;
   uint64_t delay;
 } fsim_jit_logic9_projected_element_v1;
+
+/*
+ * One callback-free, zero-delay packed update accumulator owned by the host.
+ * Generated code merges all writes to one signal during a native resume into
+ * this slot.  mask selects the bits written at least once; later overlapping
+ * writes replace earlier bits, preserving source order without one C callback
+ * per assignment.  The host clears active/mask before each resume and commits
+ * the accumulated patches at the suspension boundary. reserved bit 0 marks
+ * aval/bval as a persistent shadow of a proven single-driver signal; generated
+ * code may then leave an identical assignment inactive while retaining any
+ * earlier active patch in the slot.
+ */
+typedef struct fsim_jit_update_slot_v1 {
+  uint64_t aval;
+  uint64_t bval;
+  uint64_t logic9_plane2;
+  uint64_t logic9_plane3;
+  uint64_t mask;
+  uint32_t active;
+  uint32_t reserved;
+  uint64_t* wide_aval;
+  uint64_t* wide_bval;
+  uint64_t* wide_mask;
+  uint32_t word_count;
+  uint32_t width;
+} fsim_jit_update_slot_v1;
 
 typedef struct fsim_jit_frame_v1 fsim_jit_frame_v1;
 
@@ -609,6 +642,181 @@ typedef struct fsim_jit_runtime_v1 {
       uint32_t process,
       uint32_t instruction,
       fsim_jit_frame_v1* frame);
+
+  /*
+   * Append-only scalar packed-container fast paths. flags bit 0 selects a
+   * pre-linearized index and bit 1 selects signed dynamic-index validation.
+   * More complex container kinds continue through container_operation.
+   */
+  uint32_t (*container_read_word)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      uint32_t container,
+      uint32_t flags,
+      uint64_t index_aval,
+      uint64_t index_bval,
+      uint64_t* result_aval,
+      uint64_t* result_bval);
+  uint32_t (*container_write_word)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      uint32_t container,
+      uint32_t flags,
+      uint64_t index_aval,
+      uint64_t index_bval,
+      uint64_t value_aval,
+      uint64_t value_bval);
+
+  /*
+   * Append-only arbitrary-width packed-container fast paths. The word planes
+   * contain ceil(element_width / 64) little-endian words and point directly
+   * into the caller-owned process frame. Only the selected element crosses
+   * the runtime boundary.
+   */
+  uint32_t (*container_read_packed)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      uint32_t container,
+      uint32_t flags,
+      uint64_t index_aval,
+      uint64_t index_bval,
+      uint64_t* result_aval_words,
+      uint64_t* result_bval_words,
+      uint32_t word_count);
+  uint32_t (*container_write_packed)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      uint32_t container,
+      uint32_t flags,
+      uint64_t index_aval,
+      uint64_t index_bval,
+      const uint64_t* value_aval_words,
+      const uint64_t* value_bval_words,
+      uint32_t word_count);
+
+  /*
+   * Append-only arbitrary-width signal-read fast path. The destination planes
+   * point directly into the generated process frame and contain
+   * ceil(width / 64) little-endian words. Logic4 callers pass null for planes
+   * 2 and 3; Logic9 callers provide all four planes.
+   */
+  uint32_t (*read_signal_packed)(
+      void* context,
+      uint32_t signal,
+      uint32_t width,
+      uint64_t* result_aval_words,
+      uint64_t* result_bval_words,
+      uint64_t* result_logic9_plane2_words,
+      uint64_t* result_logic9_plane3_words);
+
+  /*
+   * Append-only arbitrary-width signal-write fast path. mode is one of the
+   * FSIM_JIT_PACKED_SIGNAL_WRITE_* constants. The source planes contain
+   * ceil(width / 64) little-endian words and point into the process frame.
+   */
+  uint32_t (*write_signal_packed)(
+      void* context,
+      uint32_t signal,
+      uint32_t offset,
+      uint32_t width,
+      uint32_t mode,
+      uint64_t delay,
+      const uint64_t* aval_words,
+      const uint64_t* bval_words,
+      const uint64_t* logic9_plane2_words,
+      const uint64_t* logic9_plane3_words);
+
+  /*
+   * Append-only callback-free update staging.  Slots correspond to the
+   * process-specific direct_update_signals frame-layout vector.  A null
+   * pointer requests the ordinary callback path.
+   */
+  fsim_jit_update_slot_v1* direct_update_slots;
+  uint32_t direct_update_slot_count;
+  uint32_t direct_update_reserved;
+
+  /*
+   * Append-only callback-free current Logic4 reads.  The process-specific
+   * direct_read_signals table maps generated read slots to simulator signal
+   * indices in the dense aval/bval planes.  Null pointers request callbacks.
+   */
+  const uint64_t* direct_signal_aval;
+  const uint64_t* direct_signal_bval;
+  const uint32_t* direct_read_signals;
+  uint32_t direct_read_signal_count;
+  uint32_t direct_signal_count;
+  uint32_t direct_signal_reserved;
+
+  /*
+   * Append-only flattened current Logic4 planes for arbitrary-width native
+   * reads. direct_wide_signal_offsets maps simulator signal indices to word
+   * offsets; direct_wide_word_count bounds both planes. Null pointers request
+   * the read_signal_packed callback.
+   */
+  const uint64_t* direct_wide_signal_aval;
+  const uint64_t* direct_wide_signal_bval;
+  const uint32_t* direct_wide_signal_offsets;
+  uint32_t direct_wide_signal_offset_count;
+  uint32_t direct_wide_word_count;
+
+  /*
+   * Append-only sparse direct-update activity bitmap. Generated code sets one
+   * bit for every slot written during a resume. The host consumes set bits in
+   * ascending slot order, then clears the bitmap. A null pointer retains the
+   * original full-slot scan.
+   */
+  uint64_t* direct_update_active_words;
+  uint32_t direct_update_active_word_count;
+  uint32_t direct_update_active_reserved;
+
+  /*
+   * Append-only exact static-sensitivity activation mask. Bit 63 requests a
+   * conservative full activation; bits 0..62 correspond to the process's
+   * canonical static-sensitivity order.
+   */
+  uint64_t static_trigger_mask;
+
+  /*
+   * Append-only fused arbitrary-width signal part read. The callback applies
+   * the complete DynamicPartSelect range and unknown-base semantics and
+   * returns only the selected value, never a whole source-signal snapshot.
+   * flags bit 0 is increasing, bit 1 is source_descending, and bit 2 is
+   * two_state.
+   */
+  uint32_t (*read_signal_dynamic_part)(
+      void* context,
+      uint32_t signal,
+      uint32_t source_width,
+      uint64_t base_aval,
+      uint64_t base_bval,
+      int64_t left,
+      int64_t right,
+      uint32_t base_offset,
+      uint32_t width,
+      uint32_t flags,
+      fsim_jit_logic9_word_v1* result);
+
+  /*
+   * Append-only exact high ordinal planes for arbitrary-width Logic9 reads.
+   * These use the same flattened offsets and word count as the existing
+   * direct_wide_signal_aval/bval planes. Null pointers request callbacks.
+   */
+  const uint64_t* direct_wide_signal_logic9_plane2;
+  const uint64_t* direct_wide_signal_logic9_plane3;
+
+  /*
+   * Append-only dense exact Logic9 planes for callback-free reads of signals
+   * no wider than one word. Entries for non-Logic9 signals are zero.
+   */
+  const uint64_t* direct_signal_logic9_plane0;
+  const uint64_t* direct_signal_logic9_plane1;
+  const uint64_t* direct_signal_logic9_plane2;
+  const uint64_t* direct_signal_logic9_plane3;
+
 } fsim_jit_runtime_v1;
 
 /*
@@ -632,6 +840,9 @@ struct fsim_jit_frame_v1 {
     uint8_t* register_initialized;
     uint64_t* register_logic9_plane2;
     uint64_t* register_logic9_plane3;
+    uint32_t native_call_depth;
+    uint32_t native_call_reserved;
+    uint32_t native_return_stack[FSIM_JIT_NATIVE_CALL_STACK_CAPACITY_V1];
 };
 
 /*

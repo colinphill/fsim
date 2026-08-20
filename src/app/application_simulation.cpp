@@ -4,9 +4,19 @@
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/support/path.hpp"
 
+#include <chrono>
+#include <charconv>
+#include <atomic>
+#include <condition_variable>
 #include <cstdlib>
+#include <future>
+#include <iostream>
+#include <iterator>
+#include <numeric>
 #include <ranges>
 #include <set>
+#include <thread>
+#include <tuple>
 
 namespace fsim::app {
 using namespace application_detail;
@@ -1293,8 +1303,40 @@ struct Simulation::Impl {
                   runtime::simir::SignalId>(found->runtime_index) };
     }
 
+#if defined(FSIM_HAS_LLVM)
+    void request_background_jit_compilation(
+        const bool force_adaptive = false)
+    {
+        {
+            std::scoped_lock lock { jit_background_mutex };
+            jit_background_requested = true;
+            jit_background_forced |= force_adaptive;
+        }
+        jit_background_condition.notify_all();
+    }
+
+    void cancel_background_jit_compilation() noexcept
+    {
+        {
+            std::scoped_lock lock { jit_background_mutex };
+            jit_background_cancelled = true;
+        }
+        jit_background_condition.notify_all();
+    }
+#endif
+
     ~Impl()
     {
+#if defined(FSIM_HAS_LLVM)
+        // Materialization jobs retain pointers to process programs owned by
+        // the interpreter. Normal simulation may deliberately finish before
+        // background promotion, so join while both the interpreter and JIT
+        // are still alive rather than relying on reverse member destruction.
+        cancel_background_jit_compilation();
+        if (jit_materialization.valid()) {
+            jit_materialization.wait();
+        }
+#endif
         if (coverage_database_path && lifecycle != Lifecycle::finished) {
             try {
                 save_coverage_database();
@@ -1433,6 +1475,9 @@ struct Simulation::Impl {
 
     void publish_vpi_stored_signal(const SignalId signal)
     {
+        if (!vpi_runtime_updates_enabled) {
+            return;
+        }
         std::scoped_lock bridge_lock { vpi_bridge_mutex };
         if (vpi_event_handles.contains(signal)) {
             publish_vpi_event(signal);
@@ -1465,6 +1510,9 @@ struct Simulation::Impl {
         const runtime::simir::ProcessId process,
         const SignalId signal)
     {
+        if (!vpi_runtime_updates_enabled) {
+            return;
+        }
         std::scoped_lock bridge_lock { vpi_bridge_mutex };
         const auto drivers = vpi_driver_bindings.find(signal);
         if (drivers == vpi_driver_bindings.end()) {
@@ -1485,6 +1533,9 @@ struct Simulation::Impl {
     void publish_vpi_container(
         const runtime::simir::ContainerObjectId object)
     {
+        if (!vpi_runtime_updates_enabled) {
+            return;
+        }
         std::scoped_lock bridge_lock { vpi_bridge_mutex };
         const auto words = vpi_container_words.find(object);
         if (words == vpi_container_words.end()) {
@@ -1504,6 +1555,9 @@ struct Simulation::Impl {
 
     void publish_vpi_event(const SignalId event)
     {
+        if (!vpi_runtime_updates_enabled) {
+            return;
+        }
         std::scoped_lock bridge_lock { vpi_bridge_mutex };
         const auto objects = vpi_event_handles.find(event);
         if (objects == vpi_event_handles.end()) {
@@ -1525,6 +1579,9 @@ struct Simulation::Impl {
         const SignalId signal,
         const PackedLogic4& value)
     {
+        if (!vpi_runtime_updates_enabled) {
+            return;
+        }
         std::scoped_lock bridge_lock { vpi_bridge_mutex };
         const auto objects = vpi_signal_handles.find(signal);
         if (objects == vpi_signal_handles.end()) {
@@ -1565,6 +1622,9 @@ struct Simulation::Impl {
     void publish_vpi_assertion(
         const ConcurrentAssertionEvent& event)
     {
+        if (!vpi_runtime_updates_enabled) {
+            return;
+        }
         const auto object = vpi_assertion_handles.find(event.process);
         if (object == vpi_assertion_handles.end() || !vpi_callbacks) {
             return;
@@ -1682,6 +1742,7 @@ struct Simulation::Impl {
     }
 
     BuiltProject built;
+    bool vpi_runtime_updates_enabled { true };
     runtime::SystemVerilogClassHeap class_heap;
     runtime::SystemVerilogChandleRegistry chandle_registry;
     runtime::SystemVerilogClassStaticStore class_static_store;
@@ -1707,6 +1768,8 @@ struct Simulation::Impl {
     runtime::SystemVerilogUvmTestRunnerService uvm_test_runner;
     runtime::SystemVerilogUvmReportService uvm_reports;
     std::vector<runtime::ScheduledTaskHandle> uvm_report_setting_tasks;
+    std::set<std::tuple<runtime::simir::ProcessId, std::string,
+        std::uint32_t, std::uint32_t>> numeric_metavalue_reports;
     std::map<std::string, runtime::SystemVerilogUvmRootHandle, std::less<>>
         uvm_roots_by_scope;
 #if defined(FSIM_HAS_LLVM)
@@ -1715,9 +1778,39 @@ struct Simulation::Impl {
     std::vector<std::uint32_t> signal_widths;
     std::vector<runtime::simir::ValueKind>
         signal_value_kinds;
+    std::vector<runtime::simir::ResolutionKind>
+        signal_resolutions;
+    // Optimized executors may use elaboration-proven constant signal values.
+    // Keep their process programs alive alongside the JIT and interpreter.
+    std::vector<std::unique_ptr<runtime::simir::Process>>
+        jit_specialized_processes;
     // The interpreter owns executors referring to this JIT. Member destruction
     // is reversed, so declaring the JIT first destroys the interpreter first.
     std::unique_ptr<compiler::LlvmJit> jit;
+    // Retain each bounded background compilation so cache observers can request
+    // a stable completed snapshot without making normal simulation startup
+    // synchronous again.
+    std::vector<std::shared_future<
+        std::vector<compiler::JitProcessHandle>>> jit_compilations;
+    // Only bounded, cold-start-effective modules participate in the startup
+    // barrier. Larger recurring kernels remain in jit_compilations for cache
+    // synchronization and lifetime management, but promote asynchronously.
+    std::vector<std::shared_future<
+        std::vector<compiler::JitProcessHandle>>> jit_startup_compilations;
+    std::mutex jit_background_mutex;
+    std::condition_variable jit_background_condition;
+    bool jit_background_requested { };
+    bool jit_background_forced { };
+    bool jit_background_cancelled { };
+    // Large designs may profitably execute their first events while the
+    // bounded startup tier materializes. Small designs retain an eager native
+    // set so debugger/trace observations and short-run behavior stay stable.
+    bool jit_overlap_startup { };
+    // The deferred executor promises are fulfilled by this bounded worker
+    // batch while early simulation work proceeds through the interpreter.
+    // It is declared before the interpreter so destruction stops execution
+    // before waiting for compilation, while still outliving the JIT itself.
+    std::shared_future<void> jit_materialization;
 #endif
     std::unique_ptr<runtime::simir::Interpreter> interpreter;
     std::unique_ptr<runtime::SystemVerilogVpiObjectRegistry> vpi_registry;
@@ -1807,10 +1900,11 @@ struct Simulation::Impl {
 Simulation::Simulation(
     BuiltProject project,
     const std::uint64_t max_deltas,
-    const SimulationEngine engine)
+    const SimulationEngine engine,
+    const SystemVerilogVpiRuntimeUpdates vpi_runtime_updates)
     : impl_(
           std::make_unique<Impl>(
-              std::move(project), max_deltas, engine))
+              std::move(project), max_deltas, engine, vpi_runtime_updates))
 {
     auto* const lifetime = impl_.get();
     impl_->hdl_vcd.remove_observer = [lifetime](const std::uint64_t token) {
@@ -2009,6 +2103,27 @@ runtime::RunResult Simulation::run(
     if (until && *until < now()) {
         throw std::invalid_argument("run time limit is before the current time");
     }
+#if defined(FSIM_HAS_LLVM)
+    if (!impl_->jit_overlap_startup) {
+        await_native_compilation();
+    }
+    // A bounded run that cannot amortize large-kernel lowering should finish
+    // without launching it (or waiting for it during destruction). Unbounded
+    // and longer runs promote the background tier while simulation advances.
+    constexpr SimulationTick minimum_background_jit_run_ticks = 2'000'000U;
+    if (!until || *until - now() > minimum_background_jit_run_ticks) {
+        impl_->request_background_jit_compilation();
+    }
+    // Diagnostic gate for measuring the warm-cache cost of publishing every
+    // selected recurring kernel before any interpreter activation can make
+    // its frame ineligible for deferred native promotion.
+    if (std::getenv("FSIM_JIT_SYNCHRONIZE_RECURRING") != nullptr) {
+        impl_->request_background_jit_compilation(true);
+        for (const auto& compilation : impl_->jit_compilations) {
+            compilation.wait();
+        }
+    }
+#endif
     try {
         impl_->start_vpi();
         impl_->start_systemc();
@@ -2086,10 +2201,17 @@ std::size_t Simulation::compiled_module_count() const noexcept
     return impl_->compiled_modules;
 }
 
-NativeCacheStatistics Simulation::native_cache_statistics() const noexcept
+NativeCacheStatistics Simulation::native_cache_statistics(
+    const bool synchronize) const noexcept
 {
 #if defined(FSIM_HAS_LLVM)
     if (impl_->jit) {
+        if (synchronize) {
+            impl_->request_background_jit_compilation(true);
+            for (const auto& compilation : impl_->jit_compilations) {
+                compilation.wait();
+            }
+        }
         const auto statistics = impl_->jit->cache_statistics();
         return {
             statistics.hits,
@@ -2105,6 +2227,16 @@ NativeCacheStatistics Simulation::native_cache_statistics() const noexcept
     }
 #endif
     return { };
+}
+
+void Simulation::await_native_compilation() const
+{
+#if defined(FSIM_HAS_LLVM)
+    for (const auto& compilation : impl_->jit_startup_compilations) {
+        static_cast<void>(compilation.get());
+    }
+    impl_->interpreter->materialize_ready_process_executors();
+#endif
 }
 
 std::vector<ConcurrentAssertionCoverage>

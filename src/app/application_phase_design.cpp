@@ -35,15 +35,29 @@ namespace {
                 "cannot open .fsimdesign payload: " + support::path_to_utf8(path));
             return std::nullopt;
         }
-        std::ostringstream contents;
-        contents << input.rdbuf();
-        if (!input.good() && !input.eof()) {
+        std::error_code size_error;
+        const auto file_size = std::filesystem::file_size(path, size_error);
+        if (size_error
+            || file_size > std::string { }.max_size()
+            || file_size
+                > static_cast<std::uintmax_t>(
+                    std::numeric_limits<std::streamsize>::max())) {
             diagnostics.error(
                 "FSIM-ART-0014",
-                "cannot read .fsimdesign payload: " + support::path_to_utf8(path));
+                "cannot size .fsimdesign payload: "
+                    + support::path_to_utf8(path));
             return std::nullopt;
         }
-        auto bytes = contents.str();
+        std::string bytes(static_cast<std::size_t>(file_size), '\0');
+        input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        if (input.gcount() != static_cast<std::streamsize>(bytes.size())
+            || input.bad()) {
+            diagnostics.error(
+                "FSIM-ART-0014",
+                "cannot read .fsimdesign payload: "
+                    + support::path_to_utf8(path));
+            return std::nullopt;
+        }
         if (support::Sha256::hex(support::Sha256::digest(bytes)) != checksum) {
             diagnostics.error(
                 "FSIM-ART-0014",
@@ -110,10 +124,10 @@ namespace {
         semantic::design::DesignIr& design_ir,
         diagnostic::Engine& diagnostics)
     {
-        auto state = runtime.state();
         if (metadata.systemc_plugins.empty()) {
-            if (!state.systemc_instances.empty() || !state.systemc_processes.empty()
-                || !state.systemc_objects.empty()) {
+            if (!runtime.systemc_instances().empty()
+                || !runtime.systemc_processes().empty()
+                || !runtime.systemc_objects().empty()) {
                 diagnostics.error(
                     "FSIM-ART-0014",
                     ".fsimdesign contains SystemC runtime state without embedded plug-ins");
@@ -121,6 +135,7 @@ namespace {
             }
             return RehydratedSystemC { };
         }
+        auto state = runtime.state();
 
         project::SystemCSection host_settings;
         diagnostic::Engine fingerprint_diagnostics;
@@ -471,9 +486,14 @@ bool publish_design_artifact(
     metadata.seed = project.seed;
     metadata.entropy_seed = project.entropy_seed;
     metadata.search_libraries = config.elaboration.search_libraries;
-    for (const auto& root : config.project.tops) {
-        metadata.roots.push_back({ root.alias, root.target,
-            selected_root_identity(project, root.alias, root.target) });
+    for (std::size_t index = 0; index < config.project.tops.size(); ++index) {
+        const auto& root = config.project.tops[index];
+        const auto alias = root.alias.empty()
+            && index < project.design.roots().size()
+            ? project.design.roots()[index]
+            : root.alias;
+        metadata.roots.push_back({ alias, root.target,
+            selected_root_identity(project, alias, root.target) });
     }
     if (metadata.roots.empty() && !config.project.top.empty()) {
         const auto alias = project.design.roots().empty()
@@ -1182,6 +1202,10 @@ int handle_simulate(
     if (!built) {
         return 1;
     }
+    // Native lowering is a simulation-time choice. The design artifact keeps
+    // the elaborated HDL state, while an explicit standalone -O selection
+    // must govern the JIT pipeline and native-cache identity for this run.
+    built->optimization = config.build.optimization;
     if (invocation.cache_directory) {
         built->cache_path = *invocation.cache_directory;
     }

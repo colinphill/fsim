@@ -248,6 +248,54 @@ endmodule
       !read_only_rejected.ok()
       && has_diagnostic(
           read_only_rejected, "FSIM-ELAB-SVPORT-009"));
+
+  const auto selected_word = fsim::frontend::parse_text(
+      "static-array-selected-word-port.sv",
+      R"(
+module selected_word_probe(
+    input logic [7:0] value,
+    output logic [7:0] observed);
+  assign observed = value;
+endmodule
+
+module static_array_selected_word_port;
+  logic [7:0] values[0:3];
+  wire [7:0] observed[0:3];
+  integer index;
+  genvar word;
+  generate
+    for (word = 0; word < 4; word = word + 1) begin : probes
+      selected_word_probe probe(
+          .value(values[word]),
+          .observed(observed[word]));
+    end
+  endgenerate
+  initial begin
+    for (index = 0; index < 4; index = index + 1)
+      values[index] <= index + 8'h10;
+    #1;
+    assert (observed[0] === 8'h10);
+    assert (observed[1] === 8'h11);
+    assert (observed[2] === 8'h12);
+    assert (observed[3] === 8'h13);
+  end
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(selected_word.ok());
+  const auto selected_word_elaborated =
+      fsim::elaboration::elaborate(
+          selected_word.design,
+          "static_array_selected_word_port");
+  assert(selected_word_elaborated.ok());
+  auto selected_word_interpreter =
+      selected_word_elaborated.design->create_interpreter();
+  const auto selected_word_result =
+      selected_word_interpreter->run();
+  assert(
+      selected_word_result.status
+          == fsim::runtime::RunStatus::completed
+      && selected_word_result.time == 1);
 }
 
 }  // namespace fsim::tests::elaboration

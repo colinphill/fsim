@@ -14,14 +14,37 @@ inline constexpr std::uint32_t maximum_constant_width =
 inline constexpr std::uint64_t maximum_constant_work_units =
     64U * 1024U * 1024U;
 
+[[nodiscard]] constexpr char ascii_lower(const char value) noexcept {
+    return value >= 'A' && value <= 'Z'
+        ? static_cast<char>(value + ('a' - 'A')) : value;
+}
+
 [[nodiscard]] std::size_t checked_constant_width(
     const std::uint64_t width) {
     if (width == 0 || width > maximum_constant_width) {
         throw std::length_error{
             "SystemVerilog constant exceeds the 16,777,216-bit resource "
-            "limit"};
+            "limit (requested " + std::to_string(width) + " bits)"};
     }
     return static_cast<std::size_t>(width);
+}
+
+[[nodiscard]] PackedLogic4 packed_from_low_word(
+    const std::uint64_t bits,
+    const std::uint64_t unknown_bits,
+    const std::uint64_t high_impedance_bits,
+    const std::uint32_t width) {
+    auto packed = PackedLogic4{
+        checked_constant_width(width), Logic4::zero};
+    const auto low_width = std::min(width, std::uint32_t{64});
+    packed.insert_word(
+        runtime::Logic4Word{
+            low_width,
+            (bits & ~unknown_bits)
+                | (unknown_bits & ~high_impedance_bits),
+            unknown_bits},
+        0);
+    return packed;
 }
 
 [[nodiscard]] std::uint64_t width_mask(const std::uint32_t width) noexcept {
@@ -270,8 +293,7 @@ struct ParsedDecimal {
         suffix.remove_prefix(1);
     }
     if (width_text.empty() && suffix.size() == 1U) {
-        const auto digit = static_cast<char>(
-            std::tolower(static_cast<unsigned char>(suffix.front())));
+        const auto digit = ascii_lower(suffix.front());
         if (digit == '0' || digit == '1'
             || digit == 'x' || digit == 'z') {
             Value result {
@@ -291,8 +313,7 @@ struct ParsedDecimal {
         error = "SystemVerilog based literal is missing a base or digits";
         return std::nullopt;
     }
-    const auto base_character = static_cast<char>(
-        std::tolower(static_cast<unsigned char>(suffix.front())));
+    const auto base_character = ascii_lower(suffix.front());
     suffix.remove_prefix(1);
     std::uint32_t digit_width = 0;
     int numeric_base = 0;
@@ -336,8 +357,7 @@ struct ParsedDecimal {
 
     if (numeric_base == 10) {
         const auto decimal_state = [](const char character) {
-            return static_cast<char>(
-                std::tolower(static_cast<unsigned char>(character)));
+            return ascii_lower(character);
         };
         const bool has_unknown_digit = std::ranges::any_of(
             digits,
@@ -417,8 +437,7 @@ struct ParsedDecimal {
     for (auto digit = digits.rbegin();
          digit != digits.rend() && output_bit < selected_width;
          ++digit) {
-        const auto folded = static_cast<char>(
-            std::tolower(static_cast<unsigned char>(*digit)));
+        const auto folded = ascii_lower(*digit);
         if (folded == 'x' || folded == 'z' || folded == '?') {
             for (std::uint32_t bit = 0;
                  bit < digit_width && output_bit < selected_width;
@@ -459,38 +478,29 @@ struct ParsedDecimal {
     Value value,
     const std::uint32_t width) {
     const bool width_changed = value.width != width;
+    if (!width_changed) {
+        return value;
+    }
     const bool logic9 = value.packed.is_logic9();
     auto resized_value = PackedLogic4{width, Logic4::zero};
     if (logic9) {
         resized_value = resized_value.promoted_to_logic9();
     }
-    const auto copied = std::min(value.width, width);
-    for (std::uint32_t bit = 0; bit < copied; ++bit) {
-        if (logic9) {
-            resized_value.set_logic9(bit, value.packed.get_logic9(bit));
-        } else {
-            resized_value.set(bit, value.packed.get(bit));
-        }
-    }
     if (width > value.width && value.is_signed) {
         if (logic9) {
             const auto sign = value.packed.get_logic9(value.width - 1U);
-            for (auto bit = value.width; bit < width; ++bit) {
-                resized_value.set_logic9(bit, sign);
-            }
+            resized_value.fill(sign);
         } else {
             const auto sign = value.packed.get(value.width - 1U);
-            for (auto bit = value.width; bit < width; ++bit) {
-                resized_value.set(bit, sign);
-            }
+            resized_value.fill(sign);
         }
     }
+    const auto copied = std::min(value.width, width);
+    resized_value.insert_bits(value.packed.extract_bits(0, copied), 0);
     value.packed = std::move(resized_value);
     value.width = width;
-    if (width_changed) {
-        value.packed_range = frontend::PackedRange{
-            static_cast<std::int64_t>(width - 1U), 0, true};
-    }
+    value.packed_range = frontend::PackedRange{
+        static_cast<std::int64_t>(width - 1U), 0, true};
     value.refresh_low_word_mirrors();
     return value;
 }
@@ -1251,6 +1261,20 @@ struct ConstantProfile {
         return std::nullopt;
     }
     if (expression.kind == ExpressionKind::IntegerLiteral) {
+        if (expression.text.find('#') != std::string::npos) {
+            const auto value = evaluate_constant_expression(
+                expression, {}, error);
+            if (!value) {
+                return std::nullopt;
+            }
+            return Value{
+                integer_value(*value),
+                true,
+                false,
+                frontend::ValueDomain::Integer,
+                expression.nominal_type,
+                expression.span};
+        }
         auto digits = cleaned_digits(expression.text);
         auto parsed = parse_decimal_packed(
             digits, std::nullopt, true, error);
@@ -1266,6 +1290,44 @@ struct ConstantProfile {
             expression.span};
     }
     if (expression.kind == ExpressionKind::LogicLiteral) {
+        if (expression.text.size() == 3
+            && expression.text.front() == '\''
+            && expression.text.back() == '\'') {
+            const auto digit = ascii_lower(expression.text[1]);
+            Logic4 value = Logic4::x;
+            if (digit == '0' || digit == 'l') {
+                value = Logic4::zero;
+            } else if (digit == '1' || digit == 'h') {
+                value = Logic4::one;
+            } else if (digit == 'z') {
+                value = Logic4::z;
+            } else if (digit != 'x' && digit != 'u'
+                       && digit != 'w' && digit != '-') {
+                error = "VHDL logic character literal is malformed";
+                return std::nullopt;
+            }
+            return Value{
+                PackedLogic4{1, value},
+                false,
+                false,
+                frontend::ValueDomain::Logic4,
+                expression.nominal_type,
+                expression.span};
+        }
+        if (expression.text.find('#') != std::string::npos) {
+            const auto value = evaluate_constant_expression(
+                expression, {}, error);
+            if (!value) {
+                return std::nullopt;
+            }
+            return Value{
+                integer_value(*value),
+                true,
+                false,
+                frontend::ValueDomain::Integer,
+                expression.nominal_type,
+                expression.span};
+        }
         auto result = parse_based_literal(expression, error);
         if (result) {
             result->nominal_type = expression.nominal_type;
@@ -2114,11 +2176,18 @@ struct ConstantProfile {
                 return std::nullopt;
             }
             const auto converted = nonnegative_count(*count, error);
-            if (!converted || *converted == 0) {
-                if (converted) {
-                    error = "replication count must be positive";
-                }
+            if (!converted) {
                 return std::nullopt;
+            }
+            if (*converted == 0U) {
+                return Value {
+                    PackedLogic4 { 1, Logic4::zero },
+                    false,
+                    false,
+                    frontend::ValueDomain::Logic4,
+                    {},
+                    expression.span
+                };
             }
             repetitions = *converted;
             first = 1;
@@ -2132,8 +2201,29 @@ struct ConstantProfile {
         for (std::size_t index = first;
              index < expression.operands.size();
              ++index) {
+            const auto& operand_expression = expression.operands[index];
+            if (expression.kind == ExpressionKind::Concatenation
+                && operand_expression.kind
+                    == ExpressionKind::Replication
+                && !operand_expression.operands.empty()) {
+                const auto count = evaluate_impl(
+                    operand_expression.operands.front(),
+                    environment,
+                    fallback_environment,
+                    error);
+                if (!count) {
+                    return std::nullopt;
+                }
+                const auto converted = nonnegative_count(*count, error);
+                if (!converted) {
+                    return std::nullopt;
+                }
+                if (*converted == 0U) {
+                    continue;
+                }
+            }
             auto operand = evaluate_impl(
-                expression.operands[index],
+                operand_expression,
                 environment,
                 fallback_environment,
                 error);
@@ -2157,6 +2247,19 @@ struct ConstantProfile {
             return std::nullopt;
         }
         const auto result_width = element_width * repetitions;
+        if (operands.size() == 1U && element_width == 1U
+            && result_width <= maximum_constant_work_units / 64U) {
+            return Value{
+                PackedLogic4(
+                    static_cast<std::size_t>(result_width),
+                    runtime::to_logic4(
+                        operands.front().packed.get_logic9(0))),
+                false,
+                false,
+                operands.front().domain,
+                {},
+                expression.span};
+        }
         if (repetitions
                 > maximum_constant_work_units / operands.size()
             || result_width
@@ -2290,7 +2393,11 @@ SystemVerilogConstantValue::SystemVerilogConstantValue(
     const bool initial_signed,
     const bool initial_unsized,
     frontend::SourceSpan initial_source)
-    : packed{checked_constant_width(initial_width), Logic4::zero},
+    : packed{packed_from_low_word(
+          initial_bits,
+          initial_unknown_bits,
+          initial_high_impedance_bits,
+          initial_width)},
       bits{initial_bits},
       unknown_bits{initial_unknown_bits},
       high_impedance_bits{initial_high_impedance_bits},
@@ -2300,17 +2407,6 @@ SystemVerilogConstantValue::SystemVerilogConstantValue(
       source{std::move(initial_source)},
       packed_range{frontend::PackedRange{
           static_cast<std::int64_t>(initial_width - 1U), 0, true}} {
-    const auto copied = std::min(width, std::uint32_t{64});
-    for (std::uint32_t bit = 0; bit < copied; ++bit) {
-        const auto bit_mask = std::uint64_t{1} << bit;
-        packed.set(
-            bit,
-            (unknown_bits & bit_mask) != 0
-                ? ((high_impedance_bits & bit_mask) != 0
-                       ? Logic4::z : Logic4::x)
-                : (bits & bit_mask) != 0
-                      ? Logic4::one : Logic4::zero);
-    }
     refresh_low_word_mirrors();
 }
 
@@ -2335,24 +2431,24 @@ SystemVerilogConstantValue::SystemVerilogConstantValue(
 }
 
 void SystemVerilogConstantValue::refresh_low_word_mirrors() noexcept {
-    bits = 0;
-    unknown_bits = 0;
-    high_impedance_bits = 0;
-    const auto copied = std::min(width, std::uint32_t{64});
-    for (std::uint32_t bit = 0; bit < copied; ++bit) {
-        const auto bit_mask = std::uint64_t{1} << bit;
-        const auto state = packed.is_logic9()
-            ? runtime::to_logic4(packed.get_logic9(bit))
-            : packed.get(bit);
-        if (state == Logic4::one) {
-            bits |= bit_mask;
-        } else if (state == Logic4::x || state == Logic4::z) {
-            unknown_bits |= bit_mask;
-            if (state == Logic4::z) {
-                high_impedance_bits |= bit_mask;
-            }
-        }
+    const auto mask = width_mask(width);
+    if (!packed.is_logic9()) {
+        const auto aval = packed.aval_words().front() & mask;
+        const auto bval = packed.bval_words().front() & mask;
+        bits = aval & ~bval;
+        unknown_bits = bval;
+        high_impedance_bits = bval & ~aval;
+        return;
     }
+
+    const auto plane0 = packed.logic9_plane_words(0).front();
+    const auto plane1 = packed.logic9_plane_words(1).front();
+    const auto plane2 = packed.logic9_plane_words(2).front();
+    const auto plane3 = packed.logic9_plane_words(3).front();
+    bits = plane0 & plane1 & ~plane3 & mask;
+    unknown_bits = (~plane1 | plane3) & mask;
+    high_impedance_bits = plane2
+        & ~(plane0 | plane1 | plane3) & mask;
 }
 
 std::uint64_t SystemVerilogConstantValue::mask() const noexcept {

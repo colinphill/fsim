@@ -115,7 +115,10 @@ void inspect_suspended(
     };
     std::optional<fsim::runtime::simir::ProcessId> process_id;
     std::optional<std::size_t> temporary;
-    for (const auto& process : simulation.design().processes()) {
+    for (std::size_t id = 0;
+         id < simulation.design_ir().processes().size(); ++id) {
+        const auto& process = simulation.process_program(
+            static_cast<fsim::runtime::simir::ProcessId>(id));
         for (std::size_t index = 0;
             index < process.debug_string_locals.size(); ++index) {
             if (process.debug_string_locals[index].name

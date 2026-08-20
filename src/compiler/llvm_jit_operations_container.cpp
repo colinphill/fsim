@@ -24,6 +24,10 @@ ContainerOperationLowerer::ContainerOperationLowerer(
     const std::uint32_t instruction_value,
     llvm::StructType* runtime_type,
     llvm::Value* runtime_argument,
+    const std::span<const runtime::simir::ContainerType> container_types_value,
+    llvm::Value* result_aval_value,
+    llvm::Value* result_bval_value,
+    const std::uint32_t fused_container_object_read_distance_value,
     std::function<void(
         llvm::Value*,
         JitGeneratedRuntimeErrorReason,
@@ -38,6 +42,13 @@ ContainerOperationLowerer::ContainerOperationLowerer(
     , context_pointer(context_pointer_value)
     , process(process_value)
     , instruction(instruction_value)
+    , runtime_type_value(runtime_type)
+    , runtime_argument_value(runtime_argument)
+    , container_types(container_types_value)
+    , result_aval(result_aval_value)
+    , result_bval(result_bval_value)
+    , fused_container_object_read_distance(
+          fused_container_object_read_distance_value)
     , runtime_error_if(std::move(runtime_error_if_value))
     , branch_to_next(std::move(branch_to_next_value))
 {
@@ -50,6 +61,30 @@ ContainerOperationLowerer::ContainerOperationLowerer(
     callback_type = llvm::FunctionType::get(
         i32,
         { pointer, i32, i32, i64, i64, i64, i64, pointer, pointer },
+        false);
+    read_word_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(runtime_type, runtime_argument, 77U),
+        "container.read-word.callback");
+    write_word_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(runtime_type, runtime_argument, 78U),
+        "container.write-word.callback");
+    read_word_callback_type = llvm::FunctionType::get(
+        i32,
+        { pointer, i32, i32, i32, i32, i64, i64, pointer, pointer },
+        false);
+    write_word_callback_type = llvm::FunctionType::get(
+        i32,
+        { pointer, i32, i32, i32, i32, i64, i64, i64, i64 },
+        false);
+    read_packed_callback_type = llvm::FunctionType::get(
+        i32,
+        { pointer, i32, i32, i32, i32, i64, i64, pointer, pointer, i32 },
+        false);
+    write_packed_callback_type = llvm::FunctionType::get(
+        i32,
+        { pointer, i32, i32, i32, i32, i64, i64, pointer, pointer, i32 },
         false);
 }
 
@@ -72,8 +107,6 @@ void ContainerOperationLowerer::invoke(
             ? builder.CreateTrunc(value, i64)
             : value;
     };
-    auto* result_aval = builder.CreateAlloca(i64, nullptr, "container.result.aval");
-    auto* result_bval = builder.CreateAlloca(i64, nullptr, "container.result.bval");
     builder.CreateStore(zero, result_aval);
     builder.CreateStore(zero, result_bval);
     auto* status = builder.CreateCall(
@@ -179,6 +212,93 @@ void ContainerOperationLowerer::lower(
 void ContainerOperationLowerer::lower(
     const runtime::simir::ContainerRead& value)
 {
+    const auto& type = container_types[value.source];
+    const bool packed_fast_path = !value.string_index && !type.associative
+        && (type.element_kind
+                == runtime::simir::ContainerElementKind::Packed
+            || type.element_kind
+                == runtime::simir::ContainerElementKind::Scalar)
+        && registers[value.index].width <= 64U
+        && registers[value.destination].width == type.element_width;
+    if (packed_fast_path) {
+        const auto index = load_register(builder, registers, value.index);
+        const std::uint32_t flags = (value.linear_index ? 1U : 0U)
+            | ((type.fixed || value.signed_index) ? 2U : 0U)
+            | (fused_container_object_read_distance << 8U);
+        const auto& destination = registers[value.destination];
+        if (type.element_width > 64U) {
+            auto* aval = builder.CreateGEP(
+                i64, destination.aval_base,
+                constant_i64(context, destination.word_offset),
+                "container.read-packed.aval");
+            auto* bval = builder.CreateGEP(
+                i64, destination.bval_base,
+                constant_i64(context, destination.word_offset),
+                "container.read-packed.bval");
+            const auto words = static_cast<std::uint32_t>(
+                (type.element_width + 63U) / 64U);
+            auto* status = builder.CreateCall(
+                read_packed_callback_type,
+                builder.CreateLoad(
+                    llvm::PointerType::getUnqual(context),
+                    builder.CreateStructGEP(
+                        runtime_type_value, runtime_argument_value, 79U),
+                    "container.read-packed.callback"),
+                { context_pointer,
+                    id(i32, process),
+                    id(i32, instruction),
+                    id(i32, value.source),
+                    id(i32, flags),
+                    index.aval,
+                    index.bval,
+                    aval,
+                    bval,
+                    id(i32, words) });
+            runtime_error_if(
+                builder.CreateICmpNE(status, id(i32, 0)),
+                JitGeneratedRuntimeErrorReason::container_callback_failure,
+                "container.read-packed");
+            if (destination.initialized_base != nullptr) {
+                builder.CreateStore(
+                    llvm::ConstantInt::get(
+                        llvm::Type::getInt8Ty(context), 1U),
+                    builder.CreateGEP(
+                        llvm::Type::getInt8Ty(context),
+                        destination.initialized_base,
+                        id(i32, destination.index)));
+            }
+            branch_to_next();
+            return;
+        }
+        auto* zero = constant_i64(context, 0);
+        builder.CreateStore(zero, result_aval);
+        builder.CreateStore(zero, result_bval);
+        auto* status = builder.CreateCall(
+            read_word_callback_type,
+            read_word_callback,
+            { context_pointer,
+                id(i32, process),
+                id(i32, instruction),
+                id(i32, value.source),
+                id(i32, flags),
+                index.aval,
+                index.bval,
+                result_aval,
+                result_bval });
+        runtime_error_if(
+            builder.CreateICmpNE(status, id(i32, 0)),
+            JitGeneratedRuntimeErrorReason::container_callback_failure,
+            "container.read-word");
+        store_register(
+            builder,
+            registers,
+            value.destination,
+            { builder.CreateLoad(i64, result_aval),
+                builder.CreateLoad(i64, result_bval),
+                registers[value.destination].width });
+        branch_to_next();
+        return;
+    }
     invoke(
         value.string_index ? std::nullopt : std::optional { value.index },
         std::nullopt,
@@ -190,9 +310,86 @@ void ContainerOperationLowerer::lower(
 void ContainerOperationLowerer::lower(
     const runtime::simir::ContainerWrite& value)
 {
+    const auto& type = container_types[value.target];
+    const bool packed_fast_path = !value.string_index && !type.associative
+        && (type.element_kind
+                == runtime::simir::ContainerElementKind::Packed
+            || type.element_kind
+                == runtime::simir::ContainerElementKind::Scalar)
+        && registers[value.index].width <= 64U
+        && registers[value.source].width == type.element_width;
+    if (packed_fast_path) {
+        const auto index = load_register(builder, registers, value.index);
+        const std::uint32_t flags = (value.linear_index ? 1U : 0U)
+            | ((type.fixed || value.signed_index) ? 2U : 0U);
+        const auto& source_slot = registers[value.source];
+        if (type.element_width > 64U) {
+            auto* aval = builder.CreateGEP(
+                i64, source_slot.aval_base,
+                constant_i64(context, source_slot.word_offset),
+                "container.write-packed.aval");
+            auto* bval = builder.CreateGEP(
+                i64, source_slot.bval_base,
+                constant_i64(context, source_slot.word_offset),
+                "container.write-packed.bval");
+            const auto words = static_cast<std::uint32_t>(
+                (type.element_width + 63U) / 64U);
+            auto* status = builder.CreateCall(
+                write_packed_callback_type,
+                builder.CreateLoad(
+                    llvm::PointerType::getUnqual(context),
+                    builder.CreateStructGEP(
+                        runtime_type_value, runtime_argument_value, 80U),
+                    "container.write-packed.callback"),
+                { context_pointer,
+                    id(i32, process),
+                    id(i32, instruction),
+                    id(i32, value.target),
+                    id(i32, flags),
+                    index.aval,
+                    index.bval,
+                    aval,
+                    bval,
+                    id(i32, words) });
+            runtime_error_if(
+                builder.CreateICmpNE(status, id(i32, 0)),
+                JitGeneratedRuntimeErrorReason::container_callback_failure,
+                "container.write-packed");
+            branch_to_next();
+            return;
+        }
+        const auto source = load_register(builder, registers, value.source);
+        auto* status = builder.CreateCall(
+            write_word_callback_type,
+            write_word_callback,
+            { context_pointer,
+                id(i32, process),
+                id(i32, instruction),
+                id(i32, value.target),
+                id(i32, flags),
+                index.aval,
+                index.bval,
+                source.aval,
+                source.bval });
+        runtime_error_if(
+            builder.CreateICmpNE(status, id(i32, 0)),
+            JitGeneratedRuntimeErrorReason::container_callback_failure,
+            "container.write-word");
+        branch_to_next();
+        return;
+    }
     invoke(
         value.string_index ? std::nullopt : std::optional { value.index },
         value.source, std::nullopt, "container.write");
+}
+void ContainerOperationLowerer::lower(
+    const runtime::simir::WriteContainerObjectElement& value)
+{
+    invoke(
+        value.index,
+        value.source,
+        std::nullopt,
+        "container.object-element-write");
 }
 void ContainerOperationLowerer::lower(
     const runtime::simir::ContainerStringRead& value)
@@ -295,8 +492,6 @@ void ContainerOperationLowerer::lower(
     }
     const auto input = load_register(builder, registers, value.index);
     auto* zero = constant_i64(context, 0);
-    auto* result_aval = builder.CreateAlloca(i64, nullptr, "container.key.aval");
-    auto* result_bval = builder.CreateAlloca(i64, nullptr, "container.key.bval");
     builder.CreateStore(zero, result_aval);
     builder.CreateStore(zero, result_bval);
     auto* key_status = builder.CreateCall(
@@ -323,10 +518,8 @@ void ContainerOperationLowerer::lower(
             builder.CreateLoad(i64, result_bval),
             registers[value.index].width });
 
-    auto* status_aval = builder.CreateAlloca(i64, nullptr, "container.status.aval");
-    auto* status_bval = builder.CreateAlloca(i64, nullptr, "container.status.bval");
-    builder.CreateStore(zero, status_aval);
-    builder.CreateStore(zero, status_bval);
+    builder.CreateStore(zero, result_aval);
+    builder.CreateStore(zero, result_bval);
     auto* status = builder.CreateCall(
         callback_type,
         callback,
@@ -337,8 +530,8 @@ void ContainerOperationLowerer::lower(
             input.bval,
             constant_i64(context, 1),
             zero,
-            status_aval,
-            status_bval });
+            result_aval,
+            result_bval });
     runtime_error_if(
         builder.CreateICmpNE(status, id(i32, 0)),
         JitGeneratedRuntimeErrorReason::container_callback_failure,
@@ -347,8 +540,8 @@ void ContainerOperationLowerer::lower(
         builder,
         registers,
         value.destination,
-        { builder.CreateLoad(i64, status_aval),
-            builder.CreateLoad(i64, status_bval),
+        { builder.CreateLoad(i64, result_aval),
+            builder.CreateLoad(i64, result_bval),
             registers[value.destination].width });
     branch_to_next();
 }

@@ -22,11 +22,22 @@ namespace {
         StableOrder order { };
         std::uint64_t sequence { };
         Scheduler::Task task;
-        std::shared_ptr<bool> active;
+        std::vector<std::uint8_t>* cancel_states { };
+        std::uint64_t cancel_token { };
+        SchedulerBatchTask* batch_task { };
+        std::uint64_t batch_payload { };
 
         [[nodiscard]] bool is_cancelled() const noexcept
         {
-            return active && !*active;
+            return cancel_states
+                && (*cancel_states)[cancel_token] == 0U;
+        }
+
+        void complete() noexcept
+        {
+            if (cancel_states) {
+                (*cancel_states)[cancel_token] = 0U;
+            }
         }
     };
 
@@ -45,14 +56,19 @@ namespace {
 
         void push(Entry entry)
         {
+            if (!needs_sort && cursor < entries.size()) {
+                const auto& last = entries.back();
+                needs_sort = entry.order < last.order
+                    || (entry.order == last.order
+                        && entry.sequence < last.sequence);
+            }
             entries.push_back(std::move(entry));
-            needs_sort = true;
         }
 
-        Entry pop()
+        void prepare()
         {
             if (needs_sort) {
-                std::stable_sort(entries.begin() + static_cast<std::ptrdiff_t>(cursor),
+                std::sort(entries.begin() + static_cast<std::ptrdiff_t>(cursor),
                     entries.end(), [](const Entry& lhs, const Entry& rhs) {
                         if (lhs.order != rhs.order) {
                             return lhs.order < rhs.order;
@@ -64,6 +80,17 @@ namespace {
             while (cursor < entries.size() && entries[cursor].is_cancelled()) {
                 ++cursor;
             }
+        }
+
+        [[nodiscard]] const Entry* next()
+        {
+            prepare();
+            return cursor < entries.size() ? &entries[cursor] : nullptr;
+        }
+
+        Entry pop()
+        {
+            prepare();
             return std::move(entries.at(cursor++));
         }
 
@@ -79,15 +106,15 @@ namespace {
         void cancel_pending() noexcept
         {
             for (auto index = cursor; index < entries.size(); ++index) {
-                if (entries[index].active)
-                    *entries[index].active = false;
+                entries[index].complete();
             }
         }
 
         [[nodiscard]] std::vector<StableOrder> pending_orders() const
         {
             std::vector<StableOrder> result;
-            result.reserve(entries.size() - cursor);
+            result.reserve(
+                entries.size() - cursor);
             for (auto index = cursor; index < entries.size(); ++index) {
                 if (!entries[index].is_cancelled()) {
                     result.push_back(entries[index].order);
@@ -182,11 +209,14 @@ struct Scheduler::Impl {
     SimulationTick now { };
     std::uint64_t callbacks { };
     std::uint64_t next_sequence { };
+    std::uint64_t current_phase_revision { };
     bool in_run { };
     bool in_callback { };
     bool in_safe_point { };
     std::atomic_bool stop { false };
     std::shared_ptr<const void> owner = std::make_shared<const bool>(true);
+    std::shared_ptr<std::vector<std::uint8_t>> cancel_states
+        = std::make_shared<std::vector<std::uint8_t>>();
     SlotStartHook slot_start_hook;
     SafePointHook safe_point_hook;
     std::vector<RuntimeSignalId> recent_signals;
@@ -195,7 +225,10 @@ struct Scheduler::Impl {
     [[nodiscard]] Entry make_entry(
         StableOrder order,
         Task task,
-        std::shared_ptr<bool> active = { })
+        std::vector<std::uint8_t>* cancel_state = nullptr,
+        const std::uint64_t cancel_token = 0U,
+        SchedulerBatchTask* batch_task = nullptr,
+        const std::uint64_t batch_payload = 0U)
     {
         if (!task) {
             throw std::invalid_argument("cannot schedule an empty task");
@@ -204,7 +237,8 @@ struct Scheduler::Impl {
             throw std::overflow_error("scheduler insertion sequence overflow");
         }
         return Entry {
-            order, next_sequence++, std::move(task), std::move(active)
+            order, next_sequence++, std::move(task), cancel_state,
+            cancel_token, batch_task, batch_payload
         };
     }
 
@@ -273,6 +307,9 @@ void Scheduler::schedule_at(SimulationTick time, SchedulerPhase phase,
         const bool phase_finished = index < impl_->current->phase;
         auto& bucket = phase_finished ? impl_->current->next_delta : impl_->current->current;
         bucket.queues[index].push(std::move(entry));
+        if (!phase_finished && index == impl_->current->phase) {
+            ++impl_->current_phase_revision;
+        }
         return;
     }
     impl_->future[time].queues[index].push(std::move(entry));
@@ -297,21 +334,26 @@ ScheduledTaskHandle Scheduler::schedule_after_cancelable(
         throw std::overflow_error("simulation time overflow while scheduling event");
     }
     const auto time = impl_->now + delay;
-    const auto active = std::make_shared<bool>(true);
-    auto entry = impl_->make_entry(stable_order, std::move(task), active);
     const auto index = phase_index(phase);
     if (index >= phase_count) {
         throw std::invalid_argument("invalid scheduler phase");
     }
+    const auto token = impl_->cancel_states->size();
+    impl_->cancel_states->push_back(1U);
+    auto entry = impl_->make_entry(
+        stable_order, std::move(task), impl_->cancel_states.get(), token);
 
     if (impl_->current && time == impl_->current->time) {
         const bool phase_finished = index < impl_->current->phase;
         auto& bucket = phase_finished ? impl_->current->next_delta : impl_->current->current;
         bucket.queues[index].push(std::move(entry));
+        if (!phase_finished && index == impl_->current->phase) {
+            ++impl_->current_phase_revision;
+        }
     } else {
         impl_->future[time].queues[index].push(std::move(entry));
     }
-    return ScheduledTaskHandle { active, impl_->owner };
+    return ScheduledTaskHandle { impl_->cancel_states, token, impl_->owner };
 }
 
 void Scheduler::cancel(const ScheduledTaskHandle& handle) noexcept
@@ -319,8 +361,9 @@ void Scheduler::cancel(const ScheduledTaskHandle& handle) noexcept
     if (!impl_ || !handle.active_)
         return;
     const auto owner = handle.owner_.lock();
-    if (owner && owner.get() == impl_->owner.get()) {
-        *handle.active_ = false;
+    if (owner && owner.get() == impl_->owner.get()
+        && handle.token_ < impl_->cancel_states->size()) {
+        (*impl_->cancel_states)[handle.token_] = 0U;
     }
 }
 
@@ -344,6 +387,28 @@ void Scheduler::schedule_next_delta(SchedulerPhase phase,
     }
 
     // Before a run begins, "next delta" means the initial delta at now.
+    impl_->future[impl_->now].queues[index].push(std::move(entry));
+}
+
+void Scheduler::schedule_next_delta_batchable(
+    const SchedulerPhase phase,
+    const StableOrder stable_order,
+    SchedulerBatchTask& batch_task,
+    const std::uint64_t batch_payload,
+    Task fallback_task)
+{
+    auto entry = impl_->make_entry(
+        stable_order, std::move(fallback_task), nullptr, 0U,
+        &batch_task, batch_payload);
+    const auto index = phase_index(phase);
+    if (index >= phase_count) {
+        throw std::invalid_argument("invalid scheduler phase");
+    }
+    if (impl_->current) {
+        impl_->current->next_delta.queues[index].push(std::move(entry));
+        return;
+    }
+
     impl_->future[impl_->now].queues[index].push(std::move(entry));
 }
 
@@ -377,6 +442,8 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
     impl_->in_run = true;
     RunGuard guard { impl_->in_run };
     const auto initial_callbacks = impl_->callbacks;
+    std::vector<Entry> batch_entries;
+    std::vector<std::uint64_t> batch_payloads;
 
     auto result = [&](RunStatus status) {
         return RunResult { status,
@@ -437,8 +504,77 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                 return result(RunStatus::stopped);
             }
             auto entry = queue.pop();
-            if (entry.active)
-                *entry.active = false;
+            if (entry.batch_task != nullptr) {
+                batch_entries.clear();
+                batch_payloads.clear();
+                auto* const batch_task = entry.batch_task;
+                batch_entries.push_back(std::move(entry));
+                while (const auto* next = queue.next()) {
+                    if (next->batch_task != batch_task) {
+                        break;
+                    }
+                    batch_entries.push_back(queue.pop());
+                }
+                batch_payloads.reserve(batch_entries.size());
+                for (const auto& candidate : batch_entries) {
+                    batch_payloads.push_back(candidate.batch_payload);
+                }
+
+                impl_->in_callback = true;
+                SchedulerBatchResult batch_result;
+                try {
+                    batch_result = batch_task->execute(
+                        *this, batch_payloads);
+                } catch (...) {
+                    for (auto& candidate : batch_entries) {
+                        queue.push(std::move(candidate));
+                    }
+                    impl_->in_callback = false;
+                    throw;
+                }
+                if (batch_result.executed > batch_entries.size()) {
+                    for (auto& candidate : batch_entries) {
+                        queue.push(std::move(candidate));
+                    }
+                    impl_->in_callback = false;
+                    throw std::logic_error(
+                        "scheduler batch consumed an invalid task count");
+                }
+
+                const auto consumed = batch_result.executed;
+                if (consumed == 0U && !batch_result.failure) {
+                    auto fallback = std::move(batch_entries.front());
+                    for (std::size_t index = 1U;
+                        index < batch_entries.size(); ++index) {
+                        queue.push(std::move(batch_entries[index]));
+                    }
+                    fallback.complete();
+                    try {
+                        fallback.task(*this);
+                    } catch (...) {
+                        impl_->in_callback = false;
+                        throw;
+                    }
+                    impl_->in_callback = false;
+                    ++impl_->callbacks;
+                    continue;
+                }
+
+                for (std::size_t index = 0U; index < consumed; ++index) {
+                    batch_entries[index].complete();
+                }
+                for (auto index = consumed;
+                    index < batch_entries.size(); ++index) {
+                    queue.push(std::move(batch_entries[index]));
+                }
+                impl_->callbacks += consumed;
+                impl_->in_callback = false;
+                if (batch_result.failure) {
+                    std::rethrow_exception(batch_result.failure);
+                }
+                continue;
+            }
+            entry.complete();
             impl_->in_callback = true;
             try {
                 entry.task(*this);
@@ -548,6 +684,11 @@ std::optional<SchedulerPhase> Scheduler::current_phase() const noexcept
         return std::nullopt;
     }
     return static_cast<SchedulerPhase>(impl_->current->phase);
+}
+
+std::uint64_t Scheduler::current_phase_revision() const noexcept
+{
+    return impl_->current_phase_revision;
 }
 
 void Scheduler::set_safe_point_hook(SafePointHook hook)

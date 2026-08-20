@@ -99,7 +99,6 @@ Capture run_once(
   fsim::app::Simulation simulation{
       std::move(*project), config.run.max_deltas, engine};
   Capture capture;
-  capture.compiled = simulation.compiled_process_count();
   simulation.set_output_hook(
       [&](const auto,
           const std::string_view text,
@@ -132,6 +131,7 @@ Capture run_once(
         vcd.change(observed_trace, value);
       });
   capture.result = simulation.run();
+  capture.compiled = simulation.compiled_process_count();
   vcd.flush();
   capture.vcd = vcd_output.str();
   const auto& objects = simulation.design().container_objects();
@@ -213,7 +213,10 @@ void inspect_suspended(
       std::move(*project), config.run.max_deltas, engine};
   std::optional<fsim::runtime::simir::ProcessId> process_id;
   std::optional<std::size_t> target_index;
-  for (const auto& process : simulation.design().processes()) {
+  for (std::size_t id = 0;
+       id < simulation.design_ir().processes().size(); ++id) {
+    const auto& process = simulation.process_program(
+        static_cast<fsim::runtime::simir::ProcessId>(id));
     for (std::size_t index = 0;
          index < process.debug_container_locals.size(); ++index) {
       if (process.debug_container_locals[index].name
@@ -279,7 +282,10 @@ void inspect_ordering_suspended(
       std::move(*project), config.run.max_deltas, engine};
   std::optional<fsim::runtime::simir::ProcessId> process_id;
   std::optional<std::size_t> local_index;
-  for (const auto& process : simulation.design().processes()) {
+  for (std::size_t id = 0;
+       id < simulation.design_ir().processes().size(); ++id) {
+    const auto& process = simulation.process_program(
+        static_cast<fsim::runtime::simir::ProcessId>(id));
     for (std::size_t index = 0;
          index < process.debug_container_locals.size(); ++index) {
       if (process.debug_container_locals[index].name
@@ -332,7 +338,10 @@ void inspect_static_suspended(
       std::move(*project), config.run.max_deltas, engine};
   std::optional<fsim::runtime::simir::ProcessId> process_id;
   std::optional<std::size_t> target_index;
-  for (const auto& process : simulation.design().processes()) {
+  for (std::size_t id = 0;
+       id < simulation.design_ir().processes().size(); ++id) {
+    const auto& process = simulation.process_program(
+        static_cast<fsim::runtime::simir::ProcessId>(id));
     for (std::size_t index = 0;
          index < process.debug_container_locals.size(); ++index) {
       if (process.debug_container_locals[index].name
@@ -1718,7 +1727,7 @@ endmodule
         && compiled.vcd.find("b0000z010")
             != std::string::npos);
 #if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled == 3);
+    assert(compiled.compiled == 4);
 #endif
     inspect_suspended(
         config, fsim::app::SimulationEngine::interpreter);

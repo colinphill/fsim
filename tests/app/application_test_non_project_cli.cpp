@@ -303,6 +303,7 @@ void ApplicationTestFixture::test_non_project_cli()
         "fsim", "simulate",
         "--design", design_text.c_str(),
         "--engine", "compiled",
+        "--optimization", "O0",
         "--duration", "10ns",
         "--max-deltas", "1000",
         "--trace", trace_text.c_str(),
@@ -321,6 +322,7 @@ void ApplicationTestFixture::test_non_project_cli()
     assert(simulate->command == cli::Command::simulate);
     assert(simulate->design == design);
     assert(simulate->engine == "compiled");
+    assert(simulate->optimization == project::Optimization::o0);
     assert(simulate->trace_filters == std::vector<std::string> { "primary.*" });
     assert(simulate->trace_format == project::TraceFormat::fst);
     assert(simulate->trace_compression == project::TraceCompression::deterministic);

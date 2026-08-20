@@ -13,14 +13,14 @@
 
 namespace fsim::app {
 
-inline constexpr std::uint32_t kRuntimeStateSchema = 48;
-inline constexpr std::uint32_t kSemanticStateSchema = 3;
-inline constexpr std::uint32_t kDesignIrStateSchema = 3;
-inline constexpr std::uint32_t kClassStateSchema = 10;
-inline constexpr std::uint32_t kSystemVerilogConstraintHirStateSchema = 6;
-inline constexpr std::uint32_t kSystemVerilogCoverageStateSchema = 4;
-inline constexpr std::uint32_t kSystemVerilogUvmStateSchema = 2;
-inline constexpr std::uint32_t kVhdlHirStateSchema = 1;
+inline constexpr std::uint32_t kRuntimeStateSchema = 50;
+inline constexpr std::uint32_t kSemanticStateSchema = 4;
+inline constexpr std::uint32_t kDesignIrStateSchema = 4;
+inline constexpr std::uint32_t kClassStateSchema = 11;
+inline constexpr std::uint32_t kSystemVerilogConstraintHirStateSchema = 7;
+inline constexpr std::uint32_t kSystemVerilogCoverageStateSchema = 5;
+inline constexpr std::uint32_t kSystemVerilogUvmStateSchema = 3;
+inline constexpr std::uint32_t kVhdlHirStateSchema = 2;
 
 [[nodiscard]] std::optional<std::string> serialize_runtime_state(
     const elaboration::ElaboratedDesign& design,

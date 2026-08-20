@@ -1,8 +1,178 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_internal.hpp"
+#include "fsim/support/sha256.hpp"
 namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
+namespace {
+
+void append_specialization_key_component(
+    std::string& key,
+    const std::string_view component)
+{
+    key += std::to_string(component.size());
+    key += ':';
+    key += component;
+}
+
+void append_specialization_expression(
+    std::string& key,
+    const frontend::Expression& expression)
+{
+    append_specialization_key_component(key,
+        std::to_string(static_cast<unsigned>(expression.kind)));
+    append_specialization_key_component(key, expression.text);
+    append_specialization_key_component(key, expression.nominal_type);
+    for (const auto& operand : expression.operands) {
+        append_specialization_expression(key, operand);
+    }
+    for (const auto& choices :
+        expression.aggregate_choice_expressions) {
+        for (const auto& choice : choices) {
+            append_specialization_expression(key, choice);
+        }
+    }
+}
+
+template <typename Environment, typename Identity>
+void append_sorted_environment(
+    std::string& key,
+    const Environment& environment,
+    Identity identity)
+{
+    std::vector<const typename Environment::value_type*> entries;
+    entries.reserve(environment.size());
+    for (const auto& entry : environment) {
+        entries.push_back(&entry);
+    }
+    std::ranges::sort(entries, {}, [](const auto* entry) {
+        return entry->first;
+    });
+    for (const auto* entry : entries) {
+        append_specialization_key_component(key, entry->first);
+        append_specialization_key_component(key, identity(entry->second));
+    }
+}
+
+std::string specialization_cache_key(
+    const frontend::DesignUnit& selected,
+    const std::vector<frontend::ParameterOverride>& overrides,
+    const ConstantEnvironment& parent_environment,
+    const SystemVerilogConstantEnvironment& parent_integral_environment,
+    const ConstantDomainEnvironment& parent_domains,
+    const NamedTypeEnvironment& parent_types,
+    const std::vector<frontend::FunctionDeclaration>& parent_functions,
+    const std::vector<frontend::ProcedureDeclaration>& parent_procedures,
+    const PackageEnvironment& parent_packages,
+    const frontend::Language association_language)
+{
+    std::string key;
+    append_specialization_key_component(key,
+        unit_identity(selected));
+    append_specialization_key_component(key,
+        frontend::physical_source(selected.span));
+    append_specialization_key_component(key,
+        std::to_string(selected.span.begin.offset));
+    append_specialization_key_component(key,
+        std::to_string(selected.span.end.offset));
+    append_specialization_key_component(key,
+        std::to_string(static_cast<unsigned>(selected.kind)));
+    append_specialization_key_component(key,
+        std::to_string(static_cast<unsigned>(selected.language)));
+    append_specialization_key_component(key,
+        std::to_string(static_cast<unsigned>(association_language)));
+    for (const auto& override : overrides) {
+        append_specialization_key_component(key,
+            override.name.value_or(std::string { }));
+        append_specialization_key_component(key,
+            std::to_string(override.default_box));
+        append_specialization_expression(key, override.value);
+        if (override.type_value) {
+            append_specialization_key_component(key,
+                vhdl_type_identity(*override.type_value));
+        }
+    }
+    append_sorted_environment(key, parent_environment,
+        [](const auto value) { return std::to_string(value); });
+    append_sorted_environment(key, parent_integral_environment,
+        [](const auto& value) { return value.canonical(); });
+    append_sorted_environment(key, parent_domains,
+        [](const auto& domain) {
+            std::string identity =
+                std::to_string(static_cast<unsigned>(domain.domain))
+                + ':' + std::to_string(domain.vhdl_enumeration)
+                + ':' + domain.nominal_type;
+            if (domain.vhdl_composite_value) {
+                append_specialization_expression(
+                    identity, *domain.vhdl_composite_value);
+            }
+            return identity;
+        });
+    append_sorted_environment(key, parent_types,
+        [](const auto& binding) {
+            return vhdl_type_identity(binding.type);
+        });
+    for (const auto& function : parent_functions) {
+        append_specialization_key_component(key, function.name);
+        append_specialization_key_component(
+            key, function.specialization_identity);
+        append_specialization_key_component(
+            key, function.visibility_owner);
+        append_specialization_key_component(key,
+            frontend::physical_source(function.span));
+        append_specialization_key_component(key,
+            std::to_string(function.span.begin.offset));
+        append_specialization_key_component(key,
+            std::to_string(function.span.end.offset));
+        append_specialization_key_component(key,
+            vhdl_type_identity(function.return_type));
+        for (const auto& argument : function.arguments) {
+            append_specialization_key_component(key,
+                vhdl_type_identity(argument.type));
+        }
+    }
+    for (const auto& procedure : parent_procedures) {
+        append_specialization_key_component(key, procedure.name);
+        append_specialization_key_component(
+            key, procedure.specialization_identity);
+        append_specialization_key_component(
+            key, procedure.visibility_owner);
+        append_specialization_key_component(key,
+            frontend::physical_source(procedure.span));
+        append_specialization_key_component(key,
+            std::to_string(procedure.span.begin.offset));
+        append_specialization_key_component(key,
+            std::to_string(procedure.span.end.offset));
+        for (const auto& argument : procedure.arguments) {
+            append_specialization_key_component(key,
+                vhdl_type_identity(argument.type));
+        }
+    }
+    std::vector<const PackageEnvironment::value_type*> packages;
+    packages.reserve(parent_packages.size());
+    for (const auto& package : parent_packages) {
+        packages.push_back(&package);
+    }
+    std::ranges::sort(packages, {}, [](const auto* package) {
+        return package->first;
+    });
+    for (const auto* package : packages) {
+        append_specialization_key_component(key, package->first);
+        append_specialization_key_component(
+            key, package->second.template_name);
+        for (const auto& [name, value] :
+            package->second.identity_values) {
+            append_specialization_key_component(key, name);
+            append_specialization_key_component(key, value);
+        }
+        append_sorted_environment(key, package->second.environment,
+            [](const auto value) { return std::to_string(value); });
+    }
+    return support::Sha256::hex(support::Sha256::digest(key));
+}
+
+} // namespace
+
 DesignUnit HierarchyBuilder::effective_unit(
     const DesignUnit& selected,
     const DesignUnit* entity_override)
@@ -365,6 +535,7 @@ SpecializedUnit HierarchyBuilder::specialize_selected_unit(
     const PackageEnvironment& parent_packages,
     const frontend::Language association_language)
 {
+    const auto diagnostics_before = diagnostics_.size();
     auto normalized_overrides = overrides;
     if (selected.language
         == frontend::Language::SystemVerilog2017) {
@@ -393,6 +564,56 @@ SpecializedUnit HierarchyBuilder::specialize_selected_unit(
             annotate_nominal_actual(
                 annotate_nominal_actual, override.value);
         }
+    }
+    if (association_language
+            == frontend::Language::SystemVerilog2017
+        || association_language
+            == frontend::Language::Verilog2005) {
+        for (auto& override : normalized_overrides) {
+            std::string error;
+            const auto value =
+                evaluate_systemverilog_constant_function_expression(
+                    override.value,
+                    parent_integral_environment,
+                    parent_environment,
+                    parent_functions,
+                    error);
+            if (value) {
+                override.value = value->expression(
+                    override.value.span);
+            }
+        }
+    }
+    if (association_language == frontend::Language::Vhdl2008) {
+        for (auto& override : normalized_overrides) {
+            std::string error;
+            const auto value =
+                evaluate_systemverilog_constant_function_expression(
+                    override.value,
+                    parent_integral_environment,
+                    parent_environment,
+                    parent_functions,
+                    error);
+            if (value) {
+                override.value = value->expression(
+                    override.value.span);
+            }
+        }
+    }
+    const auto cache_key = specialization_cache_key(
+        selected,
+        normalized_overrides,
+        parent_environment,
+        parent_integral_environment,
+        parent_domains,
+        parent_types,
+        parent_functions,
+        parent_procedures,
+        parent_packages,
+        association_language);
+    if (const auto cached = specialized_unit_cache_.find(cache_key);
+        cached != specialized_unit_cache_.end()) {
+        return cached->second;
     }
     PackageEnvironment interface_packages;
     std::vector<std::pair<std::string, std::string>>
@@ -490,7 +711,8 @@ SpecializedUnit HierarchyBuilder::specialize_selected_unit(
         association_language,
         diagnostics_,
         false,
-        parent_integral_environment);
+        parent_integral_environment,
+        parent_functions);
     if (selected.language
             == frontend::Language::SystemVerilog2017
         && type_specialized.applied) {
@@ -600,6 +822,16 @@ SpecializedUnit HierarchyBuilder::specialize_selected_unit(
     instantiate_vhdl_local_packages(
         specialized, interface_packages);
     expand_vhdl_block_generates(specialized);
+    if (diagnostics_.size() == diagnostics_before) {
+        const bool admit = selected.language
+                != frontend::Language::Vhdl2008
+            || !seen_vhdl_specialization_keys_.insert(
+                    cache_key).second;
+        if (admit) {
+            specialized_unit_cache_.try_emplace(
+                cache_key, specialized);
+        }
+    }
     return specialized;
 }
 std::optional<SignalId> HierarchyBuilder::add_owned_signal(
@@ -753,6 +985,26 @@ std::optional<SignalId> HierarchyBuilder::add_owned_signal(
             == frontend::ValueDomain::Integer) {
         initial_value = default_packed_value(
             declaration.type, static_cast<std::size_t>(width));
+    }
+    if (!declaration.is_port && declaration.default_value) {
+        std::string initializer_error;
+        const auto initialized = static_vhdl_value(
+            *declaration.default_value,
+            declaration.type,
+            initializer_error);
+        if (!initialized
+            || initialized->width()
+                != static_cast<std::size_t>(width)) {
+            report(
+                "FSIM-ELAB-VHINIT-001",
+                "initial value for VHDL signal '" + declaration.name
+                    + "' is not a statically foldable value compatible "
+                      "with its subtype: "
+                    + initializer_error,
+                declaration.default_value->span);
+        } else {
+            initial_value = *initialized;
+        }
     }
     runtime::simir::Signal signal {
         full_name,
@@ -1010,9 +1262,51 @@ HierarchyBuilder::PortAliases HierarchyBuilder::connect_ports(
     auto& aliases = result.signals;
     auto& string_aliases = result.strings;
     auto& container_aliases = result.containers;
+    auto connections = instance.connections;
+    const auto wildcard = std::ranges::find_if(
+        connections,
+        [](const frontend::PortConnection& connection) {
+            return connection.port
+                && *connection.port == "*";
+        });
+    if (wildcard != connections.end()) {
+        std::unordered_set<std::string> explicitly_connected;
+        for (const auto& connection : connections) {
+            if (connection.port && *connection.port != "*") {
+                explicitly_connected.insert(*connection.port);
+            }
+        }
+        std::vector<frontend::PortConnection> expanded;
+        expanded.reserve(connections.size() + ports.size());
+        for (auto& connection : connections) {
+            if (!connection.port || *connection.port != "*") {
+                expanded.push_back(std::move(connection));
+                continue;
+            }
+            for (const auto& port : ports) {
+                const bool matching_actual =
+                    parent_signals.contains(port.name)
+                    || parent_strings.contains(port.name)
+                    || parent_containers.contains(port.name);
+                if (explicitly_connected.contains(port.name)
+                    || !matching_actual) {
+                    continue;
+                }
+                frontend::PortConnection implicit;
+                implicit.port = port.name;
+                implicit.value.kind =
+                    frontend::ExpressionKind::Identifier;
+                implicit.value.text = port.name;
+                implicit.value.span = connection.span;
+                implicit.span = connection.span;
+                expanded.push_back(std::move(implicit));
+            }
+        }
+        connections = std::move(expanded);
+    }
     std::vector<bool> connected(ports.size());
     std::size_t positional = 0;
-    for (const auto& connection : instance.connections) {
+    for (const auto& connection : connections) {
         std::size_t port_index = ports.size();
         if (connection.port) {
             const auto found = std::find_if(
@@ -1536,6 +1830,40 @@ HierarchyBuilder::PortAliases HierarchyBuilder::connect_ports(
                 result)) {
             continue;
         }
+        const auto cross_language_verilog_constant =
+            [&]() {
+              if (!cross_language || dependency_owner == nullptr
+                  || port.direction
+                      != frontend::PortDirection::Input
+                  || connection.kind
+                      != frontend::PortActualKind::Expression) {
+                return false;
+              }
+              std::string error;
+              return evaluate_systemverilog_constant_expression(
+                  connection.value, { }, { }, error).has_value();
+            }();
+        if (cross_language_verilog_constant
+            && connect_verilog_expression_port(
+                port,
+                connection,
+                path,
+                parent_signals,
+                result)) {
+            continue;
+        }
+        if (!cross_language
+            && dependency_owner != nullptr
+            && dependency_owner->language
+                != frontend::Language::Vhdl2008
+            && connect_verilog_expression_port(
+                port,
+                connection,
+                path,
+                parent_signals,
+                result)) {
+            continue;
+        }
         if (!cross_language
             && dependency_owner != nullptr
             && dependency_owner->language
@@ -1887,6 +2215,16 @@ HierarchyBuilder::PortAliases HierarchyBuilder::connect_ports(
             if (!connected[port_index]
                 && ports[port_index].direction
                     == frontend::PortDirection::Input) {
+                if (cross_language
+                    && !ports[port_index].type.systemverilog_container
+                    && ports[port_index].type.domain
+                        != frontend::ValueDomain::String) {
+                    if (const auto signal = add_owned_signal(
+                            ports[port_index], path, aliases)) {
+                        result.read_only_signals.insert(*signal);
+                    }
+                    continue;
+                }
                 if (!cross_language
                     && dependency_owner != nullptr
                     && ports[port_index].default_value) {

@@ -528,6 +528,57 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
             expression.operands[0]);
         const frontend::Type* rhs_object_type = expression_object_type(
             expression.operands[1]);
+        auto lhs_vhdl_type = language_ == frontend::Language::Vhdl2008
+            ? vhdl_expression_type(expression.operands[0])
+            : std::optional<frontend::Type>{};
+        auto rhs_vhdl_type = language_ == frontend::Language::Vhdl2008
+            ? vhdl_expression_type(expression.operands[1])
+            : std::optional<frontend::Type>{};
+        const auto constrain_builtin_result = [&](
+            std::optional<frontend::Type>& type,
+            const Expression& operand,
+            const std::optional<std::size_t> contextual_width) {
+          if (!type || type->vhdl_array || type->packed_range) {
+            return;
+          }
+          const auto separator = type->spelling.find_last_of('.');
+          const auto name = std::string_view{type->spelling}.substr(
+              separator == std::string::npos ? 0U : separator + 1U);
+          const bool builtin_array = name == "bit_vector"
+              || name == "std_logic_vector"
+              || name == "std_ulogic_vector" || name == "signed"
+              || name == "unsigned";
+          const auto width = builtin_array
+              ? contextual_width
+                    ? contextual_width
+                    : infer_width(operand)
+              : std::nullopt;
+          if (width && *width != 0U
+              && *width - 1U
+                  <= static_cast<std::size_t>(
+                      std::numeric_limits<std::int64_t>::max())) {
+            type->packed_range = frontend::PackedRange{
+                static_cast<std::int64_t>(*width - 1U), 0, true};
+          }
+        };
+        constrain_builtin_result(
+            lhs_vhdl_type,
+            expression.operands[0],
+            expression.operands[1].kind == ExpressionKind::Aggregate
+                ? infer_width(expression.operands[1])
+                : std::nullopt);
+        constrain_builtin_result(
+            rhs_vhdl_type,
+            expression.operands[1],
+            expression.operands[0].kind == ExpressionKind::Aggregate
+                ? infer_width(expression.operands[0])
+                : std::nullopt);
+        const auto* lhs_value_type = lhs_object_type != nullptr
+            ? lhs_object_type
+            : lhs_vhdl_type ? &*lhs_vhdl_type : nullptr;
+        const auto* rhs_value_type = rhs_object_type != nullptr
+            ? rhs_object_type
+            : rhs_vhdl_type ? &*rhs_vhdl_type : nullptr;
         const auto* lhs_nominal_type = systemverilog_expression_type(
             expression.operands[0]);
         const auto* rhs_nominal_type = systemverilog_expression_type(
@@ -763,15 +814,16 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                 || expression.text == "?/=") {
                 if (expression.operands[0].kind
                     == ExpressionKind::Aggregate) {
-                    binary_context_type = rhs_object_type;
+                    binary_context_type = rhs_value_type;
                 } else if (
                     expression.operands[1].kind
                     == ExpressionKind::Aggregate) {
-                    binary_context_type = lhs_object_type;
+                    binary_context_type = lhs_value_type;
                 }
                 if (binary_context_type != nullptr
-                    && binary_context_type
-                        ->packed_members.empty()) {
+                    && binary_context_type->packed_members.empty()
+                    && !binary_context_type->vhdl_array
+                    && !binary_context_type->packed_range) {
                     binary_context_type = nullptr;
                 }
             }
@@ -956,6 +1008,37 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                 expression.span);
             return std::nullopt;
         }
+        if (language_ == frontend::Language::Vhdl2008) {
+            const bool lhs_integer = is_integer_expression(
+                expression.operands[0]);
+            const bool rhs_integer = is_integer_expression(
+                expression.operands[1]);
+            const auto contextualize_integer =
+                [&](std::optional<RegisterId>& integer,
+                    const RegisterId vector,
+                    const Expression& vector_expression) {
+                  const auto target_width = register_width(vector);
+                  *integer = resize_register(
+                      *integer,
+                      target_width,
+                      is_signed_expression(vector_expression));
+                  const auto target_domain = register_domain(vector);
+                  if (register_domain(*integer) != target_domain) {
+                      const auto converted = allocate_register(
+                          target_width, target_domain);
+                      process_.operations.emplace_back(
+                          CopyRegister{converted, *integer});
+                      *integer = converted;
+                  }
+                };
+            if (lhs_integer && !rhs_integer) {
+                contextualize_integer(
+                    lhs, *rhs, expression.operands[1]);
+            } else if (rhs_integer && !lhs_integer) {
+                contextualize_integer(
+                    rhs, *lhs, expression.operands[0]);
+            }
+        }
         if (language_ != frontend::Language::Vhdl2008) {
             const bool common_signed = is_signed_expression(expression.operands[0])
                 && is_signed_expression(expression.operands[1]);
@@ -1065,6 +1148,20 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
             || *operation == BinaryOperator::greater_unsigned
             || *operation
                 == BinaryOperator::greater_equal_unsigned;
+        const auto numeric_array_type = [](const frontend::Type* type) {
+          if (type == nullptr) {
+            return false;
+          }
+          const auto separator = type->spelling.find_last_of('.');
+          const auto name = std::string_view{type->spelling}.substr(
+              separator == std::string::npos ? 0U : separator + 1U);
+          return name == "signed" || name == "unsigned";
+        };
+        const bool vhdl_numeric_relational =
+            language_ == frontend::Language::Vhdl2008
+            && relational
+            && (numeric_array_type(lhs_value_type)
+                || numeric_array_type(rhs_value_type));
         const auto arithmetic = *operation == BinaryOperator::add_unsigned
             || *operation == BinaryOperator::subtract_unsigned
             || *operation == BinaryOperator::multiply_unsigned
@@ -1091,10 +1188,9 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
         const bool lhs_signed = is_signed_expression(expression.operands[0]);
         const bool rhs_signed = is_signed_expression(expression.operands[1]);
         const bool signed_operation = lhs_signed && rhs_signed;
-        const bool contextual_integer = expression.operands[0].kind
-                == ExpressionKind::IntegerLiteral
-            || expression.operands[1].kind
-                == ExpressionKind::IntegerLiteral;
+        const bool contextual_integer = is_integer_expression(
+                expression.operands[0])
+            || is_integer_expression(expression.operands[1]);
         if (language_ == frontend::Language::Vhdl2008
             && (arithmetic || relational)
             && lhs_signed != rhs_signed
@@ -1257,10 +1353,24 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
             process_.operations.emplace_back(
                 Binary { *operation, destination, *lhs, *rhs });
         }
+        auto normalized_destination = destination;
+        if (vhdl_numeric_relational) {
+            const auto one = allocate_register(
+                1, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(LoadConstant {
+                one, PackedLogic4(1, Logic4::one) });
+            normalized_destination = allocate_register(
+                1, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::case_equal,
+                normalized_destination,
+                destination,
+                one });
+        }
         if (invert_result) {
             const auto inverted = allocate_register(result_width, result_domain);
             process_.operations.emplace_back(
-                UnaryNot { inverted, destination });
+                UnaryNot { inverted, normalized_destination });
             return inverted;
         }
         if (systemverilog_power
@@ -1268,7 +1378,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
             return resize_register(
                 destination, width, signed_operation);
         }
-        return destination;
+        return normalized_destination;
     }
     if (language_ == frontend::Language::Vhdl2008
         && expression.kind == ExpressionKind::Call) {

@@ -7,8 +7,46 @@
 #include "fsim/runtime/systemverilog_string.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <iostream>
 
 namespace fsim::app::application_detail {
+
+namespace {
+
+struct ContainerCallbackProfile {
+    bool enabled = std::getenv("FSIM_PROFILE_CONTAINERS") != nullptr;
+    std::uint64_t read_words { };
+    std::uint64_t write_words { };
+    std::uint64_t read_packed_elements { };
+    std::uint64_t write_packed_elements { };
+    std::uint64_t generic { };
+    std::uint64_t copy_registers { };
+    std::uint64_t read_objects { };
+    std::uint64_t write_objects { };
+
+    ~ContainerCallbackProfile()
+    {
+        if (enabled) {
+            std::cerr << "FSIM-CONTAINER-PROFILE read_words=" << read_words
+                      << " write_words=" << write_words
+                      << " read_packed_elements=" << read_packed_elements
+                      << " write_packed_elements=" << write_packed_elements
+                      << " generic=" << generic
+                      << " copy_registers=" << copy_registers
+                      << " read_objects=" << read_objects
+                      << " write_objects=" << write_objects << '\n';
+        }
+    }
+};
+
+ContainerCallbackProfile& container_callback_profile()
+{
+    static ContainerCallbackProfile result;
+    return result;
+}
+
+} // namespace
 
 SystemCProcessExecutor::SystemCProcessExecutor(
     std::shared_ptr<systemc::HierarchyRegistry> hierarchy,
@@ -95,7 +133,7 @@ void LlvmProcessExecutor::write_report(
     try {
         if (state.context == nullptr
             || state.process == nullptr
-            || state.process->id != process
+            || state.generated_process != process
             || instruction >= state.process->operations.size()) {
             throw std::logic_error {
                 "invalid generated report callback"
@@ -198,6 +236,11 @@ runtime::simir::ContainerValue
 LlvmProcessExecutor::read_container_register(
     const runtime::simir::ContainerRegisterId id) const
 {
+    if (container_object_aliases_.at(id)) {
+        throw compiler::LlvmJitError {
+            "compiled process exposed an unmaterialized container register"
+        };
+    }
     return container_registers_.at(id);
 }
 
@@ -212,6 +255,68 @@ void LlvmProcessExecutor::write_container_register(
         };
     }
     container_registers_[id] = value;
+    container_object_aliases_[id].reset();
+}
+
+const runtime::simir::ContainerValue&
+LlvmProcessExecutor::container_register_value(
+    const runtime::simir::ContainerRegisterId id,
+    const runtime::simir::ProcessExecutionContext& context)
+{
+    if (const auto alias = container_object_aliases_.at(id)) {
+        if (!context.copy_container_object(*alias, container_registers_.at(id))) {
+            throw compiler::LlvmJitError {
+                "compiled process could not materialize a container-object alias"
+            };
+        }
+        container_object_aliases_[id].reset();
+    }
+    return container_registers_.at(id);
+}
+
+runtime::simir::ContainerValue&
+LlvmProcessExecutor::mutable_container_register_value(
+    const runtime::simir::ContainerRegisterId id,
+    const runtime::simir::ProcessExecutionContext& context)
+{
+    (void)container_register_value(id, context);
+    return container_registers_[id];
+}
+
+void LlvmProcessExecutor::alias_container_register(
+    const runtime::simir::ContainerRegisterId destination,
+    const runtime::simir::ContainerObjectId object,
+    const runtime::simir::ProcessExecutionContext& context)
+{
+    if (!context.container_object_has_type(
+            object, container_registers_.at(destination).type)) {
+        throw compiler::LlvmJitError {
+            "compiled process container-object type mismatch"
+        };
+    }
+    if (!container_object_aliases_.at(destination)) {
+        active_container_object_aliases_.push_back(destination);
+    }
+    container_object_aliases_.at(destination) = object;
+}
+
+void LlvmProcessExecutor::materialize_container_object_aliases(
+    const runtime::simir::ProcessExecutionContext& context)
+{
+    for (const auto id : active_container_object_aliases_) {
+        if (container_object_aliases_[id]) {
+            (void)mutable_container_register_value(id, context);
+        }
+    }
+    active_container_object_aliases_.clear();
+}
+
+void LlvmProcessExecutor::discard_container_object_aliases() noexcept
+{
+    for (const auto id : active_container_object_aliases_) {
+        container_object_aliases_[id].reset();
+    }
+    active_container_object_aliases_.clear();
 }
 
 runtime::simir::FileHandle LlvmProcessExecutor::checked_file_handle(
@@ -257,7 +362,7 @@ LlvmProcessExecutor::callback_operation(
     const std::uint32_t instruction)
 {
     if (state.process == nullptr
-        || process != state.process->id
+        || process != state.generated_process
         || instruction >= state.process->operations.size()) {
         throw compiler::LlvmJitError {
             "compiled file callback metadata is out of range"
@@ -588,6 +693,308 @@ std::uint32_t LlvmProcessExecutor::file_error(
     }
 }
 
+std::uint32_t LlvmProcessExecutor::container_read_packed(
+    void* context,
+    const std::uint32_t process,
+    const std::uint32_t instruction,
+    const std::uint32_t container,
+    const std::uint32_t flags,
+    const std::uint64_t index_aval,
+    const std::uint64_t index_bval,
+    std::uint64_t* result_aval,
+    std::uint64_t* result_bval,
+    const std::uint32_t word_count) noexcept
+{
+    auto& state = *static_cast<CallbackState*>(context);
+    auto& profile = container_callback_profile();
+    if (profile.enabled) {
+        ++profile.read_words;
+        profile.read_packed_elements += word_count > 1U ? 1U : 0U;
+    }
+    if (state.failure) {
+        return 1;
+    }
+    try {
+        if (state.executor == nullptr || state.context == nullptr
+            || result_aval == nullptr
+            || result_bval == nullptr) {
+            throw compiler::LlvmJitError {
+                "invalid generated packed-container read callback"
+            };
+        }
+        const auto fused_object_distance = flags >> 8U;
+        if (fused_object_distance != 0U) {
+            if (instruction < fused_object_distance) {
+                throw compiler::LlvmJitError {
+                    "fused container-object read has no source operation"
+                };
+            }
+            const auto* read_object
+                = fsim::runtime::simir::operation_get_if<
+                    runtime::simir::ReadContainerObject>(
+                    &callback_operation(
+                        state, process,
+                        instruction - fused_object_distance));
+            if (read_object == nullptr
+                || read_object->destination != container) {
+                throw compiler::LlvmJitError {
+                    "fused container-object read metadata is inconsistent"
+                };
+            }
+            state.executor->alias_container_register(
+                container, read_object->object, *state.context);
+        }
+        const auto& source = state.executor->container_registers_.at(container);
+        const auto expected_words = static_cast<std::uint32_t>(
+            (source.type.element_width + 63U) / 64U);
+        if (word_count != expected_words || word_count == 0U) {
+            throw compiler::LlvmJitError {
+                "generated packed-container read word count mismatch"
+            };
+        }
+        const bool linear_index = (flags & 1U) != 0;
+        const bool signed_index = (flags & 2U) != 0;
+        const auto publish = [&](const PackedLogic4& value) {
+            if (value.width() != source.type.element_width
+                || value.aval_words().size() != word_count
+                || value.bval_words().size() != word_count) {
+                throw compiler::LlvmJitError {
+                    "generated packed-container read width mismatch"
+                };
+            }
+            std::ranges::copy(value.aval_words(), result_aval);
+            std::ranges::copy(value.bval_words(), result_bval);
+        };
+        const auto publish_default = [&] {
+            publish(PackedLogic4(
+                source.type.element_width,
+                source.type.two_state
+                    ? runtime::Logic4::zero
+                    : runtime::Logic4::x));
+        };
+        if (index_bval != 0) {
+            if (source.type.fixed) {
+                publish_default();
+                return 0;
+            }
+            throw runtime::simir::InterpreterError {
+                process, instruction,
+                "container index must be a known integral value"
+            };
+        }
+        std::size_t selected { };
+        if (source.type.fixed && !linear_index) {
+            const auto sought = static_cast<std::int32_t>(
+                static_cast<std::uint32_t>(index_aval));
+            const auto low = std::min(
+                source.type.index_left, source.type.index_right);
+            const auto high = std::max(
+                source.type.index_left, source.type.index_right);
+            if (sought < low || sought > high) {
+                publish_default();
+                return 0;
+            }
+            selected = static_cast<std::size_t>(
+                source.type.index_left >= source.type.index_right
+                    ? static_cast<std::int64_t>(source.type.index_left) - sought
+                    : static_cast<std::int64_t>(sought) - source.type.index_left);
+        } else {
+            if (signed_index
+                && static_cast<std::int32_t>(
+                       static_cast<std::uint32_t>(index_aval)) < 0) {
+                if (source.type.fixed) {
+                    publish_default();
+                    return 0;
+                }
+                throw runtime::simir::InterpreterError {
+                    process, instruction,
+                    "container index cannot be negative"
+                };
+            }
+            selected = static_cast<std::size_t>(index_aval);
+        }
+        if (const auto alias
+            = state.executor->container_object_aliases_.at(container)) {
+            PackedLogic4 value;
+            if (state.context->read_container_object_element(
+                    *alias, selected, value)) {
+                if (value.width() != source.type.element_width) {
+                    throw compiler::LlvmJitError {
+                        "compiled process direct container-element width mismatch"
+                    };
+                }
+                publish(value);
+                return 0;
+            }
+            const auto& materialized
+                = state.executor->container_register_value(
+                    container, *state.context);
+            if (selected >= materialized.elements.size()) {
+                if (source.type.fixed) {
+                    publish_default();
+                    return 0;
+                }
+                throw runtime::simir::InterpreterError {
+                    process, instruction,
+                    "container index is out of range"
+                };
+            }
+            publish(materialized.elements[selected]);
+            return 0;
+        }
+        if (selected >= source.elements.size()) {
+            if (source.type.fixed) {
+                publish_default();
+                return 0;
+            }
+            throw runtime::simir::InterpreterError {
+                process, instruction,
+                "container index is out of range"
+            };
+        }
+        publish(source.elements[selected]);
+        return 0;
+    } catch (...) {
+        capture_file_failure(state, process, instruction);
+        return 1;
+    }
+}
+
+std::uint32_t LlvmProcessExecutor::container_read_word(
+    void* context,
+    const std::uint32_t process,
+    const std::uint32_t instruction,
+    const std::uint32_t container,
+    const std::uint32_t flags,
+    const std::uint64_t index_aval,
+    const std::uint64_t index_bval,
+    std::uint64_t* result_aval,
+    std::uint64_t* result_bval) noexcept
+{
+    return container_read_packed(
+        context, process, instruction, container, flags,
+        index_aval, index_bval, result_aval, result_bval, 1U);
+}
+
+std::uint32_t LlvmProcessExecutor::container_write_packed(
+    void* context,
+    const std::uint32_t process,
+    const std::uint32_t instruction,
+    const std::uint32_t container,
+    const std::uint32_t flags,
+    const std::uint64_t index_aval,
+    const std::uint64_t index_bval,
+    const std::uint64_t* value_aval,
+    const std::uint64_t* value_bval,
+    const std::uint32_t word_count) noexcept
+{
+    auto& state = *static_cast<CallbackState*>(context);
+    auto& profile = container_callback_profile();
+    if (profile.enabled) {
+        ++profile.write_words;
+        profile.write_packed_elements += word_count > 1U ? 1U : 0U;
+    }
+    if (state.failure) {
+        return 1;
+    }
+    try {
+        if (state.executor == nullptr || state.context == nullptr
+            || value_aval == nullptr || value_bval == nullptr) {
+            throw compiler::LlvmJitError {
+                "invalid generated packed-container write callback"
+            };
+        }
+        auto& target = state.executor->mutable_container_register_value(
+            container, *state.context);
+        const auto expected_words = static_cast<std::uint32_t>(
+            (target.type.element_width + 63U) / 64U);
+        if (word_count != expected_words || word_count == 0U) {
+            throw compiler::LlvmJitError {
+                "generated packed-container write word count mismatch"
+            };
+        }
+        const bool linear_index = (flags & 1U) != 0;
+        const bool signed_index = (flags & 2U) != 0;
+        if (index_bval != 0) {
+            throw runtime::simir::InterpreterError {
+                process, instruction,
+                "container index must be a known integral value"
+            };
+        }
+        std::size_t selected { };
+        if (target.type.fixed && !linear_index) {
+            const auto sought = static_cast<std::int32_t>(
+                static_cast<std::uint32_t>(index_aval));
+            const auto low = std::min(
+                target.type.index_left, target.type.index_right);
+            const auto high = std::max(
+                target.type.index_left, target.type.index_right);
+            if (sought < low || sought > high) {
+                throw runtime::simir::InterpreterError {
+                    process, instruction,
+                    "static-array index is out of range"
+                };
+            }
+            selected = static_cast<std::size_t>(
+                target.type.index_left >= target.type.index_right
+                    ? static_cast<std::int64_t>(target.type.index_left) - sought
+                    : static_cast<std::int64_t>(sought) - target.type.index_left);
+        } else {
+            if (signed_index
+                && static_cast<std::int32_t>(
+                       static_cast<std::uint32_t>(index_aval)) < 0) {
+                throw runtime::simir::InterpreterError {
+                    process, instruction,
+                    "container index cannot be negative"
+                };
+            }
+            selected = static_cast<std::size_t>(index_aval);
+        }
+        if (selected >= target.elements.size()) {
+            throw runtime::simir::InterpreterError {
+                process, instruction,
+                "container index is out of range"
+            };
+        }
+        const auto aval = std::span<const std::uint64_t> {
+            value_aval, word_count
+        };
+        const auto bval = std::span<const std::uint64_t> {
+            value_bval, word_count
+        };
+        if (target.type.two_state
+            && std::ranges::any_of(
+                bval, [](const auto word) { return word != 0U; })) {
+            throw runtime::simir::InterpreterError {
+                process, instruction,
+                "container element write type mismatch"
+            };
+        }
+        target.elements[selected] = PackedLogic4::from_word_planes(
+            target.type.element_width, aval, bval);
+        return 0;
+    } catch (...) {
+        capture_file_failure(state, process, instruction);
+        return 1;
+    }
+}
+
+std::uint32_t LlvmProcessExecutor::container_write_word(
+    void* context,
+    const std::uint32_t process,
+    const std::uint32_t instruction,
+    const std::uint32_t container,
+    const std::uint32_t flags,
+    const std::uint64_t index_aval,
+    const std::uint64_t index_bval,
+    const std::uint64_t value_aval,
+    const std::uint64_t value_bval) noexcept
+{
+    return container_write_packed(
+        context, process, instruction, container, flags,
+        index_aval, index_bval, &value_aval, &value_bval, 1U);
+}
+
 std::uint32_t LlvmProcessExecutor::container_operation(
     void* context,
     const std::uint32_t process,
@@ -613,6 +1020,148 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         *result_aval = 0;
         *result_bval = 0;
         const auto& operation = callback_operation(state, process, instruction);
+        if (!fsim::runtime::simir::operation_holds<
+                runtime::simir::ReadContainerObject>(operation)
+            && !fsim::runtime::simir::operation_holds<
+                runtime::simir::WriteContainerObjectElement>(operation)) {
+            state.executor->materialize_container_object_aliases(*state.context);
+        }
+        auto& profile = container_callback_profile();
+        if (profile.enabled) {
+            ++profile.generic;
+            if (fsim::runtime::simir::operation_holds<
+                    runtime::simir::CopyContainerRegister>(operation)) {
+                ++profile.copy_registers;
+            } else if (fsim::runtime::simir::operation_holds<
+                           runtime::simir::ReadContainerObject>(operation)) {
+                ++profile.read_objects;
+            } else if (fsim::runtime::simir::operation_holds<
+                           runtime::simir::WriteContainerObject>(operation)) {
+                ++profile.write_objects;
+            }
+        }
+        const auto fast_offset = [&](const runtime::simir::ContainerValue& value,
+                                     const bool linear_index,
+                                     const bool signed_index) {
+            if (input0_bval != 0) {
+                throw runtime::simir::InterpreterError {
+                    process, instruction,
+                    "container index must be a known integral value"
+                };
+            }
+            if (value.type.fixed && !linear_index) {
+                const auto sought = static_cast<std::int32_t>(
+                    static_cast<std::uint32_t>(input0_aval));
+                const auto low = std::min(
+                    value.type.index_left, value.type.index_right);
+                const auto high = std::max(
+                    value.type.index_left, value.type.index_right);
+                if (sought < low || sought > high) {
+                    throw runtime::simir::InterpreterError {
+                        process, instruction,
+                        "static-array index is out of range"
+                    };
+                }
+                return static_cast<std::size_t>(
+                    value.type.index_left >= value.type.index_right
+                        ? static_cast<std::int64_t>(value.type.index_left)
+                            - sought
+                        : static_cast<std::int64_t>(sought)
+                            - value.type.index_left);
+            }
+            if (signed_index
+                && static_cast<std::int32_t>(
+                       static_cast<std::uint32_t>(input0_aval)) < 0) {
+                throw runtime::simir::InterpreterError {
+                    process, instruction,
+                    "container index cannot be negative"
+                };
+            }
+            return static_cast<std::size_t>(input0_aval);
+        };
+        const auto fast_packed_type = [](const auto& value) {
+            return !value.type.associative
+                && (value.type.element_kind
+                        == runtime::simir::ContainerElementKind::Packed
+                    || value.type.element_kind
+                        == runtime::simir::ContainerElementKind::Scalar)
+                && value.type.element_width <= 64U;
+        };
+        if (const auto* read = fsim::runtime::simir::operation_get_if<
+                runtime::simir::ContainerRead>(&operation)) {
+            const auto& source = state.executor->container_registers_.at(
+                read->source);
+            if (!read->string_index && fast_packed_type(source)
+                && state.executor->layout_.register_widths.at(read->index)
+                    <= 64U) {
+                const auto publish = [&](const PackedLogic4& value) {
+                    const auto word = value.low_word();
+                    *result_aval = word.aval;
+                    *result_bval = word.bval;
+                };
+                std::optional<std::size_t> selected;
+                if (source.type.fixed) {
+                    try {
+                        selected = fast_offset(
+                            source, read->linear_index, true);
+                    } catch (const runtime::simir::InterpreterError&) {
+                        publish(PackedLogic4(
+                            source.type.element_width,
+                            source.type.two_state
+                                ? runtime::Logic4::zero
+                                : runtime::Logic4::x));
+                        return 0;
+                    }
+                } else {
+                    selected = fast_offset(
+                        source, read->linear_index, read->signed_index);
+                }
+                if (*selected >= source.elements.size()) {
+                    if (source.type.fixed) {
+                        publish(PackedLogic4(
+                            source.type.element_width,
+                            source.type.two_state
+                                ? runtime::Logic4::zero
+                                : runtime::Logic4::x));
+                        return 0;
+                    }
+                    throw runtime::simir::InterpreterError {
+                        process, instruction,
+                        "container index is out of range"
+                    };
+                }
+                publish(source.elements[*selected]);
+                return 0;
+            }
+        } else if (const auto* write = fsim::runtime::simir::operation_get_if<
+                       runtime::simir::ContainerWrite>(&operation)) {
+            auto& target = state.executor->container_registers_.at(
+                write->target);
+            if (!write->string_index && fast_packed_type(target)
+                && state.executor->layout_.register_widths.at(write->index)
+                    <= 64U
+                && state.executor->layout_.register_widths.at(write->source)
+                    <= 64U) {
+                const auto selected = fast_offset(
+                    target, write->linear_index,
+                    target.type.fixed || write->signed_index);
+                if (selected >= target.elements.size()) {
+                    throw runtime::simir::InterpreterError {
+                        process, instruction,
+                        "container index is out of range"
+                    };
+                }
+                if (target.type.two_state && input1_bval != 0) {
+                    throw runtime::simir::InterpreterError {
+                        process, instruction,
+                        "container element write type mismatch"
+                    };
+                }
+                target.elements[selected] = PackedLogic4::from_aval_bval(
+                    target.type.element_width, input1_aval, input1_bval);
+                return 0;
+            }
+        }
         if (const auto* declaration = fsim::runtime::simir::operation_get_if<
                 runtime::simir::VitalMemoryDeclare>(&operation)) {
             auto memory = runtime::simir::make_vital_memory(
@@ -943,8 +1492,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 const runtime::simir::RegisterId index_register,
                 const std::uint64_t aval,
                 const std::uint64_t bval) {
-                const auto layout = state.executor->jit_.frame_layout(
-                    state.executor->handle_);
+                const auto& layout = state.executor->layout_;
                 if (layout.register_widths.at(index_register) <= 64) {
                     return fixed_offset(target, aval, bval);
                 }
@@ -1254,10 +1802,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         } else if (const auto* read_object = fsim::runtime::simir::operation_get_if<
                        runtime::simir::ReadContainerObject>(
                        &operation)) {
-            auto& target = registers.at(read_object->destination);
-            const auto source = state.context->read_container_object(read_object->object);
-            require_same(target, source);
-            target = source;
+            state.executor->alias_container_register(
+                read_object->destination, read_object->object, *state.context);
         } else if (const auto* write_object = fsim::runtime::simir::operation_get_if<
                        runtime::simir::WriteContainerObject>(
                        &operation)) {
@@ -1267,7 +1813,33 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             if (write_object->transaction_signal) {
                 state.context->write_update_word(
                     *write_object->transaction_signal,
-                    runtime::Logic4Word { });
+                    runtime::Logic4Word { 1, 0, 0 });
+            }
+        } else if (const auto* write_element = fsim::runtime::simir::operation_get_if<
+                       runtime::simir::WriteContainerObjectElement>(
+                       &operation)) {
+            const auto packed_input = [&](const runtime::simir::RegisterId id,
+                                          const std::uint64_t aval,
+                                          const std::uint64_t bval) {
+                const auto width = state.executor->layout_.register_widths.at(id);
+                return width <= 64U
+                    ? PackedLogic4::from_aval_bval(width, aval, bval)
+                    : state.executor->read_register(id, width);
+            };
+            state.context->write_container_object_element(
+                write_element->object,
+                packed_input(
+                    write_element->index, input0_aval, input0_bval),
+                write_element->signed_index,
+                write_element->linear_index,
+                packed_input(
+                    write_element->source, input1_aval, input1_bval),
+                state.generated_process,
+                instruction);
+            if (write_element->transaction_signal) {
+                state.context->write_update_word(
+                    *write_element->transaction_signal,
+                    runtime::Logic4Word { 1, 0, 0 });
             }
         } else if (const auto* size = fsim::runtime::simir::operation_get_if<runtime::simir::ContainerSize>(
                        &operation)) {
@@ -1343,17 +1915,39 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                               runtime::Logic4::zero));
                 return 0;
             }
-            const auto at = source.type.fixed
-                ? read->linear_index
-                    ? index(
-                          input0_aval, input0_bval, true,
-                          "multidimensional linear index")
-                    : packed_fixed_offset(
-                          source, read->index, input0_aval, input0_bval)
-                : index(
-                      input0_aval, input0_bval, read->signed_index,
-                      "container index");
+            std::optional<std::size_t> selected_offset;
+            if (source.type.fixed) {
+                try {
+                    selected_offset = read->linear_index
+                        ? index(
+                              input0_aval, input0_bval, true,
+                              "multidimensional linear index")
+                        : packed_fixed_offset(
+                              source, read->index,
+                              input0_aval, input0_bval);
+                } catch (const runtime::simir::InterpreterError&) {
+                    publish(PackedLogic4(
+                        source.type.element_width,
+                        source.type.two_state
+                            ? runtime::Logic4::zero
+                            : runtime::Logic4::x));
+                    return 0;
+                }
+            } else {
+                selected_offset = index(
+                    input0_aval, input0_bval, read->signed_index,
+                    "container index");
+            }
+            const auto at = *selected_offset;
             if (at >= source.elements.size()) {
+                if (source.type.fixed) {
+                    publish(PackedLogic4(
+                        source.type.element_width,
+                        source.type.two_state
+                            ? runtime::Logic4::zero
+                            : runtime::Logic4::x));
+                    return 0;
+                }
                 throw runtime::simir::InterpreterError {
                     process, instruction,
                     "container index is out of range"
@@ -2276,10 +2870,12 @@ void LlvmProcessExecutor::force_signal_slice(
         return;
     }
     try {
+        const auto actual_signal = mapped_signal(state, signal);
         const auto value = checked_slice_word(
-            state, signal, offset, width, aval, bval);
+            state, actual_signal, offset, width, aval, bval);
+        invalidate_signal_read_cache(state);
         state.context->force_signal_slice(
-            signal,
+            actual_signal,
             runtime::PackedLogic4::from_aval_bval(
                 value.width, value.aval, value.bval),
             offset);
@@ -2300,9 +2896,12 @@ void LlvmProcessExecutor::force_signal_slice_logic9(
         return;
     }
     try {
+        const auto actual_signal = mapped_signal(state, signal);
+        invalidate_signal_read_cache(state);
         state.context->force_signal_slice(
-            signal,
-            checked_logic9_slice(state, signal, offset, width, value),
+            actual_signal,
+            checked_logic9_slice(
+                state, actual_signal, offset, width, value),
             offset);
     } catch (...) {
         capture_failure(state);
@@ -2320,7 +2919,9 @@ void LlvmProcessExecutor::release_signal_slice(
         return;
     }
     try {
-        state.context->release_signal_slice(signal, offset, width);
+        invalidate_signal_read_cache(state);
+        state.context->release_signal_slice(
+            mapped_signal(state, signal), offset, width);
     } catch (...) {
         capture_failure(state);
     }
@@ -2339,10 +2940,12 @@ void LlvmProcessExecutor::force_driver_signal_slice(
         return;
     }
     try {
+        const auto actual_signal = mapped_signal(state, signal);
         const auto value = checked_slice_word(
-            state, signal, offset, width, aval, bval);
+            state, actual_signal, offset, width, aval, bval);
+        invalidate_signal_read_cache(state);
         state.context->force_driver_signal_slice(
-            signal,
+            actual_signal,
             runtime::PackedLogic4::from_aval_bval(
                 value.width, value.aval, value.bval),
             offset);
@@ -2363,9 +2966,12 @@ void LlvmProcessExecutor::force_driver_signal_slice_logic9(
         return;
     }
     try {
+        const auto actual_signal = mapped_signal(state, signal);
+        invalidate_signal_read_cache(state);
         state.context->force_driver_signal_slice(
-            signal,
-            checked_logic9_slice(state, signal, offset, width, value),
+            actual_signal,
+            checked_logic9_slice(
+                state, actual_signal, offset, width, value),
             offset);
     } catch (...) {
         capture_failure(state);
@@ -2383,7 +2989,9 @@ void LlvmProcessExecutor::release_driver_signal_slice(
         return;
     }
     try {
-        state.context->release_driver_signal_slice(signal, offset, width);
+        invalidate_signal_read_cache(state);
+        state.context->release_driver_signal_slice(
+            mapped_signal(state, signal), offset, width);
     } catch (...) {
         capture_failure(state);
     }
@@ -2392,9 +3000,16 @@ void LlvmProcessExecutor::release_driver_signal_slice(
 compiler::JitOptimizationLevel jit_optimization(
     const project::Optimization optimization) noexcept
 {
-    return optimization == project::Optimization::o0
-        ? compiler::JitOptimizationLevel::o0
-        : compiler::JitOptimizationLevel::o2;
+    switch (optimization) {
+    case project::Optimization::o0:
+        return compiler::JitOptimizationLevel::o0;
+    case project::Optimization::o1:
+        return compiler::JitOptimizationLevel::o1;
+    case project::Optimization::o2:
+    case project::Optimization::o3:
+        return compiler::JitOptimizationLevel::o2;
+    }
+    return compiler::JitOptimizationLevel::o2;
 }
 
 #endif

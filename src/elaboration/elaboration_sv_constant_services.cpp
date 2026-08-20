@@ -5,6 +5,14 @@
 #include <sstream>
 
 namespace fsim::elaboration::elaboration_detail {
+namespace {
+
+[[nodiscard]] constexpr char ascii_lower(const char value) noexcept {
+    return value >= 'A' && value <= 'Z'
+        ? static_cast<char>(value + ('a' - 'A')) : value;
+}
+
+} // namespace
 
 std::string SystemVerilogConstantValue::display() const {
     if (unbounded) {
@@ -37,9 +45,24 @@ bool SystemVerilogConstantValue::known() const noexcept {
     if (unbounded) {
         return false;
     }
-    for (std::uint32_t bit = 0; bit < width; ++bit) {
-        const auto state = runtime::to_logic4(packed.get_logic9(bit));
-        if (state == runtime::Logic4::x || state == runtime::Logic4::z) {
+    if (!packed.is_logic9()) {
+        for (const auto word : packed.bval_words()) {
+            if (word != 0U) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    const auto plane1 = packed.logic9_plane_words(1);
+    const auto plane3 = packed.logic9_plane_words(3);
+    for (std::size_t index = 0; index < plane1.size(); ++index) {
+        const auto final_bits = width % 64U;
+        const auto valid = index + 1U == plane1.size() && final_bits != 0U
+            ? (std::uint64_t{1} << final_bits) - 1U
+            : std::numeric_limits<std::uint64_t>::max();
+        if ((plane1[index] & valid) != valid
+            || (plane3[index] & valid) != 0U) {
             return false;
         }
     }
@@ -135,8 +158,7 @@ Expression SystemVerilogConstantValue::expression(
     }
     auto digits = packed.to_msb_string();
     for (auto& digit : digits) {
-        digit = static_cast<char>(
-            std::tolower(static_cast<unsigned char>(digit)));
+        digit = ascii_lower(digit);
     }
     return {
         ExpressionKind::LogicLiteral,
@@ -237,6 +259,10 @@ void substitute_sv_type(
                 *type.systemverilog_container
                      ->associative_index_type,
                 environment);
+        }
+        for (auto& element_type :
+             type.systemverilog_container->element_types) {
+            substitute_sv_type(element_type, environment);
         }
     }
     for (auto& member : type.packed_members) {

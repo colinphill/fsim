@@ -182,9 +182,31 @@ ElaboratedDesign::container_paths() const
 std::unique_ptr<runtime::simir::Interpreter>
 ElaboratedDesign::create_interpreter(
     const runtime::SchedulerOptions options,
-    const std::uint64_t seed) const
+    const std::uint64_t seed) const &
 {
     auto interpreter = std::make_unique<runtime::simir::Interpreter>(options, seed);
+    populate_interpreter(interpreter.get(), false);
+    return interpreter;
+}
+
+std::unique_ptr<runtime::simir::Interpreter>
+ElaboratedDesign::create_interpreter(
+    const runtime::SchedulerOptions options,
+    const std::uint64_t seed) &&
+{
+    auto interpreter = std::make_unique<runtime::simir::Interpreter>(options, seed);
+    populate_interpreter(interpreter.get(), false, &processes_);
+    return interpreter;
+}
+
+void ElaboratedDesign::populate_interpreter(
+    runtime::simir::Interpreter* const interpreter,
+    const bool validation_only,
+    std::vector<runtime::simir::Process>* const consumed_processes) const
+{
+    if (interpreter == nullptr) {
+        throw std::invalid_argument("cannot populate a null SimIR interpreter");
+    }
     for (const auto& signal : signals_) {
         (void)interpreter->add_signal(signal);
     }
@@ -197,8 +219,19 @@ ElaboratedDesign::create_interpreter(
     for (const auto& alias : container_signal_aliases_) {
         interpreter->add_container_signal_alias(alias);
     }
-    for (const auto& process : processes_) {
-        (void)interpreter->add_process(process);
+    if (consumed_processes != nullptr) {
+        for (auto& process : *consumed_processes) {
+            (void)interpreter->add_process(std::move(process));
+        }
+        consumed_processes->clear();
+    } else {
+        for (const auto& process : processes_) {
+            if (validation_only) {
+                (void)interpreter->validate_process(process);
+            } else {
+                (void)interpreter->add_process(process);
+            }
+        }
     }
     for (const auto& path : verilog_specify_paths_) {
         runtime::simir::ModulePath runtime_path;
@@ -265,7 +298,6 @@ ElaboratedDesign::create_interpreter(
     for (const auto& check : verilog_timing_checks_) {
         (void)interpreter->add_module_timing_check(check);
     }
-    return interpreter;
 }
 
 ElaboratedDesignState ElaboratedDesign::state() const
@@ -273,7 +305,8 @@ ElaboratedDesignState ElaboratedDesign::state() const
     ElaboratedDesignState result {
         top_, roots_, signal_info_, boundary_conversions_, signals_,
         string_object_info_, string_objects_, container_object_info_,
-        container_objects_, vhdl_protected_object_info_, processes_,
+        container_objects_, container_signal_aliases_,
+        vhdl_protected_object_info_, processes_,
         specializations_, udp_tables_, verilog_specify_paths_,
         verilog_timing_checks_,
         systemc_instances_, systemc_processes_, systemc_objects_, { }, { }, { }
@@ -516,6 +549,8 @@ std::optional<ElaboratedDesign> ElaboratedDesign::from_state(
     result.string_objects_ = std::move(state.string_objects);
     result.container_object_info_ = std::move(state.container_object_info);
     result.container_objects_ = std::move(state.container_objects);
+    result.container_signal_aliases_ =
+        std::move(state.container_signal_aliases);
     result.vhdl_protected_object_info_ = std::move(state.vhdl_protected_object_info);
     result.processes_ = std::move(state.processes);
     result.specializations_ = std::move(state.specializations);
@@ -544,7 +579,8 @@ std::optional<ElaboratedDesign> ElaboratedDesign::from_state(
         }
     }
     try {
-        (void)result.create_interpreter();
+        runtime::simir::Interpreter validator;
+        result.populate_interpreter(&validator, true);
     } catch (const std::exception&) {
         return std::nullopt;
     }

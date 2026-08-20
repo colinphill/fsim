@@ -140,6 +140,16 @@ namespace {
         element.spelling = source->domain == frontend::ValueDomain::Logic9
             ? "std_logic"
             : "bit";
+        element.nominal_type = source->domain == frontend::ValueDomain::Logic9
+            ? "std.standard.std_logic"
+            : "std.standard.bit";
+        element.enumeration_literals = source->enumeration_literals;
+        element.enumeration_range = source->enumeration_range;
+        element.enumeration_range_expression =
+            source->enumeration_range_expression;
+        element.enumeration_base_range = source->enumeration_base_range;
+        element.enumeration_base_range_expression =
+            source->enumeration_base_range_expression;
         frontend::VhdlArrayInfo array;
         array.index_subtype = "integer";
         array.element_spelling = element.spelling;
@@ -148,6 +158,11 @@ namespace {
         array.dimensions.push_back(std::move(dimension));
         array.element_types.push_back(std::move(element));
         result.vhdl_array = std::move(array);
+        result.enumeration_literals.clear();
+        result.enumeration_range.reset();
+        result.enumeration_range_expression.reset();
+        result.enumeration_base_range.reset();
+        result.enumeration_base_range_expression.reset();
         return result;
     }
 
@@ -224,9 +239,12 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_composite_expression(
         for (const auto* operand_pointer : concatenands) {
             const auto& operand_expression = *operand_pointer;
             auto operand_storage = vhdl_expression_type(operand_expression);
+            auto operand_array = bounded_array_context(
+                operand_storage ? &*operand_storage : nullptr);
             const frontend::Type* operand_type = operand_storage
+                    && operand_storage->vhdl_array
                 ? &*operand_storage
-                : nullptr;
+                : operand_array ? &*operand_array : nullptr;
             std::size_t operand_width = static_cast<std::size_t>(*element_width);
             const frontend::Type* operand_context = &element;
             if (operand_type != nullptr && operand_type->vhdl_array) {
@@ -479,8 +497,16 @@ bool Lowerer::validate_vhdl_composite_assignment(
         return true;
     }
     const auto source = vhdl_expression_type(value);
-    if ((source && assignment_compatible(*target, *source))
-        || (!source && vhdl_expression_matches_type(value, *target))) {
+    const auto source_array = source
+        ? bounded_array_context(&*source)
+        : std::nullopt;
+    const auto* comparable_source = source_array
+        ? &*source_array
+        : source ? &*source : nullptr;
+    if ((comparable_source
+            && assignment_compatible(*target, *comparable_source))
+        || (!comparable_source
+            && vhdl_expression_matches_type(value, *target))) {
         return true;
     }
     report(

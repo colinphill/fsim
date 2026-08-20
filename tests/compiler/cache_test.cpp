@@ -22,6 +22,17 @@ int main() {
     assert(
         Sha256::hex(Sha256::digest("abc"))
         == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    const std::string million_a(1'000'000U, 'a');
+    assert(
+        Sha256::hex(Sha256::digest(million_a))
+        == "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+    Sha256 chunked;
+    for (std::size_t offset = 0; offset < million_a.size(); offset += 137U) {
+        chunked.update(std::string_view { million_a }.substr(offset, 137U));
+    }
+    assert(
+        Sha256::hex(chunked.finish())
+        == "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
 
     CacheKeyBuilder first;
     const auto key = first.add("source", "module m; endmodule").add("llvm", "22.1.8").finish();

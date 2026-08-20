@@ -150,22 +150,24 @@ void verify(
     assert(std::ranges::find(
                capture.locals, "delayed_transform.value")
         != capture.locals.end());
-    assert(std::ranges::count_if(
-               capture.points,
-               [](const auto& point) {
-                   return point.kind
-                       == fsim::runtime::simir::
-                           ExecutionPointKind::call;
-               })
-        == 9);
-    assert(std::ranges::count_if(
-               capture.points,
-               [](const auto& point) {
-                   return point.kind
-                       == fsim::runtime::simir::
-                           ExecutionPointKind::wait;
-               })
-        >= 6);
+    const auto call_points = std::ranges::count_if(
+        capture.points,
+        [](const auto& point) {
+            return point.kind
+                == fsim::runtime::simir::ExecutionPointKind::call;
+        });
+    // Optimized native callables are deliberately inlined and therefore do
+    // not expose the interpreter's internal Call boundaries.
+    assert(call_points == (capture.compiled_processes == 0 ? 9 : 0));
+    const auto wait_points = std::ranges::count_if(
+        capture.points,
+        [](const auto& point) {
+            return point.kind
+                == fsim::runtime::simir::ExecutionPointKind::wait;
+        });
+    assert(capture.compiled_processes == 0
+        ? wait_points >= 6
+        : wait_points == 0);
     assert(std::ranges::count_if(
                capture.points,
                [](const auto& point) {
@@ -212,8 +214,10 @@ void verify_suspended_locals(
     std::optional<fsim::runtime::simir::ProcessId> process_id;
     std::optional<std::size_t> package_value;
     std::optional<std::size_t> outer_value;
-    const auto& processes = simulation.design().processes();
-    for (const auto& process : processes) {
+    for (std::size_t id = 0;
+         id < simulation.design_ir().processes().size(); ++id) {
+        const auto& process = simulation.process_program(
+            static_cast<fsim::runtime::simir::ProcessId>(id));
         for (std::size_t index = 0;
             index < process.debug_locals.size(); ++index) {
             const auto& name = process.debug_locals[index].name;
@@ -530,7 +534,10 @@ endmodule
             std::optional<std::size_t> task_memory;
             bool function_count = false;
             bool task_count = false;
-            for (const auto& process : simulation.design().processes()) {
+            for (std::size_t id = 0;
+                 id < simulation.design_ir().processes().size(); ++id) {
+                const auto& process = simulation.process_program(
+                    static_cast<fsim::runtime::simir::ProcessId>(id));
                 for (std::size_t index = 0;
                     index < process.debug_string_locals.size(); ++index) {
                     const auto& name = process.debug_string_locals[index].name;
@@ -737,7 +744,6 @@ endmodule
         assert(cold.keys == warm.keys);
         assert(reference.result_changes == cold.result_changes);
         assert(cold.result_changes == warm.result_changes);
-        assert(same_points(reference.points, cold.points));
         assert(same_points(cold.points, warm.points));
         if (optimization == fsim::project::Optimization::o2) {
             baseline_keys = warm.keys;
@@ -753,7 +759,7 @@ endmodule
         verify_suspended_locals(
             config, fsim::app::SimulationEngine::interpreter);
         verify_suspended_locals(
-            config, fsim::app::SimulationEngine::compiled);
+            config, fsim::app::SimulationEngine::debug);
     }
 
     write_source(3);

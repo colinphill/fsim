@@ -130,6 +130,9 @@ make_systemverilog_vpi_design(
     const BuiltProject& project,
     const runtime::simir::Interpreter& interpreter);
 
+[[nodiscard]] std::unique_ptr<runtime::SystemVerilogVpiObjectRegistry>
+make_empty_systemverilog_vpi_registry();
+
 [[nodiscard]] runtime::SystemVerilogVpiTimeProfile
 systemverilog_vpi_time_profile(std::string_view resolution);
 
@@ -254,7 +257,7 @@ void complete_systemverilog_executable_hir(
 
 [[nodiscard]] bool valid_runtime_projection(
     const semantic::design::DesignIr& design,
-    const elaboration::ElaboratedDesign& runtime) noexcept;
+    const elaboration::ElaboratedDesign& runtime);
 
 class SystemCProcessExecutor final
     : public runtime::simir::ProcessExecutor {
@@ -276,12 +279,18 @@ private:
 
 class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
 public:
+    using SignalRemap
+        = std::vector<std::pair<std::uint32_t, std::uint32_t>>;
+
     LlvmProcessExecutor(
         compiler::LlvmJit& jit,
         const compiler::JitProcessHandle handle,
         const runtime::simir::Process& process,
         std::span<const std::uint32_t> signal_widths,
-        std::span<const runtime::simir::ValueKind> signal_value_kinds);
+        std::span<const runtime::simir::ValueKind> signal_value_kinds,
+        std::span<const runtime::simir::ResolutionKind> signal_resolutions,
+        std::shared_ptr<const SignalRemap> signal_remap = { },
+        std::optional<runtime::simir::ProcessId> generated_process = { });
 
     [[nodiscard]] std::unique_ptr<runtime::simir::ProcessExecutor>
     fork_clone(
@@ -293,6 +302,17 @@ public:
     [[nodiscard]] runtime::simir::ProcessResumeResult resume(
         runtime::simir::ProcessExecutionContext& context,
         const runtime::simir::InstructionIndex start_instruction) override;
+
+    [[nodiscard]] std::size_t resume_cohort(
+        std::span<runtime::simir::ProcessCohortResumeEntry> entries) override;
+
+    [[nodiscard]] std::size_t resume_region(
+        std::span<runtime::simir::ProcessCohortResumeEntry> entries,
+        std::span<const std::size_t> active_indices) override;
+
+    [[nodiscard]] bool cohort_manages_process_state() const noexcept override;
+
+    [[nodiscard]] const void* cohort_domain() const noexcept override;
 
     [[nodiscard]] PackedLogic4 read_register(
         const runtime::simir::RegisterId id,
@@ -326,15 +346,22 @@ private:
         std::vector<std::uint8_t> register_initialized;
         std::vector<std::string> string_registers;
         std::vector<runtime::simir::ContainerValue> container_registers;
+        std::vector<std::optional<runtime::simir::ContainerObjectId>>
+            container_object_aliases;
+        std::vector<runtime::simir::ContainerRegisterId>
+            active_container_object_aliases;
         std::vector<runtime::simir::VitalMemoryState> vital_memories;
     };
 
     LlvmProcessExecutor(
         compiler::LlvmJit& jit,
-        compiler::JitProcessHandle handle,
+        compiler::JitProcessBinding binding,
         const runtime::simir::Process& process,
         std::span<const std::uint32_t> signal_widths,
         std::span<const runtime::simir::ValueKind> signal_value_kinds,
+        std::span<const runtime::simir::ResolutionKind> signal_resolutions,
+        std::shared_ptr<const SignalRemap> signal_remap,
+        runtime::simir::ProcessId generated_process,
         std::shared_ptr<FrameStorage> storage,
         const fsim_jit_frame_v1& parent_frame,
         runtime::simir::InstructionIndex start_instruction);
@@ -343,9 +370,26 @@ private:
         LlvmProcessExecutor* executor { };
         runtime::simir::ProcessExecutionContext* context { };
         const runtime::simir::Process* process { };
+        runtime::simir::ProcessId generated_process { };
         std::span<const std::uint32_t> signal_widths;
         std::span<const runtime::simir::ValueKind> signal_value_kinds;
+        std::span<const SignalRemap::value_type> signal_remap;
+        std::span<const std::uint32_t> dense_signal_remap;
+        std::uint32_t dense_signal_remap_base { };
+        std::array<std::span<const std::uint64_t>, 4>
+            direct_signal_logic9_planes;
+        bool supports_direct_word_updates { };
         std::exception_ptr failure;
+        static constexpr std::size_t signal_read_cache_size = 4U;
+        std::array<std::uint32_t, signal_read_cache_size>
+            signal_read_cache_ids {
+                std::numeric_limits<std::uint32_t>::max(),
+                std::numeric_limits<std::uint32_t>::max(),
+                std::numeric_limits<std::uint32_t>::max(),
+                std::numeric_limits<std::uint32_t>::max()
+            };
+        std::array<runtime::Logic4Word, signal_read_cache_size>
+            signal_read_cache_words { };
     };
 
     template <typename Boundary>
@@ -353,7 +397,52 @@ private:
         const runtime::simir::InstructionIndex instruction,
         const std::string_view status) const;
 
+    [[nodiscard]] const runtime::simir::ContainerValue& container_register_value(
+        runtime::simir::ContainerRegisterId id,
+        const runtime::simir::ProcessExecutionContext& context);
+    [[nodiscard]] runtime::simir::ContainerValue& mutable_container_register_value(
+        runtime::simir::ContainerRegisterId id,
+        const runtime::simir::ProcessExecutionContext& context);
+    void alias_container_register(
+        runtime::simir::ContainerRegisterId destination,
+        runtime::simir::ContainerObjectId object,
+        const runtime::simir::ProcessExecutionContext& context);
+    void materialize_container_object_aliases(
+        const runtime::simir::ProcessExecutionContext& context);
+    void discard_container_object_aliases() noexcept;
+    void initialize_direct_read_signals();
+    void initialize_direct_update_slots();
+    void initialize_buffered_logic9_updates();
+    [[nodiscard]] bool buffer_logic9_update(
+        runtime::simir::SignalId signal,
+        std::uint32_t offset,
+        std::uint32_t width,
+        const fsim_jit_logic9_word_v1& value);
+    void flush_buffered_logic9_updates(
+        runtime::simir::ProcessExecutionContext& context);
+    void flush_update_words(
+        runtime::simir::ProcessExecutionContext& context);
+
     static void capture_failure(CallbackState& state) noexcept;
+    static void invalidate_signal_read_cache(CallbackState& state) noexcept;
+    [[nodiscard]] static std::uint32_t mapped_signal_sparse(
+        const CallbackState& state, std::uint32_t signal);
+    [[nodiscard]] static std::uint32_t mapped_signal(
+        const CallbackState& state, const std::uint32_t signal)
+    {
+        if (!state.dense_signal_remap.empty()) {
+            if (signal < state.dense_signal_remap_base) {
+                return signal;
+            }
+            const auto offset = signal - state.dense_signal_remap_base;
+            return offset < state.dense_signal_remap.size()
+                ? state.dense_signal_remap[offset]
+                : signal;
+        }
+        return state.signal_remap.empty()
+            ? signal
+            : mapped_signal_sparse(state, signal);
+    }
     static void capture_file_failure(
         CallbackState&, std::uint32_t, std::uint32_t) noexcept;
 
@@ -406,6 +495,22 @@ private:
         std::uint64_t, std::uint64_t,
         std::uint64_t, std::uint64_t,
         std::uint64_t*, std::uint64_t*) noexcept;
+    static std::uint32_t container_read_word(
+        void*, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t,
+        std::uint64_t, std::uint64_t,
+        std::uint64_t*, std::uint64_t*) noexcept;
+    static std::uint32_t container_write_word(
+        void*, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t,
+        std::uint64_t, std::uint64_t,
+        std::uint64_t, std::uint64_t) noexcept;
+    static std::uint32_t container_read_packed(
+        void*, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t,
+        std::uint64_t, std::uint64_t,
+        std::uint64_t*, std::uint64_t*, std::uint32_t) noexcept;
+    static std::uint32_t container_write_packed(
+        void*, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t,
+        std::uint64_t, std::uint64_t,
+        const std::uint64_t*, const std::uint64_t*, std::uint32_t) noexcept;
     static runtime::simir::FileHandle checked_file_handle(
         std::uint64_t aval, std::uint64_t bval);
     static const runtime::simir::Operation& callback_operation(
@@ -416,9 +521,47 @@ private:
         const std::uint32_t signal,
         std::uint64_t* bval) noexcept;
 
+    static std::uint32_t read_signal_packed(
+        void* context,
+        std::uint32_t signal,
+        std::uint32_t width,
+        std::uint64_t* aval,
+        std::uint64_t* bval,
+        std::uint64_t* logic9_plane2,
+        std::uint64_t* logic9_plane3) noexcept;
+
+    static std::uint32_t read_signal_dynamic_part(
+        void* context,
+        std::uint32_t signal,
+        std::uint32_t source_width,
+        std::uint64_t base_aval,
+        std::uint64_t base_bval,
+        std::int64_t left,
+        std::int64_t right,
+        std::uint32_t base_offset,
+        std::uint32_t width,
+        std::uint32_t flags,
+        fsim_jit_logic9_word_v1* result) noexcept;
+
+    static std::uint32_t write_signal_packed(
+        void* context,
+        std::uint32_t signal,
+        std::uint32_t offset,
+        std::uint32_t width,
+        std::uint32_t mode,
+        std::uint64_t delay,
+        const std::uint64_t* aval,
+        const std::uint64_t* bval,
+        const std::uint64_t* logic9_plane2,
+        const std::uint64_t* logic9_plane3) noexcept;
+
     static void read_signal_logic9(
         void* context,
         const std::uint32_t signal,
+        fsim_jit_logic9_word_v1* result) noexcept;
+    static void read_signal_logic9_identity(
+        void* context,
+        std::uint32_t signal,
         fsim_jit_logic9_word_v1* result) noexcept;
 
     static void write_signal(
@@ -821,11 +964,19 @@ private:
         std::uint64_t* result_bval) noexcept;
 
     compiler::LlvmJit& jit_;
-    compiler::JitProcessHandle handle_;
+    compiler::JitProcessBinding binding_;
     const runtime::simir::Process& process_;
     std::span<const std::uint32_t> signal_widths_;
     std::span<const runtime::simir::ValueKind> signal_value_kinds_;
+    std::span<const runtime::simir::ResolutionKind> signal_resolutions_;
+    std::shared_ptr<const SignalRemap> signal_remap_;
+    std::vector<std::uint32_t> dense_signal_remap_;
+    std::uint32_t dense_signal_remap_base_ { };
+    runtime::simir::ProcessId generated_process_ { };
+    compiler::JitProcessFrameLayout layout_;
     std::shared_ptr<FrameStorage> storage_;
+    fsim_jit_runtime_v1 runtime_ { };
+    CallbackState callback_state_ { };
     fsim_jit_frame_v1 frame_ { };
     std::vector<std::uint64_t>& register_aval_;
     std::vector<std::uint64_t>& register_bval_;
@@ -834,6 +985,63 @@ private:
     std::vector<std::uint8_t>& register_initialized_;
     std::vector<std::string>& string_registers_;
     std::vector<runtime::simir::ContainerValue>& container_registers_;
+    std::vector<std::optional<runtime::simir::ContainerObjectId>>&
+        container_object_aliases_;
+    std::vector<runtime::simir::ContainerRegisterId>&
+        active_container_object_aliases_;
+    std::vector<std::uint32_t> direct_read_signals_;
+    std::vector<std::uint32_t> direct_update_signals_;
+    std::vector<fsim_jit_update_slot_v1> direct_update_slots_;
+    std::uint64_t direct_update_writer_revision_
+        { std::numeric_limits<std::uint64_t>::max() };
+    std::vector<std::uint64_t> direct_update_active_words_;
+    std::vector<std::uint64_t> direct_update_wide_aval_;
+    std::vector<std::uint64_t> direct_update_wide_bval_;
+    std::vector<std::uint64_t> direct_update_wide_mask_;
+    std::vector<runtime::simir::ProcessUpdateSlotView>
+        direct_update_slot_views_;
+    std::vector<runtime::simir::ProcessUpdateWord> pending_update_words_;
+    struct BufferedLogic9Update {
+        runtime::simir::SignalId signal { };
+        std::uint32_t width { };
+        std::array<std::uint64_t, 4> planes { };
+        std::uint64_t mask { };
+    };
+    std::vector<BufferedLogic9Update> buffered_logic9_updates_;
+    std::vector<runtime::simir::ProcessLogic9UpdateSlotView>
+        buffered_logic9_update_views_;
+    enum class CohortResumeMode : std::uint8_t {
+        normal,
+        prepare,
+        consume,
+    };
+    CohortResumeMode cohort_resume_mode_ { CohortResumeMode::normal };
+    fsim_jit_resume_result_v1 cohort_resume_result_ { };
+    std::uint32_t cohort_resume_status_ { };
+    std::exception_ptr cohort_resume_failure_;
+    std::vector<LlvmProcessExecutor*> cohort_members_;
+    std::vector<runtime::simir::InstructionIndex>
+        cohort_start_instructions_;
+    std::vector<compiler::JitProcessCohortResumeEntry>
+        cohort_native_entries_;
+    std::vector<runtime::simir::ProcessUpdateSlotBatch>
+        cohort_update_batches_;
+    std::vector<runtime::simir::ProcessLogic9UpdateBatch>
+        cohort_logic9_update_batches_;
+    compiler::JitProcessCohortBinding cohort_binding_;
+    std::vector<LlvmProcessExecutor*> region_members_;
+    std::vector<runtime::simir::ProcessExecutionContext*> region_contexts_;
+    std::vector<runtime::simir::InstructionIndex> region_start_instructions_;
+    std::vector<compiler::JitProcessCohortResumeEntry>
+        region_native_entries_;
+    std::vector<runtime::simir::ProcessUpdateSlotBatch>
+        region_update_batches_;
+    std::vector<runtime::simir::ProcessLogic9UpdateBatch>
+        region_logic9_update_batches_;
+    std::vector<runtime::simir::ProcessUpdateSlotBatch>
+        region_active_update_batches_;
+    const runtime::simir::ProcessCohortResumeEntry*
+        region_entries_identity_ { };
 };
 
 [[nodiscard]] compiler::JitOptimizationLevel jit_optimization(
@@ -1173,6 +1381,7 @@ struct HdlVcdState {
     std::filesystem::path file_root;
     std::filesystem::path path;
     Simulation* simulation { };
+    std::function<void()> activate_observer;
     std::function<void(std::uint64_t)> remove_observer;
     std::function<SimulationTick()> current_time;
     std::vector<std::vector<runtime::VcdSignal>> handles;
@@ -1240,7 +1449,8 @@ void install_interrupt_hook(Simulation& simulation);
 
 void report_native_cache_failures(
     const Simulation& simulation,
-    diagnostic::Engine& diagnostics);
+    diagnostic::Engine& diagnostics,
+    bool synchronize = true);
 
 bool apply_uvm_command_line(
     Simulation& simulation,

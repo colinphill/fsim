@@ -160,11 +160,27 @@ namespace elaboration_detail {
         const ConstantEnvironment& fallback_environment,
         const std::vector<frontend::FunctionDeclaration>& functions,
         std::string& error);
+
+    class ConstantFunctionMemoizationScope final {
+    public:
+        ConstantFunctionMemoizationScope();
+        ConstantFunctionMemoizationScope(
+            const ConstantFunctionMemoizationScope&) = delete;
+        ConstantFunctionMemoizationScope& operator=(
+            const ConstantFunctionMemoizationScope&) = delete;
+        ~ConstantFunctionMemoizationScope();
+    };
+
     void fold_systemverilog_constant_functions(
         DesignUnit& unit,
         const SystemVerilogConstantEnvironment& environment,
         const ConstantEnvironment& fallback_environment,
         std::vector<Diagnostic>& diagnostics);
+    void fold_systemverilog_constant_functions(
+        frontend::GenerateBody& body,
+        const std::vector<frontend::FunctionDeclaration>& functions,
+        const SystemVerilogConstantEnvironment& environment,
+        const ConstantEnvironment& fallback_environment);
     std::optional<SystemVerilogConstantValue>
     convert_systemverilog_parameter_value(
         const SystemVerilogConstantValue& value,
@@ -203,6 +219,13 @@ namespace elaboration_detail {
         const SystemVerilogStringEnvironment& string_environment,
         const ConstantEnvironment& integer_environment,
         const ConstantDomainEnvironment& domains,
+        const std::vector<frontend::FunctionDeclaration>& functions,
+        std::vector<Diagnostic>& diagnostics);
+    void prepare_systemverilog_generate_body(
+        frontend::GenerateBody& body,
+        const ConstantEnvironment& integer_environment,
+        const ConstantDomainEnvironment& domains,
+        const std::vector<frontend::FunctionDeclaration>& functions,
         std::vector<Diagnostic>& diagnostics);
 
     std::int64_t normalize_systemverilog_parameter_value(
@@ -666,6 +689,7 @@ namespace elaboration_detail {
         ConstantEnvironment& environment,
         ConstantDomainEnvironment& domains,
         const frontend::Language language,
+        const std::vector<frontend::FunctionDeclaration>& functions,
         std::vector<Diagnostic>& diagnostics);
 
     void append_generated_body(
@@ -722,6 +746,9 @@ namespace elaboration_detail {
     NamedTypeEnvironment local_vhdl_type_environment(
         const DesignUnit& unit);
 
+    std::string vhdl_type_identity(
+        const frontend::Type& type);
+
     NamedTypeEnvironment local_systemverilog_type_environment(
         const DesignUnit& unit);
 
@@ -777,7 +804,9 @@ namespace elaboration_detail {
         std::vector<Diagnostic>& diagnostics,
         bool expand_generates = true,
         const SystemVerilogConstantEnvironment&
-            parent_integral_environment = { });
+            parent_integral_environment = { },
+        const std::vector<frontend::FunctionDeclaration>&
+            parent_functions = { });
 
     void expand_specialized_unit_generates(
         SpecializedUnit& specialized,
@@ -858,6 +887,15 @@ public:
         const frontend::Language language,
         const std::string& name,
         const std::size_t order);
+    Process lower_concurrent_group(
+        std::span<const Statement> statements,
+        frontend::Language language,
+        const std::string& name,
+        std::size_t order);
+    [[nodiscard]] std::vector<SignalId> concurrent_sensitivity(
+        const Statement& statement) const;
+    [[nodiscard]] bool concurrent_trigger_fusion_safe(
+        const Statement& statement) const;
 
     [[nodiscard]] std::vector<Process> take_generated_processes();
 
@@ -1453,7 +1491,7 @@ private:
     void lower_function_return(const Statement& statement);
 
     void initialize_task_support();
-    void collect_class_tasks(const std::vector<Statement>& statements);
+    void collect_class_tasks(std::span<const Statement> statements);
 
     std::optional<std::vector<const Expression*>> bind_task_actuals(
         const Statement& statement,
@@ -1506,10 +1544,10 @@ private:
         const Expression& expression,
         std::set<std::string>& output) const;
     void collect_statement_identifiers(
-        const std::vector<Statement>& statements,
+        std::span<const Statement> statements,
         std::set<std::string>& output) const;
     void collect_wildcard_identifiers(
-        const std::vector<Statement>& statements,
+        std::span<const Statement> statements,
         std::set<std::string>& output) const;
     RegisterId allocate_register(
         const std::size_t width,
@@ -1663,9 +1701,13 @@ private:
         bool lowered { };
         bool invocation_layout_finalized { };
     };
+    std::deque<frontend::FunctionDeclaration>
+        vhdl_function_specializations_;
     std::vector<FunctionFrame> function_frames_;
     std::unordered_map<std::string, std::vector<std::size_t>>
         function_indices_;
+    std::unordered_map<std::string, std::size_t>
+        vhdl_function_specialization_indices_;
     std::deque<std::size_t> pending_functions_;
     std::vector<std::unordered_set<std::size_t>>
         function_dependencies_;
@@ -2010,7 +2052,7 @@ private:
         const bool vhdl = false,
         const bool resolve_ports = true);
     void merge_vhdl_protected_types(DesignUnit&, const DesignUnit&);
-    void materialize_vhdl_1993_shared_variable(
+    void materialize_vhdl_shared_variable(
         const frontend::VariableDeclaration&,
         const std::string& path,
         SignalMap& signals);
@@ -2200,6 +2242,13 @@ private:
         const ContainerMap& parent_containers,
         PortAliases& aliases);
 
+    bool connect_verilog_expression_port(
+        const frontend::SignalDeclaration& port,
+        const frontend::PortConnection& connection,
+        const std::string& path,
+        const SignalMap& parent_signals,
+        PortAliases& aliases);
+
     PortAliases connect_ports(
         const frontend::Instance& instance,
         const std::vector<frontend::SignalDeclaration>& ports,
@@ -2321,6 +2370,10 @@ private:
         predeclared_root_signals_;
     std::unordered_map<std::string, SpecializedUnit>
         prepared_systemverilog_roots_;
+    std::unordered_map<std::string, SpecializedUnit>
+        specialized_unit_cache_;
+    std::unordered_set<std::string>
+        seen_vhdl_specialization_keys_;
     std::unordered_set<std::string> used_systemc_instances_;
     std::unordered_set<std::string> instance_paths_;
     std::unordered_map<std::string, UdpTableId> udp_table_by_identity_;

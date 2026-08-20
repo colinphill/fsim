@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_internal.hpp"
+
 #include "vhdl_array_boundary.hpp"
+
 
 namespace fsim::elaboration {
 using namespace elaboration_detail;
@@ -81,6 +83,22 @@ bool Lowerer::vhdl_callable_type_matches(
     return formal.systemverilog_container
         && actual.systemverilog_container
         && formal.spelling == actual.spelling;
+  }
+  const auto simple_name = [](const std::string_view spelling) {
+    const auto separator = spelling.find_last_of('.');
+    return spelling.substr(
+        separator == std::string_view::npos ? 0U : separator + 1U);
+  };
+  const auto formal_name = simple_name(formal.spelling);
+  const bool unconstrained_builtin_array =
+      !formal.packed_range && !formal.vhdl_array
+      && (formal_name == "bit_vector"
+          || formal_name == "std_logic_vector"
+          || formal_name == "std_ulogic_vector"
+          || formal_name == "signed"
+          || formal_name == "unsigned");
+  if (unconstrained_builtin_array) {
+    return formal_name == simple_name(actual.spelling);
   }
   const auto formal_width = formal.width();
   const auto actual_width = actual.width();
@@ -191,7 +209,7 @@ bool Lowerer::vhdl_function_profile_matches(
     const frontend::Type* expected_type) const {
   if (expected_type != nullptr
       && !vhdl_callable_type_matches(
-          *expected_type, function.return_type)) {
+          function.return_type, *expected_type)) {
     return false;
   }
   const auto actuals = bind_actual_shape(

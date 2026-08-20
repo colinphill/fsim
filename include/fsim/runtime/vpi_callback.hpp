@@ -202,6 +202,10 @@ public:
         fsim_vpi_handle_v1 object,
         SystemVerilogVpiAssertionEvent event);
     [[nodiscard]] std::size_t registrations() const;
+    /// Lock-free conservative activity bit for signal publication hot paths.
+    /// Once any registration succeeds it remains true for the manager's
+    /// lifetime, including after a one-shot callback fires or is removed.
+    [[nodiscard]] bool has_registrations() const noexcept;
 
     // Public only so translation-unit helpers can name the opaque state type.
     struct Impl;

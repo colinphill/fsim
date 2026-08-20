@@ -1177,7 +1177,6 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-PARSE-058` | error | Expected `)` after instance parameter overrides. |
 | `FSIM-SV-PARSE-059` | error | Expected `(` after a generate `if`. |
 | `FSIM-SV-PARSE-060` | error | Expected `)` after a generate condition. |
-| `FSIM-SV-PARSE-061` | error | A conditional-generate branch is not a labeled `begin`/`end` block. |
 | `FSIM-SV-PARSE-063` | error | A generate branch lacks `end` or has a mismatched end label. |
 | `FSIM-SV-PARSE-064` | error | Expected `endgenerate`. |
 | `FSIM-SV-PARSE-065` | error | Expected `(` after a generate `for`. |
@@ -1579,7 +1578,6 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
 | `FSIM-SV-UNSUPPORTED-005` | error | A named port connection was used where a module-header declaration is required. |
-| `FSIM-SV-UNSUPPORTED-007` | error | Unpacked arrays are not implemented. |
 | `FSIM-SV-UNSUPPORTED-008` | error | Unsupported identifier-starting procedural statement. |
 | `FSIM-SV-UNSUPPORTED-009` | error | Unsupported procedural statement. |
 | `FSIM-SV-UNSUPPORTED-010` | error | ANSI port default expressions are parsed but not executable. |

@@ -863,9 +863,8 @@ namespace {
 
 } // namespace
 
-SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
-    const BuiltProject& project,
-    const runtime::simir::Interpreter& interpreter)
+std::unique_ptr<runtime::SystemVerilogVpiObjectRegistry>
+make_empty_systemverilog_vpi_registry()
 {
     auto identity = next_vpi_simulation.fetch_add(
         1U, std::memory_order_relaxed);
@@ -873,12 +872,20 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         identity = next_vpi_simulation.fetch_add(
             1U, std::memory_order_relaxed);
     }
-    SystemVerilogVpiPublishedDesign result;
-    result.registry
+    auto registry
         = std::make_unique<runtime::SystemVerilogVpiObjectRegistry>(identity);
-    if (!result.registry->valid()) {
+    if (!registry->valid()) {
         throw std::overflow_error { "VPI simulation identity space exhausted" };
     }
+    return registry;
+}
+
+SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
+    const BuiltProject& project,
+    const runtime::simir::Interpreter& interpreter)
+{
+    SystemVerilogVpiPublishedDesign result;
+    result.registry = make_empty_systemverilog_vpi_registry();
 
     std::set<std::uint32_t> relevant_specializations;
     std::map<std::uint32_t, runtime::SystemVerilogVpiLanguage>
@@ -1707,8 +1714,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             = std::get_if<runtime::PackedLogic4>(&vpi_stored.payload);
         if (logic != nullptr && logic->width() == 1U) {
             strength = vpi_drive_strength(
-                project.design.processes()
-                    .at(process.runtime_index)
+                interpreter.process_program(process.runtime_index)
                     .drive_strength);
             vpi_stored.strength = strength;
         }

@@ -106,6 +106,7 @@ void test_wide_register_frame_at_level(
     jit.add_process(symbol, process, { });
     const auto handle = jit.lookup(symbol);
     const auto layout = jit.frame_layout(handle);
+    assert(layout.tracks_register_initialization);
     assert(layout.register_count == 2);
     assert(layout.register_word_count == 10);
     assert((layout.register_widths
@@ -134,6 +135,391 @@ void test_wide_register_frame_at_level(
     }
 }
 
+void test_wide_transient_register_frame_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol)
+{
+    auto value = PackedLogic4(257, Logic4::zero);
+    value.set(0, Logic4::one);
+    value.set(64, Logic4::x);
+    value.set(128, Logic4::z);
+    value.set(256, Logic4::one);
+
+    Process process;
+    process.id = 98;
+    process.name = "wide_transient_register_frame";
+    process.register_count = 2;
+    process.static_sensitivity.push_back({ 0U, EdgeKind::any });
+    process.operations = {
+        LoadConstant { 0, value },
+        CopyRegister { 1, 0 },
+        WriteUpdate { 0, 1 },
+        WaitSensitivity { },
+        Jump { 0 },
+    };
+    const std::array<std::uint32_t, 1> widths { 257 };
+
+    auto options = LlvmJitOptions { optimization, { } };
+    options.debug_instrumentation = false;
+    LlvmJit jit { std::move(options) };
+    assert(jit.supports_process(process, widths));
+    jit.add_process(symbol, process, widths);
+    const auto handle = jit.lookup(symbol);
+    const auto layout = jit.frame_layout(handle);
+    assert(layout.register_word_count == 10U);
+
+    std::vector<std::uint64_t> aval(
+        layout.register_word_count, 0xaaaaaaaaaaaaaaaaULL);
+    std::vector<std::uint64_t> bval(
+        layout.register_word_count, 0x5555555555555555ULL);
+    std::vector<std::uint8_t> initialized(layout.register_count);
+    fsim_jit_frame_v1 frame { };
+    jit.initialize_frame(handle, frame, aval, bval, initialized);
+    std::ranges::fill(aval, 0xaaaaaaaaaaaaaaaaULL);
+    std::ranges::fill(bval, 0x5555555555555555ULL);
+    const auto initial_aval = aval;
+    const auto initial_bval = bval;
+    TestRuntime runtime;
+    auto descriptor = abi(runtime);
+    descriptor.execute_signal_operation = nullptr;
+    auto result = new_resume_result();
+
+    for (std::size_t resume = 0; resume < 2; ++resume) {
+        assert(jit.resume(handle, descriptor, frame, result)
+            == JitResumeStatus::wait_sensitivity);
+        assert(result.instruction == 3U);
+        assert(frame.program_counter == 4U);
+        assert(std::ranges::equal(
+            value.aval_words(), runtime.wide_signal_aval[0]));
+        assert(std::ranges::equal(
+            value.bval_words(), runtime.wide_signal_bval[0]));
+        assert(aval == initial_aval);
+        assert(bval == initial_bval);
+    }
+}
+
+void test_optimized_frame_initialization_elision_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol)
+{
+    Process process;
+    process.id = 99;
+    process.name = "optimized_frame_initialization_elision";
+    process.register_count = 2;
+    process.operations = {
+        LoadConstant {
+            0, PackedLogic4::from_aval_bval(
+                   64, UINT64_C(0x0123456789abcdef), 0) },
+        CopyRegister { 1, 0 },
+        Pause { },
+        Stop { },
+    };
+
+    LlvmJitOptions options;
+    options.optimization = optimization;
+    options.debug_instrumentation = false;
+    LlvmJit jit { options };
+    jit.add_process(symbol, process, { });
+    const auto handle = jit.lookup(symbol);
+    const auto layout = jit.frame_layout(handle);
+    assert(!layout.tracks_register_initialization);
+
+    std::vector<std::uint64_t> aval(layout.register_word_count);
+    std::vector<std::uint64_t> bval(layout.register_word_count);
+    std::vector<std::uint8_t> initialized(layout.register_count);
+    fsim_jit_frame_v1 frame { };
+    jit.initialize_frame(handle, frame, aval, bval, initialized);
+    TestRuntime runtime;
+    auto descriptor = abi(runtime);
+    auto result = new_resume_result();
+    assert(jit.resume(handle, descriptor, frame, result)
+        == JitResumeStatus::paused);
+    assert(result.instruction == 2);
+    assert((initialized == std::vector<std::uint8_t> { 0, 0 }));
+    assert((aval == std::vector<std::uint64_t> {
+        UINT64_C(0x0123456789abcdef),
+        UINT64_C(0x0123456789abcdef) }));
+    assert((bval == std::vector<std::uint64_t> { 0, 0 }));
+}
+
+void test_wide_signal_read_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol)
+{
+    Process process;
+    process.id = 96;
+    process.name = "wide_signal_read";
+    process.register_count = 1;
+    process.operations = {
+        ReadSignal { 0, 0 },
+        Pause { },
+        Stop { },
+    };
+    const std::array<std::uint32_t, 1> widths { 257 };
+
+    LlvmJit jit { LlvmJitOptions { optimization, { } } };
+    assert(jit.supports_process(process, widths));
+    jit.add_process(symbol, process, widths);
+    const auto handle = jit.lookup(symbol);
+    const auto layout = jit.frame_layout(handle);
+    assert((layout.direct_read_signals
+        == std::vector<runtime::simir::SignalId> { 0 }));
+    std::vector<std::uint64_t> aval(layout.register_word_count);
+    std::vector<std::uint64_t> bval(layout.register_word_count);
+    std::vector<std::uint8_t> initialized(layout.register_count);
+    fsim_jit_frame_v1 frame { };
+    jit.initialize_frame(handle, frame, aval, bval, initialized);
+
+    const std::vector<std::uint64_t> expected_aval {
+        UINT64_C(0x0123456789abcdef),
+        UINT64_C(0xfedcba9876543210),
+        UINT64_C(0x1111222233334444),
+        UINT64_C(0xaaaabbbbccccdddd),
+        UINT64_C(1),
+    };
+    const std::vector<std::uint64_t> expected_bval {
+        0U, UINT64_C(0x8000000000000000), 0U, 1U, 0U,
+    };
+    TestRuntime runtime;
+    runtime.wide_signal_aval[0].assign(expected_aval.size(), 0U);
+    runtime.wide_signal_bval[0].assign(expected_bval.size(), 0U);
+    auto descriptor = abi(runtime);
+    descriptor.execute_signal_operation = nullptr;
+    const std::array<std::uint32_t, 1> direct_signals { 0 };
+    const std::array<std::uint32_t, 1> direct_offsets { 0 };
+    descriptor.direct_read_signals = direct_signals.data();
+    descriptor.direct_read_signal_count = 1;
+    descriptor.direct_wide_signal_aval = expected_aval.data();
+    descriptor.direct_wide_signal_bval = expected_bval.data();
+    descriptor.direct_wide_signal_offsets = direct_offsets.data();
+    descriptor.direct_wide_signal_offset_count = 1;
+    descriptor.direct_wide_word_count = 5;
+    auto result = new_resume_result();
+    assert(jit.resume(handle, descriptor, frame, result)
+        == JitResumeStatus::paused);
+    assert(initialized[0] == 1U);
+    assert(aval == expected_aval);
+    assert(bval == expected_bval);
+}
+
+void test_wide_signal_write_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol)
+{
+    auto whole = PackedLogic4(257, Logic4::zero);
+    whole.set(0, Logic4::one);
+    whole.set(128, Logic4::x);
+    whole.set(256, Logic4::one);
+    auto slice = PackedLogic4(129, Logic4::zero);
+    slice.set(0, Logic4::z);
+    slice.set(64, Logic4::one);
+    slice.set(128, Logic4::x);
+
+    Process process;
+    process.id = 97;
+    process.name = "wide_signal_write";
+    process.register_count = 2;
+    process.operations = {
+        LoadConstant { 0, whole },
+        LoadConstant { 1, slice },
+        WriteBlocking { 0, 0 },
+        WriteUpdate { 1, 0 },
+        WriteAfter { 2, 0, 11 },
+        WriteBlockingSlice { 3, 1, 64 },
+        WriteUpdateSlice { 4, 1, 64 },
+        WriteAfterSlice { 5, 1, 64, 13 },
+        Pause { },
+        Stop { },
+    };
+    const std::array<std::uint32_t, 6> widths {
+        257, 257, 257, 257, 257, 257
+    };
+
+    LlvmJit jit { LlvmJitOptions { optimization, { } } };
+    assert(jit.supports_process(process, widths));
+    jit.add_process(symbol, process, widths);
+    const auto handle = jit.lookup(symbol);
+    const auto layout = jit.frame_layout(handle);
+    std::vector<std::uint64_t> aval(layout.register_word_count);
+    std::vector<std::uint64_t> bval(layout.register_word_count);
+    std::vector<std::uint8_t> initialized(layout.register_count);
+    fsim_jit_frame_v1 frame { };
+    jit.initialize_frame(handle, frame, aval, bval, initialized);
+    TestRuntime runtime;
+    auto descriptor = abi(runtime);
+    descriptor.execute_signal_operation = nullptr;
+    auto result = new_resume_result();
+    assert(jit.resume(handle, descriptor, frame, result)
+        == JitResumeStatus::paused);
+    assert((runtime.packed_signal_write_modes
+        == std::vector<std::uint32_t> {
+            FSIM_JIT_PACKED_SIGNAL_WRITE_BLOCKING,
+            FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE,
+            FSIM_JIT_PACKED_SIGNAL_WRITE_AFTER,
+            FSIM_JIT_PACKED_SIGNAL_WRITE_BLOCKING_SLICE,
+            FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE_SLICE,
+            FSIM_JIT_PACKED_SIGNAL_WRITE_AFTER_SLICE,
+        }));
+    assert((runtime.packed_signal_write_signals
+        == std::vector<std::uint32_t> { 0, 1, 2, 3, 4, 5 }));
+    for (std::uint32_t signal = 0; signal < 3; ++signal) {
+        assert(std::ranges::equal(
+            whole.aval_words(), runtime.wide_signal_aval[signal]));
+        assert(std::ranges::equal(
+            whole.bval_words(), runtime.wide_signal_bval[signal]));
+    }
+    for (std::uint32_t signal = 3; signal < 6; ++signal) {
+        assert(std::ranges::equal(
+            slice.aval_words(), runtime.wide_signal_aval[signal]));
+        assert(std::ranges::equal(
+            slice.bval_words(), runtime.wide_signal_bval[signal]));
+    }
+    assert(runtime.packed_signal_write_offset == 64U);
+    assert(runtime.packed_signal_write_width == 129U);
+    assert(runtime.packed_signal_write_delay == 13U);
+}
+
+void test_wide_container_operations_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol)
+{
+    Process process;
+    process.id = 94;
+    process.name = "wide_container_operations";
+    process.register_count = 2;
+    process.container_register_count = 1;
+    ContainerType type;
+    type.fixed = true;
+    type.index_left = 0;
+    type.index_right = 0;
+    type.element_kind = ContainerElementKind::Packed;
+    type.element_width = 257;
+    process.container_register_types.push_back(type);
+    process.operations = {
+        LoadConstant {
+            0, PackedLogic4::from_aval_bval(32, 0U, 0U) },
+        ContainerRead { 1, 0, 0, true, false, false },
+        ContainerWrite { 0, 0, 1, true, false, false },
+        Pause { },
+        Stop { },
+    };
+
+    LlvmJit jit { LlvmJitOptions { optimization, { } } };
+    assert(jit.supports_process(process, { }));
+    jit.add_process(symbol, process, { });
+    const auto handle = jit.lookup(symbol);
+    const auto layout = jit.frame_layout(handle);
+    std::vector<std::uint64_t> aval(layout.register_word_count);
+    std::vector<std::uint64_t> bval(layout.register_word_count);
+    std::vector<std::uint8_t> initialized(layout.register_count);
+    fsim_jit_frame_v1 frame { };
+    jit.initialize_frame(handle, frame, aval, bval, initialized);
+
+    TestRuntime runtime;
+    runtime.container_read_aval = {
+        UINT64_C(0x0123456789abcdef),
+        UINT64_C(0xfedcba9876543210),
+        UINT64_C(0x1111222233334444),
+        UINT64_C(0xaaaabbbbccccdddd),
+        UINT64_C(1)
+    };
+    runtime.container_read_bval = {
+        0U, UINT64_C(0x8000000000000000), 0U, 1U, 0U
+    };
+    auto descriptor = abi(runtime);
+    auto result = new_resume_result();
+    assert(jit.resume(handle, descriptor, frame, result)
+        == JitResumeStatus::paused);
+    assert(runtime.container_packed_reads == 1U);
+    assert(runtime.container_packed_writes == 1U);
+    assert(runtime.container_write_aval == runtime.container_read_aval);
+    assert(runtime.container_write_bval == runtime.container_read_bval);
+}
+
+void test_fused_container_object_read_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol)
+{
+    Process process;
+    process.id = 108;
+    process.name = "fused_container_object_read";
+    process.register_count = 2;
+    process.container_register_count = 1;
+    ContainerType type;
+    type.fixed = true;
+    type.index_left = 0;
+    type.index_right = 0;
+    type.element_kind = ContainerElementKind::Packed;
+    type.element_width = 8;
+    process.container_register_types.push_back(type);
+    process.operations = {
+        LoadConstant {
+            0, PackedLogic4::from_aval_bval(32, 0U, 0U) },
+        ReadContainerObject { 0, 7 },
+        LoadConstant {
+            0, PackedLogic4::from_aval_bval(32, 0U, 0U) },
+        LoadConstant {
+            0, PackedLogic4::from_aval_bval(32, 0U, 0U) },
+        LoadConstant {
+            0, PackedLogic4::from_aval_bval(32, 0U, 0U) },
+        ContainerRead { 1, 0, 0, true, false, false },
+        WriteBlocking { 0, 1 },
+        Pause { },
+        Stop { },
+    };
+
+    LlvmJitOptions options;
+    options.optimization = optimization;
+    options.cache_directory.clear();
+    options.debug_instrumentation = false;
+    LlvmJit jit { options };
+    const std::array<std::uint32_t, 1> widths { 8 };
+    assert(jit.supports_process(process, widths));
+    jit.add_process(symbol, process, widths);
+    const auto handle = jit.lookup(symbol);
+    const auto layout = jit.frame_layout(handle);
+    std::vector<std::uint64_t> aval(layout.register_word_count);
+    std::vector<std::uint64_t> bval(layout.register_word_count);
+    std::vector<std::uint8_t> initialized(layout.register_count);
+    fsim_jit_frame_v1 frame { };
+    jit.initialize_frame(handle, frame, aval, bval, initialized);
+
+    TestRuntime runtime;
+    auto descriptor = abi(runtime);
+    descriptor.container_operation = [](
+        void* opaque, std::uint32_t, std::uint32_t,
+        std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t,
+        std::uint64_t*, std::uint64_t*) {
+        auto& observed = *static_cast<TestRuntime*>(opaque);
+        ++observed.container_packed_writes;
+        return std::uint32_t { 1U };
+    };
+    descriptor.container_read_word = [](
+        void* opaque, std::uint32_t, const std::uint32_t instruction,
+        std::uint32_t, const std::uint32_t flags,
+        std::uint64_t, std::uint64_t,
+        std::uint64_t* result_aval, std::uint64_t* result_bval) {
+        auto& observed = *static_cast<TestRuntime*>(opaque);
+        ++observed.container_packed_reads;
+        observed.container_write_aval[0] = instruction;
+        observed.container_write_aval[1] = flags;
+        *result_aval = UINT64_C(0x5a);
+        *result_bval = 0U;
+        return std::uint32_t { };
+    };
+    auto result = new_resume_result();
+    assert(jit.resume(handle, descriptor, frame, result)
+        == JitResumeStatus::paused);
+    assert(runtime.container_packed_writes == 0U);
+    assert(runtime.container_packed_reads == 1U);
+    assert(runtime.container_write_aval[0] == 5U);
+    assert((runtime.container_write_aval[1] >> 8U) == 4U);
+    assert((runtime.writes
+        == std::vector<std::pair<std::uint32_t, EncodedSignal>> {
+            { 0U, { UINT64_C(0x5a), 0U } }
+        }));
+}
+
 void test_wide_value_operations_at_level(
     const JitOptimizationLevel optimization,
     const std::string_view symbol)
@@ -150,11 +536,14 @@ void test_wide_value_operations_at_level(
     wide_part.set(0, Logic4::one);
     wide_part.set(64, Logic4::x);
     wide_part.set(128, Logic4::z);
+    auto unknown_addend = wide;
+    unknown_addend.set(64, Logic4::x);
+    auto all_ones = PackedLogic4(257, Logic4::one);
 
     Process process;
     process.id = 92;
     process.name = "wide_value_operations";
-    process.register_count = 50;
+    process.register_count = 57;
     process.operations = {
         LoadConstant { 0, wide },
         LoadConstant { 1, one },
@@ -210,6 +599,13 @@ void test_wide_value_operations_at_level(
         DynamicPartSelect {
             48, 47, 46, 256, 0, 129, true, true, false, 0 },
         ConvertToTwoState { 49, 45 },
+        LoadConstant { 50, unknown_addend },
+        Binary { BinaryOperator::add_unsigned, 51, 50, 1 },
+        Binary { BinaryOperator::add_signed, 52, 50, 1 },
+        LoadConstant { 53, all_ones },
+        Binary { BinaryOperator::add_unsigned, 54, 53, 1 },
+        Binary { BinaryOperator::add_signed, 55, 53, 1 },
+        Binary { BinaryOperator::add_unsigned, 56, 1, 1 },
         Pause { },
         Stop { },
     };
@@ -330,6 +726,248 @@ void test_wide_value_operations_at_level(
     auto expected_two_state = PackedLogic4(129, Logic4::zero);
     expected_two_state.set(0, Logic4::one);
     expect_wide(49, expected_two_state);
+    const auto all_unknown = PackedLogic4(257, Logic4::x);
+    expect_wide(51, all_unknown);
+    expect_wide(52, all_unknown);
+    const auto wrapped_zero = PackedLogic4(257, Logic4::zero);
+    expect_wide(54, wrapped_zero);
+    expect_wide(55, wrapped_zero);
+    auto expected_two = PackedLogic4(257, Logic4::zero);
+    expected_two.set(1, Logic4::one);
+    expect_wide(56, expected_two);
+}
+
+void test_constant_dynamic_part_select_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol)
+{
+    const auto rom = PackedLogic4::from_logic9_msb_string(
+        "01UXZWLH-10HLWZX");
+    Process process;
+    process.id = 108;
+    process.name = "constant_dynamic_part_select";
+    process.register_count = 3;
+    process.register_value_kinds = {
+        ValueKind::logic4, ValueKind::logic9, ValueKind::logic9
+    };
+    process.operations = {
+        LoadConstant {
+            0, PackedLogic4::from_aval_bval(32, 8, 0) },
+        LoadConstant { 1, rom },
+        DynamicPartSelect {
+            2, 1, 0, 15, 0, 8, true, true, false, 0 },
+        WriteBlocking { 0, 2 },
+        Halt { }
+    };
+    const std::array<std::uint32_t, 1> widths { 8 };
+    const std::array<ValueKind, 1> kinds { ValueKind::logic9 };
+    auto options = LlvmJitOptions { optimization, { } };
+    options.debug_instrumentation = false;
+    LlvmJit jit { options };
+    jit.add_process(symbol, process, widths, kinds);
+
+    TestRuntime runtime;
+    auto descriptor = abi(runtime);
+    assert(jit.execute(jit.lookup(symbol), descriptor)
+        == JitExecutionStatus::completed);
+    const auto expected = rom.extract_bits(8, 8).logic9_low_word().planes;
+    assert(runtime.logic9_signals[0] == expected);
+}
+
+void test_logic4_constant_dynamic_part_select_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol)
+{
+    const auto rom = PackedLogic4::from_aval_bval(
+        16, UINT64_C(0xa53c), UINT64_C(0x0082));
+    Process process;
+    process.id = 109;
+    process.name = "logic4_constant_dynamic_part_select";
+    process.register_count = 3;
+    process.register_value_kinds = {
+        ValueKind::logic4, ValueKind::logic4, ValueKind::logic4
+    };
+    process.operations = {
+        LoadConstant {
+            0, PackedLogic4::from_aval_bval(32, 8, 0) },
+        LoadConstant { 1, rom },
+        DynamicPartSelect {
+            2, 1, 0, 15, 0, 8, true, true, false, 0 },
+        WriteBlocking { 0, 2 },
+        Halt { }
+    };
+    const std::array<std::uint32_t, 1> widths { 8 };
+    const std::array<ValueKind, 1> kinds { ValueKind::logic4 };
+    auto options = LlvmJitOptions { optimization, { } };
+    options.debug_instrumentation = false;
+    LlvmJit jit { options };
+    jit.add_process(symbol, process, widths, kinds);
+
+    TestRuntime runtime;
+    auto descriptor = abi(runtime);
+    assert(jit.execute(jit.lookup(symbol), descriptor)
+        == JitExecutionStatus::completed);
+    const auto expected = rom.extract_bits(8, 8).low_word();
+    const auto encoded_expected
+        = EncodedSignal { expected.aval, expected.bval };
+    assert(runtime.signals[0] == encoded_expected);
+}
+
+void test_affine_dynamic_extract_fusion_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol)
+{
+    constexpr std::uint32_t result_width = 128U;
+    auto source = PackedLogic4(result_width * 2U, Logic4::zero);
+    for (std::uint32_t bit = 0U; bit < result_width; ++bit) {
+        if (bit % 5U == 1U || bit % 7U == 3U) {
+            source.set(result_width + bit, Logic4::one);
+        }
+    }
+    const auto expected = source.extract_bits(result_width, result_width);
+
+    Process process;
+    process.id = 110;
+    process.name = "affine_dynamic_extract_fusion";
+    constexpr RegisterId source_register = 0U;
+    constexpr RegisterId index_register = 1U;
+    constexpr RegisterId result_register = 2U;
+    constexpr RegisterId first_temporary = 3U;
+    process.register_count = first_temporary + 7U * result_width;
+    process.operations = {
+        LoadConstant { source_register, source },
+        LoadConstant {
+            index_register,
+            PackedLogic4::from_aval_bval(32U, 1U, 0U) },
+        LoadConstant {
+            result_register,
+            PackedLogic4(result_width, Logic4::zero) },
+    };
+    for (std::uint32_t element = 0U; element < result_width; ++element) {
+        const auto temporary = static_cast<RegisterId>(
+            first_temporary + 7U * element);
+        process.operations.emplace_back(LoadConstant {
+            temporary,
+            PackedLogic4::from_aval_bval(32U, 0U, 0U) });
+        process.operations.emplace_back(LoadConstant {
+            temporary + 1U,
+            PackedLogic4::from_aval_bval(32U, result_width, 0U) });
+        process.operations.emplace_back(IntegerBinary {
+            IntegerBinaryOperator::multiply,
+            temporary + 2U,
+            index_register,
+            temporary + 1U });
+        process.operations.emplace_back(IntegerBinary {
+            IntegerBinaryOperator::add,
+            temporary + 3U,
+            temporary,
+            temporary + 2U });
+        process.operations.emplace_back(LoadConstant {
+            temporary + 4U,
+            PackedLogic4::from_aval_bval(32U, element, 0U) });
+        process.operations.emplace_back(IntegerBinary {
+            IntegerBinaryOperator::add,
+            temporary + 5U,
+            temporary + 3U,
+            temporary + 4U });
+        process.operations.emplace_back(DynamicExtract {
+            temporary + 6U,
+            source_register,
+            DynamicIndex {
+                temporary + 5U,
+                static_cast<std::int64_t>(result_width - 1U),
+                0,
+                0 } });
+        process.operations.emplace_back(Insert {
+            result_register,
+            result_register,
+            temporary + 6U,
+            element });
+    }
+    process.operations.emplace_back(Pause { });
+    process.operations.emplace_back(Stop { });
+
+    auto options = LlvmJitOptions { optimization, { } };
+    options.debug_instrumentation = false;
+    LlvmJit jit { options };
+    assert(jit.supports_process(process, { }));
+    jit.add_process(symbol, process, { });
+    const auto handle = jit.lookup(symbol);
+    const auto layout = jit.frame_layout(handle);
+    std::vector<std::uint64_t> aval(layout.register_word_count);
+    std::vector<std::uint64_t> bval(layout.register_word_count);
+    std::vector<std::uint8_t> initialized(layout.register_count);
+    fsim_jit_frame_v1 frame { };
+    jit.initialize_frame(handle, frame, aval, bval, initialized);
+    TestRuntime runtime;
+    auto descriptor = abi(runtime);
+    auto result = new_resume_result();
+    assert(jit.resume(handle, descriptor, frame, result)
+        == JitResumeStatus::paused);
+
+    const auto offset = layout.register_word_offsets[result_register];
+    const auto words = (result_width + 63U) / 64U;
+    const auto actual = PackedLogic4::from_word_planes(
+        result_width,
+        std::span { aval }.subspan(offset, words),
+        std::span { bval }.subspan(offset, words));
+    assert(actual.to_msb_string() == expected.to_msb_string());
+}
+
+void test_fused_dynamic_part_signal_read_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol)
+{
+    Process process;
+    process.id = 109;
+    process.name = "fused_dynamic_part_signal_read";
+    process.register_count = 3;
+    process.register_value_kinds = {
+        ValueKind::logic4, ValueKind::logic9, ValueKind::logic9
+    };
+    process.operations = {
+        LoadConstant {
+            0, PackedLogic4::from_aval_bval(32, 64, 0) },
+        ReadSignal { 1, 0 },
+        DynamicPartSelect {
+            2, 1, 0, 127, 0, 8, true, true, false, 0 },
+        WriteBlocking { 1, 2 },
+        Halt { }
+    };
+    const std::array<std::uint32_t, 2> widths { 128, 8 };
+    const std::array<ValueKind, 2> kinds {
+        ValueKind::logic9, ValueKind::logic9
+    };
+    auto options = LlvmJitOptions { optimization, { } };
+    options.debug_instrumentation = false;
+    LlvmJit jit { options };
+    jit.add_process(symbol, process, widths, kinds);
+
+    TestRuntime runtime;
+    auto descriptor = abi(runtime);
+    const auto run = [&](const std::string_view text) {
+        const auto source = PackedLogic4::from_logic9_msb_string(text);
+        assert(source.width() == 128);
+        const auto assign_plane = [&](const std::size_t plane,
+                                      std::vector<std::uint64_t>& destination) {
+            const auto words = source.logic9_plane_words(plane);
+            destination.assign(words.begin(), words.end());
+        };
+        assign_plane(0, runtime.wide_signal_aval[0]);
+        assign_plane(1, runtime.wide_signal_bval[0]);
+        assign_plane(2, runtime.wide_signal_logic9_plane2[0]);
+        assign_plane(3, runtime.wide_signal_logic9_plane3[0]);
+        assert(jit.execute(jit.lookup(symbol), descriptor)
+            == JitExecutionStatus::completed);
+        assert(runtime.logic9_signals[1]
+            == source.extract_bits(64, 8).logic9_low_word().planes);
+    };
+    run("01UXZWLH-10HLWZX01UXZWLH-10HLWZX01UXZWLH-10HLWZX01UXZWLH-10HLWZX"
+        "01UXZWLH-10HLWZX01UXZWLH-10HLWZX01UXZWLH-10HLWZX01UXZWLH-10HLWZX");
+    run("HLWZX-1001UXZWLHHLWZX-1001UXZWLHHLWZX-1001UXZWLHHLWZX-1001UXZWLH"
+        "HLWZX-1001UXZWLHHLWZX-1001UXZWLHHLWZX-1001UXZWLHHLWZX-1001UXZWLH");
+    assert(runtime.dynamic_part_signal_reads == 2U);
+    assert(runtime.packed_signal_reads == 0U);
 }
 
 void test_scalar_truth_tables_and_64_bits() {
@@ -1345,11 +1983,9 @@ void test_dynamic_packed_indices_at_level(
           && runtime.projected_writes[2].offset == 4
           && runtime.projected_writes[2].width == 4);
 
-  const auto run_failure =
+  const auto run_invalid_read =
       [&](const std::string_view suffix,
-          PackedLogic4 index,
-          const JitGeneratedRuntimeErrorReason reason,
-          const std::string_view message) {
+          PackedLogic4 index) {
         Process failure;
         failure.id = 42;
         failure.name =
@@ -1361,35 +1997,28 @@ void test_dynamic_packed_indices_at_level(
             LoadConstant{1, std::move(index)},
             DynamicExtract{
                 2, 0, DynamicIndex{1, 3, 0, 0}},
+            WriteBlocking{0, 2},
             Halt{}};
         const auto failure_symbol =
             std::string{symbol} + "_" + std::string{suffix};
-        jit.add_process(failure_symbol, failure, {});
-        TestRuntime failed_runtime;
-        auto failed_descriptor = abi(failed_runtime);
-        expect_generated_runtime_error(
-            [&] {
-              (void)jit.execute(
-                  jit.lookup(failure_symbol),
-                  failed_descriptor);
-            },
-            2,
-            reason,
-            message);
+        const std::array<std::uint32_t, 1> one_bit_signal { 1 };
+        jit.add_process(failure_symbol, failure, one_bit_signal);
+        TestRuntime invalid_runtime;
+        invalid_runtime.signals[0] =
+            encode(PackedLogic4::from_msb_string("0"));
+        auto invalid_descriptor = abi(invalid_runtime);
+        assert(
+            jit.execute(
+                jit.lookup(failure_symbol), invalid_descriptor)
+            == JitExecutionStatus::completed);
+        assert(
+            invalid_runtime.signals[0]
+            == encode(PackedLogic4::from_msb_string("X")));
       };
-  run_failure(
-      "range",
-      integer(4),
-      JitGeneratedRuntimeErrorReason::dynamic_index_range,
-      "instruction 2: dynamic packed index is outside the declared range");
+  run_invalid_read("range", integer(4));
   auto unknown = integer(0);
   unknown.set(0, Logic4::x);
-  run_failure(
-      "unknown",
-      std::move(unknown),
-      JitGeneratedRuntimeErrorReason::dynamic_index_unknown,
-      "instruction 2: dynamic packed index contains an unknown or "
-      "high-impedance value");
+  run_invalid_read("unknown", std::move(unknown));
 
   Process logic9;
   logic9.id = 43;
@@ -1511,6 +2140,236 @@ void test_initialized_bval_slot(const JitOptimizationLevel optimization,
   assert(jit.execute(jit.lookup(symbol), descriptor) ==
          JitExecutionStatus::completed);
   assert((runtime.signals[1] == EncodedSignal{UINT64_C(0xa5), 0}));
+}
+
+void test_direct_signal_read_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol)
+{
+  LlvmJit jit { LlvmJitOptions { optimization, { } } };
+  Process process;
+  process.id = 106;
+  process.name = "direct_signal_read";
+  process.register_count = 1;
+  process.operations = {
+      ReadSignal { 0, 3 },
+      WriteBlocking { 0, 0 },
+      Halt { },
+  };
+  const std::array<std::uint32_t, 4> widths { 8, 8, 8, 8 };
+  jit.add_process(symbol, process, widths);
+  const auto handle = jit.lookup(symbol);
+  assert((jit.frame_layout(handle).direct_read_signals
+      == std::vector<runtime::simir::SignalId> { 3 }));
+
+  TestRuntime runtime;
+  runtime.signals[3] = { UINT64_C(0x11), UINT64_C(0) };
+  auto descriptor = abi(runtime);
+  const std::array<std::uint64_t, 8> aval {
+      0, 0, 0, 0, 0, 0, 0, UINT64_C(0xa5)
+  };
+  const std::array<std::uint64_t, 8> bval {
+      0, 0, 0, 0, 0, 0, 0, UINT64_C(0x80)
+  };
+  const std::array<std::uint32_t, 1> remap { 7 };
+  descriptor.direct_signal_aval = aval.data();
+  descriptor.direct_signal_bval = bval.data();
+  descriptor.direct_read_signals = remap.data();
+  descriptor.direct_read_signal_count = 1;
+  descriptor.direct_signal_count = 8;
+  assert(jit.execute(handle, descriptor) == JitExecutionStatus::completed);
+  assert((runtime.signals[0]
+      == EncodedSignal { UINT64_C(0xa5), UINT64_C(0x80) }));
+}
+
+void test_direct_update_accumulator_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol)
+{
+  Process process;
+  process.id = 104;
+  process.name = "direct_update_accumulator";
+  process.register_count = 5;
+  process.operations = {
+      LoadConstant { 0, PackedLogic4::from_aval_bval(8, 0xa5, 0) },
+      WriteUpdate { 0, 0 },
+      LoadConstant { 1, PackedLogic4::from_aval_bval(4, 0, 0) },
+      WriteUpdateSlice { 0, 1, 2 },
+      LoadConstant { 2, PackedLogic4::from_aval_bval(2, 3, 0) },
+      WriteUpdateSlice { 0, 2, 4 },
+      LoadConstant { 3, PackedLogic4::from_aval_bval(32, 7, 0) },
+      LoadConstant { 4, PackedLogic4::from_aval_bval(1, 0, 0) },
+      WriteUpdateDynamicSlice {
+          0, 4, DynamicIndex { 3, 7, 0, 0 } },
+      Halt { },
+  };
+  const std::array<std::uint32_t, 1> widths { 8 };
+  LlvmJitOptions options { optimization, { } };
+  options.require_direct_update_slots = true;
+  LlvmJit jit { options };
+  jit.add_process(symbol, process, widths);
+  const auto handle = jit.lookup(symbol);
+  assert((jit.frame_layout(handle).direct_update_signals
+      == std::vector<runtime::simir::SignalId> { 0 }));
+
+  TestRuntime runtime;
+  auto descriptor = abi(runtime);
+  fsim_jit_update_slot_v1 slot { };
+  std::array<std::uint64_t, 1> active_words { };
+  descriptor.direct_update_slots = &slot;
+  descriptor.direct_update_slot_count = 1;
+  descriptor.direct_update_active_words = active_words.data();
+  descriptor.direct_update_active_word_count = 1;
+  assert(jit.execute(handle, descriptor) == JitExecutionStatus::completed);
+  assert(runtime.writes.empty());
+  assert(slot.active == 1U);
+  assert(slot.mask == UINT64_C(0xff));
+  assert(slot.aval == UINT64_C(0x31));
+  assert(slot.bval == 0U);
+  assert(active_words[0] == UINT64_C(1));
+
+  Process stable_process;
+  stable_process.id = 106;
+  stable_process.name = "stable_direct_update";
+  stable_process.register_count = 1;
+  stable_process.operations = {
+      LoadConstant { 0, PackedLogic4::from_aval_bval(8, 0xa5, 0) },
+      WriteUpdate { 0, 0 },
+      Halt { },
+  };
+  const auto stable_symbol = std::string { symbol } + "_stable";
+  jit.add_process(stable_symbol, stable_process, widths);
+  const auto stable_handle = jit.lookup(stable_symbol);
+  slot = { };
+  slot.width = 8U;
+  slot.word_count = 1U;
+  slot.aval = UINT64_C(0xa5);
+  slot.reserved = 1U;
+  active_words[0] = 0U;
+  assert(jit.execute(stable_handle, descriptor)
+         == JitExecutionStatus::completed);
+  assert(slot.active == 0U);
+  assert(slot.mask == 0U);
+  assert(active_words[0] == 0U);
+
+  slot.aval = UINT64_C(0xa4);
+  assert(jit.execute(stable_handle, descriptor)
+         == JitExecutionStatus::completed);
+  assert(slot.active == 1U);
+  assert(slot.mask == UINT64_C(0xff));
+  assert(slot.aval == UINT64_C(0xa5));
+  assert(active_words[0] == UINT64_C(1));
+
+  Process wide_process;
+  wide_process.id = 105;
+  wide_process.name = "direct_wide_update_accumulator";
+  wide_process.register_count = 4;
+  auto whole = PackedLogic4(130, Logic4::zero);
+  whole.set(0, Logic4::one);
+  whole.set(64, Logic4::one);
+  whole.set(129, Logic4::one);
+  wide_process.operations = {
+      LoadConstant { 0, whole },
+      WriteUpdate { 0, 0 },
+      LoadConstant { 1, PackedLogic4::from_aval_bval(2, 3, 0) },
+      WriteUpdateSlice { 0, 1, 63 },
+      LoadConstant { 2, PackedLogic4::from_aval_bval(32, 64, 0) },
+      LoadConstant { 3, PackedLogic4::from_aval_bval(1, 0, 0) },
+      WriteUpdateDynamicSlice {
+          0, 3, DynamicIndex { 2, 129, 0, 0 } },
+      Halt { },
+  };
+  const std::array<std::uint32_t, 1> wide_widths { 130 };
+  const auto wide_symbol = std::string { symbol } + "_wide";
+  jit.add_process(wide_symbol, wide_process, wide_widths);
+  const auto wide_handle = jit.lookup(wide_symbol);
+  assert((jit.frame_layout(wide_handle).direct_update_signals
+      == std::vector<runtime::simir::SignalId> { 0 }));
+
+  TestRuntime wide_runtime;
+  auto wide_descriptor = abi(wide_runtime);
+  fsim_jit_update_slot_v1 wide_slot { };
+  std::array<std::uint64_t, 3> wide_aval { };
+  std::array<std::uint64_t, 3> wide_bval { };
+  std::array<std::uint64_t, 3> wide_mask { };
+  std::array<std::uint64_t, 1> wide_active_words { };
+  wide_slot.wide_aval = wide_aval.data();
+  wide_slot.wide_bval = wide_bval.data();
+  wide_slot.wide_mask = wide_mask.data();
+  wide_slot.word_count = 3;
+  wide_slot.width = 130;
+  wide_descriptor.direct_update_slots = &wide_slot;
+  wide_descriptor.direct_update_slot_count = 1;
+  wide_descriptor.direct_update_active_words = wide_active_words.data();
+  wide_descriptor.direct_update_active_word_count = 1;
+  wide_descriptor.execute_signal_operation
+      = [](void*, std::uint32_t, std::uint32_t, fsim_jit_frame_v1*) {
+          assert(false && "direct wide update used its exact callback");
+          return std::uint32_t { };
+        };
+  assert(jit.execute(wide_handle, wide_descriptor)
+      == JitExecutionStatus::completed);
+  assert(wide_runtime.writes.empty());
+  assert(wide_runtime.packed_signal_write_modes.empty());
+  assert(wide_slot.active == 1U);
+  assert((wide_mask == std::array<std::uint64_t, 3> {
+      std::numeric_limits<std::uint64_t>::max(),
+      std::numeric_limits<std::uint64_t>::max(),
+      UINT64_C(3) }));
+  assert((wide_aval == std::array<std::uint64_t, 3> {
+      UINT64_C(0x8000000000000001), UINT64_C(0), UINT64_C(2) }));
+  assert((wide_bval == std::array<std::uint64_t, 3> { 0, 0, 0 }));
+  assert(wide_active_words[0] == UINT64_C(1));
+
+}
+
+void test_static_trigger_regions_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol)
+{
+  Process process;
+  process.id = 107;
+  process.name = "static_trigger_regions";
+  process.register_count = 2;
+  process.static_sensitivity = {
+      { 0, EdgeKind::any }, { 1, EdgeKind::any }
+  };
+  process.static_trigger_regions = {
+      { 0, 2, UINT64_C(1) << 0U },
+      { 2, 4, UINT64_C(1) << 1U }
+  };
+  process.operations = {
+      LoadConstant { 0, PackedLogic4::from_aval_bval(8, 0x11, 0) },
+      WriteBlocking { 2, 0 },
+      LoadConstant { 1, PackedLogic4::from_aval_bval(8, 0x22, 0) },
+      WriteBlocking { 3, 1 },
+      Halt { }
+  };
+  const std::array<std::uint32_t, 4> widths { 1, 1, 8, 8 };
+  LlvmJitOptions options;
+  options.optimization = optimization;
+  options.cache_directory.clear();
+  options.debug_instrumentation = false;
+  LlvmJit jit { options };
+  jit.add_process(symbol, process, widths);
+  const auto handle = jit.lookup(symbol);
+
+  const auto run = [&](const std::uint64_t trigger_mask) {
+    TestRuntime runtime;
+    auto descriptor = abi(runtime);
+    descriptor.static_trigger_mask = trigger_mask;
+    assert(jit.execute(handle, descriptor) == JitExecutionStatus::completed);
+    std::vector<std::uint32_t> signals;
+    for (const auto& [signal, value] : runtime.writes) {
+      (void)value;
+      signals.push_back(signal);
+    }
+    return signals;
+  };
+  assert((run(UINT64_C(1) << 0U) == std::vector<std::uint32_t> { 2 }));
+  assert((run(UINT64_C(1) << 1U) == std::vector<std::uint32_t> { 3 }));
+  assert((run(Process::full_static_trigger_mask)
+      == std::vector<std::uint32_t> { 2, 3 }));
 }
 
 } // namespace fsim::tests::compiler

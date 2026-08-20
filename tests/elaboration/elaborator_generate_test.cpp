@@ -200,6 +200,93 @@ module generated_sv_wide_constant;
     end
   endgenerate
 endmodule
+
+module generated_sv_wide_function_constant;
+  function automatic logic [95:0] build_table(input int index);
+    build_table = 96'h123456789abcdef012345678 + index;
+  endfunction
+  generate
+    for (genvar lane = 0; lane < 2; lane++) begin : each
+      localparam logic [95:0] TABLE = build_table(lane);
+      logic [7:0] observed;
+      assign observed = TABLE[lane * 8 +: 8];
+    end
+  endgenerate
+endmodule
+
+module generated_sv_zero_replication;
+  function automatic logic [1:0] alpha;
+    alpha = {{0{1'b0}}, 2'b10};
+  endfunction
+  if (alpha() == 2'b10) begin : selected
+    logic observed;
+    assign observed = 1'b1;
+  end
+endmodule
+
+module generated_sv_inactive_constant_function;
+  function automatic logic [4095:0] build_table(input int seed);
+    integer index;
+    begin
+      build_table = '0;
+      for (index = 0; index < 512; index++)
+        build_table[index * 8 +: 8] = seed + index;
+    end
+  endfunction
+  generate
+    if (0) begin : inactive
+      generated_sv_internal_leaf #(.VALUE(build_table(1))) child();
+    end else begin : selected
+      generated_sv_internal_leaf #(.VALUE(7)) child();
+    end
+  endgenerate
+endmodule
+
+module generated_sv_local_function_after_genvar #(
+  parameter int BIAS = 3
+) (
+  output logic [15:0] observed
+);
+  generate
+    for (genvar lane = 0; lane < 2; lane++) begin : each
+      function automatic logic [7:0] build_value(input int seed);
+        build_value = BIAS + seed;
+      endfunction
+      assign observed[lane * 8 +: 8] = build_value(lane);
+    end
+  endgenerate
+endmodule
+
+module generated_sv_full_slice_bank(
+  output logic [7:0] observed
+);
+  generate
+    for (genvar lane = 0; lane < 8; lane++) begin : each
+      assign observed[lane] = lane < 4;
+    end
+  endgenerate
+endmodule
+
+module generated_sv_partial_slice_bank(
+  output logic [8:0] observed
+);
+  generate
+    for (genvar lane = 0; lane < 8; lane++) begin : each
+      assign observed[lane] = lane < 4;
+    end
+  endgenerate
+endmodule
+
+module generated_sv_wide_slice_bank(
+  output logic [1023:0] observed
+);
+  generate
+    for (genvar lane = 0; lane < 128; lane++) begin : each
+      assign observed[lane * 8 +: 8] = lane;
+    end
+  endgenerate
+endmodule
+
 )",
         fsim::frontend::Language::SystemVerilog2017);
     std::string generated_vhdl_source = R"(
@@ -1744,6 +1831,158 @@ end architecture;
         [](const auto& diagnostic) {
           return diagnostic.code == "FSIM-ELAB-GEN-012";
         }));
+
+    const auto generated_sv_wide_function_constant =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "sv:work.generated_sv_wide_function_constant");
+    assert(generated_sv_wide_function_constant.ok());
+
+    const auto generated_sv_zero_replication =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "sv:work.generated_sv_zero_replication");
+    assert(generated_sv_zero_replication.ok());
+
+    const auto generated_sv_inactive_constant_function =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "sv:work.generated_sv_inactive_constant_function");
+    assert(generated_sv_inactive_constant_function.ok());
+    assert(
+        generated_sv_inactive_constant_function.design
+            ->specializations()[1]
+            .instance
+        == "generated_sv_inactive_constant_function.selected.child");
+
+    const auto generated_sv_local_function_after_genvar =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "sv:work.generated_sv_local_function_after_genvar");
+    assert(generated_sv_local_function_after_genvar.ok());
+    assert(std::ranges::none_of(
+        generated_sv_local_function_after_genvar.design->processes(),
+        [](const auto& process) {
+          return std::ranges::any_of(
+              process.operations,
+              [](const auto& operation) {
+                return fsim::runtime::simir::operation_holds<
+                    fsim::runtime::simir::Call>(operation);
+              });
+        }));
+    const auto generated_function_observed =
+        generated_sv_local_function_after_genvar.design->find_signal(
+            "observed");
+    assert(generated_function_observed);
+    auto generated_function_interpreter =
+        generated_sv_local_function_after_genvar.design
+            ->create_interpreter();
+    assert(
+        generated_function_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        generated_function_interpreter
+            ->signal_value(*generated_function_observed)
+            .to_msb_string()
+        == "0000010000000011");
+
+    const auto generated_sv_full_slice_bank =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "sv:work.generated_sv_full_slice_bank");
+    assert(generated_sv_full_slice_bank.ok());
+    const auto full_slice_process = std::ranges::find_if(
+        generated_sv_full_slice_bank.design->processes(),
+        [](const auto& process) {
+            return process.name.find(".continuous_fused_")
+                != std::string::npos;
+        });
+    assert(
+        full_slice_process
+        != generated_sv_full_slice_bank.design->processes().end());
+    assert(
+        std::ranges::count_if(
+            full_slice_process->operations,
+            [](const auto& operation) {
+                return fsim::runtime::simir::operation_holds<
+                    fsim::runtime::simir::WriteUpdate>(operation);
+            })
+        == 1);
+    assert(std::ranges::none_of(
+        full_slice_process->operations,
+        [](const auto& operation) {
+            return fsim::runtime::simir::operation_holds<
+                fsim::runtime::simir::WriteUpdateSlice>(operation);
+        }));
+    const auto full_slice_observed =
+        generated_sv_full_slice_bank.design->find_signal("observed");
+    assert(full_slice_observed);
+    auto full_slice_interpreter =
+        generated_sv_full_slice_bank.design->create_interpreter();
+    assert(
+        full_slice_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        full_slice_interpreter->signal_value(*full_slice_observed)
+            .to_msb_string()
+        == "00001111");
+
+    const auto generated_sv_partial_slice_bank =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "sv:work.generated_sv_partial_slice_bank");
+    assert(generated_sv_partial_slice_bank.ok());
+    const auto partial_slice_process = std::ranges::find_if(
+        generated_sv_partial_slice_bank.design->processes(),
+        [](const auto& process) {
+            return process.name.find(".continuous_fused_")
+                != std::string::npos;
+        });
+    assert(
+        partial_slice_process
+        != generated_sv_partial_slice_bank.design->processes().end());
+    assert(
+        std::ranges::count_if(
+            partial_slice_process->operations,
+            [](const auto& operation) {
+                return fsim::runtime::simir::operation_holds<
+                    fsim::runtime::simir::WriteUpdateSlice>(operation);
+            })
+        == 8);
+
+    const auto generated_sv_wide_slice_bank =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "sv:work.generated_sv_wide_slice_bank");
+    assert(generated_sv_wide_slice_bank.ok());
+    const auto wide_slice_process = std::ranges::find_if(
+        generated_sv_wide_slice_bank.design->processes(),
+        [](const auto& process) {
+            return process.name.find(".continuous_fused_")
+                != std::string::npos;
+        });
+    assert(
+        wide_slice_process
+        != generated_sv_wide_slice_bank.design->processes().end());
+    assert(
+        std::ranges::count_if(
+            wide_slice_process->operations,
+            [](const auto& operation) {
+                return fsim::runtime::simir::operation_holds<
+                    fsim::runtime::simir::WriteUpdateSlice>(operation);
+            })
+        == 128);
+    assert(std::ranges::none_of(
+        wide_slice_process->operations,
+        [](const auto& operation) {
+            return fsim::runtime::simir::operation_holds<
+                fsim::runtime::simir::Insert>(operation);
+        }));
+    auto wide_slice_interpreter =
+        generated_sv_wide_slice_bank.design->create_interpreter();
+    assert(
+        wide_slice_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
 
     const auto generated_vhdl_bad_constant =
         fsim::elaboration::elaborate(

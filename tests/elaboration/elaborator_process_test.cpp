@@ -683,6 +683,96 @@ endmodule
     assert(has_diagnostic(
         rejected_process_drivers, "FSIM-ELAB-DRV-001"));
 
+    const auto initialized_event_driver =
+        fsim::frontend::parse_text(
+            "initialized_event_driver.sv",
+            R"(
+module initialized_event_driver;
+  logic clock = 1'b0;
+  logic ready;
+  initial begin
+    ready = 1'b1;
+    #3 $finish;
+  end
+  always #1 clock = ~clock;
+  always @(posedge clock) ready <= ~ready;
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(initialized_event_driver.ok());
+    const auto accepted_initialized_event_driver =
+        fsim::elaboration::elaborate(
+            initialized_event_driver.design,
+            "initialized_event_driver");
+    assert(accepted_initialized_event_driver.ok());
+    auto initialized_event_interpreter =
+        accepted_initialized_event_driver.design->create_interpreter();
+    const auto initialized_event_result =
+        initialized_event_interpreter->run();
+    assert(
+        initialized_event_result.status
+            == fsim::runtime::RunStatus::stopped
+        && initialized_event_result.time == 3);
+
+    const auto legacy_integral_process_drivers =
+        fsim::frontend::parse_text(
+            "legacy_integral_process_drivers.sv",
+            R"(
+module legacy_integral_process_drivers;
+  reg clock;
+  integer cycles;
+  initial begin
+    clock = 1'b0;
+    cycles = 0;
+    #3 $finish;
+  end
+  always #1 clock = ~clock;
+  always @(posedge clock) cycles <= cycles + 1;
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(legacy_integral_process_drivers.ok());
+    const auto accepted_legacy_integral_process_drivers =
+        fsim::elaboration::elaborate(
+            legacy_integral_process_drivers.design,
+            "legacy_integral_process_drivers");
+    assert(accepted_legacy_integral_process_drivers.ok());
+    auto legacy_integral_interpreter =
+        accepted_legacy_integral_process_drivers.design
+            ->create_interpreter();
+    const auto legacy_integral_result =
+        legacy_integral_interpreter->run();
+    assert(
+        legacy_integral_result.status
+            == fsim::runtime::RunStatus::stopped
+        && legacy_integral_result.time == 3);
+
+    const auto declaration_initializer_driver =
+        fsim::frontend::parse_text(
+            "declaration_initializer_driver.sv",
+            R"(
+module declaration_initializer_driver;
+  logic clock = 1'b0;
+  always #1 clock = ~clock;
+  initial #3 $finish;
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(declaration_initializer_driver.ok());
+    const auto accepted_declaration_initializer_driver =
+        fsim::elaboration::elaborate(
+            declaration_initializer_driver.design,
+            "declaration_initializer_driver");
+    assert(accepted_declaration_initializer_driver.ok());
+    auto declaration_initializer_interpreter =
+        accepted_declaration_initializer_driver.design->create_interpreter();
+    const auto declaration_initializer_result =
+        declaration_initializer_interpreter->run();
+    assert(
+        declaration_initializer_result.status
+            == fsim::runtime::RunStatus::stopped
+        && declaration_initializer_result.time == 3);
+
     const auto selected_process_drivers =
         fsim::frontend::parse_text(
             "selected_process_drivers.sv",
@@ -703,6 +793,24 @@ endmodule
     assert(has_diagnostic(
         rejected_selected_process_drivers,
         "FSIM-ELAB-DRV-001"));
+
+    const auto selected_continuous_drivers =
+        fsim::frontend::parse_text(
+            "selected_continuous_drivers.sv",
+            R"(
+module selected_continuous_drivers;
+  logic [3:0] q;
+  assign q[0] = 1'b0;
+  assign q[3:2] = 2'b11;
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(selected_continuous_drivers.ok());
+    const auto accepted_selected_continuous_drivers =
+        fsim::elaboration::elaborate(
+            selected_continuous_drivers.design,
+            "selected_continuous_drivers");
+    assert(accepted_selected_continuous_drivers.ok());
 
     const auto native_wire_drivers = fsim::frontend::parse_text(
         "native_wire_drivers.sv",

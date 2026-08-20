@@ -487,6 +487,8 @@ struct ElaboratedDesignState {
     std::vector<runtime::simir::StringObject> string_objects;
     std::vector<ContainerObjectInfo> container_object_info;
     std::vector<runtime::simir::ContainerObject> container_objects;
+    std::vector<runtime::simir::ContainerSignalAlias>
+        container_signal_aliases;
     std::vector<VhdlProtectedObjectInfo> vhdl_protected_object_info;
     std::vector<runtime::simir::Process> processes;
     std::vector<SpecializationInfo> specializations;
@@ -551,7 +553,13 @@ public:
 
     [[nodiscard]] std::unique_ptr<runtime::simir::Interpreter> create_interpreter(
         runtime::SchedulerOptions options = { },
-        std::uint64_t seed = 1) const;
+        std::uint64_t seed = 1) const &;
+    /// Consume the immutable SimIR process programs when the elaborated design
+    /// is no longer needed as their owner. Other design metadata remains
+    /// available for runtime services and native-executor setup.
+    [[nodiscard]] std::unique_ptr<runtime::simir::Interpreter> create_interpreter(
+        runtime::SchedulerOptions options = { },
+        std::uint64_t seed = 1) &&;
 
     [[nodiscard]] ElaboratedDesignState state() const;
     [[nodiscard]] static std::optional<ElaboratedDesign> from_state(
@@ -560,6 +568,11 @@ public:
 private:
     friend struct ElaborationResult;
     friend class Lowerer;
+
+    void populate_interpreter(
+        runtime::simir::Interpreter* interpreter,
+        bool validation_only,
+        std::vector<runtime::simir::Process>* consumed_processes = nullptr) const;
     friend class HierarchyBuilder;
     friend ElaborationResult elaborate(
         const frontend::ParsedDesign&, std::string_view);

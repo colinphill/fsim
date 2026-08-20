@@ -65,8 +65,7 @@ Capture execute(
     capture.signals[index] =
         simulation.read_signal(signals[index]).to_msb_string();
   }
-  const auto& locals =
-      simulation.design().processes().front().debug_locals;
+  const auto& locals = simulation.process_program(0U).debug_locals;
   // The untaken branch has a stable metadata object but its automatic local
   // never enters scope, so it intentionally has no readable runtime value.
   assert(locals.size() == 7);

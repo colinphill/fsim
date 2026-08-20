@@ -196,16 +196,33 @@ std::optional<LoweredLiteral> literal_value(
                         : runtime::collapse_to_logic4(nine_state),
                     domain};
             }
-            auto value = PackedLogic4::from_msb_string(text);
-            auto domain = frontend::ValueDomain::Bit2;
-            for (std::size_t bit = 0; bit < value.width(); ++bit) {
-                if (value.get(bit) != Logic4::zero
-                    && value.get(bit) != Logic4::one) {
-                    domain = frontend::ValueDomain::Logic4;
-                    break;
+            if (!expression.decoded_string) {
+                return std::nullopt;
+            }
+            auto value = PackedLogic4(
+                expected_width, Logic4::zero);
+            const auto& bytes = *expression.decoded_string;
+            const auto byte_count = std::min(
+                bytes.size(), (expected_width + 7U) / 8U);
+            for (std::size_t byte_index = 0;
+                 byte_index < byte_count;
+                 ++byte_index) {
+                const auto byte = static_cast<unsigned char>(
+                    bytes[bytes.size() - 1U - byte_index]);
+                for (std::size_t bit = 0; bit < 8U; ++bit) {
+                    const auto destination = byte_index * 8U + bit;
+                    if (destination >= expected_width) {
+                        break;
+                    }
+                    value.set(
+                        destination,
+                        (byte & (1U << bit)) != 0U
+                            ? Logic4::one
+                            : Logic4::zero);
                 }
             }
-            return LoweredLiteral{std::move(value), domain};
+            return LoweredLiteral{
+                std::move(value), frontend::ValueDomain::Bit2};
         } catch (const std::invalid_argument&) {
             return std::nullopt;
         }

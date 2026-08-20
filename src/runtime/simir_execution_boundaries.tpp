@@ -99,10 +99,18 @@ void Interpreter::Impl::handle_boundary(
         return;
     }
     if (frame_push) {
+        if (jit_skip_callable_frames) {
+            ++process.pc;
+            return;
+        }
         push_callable_frame(process, *frame_push);
         return;
     }
     if (frame_pop) {
+        if (jit_skip_callable_frames) {
+            ++process.pc;
+            return;
+        }
         pop_callable_frame(process, *frame_pop);
         return;
     }
@@ -641,6 +649,7 @@ void Interpreter::Impl::handle_boundary(
             fail(process, "WaitSensitivity requires a static sensitivity list");
         }
         process.waiting_on_static = true;
+        process.static_trigger_mask = 0U;
         process.status = ProcessStatus::waiting;
         notify_execution_point(
             process, instruction, ExecutionPointKind::process_suspend,

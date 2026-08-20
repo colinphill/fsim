@@ -524,6 +524,7 @@ void Interpreter::Impl::spawn_fork(
             child.fork_group = group_id;
         }
         processes.push_back(std::move(child));
+        register_static_sensitivity_cohort(child_id);
         children.insert(child_id);
     }
 
@@ -543,10 +544,19 @@ void Interpreter::Impl::spawn_fork(
     }
 
     for (const auto child : children) {
-        for (const auto sensitivity :
-            get_process(child).program.static_sensitivity) {
+        const auto& child_program = get_process(child).program;
+        for (std::size_t sensitivity_index = 0;
+             sensitivity_index < child_program.static_sensitivity.size();
+             ++sensitivity_index) {
+            const auto sensitivity
+                = child_program.static_sensitivity[sensitivity_index];
+            const auto trigger_mask
+                = sensitivity_index < 63U
+                    && !child_program.static_trigger_regions.empty()
+                ? UINT64_C(1) << sensitivity_index
+                : Process::full_static_trigger_mask;
             static_fanout[sensitivity.signal].push_back(
-                { child, sensitivity.edge });
+                { child, sensitivity.edge, trigger_mask });
         }
         queue_active_current(child);
     }

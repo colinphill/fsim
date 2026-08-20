@@ -3826,6 +3826,11 @@ if(TARGET fsim_application)
       0 expressions app/expression_application_test.cpp
       fsim.application.expressions fast expressions)
     fsim_add_application_case(
+      0 structural_signal_remap
+      app/structural_signal_remap_application_test.cpp
+      fsim.application.structural_signal_remap
+      fast llvm systemverilog hierarchy)
+    fsim_add_application_case(
       0 sv_hierarchy app/sv_hierarchy_application_test.cpp
       fsim.application.sv_hierarchy fast systemverilog hierarchy)
     fsim_add_application_case(

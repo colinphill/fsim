@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_internal.hpp"
 
+
 namespace fsim::elaboration::elaboration_detail {
 
 const frontend::GenerateAlternative* select_generate_alternative(
@@ -167,6 +168,42 @@ void substitute_parameters(
     const ConstantDomainEnvironment& domains,
     std::vector<Diagnostic>& diagnostics,
     const frontend::Language language) {
+    const auto substitute_assignment_target =
+        [&](const auto& self, Expression& target) -> void {
+          if (target.kind == ExpressionKind::Identifier) {
+            return;
+          }
+          if ((target.kind == ExpressionKind::Index
+               || target.kind == ExpressionKind::Slice)
+              && !target.operands.empty()) {
+            self(self, target.operands.front());
+            for (std::size_t index = 1;
+                 index < target.operands.size(); ++index) {
+              substitute_parameters(
+                  target.operands[index], environment, domains, language);
+            }
+            return;
+          }
+          if (target.kind == ExpressionKind::Concatenation) {
+            for (auto& operand : target.operands) {
+              self(self, operand);
+            }
+            return;
+          }
+          if (target.kind == ExpressionKind::Call
+              && !target.operands.empty()
+              && (target.text == "@vhdl-dereference"
+                  || target.text.starts_with("@vhdl-member:"))) {
+            self(self, target.operands.front());
+            for (std::size_t index = 1;
+                 index < target.operands.size(); ++index) {
+              substitute_parameters(
+                  target.operands[index], environment, domains, language);
+            }
+            return;
+          }
+          substitute_parameters(target, environment, domains, language);
+        };
     for (auto& statement : statements) {
         if (statement.delay) {
             substitute_delay_parameters(
@@ -176,8 +213,8 @@ void substitute_parameters(
                 diagnostics,
                 language);
         }
-        substitute_parameters(
-            statement.target, environment, domains, language);
+        substitute_assignment_target(
+            substitute_assignment_target, statement.target);
         substitute_parameters(
             statement.value, environment, domains, language);
         for (auto& element : statement.vhdl_waveform) {
@@ -846,6 +883,13 @@ void qualify_generated_statement(
     }
     qualify_generated_expression(statement.target, body_names);
     qualify_generated_expression(statement.value, body_names);
+    qualify_generated_expression(statement.loop_initial, body_names);
+    qualify_generated_expression(statement.loop_limit, body_names);
+    qualify_generated_expression(
+        statement.loop_update_target, body_names);
+    for (auto& update : statement.loop_updates) {
+        qualify_generated_statement(update, body_names);
+    }
     for (auto& element : statement.vhdl_waveform) {
         qualify_generated_expression(element.value, body_names);
     }
@@ -1039,7 +1083,78 @@ void evaluate_generated_constants(
     ConstantEnvironment& environment,
     ConstantDomainEnvironment& domains,
     const frontend::Language language,
+    const std::vector<frontend::FunctionDeclaration>& functions,
     std::vector<Diagnostic>& diagnostics) {
+    if (language == frontend::Language::Vhdl2008) {
+        for (auto& alias : body.type_aliases) {
+            substitute_parameters(
+                alias.type,
+                environment,
+                domains,
+                diagnostics,
+                language);
+        }
+        const auto simple_name = [](const std::string_view name) {
+            const auto separator = name.find_last_of('.');
+            return name.substr(
+                separator == std::string_view::npos
+                    ? 0U : separator + 1U);
+        };
+        const auto resolve_type =
+            [&](auto&& self, frontend::Type& type) -> void {
+              const auto reference = type.named_type.empty()
+                  ? std::string_view{type.spelling}
+                  : std::string_view{type.named_type};
+              const auto alias = std::ranges::find_if(
+                  body.type_aliases,
+                  [&](const auto& candidate) {
+                    return simple_name(candidate.name)
+                        == simple_name(reference);
+                  });
+              if (alias != body.type_aliases.end()
+                  && (!type.vhdl_array
+                      || type.width().value_or(0U) == 0U)
+                  && type.packed_members.empty()) {
+                  type = alias->type;
+              }
+              if (type.vhdl_array) {
+                  for (auto& element :
+                       type.vhdl_array->element_types) {
+                      self(self, element);
+                  }
+              }
+              for (auto& member : type.packed_members) {
+                  for (auto& nested : member.nested_types) {
+                      self(self, nested);
+                  }
+              }
+            };
+        const auto resolve_function =
+            [&](auto&& self,
+                frontend::FunctionDeclaration& function) -> void {
+              resolve_type(resolve_type, function.return_type);
+              for (auto& argument : function.arguments) {
+                  resolve_type(resolve_type, argument.type);
+              }
+              for (auto& variable : function.variables) {
+                  resolve_type(resolve_type, variable.type);
+              }
+              for (auto& constant : function.constants) {
+                  resolve_type(resolve_type, constant.type);
+              }
+              for (auto& nested : function.functions) {
+                  self(self, nested);
+              }
+            };
+        for (auto& function : body.functions) {
+            resolve_function(resolve_function, function);
+        }
+    }
+    auto available_functions = functions;
+    available_functions.insert(
+        available_functions.end(),
+        body.functions.begin(),
+        body.functions.end());
     for (auto& constant : body.constants) {
         substitute_parameters(
             constant.type,
@@ -1053,8 +1168,72 @@ void evaluate_generated_constants(
             domains,
             language);
         std::string error;
-        auto value = evaluate_constant_expression(
-            constant.default_value, environment, error);
+        const bool vhdl_composite =
+            language == frontend::Language::Vhdl2008
+            && (constant.type.vhdl_array
+                || !constant.type.packed_members.empty()
+                || (constant.type.packed_range
+                    && constant.type.domain
+                        != frontend::ValueDomain::Integer));
+        std::optional<SystemVerilogConstantValue> function_value;
+        std::string function_error;
+        if (language == frontend::Language::Vhdl2008) {
+            function_value =
+                evaluate_systemverilog_constant_function_expression(
+                    constant.default_value,
+                    { },
+                    environment,
+                    available_functions,
+                    function_error);
+        }
+        if (vhdl_composite && function_value) {
+            auto nominal_type = constant.type.nominal_type;
+            const auto constant_name = constant.type.named_type.empty()
+                ? std::string_view{constant.type.spelling}
+                : std::string_view{constant.type.named_type};
+            const auto separator = constant_name.find_last_of('.');
+            const auto constant_simple = constant_name.substr(
+                separator == std::string_view::npos
+                    ? 0U : separator + 1U);
+            if (const auto alias = std::ranges::find_if(
+                    body.type_aliases,
+                    [&](const auto& candidate) {
+                      const auto candidate_separator =
+                          candidate.name.find_last_of('.');
+                      return std::string_view{candidate.name}.substr(
+                          candidate_separator == std::string::npos
+                              ? 0U : candidate_separator + 1U)
+                          == constant_simple;
+                    });
+                alias != body.type_aliases.end()
+                && !alias->type.nominal_type.empty()) {
+                nominal_type = alias->type.nominal_type;
+            }
+            auto info = ConstantTypeInfo{
+                constant.type.domain,
+                false,
+                std::move(nominal_type)};
+            auto composite_value = function_value->expression(
+                constant.default_value.span);
+            composite_value.call_result_width =
+                constant.type.width().value_or(0U);
+            composite_value.call_result_domain =
+                constant.type.domain;
+            composite_value.call_result_signed =
+                constant.type.is_signed;
+            info.vhdl_composite_value =
+                std::move(composite_value);
+            domains.insert_or_assign(
+                constant.name, std::move(info));
+            continue;
+        }
+        auto value = function_value
+            ? function_value->integer_value()
+            : evaluate_constant_expression(
+                constant.default_value, environment, error);
+        if (!value && !function_error.empty()) {
+            error = std::move(function_error);
+        }
         if (!value) {
             diagnostics.push_back({
                 "FSIM-ELAB-GEN-011",
@@ -1127,13 +1306,41 @@ void append_generated_body(
     const VhdlBlockInterfacePreparer* block_preparer) {
     auto body_environment = environment;
     auto body_domains = domains;
-    evaluate_generated_constants(
-        body,
-        body_environment,
-        body_domains,
-        language,
-        diagnostics);
-    body.constants.clear();
+    if (language == frontend::Language::SystemVerilog2017
+        || language == frontend::Language::Verilog2005) {
+        prepare_systemverilog_generate_body(
+            body,
+            body_environment,
+            body_domains,
+            unit.functions,
+            diagnostics);
+    } else {
+        evaluate_generated_constants(
+            body,
+            body_environment,
+            body_domains,
+            language,
+            unit.functions,
+            diagnostics);
+        body.constants.clear();
+    }
+    if (language == frontend::Language::Vhdl2008) {
+        const auto scope_suffix = "@" + std::string{scope};
+        for (const auto& alias : body.type_aliases) {
+            if (alias.declaration_kind
+                    == frontend::TypeDeclarationKind::VhdlSubtype
+                || alias.type.nominal_type.empty()) {
+                continue;
+            }
+            for (auto& [name, info] : body_domains) {
+                (void)name;
+                if (info.nominal_type
+                    == alias.type.nominal_type) {
+                    info.nominal_type += scope_suffix;
+                }
+            }
+        }
+    }
     substitute_parameters(
         body,
         body_environment,

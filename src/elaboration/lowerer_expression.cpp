@@ -480,7 +480,18 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
         frontend::Type builtin;
         if (cast_type == nullptr) {
             builtin.spelling = std::string { type_name };
-            if (type_name == "bit") {
+            if (expression.call_result_width != 0U
+                && expression.call_result_domain
+                    != frontend::ValueDomain::Unknown) {
+                builtin.domain = expression.call_result_domain;
+                builtin.is_signed = expression.call_result_signed;
+                builtin.packed_range = frontend::PackedRange {
+                    static_cast<std::int64_t>(
+                        expression.call_result_width - 1U),
+                    0,
+                    true
+                };
+            } else if (type_name == "bit") {
                 builtin.domain = frontend::ValueDomain::Bit2;
                 builtin.is_signed = false;
             } else if (type_name == "logic"
@@ -643,7 +654,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
             && expression.operands.size() == 2
             && is_container_expression(
                 expression.operands.front()))) {
-        const auto source_expression = expression.operands.front();
+        const auto& source_expression = expression.operands.front();
         if (expression.kind == ExpressionKind::Call
             && (expression.text == ".pop_front"
                 || expression.text == ".pop_back")
@@ -669,6 +680,88 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 "module",
                 source_expression.span);
             return std::nullopt;
+        }
+        if (expression.kind == ExpressionKind::Index
+            && expression.operands.size() == 2U
+            && source_expression.kind == ExpressionKind::Identifier) {
+            const auto object = container_objects_.find(
+                source_expression.text);
+            const auto* source_type = container_expression_type(
+                source_expression);
+            const auto runtime_type = container_expression_runtime_type(
+                source_expression);
+            if (object != container_objects_.end()
+                && source_type != nullptr
+                && runtime_type
+                && runtime_type->fixed
+                && runtime_type->dimensions.size() == 1U
+                && !runtime_type->two_state
+                && (runtime_type->element_kind
+                        == ContainerElementKind::Packed
+                    || runtime_type->element_kind
+                        == ContainerElementKind::Scalar)
+                && runtime_type->element_width != 0U) {
+                const auto alias = std::find_if(
+                    design_.container_signal_aliases_.rbegin(),
+                    design_.container_signal_aliases_.rend(),
+                    [&](const ContainerSignalAlias& candidate) {
+                        return candidate.object == object->second
+                            && candidate.readable;
+                    });
+                const auto selected = static_integer_value(
+                    expression.operands[1]);
+                const auto [left, right]
+                    = runtime_type->dimensions.front();
+                const auto low = std::min(left, right);
+                const auto high = std::max(left, right);
+                if (alias != design_.container_signal_aliases_.rend()
+                    && design_.signal_info_.at(alias->signal).source_domain
+                        == frontend::ValueDomain::Logic4
+                    && selected
+                    && *selected >= low && *selected <= high) {
+                    const auto count = static_cast<std::uint64_t>(
+                        static_cast<std::int64_t>(high) - low + 1);
+                    const auto total_width = count
+                        * runtime_type->element_width;
+                    if (total_width
+                        <= std::numeric_limits<std::uint32_t>::max()) {
+                        const auto ordinal = left >= right
+                            ? static_cast<std::uint64_t>(left - *selected)
+                            : static_cast<std::uint64_t>(*selected - left);
+                        const auto offset = static_cast<std::uint32_t>(
+                            (count - 1U - ordinal)
+                            * runtime_type->element_width);
+                        const auto packed = allocate_register(
+                            static_cast<std::size_t>(total_width),
+                            design_.signal_info_.at(alias->signal)
+                                        .source_domain);
+                        frontend::ValueDomain element_domain
+                            = design_.signal_info_.at(alias->signal)
+                                  .source_domain;
+                        if (source_type->systemverilog_container
+                            && source_type->systemverilog_container
+                                   ->element_types.size() == 1U) {
+                            element_domain
+                                = source_type->systemverilog_container
+                                      ->element_types.front()
+                                      .domain;
+                        }
+                        const auto destination = allocate_register(
+                            runtime_type->element_width,
+                            element_domain);
+                        process_.operations.emplace_back(
+                            ReadSignal { packed, alias->signal });
+                        process_.operations.emplace_back(Extract {
+                            destination,
+                            packed,
+                            offset,
+                            runtime_type->element_width });
+                        implicit_signal_dependencies_.push_back(
+                            alias->signal);
+                        return destination;
+                    }
+                }
+            }
         }
         const auto source = lower_container_expression(source_expression);
         if (!source) {
@@ -965,7 +1058,14 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
         if (!index) {
             return std::nullopt;
         }
-        if (runtime_type->associative
+        if (runtime_type->fixed
+            && !string_index
+            && register_width(*index) != 32U) {
+            *index = resize_register(
+                *index,
+                32U,
+                is_signed_expression(expression.operands[1]));
+        } else if (runtime_type->associative
             && !string_index
             && register_width(*index)
                 != runtime_type->index_width) {
@@ -1138,12 +1238,43 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 || source_type == nullptr) {
                 return true;
             }
-            const bool expected_array = expected_type->vhdl_array.has_value();
-            const bool source_array = source_type->vhdl_array.has_value();
+            const bool expected_array = is_vhdl_array_like(*expected_type);
+            const bool source_array = is_vhdl_array_like(*source_type);
             if (expected_array || source_array) {
+                if (!expected_array || !source_array) {
+                    return true;
+                }
+                const auto simple_name = [](const std::string_view spelling) {
+                    const auto separator = spelling.find_last_of('.');
+                    return spelling.substr(
+                        separator == std::string_view::npos
+                            ? 0U
+                            : separator + 1U);
+                };
+                const auto expected_name = simple_name(
+                    expected_type->spelling);
+                const auto source_name = simple_name(
+                    source_type->spelling);
+                const bool logic_vector_family =
+                    (expected_name == "std_logic_vector"
+                        || expected_name == "std_ulogic_vector")
+                    && (source_name == "std_logic_vector"
+                        || source_name == "std_ulogic_vector");
+                const bool standard_array = logic_vector_family
+                    || (expected_name == source_name
+                        && (expected_name == "bit_vector"
+                            || expected_name == "signed"
+                            || expected_name == "unsigned"));
+                const bool same_base = standard_array
+                    || ((!expected_type->nominal_type.empty()
+                        && !source_type->nominal_type.empty())
+                    ? expected_type->nominal_type
+                        == source_type->nominal_type
+                    : false);
                 if (expected_array && source_array
-                    && expected_type->nominal_type
-                        == source_type->nominal_type) {
+                    && same_base
+                    && expected_type->domain == source_type->domain
+                    && expected_type->width() == source_type->width()) {
                     return true;
                 }
                 report(
@@ -2150,6 +2281,15 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
         std::size_t width = 0;
         auto result_domain = frontend::ValueDomain::Bit2;
         for (const auto& operand_expression : expression.operands) {
+            if (operand_expression.kind == ExpressionKind::Replication
+                && !operand_expression.operands.empty()) {
+                std::string count_error;
+                const auto count = evaluate_constant_expression(
+                    operand_expression.operands.front(), { }, count_error);
+                if (count && *count == 0) {
+                    continue;
+                }
+            }
             const auto operand_width = infer_width(operand_expression);
             if (!operand_width || *operand_width == 0
                 || *operand_width

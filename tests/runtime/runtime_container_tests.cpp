@@ -1430,6 +1430,47 @@ void test_simir_containers()
             && fixed_changes.back().second == 0,
         "container change hooks suppress unchanged deposits and publish changed deposits");
 
+    Interpreter bridged;
+    auto bridged_type = static_type;
+    bridged_type.dimensions = { { 2, -1 } };
+    const auto bridged_signal = bridged.add_signal(
+        { "bridged.storage", value(32, 0x11223344U) });
+    const auto bridged_object = bridged.add_container_object(
+        { "bridged", default_container_value(bridged_type), std::nullopt });
+    bridged.add_container_signal_alias(
+        { bridged_object, bridged_signal, true, true });
+    Process bridged_process;
+    bridged_process.id = 0;
+    bridged_process.name = "bridged_element_write";
+    bridged_process.register_count = 2;
+    bridged_process.operations = {
+        LoadConstant { 0, value(32, 1) },
+        LoadConstant { 1, value(8, 0xaa) },
+        WriteContainerObjectElement {
+            bridged_object, 0, 1, true, false, std::nullopt },
+        Halt { }
+    };
+    (void)bridged.add_process(std::move(bridged_process));
+    require(
+        bridged.run().status == RunStatus::completed
+            && bridged.signal_value(bridged_signal)
+                == value(32, 0x11aa3344U)
+            && bridged.container_object_value(bridged_object).elements[1]
+                == value(8, 0xaa),
+        "signal-backed element writes update one packed slice without "
+        "requiring a whole-container snapshot");
+    bridged.deposit_signal(
+        bridged_signal, value(32, 0x55667788U));
+    require(
+        bridged.container_object_value(bridged_object).elements
+            == std::vector<PackedLogic4> {
+                value(8, 0x55), value(8, 0x66),
+                value(8, 0x77), value(8, 0x88) }
+            && bridged.container_object_value(bridged_object).elements[2]
+                == value(8, 0x77),
+        "signal-backed container materialization refreshes after a backing "
+        "signal revision and remains coherent on repeated reads");
+
     ContainerType slice_parent_type = static_type;
     slice_parent_type.index_left = 5;
     slice_parent_type.index_right = 0;
@@ -1742,20 +1783,32 @@ void test_simir_containers()
             DeleteContainer { 0, 0 },
             Halt { } },
         "requires an associative array");
-    expect_failure(
-        static_type,
-        { LoadConstant {
-              0,
-              PackedLogic4::from_aval_bval(32, 1, 1) },
+    const auto expect_invalid_static_read = [&](PackedLogic4 index) {
+        Interpreter candidate_interpreter;
+        const auto observed = candidate_interpreter.add_signal(
+            { "static.invalid_read", PackedLogic4(8, Logic4::zero) });
+        Process candidate;
+        candidate.id = 0;
+        candidate.name = "static_invalid_read";
+        candidate.register_count = 2;
+        candidate.container_register_count = 1;
+        candidate.container_register_types = { static_type };
+        candidate.operations = {
+            LoadConstant { 0, std::move(index) },
             ContainerRead { 1, 0, 0, true },
-            Halt { } },
-        "known 32-bit integral value");
-    expect_failure(
-        static_type,
-        { LoadConstant { 0, value(32, 3) },
-            ContainerRead { 1, 0, 0, true },
-            Halt { } },
-        "static-array index is out of range");
+            WriteBlocking { observed, 1 },
+            Halt { }
+        };
+        (void)candidate_interpreter.add_process(std::move(candidate));
+        require(
+            candidate_interpreter.run().status == RunStatus::completed
+                && candidate_interpreter.signal_value(observed).to_msb_string()
+                    == "XXXXXXXX",
+            "invalid four-state static-array reads complete with X");
+    };
+    expect_invalid_static_read(
+        PackedLogic4::from_aval_bval(32, 1, 1));
+    expect_invalid_static_read(value(32, 3));
     expect_failure(
         static_type,
         { DeleteContainer { 0, std::nullopt }, Halt { } },

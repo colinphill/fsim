@@ -122,15 +122,17 @@ bool supports_wide_register_operation(
                 || std::is_same_v<
                     OperationType,
                     WriteInertialDynamicPartSlice>
+                || std::is_same_v<OperationType, WriteProjected>
+                || std::is_same_v<OperationType, WriteProjectedSlice>
                 || std::is_same_v<OperationType, ForceSignalSlice>
                 || std::is_same_v<OperationType, ReleaseSignalSlice>) {
                 return true;
             } else if constexpr (std::is_same_v<OperationType, ContainerRead>) {
                 return operation.string_index
-                    || register_widths[operation.destination] <= 64;
+                    || register_widths[operation.index] <= 64;
             } else if constexpr (std::is_same_v<OperationType, ContainerWrite>) {
                 return operation.string_index
-                    || register_widths[operation.source] <= 64;
+                    || register_widths[operation.index] <= 64;
             }
             return false;
         },

@@ -7,7 +7,10 @@
 
 #include "simir_signal_attributes.hpp"
 #include <bit>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <numeric>
 
 namespace fsim::runtime::simir {
 
@@ -770,52 +773,190 @@ void Interpreter::Impl::restore_callable_context(ProcessState& process)
 }
 
 #include "simir_execution_boundaries.tpp"
+void Interpreter::Impl::install_deferred_executor(ProcessState& process)
+{
+    auto executor = process.deferred_executor->take();
+    if (!executor) {
+        throw std::logic_error {
+            "deferred SimIR process executor produced a null executor"
+        };
+    }
+    for (std::size_t register_index = 0;
+         register_index < process.frame->registers.size();
+         ++register_index) {
+        const auto& value = process.frame->registers[register_index];
+        if (value.width() != 0) {
+            executor->write_register(
+                static_cast<RegisterId>(register_index), value);
+        }
+    }
+    for (std::size_t register_index = 0;
+         register_index < process.frame->string_registers.size();
+         ++register_index) {
+        executor->write_string_register(
+            static_cast<StringRegisterId>(register_index),
+            process.frame->string_registers[register_index]);
+    }
+    for (std::size_t register_index = 0;
+         register_index < process.frame->container_registers.size();
+         ++register_index) {
+        executor->write_container_register(
+            static_cast<ContainerRegisterId>(register_index),
+            process.frame->container_registers[register_index]);
+    }
+    executor->redirect(process.pc);
+    process.executor = std::move(executor);
+    process.deferred_executor.reset();
+}
+
+[[nodiscard]] bool Interpreter::Impl::handle_executor_resume(
+    ProcessState& process, const ProcessResumeResult& boundary)
+{
+    const auto* operation
+        = boundary.instruction < process.program.operations.size()
+        ? &process.program.operations[boundary.instruction]
+        : nullptr;
+    if (boundary.external.kind != ExternalSuspendKind::simir_boundary) {
+        handle_external_boundary(
+            process,
+            boundary.instruction,
+            boundary.next_instruction,
+            boundary.external);
+        snapshot_callable_context(process);
+        return false;
+    }
+    if (native_process_count_profile_enabled && operation) {
+        ++native_process_simir_boundary_groups[operation->storage.index()];
+        if (const auto* scheduling = std::get_if<SchedulingOperationGroup>(
+                &operation->storage)) {
+            ++native_process_scheduling_boundaries[
+                scheduling->storage.index()];
+        }
+    }
+    const bool debug_boundary
+        = operation && operation_holds<DebugPoint>(*operation);
+    const bool class_boundary
+        = operation && is_class_execution_boundary(*operation);
+    const bool immediate_process_boundary
+        = operation && is_immediate_process_boundary(*operation);
+    const bool synchronization_boundary
+        = operation && is_synchronization_boundary(*operation);
+    const bool callable_boundary
+        = operation && is_dynamic_callable_boundary(*operation);
+    handle_boundary(
+        process, boundary.instruction, boundary.next_instruction);
+    if ((class_boundary || callable_boundary || immediate_process_boundary
+            || (synchronization_boundary
+                && process.status == ProcessStatus::running
+                && !process.queued))
+        && !scheduler.stop_requested()) {
+        return true;
+    }
+    if (!debug_boundary || scheduler.stop_requested()) {
+        snapshot_callable_context(process);
+        return false;
+    }
+    return true;
+}
+
 void Interpreter::Impl::execute(ProcessId id)
 {
     auto& process = get_process(id);
+    std::uint64_t interpreted_operations = 0U;
+    struct ProcessProfileScope {
+        ProcessState& process;
+        bool enabled;
+        std::chrono::steady_clock::time_point started;
+        std::uint64_t& interpreted_operations;
+
+        ~ProcessProfileScope()
+        {
+            if (process.track_interpreter_operations) {
+                process.interpreter_operations += interpreted_operations;
+            }
+            if (!enabled) {
+                return;
+            }
+            ++process.profile_calls;
+            process.profile_total_nanoseconds += static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - started)
+                    .count());
+        }
+    } profile_scope {
+        process,
+        process_profile_enabled,
+        process_profile_enabled ? std::chrono::steady_clock::now()
+                                : std::chrono::steady_clock::time_point { },
+        interpreted_operations
+    };
     if (process.suspended) {
         process.suspended_wake = true;
         return;
     }
     restore_callable_context(process);
+    if (!process.executor && process.deferred_executor
+        && process.frame.use_count() == 1
+        && process.frame->vital_memories.empty()
+        && process.dynamic_call_stack.empty()
+        && process.callable_frames.empty()
+        && process.deferred_executor->ready()) {
+        install_deferred_executor(process);
+    }
     if (!process.halted) {
         process.status = ProcessStatus::running;
     }
     if (process.executor) {
         ExecutionContext context { *this, id };
         while (!process.halted) {
-            const auto boundary = process.executor->resume(context, process.pc);
-            const auto* operation = boundary.instruction < process.program.operations.size()
-                ? &process.program.operations[boundary.instruction]
-                : nullptr;
-            const bool debug_boundary = operation && operation_holds<DebugPoint>(*operation);
-            const bool class_boundary = operation && is_class_execution_boundary(*operation);
-            const bool immediate_process_boundary = operation && is_immediate_process_boundary(*operation);
-            const bool synchronization_boundary = operation && is_synchronization_boundary(*operation);
-            const bool callable_boundary = operation && is_dynamic_callable_boundary(*operation);
-            if (boundary.external.kind
-                == ExternalSuspendKind::simir_boundary) {
-                handle_boundary(
-                    process, boundary.instruction, boundary.next_instruction);
-            } else {
-                handle_external_boundary(
-                    process,
-                    boundary.instruction,
-                    boundary.next_instruction,
-                    boundary.external);
+            if (native_phase_profile_enabled) {
+                ++native_phase_profile_single_resumes;
             }
-            if ((class_boundary || callable_boundary
-                    || immediate_process_boundary
-                    || (synchronization_boundary
-                        && process.status == ProcessStatus::running
-                        && !process.queued))
-                && !scheduler.stop_requested()) {
+            if (native_process_count_profile_enabled) {
+                if (id >= native_process_resume_counts.size()) {
+                    const auto size = static_cast<std::size_t>(id) + 1U;
+                    native_process_resume_counts.resize(size);
+                    native_process_single_resume_counts.resize(size);
+                    native_process_single_static_wait_counts.resize(size);
+                    native_process_cohort_resume_counts.resize(size);
+                    native_process_cohort_static_wait_counts.resize(size);
+                    native_process_word_fanout_ready_counts.resize(size);
+                }
+                ++native_process_resume_counts[id];
+            }
+            const auto native_started = process_profile_enabled
+                ? std::chrono::steady_clock::now()
+                : std::chrono::steady_clock::time_point { };
+            const auto boundary = process.executor->resume(context, process.pc);
+            if (native_process_count_profile_enabled) {
+                ++native_process_single_resume_counts[id];
+                ++native_process_single_boundary_counts[
+                    static_cast<std::size_t>(boundary.external.kind)];
+                if (boundary.external.kind
+                    == ExternalSuspendKind::wait_sensitivity) {
+                    ++native_process_single_static_wait_counts[id];
+                    const auto wave = std::pair {
+                        scheduler.now(), scheduler.delta()
+                    };
+                    if (native_process_single_wave_identity != wave) {
+                        native_process_single_wave_offsets.push_back(
+                            native_process_single_wave_processes.size());
+                        native_process_single_wave_identity = wave;
+                    }
+                    native_process_single_wave_processes.push_back(id);
+                }
+            }
+            if (process_profile_enabled) {
+                ++process.profile_native_resumes;
+                process.profile_native_nanoseconds += static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() - native_started)
+                    .count());
+            }
+            if (handle_executor_resume(process, boundary)) {
                 continue;
             }
-            if (!debug_boundary || scheduler.stop_requested()) {
-                snapshot_callable_context(process);
-                return;
-            }
+            return;
         }
         snapshot_callable_context(process);
         return;
@@ -827,6 +968,12 @@ void Interpreter::Impl::execute(ProcessId id)
         }
 
         const auto instruction = process.pc;
+        if (process.track_interpreter_operations) {
+            ++interpreted_operations;
+        }
+        if (process_profile_enabled) {
+            ++process.profile_interpreter_operations;
+        }
         const auto& operation = process.program.operations[instruction];
         bool boundary = false;
         const auto selected_offset =
@@ -1385,15 +1532,21 @@ void Interpreter::Impl::execute(ProcessId id)
                     }
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, DynamicExtract>) {
+                    const auto& source = get_register(process, op.source);
                     try {
                         get_register(process, op.destination) = extract_value(
-                            get_register(process, op.source),
+                            source,
                             dynamic_index_offset(
                                 get_register(process, op.selection.index),
                                 op.selection),
                             1);
-                    } catch (const std::invalid_argument& error) {
-                        fail(process, error.what());
+                    } catch (const std::invalid_argument&) {
+                        auto invalid = PackedLogic4(1, Logic4::x);
+                        if (source.is_logic9()) {
+                            invalid = invalid.promoted_to_logic9();
+                        }
+                        get_register(process, op.destination) =
+                            std::move(invalid);
                     }
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, DynamicPartSelect>) {
@@ -1430,8 +1583,9 @@ void Interpreter::Impl::execute(ProcessId id)
                             dynamic_index_offset(
                                 get_register(process, op.selection.index),
                                 op.selection));
-                    } catch (const std::invalid_argument& error) {
-                        fail(process, error.what());
+                    } catch (const std::invalid_argument&) {
+                        get_register(process, op.destination) =
+                            get_register(process, op.target);
                     }
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, DynamicPartInsert>) {
@@ -2445,6 +2599,17 @@ void Interpreter::Impl::execute(ProcessId id)
 
         if (boundary) {
             const bool debug_boundary = fsim::runtime::simir::operation_holds<DebugPoint>(operation);
+            if (fsim::runtime::simir::operation_holds<Fork>(operation)
+                && !process.executor && process.deferred_executor
+                && process.frame.use_count() == 1
+                && process.frame->vital_memories.empty()
+                && process.dynamic_call_stack.empty()
+                && process.callable_frames.empty()
+                && process.deferred_executor->ready()) {
+                install_deferred_executor(process);
+                queue_current(process.program.id);
+                return;
+            }
             const bool immediate_process_boundary = is_immediate_process_boundary(operation);
             const bool synchronization_boundary = is_synchronization_boundary(operation);
             handle_boundary(process, instruction, instruction + 1);
@@ -2461,5 +2626,556 @@ void Interpreter::Impl::execute(ProcessId id)
             }
         }
     }
+}
+
+void Interpreter::Impl::execute_static_cohort(
+    const std::span<const ProcessId> process_ids)
+{
+    if (process_ids.size() < 2U || process_profile_enabled) {
+        for (const auto id : process_ids) {
+            if (scheduler.stop_requested()) {
+                break;
+            }
+            auto& state = get_process(id);
+            state.queued = false;
+            state.waiting_on_static = false;
+            remove_dynamic_wait(state);
+            execute(id);
+        }
+        return;
+    }
+
+    if (scheduler.stop_requested()) {
+        return;
+    }
+    for (const auto id : process_ids) {
+        auto& state = get_process(id);
+        restore_callable_context(state);
+        if (!state.executor && state.deferred_executor
+            && state.frame.use_count() == 1
+            && state.frame->vital_memories.empty()
+            && state.dynamic_call_stack.empty()
+            && state.callable_frames.empty()
+            && state.deferred_executor->ready()) {
+            install_deferred_executor(state);
+        }
+    }
+
+    constexpr std::size_t inline_cohort_capacity = 512U;
+    std::array<std::optional<ExecutionContext>, inline_cohort_capacity>
+        inline_contexts;
+    std::array<ProcessCohortResumeEntry, inline_cohort_capacity>
+        inline_entries;
+    std::vector<ExecutionContext> overflow_contexts;
+    std::vector<ProcessCohortResumeEntry> overflow_entries;
+    static const bool inline_cohort_buffers_enabled
+        = std::getenv("FSIM_DISABLE_INLINE_COHORT_BUFFERS") == nullptr;
+    std::size_t begin = 0U;
+    while (begin < process_ids.size() && !scheduler.stop_requested()) {
+        auto* const state = &get_process(process_ids[begin]);
+        if (state->suspended || state->halted || !state->executor) {
+            state->queued = false;
+            state->waiting_on_static = false;
+            remove_dynamic_wait(*state);
+            execute(state->program.id);
+            ++begin;
+            continue;
+        }
+
+        const auto* const cohort_domain
+            = state->executor->cohort_domain();
+        const bool state_aware_cohort
+            = state->executor->cohort_manages_process_state();
+        if (cohort_domain == nullptr) {
+            state->queued = false;
+            state->waiting_on_static = false;
+            remove_dynamic_wait(*state);
+            execute(state->program.id);
+            ++begin;
+            continue;
+        }
+        auto end = begin + 1U;
+        while (end < process_ids.size()) {
+            const auto& candidate = get_process(process_ids[end]);
+            if (candidate.suspended || candidate.halted
+                || !candidate.executor
+                || candidate.executor->cohort_domain() != cohort_domain
+                || candidate.executor->cohort_manages_process_state()
+                    != state_aware_cohort) {
+                break;
+            }
+            ++end;
+        }
+        if (end - begin < 2U) {
+            state->queued = false;
+            state->waiting_on_static = false;
+            remove_dynamic_wait(*state);
+            execute(state->program.id);
+            begin = end;
+            continue;
+        }
+
+        const auto count = end - begin;
+        if (!state_aware_cohort) {
+            for (auto index = begin; index < end; ++index) {
+                auto& member = get_process(process_ids[index]);
+                member.queued = false;
+                member.waiting_on_static = false;
+                remove_dynamic_wait(member);
+            }
+        }
+        std::span<ProcessCohortResumeEntry> entries;
+        if (inline_cohort_buffers_enabled
+            && count <= inline_cohort_capacity) {
+            for (std::size_t offset = 0U; offset < count; ++offset) {
+                auto& member = get_process(process_ids[begin + offset]);
+                if (!state_aware_cohort) {
+                    member.status = ProcessStatus::running;
+                }
+                inline_contexts[offset].emplace(*this, member.program.id);
+                inline_entries[offset] = {
+                    member.executor.get(),
+                    &*inline_contexts[offset],
+                    member.pc,
+                    { },
+                    { },
+                    &member.queued,
+                    &member.waiting_on_static,
+                    &member.status
+                };
+            }
+            entries = std::span<ProcessCohortResumeEntry> {
+                inline_entries.data(), count
+            };
+        } else {
+            overflow_contexts.clear();
+            overflow_entries.clear();
+            overflow_contexts.reserve(count);
+            overflow_entries.reserve(count);
+            for (auto index = begin; index < end; ++index) {
+                auto& member = get_process(process_ids[index]);
+                if (!state_aware_cohort) {
+                    member.status = ProcessStatus::running;
+                }
+                overflow_contexts.emplace_back(*this, member.program.id);
+                overflow_entries.push_back({
+                    member.executor.get(),
+                    &overflow_contexts.back(),
+                    member.pc,
+                    { },
+                    { },
+                    &member.queued,
+                    &member.waiting_on_static,
+                    &member.status
+                });
+            }
+            entries = overflow_entries;
+        }
+
+        const auto executed
+            = entries.front().executor->resume_cohort(entries);
+        if (native_phase_profile_enabled) {
+            ++native_phase_profile_cohort_resumes;
+            native_phase_profile_cohort_members += executed;
+        }
+        if (executed > entries.size()) {
+            throw std::logic_error {
+                "process cohort executor returned an invalid activation count"
+            };
+        }
+        if (native_process_count_profile_enabled) {
+            for (std::size_t offset = 0; offset < executed; ++offset) {
+                const auto id = process_ids[begin + offset];
+                if (id >= native_process_resume_counts.size()) {
+                    const auto size = static_cast<std::size_t>(id) + 1U;
+                    native_process_resume_counts.resize(size);
+                    native_process_single_resume_counts.resize(size);
+                    native_process_single_static_wait_counts.resize(size);
+                    native_process_cohort_resume_counts.resize(size);
+                    native_process_cohort_static_wait_counts.resize(size);
+                    native_process_word_fanout_ready_counts.resize(size);
+                }
+                ++native_process_resume_counts[id];
+                ++native_process_cohort_resume_counts[id];
+                ++native_process_cohort_boundary_counts[
+                    static_cast<std::size_t>(
+                        entries[offset].result.external.kind)];
+                if (entries[offset].result.external.kind
+                    == ExternalSuspendKind::wait_sensitivity) {
+                    ++native_process_cohort_static_wait_counts[id];
+                }
+            }
+        }
+        if (executed == 0U) {
+            state->queued = false;
+            state->waiting_on_static = false;
+            remove_dynamic_wait(*state);
+            execute(state->program.id);
+            ++begin;
+            continue;
+        }
+
+        std::size_t local = 0U;
+        for (; local < executed; ++local) {
+            auto* const member
+                = &get_process(process_ids[begin + local]);
+            if (entries[local].failure) {
+                std::rethrow_exception(entries[local].failure);
+            }
+            if (handle_executor_resume(*member, entries[local].result)) {
+                execute(member->program.id);
+            }
+            if (scheduler.stop_requested()) {
+                return;
+            }
+        }
+        begin += local;
+    }
+}
+
+void Interpreter::Impl::build_native_static_regions()
+{
+    if (native_static_regions_built) {
+        return;
+    }
+    native_static_regions_built = true;
+    const auto no_region = std::numeric_limits<std::size_t>::max();
+    native_static_region_by_process.assign(processes.size(), no_region);
+    native_static_region_offset_by_process.assign(processes.size(), no_region);
+    if (std::getenv("FSIM_ENABLE_NATIVE_STATIC_REGIONS") == nullptr
+        || process_profile_enabled || execution_point_hook) {
+        return;
+    }
+
+    std::vector<bool> candidate(processes.size(), false);
+    const auto no_cohort = std::numeric_limits<std::size_t>::max();
+    for (std::size_t id = 0; id < processes.size(); ++id) {
+        auto& state = processes[id];
+        const auto& process = state.program;
+        const auto cohort = id < static_sensitivity_cohort_by_process.size()
+            ? static_sensitivity_cohort_by_process[id]
+            : no_cohort;
+        const auto wait_count = std::ranges::count_if(
+            process.operations,
+            [](const auto& operation) {
+                return operation_holds<WaitSensitivity>(operation);
+            });
+        const bool static_region_shape
+            = !process.static_sensitivity.empty()
+            && wait_count == 1
+            && !process.postponed && !process.reactive && !process.observed
+            && (cohort == no_cohort
+                || static_sensitivity_cohorts[cohort].members.size() < 2U);
+        if (!static_region_shape) {
+            continue;
+        }
+        if (!state.executor && state.deferred_executor
+            && state.frame.use_count() == 1
+            && state.frame->vital_memories.empty()
+            && state.dynamic_call_stack.empty()
+            && state.callable_frames.empty()
+            && state.deferred_executor->ready()) {
+            install_deferred_executor(state);
+        }
+        candidate[id] = state.executor
+            && state.executor->cohort_domain() != nullptr
+            && state.executor->cohort_manages_process_state();
+    }
+    std::vector<std::size_t> parent(processes.size());
+    std::iota(parent.begin(), parent.end(), std::size_t { });
+    const auto root = [&](std::size_t id) {
+        while (parent[id] != id) {
+            parent[id] = parent[parent[id]];
+            id = parent[id];
+        }
+        return id;
+    };
+    const auto join = [&](const std::size_t left,
+                          const std::size_t right) {
+        const auto left_root = root(left);
+        const auto right_root = root(right);
+        if (left_root != right_root) {
+            parent[right_root] = left_root;
+        }
+    };
+    for (std::size_t id = 0; id < processes.size(); ++id) {
+        if (!candidate[id]) {
+            continue;
+        }
+        std::set<SignalId> outputs;
+        for (const auto& driver : processes[id].program.driver_regions) {
+            outputs.insert(driver.signal);
+        }
+        if (outputs.empty()) {
+            for (const auto& operation : processes[id].program.operations) {
+                if (const auto signal = output_signal(operation)) {
+                    outputs.insert(*signal);
+                }
+            }
+        }
+        for (const auto signal : outputs) {
+            if (!can_publish_native_word(
+                    signal, static_cast<ProcessId>(id))) {
+                continue;
+            }
+            for (const auto& fanout : static_fanout[signal]) {
+                const auto target
+                    = static_cast<std::size_t>(fanout.process);
+                if (fanout.edge == EdgeKind::any
+                    && target < candidate.size() && candidate[target]) {
+                    join(id, target);
+                }
+            }
+        }
+    }
+
+    std::map<std::size_t, std::vector<ProcessId>> components;
+    for (std::size_t id = 0; id < candidate.size(); ++id) {
+        if (candidate[id]) {
+            components[root(id)].push_back(static_cast<ProcessId>(id));
+        }
+    }
+    for (auto& [component, members] : components) {
+        (void)component;
+        if (members.size() < 2U) {
+            continue;
+        }
+        const auto region_id = native_static_regions.size();
+        NativeStaticRegion region;
+        region.members = std::move(members);
+        region.active.assign(region.members.size(), 0U);
+        region.ready_offsets.reserve(region.members.size());
+        region.contexts.reserve(region.members.size());
+        region.entries.resize(region.members.size());
+        for (std::size_t offset = 0; offset < region.members.size();
+             ++offset) {
+            const auto id = region.members[offset];
+            region.contexts.push_back(
+                std::make_unique<ExecutionContext>(*this, id));
+            auto& state = get_process(id);
+            region.entries[offset] = ProcessCohortResumeEntry {
+                state.executor.get(), region.contexts[offset].get(), state.pc,
+                { }, { }, &state.queued, &state.waiting_on_static,
+                &state.status, &region.active[offset]
+            };
+            native_static_region_by_process[id] = region_id;
+            native_static_region_offset_by_process[id] = offset;
+        }
+        native_static_regions.push_back(std::move(region));
+    }
+}
+
+std::size_t Interpreter::Impl::execute_native_static_region(
+    const std::size_t region_id,
+    const std::span<const ProcessId> ready)
+{
+    ++native_static_region_attempts;
+    native_static_region_ready += ready.size();
+    if (region_id >= native_static_regions.size() || ready.size() < 2U
+        || scheduler.stop_requested()) {
+        ++native_static_region_declines[0];
+        return 0U;
+    }
+    auto& region = native_static_regions[region_id];
+    std::ranges::fill(region.active, UINT8_C(0));
+    region.ready_offsets.clear();
+    for (const auto id : ready) {
+        if (id >= native_static_region_by_process.size()
+            || native_static_region_by_process[id] != region_id) {
+            return 0U;
+        }
+        const auto offset = native_static_region_offset_by_process[id];
+        region.active[offset] = 1U;
+        region.ready_offsets.push_back(offset);
+    }
+    if (!region.prepared) {
+        for (std::size_t offset = 0; offset < region.members.size();
+             ++offset) {
+            auto& state = get_process(region.members[offset]);
+            restore_callable_context(state);
+            if (!state.executor && state.deferred_executor
+                && state.frame.use_count() == 1
+                && state.frame->vital_memories.empty()
+                && state.dynamic_call_stack.empty()
+                && state.callable_frames.empty()
+                && state.deferred_executor->ready()) {
+                install_deferred_executor(state);
+            }
+            if (!state.executor
+                || state.executor->cohort_domain() == nullptr
+                || !state.executor->cohort_manages_process_state()) {
+                ++native_static_region_declines[1];
+                return 0U;
+            }
+            auto& entry = region.entries[offset];
+            entry.executor = state.executor.get();
+            entry.start_instruction = state.pc;
+        }
+        region.prepared = true;
+    }
+    for (const auto id : ready) {
+        auto& state = get_process(id);
+        const auto offset = native_static_region_offset_by_process[id];
+        auto& entry = region.entries[offset];
+        if (state.executor.get() != entry.executor || state.suspended
+            || state.halted || !state.waiting_on_static) {
+            ++native_static_region_declines[2];
+            return 0U;
+        }
+        restore_callable_context(state);
+        entry.start_instruction = state.pc;
+        entry.result = { };
+        entry.failure = { };
+    }
+
+    const auto scanned = region.entries.front().executor->resume_region(
+        region.entries, region.ready_offsets);
+    if (scanned == 0U || scanned > region.entries.size()) {
+        ++native_static_region_declines[3];
+        return 0U;
+    }
+    ++native_static_region_calls;
+    std::size_t consumed { };
+    for (const auto id : ready) {
+        const auto offset = native_static_region_offset_by_process[id];
+        if (offset >= scanned) {
+            break;
+        }
+        auto& state = get_process(id);
+        auto& entry = region.entries[offset];
+        if (entry.failure) {
+            std::rethrow_exception(entry.failure);
+        }
+        if (native_process_count_profile_enabled) {
+            ++native_process_resume_counts[id];
+            ++native_process_single_resume_counts[id];
+            ++native_process_single_boundary_counts[
+                static_cast<std::size_t>(entry.result.external.kind)];
+            if (entry.result.external.kind
+                == ExternalSuspendKind::wait_sensitivity) {
+                ++native_process_single_static_wait_counts[id];
+            }
+        }
+        if (handle_executor_resume(state, entry.result)) {
+            execute(id);
+        }
+        ++consumed;
+        if (scheduler.stop_requested()) {
+            break;
+        }
+    }
+    native_static_region_consumed += consumed;
+    if (consumed != ready.size()) {
+        ++native_static_region_declines[4];
+    }
+    return consumed;
+}
+
+SchedulerBatchResult Interpreter::Impl::execute(
+    Scheduler& runtime,
+    const std::span<const std::uint64_t> cohort_ids)
+{
+    SchedulerBatchResult result;
+    const auto phase_revision = runtime.current_phase_revision();
+    std::size_t batch_index { };
+    while (batch_index < cohort_ids.size()) {
+        const auto raw_cohort = cohort_ids[batch_index];
+        if ((raw_cohort & native_static_region_payload) != 0U) {
+            const auto process = static_cast<ProcessId>(
+                raw_cohort & ~native_static_region_payload);
+            const auto no_region = std::numeric_limits<std::size_t>::max();
+            const auto region
+                = process < native_static_region_by_process.size()
+                ? native_static_region_by_process[process]
+                : no_region;
+            if (region == no_region) {
+                result.failure = std::make_exception_ptr(
+                    std::logic_error(
+                        "scheduler batch references an invalid native "
+                        "static-region process"));
+                ++result.executed;
+                break;
+            }
+            auto end = batch_index + 1U;
+            while (end < cohort_ids.size()
+                && (cohort_ids[end] & native_static_region_payload) != 0U) {
+                const auto candidate = static_cast<ProcessId>(
+                    cohort_ids[end] & ~native_static_region_payload);
+                if (candidate >= native_static_region_by_process.size()
+                    || native_static_region_by_process[candidate] != region) {
+                    break;
+                }
+                ++end;
+            }
+            std::vector<ProcessId> ready;
+            ready.reserve(end - batch_index);
+            for (auto index = batch_index; index < end; ++index) {
+                ready.push_back(static_cast<ProcessId>(
+                    cohort_ids[index] & ~native_static_region_payload));
+            }
+            std::size_t consumed { };
+            try {
+                consumed = execute_native_static_region(region, ready);
+            } catch (...) {
+                result.failure = std::current_exception();
+            }
+            if (result.failure) {
+                break;
+            }
+            if (consumed == 0U) {
+                if (result.executed == 0U) {
+                    return result;
+                }
+                break;
+            }
+            if (consumed > ready.size()) {
+                result.failure = std::make_exception_ptr(
+                    std::logic_error(
+                        "native static region consumed an invalid process "
+                        "count"));
+                break;
+            }
+            result.executed += consumed;
+            batch_index += consumed;
+            if (consumed != ready.size()) {
+                break;
+            }
+            if (runtime.stop_requested()
+                || runtime.current_phase_revision() != phase_revision) {
+                break;
+            }
+            continue;
+        }
+        if (raw_cohort >= static_sensitivity_cohorts.size()) {
+            result.failure = std::make_exception_ptr(
+                std::logic_error(
+                    "scheduler batch references an invalid static cohort"));
+            ++result.executed;
+            break;
+        }
+        auto& cohort = static_sensitivity_cohorts[
+            static_cast<std::size_t>(raw_cohort)];
+        if (cohort.ready.empty()) {
+            result.failure = std::make_exception_ptr(
+                std::logic_error(
+                    "scheduler batch references an empty static cohort"));
+            ++result.executed;
+            break;
+        }
+        auto ready = std::move(cohort.ready);
+        cohort.ready.clear();
+        try {
+            execute_static_cohort(ready);
+        } catch (...) {
+            result.failure = std::current_exception();
+        }
+        ++result.executed;
+        ++batch_index;
+        if (result.failure || runtime.stop_requested()
+            || runtime.current_phase_revision() != phase_revision) {
+            break;
+        }
+    }
+    return result;
 }
 } // namespace fsim::runtime::simir

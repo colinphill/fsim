@@ -1246,6 +1246,12 @@ void Lowerer::lower_statement(const Statement& statement)
         }
         const auto scalar_kind_of =
             [&](const Expression& value) {
+                if (value.text == "$time") {
+                    return frontend::SystemVerilogScalarKind::Time;
+                }
+                if (value.text == "$realtime") {
+                    return frontend::SystemVerilogScalarKind::Realtime;
+                }
                 const auto* output_type = value.kind
                         == frontend::ExpressionKind::Identifier
                     ? object_type(value.text)
@@ -1588,6 +1594,12 @@ void Lowerer::lower_statement(const Statement& statement)
     }
     case StatementKind::Display: {
         const auto scalar_kind_of = [&](const Expression& value) {
+            if (value.text == "$time") {
+                return frontend::SystemVerilogScalarKind::Time;
+            }
+            if (value.text == "$realtime") {
+                return frontend::SystemVerilogScalarKind::Realtime;
+            }
             const auto* type = value.kind == ExpressionKind::Identifier
                 ? object_type(value.text)
                 : nullptr;
@@ -1608,6 +1620,7 @@ void Lowerer::lower_statement(const Statement& statement)
             return real_scalar ? real_format
                 : scalar == frontend::SystemVerilogScalarKind::Time
                 ? format == frontend::OutputFormat::Decimal
+                    || format == frontend::OutputFormat::Time
                 : scalar == frontend::SystemVerilogScalarKind::Chandle
                 ? format == frontend::OutputFormat::Hexadecimal
                 : !real_format;
@@ -1737,7 +1750,9 @@ void Lowerer::lower_statement(const Statement& statement)
                             statement.output_postponed });
                     continue;
                 }
-                if (output.format == frontend::OutputFormat::Time) {
+                if (output.format == frontend::OutputFormat::Time
+                    && (!output.value.valid()
+                        || output.value.text == "$time")) {
                     process_.operations.emplace_back(
                         TimeDisplay {
                             output.prefix,

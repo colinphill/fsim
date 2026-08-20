@@ -244,11 +244,11 @@ namespace {
         CheckedProject::MappedLibrary& provenance,
         diagnostic::Engine& diagnostics)
     {
-        const auto optimization = config.build.optimization == project::Optimization::o0
-            ? compiler::JitOptimizationLevel::o0
-            : compiler::JitOptimizationLevel::o2;
+        const auto optimization = jit_optimization(config.build.optimization);
         const auto host = compiler::LlvmJit::native_host_identity(optimization);
-        const auto expected_optimization = optimization == compiler::JitOptimizationLevel::o0 ? "O0" : "O2";
+        const std::string expected_optimization {
+            compiler::to_string(optimization)
+        };
         const auto expected_features = feature_identity(host.features);
         if (native.runtime_abi != runtime_abi_version
             || native.compiler_fingerprint != host.fingerprint

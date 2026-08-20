@@ -9,12 +9,15 @@ std::uint64_t LlvmProcessExecutor::signal_last_active(
     void* context,
     const std::uint32_t signal) noexcept {
   auto& state = *static_cast<CallbackState*>(context);
-  if (state.failure || state.context == nullptr
-      || signal >= state.signal_widths.size()) {
+  if (state.failure || state.context == nullptr) {
     return std::numeric_limits<std::uint64_t>::max();
   }
   try {
-    return state.context->signal_last_active(signal);
+    const auto actual_signal = mapped_signal(state, signal);
+    if (actual_signal >= state.signal_widths.size()) {
+      return std::numeric_limits<std::uint64_t>::max();
+    }
+    return state.context->signal_last_active(actual_signal);
   } catch (...) {
     capture_failure(state);
     return std::numeric_limits<std::uint64_t>::max();
@@ -25,12 +28,15 @@ std::uint32_t LlvmProcessExecutor::signal_driving(
     void* context,
     const std::uint32_t signal) noexcept {
   auto& state = *static_cast<CallbackState*>(context);
-  if (state.failure || state.context == nullptr
-      || signal >= state.signal_widths.size()) {
+  if (state.failure || state.context == nullptr) {
     return 0;
   }
   try {
-    return state.context->signal_driving(signal) ? 1U : 0U;
+    const auto actual_signal = mapped_signal(state, signal);
+    if (actual_signal >= state.signal_widths.size()) {
+      return 0;
+    }
+    return state.context->signal_driving(actual_signal) ? 1U : 0U;
   } catch (...) {
     capture_failure(state);
     return 0;
@@ -49,14 +55,15 @@ std::uint64_t LlvmProcessExecutor::signal_driving_value(
     return 0;
   }
   try {
+    const auto actual_signal = mapped_signal(state, signal);
     if (bval == nullptr || state.context == nullptr
-        || signal >= state.signal_widths.size()) {
+        || actual_signal >= state.signal_widths.size()) {
       throw std::logic_error{
           "invalid generated signal-driving-value callback"};
     }
     const auto value =
-        state.context->signal_driving_value_word(signal);
-    if (value.width != state.signal_widths[signal]
+        state.context->signal_driving_value_word(actual_signal);
+    if (value.width != state.signal_widths[actual_signal]
         || value.width == 0 || value.width > 64) {
       throw std::logic_error{
           "generated signal-driving-value callback observed an invalid "
@@ -83,10 +90,11 @@ void LlvmProcessExecutor::signal_driving_value_logic9(
     return;
   }
   try {
-    require_logic9_signal(state, signal, result);
+    const auto actual_signal = mapped_signal(state, signal);
+    require_logic9_signal(state, actual_signal, result);
     const auto value =
-        state.context->signal_driving_value_logic9_word(signal);
-    if (value.width != state.signal_widths[signal]) {
+        state.context->signal_driving_value_logic9_word(actual_signal);
+    if (value.width != state.signal_widths[actual_signal]) {
       throw std::logic_error{
           "generated Logic9 driving-value read observed an invalid width"};
     }

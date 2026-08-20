@@ -683,7 +683,9 @@ using namespace elaboration_detail;
                 const auto width = element.width();
                 const bool deferred_composite_layout =
                     !element.packed_members.empty()
-                    || element.vhdl_array.has_value();
+                    || element.vhdl_array.has_value()
+                    || element.packed_range_expression.has_value()
+                    || !element.vhdl_array_constraints.empty();
                 if (((!width || *width == 0)
                      && !deferred_composite_layout)
                     || element.domain

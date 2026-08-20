@@ -73,7 +73,6 @@ bool substitute_vhdl_array_layout(
           "FSIM-ELAB-GENERIC-006",
           "cannot evaluate VHDL array dimension constraint: " + error,
           dimension.constraint->span});
-      dimension.constraint.reset();
       valid = false;
       concrete = false;
       continue;

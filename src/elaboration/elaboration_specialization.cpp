@@ -77,11 +77,36 @@ namespace {
 
     bool vhdl_composite_constant_type(const frontend::Type& type)
     {
+        const auto separator = type.spelling.find_last_of('.');
+        const auto name = std::string_view { type.spelling }.substr(
+            separator == std::string::npos ? 0U : separator + 1U);
         return type.vhdl_array.has_value() || !type.packed_members.empty()
+            || name == "bit_vector"
+            || name == "std_logic_vector"
+            || name == "std_ulogic_vector"
+            || name == "signed"
+            || name == "unsigned"
+            || (!type.named_type.empty()
+                && type.enumeration_literals.empty()
+                && type.width().value_or(0U) > 1U
+                && type.domain != frontend::ValueDomain::Integer
+                && type.domain != frontend::ValueDomain::Boolean
+                && type.domain != frontend::ValueDomain::Bit2)
             || (type.packed_range.has_value()
                 && type.enumeration_literals.empty()
                 && !type.vhdl_physical
                 && type.domain != frontend::ValueDomain::Integer);
+    }
+
+    bool vhdl_unconstrained_builtin_array(const frontend::Type& type)
+    {
+        const auto separator = type.spelling.find_last_of('.');
+        const auto name = std::string_view{type.spelling}.substr(
+            separator == std::string::npos ? 0U : separator + 1U);
+        return !type.packed_range && !type.vhdl_array
+            && (name == "bit_vector" || name == "std_logic_vector"
+                || name == "std_ulogic_vector" || name == "signed"
+                || name == "unsigned");
     }
 
     void annotate_systemverilog_constant_casts(
@@ -393,7 +418,9 @@ SpecializedUnit specialize_unit(
     std::vector<Diagnostic>& diagnostics,
     const bool expand_generates,
     const SystemVerilogConstantEnvironment&
-        parent_integral_environment)
+        parent_integral_environment,
+    const std::vector<frontend::FunctionDeclaration>&
+        parent_functions)
 {
     SpecializedUnit result;
     result.unit = source;
@@ -676,10 +703,34 @@ SpecializedUnit specialize_unit(
                         overridable[*actual_index]->type)) {
                     actual_expression = *intrinsic;
                 }
-                const auto packed = static_vhdl_value(
+                auto packed = static_vhdl_value(
                     actual_expression,
                     overridable[*actual_index]->type,
                     error);
+                if (!packed) {
+                    const auto function_value =
+                        evaluate_systemverilog_constant_function_expression(
+                            actual_expression,
+                            parent_integral_environment,
+                            parent_environment,
+                            parent_functions,
+                            error);
+                    if (function_value) {
+                        auto evaluated = function_value->expression(
+                            actual_expression.span);
+                        packed = vhdl_unconstrained_builtin_array(
+                                     overridable[*actual_index]->type)
+                            ? std::optional<PackedLogic4> {
+                                  function_value->packed }
+                            : static_vhdl_value(
+                                  evaluated,
+                                  overridable[*actual_index]->type,
+                                  error);
+                        if (packed) {
+                            actual_expression = std::move(evaluated);
+                        }
+                    }
+                }
                 if (!packed) {
                     diagnostics.push_back({ code(error.starts_with(
                                                      "the packed value does not fit")
@@ -763,6 +814,79 @@ SpecializedUnit specialize_unit(
     const auto scalar_context = systemverilog_scalar_evaluation_context(source);
     SystemVerilogStringEnvironment
         systemverilog_string_environment;
+    const auto specialized_constant_functions = [&]() {
+        auto functions = result.unit.functions;
+        std::vector<Diagnostic> ignored_diagnostics;
+        for (auto& function : functions) {
+            auto function_environment = result.environment;
+            auto function_domains = domains;
+            const auto erase_local = [&](const std::string& name) {
+              function_environment.erase(name);
+              function_domains.erase(name);
+            };
+            erase_local(function.name);
+            for (const auto& argument : function.arguments) {
+                erase_local(argument.name);
+            }
+            for (const auto& constant : function.constants) {
+                erase_local(constant.name);
+            }
+            for (const auto& variable : function.variables) {
+                erase_local(variable.name);
+            }
+            const auto erase_statement_locals =
+                [&](const auto& self,
+                    const std::vector<frontend::Statement>& statements)
+                    -> void {
+                  for (const auto& statement : statements) {
+                    if (!statement.loop_variable.empty()) {
+                      erase_local(statement.loop_variable);
+                    }
+                    for (const auto& declaration :
+                         statement.declarations) {
+                      erase_local(declaration.name);
+                    }
+                    self(self, statement.statements);
+                    self(self, statement.else_statements);
+                    for (const auto& alternative :
+                         statement.case_alternatives) {
+                      self(self, alternative.statements);
+                    }
+                  }
+                };
+            erase_statement_locals(
+                erase_statement_locals, function.statements);
+            substitute_parameters(
+                function.return_type,
+                function_environment,
+                function_domains,
+                ignored_diagnostics,
+                source.language);
+            for (auto& argument : function.arguments) {
+                substitute_parameters(
+                    argument.type,
+                    function_environment,
+                    function_domains,
+                    ignored_diagnostics,
+                    source.language);
+            }
+            for (auto& variable : function.variables) {
+                substitute_parameters(
+                    variable,
+                    function_environment,
+                    function_domains,
+                    ignored_diagnostics,
+                    source.language);
+            }
+            substitute_parameters(
+                function.statements,
+                function_environment,
+                function_domains,
+                ignored_diagnostics,
+                source.language);
+        }
+        return functions;
+    };
     const auto self_qualified_name =
         [&](const std::string_view name) {
             return source.name + "::" + std::string { name };
@@ -786,7 +910,44 @@ SpecializedUnit specialize_unit(
         std::optional<SystemVerilogStringValue>
             systemverilog_string_value;
         const bool vhdl_composite_parameter = is_vhdl
-            && vhdl_composite_constant_type(parameter_type);
+            && (vhdl_composite_constant_type(parameter_type)
+                || (parameter.default_value.kind == ExpressionKind::Call
+                    && std::ranges::any_of(
+                        result.unit.functions,
+                        [&](const auto& function) {
+                          return function.name
+                                  == parameter.default_value.text
+                              && vhdl_composite_constant_type(
+                                  function.return_type);
+                        }))
+                || (parameter.local
+                    && parameter.default_value.kind
+                        == ExpressionKind::Call
+                    && std::ranges::any_of(
+                        result.unit.type_aliases,
+                        [&](const auto& alias) {
+                          const auto simple = [](const std::string_view name) {
+                            const auto separator = name.find_last_of('.');
+                            return name.substr(
+                                separator == std::string_view::npos
+                                    ? 0U : separator + 1U);
+                          };
+                          return (simple(alias.name)
+                                      == simple(parameter_type.spelling)
+                                  || simple(alias.name)
+                                      == simple(parameter_type.named_type))
+                              && alias.type.domain
+                                  != frontend::ValueDomain::Integer
+                              && alias.type.domain
+                                  != frontend::ValueDomain::Boolean
+                              && alias.type.domain
+                                  != frontend::ValueDomain::Bit2;
+                        }))
+                || (parameter.local
+                    && parameter.default_value.kind
+                        == ExpressionKind::Call
+                    && parameter_type.domain
+                        == frontend::ValueDomain::Unknown));
         std::optional<frontend::Expression> vhdl_composite_value;
         std::optional<std::int64_t> value;
         if (!parameter.local) {
@@ -824,13 +985,82 @@ SpecializedUnit specialize_unit(
                     domains,
                     source.language);
             }
+            if (vhdl_unconstrained_builtin_array(
+                    specialized_parameter.type)) {
+                std::optional<frontend::PackedRange> inferred_range;
+                if (vhdl_composite_value->kind
+                        == ExpressionKind::Aggregate
+                    && vhdl_composite_value->operands.size() == 1U
+                    && vhdl_composite_value
+                            ->aggregate_choice_expressions.size() == 1U
+                    && vhdl_composite_value
+                            ->aggregate_choice_expressions.front().size()
+                        == 1U) {
+                    const auto& choice = vhdl_composite_value
+                        ->aggregate_choice_expressions.front().front();
+                    if (choice.kind == ExpressionKind::Binary
+                        && choice.operands.size() == 2U
+                        && (choice.text == "to"
+                            || choice.text == "downto")) {
+                        std::string ignored;
+                        const auto left = evaluate_constant_expression(
+                            choice.operands[0], result.environment, ignored);
+                        const auto right = evaluate_constant_expression(
+                            choice.operands[1], result.environment, ignored);
+                        if (left && right) {
+                            inferred_range = frontend::PackedRange{
+                                *left,
+                                *right,
+                                choice.text == "downto"};
+                        }
+                    }
+                }
+                std::string ignored;
+                const auto inferred_value =
+                    evaluate_systemverilog_constant_function_expression(
+                        *vhdl_composite_value,
+                        { },
+                        result.environment,
+                        specialized_constant_functions(),
+                        ignored);
+                if (!inferred_range && inferred_value
+                    && inferred_value->width != 0U) {
+                    inferred_range = frontend::PackedRange{
+                        static_cast<std::int64_t>(
+                            inferred_value->width - 1U),
+                        0,
+                        true};
+                }
+                if (inferred_range) {
+                    specialized_parameter.type.packed_range =
+                        *inferred_range;
+                }
+            }
             if (const auto intrinsic = vital_constant_expression(
                     *vhdl_composite_value, parameter_type)) {
                 vhdl_composite_value = *intrinsic;
             }
             std::string error;
-            const auto packed = static_vhdl_value(
+            auto packed = static_vhdl_value(
                 *vhdl_composite_value, parameter_type, error);
+            if (!packed) {
+                const auto function_value =
+                    evaluate_systemverilog_constant_function_expression(
+                        *vhdl_composite_value,
+                        { },
+                        result.environment,
+                        specialized_constant_functions(),
+                        error);
+                if (function_value) {
+                    auto evaluated = function_value->expression(
+                        vhdl_composite_value->span);
+                    packed = static_vhdl_value(
+                        evaluated, parameter_type, error);
+                    if (packed) {
+                        *vhdl_composite_value = std::move(evaluated);
+                    }
+                }
+            }
             if (!packed) {
                 diagnostics.push_back({ code(SpecializationDiagnostic::default_evaluation),
                     "cannot evaluate " + std::string { object_kind } + " '"
@@ -843,6 +1073,12 @@ SpecializedUnit specialize_unit(
                 false,
                 parameter_type.nominal_type
             };
+            vhdl_composite_value->call_result_width =
+                specialized_parameter.type.width().value_or(0U);
+            vhdl_composite_value->call_result_domain =
+                specialized_parameter.type.domain;
+            vhdl_composite_value->call_result_signed =
+                specialized_parameter.type.is_signed;
             info.vhdl_composite_value = *vhdl_composite_value;
             domains[parameter.name] = std::move(info);
             result.values.emplace_back(
@@ -988,11 +1224,13 @@ SpecializedUnit specialize_unit(
                         };
                     }
                 } else {
+                    const auto functions =
+                        specialized_constant_functions();
                     systemverilog_value = evaluate_systemverilog_constant_function_expression(
                         default_expression,
                         systemverilog_environment,
                         result.environment,
-                        source.functions,
+                        functions,
                         error);
                 }
                 if (!systemverilog_value) {
@@ -1185,6 +1423,13 @@ SpecializedUnit specialize_unit(
             const auto spelling = parameter_type.spelling;
             const bool builtin_time = parameter_type.nominal_type == "@builtin:time";
             const bool enumeration = !parameter_type.enumeration_literals.empty();
+            const bool supported_logic_scalar =
+                !parameter_type.packed_range
+                && parameter_type.width().value_or(0) == 1
+                && (parameter_type.domain
+                        == frontend::ValueDomain::Logic4
+                    || parameter_type.domain
+                        == frontend::ValueDomain::Logic9);
             const bool supported_packed = parameter_type.packed_range
                 && parameter_type.packed_members.empty()
                 && parameter_type.width().value_or(0) <= 64
@@ -1198,6 +1443,7 @@ SpecializedUnit specialize_unit(
                                                      && !supported_packed && !builtin_time)
                 || !parameter_type.packed_members.empty()
                 || (!parameter_type.packed_range
+                    && !supported_logic_scalar
                     && parameter_type.domain
                         != frontend::ValueDomain::Integer
                     && parameter_type.domain
@@ -1364,6 +1610,11 @@ SpecializedUnit specialize_unit(
                 }
             }
         }
+        // Constant-function calls can occur in generate-local parameters.
+        // Specialize callable types and bodies before the folding walk reaches
+        // those generate bodies, rather than waiting for the later runtime
+        // callable-specialization pass.
+        result.unit.functions = specialized_constant_functions();
         substitute_systemverilog_parameters(
             result.unit, systemverilog_environment);
         fold_systemverilog_constant_functions(
@@ -1382,6 +1633,7 @@ SpecializedUnit specialize_unit(
             systemverilog_string_environment,
             result.environment,
             domains,
+            result.unit.functions,
             diagnostics);
         result.string_environment = std::move(systemverilog_string_environment);
         result.scalar_environment = std::move(systemverilog_scalar_environment);
@@ -1537,6 +1789,120 @@ SpecializedUnit specialize_unit(
             auto& owner,
             const ConstantEnvironment& enclosing_environment,
             const ConstantDomainEnvironment& enclosing_domains) -> void {
+        using Owner = std::remove_cvref_t<decltype(owner)>;
+        if constexpr (
+            std::is_same_v<Owner, frontend::FunctionDeclaration>
+            || std::is_same_v<Owner, frontend::ProcedureDeclaration>) {
+            std::unordered_set<std::string> formal_names;
+            for (const auto& argument : owner.arguments) {
+                formal_names.insert(argument.name);
+            }
+            const auto expression_mentions =
+                [&](const auto& recurse,
+                    const frontend::Expression& expression) -> bool {
+                  if (expression.kind
+                          == frontend::ExpressionKind::Identifier
+                      && formal_names.contains(expression.text)) {
+                      return true;
+                  }
+                  return std::ranges::any_of(
+                      expression.operands,
+                      [&](const auto& operand) {
+                          return recurse(recurse, operand);
+                      });
+                };
+            const auto type_mentions =
+                [&](const auto& recurse,
+                    const frontend::Type& type) -> bool {
+                  const auto range_mentions = [&](const auto& range) {
+                      return expression_mentions(
+                                 expression_mentions, range.left)
+                          || expression_mentions(
+                                 expression_mentions, range.right);
+                  };
+                  if ((type.packed_range_expression
+                          && range_mentions(
+                              *type.packed_range_expression))
+                      || (type.integer_range_expression
+                          && range_mentions(
+                              *type.integer_range_expression))
+                      || std::ranges::any_of(
+                          type.vhdl_array_constraints,
+                          range_mentions)) {
+                      return true;
+                  }
+                  return type.vhdl_array
+                      && std::ranges::any_of(
+                          type.vhdl_array->element_types,
+                          [&](const auto& element) {
+                              return recurse(recurse, element);
+                          });
+                };
+            bool defer = false;
+            for (const auto& constant : owner.constants) {
+                if (expression_mentions(
+                        expression_mentions,
+                        constant.default_value)) {
+                    defer = true;
+                    formal_names.insert(constant.name);
+                }
+            }
+            defer = defer || std::ranges::any_of(
+                owner.type_aliases,
+                [&](const auto& alias) {
+                    return type_mentions(type_mentions, alias.type);
+                });
+            defer = defer || std::ranges::any_of(
+                owner.variables,
+                [&](const auto& variable) {
+                    return type_mentions(type_mentions, variable.type);
+                });
+            if (defer) {
+            // A subprogram declarative region can depend on its formals (for
+            // example, a constant initialized from an unconstrained array's
+            // 'length attribute).  Preserve those declarations until the
+            // callable is evaluated or lowered with its actual arguments.
+            // Parent generics in executable expressions can still be folded
+            // without forcing formal-dependent subtype constraints early.
+            for (auto& constant : owner.constants) {
+                substitute_parameters(
+                    constant.default_value,
+                    enclosing_environment,
+                    enclosing_domains,
+                    source.language);
+            }
+            for (auto& variable : owner.variables) {
+                if (variable.initializer) {
+                    substitute_parameters(
+                        *variable.initializer,
+                        enclosing_environment,
+                        enclosing_domains,
+                        source.language);
+                }
+            }
+            for (auto& function : owner.functions) {
+                self(
+                    self,
+                    function,
+                    enclosing_environment,
+                    enclosing_domains);
+            }
+            for (auto& procedure : owner.procedures) {
+                self(
+                    self,
+                    procedure,
+                    enclosing_environment,
+                    enclosing_domains);
+            }
+            substitute_parameters(
+                owner.statements,
+                enclosing_environment,
+                enclosing_domains,
+                diagnostics,
+                source.language);
+            return;
+            }
+        }
         auto local_environment = enclosing_environment;
         auto local_domains = enclosing_domains;
         frontend::GenerateBody declarations;
@@ -1547,6 +1913,7 @@ SpecializedUnit specialize_unit(
             local_environment,
             local_domains,
             source.language,
+            result.unit.functions,
             diagnostics);
         owner.constants = std::move(declarations.constants);
         owner.type_aliases = std::move(declarations.type_aliases);

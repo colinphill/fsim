@@ -49,31 +49,21 @@ void test_debug_point_instrumentation()
                                 handle, short_descriptor, frame, result);
                         },
                         "does not include debug-point flags");
-                    if (optimization == JitOptimizationLevel::o0) {
-                        assert(
-                            jit.resume(handle, descriptor, frame, result)
-                            == JitResumeStatus::debug_point);
-                        assert(result.instruction == 0);
-                        assert(frame.program_counter == 1);
-                        assert(frame.state == FSIM_JIT_FRAME_STATE_READY);
-                    }
                     assert(
                         jit.resume(handle, descriptor, frame, result)
                         == JitResumeStatus::completed);
                     assert(result.instruction == 1);
-                    if (optimization == JitOptimizationLevel::o2) {
-                        jit.initialize_frame(
-                            handle, frame, aval, bval, initialized);
-                        descriptor.flags = FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS;
-                        assert(
-                            jit.resume(handle, descriptor, frame, result)
-                            == JitResumeStatus::debug_point);
-                        assert(result.instruction == 0);
-                        assert(frame.program_counter == 1);
-                        assert(
-                            jit.resume(handle, descriptor, frame, result)
-                            == JitResumeStatus::completed);
-                    }
+                    jit.initialize_frame(
+                        handle, frame, aval, bval, initialized);
+                    descriptor.flags = FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS;
+                    assert(
+                        jit.resume(handle, descriptor, frame, result)
+                        == JitResumeStatus::debug_point);
+                    assert(result.instruction == 0);
+                    assert(frame.program_counter == 1);
+                    assert(
+                        jit.resume(handle, descriptor, frame, result)
+                        == JitResumeStatus::completed);
                 };
             run(
                 JitOptimizationLevel::o0,

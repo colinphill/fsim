@@ -362,7 +362,9 @@ void test_vhdl_shift_rotate(
     assert(reference.compiled_modules == 0);
 #if defined(FSIM_HAS_LLVM)
     assert(compiled.compiled_processes == 11);
-    assert(compiled.compiled_modules == 1);
+    // Three structurally shared signal-process templates are emitted beside
+    // the specialization module containing the remaining processes.
+    assert(compiled.compiled_modules == 4);
 #else
     assert(compiled.compiled_processes == 0);
     assert(compiled.compiled_modules == 0);
@@ -789,6 +791,63 @@ void test_systemverilog_literal_closure(
 #endif
 }
 
+void test_systemverilog_packed_index_self_determined(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization)
+{
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "packed-index-self-determined-test";
+    config.project.top = "sv:work.packed_index_app";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path = directory
+        / (optimization == fsim::project::Optimization::o0
+                ? "packed-index-cache-o0"
+                : "packed-index-cache-o2");
+    config.run.max_deltas = 1000;
+
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2005";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
+
+    fsim::diagnostic::Engine diagnostics;
+    auto reference_project = fsim::app::build_project(config, diagnostics);
+    auto compiled_project = fsim::app::build_project(config, diagnostics);
+    if (!reference_project || !compiled_project) {
+        print_diagnostics(diagnostics);
+    }
+    assert(reference_project);
+    assert(compiled_project);
+
+    const std::array<std::string, 1> paths {
+        "packed_index_app.wrapped_select"
+    };
+    const auto reference = run(
+        std::move(*reference_project),
+        fsim::app::SimulationEngine::interpreter,
+        paths);
+    const auto compiled = run(
+        std::move(*compiled_project),
+        fsim::app::SimulationEngine::compiled,
+        paths);
+    assert(reference.result.status == fsim::runtime::RunStatus::completed);
+    assert(reference.result.status == compiled.result.status);
+    assert(reference.values == compiled.values);
+    assert((compiled.values == std::vector<std::string> { "1" }));
+#if defined(FSIM_HAS_LLVM)
+    assert(compiled.compiled_processes == 1);
+    assert(compiled.compiled_modules == 1);
+#else
+    assert(compiled.compiled_processes == 0);
+    assert(compiled.compiled_modules == 0);
+#endif
+}
+
 void test_vhdl_concurrent_assertion(
     const std::filesystem::path& directory,
     const std::filesystem::path& source,
@@ -955,8 +1014,8 @@ void test_vhdl_falling_edge(
             "1" }));
 #if defined(FSIM_HAS_LLVM)
     assert(compiled.compiled_processes == 12);
-    assert(compiled.compiled_modules == 1);
-    assert(warm.native_cache.hits == 1);
+    assert(compiled.compiled_modules == 3);
+    assert(warm.native_cache.hits == 3);
     assert(warm.native_cache.misses == 0);
 #else
     assert(compiled.compiled_processes == 0);
@@ -1783,6 +1842,22 @@ module literal_closure_app;
 endmodule
 )";
     }
+    const auto packed_index_source = directory.path / "packed_index.sv";
+    {
+        std::ofstream output(packed_index_source);
+        output << R"(
+module packed_index_app;
+  logic [3:0] values;
+  logic [1:0] slot;
+  logic wrapped_select;
+  initial begin
+    values = 4'b0001;
+    slot = 2'b11;
+    wrapped_select = values[slot + 1'b1];
+  end
+endmodule
+)";
+    }
     const auto concurrent_assertion_source = directory.path / "concurrent_assertion.vhd";
     {
         std::ofstream output(concurrent_assertion_source);
@@ -2164,6 +2239,14 @@ end architecture;
     test_systemverilog_literal_closure(
         directory.path,
         literal_closure_source,
+        fsim::project::Optimization::o2);
+    test_systemverilog_packed_index_self_determined(
+        directory.path,
+        packed_index_source,
+        fsim::project::Optimization::o0);
+    test_systemverilog_packed_index_self_determined(
+        directory.path,
+        packed_index_source,
         fsim::project::Optimization::o2);
     test_vhdl_concurrent_assertion(
         directory.path,

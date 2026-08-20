@@ -267,6 +267,30 @@ void collect_hierarchy(
     return std::move(*project);
 }
 
+void test_dormant_runtime_updates(
+    const fsim::project::Config& config,
+    const std::string_view final_value)
+{
+    auto project = build_project(config);
+    fsim::app::Simulation simulation {
+        std::move(project),
+        config.run.max_deltas,
+        fsim::app::SimulationEngine::interpreter,
+        fsim::app::SystemVerilogVpiRuntimeUpdates::disabled
+    };
+    auto& registry = simulation.systemverilog_vpi_objects();
+    const auto object = registry.find("vpi_app.evolving");
+    const auto signal = simulation.find_signal("vpi_app.evolving");
+    assert(object && signal);
+    const auto registry_before = stored_bits(registry, object.value->handle);
+
+    const auto run = simulation.run();
+    assert(run.status == fsim::runtime::RunStatus::stopped
+        && simulation.finished());
+    assert(simulation.read_signal(*signal).to_msb_string() == final_value);
+    assert(stored_bits(registry, object.value->handle) == registry_before);
+}
+
 Capture execute(
     const fsim::project::Config& config,
     const fsim::app::SimulationEngine engine,
@@ -1207,6 +1231,9 @@ endmodule
         && interpreter.observably_equal(compiled_o2));
     assert(interpreter.named_events.size() == 1
         && interpreter.named_events.front().value.empty());
+    test_dormant_runtime_updates(
+        make_config(temporary.path, source, fsim::project::Optimization::o2),
+        late);
 
     const auto metadata_source = temporary.path / "vpi-metadata.sv";
     {

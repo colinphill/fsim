@@ -132,9 +132,9 @@ fsim_require_nested_portable_tokens("${FSIM_DESIGN_CODEC}"
   "design state exceeds the safe structural nesting depth"
   "design state contains trailing bytes")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_TEST}"
-  "kRuntimeStateSchema == 48"
-  "kSystemVerilogCoverageStateSchema == 4"
-  "kSystemVerilogUvmStateSchema == 2"
+  "kRuntimeStateSchema == 50"
+  "kSystemVerilogCoverageStateSchema == 5"
+  "kSystemVerilogUvmStateSchema == 3"
   "future-coverage-state.bin"
   "truncated-coverage-state.bin"
   "future_uvm")

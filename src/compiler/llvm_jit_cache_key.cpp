@@ -188,7 +188,7 @@ using runtime::simir::WriteUpdateDynamicSlice;
 using runtime::simir::WriteUpdateSlice;
 using runtime::simir::Yield;
 
-constexpr std::string_view kNativeObjectCacheSchema = "fsim-llvm-native-object-v116";
+constexpr std::string_view kNativeObjectCacheSchema = "fsim-llvm-native-object-v167";
 
 void add_key_u64(CacheKeyBuilder& builder, const std::string_view label,
     const std::uint64_t value)
@@ -363,6 +363,8 @@ void add_container_type_key(
     const std::span<const std::uint32_t> signal_widths,
     const std::span<const ValueKind> signal_value_kinds,
     const JitOptimizationLevel optimization,
+    const bool debug_instrumentation,
+    const bool require_direct_update_slots,
     const llvm::Triple& target_triple, const llvm::DataLayout& data_layout,
     const std::string_view target_cpu,
     const std::span<const std::string> target_features)
@@ -370,8 +372,10 @@ void add_container_type_key(
     CacheKeyBuilder builder;
     builder.add("llvm-object-schema", kNativeObjectCacheSchema);
     builder.add("llvm-version", LLVM_VERSION_STRING);
-    builder.add("optimization",
-        optimization == JitOptimizationLevel::o0 ? "o0" : "o2");
+    builder.add("optimization", to_string(optimization));
+    add_key_u64(builder, "debug-instrumentation", debug_instrumentation);
+    add_key_u64(
+        builder, "require-direct-update-slots", require_direct_update_slots);
     add_key_u64(builder, "runtime-abi-version",
         FSIM_JIT_RUNTIME_ABI_VERSION_V1);
     add_key_u64(builder, "runtime-abi-structure-size",
@@ -554,7 +558,59 @@ void add_container_type_key(
             static_cast<std::underlying_type_t<runtime::simir::EdgeKind>>(
                 sensitivity.edge));
     }
+    add_key_u64(
+        builder, "static-trigger-region-count",
+        process.static_trigger_regions.size());
+    for (const auto& region : process.static_trigger_regions) {
+        add_key_u64(builder, "static-trigger-region-begin", region.begin);
+        add_key_u64(builder, "static-trigger-region-end", region.end);
+        add_key_u64(builder, "static-trigger-region-mask", region.mask);
+    }
 #include "llvm_jit_cache_key_operations.tpp"
+    return builder.finish();
+}
+
+[[nodiscard]] std::string make_immutable_design_object_cache_key(
+    const std::string_view design_identity,
+    const std::string_view module_identity,
+    const std::string_view symbol,
+    const JitOptimizationLevel optimization,
+    const bool debug_instrumentation,
+    const bool require_direct_update_slots,
+    const llvm::Triple& target_triple,
+    const llvm::DataLayout& data_layout,
+    const std::string_view target_cpu,
+    const std::span<const std::string> target_features)
+{
+    CacheKeyBuilder builder;
+    builder.add("llvm-object-schema", kNativeObjectCacheSchema);
+    builder.add("llvm-version", LLVM_VERSION_STRING);
+    builder.add("optimization", to_string(optimization));
+    add_key_u64(builder, "debug-instrumentation", debug_instrumentation);
+    add_key_u64(
+        builder, "require-direct-update-slots", require_direct_update_slots);
+    add_key_u64(builder, "runtime-abi-version",
+        FSIM_JIT_RUNTIME_ABI_VERSION_V1);
+    add_key_u64(builder, "runtime-abi-structure-size",
+        sizeof(fsim_jit_runtime_v1));
+    add_key_u64(builder, "frame-abi-version",
+        FSIM_JIT_FRAME_ABI_VERSION_V1);
+    add_key_u64(builder, "frame-abi-structure-size",
+        sizeof(fsim_jit_frame_v1));
+    add_key_u64(builder, "resume-result-abi-version",
+        FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1);
+    add_key_u64(builder, "resume-result-abi-structure-size",
+        sizeof(fsim_jit_resume_result_v1));
+    builder.add("target-triple", target_triple.str());
+    builder.add("data-layout", data_layout.getStringRepresentation());
+    builder.add("target-cpu", target_cpu);
+    add_key_u64(builder, "target-feature-count", target_features.size());
+    for (const auto& feature : target_features) {
+        builder.add("target-feature", feature);
+    }
+    builder.add("immutable-design-identity", design_identity);
+    builder.add("module-identity", module_identity);
+    builder.add("symbol", symbol);
     return builder.finish();
 }
 
@@ -590,7 +646,10 @@ void add_container_type_key(
 make_frame_layout(const std::string_view cache_key,
     const std::span<const std::uint32_t> register_widths,
     const std::size_t string_register_count,
-    const bool uses_logic9)
+    const bool uses_logic9,
+    const bool tracks_register_initialization,
+    const std::span<const runtime::simir::SignalId> direct_read_signals,
+    const std::span<const runtime::simir::SignalId> direct_update_signals)
 {
     JitProcessFrameLayout result;
     result.layout_id_low = cache_key_word(cache_key, 0);
@@ -598,7 +657,12 @@ make_frame_layout(const std::string_view cache_key,
     result.register_count = static_cast<std::uint32_t>(register_widths.size());
     result.string_register_count = static_cast<std::uint32_t>(string_register_count);
     result.uses_logic9 = uses_logic9;
+    result.tracks_register_initialization = tracks_register_initialization;
     result.register_widths.assign(register_widths.begin(), register_widths.end());
+    result.direct_read_signals.assign(
+        direct_read_signals.begin(), direct_read_signals.end());
+    result.direct_update_signals.assign(
+        direct_update_signals.begin(), direct_update_signals.end());
     result.register_word_offsets.reserve(register_widths.size());
     std::uint64_t offset { };
     for (const auto width : register_widths) {

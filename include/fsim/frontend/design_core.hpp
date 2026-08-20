@@ -634,8 +634,8 @@ struct SignalDeclaration {
     // hierarchy bundles rather than independently allocated packed signals.
     std::string interface_type;
     std::string modport;
-    // VHDL input-port default retained in the entity interface. Other
-    // languages and non-input VHDL ports leave this empty.
+    // VHDL input-port defaults and declarative signal initializers. Other
+    // languages may also retain declaration defaults for executable HIR.
     std::optional<Expression> default_value;
 
     SignalDeclaration() = default;

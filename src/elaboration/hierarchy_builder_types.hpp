@@ -17,6 +17,7 @@ struct HierarchyPortAliases {
   std::unordered_map<std::string, runtime::simir::SignalId> signals;
   std::unordered_map<std::string, runtime::simir::StringObjectId> strings;
   std::unordered_map<std::string, runtime::simir::ContainerObjectId> containers;
+  std::vector<frontend::SignalDeclaration> vhdl_input_aliases;
   std::vector<frontend::Statement> vhdl_input_drivers;
   std::unordered_set<runtime::simir::SignalId> read_only_signals;
   std::unordered_set<runtime::simir::StringObjectId> read_only_strings;

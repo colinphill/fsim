@@ -123,7 +123,10 @@ Capture execute(
     capture.values[index] =
         simulation.read_signal(signals[index]).to_msb_string();
   }
-  for (const auto& process : simulation.design().processes()) {
+  for (std::size_t id = 0;
+       id < simulation.design_ir().processes().size(); ++id) {
+    const auto& process = simulation.process_program(
+        static_cast<fsim::runtime::simir::ProcessId>(id));
     for (std::size_t index = 0;
          index < process.debug_locals.size(); ++index) {
       const auto& local = process.debug_locals[index];
@@ -176,13 +179,17 @@ void verify(
              capture.local_values,
              "retained_task.state=00000010")
       != capture.local_values.end());
-  assert(std::ranges::count_if(
-             capture.points,
-             [](const auto& point) {
-               return point.kind
-                   == fsim::runtime::simir::ExecutionPointKind::call;
-             })
-      >= 9);
+  const auto call_points = std::ranges::count_if(
+      capture.points,
+      [](const auto& point) {
+        return point.kind
+            == fsim::runtime::simir::ExecutionPointKind::call;
+      });
+  // Optimized native callables are deliberately inlined and therefore do
+  // not expose the interpreter's internal Call boundaries.
+  assert(capture.compiled_processes == 0
+      ? call_points >= 9
+      : call_points == 0);
   assert(capture.vcd.find(expected[1]) != std::string::npos);
   assert(capture.vcd.find(expected[7]) != std::string::npos);
   assert(capture.vcd.find(expected[9]) != std::string::npos);
@@ -279,7 +286,6 @@ endmodule
     verify(cold, expected);
     verify(warm, expected);
     assert(reference.keys == cold.keys && cold.keys == warm.keys);
-    assert(same_points(reference.points, cold.points));
     assert(same_points(cold.points, warm.points));
     if (optimization == fsim::project::Optimization::o2) {
       baseline_keys = warm.keys;

@@ -160,6 +160,14 @@ void substitute_parameters(
             diagnostics,
             language);
     }
+    for (auto& variable : body.variables) {
+        substitute_parameters(
+            variable,
+            environment,
+            domains,
+            diagnostics,
+            language);
+    }
     for (auto& alias : body.signal_aliases) {
         substitute_parameters(
             alias.type,
@@ -173,6 +181,114 @@ void substitute_parameters(
             auto& owner,
             const ConstantEnvironment& parent_environment,
             const ConstantDomainEnvironment& parent_domains) -> void {
+          using Owner = std::remove_cvref_t<decltype(owner)>;
+          if constexpr (
+              std::is_same_v<Owner, frontend::FunctionDeclaration>
+              || std::is_same_v<Owner, frontend::ProcedureDeclaration>) {
+              std::unordered_set<std::string> formal_names;
+              for (const auto& argument : owner.arguments) {
+                  formal_names.insert(argument.name);
+              }
+              const auto expression_mentions =
+                  [&](const auto& recurse,
+                      const frontend::Expression& expression) -> bool {
+                    if (expression.kind
+                            == frontend::ExpressionKind::Identifier
+                        && formal_names.contains(expression.text)) {
+                        return true;
+                    }
+                    return std::ranges::any_of(
+                        expression.operands,
+                        [&](const auto& operand) {
+                            return recurse(recurse, operand);
+                        });
+                  };
+              const auto type_mentions =
+                  [&](const auto& recurse,
+                      const frontend::Type& type) -> bool {
+                    const auto range_mentions = [&](const auto& range) {
+                        return expression_mentions(
+                                   expression_mentions, range.left)
+                            || expression_mentions(
+                                   expression_mentions, range.right);
+                    };
+                    if ((type.packed_range_expression
+                            && range_mentions(
+                                *type.packed_range_expression))
+                        || (type.integer_range_expression
+                            && range_mentions(
+                                *type.integer_range_expression))
+                        || std::ranges::any_of(
+                            type.vhdl_array_constraints,
+                            range_mentions)) {
+                        return true;
+                    }
+                    return type.vhdl_array
+                        && std::ranges::any_of(
+                            type.vhdl_array->element_types,
+                            [&](const auto& element) {
+                                return recurse(recurse, element);
+                            });
+                  };
+              bool defer = false;
+              for (const auto& constant : owner.constants) {
+                  if (expression_mentions(
+                          expression_mentions,
+                          constant.default_value)) {
+                      defer = true;
+                      formal_names.insert(constant.name);
+                  }
+              }
+              defer = defer || std::ranges::any_of(
+                  owner.type_aliases,
+                  [&](const auto& alias) {
+                      return type_mentions(type_mentions, alias.type);
+                  });
+              defer = defer || std::ranges::any_of(
+                  owner.variables,
+                  [&](const auto& variable) {
+                      return type_mentions(type_mentions, variable.type);
+                  });
+              if (defer) {
+              for (auto& constant : owner.constants) {
+                  substitute_parameters(
+                      constant.default_value,
+                      parent_environment,
+                      parent_domains,
+                      language);
+              }
+              for (auto& variable : owner.variables) {
+                  if (variable.initializer) {
+                      substitute_parameters(
+                          *variable.initializer,
+                          parent_environment,
+                          parent_domains,
+                          language);
+                  }
+              }
+              for (auto& function : owner.functions) {
+                  self(
+                      self,
+                      function,
+                      parent_environment,
+                      parent_domains);
+              }
+              for (auto& procedure : owner.procedures) {
+                  self(
+                      self,
+                      procedure,
+                      parent_environment,
+                      parent_domains);
+              }
+              substitute_parameters(
+                  owner.statements,
+                  parent_environment,
+                  parent_domains,
+                  diagnostics,
+                  language);
+              return;
+              }
+          }
           auto local_environment = parent_environment;
           auto local_domains = parent_domains;
           frontend::GenerateBody declarations;
@@ -183,6 +299,7 @@ void substitute_parameters(
               local_environment,
               local_domains,
               language,
+              owner.functions,
               diagnostics);
           owner.constants = std::move(declarations.constants);
           owner.type_aliases =

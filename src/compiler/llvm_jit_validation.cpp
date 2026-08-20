@@ -239,6 +239,21 @@ using namespace runtime::simir;
                 "static sensitivity has an invalid edge kind");
         }
     }
+    InstructionIndex previous_trigger_end { };
+    for (const auto& region : process.static_trigger_regions) {
+        if (region.begin >= region.end
+            || region.end > process.operations.size()
+            || region.begin < previous_trigger_end
+            || (region.mask & Process::full_static_trigger_mask) != 0U
+            || process.static_sensitivity.size() > 63U
+            || (process.static_sensitivity.size() < 63U
+                && (region.mask >> process.static_sensitivity.size()) != 0U)) {
+            reject(
+                process, region.begin,
+                "static trigger region metadata is invalid");
+        }
+        previous_trigger_end = region.end;
+    }
     for (std::size_t index = 0; index < process.operations.size(); ++index) {
         fsim::runtime::simir::visit_operation(
             [&](const auto& operation) {
@@ -299,13 +314,13 @@ using namespace runtime::simir;
                         ? 1U
                         : width;
                     constrain_width(operation.destination, result_width, index);
-                    result.uses_exact_signal_operation
-                        = result.uses_exact_signal_operation
+                    result.uses_wide_signal_read
+                        = result.uses_wide_signal_read
                         || (width > 64
                             && operation.kind == SignalReadKind::current);
                 } else if constexpr (std::is_same_v<OperationType, SignalEvent>) {
                     result.uses_signal_event = true;
-                    (void)signal_width(operation.signal, index);
+                    (void)referenced_signal_width(operation.signal, index);
                     record_definition(operation.destination, index);
                     constrain_width(operation.destination, 1U, index);
                 } else if constexpr (std::is_same_v<OperationType, SignalLastValue>) {
@@ -317,7 +332,7 @@ using namespace runtime::simir;
                         index);
                 } else if constexpr (std::is_same_v<OperationType, SignalLastEvent>) {
                     result.uses_signal_last_event = true;
-                    (void)signal_width(operation.signal, index);
+                    (void)referenced_signal_width(operation.signal, index);
                     record_definition(operation.destination, index);
                     constrain_width(operation.destination, 64U, index);
                 } else if constexpr (
@@ -379,19 +394,19 @@ using namespace runtime::simir;
                     }
                 } else if constexpr (std::is_same_v<OperationType, SignalActive>) {
                     result.uses_signal_active = true;
-                    (void)signal_width(operation.signal, index);
+                    (void)referenced_signal_width(operation.signal, index);
                     record_definition(operation.destination, index);
                     constrain_width(operation.destination, 1U, index);
                 } else if constexpr (
                     std::is_same_v<OperationType, SignalLastActive>) {
                     result.uses_signal_last_active = true;
-                    (void)signal_width(operation.signal, index);
+                    (void)referenced_signal_width(operation.signal, index);
                     record_definition(operation.destination, index);
                     constrain_width(operation.destination, 64U, index);
                 } else if constexpr (
                     std::is_same_v<OperationType, SignalDriving>) {
                     result.uses_signal_driving = true;
-                    (void)signal_width(operation.signal, index);
+                    (void)referenced_signal_width(operation.signal, index);
                     record_definition(operation.destination, index);
                     constrain_width(operation.destination, 1U, index);
                 } else if constexpr (
@@ -884,6 +899,17 @@ using namespace runtime::simir;
                         operation.source,
                         process.container_register_types[operation.target].element_width,
                         index);
+                } else if constexpr (std::is_same_v<
+                                         OperationType,
+                                         WriteContainerObjectElement>) {
+                    result.uses_containers = true;
+                    (void)operation.object;
+                    record_use(operation.index, index);
+                    record_use(operation.source, index);
+                    if (operation.transaction_signal) {
+                        (void)referenced_signal_width(
+                            *operation.transaction_signal, index);
+                    }
                 } else if constexpr (
                     std::is_same_v<OperationType, ContainerStringRead>
                     || std::is_same_v<
@@ -2010,11 +2036,59 @@ using namespace runtime::simir;
         if (!has_wide_register) {
             continue;
         }
+        visit_operation(
+            [&](const auto& operation) {
+                using OperationType = std::decay_t<decltype(operation)>;
+                if constexpr (std::is_same_v<OperationType, ContainerRead>) {
+                    if (!operation.string_index
+                        && operation.source
+                            < process.container_register_types.size()) {
+                        const auto& type
+                            = process.container_register_types[operation.source];
+                        result.uses_wide_container_operation
+                            = result.uses_wide_container_operation
+                            || (!type.associative
+                                && (type.element_kind
+                                        == ContainerElementKind::Packed
+                                    || type.element_kind
+                                        == ContainerElementKind::Scalar)
+                                && type.element_width > 64U
+                                && result.register_widths[operation.index]
+                                    <= 64U);
+                    }
+                } else if constexpr (
+                    std::is_same_v<OperationType, ContainerWrite>) {
+                    if (!operation.string_index
+                        && operation.target
+                            < process.container_register_types.size()) {
+                        const auto& type
+                            = process.container_register_types[operation.target];
+                        result.uses_wide_container_operation
+                            = result.uses_wide_container_operation
+                            || (!type.associative
+                                && (type.element_kind
+                                        == ContainerElementKind::Packed
+                                    || type.element_kind
+                                        == ContainerElementKind::Scalar)
+                                && type.element_width > 64U
+                                && result.register_widths[operation.index]
+                                    <= 64U);
+                    }
+                }
+            },
+            process.operations[index]);
         if (!supports_wide_register_operation(
                 process.operations[index], result.register_widths)) {
+            std::string operation_type;
+            fsim::runtime::simir::visit_operation(
+                [&](const auto& operation) {
+                    operation_type = typeid(operation).name();
+                },
+                process.operations[index]);
             record_unsupported(
                 index,
-                "wide register operation is outside the current LLVM vector subset");
+                "wide register operation is outside the current LLVM vector "
+                "subset (operation " + operation_type + ")");
         }
     }
     if (const auto error = validate_selection_operation_bounds(
@@ -2257,8 +2331,9 @@ using namespace runtime::simir;
         for (const auto used : instruction_uses[index]) {
             if (!definitely_defined_in[index][used]) {
                 reject(process, index,
-                    "register may be used before definition on a control-flow "
-                    "path");
+                    "register " + std::to_string(used)
+                        + " may be used before definition on a control-flow "
+                          "path");
             }
         }
     }
@@ -2266,6 +2341,8 @@ using namespace runtime::simir;
         reject_unsupported(
             process, unsupported->first, unsupported->second);
     }
+    result.instruction_uses = std::move(instruction_uses);
+    result.instruction_definitions = std::move(instruction_definitions);
     return result;
 }
 } // namespace fsim::compiler::llvm_detail

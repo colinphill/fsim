@@ -1053,10 +1053,45 @@ class DesignIrBuilder final {
     for (const auto& process : elaborated_.systemc_processes()) {
       systemc_processes.insert(process.process);
     }
+    std::vector<std::optional<di::SpecializationId>>
+        specialization_by_process(elaborated_.processes().size());
+    std::vector<std::optional<semantic::ProcessId>>
+        source_by_process(elaborated_.processes().size());
+    for (std::size_t specialization_index = 0;
+         specialization_index < hdl_specialization_count_;
+         ++specialization_index) {
+      const auto specialization = di::SpecializationId::from_index(
+          static_cast<std::uint32_t>(specialization_index));
+      const auto source_processes = unit_processes(
+          result_.specializations()[specialization_index].unit);
+      const auto& runtime_processes =
+          elaborated_.specializations()[specialization_index].processes;
+      for (std::size_t process_index = 0;
+           process_index < runtime_processes.size(); ++process_index) {
+        const auto runtime_process = static_cast<std::size_t>(
+            runtime_processes[process_index]);
+        if (runtime_process >= specialization_by_process.size()) {
+          continue;
+        }
+        specialization_by_process[runtime_process] = specialization;
+        if (process_index < source_processes.size()) {
+          source_by_process[runtime_process] =
+              source_processes[process_index];
+        }
+      }
+    }
     for (std::size_t index = 0; index < elaborated_.processes().size(); ++index) {
       const auto& input = elaborated_.processes()[index];
-      const auto specialization = process_specialization(input.id, input.name);
-      const auto source_id = source_process(specialization, input.id);
+      const auto runtime_index = static_cast<std::size_t>(input.id);
+      const auto specialization =
+          runtime_index < specialization_by_process.size()
+              && specialization_by_process[runtime_index]
+          ? *specialization_by_process[runtime_index]
+          : process_specialization(input.id, input.name);
+      const auto source_id =
+          runtime_index < source_by_process.size()
+          ? source_by_process[runtime_index]
+          : std::nullopt;
       const auto id = di::ProcessOccurrenceId::from_index(
           static_cast<std::uint32_t>(result_.processes().size()));
       di::ProcessOccurrence output;
@@ -1281,7 +1316,7 @@ bool design_object_is_signal_bearing(
 
 bool valid_runtime_projection(
     const semantic::design::DesignIr& design,
-    const elaboration::ElaboratedDesign& runtime) noexcept {
+    const elaboration::ElaboratedDesign& runtime) {
   using ObjectKind = semantic::design::ObjectKind;
   using BoundaryKind = semantic::design::BoundaryKind;
   if (!design.valid() || design.top() != runtime.top()
@@ -1310,63 +1345,88 @@ bool valid_runtime_projection(
       return false;
     }
   }
-  for (const auto& signal : runtime.signals()) {
-    const auto matches = std::ranges::count_if(
-        design.objects(), [&](const auto& object) {
-          return object.kind == ObjectKind::signal
-              && !object.parent_object && object.runtime_index == signal.id
-              && object.width == signal.width;
-        });
-    if (matches != 1) {
-      return false;
+  std::vector<std::size_t> signal_matches(runtime.signals().size());
+  using RuntimePath = std::pair<std::string_view, std::uint64_t>;
+  std::vector<RuntimePath> projected_signal_paths;
+  std::vector<RuntimePath> projected_container_paths;
+  projected_signal_paths.reserve(design.objects().size());
+  projected_container_paths.reserve(design.objects().size());
+  for (const auto& object : design.objects()) {
+    if (object.kind == ObjectKind::signal && !object.parent_object
+        && object.runtime_index < runtime.signals().size()
+        && object.width
+            == runtime.signals()[object.runtime_index].width) {
+      ++signal_matches[object.runtime_index];
+    }
+    if (design_object_is_signal_bearing(object)) {
+      projected_signal_paths.emplace_back(
+          object.path, object.runtime_index);
+    }
+    if (object.kind == ObjectKind::container) {
+      projected_container_paths.emplace_back(
+          object.path, object.runtime_index);
     }
   }
+  if (std::ranges::any_of(
+          signal_matches,
+          [](const auto matches) { return matches != 1; })) {
+    return false;
+  }
+  std::ranges::sort(projected_signal_paths);
+  std::ranges::sort(projected_container_paths);
   for (const auto& [path, signal] : runtime.signal_paths()) {
-    if (std::ranges::none_of(
-            design.objects(), [&](const auto& object) {
-              return design_object_is_signal_bearing(object)
-                  && object.path == path && object.runtime_index == signal;
-            })) {
+    if (!std::ranges::binary_search(
+            projected_signal_paths,
+            RuntimePath { path, signal })) {
       return false;
     }
   }
   for (const auto& [path, object] : runtime.container_paths()) {
-    if (std::ranges::none_of(
-            design.objects(), [&](const auto& candidate) {
-              return candidate.kind == ObjectKind::container
-                  && candidate.path == path
-                  && candidate.runtime_index == object;
-            })) {
+    if (!std::ranges::binary_search(
+            projected_container_paths,
+            RuntimePath { path, object })) {
       return false;
     }
   }
+  std::vector<const semantic::design::ProcessOccurrence*>
+      projected_processes(runtime.processes().size(), nullptr);
+  std::vector<std::size_t> process_matches(runtime.processes().size());
+  for (const auto& process : design.processes()) {
+    if (process.runtime_index >= runtime.processes().size()) {
+      continue;
+    }
+    projected_processes[process.runtime_index] = &process;
+    ++process_matches[process.runtime_index];
+  }
+  std::vector<bool> process_has_driver(design.processes().size());
+  std::vector<bool> process_has_transaction(design.processes().size());
+  for (const auto& driver : design.drivers()) {
+    if (driver.process.value() < process_has_driver.size()) {
+      process_has_driver[driver.process.value()] = true;
+    }
+  }
+  for (const auto& transaction : design.transactions()) {
+    if (transaction.process.value() < process_has_transaction.size()) {
+      process_has_transaction[transaction.process.value()] = true;
+    }
+  }
   for (std::size_t index = 0; index < runtime.processes().size(); ++index) {
-    const auto projected = std::ranges::find(
-        design.processes(), index,
-        &semantic::design::ProcessOccurrence::runtime_index);
-    if (projected == design.processes().end()
+    const auto* projected = projected_processes[index];
+    if (projected == nullptr || process_matches[index] != 1
         || projected->name != runtime.processes()[index].name
         || projected->initialize != runtime.processes()[index].initialize
         || projected->observed != runtime.processes()[index].observed
         || projected->reactive != runtime.processes()[index].reactive
-        || projected->final != runtime.processes()[index].final
-        || std::ranges::count(
-               design.processes(), index,
-               &semantic::design::ProcessOccurrence::runtime_index)
-            != 1) {
-        return false;
+        || projected->final != runtime.processes()[index].final) {
+      return false;
     }
     if (runtime.processes()[index].switch_bidirectional
         && (!projected->drivers.empty()
             || !projected->transactions.empty()
-            || std::ranges::any_of(
-                design.drivers(), [&](const auto& driver) {
-                  return driver.process == projected->id;
-                })
-            || std::ranges::any_of(
-                design.transactions(), [&](const auto& transaction) {
-                  return transaction.process == projected->id;
-                }))) {
+            || (projected->id.value() < process_has_driver.size()
+                && process_has_driver[projected->id.value()])
+            || (projected->id.value() < process_has_transaction.size()
+                && process_has_transaction[projected->id.value()]))) {
       return false;
     }
   }

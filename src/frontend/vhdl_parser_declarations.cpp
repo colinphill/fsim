@@ -1146,12 +1146,9 @@ void VhdlParser::parse_signal_declaration(
   }
   expect(TokenKind::Colon, "':' after signal name", "FSIM-VHDL-PARSE-017");
   const Type type = parse_vhdl_type(true, true);
+  std::optional<Expression> default_value;
   if (match(TokenKind::ColonEqual)) {
-    const auto initializer = previous();
-    (void)parse_expression();
-    error(initializer, "FSIM-VHDL-UNSUPPORTED-012",
-          "VHDL signal initializers are not executable in this frontend "
-          "slice");
+    default_value = parse_expression();
   }
   expect(TokenKind::Semicolon, "';' after signal declaration",
          "FSIM-VHDL-PARSE-018");
@@ -1175,9 +1172,11 @@ void VhdlParser::parse_signal_declaration(
       error(name, "FSIM-VHDL-SEM-003",
             "duplicate signal declaration '" + canonical + "'");
     } else {
-      signals.push_back(SignalDeclaration{canonical, type,
-                                          PortDirection::Unknown, false,
-                                          span_from(start, previous())});
+      auto declaration = SignalDeclaration{
+          canonical, type, PortDirection::Unknown, false,
+          span_from(start, previous())};
+      declaration.default_value = default_value;
+      signals.push_back(std::move(declaration));
     }
   }
 }

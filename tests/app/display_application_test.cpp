@@ -329,7 +329,7 @@ void test_display(
     assert(reference.output[46].time == 4);
     assert(reference.compiled_processes == 0);
 #if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 1);
+    assert(compiled.compiled_processes == 2);
 #else
     assert(compiled.compiled_processes == 0);
 #endif
@@ -611,6 +611,9 @@ module display_test;
     $write;
     $display;
     $finish;
+  end
+  initial begin
+    #5 $display("after-finish");
   end
 endmodule
 )";

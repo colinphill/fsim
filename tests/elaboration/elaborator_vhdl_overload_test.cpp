@@ -4,6 +4,33 @@
 namespace fsim::tests::elaboration {
 
 void test_vhdl_callable_overloads() {
+    const auto unconstrained_result = frontend::parse_text(
+        "vhdl_unconstrained_function_result.vhd",
+        R"(
+entity unconstrained_function_result is
+  generic (width : integer := 8);
+  port (
+    input_value : in bit_vector(width - 1 downto 0);
+    output_value : out bit_vector(width - 1 downto 0));
+end entity;
+architecture rtl of unconstrained_function_result is
+  function pass_through(
+      value : bit_vector; count : integer) return bit_vector is
+    variable result : bit_vector(count - 1 downto 0) := value;
+  begin
+    return result;
+  end function;
+begin
+  output_value <= pass_through(input_value, width);
+end architecture;
+)",
+        frontend::Language::Vhdl2008);
+    assert(unconstrained_result.ok());
+    const auto unconstrained_elaboration = fsim::elaboration::elaborate(
+        unconstrained_result.design,
+        "vhdl:work.unconstrained_function_result(rtl)");
+    assert(unconstrained_elaboration.ok());
+
   const auto parsed = fsim::frontend::parse_text(
       "vhdl-callable-overloads.vhd",
       R"(

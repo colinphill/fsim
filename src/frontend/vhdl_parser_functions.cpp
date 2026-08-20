@@ -673,12 +673,13 @@ ParameterDeclaration VhdlParser::parse_vhdl_interface_function(
           || (profile.return_type.domain != ValueDomain::Integer
               && profile.return_type.domain != ValueDomain::Boolean
               && profile.return_type.domain != ValueDomain::Bit2
-              && profile.return_type.domain != ValueDomain::Logic9))) {
+              && profile.return_type.domain != ValueDomain::Logic9
+              && profile.return_type.domain != ValueDomain::String))) {
     error(
         result_start,
         "FSIM-VHDL-UNSUPPORTED-034",
         "bounded VHDL interface functions require scalar integer, "
-        "Boolean, bit, std_logic, or visible scalar subtype results");
+        "Boolean, bit, std_logic, string, or visible subtype results");
   }
 
   if (match_keyword("is", true)) {
@@ -799,12 +800,13 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
           || (function.return_type.domain != ValueDomain::Integer
               && function.return_type.domain != ValueDomain::Boolean
               && function.return_type.domain != ValueDomain::Bit2
-              && function.return_type.domain != ValueDomain::Logic9))) {
+              && function.return_type.domain != ValueDomain::Logic9
+              && function.return_type.domain != ValueDomain::String))) {
     error(
         result_start,
         "FSIM-VHDL-UNSUPPORTED-034",
         "bounded VHDL functions require scalar integer, Boolean, bit, "
-        "std_logic, or visible scalar subtype results");
+        "std_logic, string, or visible subtype results");
   }
 
   if (match(TokenKind::Semicolon)) {

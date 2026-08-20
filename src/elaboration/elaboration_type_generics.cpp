@@ -917,6 +917,11 @@ namespace {
 
 } // namespace
 
+std::string vhdl_type_identity(const frontend::Type& type)
+{
+    return canonical_type_identity(type);
+}
+
 NamedTypeEnvironment local_vhdl_type_environment(
     const DesignUnit& unit)
 {

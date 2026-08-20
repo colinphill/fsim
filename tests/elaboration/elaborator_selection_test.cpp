@@ -439,14 +439,11 @@ endmodule
 )",
             fsim::frontend::Language::SystemVerilog2017);
     assert(narrow_dynamic_select.ok());
-    const auto rejected_narrow_dynamic_select =
+    const auto elaborated_narrow_dynamic_select =
         fsim::elaboration::elaborate(
             narrow_dynamic_select.design,
             "sv:work.narrow_dynamic_select");
-    assert(!rejected_narrow_dynamic_select.ok());
-    assert(has_diagnostic(
-        rejected_narrow_dynamic_select,
-        "FSIM-ELAB-DYNINDEX-002"));
+    assert(elaborated_narrow_dynamic_select.ok());
 
     const auto empty_concatenation =
         fsim::frontend::parse_text(
@@ -1033,7 +1030,7 @@ endmodule
                 return fsim::runtime::simir::operation_holds<
                     fsim::runtime::simir::Branch>(operation);
             })
-        == 5);
+        == 2);
     assert(
         std::count_if(
             sv_conditional_process.operations.begin(),
@@ -1042,7 +1039,7 @@ endmodule
                 return fsim::runtime::simir::operation_holds<
                     fsim::runtime::simir::LogicalNot>(operation);
             })
-        == 10);
+        == 4);
     auto sv_conditional_interpreter =
         elaborated_sv_conditionals.design->create_interpreter();
     const auto sv_conditional_result =
@@ -1334,15 +1331,52 @@ endmodule
             .to_msb_string()
         == "00");
 
+    const auto dynamic_systemverilog_loops =
+        fsim::frontend::parse_text(
+            "dynamic_procedural_loops.sv",
+            R"(
+module dynamic_procedural_loops;
+  logic [2:0] dynamic_initial;
+  logic [2:0] dynamic_bound;
+  logic [3:0] observed;
+  initial begin
+    dynamic_initial = 1;
+    dynamic_bound = 3;
+    observed = 0;
+    for (int lane = dynamic_initial; lane < dynamic_bound; lane++)
+      observed = observed + 1;
+  end
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(dynamic_systemverilog_loops.ok());
+    const auto elaborated_dynamic_systemverilog_loops =
+        fsim::elaboration::elaborate(
+            dynamic_systemverilog_loops.design,
+            "sv:work.dynamic_procedural_loops");
+    assert(elaborated_dynamic_systemverilog_loops.ok());
+    auto dynamic_loop_interpreter =
+        elaborated_dynamic_systemverilog_loops.design
+            ->create_interpreter();
+    assert(
+        dynamic_loop_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto dynamic_loop_observed =
+        elaborated_dynamic_systemverilog_loops.design
+            ->find_signal("observed");
+    assert(dynamic_loop_observed);
+    assert(
+        dynamic_loop_interpreter
+            ->signal_value(*dynamic_loop_observed)
+            .to_msb_string()
+        == "0010");
+
     const auto invalid_systemverilog_loops =
         fsim::frontend::parse_text(
             "invalid_procedural_loops.sv",
             R"(
 module invalid_procedural_loops;
-  logic dynamic_bound;
   initial begin
-    for (int lane = dynamic_bound; lane < 1; lane++);
-    for (int lane = 0; lane < dynamic_bound; lane++);
     for (int lane = 0; lane < 1000001; lane++);
     for (int lane = 0; lane < 1; lane++) lane = 2;
   end
@@ -1356,8 +1390,7 @@ endmodule
             "sv:work.invalid_procedural_loops");
     assert(!rejected_systemverilog_loops.ok());
     for (const auto code :
-         {"FSIM-ELAB-071", "FSIM-ELAB-072",
-          "FSIM-ELAB-073", "FSIM-ELAB-074"}) {
+         {"FSIM-ELAB-073", "FSIM-ELAB-074"}) {
         assert(
             has_diagnostic(
                 rejected_systemverilog_loops, code));

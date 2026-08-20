@@ -327,6 +327,86 @@ end architecture;
     const auto recursive_result = fsim::elaboration::elaborate(
         recursive.design, "vhdl:work.recursive_top(rtl)");
     assert(recursive_result.ok());
+
+    const auto loop_shadow = fsim::frontend::parse_text(
+        "pure-loop-shadow.vhd",
+        R"(
+entity pure_loop_shadow is
+end entity;
+architecture rtl of pure_loop_shadow is
+  signal lane : integer;
+  signal result : bit;
+  function accumulate(seed : bit) return bit is
+    variable total : bit := seed;
+  begin
+    for lane in 1 to 2 loop
+      total := not total;
+    end loop;
+    return total;
+  end function;
+begin
+  result <= accumulate('0');
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(loop_shadow.ok());
+    const auto loop_shadow_result = fsim::elaboration::elaborate(
+        loop_shadow.design, "vhdl:work.pure_loop_shadow(rtl)");
+    for (const auto& diagnostic : loop_shadow_result.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+    }
+    assert(loop_shadow_result.ok());
+
+    const auto negative_mod = fsim::frontend::parse_text(
+        "negative-mod-constant-function.vhd",
+        R"(
+package negative_mod_pkg is
+  function normalize_mod(value : integer) return integer;
+  function normalize_rem(value : integer) return integer;
+end package;
+package body negative_mod_pkg is
+  function normalize_mod(value : integer) return integer is
+  begin
+    return value mod 255;
+  end function;
+  function normalize_rem(value : integer) return integer is
+  begin
+    return value rem 255;
+  end function;
+end package body;
+
+use work.negative_mod_pkg.all;
+entity negative_mod_constant_function is
+  generic (
+    mod_value : integer := normalize_mod(-1);
+    rem_value : integer := normalize_rem(-1));
+end entity;
+architecture rtl of negative_mod_constant_function is
+begin
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(negative_mod.ok());
+    const auto negative_mod_result = fsim::elaboration::elaborate(
+        negative_mod.design,
+        "vhdl:work.negative_mod_constant_function(rtl)");
+    for (const auto& diagnostic : negative_mod_result.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+    }
+    assert(negative_mod_result.ok());
+    const auto& negative_mod_specialization =
+        negative_mod_result.design->specializations().front();
+    assert(negative_mod_specialization.parameter_values.size() == 2);
+    assert(negative_mod_specialization.parameter_values[0].first
+           == "mod_value");
+    assert(negative_mod_specialization.parameter_values[0].second
+           == "254");
+    assert(negative_mod_specialization.parameter_values[1].first
+           == "rem_value");
+    assert(negative_mod_specialization.parameter_values[1].second
+           == "-1");
 }
 
 } // namespace fsim::tests::elaboration

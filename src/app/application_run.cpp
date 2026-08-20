@@ -7,6 +7,9 @@
 #include "fsim/runtime/fst_writer.hpp"
 #include "fsim/support/path.hpp"
 
+#include <chrono>
+#include <cstdlib>
+
 namespace fsim::app::application_detail {
 
 HdlVcdState::~HdlVcdState()
@@ -366,9 +369,7 @@ make_specialization_cache_keys(
 
 #if defined(FSIM_HAS_LLVM)
     const auto llvm_native_host_fingerprint = compiler::LlvmJit::native_host_identity(
-        config.build.optimization == project::Optimization::o0
-            ? compiler::JitOptimizationLevel::o0
-            : compiler::JitOptimizationLevel::o2)
+        jit_optimization(config.build.optimization))
                                                   .fingerprint;
 #endif
     std::vector<std::string> result;
@@ -1706,6 +1707,7 @@ namespace {
             if (!state.dumpports_time || *state.dumpports_time != event.time) {
                 return true;
             }
+            state.activate_observer();
             for (auto& file : state.extended_files) {
                 begin_extended_vcd_file(state, *file, event.time);
             }
@@ -1841,6 +1843,7 @@ void attach_hdl_vcd_control(
                     || *state.dumpvars_time != event.time) {
                     return;
                 }
+                state.activate_observer();
                 if (state.path.empty()) {
                     state.path = hdl_vcd_path(state, { });
                 }
@@ -1919,11 +1922,15 @@ void attach_hdl_vcd_control(
             }
             throw std::runtime_error { "unknown HDL VCD control kind" };
         });
-    state.observer = simulation.add_signal_change_hook(
-        [&state](const runtime::simir::SignalId signal,
-            const runtime::PackedLogic4& value,
-            const SimulationTick time,
-            std::uint64_t) {
+    state.activate_observer = [&state] {
+        if (state.observer != 0U) {
+            return;
+        }
+        state.observer = state.simulation->add_signal_change_hook(
+            [&state](const runtime::simir::SignalId signal,
+                const runtime::PackedLogic4& value,
+                const SimulationTick time,
+                std::uint64_t) {
             if (state.begun && state.enabled && !state.limit_reached
                 && state.selected.at(signal)) {
                 state.writer->set_time(time * state.tick_multiplier);
@@ -1954,7 +1961,8 @@ void attach_hdl_vcd_control(
                     check_extended_vcd_limit(*file);
                 }
             }
-        });
+            });
+    };
 }
 
 std::optional<SimulationTick> configured_duration(
@@ -1987,9 +1995,10 @@ void install_interrupt_hook(Simulation& simulation)
 
 void report_native_cache_failures(
     const Simulation& simulation,
-    diagnostic::Engine& diagnostics)
+    diagnostic::Engine& diagnostics,
+    const bool synchronize)
 {
-    const auto cache = simulation.native_cache_statistics();
+    const auto cache = simulation.native_cache_statistics(synchronize);
     if (cache.load_failures == 0 && cache.store_failures == 0
         && cache.prune_failures == 0) {
         return;
@@ -2049,6 +2058,7 @@ int handle_build(
         std::move(*built),
         config.run.max_deltas,
         SimulationEngine::compiled);
+    prepared.await_native_compilation();
     report_native_cache_failures(prepared, diagnostics);
     const auto native_cache = prepared.native_cache_statistics();
     for (const auto& request : invocation.library_exports) {
@@ -2162,10 +2172,20 @@ int run_built_project(
         archived_control = std::move(restored.application);
         publish_trace_control(*archived_control, trace_config.run);
     }
+    std::vector<std::string> process_names;
+    process_names.reserve(built.design.processes().size());
+    for (const auto& process : built.design.processes()) {
+        process_names.push_back(process.name);
+    }
+    const bool profile_phases = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
+    const auto simulation_setup_begin = std::chrono::steady_clock::now();
     Simulation simulation(
         std::move(built),
         config.run.max_deltas,
-        engine);
+        engine,
+        SystemVerilogVpiRuntimeUpdates::omitted);
+    const auto simulation_setup_elapsed = std::chrono::steady_clock::now()
+        - simulation_setup_begin;
     if (!apply_uvm_command_line(simulation, plusargs, diagnostics)) {
         return 1;
     }
@@ -2194,7 +2214,7 @@ int run_built_project(
                    << report_severity_name(severity)
                    << "[FSIM-HDL-REPORT]: " << message << '\n';
         });
-    report_native_cache_failures(simulation, diagnostics);
+    report_native_cache_failures(simulation, diagnostics, false);
     auto trace = attach_trace(simulation, trace_config, diagnostics, false,
         std::move(archived_control));
     if (trace_config.run.trace_file && trace_config.run.trace_enabled && !trace) {
@@ -2203,7 +2223,17 @@ int run_built_project(
     install_interrupt_hook(simulation);
     const InterruptSignalGuard interrupt_signal;
     try {
+        // Native materialization overlaps the initial interpreted execution.
+        // Each deferred executor is installed only at a process-resume safe
+        // point, preserving its interpreter frame while removing LLVM
+        // compilation from the cold simulation critical path. The explicit
+        // build command still waits for every requested cache artifact.
+        const auto native_await_elapsed
+            = std::chrono::steady_clock::duration::zero();
+        const auto simulation_run_begin = std::chrono::steady_clock::now();
         const auto result = simulation.run(duration);
+        const auto simulation_execution_elapsed
+            = std::chrono::steady_clock::now() - simulation_run_begin;
         if (trace && !finish_trace(*trace, diagnostics)) {
             return 1;
         }
@@ -2214,6 +2244,17 @@ int run_built_project(
                           ? "reached time limit"
                           : "stopped")
                << " at tick " << result.time << ", delta " << result.delta << '\n';
+        if (profile_phases) {
+            const auto milliseconds = [](const auto elapsed) {
+                return std::chrono::duration<double, std::milli>(elapsed)
+                    .count();
+            };
+            output << "FSIM-PROFILE setup_ms="
+                   << milliseconds(simulation_setup_elapsed)
+                   << " run_ms=" << milliseconds(simulation_execution_elapsed)
+                   << " native_await_ms=" << milliseconds(native_await_elapsed)
+                   << '\n';
+        }
         return 0;
     } catch (const runtime::DeltaCycleLimitError& error) {
         std::ostringstream message;
@@ -2265,7 +2306,12 @@ int run_built_project(
         diagnostics.report(diagnostic::Diagnostic {
             severity, "FSIM-RUN-ASSERT-0001", error.what(), std::move(span), { } });
     } catch (const runtime::simir::InterpreterError& error) {
-        diagnostics.error("FSIM-RUN-0001", error.what());
+        auto message = std::string { error.what() };
+        if (error.process() < process_names.size()) {
+            message += "; process '"
+                + process_names[error.process()] + "'";
+        }
+        diagnostics.error("FSIM-RUN-0001", std::move(message));
     } catch (const std::exception& error) {
         diagnostics.error("FSIM-RUN-0002", error.what());
     }

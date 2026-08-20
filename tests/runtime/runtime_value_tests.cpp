@@ -161,6 +161,18 @@ void test_packed_values() {
       word_value.aval_words().size() == 1
           && word_value.bval_words().size() == 1,
       "four-state values up to 64 bits must expose one packed word");
+  auto assigned_word = PackedLogic4(5U, Logic4::zero);
+  assigned_word.assign_word(
+      Logic4Word { 5U, ~UINT64_C(0), UINT64_C(0b10100) });
+  require(
+      assigned_word == word_value,
+      "single-word assignment must replace and mask inline planes");
+  try {
+    assigned_word.assign_word(Logic4Word { 4U, 0U, 0U });
+    throw std::runtime_error(
+        "mismatched single-word assignment width was accepted");
+  } catch (const std::invalid_argument&) {
+  }
 
   for (const auto invalid_width : {std::size_t{0}, std::size_t{65}}) {
     try {
@@ -183,12 +195,85 @@ void test_packed_values() {
       !wide_value.known_unsigned_value()
           && !wide_value.known_signed_value(),
       "unknown wide values must not convert to host integers");
+  std::array<PackedLogic4, 4> wide_drivers {
+      PackedLogic4 { 257U, Logic4::z },
+      PackedLogic4 { 257U, Logic4::z },
+      PackedLogic4 { 257U, Logic4::z },
+      PackedLogic4 { 257U, Logic4::z }
+  };
+  constexpr std::array states {
+      Logic4::zero, Logic4::one, Logic4::x, Logic4::z
+  };
+  for (std::size_t bit = 0; bit < 257U; ++bit) {
+    for (std::size_t driver = 0; driver < wide_drivers.size(); ++driver) {
+      wide_drivers[driver].set(
+          bit, states[(bit >> (driver * 2U)) & 3U]);
+    }
+  }
+  const auto wide_resolved = resolve(
+      std::span<const PackedLogic4> { wide_drivers });
+  auto scalar_resolved = PackedLogic4 { 257U, Logic4::z };
+  for (std::size_t bit = 0; bit < scalar_resolved.width(); ++bit) {
+    std::array<Logic4, 4> bit_drivers { };
+    for (std::size_t driver = 0; driver < wide_drivers.size(); ++driver) {
+      bit_drivers[driver] = wide_drivers[driver].get(bit);
+    }
+    scalar_resolved.set(
+        bit, resolve(std::span<const Logic4> { bit_drivers }));
+  }
+  require(
+      wide_resolved == scalar_resolved,
+      "wide four-state resolution matches scalar wire semantics across words");
   try {
     (void)wide_value.low_word();
     throw std::runtime_error(
         "wide four-state value exposed a single low word");
   } catch (const std::invalid_argument&) {
   }
+
+  const auto shared_four = PackedLogic4::from_msb_string(
+      "10XZ" + std::string(121, '1') + "Z01X");
+  const auto shared_four_text = shared_four.to_msb_string();
+  require(
+      shared_four == PackedLogic4::from_msb_string(shared_four_text),
+      "separately allocated wide four-state values compare by content");
+  auto set_copy = shared_four;
+  set_copy.set(0U, Logic4::zero);
+  require(
+      shared_four.to_msb_string() == shared_four_text
+          && set_copy != shared_four,
+      "wide four-state bit mutation must detach shared storage");
+  PackedLogic4 assigned_copy;
+  assigned_copy = shared_four;
+  assigned_copy.insert_word(
+      Logic4Word { 64U, UINT64_C(0x55aa55aa55aa55aa), 0U }, 63U);
+  require(
+      shared_four.to_msb_string() == shared_four_text
+          && assigned_copy != shared_four,
+      "wide four-state word insertion must detach copy-assigned storage");
+  auto filled_copy = shared_four;
+  filled_copy.fill(Logic4::z);
+  require(
+      shared_four.to_msb_string() == shared_four_text
+          && filled_copy == PackedLogic4(129U, Logic4::z),
+      "wide four-state fill must detach shared storage");
+
+  const auto shared_nine = PackedValue::from_logic9_msb_string(
+      "U01ZWLH-" + std::string(121, 'H'));
+  const auto shared_nine_text = shared_nine.to_msb_string();
+  auto nine_set_copy = shared_nine;
+  nine_set_copy.set_logic9(64U, Logic9::dont_care);
+  require(
+      shared_nine.to_msb_string() == shared_nine_text
+          && nine_set_copy != shared_nine,
+      "wide nine-state bit mutation must detach every shared plane");
+  auto nine_filled_copy = shared_nine;
+  nine_filled_copy.fill(Logic9::l);
+  require(
+      shared_nine.to_msb_string() == shared_nine_text
+          && nine_filled_copy
+              == PackedValue::from_logic9_msb_string(std::string(129, 'L')),
+      "wide nine-state fill must detach every shared plane");
 
   const auto wide_zero = PackedLogic4::from_msb_string(
       std::string(257, '0'));
@@ -216,6 +301,123 @@ void test_packed_values() {
       !wide_overflow.known_unsigned_value()
           && !wide_overflow.known_signed_value(),
       "known wide values outside host range must not be narrowed");
+
+  auto inserted = PackedLogic4(257, Logic4::zero);
+  inserted.set(0U, Logic4::one);
+  inserted.set(256U, Logic4::z);
+  const auto inserted_source = PackedLogic4::from_msb_string(
+      "10XZ" + std::string(121, '1') + "Z01X");
+  auto inserted_expected = inserted;
+  for (std::size_t bit = 0; bit < inserted_source.width(); ++bit) {
+    inserted_expected.set(63U + bit, inserted_source.get(bit));
+  }
+  inserted.insert_bits(inserted_source, 63U);
+  require(inserted == inserted_expected,
+      "wide four-state insertion must splice unaligned word planes");
+  require(
+      inserted.extract_bits(63U, inserted_source.width()) == inserted_source,
+      "wide four-state extraction must splice unaligned word planes");
+  try {
+    (void)inserted.extract_bits(257U, 1U);
+    throw std::runtime_error(
+        "out-of-range packed extraction was accepted");
+  } catch (const std::invalid_argument&) {
+  }
+
+  auto word_inserted = PackedLogic4(257, Logic4::x);
+  auto word_expected = word_inserted;
+  const auto inserted_word = Logic4Word {
+      64U, UINT64_C(0x9a55c33cf00f8765),
+      UINT64_C(0x0f0ff0f055aa33cc) };
+  const auto inserted_word_value = PackedLogic4::from_aval_bval(
+      inserted_word.width, inserted_word.aval, inserted_word.bval);
+  for (std::size_t bit = 0; bit < inserted_word.width; ++bit) {
+    word_expected.set(61U + bit, inserted_word_value.get(bit));
+  }
+  word_inserted.insert_word(inserted_word, 61U);
+  require(word_inserted == word_expected,
+      "four-state word insertion must splice an unaligned wide target");
+  require(
+      word_inserted.matches_word(inserted_word, 61U),
+      "word comparison must match an unaligned cross-word range");
+  auto mismatched_word = inserted_word;
+  mismatched_word.bval ^= UINT64_C(1) << 31U;
+  require(
+      !word_inserted.matches_word(mismatched_word, 61U),
+      "word comparison must distinguish bval changes in wide targets");
+
+  const auto inline_target = PackedLogic4::from_msb_string("10XZ0110");
+  const auto inline_slice = inline_target.extract_bits(1U, 6U).low_word();
+  require(
+      inline_target.matches_word(inline_slice, 1U),
+      "word comparison must match an unaligned inline range");
+  auto mismatched_inline = inline_slice;
+  mismatched_inline.aval ^= UINT64_C(1) << 4U;
+  require(
+      !inline_target.matches_word(mismatched_inline, 1U),
+      "word comparison must distinguish aval changes in inline targets");
+
+  for (const auto invalid : std::array {
+           Logic4Word { 0U, 0U, 0U },
+           Logic4Word { 65U, 0U, 0U } }) {
+    try {
+      (void)inline_target.matches_word(invalid, 0U);
+      throw std::runtime_error("invalid word comparison width was accepted");
+    } catch (const std::invalid_argument&) {
+    }
+  }
+  try {
+    (void)inline_target.matches_word(inline_slice, 3U);
+    throw std::runtime_error("out-of-range word comparison was accepted");
+  } catch (const std::invalid_argument&) {
+  }
+
+  const auto exact_word_target = PackedValue::from_logic9_msb_string("10XZ01");
+  require(
+      !exact_word_target.matches_word(
+          PackedLogic4::from_msb_string("10XZ01").low_word(), 0U),
+      "word comparison must reject exact nine-state target storage");
+
+  auto exact_inserted = PackedValue::from_logic9_msb_string(
+      std::string(257, '-'));
+  const auto exact_source = PackedValue::from_logic9_msb_string(
+      "U01ZWLH-" + std::string(57, 'H'));
+  auto exact_expected = exact_inserted;
+  for (std::size_t bit = 0; bit < exact_source.width(); ++bit) {
+    exact_expected.set_logic9(61U + bit, exact_source.get_logic9(bit));
+  }
+  exact_inserted.insert_bits(exact_source, 61U);
+  require(exact_inserted == exact_expected,
+      "wide nine-state insertion must splice every ordinal plane");
+  require(
+      exact_inserted.extract_bits(61U, exact_source.width()) == exact_source,
+      "wide nine-state extraction must splice every ordinal plane");
+
+  auto promoted_inserted = PackedValue::from_logic9_msb_string(
+      std::string(129, 'L'));
+  const auto four_source = PackedLogic4::from_msb_string("10XZ01");
+  auto promoted_expected = promoted_inserted;
+  for (std::size_t bit = 0; bit < four_source.width(); ++bit) {
+    promoted_expected.set_logic9(64U + bit, four_source.get_logic9(bit));
+  }
+  promoted_inserted.insert_bits(four_source, 64U);
+  require(promoted_inserted == promoted_expected,
+      "four-state insertion into a nine-state target must preserve domains");
+
+  auto promoted_word_inserted = PackedValue::from_logic9_msb_string(
+      std::string(129, 'L'));
+  auto promoted_word_expected = promoted_word_inserted;
+  const auto promoted_word = Logic4Word {
+      6U, UINT64_C(0b101101), UINT64_C(0b011010) };
+  const auto promoted_word_value = PackedLogic4::from_aval_bval(
+      promoted_word.width, promoted_word.aval, promoted_word.bval);
+  for (std::size_t bit = 0; bit < promoted_word.width; ++bit) {
+    promoted_word_expected.set_logic9(
+        63U + bit, promoted_word_value.get_logic9(bit));
+  }
+  promoted_word_inserted.insert_word(promoted_word, 63U);
+  require(promoted_word_inserted == promoted_word_expected,
+      "four-state word insertion into a nine-state target must preserve domains");
 
   const auto nine = PackedLogic9::from_msb_string("U01ZWLH-");
   require(nine.to_msb_string() == "U01ZWLH-", "nine-state round trip");
@@ -672,6 +874,140 @@ void test_scheduler_ownership_and_failure_containment() {
       "a moved-from scheduler cannot cancel transferred work");
   destination.cancel(moved);
   require(!moved, "scheduler moves preserve cancelable-work ownership");
+}
+
+void test_scheduler_batch_contract() {
+  using namespace fsim::runtime;
+
+  class RecordingBatch final : public SchedulerBatchTask {
+  public:
+    [[nodiscard]] SchedulerBatchResult execute(
+        Scheduler& scheduler,
+        const std::span<const std::uint64_t> payloads) override {
+      calls.emplace_back(payloads.begin(), payloads.end());
+      const auto consumed = std::min(limit, payloads.size());
+      for (std::size_t index = 0; index < consumed; ++index)
+        executed.push_back(payloads[index]);
+      if (stop_once) {
+        stop_once = false;
+        scheduler.request_stop();
+      }
+      if (fail_once) {
+        fail_once = false;
+        return {consumed,
+                std::make_exception_ptr(
+                    std::runtime_error("contained batch failure"))};
+      }
+      return {consumed, {}};
+    }
+
+    std::size_t limit = std::numeric_limits<std::size_t>::max();
+    bool stop_once = false;
+    bool fail_once = false;
+    std::vector<std::vector<std::uint64_t>> calls;
+    std::vector<std::uint64_t> executed;
+  };
+
+  const auto schedule_batch = [](
+                                  Scheduler& scheduler,
+                                  RecordingBatch& batch,
+                                  const StableOrder order,
+                                  const std::uint64_t payload,
+                                  std::vector<std::uint64_t>& fallbacks) {
+    scheduler.schedule_next_delta_batchable(
+        SchedulerPhase::active, order, batch, payload,
+        [payload, &fallbacks](Scheduler&) {
+          fallbacks.push_back(payload);
+        });
+  };
+
+  Scheduler ordered;
+  RecordingBatch first_batch;
+  RecordingBatch second_batch;
+  std::vector<std::uint64_t> fallbacks;
+  schedule_batch(ordered, first_batch, 30U, 3U, fallbacks);
+  schedule_batch(ordered, first_batch, 10U, 1U, fallbacks);
+  schedule_batch(ordered, first_batch, 20U, 2U, fallbacks);
+  ordered.schedule_next_delta(
+      SchedulerPhase::active, 25U,
+      [&](Scheduler&) { fallbacks.push_back(99U); });
+  schedule_batch(ordered, second_batch, 40U, 4U, fallbacks);
+  schedule_batch(ordered, second_batch, 50U, 5U, fallbacks);
+  const auto ordered_result = ordered.run();
+  require(
+      ordered_result.status == RunStatus::completed
+          && ordered_result.callbacks_executed == 6U
+          && first_batch.calls
+              == std::vector<std::vector<std::uint64_t>> {
+                  {1U, 2U}, {3U}}
+          && first_batch.executed
+              == std::vector<std::uint64_t> {1U, 2U, 3U}
+          && second_batch.calls
+              == std::vector<std::vector<std::uint64_t>> {{4U, 5U}}
+          && fallbacks == std::vector<std::uint64_t> {99U},
+      "scheduler batches only adjacent canonically ordered tasks");
+
+  Scheduler partial;
+  RecordingBatch partial_batch;
+  partial_batch.limit = 1U;
+  std::vector<std::uint64_t> partial_fallbacks;
+  for (std::uint64_t value = 1U; value <= 3U; ++value)
+    schedule_batch(
+        partial, partial_batch, value, value, partial_fallbacks);
+  const auto partial_result = partial.run();
+  require(
+      partial_result.status == RunStatus::completed
+          && partial_result.callbacks_executed == 3U
+          && partial_batch.calls
+              == std::vector<std::vector<std::uint64_t>> {
+                  {1U, 2U, 3U}, {2U, 3U}, {3U}}
+          && partial_batch.executed
+              == std::vector<std::uint64_t> {1U, 2U, 3U}
+          && partial_fallbacks.empty(),
+      "a partially consumed batch requeues its untouched suffix");
+
+  Scheduler stopped;
+  RecordingBatch stopping_batch;
+  stopping_batch.limit = 1U;
+  stopping_batch.stop_once = true;
+  std::vector<std::uint64_t> stopped_fallbacks;
+  schedule_batch(stopped, stopping_batch, 1U, 1U, stopped_fallbacks);
+  schedule_batch(stopped, stopping_batch, 2U, 2U, stopped_fallbacks);
+  require(
+      stopped.run().status == RunStatus::stopped
+          && stopping_batch.executed == std::vector<std::uint64_t> {1U}
+          && stopped.has_pending(),
+      "a batch stop retains its unexecuted suffix");
+  stopped.clear_stop();
+  require(
+      stopped.run().status == RunStatus::completed
+          && stopping_batch.executed
+              == std::vector<std::uint64_t> {1U, 2U},
+      "a stopped scheduler resumes the retained batch suffix");
+
+  Scheduler failed;
+  RecordingBatch failing_batch;
+  failing_batch.limit = 1U;
+  failing_batch.fail_once = true;
+  std::vector<std::uint64_t> failed_fallbacks;
+  schedule_batch(failed, failing_batch, 1U, 1U, failed_fallbacks);
+  schedule_batch(failed, failing_batch, 2U, 2U, failed_fallbacks);
+  bool caught = false;
+  try {
+    (void)failed.run();
+  } catch (const std::runtime_error& error) {
+    caught = std::string_view {error.what()}
+        == "contained batch failure";
+  }
+  require(
+      caught && failing_batch.executed == std::vector<std::uint64_t> {1U}
+          && failed.has_pending(),
+      "a contained batch failure retains its unexecuted suffix");
+  require(
+      failed.run().status == RunStatus::completed
+          && failing_batch.executed
+              == std::vector<std::uint64_t> {1U, 2U},
+      "scheduler resumes after a contained batch failure");
 }
 
 void test_scheduler_time_limit_before_future_event() {
@@ -1402,6 +1738,250 @@ void test_simir_noninitializing_static_process() {
           && after_event.time == 1
           && interpreter.signal_value(observed).to_msb_string() == "1",
       "a noninitializing static process must wake on its sensitivity");
+}
+
+void test_simir_static_sensitivity_cohort() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  const auto clock = interpreter.add_signal(
+      {"top.clock", PackedLogic4::from_msb_string("0")});
+  std::array<SignalId, 3> observed;
+  for (std::size_t index = 0; index < observed.size(); ++index) {
+    observed[index] = interpreter.add_signal(
+        {"top.u" + std::to_string(index) + ".observed",
+         PackedLogic4::from_msb_string("0")});
+    Process process;
+    process.id = static_cast<ProcessId>(index);
+    process.name = "top.u" + std::to_string(index) + ".clocked";
+    process.register_count = 1;
+    process.static_sensitivity.push_back({clock, EdgeKind::posedge});
+    process.operations = {
+        LoadConstant{0, PackedLogic4::from_msb_string("1")},
+        WriteBlocking{observed[index], 0},
+        WaitSensitivity{},
+        Jump{0},
+    };
+    process.initialize = false;
+    (void)interpreter.add_process(std::move(process));
+  }
+  interpreter.schedule_signal_at(
+      clock, PackedLogic4::from_msb_string("1"), 5, 0);
+
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed && result.time == 5,
+      "an exact-sensitivity cohort completes at the triggering time");
+  for (const auto signal : observed) {
+    require(
+        interpreter.signal_value(signal).to_msb_string() == "1",
+        "every cross-hierarchy cohort member wakes exactly once");
+  }
+
+  struct CohortProbe {
+    std::vector<std::size_t> batches;
+  } probe;
+  class CohortExecutor final : public ProcessExecutor {
+  public:
+    CohortExecutor(const SignalId observed, CohortProbe& probe)
+        : observed_(observed)
+        , probe_(probe)
+    {
+    }
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext& context,
+        const InstructionIndex start) override
+    {
+      require(start == 0U, "cohort executor starts at its static wait body");
+      context.write_blocking_word(observed_, Logic4Word { 1U, 1U, 0U });
+      ProcessResumeResult result { 0U, 1U };
+      result.external.kind = ExternalSuspendKind::wait_sensitivity;
+      return result;
+    }
+
+    [[nodiscard]] std::size_t resume_cohort(
+        const std::span<ProcessCohortResumeEntry> entries) override
+    {
+      probe_.batches.push_back(entries.size());
+      for (auto& entry : entries) {
+        auto& executor = *static_cast<CohortExecutor*>(entry.executor);
+        entry.result = executor.resume(
+            *entry.context, entry.start_instruction);
+      }
+      return entries.size();
+    }
+
+    [[nodiscard]] const void* cohort_domain() const noexcept override
+    {
+      return &probe_;
+    }
+
+  private:
+    SignalId observed_ { };
+    CohortProbe& probe_;
+  };
+
+  Interpreter mixed;
+  const auto mixed_clock = mixed.add_signal(
+      {"top.clock", PackedLogic4::from_msb_string("0")});
+  std::array<SignalId, 5> mixed_observed;
+  for (std::size_t index = 0; index < mixed_observed.size(); ++index) {
+    mixed_observed[index] = mixed.add_signal(
+        {"top.branch" + std::to_string(index) + ".observed",
+         PackedLogic4::from_msb_string("0")});
+    Process process;
+    process.id = static_cast<ProcessId>(index);
+    process.name = "top.branch" + std::to_string(index) + ".clocked";
+    process.register_count = 1U;
+    process.static_sensitivity.push_back(
+        {mixed_clock, EdgeKind::posedge});
+    process.operations = {
+        WaitSensitivity { },
+        Jump { 0U },
+    };
+    if (index == 2U) {
+      process.operations = {
+          LoadConstant { 0U, PackedLogic4::from_msb_string("1") },
+          WriteBlocking { mixed_observed[index], 0U },
+          WaitSensitivity { },
+          Jump { 0U },
+      };
+    }
+    process.initialize = false;
+    const auto id = mixed.add_process(std::move(process));
+    if (index != 2U) {
+      mixed.set_process_executor(id,
+          std::make_unique<CohortExecutor>(mixed_observed[index], probe));
+    }
+  }
+  mixed.schedule_signal_at(
+      mixed_clock, PackedLogic4::from_msb_string("1"), 7U, 0U);
+  const auto mixed_result = mixed.run();
+  require(
+      mixed_result.status == RunStatus::completed
+          && mixed_result.time == 7U,
+      "mixed native/interpreted hierarchy cohort completes at its event");
+  require(
+      probe.batches == std::vector<std::size_t> { 2U, 2U },
+      "native cohort runs span hierarchy while preserving an interpreted member");
+  for (const auto signal : mixed_observed) {
+    require(
+        mixed.signal_value(signal).to_msb_string() == "1",
+        "every mixed hierarchy cohort member executes in canonical order");
+  }
+
+  class RearmProbeExecutor final : public ProcessExecutor {
+  public:
+    RearmProbeExecutor(
+        std::uint32_t& resumes,
+        const std::optional<SignalId> blocking_target = std::nullopt)
+        : resumes_(resumes), blocking_target_(blocking_target) {}
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext& context,
+        const InstructionIndex start) override {
+      require(
+          start == 0U || start == 1U,
+          "re-arm probe resumes at its static wait loop");
+      ++resumes_;
+      if (blocking_target_) {
+        context.write_blocking_word(
+            *blocking_target_, Logic4Word {1U, 0U, 0U});
+      }
+      ProcessResumeResult result {0U, 1U};
+      result.external.kind = ExternalSuspendKind::wait_sensitivity;
+      return result;
+    }
+
+  private:
+    std::uint32_t& resumes_;
+    std::optional<SignalId> blocking_target_;
+  };
+
+  const auto add_waiting_probe = [](
+                                     Interpreter& runtime,
+                                     const ProcessId id,
+                                     const SignalId sensitivity,
+                                     std::unique_ptr<ProcessExecutor> executor) {
+    Process process;
+    process.id = id;
+    process.name = "top.probe" + std::to_string(id);
+    process.static_sensitivity.push_back({sensitivity, EdgeKind::any});
+    process.operations = {WaitSensitivity {}, Jump {0U}};
+    process.initialize = false;
+    const auto added = runtime.add_process(std::move(process));
+    runtime.set_process_executor(added, std::move(executor));
+  };
+
+  Interpreter rearm;
+  const auto rearm_first = rearm.add_signal(
+      {"top.rearm_first", PackedLogic4::from_msb_string("0")});
+  const auto rearm_second = rearm.add_signal(
+      {"top.rearm_second", PackedLogic4::from_msb_string("0")});
+  std::uint32_t first_resumes { };
+  std::uint32_t second_resumes { };
+  add_waiting_probe(rearm, 0U, rearm_first,
+      std::make_unique<RearmProbeExecutor>(first_resumes));
+  add_waiting_probe(rearm, 1U, rearm_second,
+      std::make_unique<RearmProbeExecutor>(second_resumes, rearm_first));
+  rearm.schedule_signal_at(
+      rearm_first, PackedLogic4::from_msb_string("1"), 11U, 0U);
+  rearm.schedule_signal_at(
+      rearm_second, PackedLogic4::from_msb_string("1"), 11U, 1U);
+  const auto rearm_result = rearm.run();
+  require(
+      rearm_result.status == RunStatus::completed
+          && rearm_result.time == 11U
+          && first_resumes == 2U && second_resumes == 1U,
+      "a later blocking write observes an earlier process re-armed at its "
+      "static wait boundary");
+
+  Interpreter exact_rearm;
+  const auto exact_trigger = exact_rearm.add_signal(
+      {"top.exact_trigger", PackedLogic4::from_msb_string("0")});
+  std::uint32_t exact_first_resumes { };
+  std::uint32_t exact_second_resumes { };
+  add_waiting_probe(exact_rearm, 0U, exact_trigger,
+      std::make_unique<RearmProbeExecutor>(exact_first_resumes));
+  add_waiting_probe(exact_rearm, 1U, exact_trigger,
+      std::make_unique<RearmProbeExecutor>(
+          exact_second_resumes, exact_trigger));
+  exact_rearm.schedule_signal_at(
+      exact_trigger, PackedLogic4::from_msb_string("1"), 12U, 0U);
+  const auto exact_rearm_result = exact_rearm.run();
+  require(
+      exact_rearm_result.status == RunStatus::completed
+          && exact_rearm_result.time == 12U
+          && exact_first_resumes == 2U
+          && exact_second_resumes == 1U,
+      "a later exact-cohort member observes an earlier member re-armed at "
+      "its static wait boundary");
+
+  Interpreter coalesced;
+  const auto coalesced_later = coalesced.add_signal(
+      {"top.coalesced_later", PackedLogic4::from_msb_string("0")});
+  const auto coalesced_first = coalesced.add_signal(
+      {"top.coalesced_first", PackedLogic4::from_msb_string("0")});
+  std::uint32_t first_group_resumes { };
+  std::uint32_t later_group_resumes { };
+  add_waiting_probe(coalesced, 0U, coalesced_first,
+      std::make_unique<RearmProbeExecutor>(
+          first_group_resumes, coalesced_later));
+  add_waiting_probe(coalesced, 1U, coalesced_later,
+      std::make_unique<RearmProbeExecutor>(later_group_resumes));
+  coalesced.schedule_signal_at(
+      coalesced_later, PackedLogic4::from_msb_string("1"), 13U, 0U);
+  coalesced.schedule_signal_at(
+      coalesced_first, PackedLogic4::from_msb_string("1"), 13U, 1U);
+  const auto coalesced_result = coalesced.run();
+  require(
+      coalesced_result.status == RunStatus::completed
+          && coalesced_result.time == 13U
+          && first_group_resumes == 1U && later_group_resumes == 1U,
+      "a blocking wake coalesces while a later dispatch group remains queued");
+
 }
 
 void test_simir_wide_truth_and_comparison() {

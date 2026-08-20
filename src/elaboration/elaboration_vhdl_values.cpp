@@ -298,7 +298,19 @@ std::optional<PackedLogic4> static_vhdl_value(
         return normalize(std::move(result));
     }
 
+    std::optional<frontend::IntegerRange> array_range;
     if (type.packed_range) {
+        array_range = frontend::IntegerRange{
+            type.packed_range->left,
+            type.packed_range->right,
+            type.packed_range->descending};
+    } else if (type.vhdl_array
+               && type.vhdl_array->dimensions.size() == 1U
+               && type.vhdl_array->dimensions.front().range
+               && !type.vhdl_array->dimensions.front().null) {
+        array_range = *type.vhdl_array->dimensions.front().range;
+    }
+    if (array_range) {
         frontend::Type element_type;
         if (type.vhdl_array
             && !type.vhdl_array->element_types.empty()) {
@@ -350,7 +362,7 @@ std::optional<PackedLogic4> static_vhdl_value(
         const auto assign_index =
             [&](const std::int64_t source_index,
                 const Expression& value) -> bool {
-              const auto& range = *type.packed_range;
+              const auto& range = *array_range;
               const auto low = std::min(range.left, range.right);
               const auto high = std::max(range.left, range.right);
               if (source_index < low || source_index > high) {
@@ -371,8 +383,8 @@ std::optional<PackedLogic4> static_vhdl_value(
                     association];
             if (choices.empty()) {
                 const auto source_index =
-                    type.packed_range->left
-                    + (type.packed_range->descending
+                    array_range->left
+                    + (array_range->descending
                            ? -static_cast<std::int64_t>(positional)
                            : static_cast<std::int64_t>(positional));
                 ++positional;

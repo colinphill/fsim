@@ -350,9 +350,13 @@ Interpreter::Impl::read_container_object_value(
     if (!object.slice_alias) {
         const auto& alias = container_signal_aliases.at(id);
         if (alias && alias->readable) {
-            unpack_container_signal_value(
-                object.initial_value,
-                get_signal(alias->signal).initial_value);
+            const auto revision = signal_value_revisions.at(alias->signal);
+            if (container_materialized_revisions.at(id) != revision) {
+                unpack_container_signal_value(
+                    object.initial_value,
+                    get_signal(alias->signal).initial_value);
+                container_materialized_revisions[id] = revision;
+            }
         }
         return object.initial_value;
     }
@@ -371,6 +375,50 @@ Interpreter::Impl::read_container_object_value(
         object.initial_value.elements[ordinal] = source.elements[fixed_offset(source.type, selected_index)];
     }
     return object.initial_value;
+}
+
+bool Interpreter::Impl::read_container_object_element(
+    const ContainerObjectId id,
+    const std::size_t ordinal,
+    PackedLogic4& result)
+{
+    const auto& object = get_container_object(id);
+    const auto& value = object.initial_value;
+    if ((value.type.element_kind != ContainerElementKind::Packed
+            && value.type.element_kind != ContainerElementKind::Scalar)
+        || ordinal >= value.elements.size()) {
+        return false;
+    }
+    if (object.slice_alias) {
+        const auto& alias = *object.slice_alias;
+        const auto descending = alias.selected_left >= alias.selected_right;
+        const auto selected_index = static_cast<std::int32_t>(
+            static_cast<std::int64_t>(alias.selected_left)
+            + (descending
+                    ? -static_cast<std::int64_t>(ordinal)
+                    : static_cast<std::int64_t>(ordinal)));
+        const auto& source = get_container_object(alias.object).initial_value;
+        return read_container_object_element(
+            alias.object,
+            fixed_offset(source.type, selected_index),
+            result);
+    }
+    const auto& alias = container_signal_aliases.at(id);
+    if (!alias || !alias->readable) {
+        result = value.elements[ordinal];
+        return true;
+    }
+    const auto& packed = get_signal(alias->signal).initial_value;
+    const auto width = value.type.element_width;
+    if (width == 0 || ordinal >= packed.width() / width
+        || packed.width() % width != 0) {
+        return false;
+    }
+    result = extract_value(
+        packed,
+        packed.width() - (ordinal + 1U) * width,
+        width);
+    return true;
 }
 
 void Interpreter::Impl::write_container_object_value(
@@ -393,6 +441,8 @@ void Interpreter::Impl::write_container_object_value(
             commit(
                 alias->signal,
                 pack_container_signal_value(value, logic9));
+            container_materialized_revisions[id]
+                = signal_value_revisions.at(alias->signal);
         }
         if (changed) {
             const auto waiters = container_dynamic_fanout.at(id);
@@ -421,6 +471,105 @@ void Interpreter::Impl::write_container_object_value(
     write_container_object_value(
         alias.object, replacement);
     object.initial_value = value;
+}
+
+void Interpreter::Impl::write_container_object_element_value(
+    const ContainerObjectId id,
+    const PackedLogic4& index,
+    const bool signed_index,
+    const bool linear_index,
+    const PackedLogic4& value,
+    const ProcessId process,
+    const InstructionIndex instruction)
+{
+    auto& object = get_container_object(id);
+    auto& target = object.initial_value;
+    if (object.slice_alias) {
+        // Slice aliases need a coherent aggregate replacement. Ordinary
+        // signal-backed element writes use the direct packed slice below and
+        // must not materialize the whole container.
+        (void)read_container_object_value(id);
+        auto replacement = target;
+        const auto selected = target.type.fixed
+            ? linear_index
+                ? known_index(
+                      process, instruction, index, true,
+                      "multidimensional linear index")
+                : fixed_offset(
+                      process, instruction, target.type, index)
+            : known_index(
+                  process, instruction, index, signed_index,
+                  "container index");
+        if (selected >= replacement.elements.size()) {
+            container_error(
+                process, instruction,
+                "container index is out of range");
+        }
+        replacement.elements[selected] = value;
+        write_container_object_value(id, replacement);
+        return;
+    }
+    if ((target.type.element_kind != ContainerElementKind::Packed
+            && target.type.element_kind != ContainerElementKind::Scalar)
+        || value.width() != target.type.element_width
+        || value.is_logic9()
+        || (target.type.two_state && has_unknown(value))) {
+        container_error(
+            process, instruction,
+            "container element write type mismatch");
+    }
+    const auto selected = target.type.fixed
+        ? linear_index
+            ? known_index(
+                  process, instruction, index, true,
+                  "multidimensional linear index")
+            : fixed_offset(
+                  process, instruction, target.type, index)
+        : known_index(
+              process, instruction, index, signed_index,
+              "container index");
+    if (selected >= target.elements.size()) {
+        container_error(
+            process, instruction,
+            "container index is out of range");
+    }
+    const auto& alias = container_signal_aliases.at(id);
+    const auto packed_offset = alias && alias->readable
+        ? get_signal(alias->signal).initial_value.width()
+            - (selected + 1U) * target.type.element_width
+        : 0U;
+    const auto materialized_revision
+        = container_materialized_revisions.at(id);
+    const auto signal_revision = alias
+        ? signal_value_revisions.at(alias->signal)
+        : 0U;
+    const bool changed = alias && alias->readable
+        ? extract_value(
+              get_signal(alias->signal).initial_value,
+              packed_offset,
+              target.type.element_width) != value
+        : target.elements[selected] != value;
+    target.elements[selected] = value;
+    if (alias && alias->writable) {
+        const auto& signal = get_signal(alias->signal).initial_value;
+        const auto offset = signal.width()
+            - (selected + 1U) * target.type.element_width;
+        commit_slice(alias->signal, value, offset);
+        if (materialized_revision == signal_revision) {
+            container_materialized_revisions[id]
+                = signal_value_revisions.at(alias->signal);
+        }
+    }
+    if (!changed) {
+        return;
+    }
+    const auto waiters = container_dynamic_fanout.at(id);
+    for (const auto waiter : waiters) {
+        queue_next_delta(waiter);
+    }
+    if (container_object_change_hook) {
+        container_object_change_hook(id, scheduler.now());
+    }
 }
 
 PackedLogic4 default_container_element(
@@ -821,23 +970,42 @@ void Interpreter::Impl::execute_container(
         return;
     }
     if (source.type.fixed) {
+        const auto& index_value = get_register(
+            process, operation.index);
         if (operation.linear_index) {
-            const auto index = known_index(
-                process.program.id, process.pc,
-                get_register(process, operation.index),
-                true, "multidimensional linear index");
-            if (index >= source.elements.size()) {
-                container_error(
-                    process.program.id, process.pc,
-                    "multidimensional linear index is out of range");
+            const auto index = index_value.known_signed_value();
+            if (!index || *index < 0
+                || static_cast<std::uint64_t>(*index)
+                    >= source.elements.size()) {
+                get_register(process, operation.destination) =
+                    PackedLogic4(
+                        source.type.element_width,
+                        source.type.two_state
+                            ? Logic4::zero : Logic4::x);
+                ++process.pc;
+                return;
             }
-            get_register(process, operation.destination) = source.elements[index];
+            get_register(process, operation.destination) =
+                source.elements[static_cast<std::size_t>(*index)];
             ++process.pc;
             return;
         }
-        get_register(process, operation.destination) = source.elements[fixed_offset(
-            process.program.id, process.pc, source.type,
-            get_register(process, operation.index))];
+        const auto index = index_value.known_signed_value();
+        const auto low = std::min(
+            source.type.index_left, source.type.index_right);
+        const auto high = std::max(
+            source.type.index_left, source.type.index_right);
+        if (!index || *index < low || *index > high) {
+            get_register(process, operation.destination) =
+                PackedLogic4(
+                    source.type.element_width,
+                    source.type.two_state
+                        ? Logic4::zero : Logic4::x);
+            ++process.pc;
+            return;
+        }
+        get_register(process, operation.destination) = source.elements[
+            fixed_offset(source.type, static_cast<std::int32_t>(*index))];
         ++process.pc;
         return;
     }
@@ -945,6 +1113,27 @@ void Interpreter::Impl::execute_container(
             "container index is out of range");
     }
     target.elements[index] = source;
+    ++process.pc;
+}
+
+void Interpreter::Impl::execute_container(
+    ProcessState& process,
+    const WriteContainerObjectElement& operation)
+{
+    write_container_object_element_value(
+        operation.object,
+        get_register(process, operation.index),
+        operation.signed_index,
+        operation.linear_index,
+        get_register(process, operation.source),
+        process.program.id,
+        process.pc);
+    if (operation.transaction_signal) {
+        stage_update(
+            process.program.id,
+            *operation.transaction_signal,
+            PackedLogic4 { 1, Logic4::zero });
+    }
     ++process.pc;
 }
 

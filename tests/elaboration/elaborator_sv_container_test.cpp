@@ -23,6 +23,7 @@ module container_lowering #(
   byte lookup[key_t];
   logic [7:0] fixed_down[STATIC_LEFT:1];
   bit [3:0] fixed_up[-1:1];
+  logic [7:0] shadowed[0:2];
 
   function automatic int count(input byte source[$:2]);
     byte copy[$:2];
@@ -85,12 +86,23 @@ module container_lowering #(
         1: 8'h11};
   endtask
 
+  task automatic fill_shadowed(
+      output logic [7:0] shadowed[0:2]);
+    shadowed[0] = 8'h12;
+    shadowed[1] = 8'h34;
+    shadowed[2] = 8'h56;
+  endtask
+
   initial begin
     key_t key;
     int located[$];
     int locations[$];
     int preserved[];
     logic [7:0] fresh[];
+    fill_shadowed(shadowed);
+    assert (shadowed[0] == 8'h12);
+    assert (shadowed[1] == 8'h34);
+    assert (shadowed[2] == 8'h56);
     preserved = '{4, 5};
     preserved = new[4](preserved);
     assert (preserved.size() == 4);
@@ -353,7 +365,7 @@ endmodule
         }
     }
     assert(elaborated.ok());
-    assert(elaborated.design->container_objects().size() == 5);
+    assert(elaborated.design->container_objects().size() == 6);
     const auto& process = elaborated.design->processes().front();
     assert(process.container_register_count != 0);
     assert(!process.debug_container_locals.empty());
@@ -949,6 +961,170 @@ endmodule
             })
         && replacement_position < commit_position
         && commit_position < atomic_slice_object_write);
+
+    const auto memory_word_output_parsed = fsim::frontend::parse_text(
+        "memory-word-output.sv",
+        R"(
+module memory_word_source(output wire [7:0] value);
+  assign value = 8'h5a;
+endmodule
+module memory_word_sink(
+    input wire [7:0] value,
+    output wire [7:0] observed);
+  assign observed = value;
+endmodule
+module memory_word_output;
+  wire [7:0] words[0:1];
+  wire [7:0] observed;
+  memory_word_source source(.value(words[1]));
+  memory_word_sink sink(.value(words[1]), .observed(observed));
+  initial begin
+    #1;
+    assert (words[1] == 8'h5a);
+    assert (observed == 8'h5a);
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(memory_word_output_parsed.ok());
+    const auto memory_word_output_elaborated =
+        fsim::elaboration::elaborate(
+            memory_word_output_parsed.design,
+            "memory_word_output");
+    assert(memory_word_output_elaborated.ok());
+    auto memory_word_output_interpreter =
+        memory_word_output_elaborated.design->create_interpreter();
+    const auto memory_word_output_result =
+        memory_word_output_interpreter->run();
+    assert(
+        memory_word_output_result.status
+            == fsim::runtime::RunStatus::completed
+        && memory_word_output_result.time == 1);
+
+    const auto procedural_memory_parsed = fsim::frontend::parse_text(
+        "procedural-memory.sv",
+        R"(
+module procedural_memory;
+  reg clk = 0;
+  reg resetn = 0;
+  reg [7:0] words[0:3];
+  integer index;
+  always #5 clk = ~clk;
+  always @(posedge clk) begin
+    if (!resetn) begin
+      for (index = 0; index < 4; index = index + 1)
+        words[index] <= 0;
+    end else begin
+      words[0] <= 8'h11;
+      for (index = 1; index < 4; index = index + 1)
+        words[index] <= words[index - 1] + 1;
+    end
+  end
+  initial begin
+    #6 resetn = 1;
+    @(posedge clk);
+    #1;
+    assert (words[0] == 8'h11);
+    assert (words[1] == 8'h01);
+    assert (words[2] == 8'h01);
+    assert (words[3] == 8'h01);
+    $finish;
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(procedural_memory_parsed.ok());
+    const auto procedural_memory_elaborated =
+        fsim::elaboration::elaborate(
+            procedural_memory_parsed.design,
+            "procedural_memory");
+    assert(procedural_memory_elaborated.ok());
+    auto procedural_memory_interpreter =
+        procedural_memory_elaborated.design->create_interpreter();
+    const auto procedural_memory_result =
+        procedural_memory_interpreter->run();
+    assert(
+        procedural_memory_result.status
+            == fsim::runtime::RunStatus::stopped
+        && procedural_memory_result.time == 16);
+
+    const auto function_memory_parsed = fsim::frontend::parse_text(
+        "function-memory.sv",
+        R"(
+module function_memory #(parameter integer N = 4);
+  integer values[0:2*N];
+  integer wide_values[0:255];
+  integer observed;
+  integer guarded_observed;
+  integer wide_observed;
+  logic [7:0] wide_index;
+  function automatic integer lookup;
+    input [1:0] index;
+    begin
+      lookup = values[index];
+    end
+  endfunction
+  function automatic integer guarded_add;
+    input integer a;
+    input integer b;
+    begin
+      if (a == 0 || b == 0)
+        guarded_add = 0;
+      else
+        guarded_add = a + b;
+    end
+  endfunction
+  task automatic mirror;
+    integer index;
+    begin
+      for (index = N; index < 2*N; index = index + 1)
+        values[index] = values[index - N];
+    end
+  endtask
+  task automatic outer;
+    begin
+      mirror();
+      observed = lookup(0);
+      guarded_observed = guarded_add(values[0], values[1]);
+    end
+  endtask
+  initial begin
+    values[0] = 8'h41;
+    values[1] = 8'h52;
+    values[2] = 8'h63;
+    values[3] = 8'h74;
+    wide_values[198] = 32'd123;
+    wide_index = 8'd198;
+    outer();
+    wide_observed = wide_values[wide_index];
+    assert (observed == 8'h41);
+    assert (guarded_observed == 8'h93);
+    assert (wide_observed == 32'd123);
+    assert (values[N] == 8'h41);
+    assert (values[2*N-1] == 8'h74);
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(function_memory_parsed.ok());
+    const auto function_memory_elaborated =
+        fsim::elaboration::elaborate(
+            function_memory_parsed.design,
+            "function_memory");
+    assert(function_memory_elaborated.ok());
+    auto function_memory_interpreter =
+        function_memory_elaborated.design->create_interpreter();
+    const auto function_memory_result =
+        function_memory_interpreter->run();
+    assert(
+        function_memory_result.status
+            == fsim::runtime::RunStatus::completed
+        && function_memory_result.time == 0);
+    const auto wide_observed = function_memory_elaborated.design->find_signal(
+        "wide_observed");
+    assert(wide_observed);
+    assert(function_memory_interpreter->signal_value(*wide_observed)
+        .to_msb_string() == "00000000000000000000000001111011");
 
     const auto port_parsed = fsim::frontend::parse_text(
         "container-ports.sv",

@@ -695,6 +695,51 @@ endmodule
             .to_msb_string()
         == "0100");
 
+    const auto parameter_sized_constant_function =
+        fsim::frontend::parse_text(
+            "parameter_sized_constant_function.sv",
+            R"(
+module parameter_sized_constant_function #(
+    parameter integer N = 255,
+    parameter integer K = 223,
+    parameter integer M = 8);
+  localparam integer T = (N - K + 1) / 2;
+  localparam integer WIDTH = M * (2*T + 1);
+  function automatic [WIDTH-1:0] make_value;
+    input integer count;
+    reg [WIDTH-1:0] value;
+    begin
+      value = {WIDTH{1'b0}};
+      value[count] = 1'b1;
+      make_value = value;
+    end
+  endfunction
+  localparam [WIDTH-1:0] VALUE = make_value(3);
+  wire [WIDTH-1:0] observed = VALUE;
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(parameter_sized_constant_function.ok());
+    const auto parameter_sized_constant_function_result =
+        fsim::elaboration::elaborate(
+            parameter_sized_constant_function.design,
+            "parameter_sized_constant_function");
+    assert(parameter_sized_constant_function_result.ok());
+    const auto parameter_sized_observed =
+        parameter_sized_constant_function_result.design->find_signal(
+            "observed");
+    assert(parameter_sized_observed);
+    auto parameter_sized_interpreter =
+        parameter_sized_constant_function_result.design->create_interpreter();
+    assert(
+        parameter_sized_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        parameter_sized_interpreter
+            ->signal_value(*parameter_sized_observed)
+            .width()
+        == 264);
+
     const auto imported_class_scope = fsim::frontend::parse_text(
         "imported_class_scope.sv",
         R"(

@@ -505,6 +505,25 @@ using namespace elaboration_detail;
                             })) {
                         auto imported = function;
                         imported.visibility_owner = package_owner;
+                        for (const auto& dependency :
+                             specialized.unit.functions) {
+                            const bool dependency_exported =
+                                std::ranges::any_of(
+                                    package->functions,
+                                    [&](const auto& declaration) {
+                                      return declaration.name
+                                          == dependency.name;
+                                    })
+                                || std::ranges::any_of(
+                                    package->generic_function_instances,
+                                    [&](const auto& declaration) {
+                                      return declaration.name
+                                          == dependency.name;
+                                    });
+                            if (!dependency_exported && dependency.defined) {
+                                imported.functions.push_back(dependency);
+                            }
+                        }
                         function_imports.push_back(std::move(imported));
                     }
                 }

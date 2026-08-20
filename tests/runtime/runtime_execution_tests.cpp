@@ -438,12 +438,13 @@ void test_simir_dynamic_packed_indices()
                 + std::string(64, '0'),
         "wide indexed part-select inertial write preserves all source bits");
 
-    const auto expect_failure =
-        [&](PackedLogic4 index,
-            const std::string_view expected_message) {
-            Interpreter failing;
+    const auto expect_invalid_read =
+        [&](PackedLogic4 index) {
+            Interpreter candidate_interpreter;
+            const auto observed = candidate_interpreter.add_signal(
+                { "top.dynamic.invalid", PackedLogic4(1, Logic4::zero) });
             Process candidate;
-            candidate.name = "dynamic_index_failure";
+            candidate.name = "dynamic_index_invalid_read";
             candidate.register_count = 3;
             candidate.operations = {
                 LoadConstant {
@@ -451,27 +452,21 @@ void test_simir_dynamic_packed_indices()
                 LoadConstant { 1, std::move(index) },
                 DynamicExtract {
                     2, 0, DynamicIndex { 1, 3, 0, 0 } },
+                WriteBlocking { observed, 2 },
                 Halt { }
             };
-            (void)failing.add_process(std::move(candidate));
-            try {
-                (void)failing.run();
-                throw std::runtime_error(
-                    "dynamic packed-index failure was not reported");
-            } catch (const InterpreterError& error) {
-                require(
-                    std::string_view { error.what() }.find(expected_message)
-                        != std::string_view::npos,
-                    "dynamic packed-index failure message");
-            }
+            (void)candidate_interpreter.add_process(std::move(candidate));
+            const auto candidate_result = candidate_interpreter.run();
+            require(
+                candidate_result.status == RunStatus::completed
+                    && candidate_interpreter.signal_value(observed)
+                        .to_msb_string() == "X",
+                "invalid dynamic packed read produces X");
         };
-    expect_failure(
-        integer(4), "dynamic packed index is outside the declared range");
+    expect_invalid_read(integer(4));
     auto unknown = integer(0);
     unknown.set(0, Logic4::x);
-    expect_failure(
-        std::move(unknown),
-        "dynamic packed index contains an unknown or high-impedance value");
+    expect_invalid_read(std::move(unknown));
 }
 
 void test_simir_force_release()
@@ -1569,6 +1564,171 @@ void test_simir_alternate_executor_scheduled_word_writes()
             && alternate.signal_value(alternate_zero).to_msb_string() == "1"
             && alternate.signal_value(alternate_delayed).to_msb_string() == "1",
         "external scheduled word writes must publish their final values");
+}
+
+void test_simir_alternate_executor_validated_update_word_batch()
+{
+    using namespace fsim::runtime;
+    using namespace fsim::runtime::simir;
+
+    const auto make_process = [](const SignalId output) {
+        Process process;
+        process.id = 0;
+        process.name = "validated_update_word_batch";
+        process.register_count = 3;
+        process.operations = {
+            LoadConstant { 0, PackedLogic4::from_msb_string("10100101") },
+            WriteUpdate { output, 0 },
+            LoadConstant { 1, PackedLogic4::from_msb_string("010") },
+            WriteUpdateSlice { output, 1, 2 },
+            LoadConstant { 2, PackedLogic4::from_msb_string("11") },
+            WriteUpdateSlice { output, 2, 3 },
+            Halt { },
+        };
+        return process;
+    };
+
+    Interpreter reference;
+    const auto reference_output = reference.add_signal(
+        { "top.output",
+            PackedLogic4::from_msb_string("ZZZZZZZZ"),
+            ResolutionKind::sv_wire });
+    (void)reference.add_process(make_process(reference_output));
+    std::vector<std::pair<std::uint64_t, std::string>> reference_changes;
+    reference.set_signal_change_hook(
+        [&](const SignalId signal,
+            const PackedLogic4& value,
+            const SimulationTick) {
+            if (signal == reference_output) {
+                reference_changes.emplace_back(
+                    reference.scheduler().delta(), value.to_msb_string());
+            }
+        });
+    const auto reference_result = reference.run();
+
+    class BatchedExecutor final : public ProcessExecutor {
+    public:
+        explicit BatchedExecutor(const SignalId output)
+            : output_(output)
+        {
+        }
+
+        [[nodiscard]] ProcessResumeResult resume(
+            ProcessExecutionContext& context,
+            const InstructionIndex start) override
+        {
+            require(start == 0, "validated word batch initial PC");
+            const std::array updates {
+                ProcessUpdateWord {
+                    output_, Logic4Word { 8, 0xa5, 0 }, 0, false },
+                ProcessUpdateWord {
+                    output_, Logic4Word { 3, 0x2, 0 }, 2, true },
+                ProcessUpdateWord {
+                    output_, Logic4Word { 2, 0x3, 0 }, 3, true },
+            };
+            context.write_validated_update_words(updates);
+            require(
+                context.read_signal_word(output_).aval == 0,
+                "validated updates remain invisible during the active process");
+            return { 6, 7 };
+        }
+
+    private:
+        SignalId output_ { };
+    };
+
+    Interpreter alternate;
+    const auto alternate_output = alternate.add_signal(
+        { "top.output",
+            PackedLogic4::from_msb_string("ZZZZZZZZ"),
+            ResolutionKind::sv_wire });
+    const auto alternate_process = alternate.add_process(
+        make_process(alternate_output));
+    alternate.set_process_executor(
+        alternate_process,
+        std::make_unique<BatchedExecutor>(alternate_output));
+    std::vector<std::pair<std::uint64_t, std::string>> alternate_changes;
+    alternate.set_signal_change_hook(
+        [&](const SignalId signal,
+            const PackedLogic4& value,
+            const SimulationTick) {
+            if (signal == alternate_output) {
+                alternate_changes.emplace_back(
+                    alternate.scheduler().delta(), value.to_msb_string());
+            }
+        });
+    const auto alternate_result = alternate.run();
+
+    require(
+        reference_result.status == RunStatus::completed
+            && alternate_result.status == reference_result.status
+            && alternate_result.time == reference_result.time
+            && alternate_result.delta == reference_result.delta
+            && alternate_result.callbacks_executed
+                == reference_result.callbacks_executed,
+        "validated update word batch preserves run completion state");
+    require(
+        reference_changes
+                == std::vector<std::pair<std::uint64_t, std::string>> {
+                    { 0, "10111001" } }
+            && alternate_changes == reference_changes
+            && alternate.signal_value(alternate_output)
+                == reference.signal_value(reference_output),
+        "validated whole and overlapping slice updates preserve source order");
+}
+
+void test_simir_alternate_executor_native_blocking_then_update_slice()
+{
+    using namespace fsim::runtime;
+    using namespace fsim::runtime::simir;
+
+    Process process;
+    process.id = 0;
+    process.name = "native_blocking_then_update_slice";
+    process.operations = { Halt { } };
+
+    class NativeThenUpdateExecutor final : public ProcessExecutor {
+    public:
+        explicit NativeThenUpdateExecutor(const SignalId output)
+            : output_(output)
+        {
+        }
+
+        [[nodiscard]] ProcessResumeResult resume(
+            ProcessExecutionContext& context,
+            const InstructionIndex start) override
+        {
+            require(start == 0, "native blocking/update initial PC");
+            context.write_blocking_word(
+                output_, Logic4Word { 8, 0xa5, 0 });
+            const std::array updates {
+                ProcessUpdateWord {
+                    output_, Logic4Word { 3, 0x2, 0 }, 2, true }
+            };
+            context.write_validated_update_words(updates);
+            return { 0, 1 };
+        }
+
+    private:
+        SignalId output_ { };
+    };
+
+    Interpreter interpreter;
+    const auto output = interpreter.add_signal(
+        { "top.output",
+            PackedLogic4::from_msb_string("00000000"),
+            ResolutionKind::none });
+    const auto process_id = interpreter.add_process(std::move(process));
+    interpreter.set_process_executor(
+        process_id,
+        std::make_unique<NativeThenUpdateExecutor>(output));
+
+    const auto result = interpreter.run();
+    require(
+        result.status == RunStatus::completed
+            && interpreter.signal_value(output).to_msb_string()
+                == "10101001",
+        "validated slice updates merge with a pending native blocking value");
 }
 
 void test_simir_alternate_executor_zero_delay_and_frame()

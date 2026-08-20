@@ -268,7 +268,7 @@ DebuggerSession::DebuggerSession(
     for (const auto& process : simulation.design_ir().processes()) {
       retain_scope(process.name);
       const auto& runtime_process =
-          simulation.runtime_adapter().processes().at(process.runtime_index);
+          simulation.process_program(process.runtime_index);
       for (const auto& operation : runtime_process.operations) {
         if (const auto* point =
                 runtime::simir::operation_get_if<
@@ -1073,7 +1073,7 @@ void DebuggerSession::show_locals()  {
     }
     const auto process_id = current_execution_point_->process;
     const auto& process =
-        simulation_.runtime_adapter().processes().at(
+        simulation_.process_program(
             current_execution_point_->design_process);
     if (process.debug_locals.empty()
         && process.debug_string_locals.empty()

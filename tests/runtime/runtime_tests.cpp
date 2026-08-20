@@ -70,6 +70,7 @@ int main()
         test_scheduler_phase_order();
         test_scheduler_stop_resume();
         test_scheduler_ownership_and_failure_containment();
+        test_scheduler_batch_contract();
         test_scheduler_time_limit_before_future_event();
         test_scheduler_safe_point_scheduling();
         test_scheduler_delta_limit();
@@ -79,6 +80,7 @@ int main()
         test_resolved_driver_slots();
         test_simir_expressions_and_edges();
         test_simir_noninitializing_static_process();
+        test_simir_static_sensitivity_cohort();
         test_simir_wide_truth_and_comparison();
         test_simir_wildcard_case_matching();
         test_simir_wildcard_equality();
@@ -160,9 +162,12 @@ int main()
         test_systemverilog_class_methods();
         test_systemverilog_constraint_solver();
         test_simir_alternate_executor_scheduled_word_writes();
+        test_simir_alternate_executor_validated_update_word_batch();
+        test_simir_alternate_executor_native_blocking_then_update_slice();
         test_simir_alternate_executor_zero_delay_and_frame();
         test_simir_alternate_executor_cpp_exception_containment();
         test_simir_alternate_executor_validation();
+        test_simir_deferred_executor_state_handoff();
         test_simir_alternate_executor_event_replacement_and_cancel();
         test_simir_alternate_executor_notify_delayed();
         test_simir_alternate_executor_primitive_channel_updates();

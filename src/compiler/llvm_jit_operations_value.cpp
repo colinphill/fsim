@@ -3,6 +3,7 @@
 
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/GlobalVariable.h>
 #include <llvm/Support/ErrorHandling.h>
 
 #include <algorithm>
@@ -34,35 +35,281 @@ using runtime::simir::ValueKind;
 
 void ValueOperationLowerer::lower(
     const DynamicExtract& operation) {
-              const auto source = load_register(
-                  builder, registers, operation.source);
-              auto* shift = builder.CreateZExtOrTrunc(
-                  dynamic_offset(operation.selection),
-                  packed_integer_type(context, source.width));
-              const auto extract = [&](llvm::Value* value) {
-                  return builder.CreateZExtOrTrunc(
-                      builder.CreateAnd(
-                          builder.CreateLShr(value, shift),
-                          packed_constant(context, source.width, 1)),
-                      i64);
-              };
-              store_register(
-                  builder,
-                  registers,
-                  operation.destination,
-                  EncodedValue {
-                      extract(source.aval),
-                      extract(source.bval),
-                      1,
-                      extract(source.logic9_plane2),
-                      extract(source.logic9_plane3),
-                      source.kind });
-              branch_to_next();
+  const auto destination_kind = registers[operation.destination].kind;
+  const auto source = coerce_value_kind(
+      builder,
+      load_register(builder, registers, operation.source),
+      destination_kind);
+  const auto index = coerce_value_kind(
+      builder,
+      load_register(builder, registers, operation.selection.index),
+      ValueKind::logic4);
+  auto* unknown = builder.CreateICmpNE(
+      builder.CreateAnd(
+          index.bval,
+          constant_i64(
+              context,
+              std::numeric_limits<std::uint32_t>::max())),
+      constant_i64(context, 0));
+  auto* selected = builder.CreateSExt(
+      builder.CreateTrunc(index.aval, i32), i64);
+  auto* lower = llvm::ConstantInt::getSigned(
+      i64, std::min(operation.selection.left, operation.selection.right));
+  auto* upper = llvm::ConstantInt::getSigned(
+      i64, std::max(operation.selection.left, operation.selection.right));
+  auto* valid = builder.CreateAnd(
+      builder.CreateNot(unknown),
+      builder.CreateAnd(
+          builder.CreateICmpSGE(selected, lower),
+          builder.CreateICmpSLE(selected, upper)));
+  auto* right = llvm::ConstantInt::getSigned(
+      i64, operation.selection.right);
+  auto* offset = builder.CreateSelect(
+      builder.CreateICmpSGE(selected, right),
+      builder.CreateSub(selected, right),
+      builder.CreateSub(right, selected));
+  offset = builder.CreateAdd(
+      offset, constant_i64(context, operation.selection.base_offset));
+  auto* safe_offset = builder.CreateSelect(
+      valid, offset, constant_i64(context, 0));
+  auto* shift = builder.CreateZExtOrTrunc(
+      safe_offset, packed_integer_type(context, source.width));
+  const auto extract = [&](llvm::Value* value,
+                           const bool unknown_one) {
+      auto* extracted = builder.CreateZExtOrTrunc(
+          builder.CreateAnd(
+              builder.CreateLShr(value, shift),
+              packed_constant(context, source.width, 1)),
+          i64);
+      return builder.CreateSelect(
+          valid,
+          extracted,
+          constant_i64(context, unknown_one ? 1U : 0U));
+  };
+  store_register(
+      builder,
+      registers,
+      operation.destination,
+      EncodedValue {
+          extract(source.aval, true),
+          extract(
+              source.bval,
+              destination_kind == ValueKind::logic4),
+          1,
+          extract(source.logic9_plane2, false),
+          extract(source.logic9_plane3, false),
+          destination_kind });
+  branch_to_next();
             
 }
 
 void ValueOperationLowerer::lower(
     const DynamicPartSelect& operation) {
+  if (dynamic_part_signal_source) {
+    const auto base = coerce_value_kind(
+        builder,
+        load_register(builder, registers, operation.base),
+        ValueKind::logic4);
+    runtime_error_if(
+        builder.CreateICmpEQ(
+            read_signal_dynamic_part_callback,
+            llvm::ConstantPointerNull::get(
+                llvm::cast<llvm::PointerType>(
+                    read_signal_dynamic_part_callback->getType()))),
+        JitGeneratedRuntimeErrorReason::signal_callback_failure,
+        "dynamic.part.signal.callback");
+    const auto flags = (operation.increasing ? UINT32_C(1) : UINT32_C(0))
+        | (operation.source_descending ? UINT32_C(2) : UINT32_C(0))
+        | (operation.two_state ? UINT32_C(4) : UINT32_C(0));
+    auto* status = builder.CreateCall(
+        read_signal_dynamic_part_type,
+        read_signal_dynamic_part_callback,
+        { context_pointer,
+            llvm::ConstantInt::get(i32, *dynamic_part_signal_source),
+            llvm::ConstantInt::get(
+                i32, registers[operation.source].width),
+            base.aval,
+            base.bval,
+            llvm::ConstantInt::getSigned(i64, operation.left),
+            llvm::ConstantInt::getSigned(i64, operation.right),
+            llvm::ConstantInt::get(i32, operation.base_offset),
+            llvm::ConstantInt::get(i32, operation.width),
+            llvm::ConstantInt::get(i32, flags),
+            logic9_word_slot });
+    runtime_error_if(
+        builder.CreateICmpNE(status, llvm::ConstantInt::get(i32, 0)),
+        JitGeneratedRuntimeErrorReason::signal_callback_failure,
+        "dynamic.part.signal.read");
+    const auto load_plane = [&](const std::uint32_t plane) {
+      return builder.CreateLoad(
+          i64,
+          builder.CreateInBoundsGEP(
+              i64,
+              logic9_word_slot,
+              llvm::ConstantInt::get(i32, plane)));
+    };
+    store_register(
+        builder,
+        registers,
+        operation.destination,
+        EncodedValue {
+            load_plane(0),
+            load_plane(1),
+            operation.width,
+            load_plane(2),
+            load_plane(3),
+            registers[operation.source].kind });
+    branch_to_next();
+    return;
+  }
+  if (constant_part_select_source != nullptr && operation.width <= 64U
+      && constant_part_select_source->width()
+          == registers[operation.source].width
+      && constant_part_select_source->is_logic9()
+          == (registers[operation.source].kind == ValueKind::logic9)) {
+    const auto lower_bound = std::min(operation.left, operation.right);
+    const auto upper_bound = std::max(operation.left, operation.right);
+    const auto edge = static_cast<std::int64_t>(operation.width - 1U);
+    const auto table_min = operation.increasing
+        ? lower_bound - edge : lower_bound;
+    const auto table_max = operation.increasing
+        ? upper_bound : upper_bound + edge;
+    const auto entry_count = static_cast<std::uint64_t>(
+        table_max - table_min + 1);
+    constexpr std::uint64_t maximum_constant_select_entries = 65536U;
+    if (entry_count <= maximum_constant_select_entries) {
+      const auto source_kind = registers[operation.source].kind;
+      const auto width_mask = operation.width == 64U
+          ? std::numeric_limits<std::uint64_t>::max()
+          : (UINT64_C(1) << operation.width) - 1U;
+      const std::array invalid_planes {
+          operation.two_state ? UINT64_C(0) : width_mask,
+          !operation.two_state && source_kind != ValueKind::logic9
+              ? width_mask : UINT64_C(0),
+          UINT64_C(0),
+          UINT64_C(0)
+      };
+      std::array<std::vector<std::uint64_t>, 4> tables;
+      for (std::size_t plane = 0; plane < tables.size(); ++plane) {
+        tables[plane].assign(
+            static_cast<std::size_t>(entry_count),
+            invalid_planes[plane]);
+      }
+      const auto source_bit = [&](const std::size_t plane,
+                                  const std::uint64_t offset) {
+        if (plane >= 2U && source_kind != ValueKind::logic9) {
+          return false;
+        }
+        const auto words = source_kind == ValueKind::logic9
+            ? constant_part_select_source->logic9_plane_words(plane)
+            : (plane == 0U
+                  ? constant_part_select_source->aval_words()
+                  : constant_part_select_source->bval_words());
+        if (offset / 64U >= words.size()) {
+          return false;
+        }
+        return ((words[offset / 64U] >> (offset % 64U)) & 1U) != 0U;
+      };
+      const auto right_delta = operation.increasing
+          ? (operation.source_descending ? 0 : edge)
+          : (operation.source_descending ? -edge : 0);
+      for (std::int64_t base_value = table_min;
+           base_value <= table_max; ++base_value) {
+        const auto entry = static_cast<std::size_t>(
+            base_value - table_min);
+        for (std::uint32_t bit = 0; bit < operation.width; ++bit) {
+          const auto delta = operation.source_descending
+              ? static_cast<std::int64_t>(bit)
+              : -static_cast<std::int64_t>(bit);
+          const auto selected = base_value + right_delta + delta;
+          if (selected < lower_bound || selected > upper_bound) {
+            continue;
+          }
+          const auto distance = selected >= operation.right
+              ? selected - operation.right
+              : operation.right - selected;
+          const auto offset = static_cast<std::uint64_t>(distance)
+              + operation.base_offset;
+          const auto result_mask = UINT64_C(1) << bit;
+          for (std::size_t plane = 0; plane < tables.size(); ++plane) {
+            tables[plane][entry] &= ~result_mask;
+            if (source_bit(plane, offset)) {
+              tables[plane][entry] |= result_mask;
+            }
+          }
+        }
+      }
+
+      const auto base = coerce_value_kind(
+          builder,
+          load_register(builder, registers, operation.base),
+          ValueKind::logic4);
+      auto* base_unknown = builder.CreateICmpNE(
+          builder.CreateAnd(
+              base.bval,
+              constant_i64(
+                  context,
+                  std::numeric_limits<std::uint32_t>::max())),
+          constant_i64(context, 0));
+      auto* signed_base = builder.CreateSExt(
+          builder.CreateTrunc(base.aval, i32), i64);
+      auto* valid = builder.CreateAnd(
+          builder.CreateNot(base_unknown),
+          builder.CreateAnd(
+              builder.CreateICmpSGE(
+                  signed_base,
+                  llvm::ConstantInt::getSigned(i64, table_min)),
+              builder.CreateICmpSLE(
+                  signed_base,
+                  llvm::ConstantInt::getSigned(i64, table_max))));
+      auto* table_index = builder.CreateSelect(
+          valid,
+          builder.CreateSub(
+              signed_base,
+              llvm::ConstantInt::getSigned(i64, table_min)),
+          constant_i64(context, 0));
+      auto* element_type = packed_integer_type(context, operation.width);
+      auto* array_type = llvm::ArrayType::get(element_type, entry_count);
+      auto* module = builder.GetInsertBlock()->getModule();
+      std::array<llvm::Value*, 4> selected_planes { };
+      for (std::size_t plane = 0; plane < tables.size(); ++plane) {
+        std::vector<llvm::Constant*> entries;
+        entries.reserve(tables[plane].size());
+        for (const auto value : tables[plane]) {
+          entries.push_back(llvm::ConstantInt::get(element_type, value));
+        }
+        auto* global = new llvm::GlobalVariable(
+            *module,
+            array_type,
+            true,
+            llvm::GlobalValue::PrivateLinkage,
+            llvm::ConstantArray::get(array_type, entries),
+            "fsim.constant.part.select");
+        global->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+        auto* address = builder.CreateInBoundsGEP(
+            array_type,
+            global,
+            { constant_i64(context, 0), table_index });
+        selected_planes[plane] = builder.CreateSelect(
+            valid,
+            builder.CreateLoad(element_type, address),
+            llvm::ConstantInt::get(element_type, invalid_planes[plane]));
+      }
+      store_register(
+          builder,
+          registers,
+          operation.destination,
+          EncodedValue {
+              selected_planes[0],
+              selected_planes[1],
+              operation.width,
+              selected_planes[2],
+              selected_planes[3],
+              source_kind });
+      branch_to_next();
+      return;
+    }
+  }
   const auto source = load_register(
       builder, registers, operation.source);
   const auto base = coerce_value_kind(
@@ -253,29 +500,76 @@ void ValueOperationLowerer::lower(
                   load_register(
                       builder, registers, operation.source),
                   destination_kind);
+              const auto index = coerce_value_kind(
+                  builder,
+                  load_register(
+                      builder, registers, operation.selection.index),
+                  ValueKind::logic4);
+              auto* unknown = builder.CreateICmpNE(
+                  builder.CreateAnd(
+                      index.bval,
+                      constant_i64(
+                          context,
+                          std::numeric_limits<std::uint32_t>::max())),
+                  constant_i64(context, 0));
+              auto* selected = builder.CreateSExt(
+                  builder.CreateTrunc(index.aval, i32), i64);
+              auto* lower = llvm::ConstantInt::getSigned(
+                  i64,
+                  std::min(
+                      operation.selection.left,
+                      operation.selection.right));
+              auto* upper = llvm::ConstantInt::getSigned(
+                  i64,
+                  std::max(
+                      operation.selection.left,
+                      operation.selection.right));
+              auto* valid = builder.CreateAnd(
+                  builder.CreateNot(unknown),
+                  builder.CreateAnd(
+                      builder.CreateICmpSGE(selected, lower),
+                      builder.CreateICmpSLE(selected, upper)));
+              auto* right = llvm::ConstantInt::getSigned(
+                  i64, operation.selection.right);
+              auto* offset = builder.CreateSelect(
+                  builder.CreateICmpSGE(selected, right),
+                  builder.CreateSub(selected, right),
+                  builder.CreateSub(right, selected));
+              offset = builder.CreateAdd(
+                  offset,
+                  constant_i64(context, operation.selection.base_offset));
+              auto* safe_offset = builder.CreateSelect(
+                  valid, offset, constant_i64(context, 0));
               auto* shift = builder.CreateZExtOrTrunc(
-                  dynamic_offset(operation.selection),
+                  safe_offset,
                   packed_integer_type(context, target.width));
-              auto* shifted_mask = builder.CreateShl(
-                  packed_constant(context, target.width, 1), shift);
+              auto* shifted_mask = builder.CreateSelect(
+                  valid,
+                  builder.CreateShl(
+                      packed_constant(context, target.width, 1), shift),
+                  packed_constant(context, target.width, 0));
               auto* keep_mask = builder.CreateAnd(
                   builder.CreateNot(shifted_mask),
                   packed_mask(context, target.width));
               const auto insert_plane =
                   [&](llvm::Value* target_plane,
                       llvm::Value* source_plane) {
+                      auto* inserted = builder.CreateShl(
+                          builder.CreateAnd(
+                              builder.CreateZExtOrTrunc(
+                                  source_plane,
+                                  packed_integer_type(
+                                      context, target.width)),
+                              packed_constant(
+                                  context, target.width, 1)),
+                          shift);
                       return builder.CreateOr(
                           builder.CreateAnd(
                               target_plane, keep_mask),
-                          builder.CreateShl(
-                              builder.CreateAnd(
-                                  builder.CreateZExtOrTrunc(
-                                      source_plane,
-                                      packed_integer_type(
-                                          context, target.width)),
-                                  packed_constant(
-                                      context, target.width, 1)),
-                              shift));
+                          builder.CreateSelect(
+                              valid,
+                              inserted,
+                              packed_constant(context, target.width, 0)));
                   };
               store_register(
                   builder,
@@ -499,43 +793,8 @@ void ValueOperationLowerer::lower(
                         == BinaryOperator::bit_or
                     || operation.operation
                         == BinaryOperator::bit_xor) {
-                  const auto make_table =
-                      [&](const BinaryOperator selected) {
-                        std::array<
-                            std::array<Logic9, 9>, 9> table{};
-                        for (std::size_t left = 0;
-                             left < table.size();
-                             ++left) {
-                          for (std::size_t right = 0;
-                               right < table[left].size();
-                               ++right) {
-                            const auto left_state =
-                                static_cast<Logic9>(left);
-                            const auto right_state =
-                                static_cast<Logic9>(right);
-                            table[left][right] =
-                                selected
-                                        == BinaryOperator::bit_and
-                                    ? runtime::logic_and(
-                                          left_state,
-                                          right_state)
-                                    : selected
-                                              == BinaryOperator::bit_or
-                                          ? runtime::logic_or(
-                                                left_state,
-                                                right_state)
-                                          : runtime::logic_xor(
-                                                left_state,
-                                                right_state);
-                          }
-                        }
-                        return table;
-                      };
-                  value = map_logic9_binary(
-                      builder,
-                      lhs,
-                      rhs,
-                      make_table(operation.operation));
+                  value = lower_logic9_binary(
+                      builder, lhs, rhs, operation.operation);
                 } else if (
                     operation.operation
                     == BinaryOperator::vhdl_match_equal) {

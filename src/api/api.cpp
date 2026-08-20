@@ -1386,8 +1386,10 @@ fsim_status_t fsim_session_get_object_info(
         }
         if (const auto variable = object_variable(value, object)) {
             const auto& reference = value.variables[*variable];
-            const auto& process = value.simulation->runtime_adapter().processes().at(
-                reference.process);
+            const auto& process
+                = value.simulation->process_program(
+                    static_cast<fsim::runtime::simir::ProcessId>(
+                        reference.process));
             const auto& info = process.debug_locals.at(reference.local);
             out_info->parent = reference.parent_scope
                 ? scope_handle(value, *reference.parent_scope)

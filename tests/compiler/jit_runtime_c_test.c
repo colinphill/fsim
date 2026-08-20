@@ -5,6 +5,8 @@
 
 _Static_assert(FSIM_JIT_RUNTIME_ABI_VERSION_V1 == UINT32_C(1),
                "unexpected JIT runtime ABI version");
+_Static_assert(FSIM_JIT_NATIVE_CALL_STACK_CAPACITY_V1 == UINT32_C(64),
+               "unexpected native call-stack capacity");
 _Static_assert(FSIM_JIT_RESUME_STATUS_COMPLETED == UINT32_C(0),
                "completed resume status changed");
 _Static_assert(FSIM_JIT_RESUME_STATUS_ASSERTION_FAILED == UINT32_C(1),
@@ -197,8 +199,75 @@ _Static_assert(
 _Static_assert(
     offsetof(fsim_jit_runtime_v1, execute_signal_operation) == 592,
     "runtime exact-width signal helper was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 600,
+_Static_assert(offsetof(fsim_jit_runtime_v1, container_read_word) == 600,
+    "runtime container word-read helper was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, container_write_word) == 608,
+    "runtime container word-write helper was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, container_read_packed) == 616,
+    "runtime packed-container read helper was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, container_write_packed) == 624,
+    "runtime packed-container write helper was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, read_signal_packed) == 632,
+    "runtime packed-signal read helper was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, write_signal_packed) == 640,
+    "runtime packed-signal write helper was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, read_signal_dynamic_part) == 760,
+    "runtime dynamic-part signal read helper was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, direct_update_slots) == 648,
+    "runtime direct-update slots were not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, direct_update_slot_count) == 656,
+    "runtime direct-update slot count was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, direct_signal_aval) == 664,
+    "runtime direct signal aval plane was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, direct_signal_bval) == 672,
+    "runtime direct signal bval plane was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, direct_read_signals) == 680,
+    "runtime direct read map was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, direct_read_signal_count) == 688,
+    "runtime direct read map count was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, direct_signal_count) == 692,
+    "runtime direct signal count was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, direct_wide_signal_aval) == 704,
+    "runtime direct wide aval plane was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, direct_wide_signal_bval) == 712,
+    "runtime direct wide bval plane was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, direct_wide_signal_offsets) == 720,
+    "runtime direct wide signal offsets were not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, direct_wide_signal_offset_count) == 728,
+    "runtime direct wide signal offset count was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, direct_wide_word_count) == 732,
+    "runtime direct wide word count was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, direct_update_active_words) == 736,
+    "runtime direct-update activity bitmap was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, direct_update_active_word_count) == 744,
+    "runtime direct-update activity bitmap count was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, static_trigger_mask) == 752,
+    "runtime static trigger mask was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, read_signal_dynamic_part) == 760,
+    "runtime dynamic-part read was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, direct_wide_signal_logic9_plane2) == 768,
+    "runtime direct wide Logic9 plane 2 was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, direct_wide_signal_logic9_plane3) == 776,
+    "runtime direct wide Logic9 plane 3 was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, direct_signal_logic9_plane0) == 784,
+    "runtime direct Logic9 plane 0 was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, direct_signal_logic9_plane1) == 792,
+    "runtime direct Logic9 plane 1 was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, direct_signal_logic9_plane2) == 800,
+    "runtime direct Logic9 plane 2 was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, direct_signal_logic9_plane3) == 808,
+    "runtime direct Logic9 plane 3 was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 816,
     "unexpected extended runtime ABI size");
+_Static_assert(sizeof(fsim_jit_update_slot_v1) == 80,
+    "unexpected direct-update slot size");
 _Static_assert(sizeof(fsim_jit_projected_element_v1) == 24,
                "unexpected projected-waveform element size");
 _Static_assert(offsetof(fsim_jit_projected_element_v1, aval) == 0,
@@ -218,7 +287,13 @@ _Static_assert(offsetof(fsim_jit_frame_v1, register_logic9_plane2) == 64,
                "exact frame plane two was not appended");
 _Static_assert(offsetof(fsim_jit_frame_v1, register_logic9_plane3) == 72,
                "exact frame plane three was not appended");
-_Static_assert(sizeof(fsim_jit_frame_v1) == 80,
+_Static_assert(offsetof(fsim_jit_frame_v1, native_call_depth) == 80,
+               "frame native call depth offset changed");
+_Static_assert(offsetof(fsim_jit_frame_v1, native_call_reserved) == 84,
+               "frame native call reserved offset changed");
+_Static_assert(offsetof(fsim_jit_frame_v1, native_return_stack) == 88,
+               "frame native return stack offset changed");
+_Static_assert(sizeof(fsim_jit_frame_v1) == 344,
                "unexpected exact frame ABI size");
 _Static_assert(sizeof(fsim_jit_resume_result_v1) == 24,
                "unexpected resume-result ABI size");
@@ -735,6 +810,37 @@ int main(void) {
       read_simulation_time,
       vital_timing_check,
       vital_delay,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      0,
+      0,
+      NULL,
+      NULL,
+      NULL,
+      0,
+      0,
+      0,
+      NULL,
+      NULL,
+      NULL,
+      0,
+      0,
+      NULL,
+      0,
+      0,
+      0,
+      NULL,
+      NULL,
+      NULL,
       NULL,
       NULL,
       NULL,

@@ -587,6 +587,48 @@ Expression VerilogParser::parse_primary()
             token.text += based.text;
             token.span = cover(token.span, based.span);
         }
+        const bool joined_sized_cast = token.text.ends_with("'")
+            && at(TokenKind::LeftParen);
+        if (joined_sized_cast
+            || (token.text.find('\'') == std::string::npos
+                && match(TokenKind::Apostrophe))) {
+            if (joined_sized_cast) {
+                token.text.pop_back();
+            }
+            (void)require_standard(
+                "a sized casting expression",
+                StandardRevision::SystemVerilog2005,
+                token,
+                "FSIM-SV-PARSE-347");
+            expect(
+                TokenKind::LeftParen,
+                "'(' after SystemVerilog casting size",
+                "FSIM-SV-PARSE-219");
+            auto operand = parse_expression();
+            expect(
+                TokenKind::RightParen,
+                "')' after SystemVerilog cast expression",
+                "FSIM-SV-PARSE-220");
+            auto cast = Expression {
+                ExpressionKind::Call,
+                "@sv-cast:" + token.text,
+                { std::move(operand) },
+                span_from(token, previous())
+            };
+            const auto width = detail::decimal_i64(token.text);
+            if (!width || *width <= 0) {
+                error(
+                    token,
+                    "FSIM-SV-SEM-188",
+                    "a SystemVerilog casting size must be a positive "
+                    "decimal constant");
+            } else {
+                cast.call_result_width =
+                    static_cast<std::uint64_t>(*width);
+                cast.call_result_domain = ValueDomain::Logic4;
+            }
+            return parse_postfix(std::move(cast));
+        }
         const bool decimal_form = token.text.find('.') != std::string::npos
             || token.text.find_first_of("eE") != std::string::npos;
         std::optional<Token> time_unit;

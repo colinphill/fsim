@@ -12,6 +12,12 @@ Simulation::runtime_adapter() const noexcept
     return impl_->built.design;
 }
 
+const runtime::simir::Process& Simulation::process_program(
+    const runtime::simir::ProcessId process) const
+{
+    return impl_->interpreter->process_program(process);
+}
+
 const semantic::design::DesignIr& Simulation::design_ir() const noexcept
 {
     return impl_->built.design_ir;

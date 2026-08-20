@@ -323,6 +323,17 @@ enum class SimulationEngine : std::uint8_t {
     debug,
 };
 
+/// Controls whether kernel mutations are continuously mirrored into the live
+/// SystemVerilog VPI object model.  API and foreign-interface users retain the
+/// live bridge by default; standalone execution can leave the already-published
+/// time-zero registry dormant when no VPI consumer is present, or omit design
+/// publication entirely for a standalone run that cannot expose VPI services.
+enum class SystemVerilogVpiRuntimeUpdates : std::uint8_t {
+    enabled,
+    disabled,
+    omitted,
+};
+
 struct NativeCacheStatistics {
     std::uint64_t hits { };
     std::uint64_t misses { };
@@ -608,7 +619,9 @@ public:
     Simulation(
         BuiltProject project,
         std::uint64_t max_deltas,
-        SimulationEngine engine = SimulationEngine::compiled);
+        SimulationEngine engine = SimulationEngine::compiled,
+        SystemVerilogVpiRuntimeUpdates vpi_runtime_updates
+            = SystemVerilogVpiRuntimeUpdates::enabled);
     ~Simulation();
     Simulation(Simulation&&) noexcept;
     Simulation& operator=(Simulation&&) noexcept;
@@ -620,6 +633,10 @@ public:
     /// provenance, and public metadata must come from `design_ir()`.
     [[nodiscard]] const elaboration::ElaboratedDesign&
     runtime_adapter() const noexcept;
+    /// Live process program owned by the interpreter. Process operation
+    /// payloads transfer out of the elaborated adapter at simulation setup.
+    [[nodiscard]] const runtime::simir::Process& process_program(
+        runtime::simir::ProcessId process) const;
     [[nodiscard]] const semantic::design::DesignIr& design_ir() const noexcept;
     [[nodiscard]] const semantic::vhdl::Hir& vhdl_hir() const noexcept;
     [[nodiscard]] const semantic::Model& semantics() const noexcept;
@@ -913,7 +930,11 @@ public:
     /// Native-object cache activity incurred while materializing this
     /// simulation's compiled specialization modules.
     [[nodiscard]] NativeCacheStatistics
-    native_cache_statistics() const noexcept;
+    native_cache_statistics(bool synchronize = true) const noexcept;
+    /// Join the cold-start LLVM tier and surface any lowering, codegen, or
+    /// cache failure. Larger recurring kernels promote asynchronously only
+    /// for runs long enough to amortize compilation.
+    void await_native_compilation() const;
     void set_signal_change_hook(SignalChangeHook hook);
     /// Add an independent signal observer without replacing the trace/API hook.
     /// The returned token remains valid until removed or the Simulation dies.

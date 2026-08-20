@@ -137,6 +137,7 @@ struct SystemVerilogVpiCallbackManager::Impl {
     SystemVerilogVpiTimeService* time_service { };
     mutable std::mutex mutex;
     std::map<std::uint64_t, Record> records;
+    std::atomic_bool has_registrations { false };
 };
 
 namespace {
@@ -443,6 +444,7 @@ SystemVerilogVpiCallbackManager::register_callback(
         return registration_failure(
             SystemVerilogVpiCallbackError::ResourceLimit);
     }
+    impl_->has_registrations.store(true, std::memory_order_release);
 
     const std::weak_ptr<Impl> weak = impl_;
     try {
@@ -682,6 +684,12 @@ std::size_t SystemVerilogVpiCallbackManager::registrations() const
     }
     std::scoped_lock lock { impl_->mutex };
     return impl_->records.size();
+}
+
+bool SystemVerilogVpiCallbackManager::has_registrations() const noexcept
+{
+    return impl_
+        && impl_->has_registrations.load(std::memory_order_acquire);
 }
 
 } // namespace fsim::runtime

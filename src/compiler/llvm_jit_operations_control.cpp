@@ -25,6 +25,50 @@ void ControlFlowOperationLowerer::lower(const Jump& operation)
 
 void ControlFlowOperationLowerer::lower(const Call& operation)
 {
+    if (native_call) {
+        if (ssa_callable_return != nullptr) {
+            builder.CreateStore(
+                llvm::ConstantInt::get(
+                    llvm::cast<llvm::IntegerType>(i32),
+                    operation.return_target),
+                ssa_callable_return);
+            builder.CreateBr(instruction_blocks[operation.target]);
+            return;
+        }
+        auto* depth_pointer
+            = builder.CreateStructGEP(frame_type, frame_argument, 13);
+        auto* depth = builder.CreateLoad(i32, depth_pointer, "call.depth");
+        runtime_error_if(
+            builder.CreateICmpUGE(
+                depth,
+                llvm::ConstantInt::get(
+                    llvm::cast<llvm::IntegerType>(i32),
+                    FSIM_JIT_NATIVE_CALL_STACK_CAPACITY_V1)),
+            JitGeneratedRuntimeErrorReason::call_stack_overflow,
+            "native.call.stack.overflow");
+        auto* stack = builder.CreateStructGEP(
+            frame_type, frame_argument, 15);
+        auto* target_pointer = builder.CreateInBoundsGEP(
+            llvm::ArrayType::get(
+                i32, FSIM_JIT_NATIVE_CALL_STACK_CAPACITY_V1),
+            stack,
+            { llvm::ConstantInt::get(
+                  llvm::cast<llvm::IntegerType>(i32), 0),
+                depth });
+        builder.CreateStore(
+            llvm::ConstantInt::get(
+                llvm::cast<llvm::IntegerType>(i32),
+                operation.return_target),
+            target_pointer);
+        builder.CreateStore(
+            builder.CreateAdd(
+                depth,
+                llvm::ConstantInt::get(
+                    llvm::cast<llvm::IntegerType>(i32), 1)),
+            depth_pointer);
+        builder.CreateBr(instruction_blocks[operation.target]);
+        return;
+    }
     if (operation.stack.capacity == 0) {
         return_result(
             FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
@@ -72,6 +116,64 @@ void ControlFlowOperationLowerer::lower(const Call& operation)
 
 void ControlFlowOperationLowerer::lower(const Return& operation)
 {
+    if (native_return) {
+        if (ssa_callable_return != nullptr) {
+            auto* target = builder.CreateLoad(
+                i32,
+                ssa_callable_return,
+                "native.return.target");
+            auto* dispatch_return = builder.CreateSwitch(
+                target,
+                invalid_pc,
+                static_cast<unsigned>(native_return_targets.size()));
+            for (const auto return_target : native_return_targets) {
+                dispatch_return->addCase(
+                    llvm::ConstantInt::get(
+                        llvm::cast<llvm::IntegerType>(i32),
+                        return_target),
+                    instruction_blocks[return_target]);
+            }
+            return;
+        }
+        auto* depth_pointer
+            = builder.CreateStructGEP(frame_type, frame_argument, 13);
+        auto* depth = builder.CreateLoad(i32, depth_pointer, "return.depth");
+        runtime_error_if(
+            builder.CreateICmpEQ(
+                depth,
+                llvm::ConstantInt::get(
+                    llvm::cast<llvm::IntegerType>(i32), 0)),
+            JitGeneratedRuntimeErrorReason::call_stack_underflow,
+            "native.return.stack.underflow");
+        auto* next_depth = builder.CreateSub(
+            depth,
+            llvm::ConstantInt::get(
+                llvm::cast<llvm::IntegerType>(i32), 1));
+        auto* stack = builder.CreateStructGEP(
+            frame_type, frame_argument, 15);
+        auto* target_pointer = builder.CreateInBoundsGEP(
+            llvm::ArrayType::get(
+                i32, FSIM_JIT_NATIVE_CALL_STACK_CAPACITY_V1),
+            stack,
+            { llvm::ConstantInt::get(
+                  llvm::cast<llvm::IntegerType>(i32), 0),
+                next_depth });
+        auto* target = builder.CreateLoad(
+            i32, target_pointer, "native.return.target");
+        builder.CreateStore(next_depth, depth_pointer);
+        auto* dispatch_return = builder.CreateSwitch(
+            target,
+            invalid_pc,
+            static_cast<unsigned>(native_return_targets.size()));
+        for (const auto return_target : native_return_targets) {
+            dispatch_return->addCase(
+                llvm::ConstantInt::get(
+                    llvm::cast<llvm::IntegerType>(i32),
+                    return_target),
+                instruction_blocks[return_target]);
+        }
+        return;
+    }
     if (operation.stack.capacity == 0) {
         return_result(
             FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
@@ -127,19 +229,22 @@ void ControlFlowOperationLowerer::lower(const Return& operation)
     auto* dispatch_return = builder.CreateSwitch(
         builder.CreateTrunc(target_aval, i32),
         invalid_pc,
-        static_cast<unsigned>(instruction_blocks.size()));
-    for (std::size_t target = 0;
-        target < instruction_blocks.size(); ++target) {
+        static_cast<unsigned>(static_return_targets.size()));
+    for (const auto target : static_return_targets) {
         dispatch_return->addCase(
             llvm::ConstantInt::get(
                 llvm::cast<llvm::IntegerType>(i32),
-                static_cast<std::uint32_t>(target)),
+                target),
             instruction_blocks[target]);
     }
 }
 
 void ControlFlowOperationLowerer::lower(const CallableFramePush&)
 {
+    if (native_frame) {
+        builder.CreateBr(instruction_blocks[index + 1U]);
+        return;
+    }
     return_result(
         FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
         instruction,
@@ -150,6 +255,10 @@ void ControlFlowOperationLowerer::lower(const CallableFramePush&)
 
 void ControlFlowOperationLowerer::lower(const CallableFramePop&)
 {
+    if (native_frame) {
+        builder.CreateBr(instruction_blocks[index + 1U]);
+        return;
+    }
     return_result(
         FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
         instruction,

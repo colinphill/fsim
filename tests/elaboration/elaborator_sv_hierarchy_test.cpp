@@ -211,6 +211,38 @@ module missing_top; endmodule
         missing.design, "sv:work.missing_top");
     assert(!missing_result.ok());
     assert(has_diagnostic(missing_result, "FSIM-ELAB-SVEXTERN-001"));
+
+    const auto implicit_ports = fsim::frontend::parse_text(
+        "implicit-ports.sv",
+        R"(
+module implicit_leaf(
+  input logic clk,
+  input logic value,
+  output logic result);
+  assign result = value;
+endmodule
+module implicit_top;
+  logic clk;
+  logic value;
+  logic result;
+  implicit_leaf child(.clk, .*);
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(implicit_ports.ok());
+    const auto implicit_result = fsim::elaboration::elaborate(
+        implicit_ports.design, "sv:work.implicit_top");
+    for (const auto& diagnostic : implicit_result.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+    }
+    assert(implicit_result.ok());
+    for (const auto name : { "clk", "value", "result" }) {
+        const auto parent = implicit_result.design->find_signal(name);
+        const auto child = implicit_result.design->find_signal(
+            "implicit_top.child." + std::string { name });
+        assert(parent && child && *parent == *child);
+    }
 }
 
 } // namespace fsim::tests::elaboration

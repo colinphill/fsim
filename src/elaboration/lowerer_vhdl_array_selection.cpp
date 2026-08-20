@@ -23,16 +23,68 @@ std::optional<std::uint64_t> range_count(
   return distance + 1U;
 }
 
-std::optional<frontend::Type> array_element_type(
+std::optional<frontend::Type> bounded_vector_array_type(
     const frontend::Type& type) {
-  if (!type.vhdl_array || type.vhdl_array->dimensions.empty()
-      || type.vhdl_array->element_types.empty()) {
+  if (type.vhdl_array) {
+    return type;
+  }
+  if (!type.packed_range || !type.packed_members.empty()
+      || (type.domain != frontend::ValueDomain::Bit2
+          && type.domain != frontend::ValueDomain::Logic9)) {
     return std::nullopt;
   }
-  if (type.vhdl_array->dimensions.size() == 1U) {
-    return type.vhdl_array->element_types.front();
-  }
   auto result = type;
+  const auto& packed = *type.packed_range;
+  frontend::Type element;
+  element.domain = type.domain;
+  element.spelling = type.domain == frontend::ValueDomain::Logic9
+      ? "std_logic"
+      : "bit";
+  element.nominal_type = type.domain == frontend::ValueDomain::Logic9
+      ? "std.standard.std_logic"
+      : "std.standard.bit";
+  element.enumeration_literals = type.enumeration_literals;
+  element.enumeration_range = type.enumeration_range;
+  element.enumeration_range_expression = type.enumeration_range_expression;
+  element.enumeration_base_range = type.enumeration_base_range;
+  element.enumeration_base_range_expression =
+      type.enumeration_base_range_expression;
+  frontend::VhdlArrayDimension dimension;
+  dimension.index_subtype = "integer";
+  dimension.range = frontend::IntegerRange{
+      packed.left, packed.right, packed.descending};
+  dimension.null = packed.descending
+      ? packed.left < packed.right
+      : packed.left > packed.right;
+  dimension.stride = 1;
+  frontend::VhdlArrayInfo array;
+  array.index_subtype = "integer";
+  array.element_spelling = element.spelling;
+  array.element_domain = element.domain;
+  array.flat_width = type.width();
+  array.dimensions.push_back(std::move(dimension));
+  array.element_types.push_back(std::move(element));
+  result.vhdl_array = std::move(array);
+  result.enumeration_literals.clear();
+  result.enumeration_range.reset();
+  result.enumeration_range_expression.reset();
+  result.enumeration_base_range.reset();
+  result.enumeration_base_range_expression.reset();
+  return result;
+}
+
+std::optional<frontend::Type> array_element_type(
+    const frontend::Type& type) {
+  auto storage = bounded_vector_array_type(type);
+  if (!storage || !storage->vhdl_array
+      || storage->vhdl_array->dimensions.empty()
+      || storage->vhdl_array->element_types.empty()) {
+    return std::nullopt;
+  }
+  if (storage->vhdl_array->dimensions.size() == 1U) {
+    return storage->vhdl_array->element_types.front();
+  }
+  auto result = std::move(*storage);
   auto& array = *result.vhdl_array;
   const auto width = array.dimensions.front().stride;
   array.dimensions.erase(array.dimensions.begin());
@@ -63,18 +115,20 @@ std::optional<frontend::Type> array_element_type(
 std::optional<frontend::Type> array_slice_type(
     const frontend::Type& type,
     const frontend::IntegerRange& range) {
-  if (!type.vhdl_array || type.vhdl_array->dimensions.empty()) {
+  auto storage = bounded_vector_array_type(type);
+  if (!storage || !storage->vhdl_array
+      || storage->vhdl_array->dimensions.empty()) {
     return std::nullopt;
   }
   const auto count = range_count(range);
-  const auto stride = type.vhdl_array->dimensions.front().stride;
+  const auto stride = storage->vhdl_array->dimensions.front().stride;
   if (!count || (stride != 0
                  && *count
                      > std::numeric_limits<std::uint64_t>::max()
                            / stride)) {
     return std::nullopt;
   }
-  auto result = type;
+  auto result = std::move(*storage);
   auto& array = *result.vhdl_array;
   auto& first = array.dimensions.front();
   first.range = range;
@@ -148,6 +202,16 @@ std::optional<frontend::Type> Lowerer::vhdl_expression_type(
     const Expression& expression) const {
   if (language_ != frontend::Language::Vhdl2008) {
     return std::nullopt;
+  }
+  if (!expression.nominal_type.empty()) {
+    const auto type = std::ranges::find_if(
+        visible_type_marks_, [&](const auto& entry) {
+          return entry.second != nullptr
+              && entry.second->nominal_type == expression.nominal_type;
+        });
+    if (type != visible_type_marks_.end()) {
+      return *type->second;
+    }
   }
   if (expression.kind == ExpressionKind::Call
       || expression.kind == ExpressionKind::Identifier) {
@@ -231,6 +295,26 @@ std::optional<frontend::Type> Lowerer::vhdl_expression_type(
         return when_false;
       }
       return std::nullopt;
+    }
+    if (expression.operands.size() == 1U) {
+      const auto separator = expression.text.find_last_of('.');
+      const auto name = std::string_view{expression.text}.substr(
+          separator == std::string::npos ? 0U : separator + 1U);
+      const bool builtin_vector = name == "bit_vector"
+          || name == "std_logic_vector"
+          || name == "std_ulogic_vector" || name == "signed"
+          || name == "unsigned";
+      if (builtin_vector) {
+        if (auto converted = vhdl_expression_type(
+                expression.operands.front());
+            converted && converted->width().value_or(0U) != 0U) {
+          converted->spelling = std::string{name};
+          converted->named_type = std::string{name};
+          converted->nominal_type.clear();
+          converted->is_signed = name == "signed";
+          return converted;
+        }
+      }
     }
     constexpr std::string_view qualification_prefix{
         "@vhdl-qualified:"};
@@ -348,7 +432,8 @@ Lowerer::lower_vhdl_array_selection_expression(
       const auto member_width = selected_type->width();
       if (member == source_type->packed_members.end()
           || !source_width || !member_width || *member_width == 0
-          || *source_width > 64 || *member_width > 64
+          || *source_width > std::numeric_limits<std::uint32_t>::max()
+          || *member_width > std::numeric_limits<std::uint32_t>::max()
           || member->lsb_offset + *member_width > *source_width) {
         report(
             "FSIM-ELAB-VHCOMPOP-004",
@@ -458,7 +543,8 @@ Lowerer::lower_vhdl_array_selection_expression(
     return std::nullopt;
   }
   const auto source_width = source_type->width();
-  if (!source_width || *source_width == 0 || *source_width > 64) {
+  if (!source_width || *source_width == 0
+      || *source_width > std::numeric_limits<std::uint32_t>::max()) {
     report(
         "FSIM-ELAB-VHARRAYSEL-001",
         "VHDL array selection source has no executable packed width",
@@ -601,7 +687,8 @@ Lowerer::lower_vhdl_array_selection_expression(
           IntegerCheck{distance, required, required});
     }
   }
-  if (selected_width == 0 || selected_width > 64
+  if (selected_width == 0
+      || selected_width > std::numeric_limits<std::uint32_t>::max()
       || (static_offset
           && *static_offset + selected_width > *source_width)) {
     report(
@@ -698,7 +785,8 @@ bool Lowerer::lower_assignment_selections(
         return false;
       }
       const auto width = member->width();
-      if (!width || *width == 0 || *width > 64
+      if (!width || *width == 0
+          || *width > std::numeric_limits<std::uint32_t>::max()
           || member->lsb_offset
               > std::numeric_limits<std::uint32_t>::max()
                   - selected_offset) {
@@ -886,7 +974,9 @@ bool Lowerer::lower_assignment_selections(
         const auto count = static_cast<std::uint64_t>(
             descending ? *left - *right : *right - *left) + 1U;
         const auto offset = static_array_offset(dimension, *right);
-        if (!offset || count > 64 / dimension.stride
+        if (!offset
+            || count > std::numeric_limits<std::uint32_t>::max()
+                    / dimension.stride
             || *offset
                    > std::numeric_limits<std::uint32_t>::max()
                          - selected_offset) {
@@ -994,8 +1084,18 @@ bool Lowerer::lower_assignment_selections(
         has_selected_offset = false;
       }
       selected_width = 1;
-      selected_type.reset();
-      current_type.reset();
+      if (language_ == frontend::Language::Vhdl2008
+          && current_type
+          && bounded_vector_array_type(*current_type)) {
+        current_type = array_element_type(*current_type);
+        selected_type = current_type;
+        if (current_type) {
+          selected_domain = current_type->domain;
+        }
+      } else {
+        selected_type.reset();
+        current_type.reset();
+      }
       continue;
     }
 
@@ -1010,8 +1110,29 @@ bool Lowerer::lower_assignment_selections(
           base_offset + selection->offset);
       has_selected_offset = true;
       selected_width = selection->width;
-      selected_type.reset();
-      current_type.reset();
+      const auto left = static_integer_value(
+          selection_expression.operands[1]);
+      const auto right = static_integer_value(
+          selection_expression.operands[2]);
+      if (language_ == frontend::Language::Vhdl2008
+          && current_type
+          && bounded_vector_array_type(*current_type)
+          && left && right
+          && (selection_expression.text == "to"
+              || selection_expression.text == "downto")) {
+        current_type = array_slice_type(
+            *current_type,
+            frontend::IntegerRange{
+                *left, *right,
+                selection_expression.text == "downto"});
+        selected_type = current_type;
+        if (current_type) {
+          selected_domain = current_type->domain;
+        }
+      } else {
+        selected_type.reset();
+        current_type.reset();
+      }
       continue;
     }
     const bool runtime_vhdl_slice =
@@ -1103,7 +1224,8 @@ bool Lowerer::lower_assignment_selections(
   }
   if (dynamic_array_offset) {
     if (!selected_width || *selected_width == 0
-        || *selected_width > 64 || whole_width == 0
+        || *selected_width > std::numeric_limits<std::uint32_t>::max()
+        || whole_width == 0
         || whole_width - 1U
             > static_cast<std::size_t>(
                 std::numeric_limits<std::int64_t>::max())) {

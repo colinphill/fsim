@@ -89,6 +89,9 @@ ElaborationResult elaborate(
         return result;
     }
 
+    const elaboration_detail::ConstantFunctionMemoizationScope
+        constant_function_memoization;
+
     std::vector<Root> normalized_roots{roots.begin(), roots.end()};
     std::unordered_set<std::string> aliases;
     for (auto& root : normalized_roots) {

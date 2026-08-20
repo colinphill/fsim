@@ -5,6 +5,12 @@
 #include <bit>
 #include <stdexcept>
 
+#if (defined(__x86_64__) || defined(_M_X64)) \
+    && (defined(__GNUC__) || defined(__clang__))
+#include <immintrin.h>
+#define FSIM_SHA256_X86_INTRINSICS 1
+#endif
+
 namespace fsim::support {
 namespace {
 
@@ -55,6 +61,80 @@ std::uint32_t load_be(const std::byte* data) noexcept {
         | std::to_integer<std::uint32_t>(data[3]);
 }
 
+#if defined(FSIM_SHA256_X86_INTRINSICS)
+[[nodiscard]] bool supports_sha256_instructions() noexcept
+{
+    static const bool available = [] {
+        __builtin_cpu_init();
+        return __builtin_cpu_supports("sha")
+            && __builtin_cpu_supports("ssse3")
+            && __builtin_cpu_supports("sse4.1");
+    }();
+    return available;
+}
+
+__attribute__((target("sha,ssse3,sse4.1")))
+void transform_sha256_instructions(
+    std::uint32_t* const state,
+    const std::byte* const block) noexcept
+{
+    auto temporary = _mm_loadu_si128(
+        reinterpret_cast<const __m128i*>(state));
+    auto state1 = _mm_loadu_si128(
+        reinterpret_cast<const __m128i*>(state + 4U));
+    temporary = _mm_shuffle_epi32(temporary, 0xb1);
+    state1 = _mm_shuffle_epi32(state1, 0x1b);
+    auto state0 = _mm_alignr_epi8(temporary, state1, 8);
+    state1 = _mm_blend_epi16(state1, temporary, 0xf0);
+    const auto saved0 = state0;
+    const auto saved1 = state1;
+
+    const auto byte_shuffle = _mm_set_epi8(
+        12, 13, 14, 15,
+        8, 9, 10, 11,
+        4, 5, 6, 7,
+        0, 1, 2, 3);
+    __m128i messages[4];
+    for (std::size_t index = 0; index < 4U; ++index) {
+        messages[index] = _mm_shuffle_epi8(
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(
+                block + index * 16U)),
+            byte_shuffle);
+    }
+
+    for (std::size_t group = 0; group < 16U; ++group) {
+        const auto slot = group & 3U;
+        if (group >= 4U) {
+            auto scheduled = _mm_sha256msg1_epu32(
+                messages[slot], messages[(slot + 1U) & 3U]);
+            const auto middle = _mm_alignr_epi8(
+                messages[(slot + 3U) & 3U],
+                messages[(slot + 2U) & 3U],
+                4);
+            scheduled = _mm_add_epi32(scheduled, middle);
+            messages[slot] = _mm_sha256msg2_epu32(
+                scheduled, messages[(slot + 3U) & 3U]);
+        }
+        auto rounds = _mm_add_epi32(
+            messages[slot],
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(
+                kRoundConstants.data() + group * 4U)));
+        state1 = _mm_sha256rnds2_epu32(state1, state0, rounds);
+        rounds = _mm_shuffle_epi32(rounds, 0x0e);
+        state0 = _mm_sha256rnds2_epu32(state0, state1, rounds);
+    }
+
+    state0 = _mm_add_epi32(state0, saved0);
+    state1 = _mm_add_epi32(state1, saved1);
+    temporary = _mm_shuffle_epi32(state0, 0x1b);
+    state1 = _mm_shuffle_epi32(state1, 0xb1);
+    state0 = _mm_blend_epi16(temporary, state1, 0xf0);
+    state1 = _mm_alignr_epi8(state1, temporary, 8);
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(state), state0);
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(state + 4U), state1);
+}
+#endif
+
 } // namespace
 
 Sha256::Sha256() noexcept
@@ -76,7 +156,7 @@ void Sha256::update(const std::span<const std::byte> bytes) noexcept {
 
     total_bytes_ += bytes.size();
     std::size_t offset = 0;
-    while (offset < bytes.size()) {
+    if (buffered_ != 0U) {
         const auto count = std::min(buffer_.size() - buffered_, bytes.size() - offset);
         std::copy_n(bytes.data() + offset, count, buffer_.data() + buffered_);
         buffered_ += count;
@@ -85,6 +165,15 @@ void Sha256::update(const std::span<const std::byte> bytes) noexcept {
             transform(buffer_.data());
             buffered_ = 0;
         }
+    }
+    while (bytes.size() - offset >= buffer_.size()) {
+        transform(bytes.data() + offset);
+        offset += buffer_.size();
+    }
+    if (offset != bytes.size()) {
+        const auto count = bytes.size() - offset;
+        std::copy_n(bytes.data() + offset, count, buffer_.data());
+        buffered_ = count;
     }
 }
 
@@ -149,6 +238,12 @@ std::string Sha256::hex(const Digest& digest) {
 }
 
 void Sha256::transform(const std::byte* block) noexcept {
+#if defined(FSIM_SHA256_X86_INTRINSICS)
+    if (supports_sha256_instructions()) {
+        transform_sha256_instructions(state_.data(), block);
+        return;
+    }
+#endif
     std::array<std::uint32_t, 64> words{};
     for (std::size_t i = 0; i < 16; ++i) {
         words[i] = load_be(block + i * 4);

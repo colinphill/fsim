@@ -253,7 +253,8 @@ module typed_constant_top #(
   parameter logic [31:0] WIDE_INTEGER_UNKNOWN_CAST =
       integer'(128'h0000000000000000000000000000000x),
   parameter bit WIDE_CAST_IS_UNKNOWN =
-      $isunknown(WIDE_INTEGER_UNKNOWN_CAST)
+      $isunknown(WIDE_INTEGER_UNKNOWN_CAST),
+  parameter int CAST_WIDTH = 3
 ) ();
   import wide_constant_values::*;
   typedef logic [127:0] local_wide_t;
@@ -298,6 +299,8 @@ module typed_constant_top #(
   logic [95:0] wide_unknown_q;
   logic [95:0] wide_cast_source;
   local_wide_t wide_cast_q;
+  logic [CAST_WIDTH-1:0] sized_cast_q;
+  logic statically_selected_q;
 
   initial begin
     max_q = MAX_VALUE;
@@ -309,6 +312,11 @@ module typed_constant_top #(
     wide_unknown_q = WIDE_UNKNOWN;
     wide_cast_source = WIDE_UNKNOWN;
     wide_cast_q = local_wide_t'(wide_cast_source);
+    sized_cast_q = CAST_WIDTH'(8'hff);
+    if (1'b0)
+      statically_selected_q[4+:2] = 2'b00;
+    else
+      statically_selected_q = 1'b1;
   end
 
   typed_constant_child #(.VALUE(MAX_VALUE)) child(.q(child_q));

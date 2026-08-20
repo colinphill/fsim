@@ -4,8 +4,10 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <exception>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -48,23 +50,43 @@ struct RunResult {
   std::uint64_t callbacks_executed = 0;
 };
 
+struct SchedulerBatchResult {
+  std::size_t executed { };
+  std::exception_ptr failure;
+};
+
+class Scheduler;
+
+/// Stable, caller-owned executor for adjacent opt-in scheduler tasks.
+/// Implementations consume only a leading payload prefix and contain any
+/// exception in the returned result. The executor must outlive queued tasks.
+class SchedulerBatchTask {
+public:
+  virtual ~SchedulerBatchTask() = default;
+  [[nodiscard]] virtual SchedulerBatchResult execute(
+      Scheduler&, std::span<const std::uint64_t> payloads) = 0;
+};
+
 class ScheduledTaskHandle {
 public:
   ScheduledTaskHandle() = default;
 
   [[nodiscard]] explicit operator bool() const noexcept {
-    return active_ && *active_ && !owner_.expired();
+    return active_ && token_ < active_->size() && (*active_)[token_] != 0U
+        && !owner_.expired();
   }
 
 private:
   friend class Scheduler;
 
   explicit ScheduledTaskHandle(
-      std::shared_ptr<bool> active,
+      std::shared_ptr<const std::vector<std::uint8_t>> active,
+      std::uint64_t token,
       std::weak_ptr<const void> owner)
-      : active_(std::move(active)), owner_(std::move(owner)) {}
+      : active_(std::move(active)), token_(token), owner_(std::move(owner)) {}
 
-  std::shared_ptr<bool> active_;
+  std::shared_ptr<const std::vector<std::uint8_t>> active_;
+  std::uint64_t token_ { };
   std::weak_ptr<const void> owner_;
 };
 
@@ -122,6 +144,10 @@ public:
   void schedule(SchedulerPhase phase, StableOrder stable_order, Task task);
   void schedule_next_delta(SchedulerPhase phase, StableOrder stable_order,
                            Task task);
+  void schedule_next_delta_batchable(
+      SchedulerPhase phase, StableOrder stable_order,
+      SchedulerBatchTask& batch_task, std::uint64_t batch_payload,
+      Task fallback_task);
 
   /// Record a changed signal for a possible delta-limit diagnostic.
   void note_signal_change(RuntimeSignalId signal);
@@ -150,6 +176,10 @@ public:
   [[nodiscard]] SimulationTick now() const noexcept;
   [[nodiscard]] std::uint64_t delta() const noexcept;
   [[nodiscard]] std::optional<SchedulerPhase> current_phase() const noexcept;
+  /// Monotonic identity changed whenever work enters the phase currently
+  /// being executed. Batch executors use it to stop before crossing newly
+  /// inserted canonical work.
+  [[nodiscard]] std::uint64_t current_phase_revision() const noexcept;
 
   /// Observe a newly loaded simulation time slot before any phase executes.
   void set_slot_start_hook(SlotStartHook hook);

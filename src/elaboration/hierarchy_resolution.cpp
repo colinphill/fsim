@@ -306,15 +306,27 @@ void HierarchyBuilder::set_resolution(
 void HierarchyBuilder::validate_process_drivers()
 {
     using DriverRegion = Process::DriverRegion;
-    using ProcessDriver = std::vector<DriverRegion>;
+    struct ProcessDriver {
+        std::vector<DriverRegion> regions;
+        bool continuous { };
+        bool event_controlled { };
+    };
     std::unordered_map<SignalId, std::vector<ProcessDriver>> drivers;
     for (const auto& process : design_.processes_) {
+        if (process.name.find("$declaration_initializer_")
+            != std::string::npos) {
+            continue;
+        }
         std::map<SignalId, std::vector<DriverRegion>> process_outputs;
         for (const auto& region : process.driver_regions) {
             process_outputs[region.signal].push_back(region);
         }
         for (auto& [signal, regions] : process_outputs) {
-            drivers[signal].push_back(std::move(regions));
+            const auto leaf = std::string_view { process.name }.substr(
+                process.name.find_last_of('.') + 1U);
+            drivers[signal].push_back(ProcessDriver {
+                std::move(regions), leaf.starts_with("concurrent_"),
+                !process.static_sensitivity.empty() });
         }
     }
     for (SignalId signal = 0;
@@ -338,10 +350,13 @@ void HierarchyBuilder::validate_process_drivers()
         return left.offset < right_end && right.offset < left_end;
     };
     for (const auto& [signal, process_drivers] : drivers) {
+        const auto& info = design_.signal_info_.at(signal);
         if (process_drivers.size() <= 1
             || vhdl_1993_shared_signals_.contains(signal)
-            || design_.signal_info_.at(signal).resolution
-                != ResolutionKind::none) {
+            || info.resolution != ResolutionKind::none
+            || info.type_name == "reg"
+            || info.type_name == "integer"
+            || info.name.ends_with(".$container_storage")) {
             continue;
         }
         bool overlap = false;
@@ -350,10 +365,10 @@ void HierarchyBuilder::validate_process_drivers()
             for (std::size_t right = left + 1;
                 right < process_drivers.size() && !overlap; ++right) {
                 overlap = std::ranges::any_of(
-                    process_drivers[left],
+                    process_drivers[left].regions,
                     [&](const auto& left_region) {
                         return std::ranges::any_of(
-                            process_drivers[right],
+                            process_drivers[right].regions,
                             [&](const auto& right_region) {
                                 return regions_overlap(
                                     left_region, right_region);
@@ -361,8 +376,20 @@ void HierarchyBuilder::validate_process_drivers()
                     });
             }
         }
-        const auto& info = design_.signal_info_.at(signal);
-        if (!overlap && info.vhdl_array) {
+        if (!overlap
+            && (info.vhdl_array
+                || std::ranges::all_of(
+                    process_drivers,
+                    [](const auto& driver) {
+                        return driver.continuous;
+                    }))) {
+            continue;
+        }
+        if (process_drivers.size() == 2
+            && process_drivers.front().event_controlled
+                != process_drivers.back().event_controlled
+            && !process_drivers.front().continuous
+            && !process_drivers.back().continuous) {
             continue;
         }
         report(

@@ -21,6 +21,10 @@ namespace fsim::compiler::llvm_detail {
 
 struct ValidatedProcess {
     std::vector<std::uint32_t> register_widths;
+    /// Exact packed-register dataflow retained for lowering-time fusion.
+    std::vector<std::vector<runtime::simir::RegisterId>> instruction_uses;
+    std::vector<std::vector<runtime::simir::RegisterId>>
+        instruction_definitions;
     bool uses_logic9 { };
     bool requires_resume { };
     bool uses_write_update { };
@@ -60,7 +64,10 @@ struct ValidatedProcess {
     bool uses_strings { };
     bool uses_files { };
     bool uses_containers { };
+    bool uses_wide_container_operation { };
     bool uses_exact_signal_operation { };
+    bool uses_wide_signal_read { };
+    bool uses_wide_signal_write { };
 };
 
 [[nodiscard]] bool valid_symbol(std::string_view symbol) noexcept;
@@ -201,6 +208,20 @@ void validate_fork_operation(
     std::span<const std::uint32_t> signal_widths,
     std::span<const runtime::simir::ValueKind> signal_value_kinds,
     JitOptimizationLevel optimization,
+    bool debug_instrumentation,
+    bool require_direct_update_slots,
+    const llvm::Triple& target_triple,
+    const llvm::DataLayout& data_layout,
+    std::string_view target_cpu,
+    std::span<const std::string> target_features);
+
+[[nodiscard]] std::string make_immutable_design_object_cache_key(
+    std::string_view design_identity,
+    std::string_view module_identity,
+    std::string_view symbol,
+    JitOptimizationLevel optimization,
+    bool debug_instrumentation,
+    bool require_direct_update_slots,
     const llvm::Triple& target_triple,
     const llvm::DataLayout& data_layout,
     std::string_view target_cpu,
@@ -214,7 +235,20 @@ void validate_fork_operation(
     std::string_view cache_key,
     std::span<const std::uint32_t> register_widths,
     std::size_t string_register_count,
-    bool uses_logic9);
+    bool uses_logic9,
+    bool tracks_register_initialization,
+    std::span<const runtime::simir::SignalId> direct_read_signals,
+    std::span<const runtime::simir::SignalId> direct_update_signals);
+
+struct ProcessLoweringPlan {
+    std::vector<bool> operations;
+    std::vector<runtime::simir::InstructionIndex> entry_points;
+    bool partial { };
+};
+
+[[nodiscard]] ProcessLoweringPlan make_process_lowering_plan(
+    const runtime::simir::Process& process,
+    bool debug_instrumentation);
 
 void lower_process(
     llvm::Module& module,
@@ -222,8 +256,12 @@ void lower_process(
     const runtime::simir::Process& process,
     std::span<const std::uint32_t> signal_widths,
     std::span<const runtime::simir::ValueKind> signal_value_kinds,
+    std::span<const runtime::simir::SignalId> direct_read_signals,
+    std::span<const runtime::simir::SignalId> direct_update_signals,
     const ValidatedProcess& validated,
-    bool debug_instrumentation);
+    JitOptimizationLevel optimization,
+    bool debug_instrumentation,
+    bool require_direct_update_slots);
 
 void optimize_module(
     llvm::Module& module,

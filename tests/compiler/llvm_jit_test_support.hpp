@@ -99,6 +99,18 @@ namespace {
 
     struct TestRuntime {
         std::array<EncodedSignal, 16> signals { };
+        std::array<std::vector<std::uint64_t>, 16> wide_signal_aval;
+        std::array<std::vector<std::uint64_t>, 16> wide_signal_bval;
+        std::array<std::vector<std::uint64_t>, 16> wide_signal_logic9_plane2;
+        std::array<std::vector<std::uint64_t>, 16> wide_signal_logic9_plane3;
+        std::uint32_t packed_signal_write_mode { UINT32_MAX };
+        std::uint32_t packed_signal_write_signal { UINT32_MAX };
+        std::uint32_t packed_signal_write_offset { };
+        std::uint32_t packed_signal_write_width { };
+        std::uint64_t packed_signal_write_delay { };
+        std::uint32_t packed_signal_reads { };
+        std::vector<std::uint32_t> packed_signal_write_modes;
+        std::vector<std::uint32_t> packed_signal_write_signals;
         std::array<std::array<std::uint64_t, 4>, 16> logic9_signals { };
         std::uint32_t assertion_count { };
         std::uint32_t failed_process { };
@@ -129,7 +141,80 @@ namespace {
         std::vector<std::array<std::uint32_t, 3>> released_slices;
         std::array<std::string, 32> strings;
         std::array<std::string, 8> string_objects;
+        std::array<std::uint64_t, 5> container_read_aval { };
+        std::array<std::uint64_t, 5> container_read_bval { };
+        std::array<std::uint64_t, 5> container_write_aval { };
+        std::array<std::uint64_t, 5> container_write_bval { };
+        std::uint32_t container_packed_reads { };
+        std::uint32_t container_packed_writes { };
+        std::uint32_t dynamic_part_signal_reads { };
     };
+
+    extern "C" inline std::uint32_t container_operation_stub(
+        void*, std::uint32_t, std::uint32_t,
+        std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t,
+        std::uint64_t*, std::uint64_t*)
+    {
+        return 1U;
+    }
+
+    extern "C" inline std::uint32_t container_read_word_stub(
+        void*, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t,
+        std::uint64_t, std::uint64_t, std::uint64_t*, std::uint64_t*)
+    {
+        return 1U;
+    }
+
+    extern "C" inline std::uint32_t container_write_word_stub(
+        void*, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t,
+        std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t)
+    {
+        return 1U;
+    }
+
+    extern "C" inline std::uint32_t container_read_packed(
+        void* opaque,
+        std::uint32_t,
+        std::uint32_t,
+        std::uint32_t,
+        std::uint32_t,
+        const std::uint64_t index_aval,
+        const std::uint64_t index_bval,
+        std::uint64_t* aval,
+        std::uint64_t* bval,
+        const std::uint32_t word_count)
+    {
+        auto& runtime = *static_cast<TestRuntime*>(opaque);
+        assert(index_aval == 0U && index_bval == 0U);
+        assert(word_count == runtime.container_read_aval.size());
+        std::ranges::copy(runtime.container_read_aval, aval);
+        std::ranges::copy(runtime.container_read_bval, bval);
+        ++runtime.container_packed_reads;
+        return 0U;
+    }
+
+    extern "C" inline std::uint32_t container_write_packed(
+        void* opaque,
+        std::uint32_t,
+        std::uint32_t,
+        std::uint32_t,
+        std::uint32_t,
+        const std::uint64_t index_aval,
+        const std::uint64_t index_bval,
+        const std::uint64_t* aval,
+        const std::uint64_t* bval,
+        const std::uint32_t word_count)
+    {
+        auto& runtime = *static_cast<TestRuntime*>(opaque);
+        assert(index_aval == 0U && index_bval == 0U);
+        assert(word_count == runtime.container_write_aval.size());
+        std::ranges::copy_n(
+            aval, word_count, runtime.container_write_aval.begin());
+        std::ranges::copy_n(
+            bval, word_count, runtime.container_write_bval.begin());
+        ++runtime.container_packed_writes;
+        return 0U;
+    }
 
     [[nodiscard]] inline std::uint64_t low_mask(std::uint32_t width);
 
@@ -349,6 +434,135 @@ namespace {
             *bval = runtime.signals[signal].bval;
         }
         return runtime.signals[signal].aval;
+    }
+
+    extern "C" inline std::uint32_t read_signal_packed(
+        void* opaque,
+        const std::uint32_t signal,
+        const std::uint32_t width,
+        std::uint64_t* const aval,
+        std::uint64_t* const bval,
+        std::uint64_t* const logic9_plane2,
+        std::uint64_t* const logic9_plane3)
+    {
+        auto& runtime = *static_cast<TestRuntime*>(opaque);
+        ++runtime.packed_signal_reads;
+        assert(signal < runtime.signals.size());
+        assert(width > 64U);
+        assert(aval != nullptr && bval != nullptr);
+        const auto words = static_cast<std::size_t>((width + 63U) / 64U);
+        const auto copy_plane = [words](
+                                    const std::vector<std::uint64_t>& source,
+                                    std::uint64_t* const destination) {
+            assert(source.size() == words);
+            std::ranges::copy(source, destination);
+        };
+        copy_plane(runtime.wide_signal_aval[signal], aval);
+        copy_plane(runtime.wide_signal_bval[signal], bval);
+        const auto& plane2 = runtime.wide_signal_logic9_plane2[signal];
+        const auto& plane3 = runtime.wide_signal_logic9_plane3[signal];
+        if (logic9_plane2 != nullptr || logic9_plane3 != nullptr) {
+            assert(logic9_plane2 != nullptr && logic9_plane3 != nullptr);
+            copy_plane(plane2, logic9_plane2);
+            copy_plane(plane3, logic9_plane3);
+        } else {
+            assert(plane2.empty() && plane3.empty());
+        }
+        return 0;
+    }
+
+    extern "C" inline std::uint32_t read_signal_dynamic_part(
+        void* opaque,
+        const std::uint32_t signal,
+        const std::uint32_t source_width,
+        const std::uint64_t base_aval,
+        const std::uint64_t base_bval,
+        const std::int64_t left,
+        const std::int64_t right,
+        const std::uint32_t base_offset,
+        const std::uint32_t width,
+        const std::uint32_t flags,
+        fsim_jit_logic9_word_v1* const result)
+    {
+        auto& runtime = *static_cast<TestRuntime*>(opaque);
+        ++runtime.dynamic_part_signal_reads;
+        const auto words = static_cast<std::size_t>((source_width + 63U) / 64U);
+        assert(signal < runtime.wide_signal_aval.size());
+        assert(runtime.wide_signal_aval[signal].size() == words);
+        assert(runtime.wide_signal_bval[signal].size() == words);
+        const auto logic9
+            = runtime.wide_signal_logic9_plane2[signal].size() == words
+            && runtime.wide_signal_logic9_plane3[signal].size() == words;
+        const auto source = logic9
+            ? PackedLogic4::from_logic9_word_planes(
+                  source_width,
+                  runtime.wide_signal_aval[signal],
+                  runtime.wide_signal_bval[signal],
+                  runtime.wide_signal_logic9_plane2[signal],
+                  runtime.wide_signal_logic9_plane3[signal])
+            : PackedLogic4::from_word_planes(
+                  source_width,
+                  runtime.wide_signal_aval[signal],
+                  runtime.wide_signal_bval[signal]);
+        const auto selected = runtime::simir::dynamic_part_select_value(
+            source,
+            PackedLogic4::from_aval_bval(32, base_aval, base_bval),
+            left,
+            right,
+            base_offset,
+            width,
+            (flags & UINT32_C(1)) != 0U,
+            (flags & UINT32_C(2)) != 0U,
+            (flags & UINT32_C(4)) != 0U);
+        if (selected.is_logic9()) {
+            const auto value = selected.logic9_low_word();
+            std::ranges::copy(value.planes, result->planes);
+        } else {
+            const auto value = selected.unchecked_low_word();
+            result->planes[0] = value.aval;
+            result->planes[1] = value.bval;
+            result->planes[2] = 0U;
+            result->planes[3] = 0U;
+        }
+        return 0U;
+    }
+
+    extern "C" inline std::uint32_t write_signal_packed(
+        void* opaque,
+        const std::uint32_t signal,
+        const std::uint32_t offset,
+        const std::uint32_t width,
+        const std::uint32_t mode,
+        const std::uint64_t delay,
+        const std::uint64_t* const aval,
+        const std::uint64_t* const bval,
+        const std::uint64_t* const logic9_plane2,
+        const std::uint64_t* const logic9_plane3)
+    {
+        auto& runtime = *static_cast<TestRuntime*>(opaque);
+        assert(signal < runtime.signals.size());
+        assert(width > 0U && aval != nullptr && bval != nullptr);
+        const auto words = static_cast<std::size_t>((width + 63U) / 64U);
+        runtime.wide_signal_aval[signal].assign(aval, aval + words);
+        runtime.wide_signal_bval[signal].assign(bval, bval + words);
+        if (logic9_plane2 != nullptr || logic9_plane3 != nullptr) {
+            assert(logic9_plane2 != nullptr && logic9_plane3 != nullptr);
+            runtime.wide_signal_logic9_plane2[signal].assign(
+                logic9_plane2, logic9_plane2 + words);
+            runtime.wide_signal_logic9_plane3[signal].assign(
+                logic9_plane3, logic9_plane3 + words);
+        } else {
+            runtime.wide_signal_logic9_plane2[signal].clear();
+            runtime.wide_signal_logic9_plane3[signal].clear();
+        }
+        runtime.packed_signal_write_mode = mode;
+        runtime.packed_signal_write_signal = signal;
+        runtime.packed_signal_write_offset = offset;
+        runtime.packed_signal_write_width = width;
+        runtime.packed_signal_write_delay = delay;
+        runtime.packed_signal_write_modes.push_back(mode);
+        runtime.packed_signal_write_signals.push_back(signal);
+        return 0;
     }
 
     extern "C" inline void write_signal(void* opaque, const std::uint32_t signal,
@@ -1022,6 +1236,14 @@ namespace {
         result.force_driver_signal_slice = &write_signal_slice;
         result.force_driver_signal_slice_logic9 = &write_signal_slice_logic9;
         result.release_driver_signal_slice = &release_signal_slice;
+        result.container_operation = &container_operation_stub;
+        result.container_read_word = &container_read_word_stub;
+        result.container_write_word = &container_write_word_stub;
+        result.container_read_packed = &container_read_packed;
+        result.container_write_packed = &container_write_packed;
+        result.read_signal_packed = &read_signal_packed;
+        result.write_signal_packed = &write_signal_packed;
+        result.read_signal_dynamic_part = &read_signal_dynamic_part;
         return result;
     }
 
@@ -1201,10 +1423,14 @@ void test_scheduling_differential_at_level(
 void test_control_flow_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
+void test_native_callable_regions();
 void test_checked_integer_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
 void test_resumable_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_process_cohort_resume_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
 void test_class_service_boundaries_at_level(
@@ -1220,7 +1446,37 @@ void test_systemverilog_scalar_transport_at_level(
 void test_wide_register_frame_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
+void test_wide_transient_register_frame_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_optimized_frame_initialization_elision_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_wide_signal_read_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_wide_signal_write_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_wide_container_operations_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_fused_container_object_read_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
 void test_wide_value_operations_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_constant_dynamic_part_select_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_logic4_constant_dynamic_part_select_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_affine_dynamic_extract_fusion_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_fused_dynamic_part_signal_read_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
 void test_wildcard_case_matching_at_level(
@@ -1257,6 +1513,15 @@ void test_dynamic_packed_indices_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
 void test_initialized_bval_slot(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_direct_signal_read_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_direct_update_accumulator_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_static_trigger_regions_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
 void test_debug_point_instrumentation();

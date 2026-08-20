@@ -1415,6 +1415,47 @@ endmodule
         "Verilog delay magnitude");
     require(initial.statements.front().statements.size() == 1 && initial.statements.front().statements.front().kind == StatementKind::Finish,
         "delayed $finish");
+
+    const auto implicit_connections = parse_text(
+        "implicit-connections.sv",
+        R"(
+module implicit_connections(input logic clk, input logic value);
+  logic [2:0] sized;
+  child shorthand(.clk, .value(value));
+  child wildcard(.*);
+  initial sized = 3'(value);
+endmodule
+)",
+        Language::SystemVerilog2017);
+    require(
+        implicit_connections.ok()
+            && implicit_connections.design.units.size() == 1
+            && implicit_connections.design.units.front().instances.size()
+                == 2,
+        "SystemVerilog implicit named and wildcard connections parse");
+    const auto& shorthand = implicit_connections.design.units.front()
+                                .instances[0]
+                                .connections;
+    const auto& wildcard = implicit_connections.design.units.front()
+                               .instances[1]
+                               .connections;
+    require(
+        shorthand.size() == 2
+            && shorthand[0].port
+                == std::optional<std::string> { "clk" }
+            && shorthand[0].value.kind
+                == ExpressionKind::Identifier
+            && shorthand[0].value.text == "clk"
+            && wildcard.size() == 1
+            && wildcard[0].port
+                == std::optional<std::string> { "*" }
+            && implicit_connections.design.units.front()
+                   .processes.front().statements.front().value.text
+                == "@sv-cast:3"
+            && implicit_connections.design.units.front()
+                   .processes.front().statements.front().value.call_result_width
+                == 3,
+        "implicit connections and sized casts retain executable HIR");
 }
 
 void test_non_ansi_verilog_ports()
@@ -1726,12 +1767,7 @@ begin
 end architecture;
 )",
         Language::Vhdl2008);
-    require(!vhdl.ok(), "VHDL signal initializers must be rejected");
-    bool signal_initializer = false;
-    for (const auto& diagnostic : vhdl.diagnostics) {
-        signal_initializer = signal_initializer
-            || diagnostic.code == "FSIM-VHDL-UNSUPPORTED-012";
-    }
+    require(vhdl.ok(), "VHDL signal initializers must be retained");
     const auto* entity = vhdl.design.find(UnitKind::VhdlEntity, "initializers");
     require(
         entity != nullptr && entity->ports.size() == 1
@@ -1739,9 +1775,14 @@ end architecture;
             && entity->ports.front().default_value->kind
                 == ExpressionKind::LogicLiteral,
         "VHDL input-port defaults must remain in entity HIR");
+    const auto* architecture = vhdl.design.find(
+        UnitKind::VhdlArchitecture, "rtl");
     require(
-        signal_initializer,
-        "VHDL signal initializer needs a targeted diagnostic");
+        architecture != nullptr && architecture->signals.size() == 1
+            && architecture->signals.front().default_value
+            && architecture->signals.front().default_value->kind
+                == ExpressionKind::LogicLiteral,
+        "VHDL signal initializers must remain in architecture HIR");
 
     const auto invalid_port_default = parse_text(
         "invalid-port-default.vhd",

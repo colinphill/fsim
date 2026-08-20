@@ -524,6 +524,97 @@ evaluate_vhdl_enumeration_attribute(
         adjusted, true, false
     };
 }
+std::optional<std::int64_t> vhdl_based_integer(
+    const std::string_view text,
+    bool& recognized,
+    std::string& error)
+{
+    const auto first_hash = text.find('#');
+    if (first_hash == std::string_view::npos) {
+        recognized = false;
+        return std::nullopt;
+    }
+    recognized = true;
+    const auto second_hash = text.find('#', first_hash + 1U);
+    if (first_hash == 0U || second_hash == std::string_view::npos
+        || text.find('#', second_hash + 1U) != std::string_view::npos) {
+        error = "VHDL based integer literal is malformed";
+        return std::nullopt;
+    }
+    const auto base_value = unsigned_decimal(text.substr(0, first_hash));
+    if (!base_value || *base_value < 2U || *base_value > 16U) {
+        error = "VHDL based integer literal base must be in 2 through 16";
+        return std::nullopt;
+    }
+    const auto digits = text.substr(
+        first_hash + 1U, second_hash - first_hash - 1U);
+    if (digits.empty() || digits.find('.') != std::string_view::npos) {
+        error = "VHDL based integer literal requires integral digits";
+        return std::nullopt;
+    }
+    std::uint64_t value = 0;
+    bool saw_digit = false;
+    for (const char raw : digits) {
+        if (raw == '_') {
+            continue;
+        }
+        const auto folded = static_cast<char>(
+            std::tolower(static_cast<unsigned char>(raw)));
+        const auto digit = folded >= '0' && folded <= '9'
+            ? static_cast<unsigned>(folded - '0')
+            : folded >= 'a' && folded <= 'f'
+            ? 10U + static_cast<unsigned>(folded - 'a')
+            : 16U;
+        if (digit >= *base_value) {
+            error = "VHDL based integer literal contains a digit outside its base";
+            return std::nullopt;
+        }
+        saw_digit = true;
+        if (value
+            > (static_cast<std::uint64_t>(
+                   std::numeric_limits<std::int64_t>::max()) - digit)
+                / *base_value) {
+            error = "VHDL based integer literal is outside fsim's signed "
+                    "64-bit constant range";
+            return std::nullopt;
+        }
+        value = value * *base_value + digit;
+    }
+    if (!saw_digit) {
+        error = "VHDL based integer literal has no digits";
+        return std::nullopt;
+    }
+    auto exponent_text = text.substr(second_hash + 1U);
+    if (!exponent_text.empty()) {
+        if (exponent_text.front() != 'e'
+            && exponent_text.front() != 'E') {
+            error = "VHDL based integer literal has an invalid suffix";
+            return std::nullopt;
+        }
+        exponent_text.remove_prefix(1U);
+        if (!exponent_text.empty() && exponent_text.front() == '+') {
+            exponent_text.remove_prefix(1U);
+        }
+        const auto exponent = unsigned_decimal(exponent_text);
+        if (!exponent) {
+            error = "VHDL based integer literal has an invalid exponent";
+            return std::nullopt;
+        }
+        for (std::uint64_t index = 0; index < *exponent; ++index) {
+            if (value
+                > static_cast<std::uint64_t>(
+                      std::numeric_limits<std::int64_t>::max())
+                    / *base_value) {
+                error = "VHDL based integer literal is outside fsim's signed "
+                        "64-bit constant range";
+                return std::nullopt;
+            }
+            value *= *base_value;
+        }
+    }
+    return static_cast<std::int64_t>(value);
+}
+
 std::optional<std::int64_t> constant_literal_integer(
     const Expression& expression,
     std::string& error)
@@ -537,6 +628,15 @@ std::optional<std::int64_t> constant_literal_integer(
         }
         error = "Boolean literal is malformed";
         return std::nullopt;
+    }
+    if (expression.kind == ExpressionKind::IntegerLiteral
+        || expression.kind == ExpressionKind::LogicLiteral) {
+        bool based_literal = false;
+        const auto value = vhdl_based_integer(
+            expression.text, based_literal, error);
+        if (based_literal) {
+            return value;
+        }
     }
     if (expression.kind == ExpressionKind::IntegerLiteral
         && expression.text.find('\'') == std::string::npos) {
@@ -1094,6 +1194,54 @@ void substitute_parameters(
     const ConstantDomainEnvironment& domains,
     const frontend::Language language)
 {
+    if (expression.kind == ExpressionKind::Call
+        && expression.text.starts_with("@sv-cast:")
+        && expression.call_result_width == 0U) {
+        const auto size_name = std::string_view { expression.text }.substr(
+            std::string_view { "@sv-cast:" }.size());
+        if (const auto size = environment.find(std::string { size_name });
+            size != environment.end() && size->second > 0) {
+            expression.call_result_width =
+                static_cast<std::uint64_t>(size->second);
+            expression.call_result_domain = frontend::ValueDomain::Logic4;
+        }
+    }
+    if (expression.kind == ExpressionKind::Call
+        && !expression.operands.empty()) {
+        if (const auto domain = domains.find(expression.text);
+            domain != domains.end()
+            && domain->second.vhdl_composite_value) {
+            const auto use_span = expression.span;
+            auto selected = *domain->second.vhdl_composite_value;
+            selected.span = use_span;
+            if (!domain->second.nominal_type.empty()) {
+                selected.nominal_type = domain->second.nominal_type;
+            }
+            for (const auto& argument : expression.operands) {
+                if (argument.kind == ExpressionKind::Binary
+                    && argument.operands.size() == 2U
+                    && (argument.text == "to"
+                        || argument.text == "downto")) {
+                    selected = Expression {
+                        ExpressionKind::Slice,
+                        argument.text,
+                        { std::move(selected),
+                            argument.operands[0],
+                            argument.operands[1] },
+                        use_span
+                    };
+                } else {
+                    selected = Expression {
+                        ExpressionKind::Index,
+                        "index",
+                        { std::move(selected), argument },
+                        use_span
+                    };
+                }
+            }
+            expression = std::move(selected);
+        }
+    }
     if (expression.kind == ExpressionKind::Identifier) {
         if (const auto domain = domains.find(expression.text);
             domain != domains.end()
@@ -1101,6 +1249,9 @@ void substitute_parameters(
             const auto use_span = expression.span;
             expression = *domain->second.vhdl_composite_value;
             expression.span = use_span;
+            if (!domain->second.nominal_type.empty()) {
+                expression.nominal_type = domain->second.nominal_type;
+            }
             return;
         }
         if (const auto found = environment.find(expression.text);

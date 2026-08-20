@@ -1029,7 +1029,8 @@ bool VerilogParser::parse_optional_container_dimension(Type& type)
             "dynamic arrays, queues, and associative arrays require "
             "SystemVerilog-2017");
     }
-    if (type.spelling == "wire"
+    if ((language_ == Language::Verilog2005
+            && type.spelling == "wire")
         || (type.domain == ValueDomain::Unknown
             && type.named_type.empty()
             && type.systemverilog_scalar

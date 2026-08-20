@@ -40,7 +40,8 @@ template <typename OperationType, typename ExactSignalWidth,
         const auto width = exact_signal_width(operation.signal, index);
         record_use(operation.source, index);
         constrain_width(operation.source, width, index);
-        result.uses_exact_signal_operation = result.uses_exact_signal_operation || width > 64;
+        result.uses_wide_signal_write
+            = result.uses_wide_signal_write || width > 64;
     } else if constexpr (std::is_same_v<OperationType, Assert>) {
         record_use(operation.condition, index);
         constrain_width(operation.condition, 1U, index);
@@ -250,7 +251,7 @@ template <typename OperationType, typename ExactSignalWidth,
         record_use(operation.source, index);
         constrain_width(operation.source, width, index);
         if (width > 64) {
-            result.uses_exact_signal_operation = true;
+            result.uses_wide_signal_write = true;
         } else {
             result.uses_write_update = true;
         }
@@ -259,7 +260,7 @@ template <typename OperationType, typename ExactSignalWidth,
         record_use(operation.source, index);
         constrain_width(operation.source, width, index);
         if (width > 64) {
-            result.uses_exact_signal_operation = true;
+            result.uses_wide_signal_write = true;
         } else {
             result.uses_write_after = true;
         }
@@ -273,10 +274,11 @@ template <typename OperationType, typename ExactSignalWidth,
             result.uses_write_inertial = true;
         }
     } else if constexpr (std::is_same_v<OperationType, WriteProjected>) {
+        const auto target_width = exact_signal_width(operation.signal, index);
         record_use(operation.source, index);
         constrain_width(
             operation.source,
-            signal_width(operation.signal, index),
+            target_width,
             index);
         switch (operation.mode) {
         case runtime::simir::ProjectedDelayMode::transport:
@@ -304,7 +306,20 @@ template <typename OperationType, typename ExactSignalWidth,
                 index,
                 "transport projected write has a rejection limit");
         }
-        result.uses_write_projected = true;
+        if (target_width > 64) {
+            if (operation.delay == 0U
+                && operation.rejection == 0U
+                && operation.mode
+                    == runtime::simir::ProjectedDelayMode::inertial) {
+                result.uses_wide_signal_write = true;
+            } else {
+                // Nonzero projected transactions retain their exact queue and
+                // rejection semantics through the interpreter boundary.
+                result.uses_exact_signal_operation = true;
+            }
+        } else {
+            result.uses_write_projected = true;
+        }
     } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveform>) {
         const auto target_width = signal_width(operation.signal, index);
         if (operation.elements.size() < 2) {
@@ -366,7 +381,7 @@ template <typename OperationType, typename ExactSignalWidth,
         const auto target_width = exact_signal_width(operation.signal, index);
         record_use(operation.source, index);
         if (target_width > 64) {
-            result.uses_exact_signal_operation = true;
+            result.uses_wide_signal_write = true;
         } else {
             result.uses_write_blocking_slice = true;
         }
@@ -374,7 +389,7 @@ template <typename OperationType, typename ExactSignalWidth,
         const auto target_width = exact_signal_width(operation.signal, index);
         record_use(operation.source, index);
         if (target_width > 64) {
-            result.uses_exact_signal_operation = true;
+            result.uses_wide_signal_write = true;
         } else {
             result.uses_write_update_slice = true;
         }
@@ -382,7 +397,7 @@ template <typename OperationType, typename ExactSignalWidth,
         const auto target_width = exact_signal_width(operation.signal, index);
         record_use(operation.source, index);
         if (target_width > 64) {
-            result.uses_exact_signal_operation = true;
+            result.uses_wide_signal_write = true;
         } else {
             result.uses_write_after_slice = true;
         }
@@ -396,7 +411,7 @@ template <typename OperationType, typename ExactSignalWidth,
         }
     } else if constexpr (std::is_same_v<OperationType, WriteProjectedSlice>) {
         record_use(operation.source, index);
-        (void)signal_width(operation.signal, index);
+        (void)referenced_signal_width(operation.signal, index);
         switch (operation.mode) {
         case runtime::simir::ProjectedDelayMode::transport:
         case runtime::simir::ProjectedDelayMode::inertial:
@@ -425,7 +440,7 @@ template <typename OperationType, typename ExactSignalWidth,
         }
         result.uses_write_projected_slice = true;
     } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveformSlice>) {
-        (void)signal_width(operation.signal, index);
+        (void)referenced_signal_width(operation.signal, index);
         if (operation.elements.size() < 2) {
             reject(
                 process,
@@ -617,7 +632,7 @@ template <typename OperationType, typename ExactSignalWidth,
             operation.selection, target_width, index);
         result.uses_exact_signal_operation = true;
     } else if constexpr (std::is_same_v<OperationType, WriteProjectedDynamicSlice>) {
-        const auto target_width = signal_width(operation.signal, index);
+        const auto target_width = referenced_signal_width(operation.signal, index);
         record_use(operation.source, index);
         validate_dynamic_selection(
             operation.selection, target_width, index);
@@ -648,7 +663,7 @@ template <typename OperationType, typename ExactSignalWidth,
         }
         result.uses_write_projected_slice = true;
     } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveformDynamicSlice>) {
-        const auto target_width = signal_width(operation.signal, index);
+        const auto target_width = referenced_signal_width(operation.signal, index);
         validate_dynamic_selection(
             operation.selection, target_width, index);
         if (operation.elements.size() < 2) {

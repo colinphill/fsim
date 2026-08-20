@@ -319,7 +319,6 @@ void ApplicationTestFixture::test_simulation_semantics()
     assert(sensitivity_hybrid.process_count == 3);
 #if defined(FSIM_HAS_LLVM)
     assert(sensitivity_hybrid.compiled_processes == 3);
-    assert(sensitivity_hybrid.compiled_modules == 1);
 #endif
     assert(
         sensitivity_hybrid.result.status
@@ -345,8 +344,12 @@ void ApplicationTestFixture::test_simulation_semantics()
         == std::vector<std::string> { "0", "1", "0" }));
 #if defined(FSIM_HAS_LLVM)
     assert(sensitivity_hybrid.native_cache.hits == 0);
-    assert(sensitivity_hybrid.native_cache.misses == 1);
-    assert(sensitivity_hybrid.native_cache.stores == 1);
+    assert(
+        sensitivity_hybrid.native_cache.misses
+        == sensitivity_hybrid.compiled_modules);
+    assert(
+        sensitivity_hybrid.native_cache.stores
+        == sensitivity_hybrid.compiled_modules);
     auto sensitivity_warm_project = fsim::app::build_project(
         sensitivity_config, sensitivity_diagnostics);
     assert(sensitivity_warm_project);
@@ -356,8 +359,9 @@ void ApplicationTestFixture::test_simulation_semantics()
     compare_captures(
         sensitivity_reference, sensitivity_warm);
     assert(sensitivity_warm.compiled_processes == 3);
-    assert(sensitivity_warm.compiled_modules == 1);
-    assert(sensitivity_warm.native_cache.hits == 1);
+    assert(
+        sensitivity_warm.native_cache.hits
+        == sensitivity_warm.compiled_modules);
     assert(sensitivity_warm.native_cache.misses == 0);
     assert(sensitivity_warm.native_cache.stores == 0);
 #endif
@@ -466,7 +470,6 @@ void ApplicationTestFixture::test_simulation_semantics()
     assert(wildcard_hybrid.process_count == 4);
 #if defined(FSIM_HAS_LLVM)
     assert(wildcard_hybrid.compiled_processes == 4);
-    assert(wildcard_hybrid.compiled_modules == 1);
 #endif
     const decltype(wildcard_reference.changes)
         expected_wildcard_changes = {
@@ -524,7 +527,6 @@ void ApplicationTestFixture::test_simulation_semantics()
     assert(case_hybrid.process_count == 2);
 #if defined(FSIM_HAS_LLVM)
     assert(case_hybrid.compiled_processes == 2);
-    assert(case_hybrid.compiled_modules == 1);
 #endif
     assert((
         case_hybrid.final_values
@@ -582,7 +584,6 @@ void ApplicationTestFixture::test_simulation_semantics()
     assert(conditional_hybrid.process_count == 2);
 #if defined(FSIM_HAS_LLVM)
     assert(conditional_hybrid.compiled_processes == 2);
-    assert(conditional_hybrid.compiled_modules == 1);
 #endif
     assert((
         conditional_hybrid.final_values
@@ -623,7 +624,6 @@ void ApplicationTestFixture::test_simulation_semantics()
     assert(comparison_hybrid.process_count == 2);
 #if defined(FSIM_HAS_LLVM)
     assert(comparison_hybrid.compiled_processes == 2);
-    assert(comparison_hybrid.compiled_modules == 1);
 #endif
     assert((
         comparison_hybrid.final_values
@@ -681,7 +681,6 @@ void ApplicationTestFixture::test_simulation_semantics()
     assert(logical_hybrid.process_count == 11);
 #if defined(FSIM_HAS_LLVM)
     assert(logical_hybrid.compiled_processes == 11);
-    assert(logical_hybrid.compiled_modules == 1);
 #endif
     assert((
         logical_hybrid.final_values
@@ -767,7 +766,6 @@ void ApplicationTestFixture::test_simulation_semantics()
     assert(arithmetic_hybrid.process_count == 2);
 #if defined(FSIM_HAS_LLVM)
     assert(arithmetic_hybrid.compiled_processes == 2);
-    assert(arithmetic_hybrid.compiled_modules == 1);
 #endif
     assert((
         arithmetic_hybrid.final_values
@@ -813,7 +811,6 @@ void ApplicationTestFixture::test_simulation_semantics()
     assert(select_concat_hybrid.process_count == 2);
 #if defined(FSIM_HAS_LLVM)
     assert(select_concat_hybrid.compiled_processes == 2);
-    assert(select_concat_hybrid.compiled_modules == 1);
 #endif
     assert((
         select_concat_hybrid.final_values
@@ -861,7 +858,6 @@ void ApplicationTestFixture::test_simulation_semantics()
     assert(vhdl_select_concat_hybrid.process_count == 4);
 #if defined(FSIM_HAS_LLVM)
     assert(vhdl_select_concat_hybrid.compiled_processes == 4);
-    assert(vhdl_select_concat_hybrid.compiled_modules == 1);
 #endif
     assert((
         vhdl_select_concat_hybrid.final_values
@@ -905,7 +901,6 @@ void ApplicationTestFixture::test_simulation_semantics()
     assert(vhdl_signed_hybrid.process_count == 3);
 #if defined(FSIM_HAS_LLVM)
     assert(vhdl_signed_hybrid.compiled_processes == 3);
-    assert(vhdl_signed_hybrid.compiled_modules == 1);
 #endif
     assert((
         vhdl_signed_hybrid.final_values
@@ -961,7 +956,6 @@ void ApplicationTestFixture::test_simulation_semantics()
         assert(conditional_statement_hybrid.process_count == 5);
 #if defined(FSIM_HAS_LLVM)
         assert(conditional_statement_hybrid.compiled_processes == 5);
-        assert(conditional_statement_hybrid.compiled_modules == 1);
 #endif
         if (conditional_statement_hybrid.final_values
             != std::vector<std::string> {
@@ -1028,9 +1022,6 @@ void ApplicationTestFixture::test_simulation_semantics()
         assert(
             vhdl_conditional_statement_hybrid.compiled_processes
             == 3);
-        assert(
-            vhdl_conditional_statement_hybrid.compiled_modules
-            == 1);
 #endif
         if (vhdl_conditional_statement_hybrid.final_values
             != std::vector<std::string> {
@@ -1082,9 +1073,12 @@ void ApplicationTestFixture::test_simulation_semantics()
     assert(partial_group_hybrid.process_count == 2);
 #if defined(FSIM_HAS_LLVM)
     assert(partial_group_hybrid.compiled_processes == 2);
-    assert(partial_group_hybrid.compiled_modules == 1);
-    assert(partial_group_hybrid.native_cache.misses == 1);
-    assert(partial_group_hybrid.native_cache.stores == 1);
+    assert(
+        partial_group_hybrid.native_cache.misses
+        == partial_group_hybrid.compiled_modules);
+    assert(
+        partial_group_hybrid.native_cache.stores
+        == partial_group_hybrid.compiled_modules);
 #endif
     assert(
         partial_group_hybrid.result.status

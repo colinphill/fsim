@@ -41,6 +41,28 @@ bool has_parameter(
 }  // namespace
 
 void test_vhdl_generic_associations() {
+    const auto based_default = frontend::parse_text(
+        "generic_based_default.vhd",
+        R"(
+entity based_default is
+  generic (primitive_polynomial : integer := 16#11D#);
+end entity;
+architecture rtl of based_default is
+  type row_array is array (natural range <>) of
+    bit_vector(primitive_polynomial - 280 downto 0);
+  signal rows : row_array(0 to 1);
+begin
+end architecture;
+)",
+        frontend::Language::Vhdl2008);
+    assert(based_default.ok());
+    const auto based_result = fsim::elaboration::elaborate(
+        based_default.design, "vhdl:work.based_default(rtl)");
+    assert(based_result.ok());
+    assert(has_parameter(
+        based_result.design->specializations().front(),
+        "primitive_polynomial", "285"));
+
     auto fixture = frontend::parse_text(
         "generic_association_matrix.vhd",
         R"(

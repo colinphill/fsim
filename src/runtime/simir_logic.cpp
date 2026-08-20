@@ -269,43 +269,14 @@ namespace fsim::runtime::simir {
     const PackedLogic4& source,
     const std::size_t offset,
     const std::size_t width) {
-  if (width == 0 || offset > source.width()
-      || width > source.width() - offset) {
-    throw std::invalid_argument(
-        "extract range is outside its source value");
-  }
-  PackedLogic4 result(width, Logic4::zero);
-  if (source.is_logic9()) {
-    result.fill(Logic9::u);
-  }
-  for (std::size_t bit = 0; bit < width; ++bit) {
-    if (source.is_logic9()) {
-      result.set_logic9(
-          bit, source.get_logic9(offset + bit));
-    } else {
-      result.set(bit, source.get(offset + bit));
-    }
-  }
-  return result;
+  return source.extract_bits(offset, width);
 }
 
 [[nodiscard]] PackedLogic4 insert_value(
     PackedLogic4 target,
     const PackedLogic4& source,
     const std::size_t offset) {
-  if (source.width() == 0 || offset > target.width()
-      || source.width() > target.width() - offset) {
-    throw std::invalid_argument(
-        "insert range is outside its target value");
-  }
-  for (std::size_t bit = 0; bit < source.width(); ++bit) {
-    if (source.is_logic9() || target.is_logic9()) {
-      target.set_logic9(
-          offset + bit, source.get_logic9(bit));
-    } else {
-      target.set(offset + bit, source.get(bit));
-    }
-  }
+  target.insert_bits(source, offset);
   return target;
 }
 

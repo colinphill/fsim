@@ -37,8 +37,16 @@ std::optional<DynamicIndex> Lowerer::lower_dynamic_index(
             index.span);
         return std::nullopt;
     }
-    const auto lowered = lower_expression(index, 32);
-    if (!lowered || register_width(*lowered) != 32) {
+    // A packed-select index is a self-determined expression.  Lower it at
+    // its own SystemVerilog width before normalizing the completed value to
+    // the runtime's signed 32-bit index representation.  Passing the runtime
+    // width down as expression context widens operations such as a 2-bit
+    // `slot + 1'b1`, preventing the required modulo-4 wrap at the select.
+    const auto index_width = language_ == frontend::Language::SystemVerilog2017
+        ? infer_width(index).value_or(std::size_t { 32 })
+        : std::size_t { 32 };
+    const auto lowered = lower_expression(index, index_width);
+    if (!lowered) {
         report(
             "FSIM-ELAB-DYNINDEX-002",
             "a dynamic packed index must lower to the signed 32-bit runtime "
@@ -46,8 +54,10 @@ std::optional<DynamicIndex> Lowerer::lower_dynamic_index(
             index.span);
         return std::nullopt;
     }
+    const auto normalized = resize_register(
+        *lowered, 32, is_signed_expression(index));
     return DynamicIndex {
-        *lowered, range->left, range->right, base_offset
+        normalized, range->left, range->right, base_offset
     };
 }
 

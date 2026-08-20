@@ -166,7 +166,7 @@ void HierarchyBuilder::merge_vhdl_protected_types(
     }
 }
 
-void HierarchyBuilder::materialize_vhdl_1993_shared_variable(
+void HierarchyBuilder::materialize_vhdl_shared_variable(
     const frontend::VariableDeclaration& variable,
     const std::string& path,
     SignalMap& signals)
@@ -175,7 +175,7 @@ void HierarchyBuilder::materialize_vhdl_1993_shared_variable(
     if (!width || *width == 0U) {
         report(
             "FSIM-ELAB-VHPROTECTED-023",
-            "legacy VHDL-1993 shared variable '" + path + "."
+            "VHDL shared variable '" + path + "."
                 + variable.name
                 + "' requires a bounded executable scalar or packed subtype",
             variable.span);
@@ -202,7 +202,7 @@ void HierarchyBuilder::materialize_vhdl_1993_shared_variable(
     if (!initial || initial->width() != *width) {
         report(
             "FSIM-ELAB-VHPROTECTED-023",
-            "legacy VHDL-1993 shared-variable initializer for '" + path + "."
+            "VHDL shared-variable initializer for '" + path + "."
                 + variable.name
                 + "' is not a static value compatible with its declared subtype: "
                 + error,

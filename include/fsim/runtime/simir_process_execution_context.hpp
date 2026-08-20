@@ -1,7 +1,82 @@
 // SPDX-License-Identifier: Apache-2.0
+/// Compact, allocation-free nonblocking update produced by native code.
+/// Batches preserve source execution order and are committed in that order.
+struct ProcessUpdateWord {
+    SignalId signal { };
+    Logic4Word value;
+    std::uint32_t offset { };
+    bool slice { };
+};
+
+/// Mutable view of one callback-free native update accumulator. The view is
+/// built once with the executor frame and lets the kernel consume all touched
+/// words without first expanding masks into temporary ProcessUpdateWord
+/// records.
+struct ProcessUpdateSlotView {
+    SignalId signal { };
+    std::uint32_t width { };
+    std::uint32_t word_count { };
+    std::uint32_t* active { };
+    std::uint64_t* aval { };
+    std::uint64_t* bval { };
+    std::uint64_t* mask { };
+};
+
+/// One process's ordered slot set within a hierarchy-wide native cohort.
+/// Batches retain the actual elaborated process identity rather than the
+/// structurally shared process template identity.
+struct ProcessUpdateSlotBatch {
+    ProcessId process { };
+    std::span<const ProcessUpdateSlotView> slots;
+    std::span<std::uint64_t> active_words;
+};
+
+/// Mutable view of one callback-buffered single-word Logic9 update. The four
+/// planes retain the exact std_ulogic values; mask selects bits written by the
+/// current activation.
+struct ProcessLogic9UpdateSlotView {
+    SignalId signal { };
+    std::uint32_t width { };
+    std::uint64_t* planes { };
+    std::uint64_t* mask { };
+};
+
+struct ProcessLogic9UpdateBatch {
+    ProcessId process { };
+    std::span<const ProcessLogic9UpdateSlotView> slots;
+};
+
+/// Shared simulator-owned state for a generated native update phase. Empty
+/// spans disable the phase path without changing the established callbacks.
+struct ProcessNativeWordUpdate {
+    std::uint64_t aval { };
+    std::uint64_t bval { };
+    std::uint32_t width { };
+    ProcessId process { };
+    std::uint32_t active { };
+    std::uint32_t reserved { };
+};
+
 class ProcessExecutionContext {
 public:
     virtual ~ProcessExecutionContext() = default;
+
+    /// Exact static sensitivities which caused the current activation. The
+    /// full bit is the conservative default for contexts which do not track
+    /// scheduler triggers.
+    [[nodiscard]] virtual std::uint64_t static_trigger_mask() const noexcept
+    {
+        return Process::full_static_trigger_mask;
+    }
+
+    /// True when a complete multiword Logic4 update may be staged as ordered
+    /// word slices without changing module-path routing semantics. Native
+    /// executors query this once per resume so wide updates can stay on the
+    /// allocation-free update path.
+    [[nodiscard]] virtual bool supports_direct_word_updates() const noexcept
+    {
+        return false;
+    }
 
     [[nodiscard]] virtual PackedLogic4 read_signal(SignalId signal) const = 0;
     virtual void write_blocking(SignalId signal, PackedLogic4 value) = 0;
@@ -26,11 +101,53 @@ public:
             "alternate process executor does not support container objects"
         };
     }
+    [[nodiscard]] virtual bool copy_container_object(
+        const ContainerObjectId object,
+        ContainerValue& destination) const
+    {
+        auto source = read_container_object(object);
+        if (destination.type != source.type) {
+            return false;
+        }
+        destination = std::move(source);
+        return true;
+    }
+    [[nodiscard]] virtual const ContainerValue*
+    borrow_container_object(ContainerObjectId) const
+    {
+        return nullptr;
+    }
+    [[nodiscard]] virtual bool container_object_has_type(
+        const ContainerObjectId object,
+        const ContainerType& type) const
+    {
+        return read_container_object(object).type == type;
+    }
+    [[nodiscard]] virtual bool read_container_object_element(
+        ContainerObjectId,
+        std::size_t,
+        PackedLogic4&) const
+    {
+        return false;
+    }
     virtual void write_container_object(
         ContainerObjectId, const ContainerValue&)
     {
         throw std::logic_error {
             "alternate process executor does not support container objects"
+        };
+    }
+    virtual void write_container_object_element(
+        ContainerObjectId,
+        const PackedLogic4&,
+        bool,
+        bool,
+        const PackedLogic4&,
+        ProcessId,
+        InstructionIndex)
+    {
+        throw std::logic_error {
+            "alternate process executor does not support direct container-object element writes"
         };
     }
 
@@ -120,10 +237,125 @@ public:
     {
         return read_signal(signal).low_word();
     }
+    /// Dense current-value planes for callback-free native reads. Empty spans
+    /// preserve compatibility for alternate execution contexts.
+    [[nodiscard]] virtual std::span<const std::uint64_t>
+    direct_signal_aval() const noexcept
+    {
+        return { };
+    }
+    [[nodiscard]] virtual std::span<const std::uint64_t>
+    direct_signal_bval() const noexcept
+    {
+        return { };
+    }
+    /// Dense exact Logic9 planes for callback-free native reads of signals no
+    /// wider than one word. Entries for non-Logic9 signals are zero.
+    [[nodiscard]] virtual std::span<const std::uint64_t>
+    direct_signal_logic9_plane0() const noexcept
+    {
+        return { };
+    }
+    [[nodiscard]] virtual std::span<const std::uint64_t>
+    direct_signal_logic9_plane1() const noexcept
+    {
+        return { };
+    }
+    [[nodiscard]] virtual std::span<const std::uint64_t>
+    direct_signal_logic9_plane2() const noexcept
+    {
+        return { };
+    }
+    [[nodiscard]] virtual std::span<const std::uint64_t>
+    direct_signal_logic9_plane3() const noexcept
+    {
+        return { };
+    }
+    /// Flattened current Logic4 planes and per-signal word offsets for
+    /// callback-free arbitrary-width native reads. Empty spans preserve
+    /// compatibility for alternate execution contexts.
+    [[nodiscard]] virtual std::span<const std::uint64_t>
+    direct_wide_signal_aval() const noexcept
+    {
+        return { };
+    }
+    [[nodiscard]] virtual std::span<const std::uint64_t>
+    direct_wide_signal_bval() const noexcept
+    {
+        return { };
+    }
+    [[nodiscard]] virtual std::span<const std::uint64_t>
+    direct_wide_signal_logic9_plane2() const noexcept
+    {
+        return { };
+    }
+    [[nodiscard]] virtual std::span<const std::uint64_t>
+    direct_wide_signal_logic9_plane3() const noexcept
+    {
+        return { };
+    }
+    [[nodiscard]] virtual std::span<const std::uint32_t>
+    direct_wide_signal_offsets() const noexcept
+    {
+        return { };
+    }
+    /// Dense owner process for the currently valid unforced single-driver
+    /// route of each signal. UINT32_MAX means that the generic update path is
+    /// required. Native executors use this only to discard writes whose
+    /// touched bits already match the published direct planes.
+    [[nodiscard]] virtual std::span<const ProcessId>
+    direct_single_driver_processes() const noexcept
+    {
+        return { };
+    }
+    /// Monotonic single-writer ownership derived from process output regions.
+    /// Once a signal has multiple writers it remains ineligible, including
+    /// after dynamically created processes terminate.
+    [[nodiscard]] virtual std::span<const ProcessId>
+    stable_single_writer_processes() const noexcept
+    {
+        return { };
+    }
+    [[nodiscard]] virtual std::uint64_t
+    signal_writer_revision() const noexcept
+    {
+        return 0U;
+    }
     [[nodiscard]] virtual Logic9Word
     read_signal_logic9_word(SignalId signal) const
     {
         return read_signal(signal).logic9_low_word();
+    }
+    /// Copy an arbitrary-width signal directly into caller-owned little-endian
+    /// word planes. Generated code uses this path to avoid materializing an
+    /// intermediate PackedLogic4 at the JIT/runtime boundary.
+    virtual void read_signal_planes(
+        SignalId signal,
+        std::span<std::uint64_t> aval,
+        std::span<std::uint64_t> bval,
+        std::span<std::uint64_t> logic9_plane2,
+        std::span<std::uint64_t> logic9_plane3) const
+    {
+        const auto value = read_signal(signal);
+        const auto expected_words = (value.width() + 63U) / 64U;
+        if (aval.size() != expected_words || bval.size() != expected_words
+            || (!value.is_logic9()
+                && (!logic9_plane2.empty() || !logic9_plane3.empty()))
+            || (value.is_logic9()
+                && (logic9_plane2.size() != expected_words
+                    || logic9_plane3.size() != expected_words))) {
+            throw std::logic_error {
+                "arbitrary-width signal destination planes have an invalid size"
+            };
+        }
+        std::ranges::copy(value.aval_words(), aval.begin());
+        std::ranges::copy(value.bval_words(), bval.begin());
+        if (value.is_logic9()) {
+            std::ranges::copy(
+                value.logic9_plane_words(2), logic9_plane2.begin());
+            std::ranges::copy(
+                value.logic9_plane_words(3), logic9_plane3.begin());
+        }
     }
     virtual void write_blocking_word(
         SignalId signal, const Logic4Word value)
@@ -210,7 +442,57 @@ public:
                 value.width, value.aval, value.bval),
             offset);
     }
-
+    virtual void write_update_words(
+        const std::span<const ProcessUpdateWord> updates)
+    {
+        for (const auto& update : updates) {
+            if (update.slice) {
+                write_update_slice_word(
+                    update.signal, update.value, update.offset);
+            } else {
+                write_update_word(update.signal, update.value);
+            }
+        }
+    }
+    /// Consume a native batch whose signal identities, widths, and slice
+    /// ranges were validated by the executor callback that created it.
+    /// Alternate contexts retain the checked behavior by default.
+    virtual void write_validated_update_words(
+        const std::span<const ProcessUpdateWord> updates)
+    {
+        write_update_words(updates);
+    }
+    /// Stable identity for contexts which can consume one hierarchy-wide
+    /// native update phase. A null identity requests the ordinary per-process
+    /// path.
+    [[nodiscard]] virtual const void*
+    direct_update_domain() const noexcept
+    {
+        return nullptr;
+    }
+    /// Consume already validated native slot batches in canonical cohort
+    /// order. Returns false without mutating slots when the context requires
+    /// the ordinary checked path.
+    virtual bool write_validated_update_slot_batches(
+        std::span<const ProcessUpdateSlotBatch>)
+    {
+        return false;
+    }
+    /// Consume validated inline Logic9 accumulators without expanding them to
+    /// temporary packed values. False leaves every mask untouched.
+    virtual bool write_validated_logic9_update_batch(
+        const ProcessLogic9UpdateBatch&)
+    {
+        return false;
+    }
+    /// Consume valid Logic9 batches in canonical cohort order. A false return
+    /// permits partial consumption: consumed batches have their masks cleared,
+    /// while rejected batches retain their masks for the generic fallback.
+    virtual bool write_validated_logic9_update_batches(
+        std::span<const ProcessLogic9UpdateBatch>)
+    {
+        return false;
+    }
     virtual void write_after(SignalId signal, PackedLogic4 value,
         SimulationTick delay) = 0;
     virtual void write_after_word(

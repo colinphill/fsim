@@ -1426,6 +1426,13 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
         && expression.text == "?:"
         && expression.operands.size() == 3) {
         if (language_ != frontend::Language::Vhdl2008) {
+            if (const auto condition =
+                    static_integer_value(expression.operands[0])) {
+                return lower_expression(
+                    expression.operands[*condition != 0 ? 1U : 2U],
+                    expected_width,
+                    expected_type);
+            }
             const auto condition = lower_condition(
                 expression.operands[0],
                 "FSIM-ELAB-064",

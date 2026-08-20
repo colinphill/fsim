@@ -16,6 +16,17 @@ void HierarchyBuilder::validate_vhdl_generic_type(
         generic.type.nominal_type == "@builtin:time"
         && generic.type.domain == frontend::ValueDomain::Integer
         && generic.type.width().value_or(0) == 64;
+    const bool supported_logic_scalar =
+        !generic.type.packed_range
+        && generic.type.width().value_or(0) == 1
+        && (generic.type.domain == frontend::ValueDomain::Logic4
+            || generic.type.domain == frontend::ValueDomain::Logic9);
+    const bool supported_unconstrained_builtin_array =
+        generic.type.spelling == "bit_vector"
+        || generic.type.spelling == "std_logic_vector"
+        || generic.type.spelling == "std_ulogic_vector"
+        || generic.type.spelling == "signed"
+        || generic.type.spelling == "unsigned";
     const bool supported_composite =
         (generic.type.vhdl_array
          || !generic.type.packed_members.empty())
@@ -31,6 +42,8 @@ void HierarchyBuilder::validate_vhdl_generic_type(
             && !supported_packed
             && !supported_time
             && !supported_composite
+            && !supported_logic_scalar
+            && !supported_unconstrained_builtin_array
             && generic.type.domain != frontend::ValueDomain::Integer
             && generic.type.domain != frontend::ValueDomain::Boolean
             && generic.type.domain != frontend::ValueDomain::Bit2)) {

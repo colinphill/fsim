@@ -206,10 +206,12 @@ bool Lowerer::lower_process_method_statement(
 
 void Lowerer::lower_fork(const Statement& statement)
 {
-    if (active_function_ || active_task_ || active_procedure_) {
+    if (active_function_
+        || ((active_task_ || active_procedure_)
+            && statement.fork_join_kind != frontend::ForkJoinKind::All)) {
         report(
             "FSIM-ELAB-107",
-            "bounded fork branches cannot escape a callable frame",
+            "fork branches cannot escape a callable frame",
             statement.span);
         return;
     }

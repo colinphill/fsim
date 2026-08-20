@@ -51,13 +51,18 @@ void set_integer_expression(
     const Expression& expression,
     const SystemVerilogConstantEnvironment& environment,
     const ConstantEnvironment& integer_environment,
+    const std::vector<frontend::FunctionDeclaration>& functions,
     const std::string_view description,
     const std::string_view code,
     std::vector<Diagnostic>& diagnostics) {
     std::string error;
     const auto value =
-        evaluate_systemverilog_constant_expression(
-            expression, environment, integer_environment, error);
+        evaluate_systemverilog_constant_function_expression(
+            expression,
+            environment,
+            integer_environment,
+            functions,
+            error);
     if (!value) {
         diagnostics.push_back({
             std::string{code},
@@ -74,6 +79,7 @@ void prepare_regions(
     const SystemVerilogStringEnvironment& string_environment,
     const ConstantEnvironment& integer_environment,
     const ConstantDomainEnvironment& domains,
+    const std::vector<frontend::FunctionDeclaration>& functions,
     std::vector<Diagnostic>& diagnostics);
 
 void prepare_body(
@@ -83,19 +89,12 @@ void prepare_body(
         inherited_string_environment,
     const ConstantEnvironment& inherited_integer_environment,
     const ConstantDomainEnvironment& inherited_domains,
+    const std::vector<frontend::FunctionDeclaration>& functions,
     std::vector<Diagnostic>& diagnostics) {
     auto environment = inherited_environment;
     auto string_environment = inherited_string_environment;
     auto integer_environment = inherited_integer_environment;
     auto domains = inherited_domains;
-    for (auto& alias : body.type_aliases) {
-        substitute_parameters(
-            alias.type,
-            integer_environment,
-            domains,
-            diagnostics,
-            frontend::Language::SystemVerilog2017);
-    }
     for (auto& constant : body.constants) {
         substitute_parameters(
             constant.type,
@@ -132,6 +131,7 @@ void prepare_body(
             constant.default_value,
             environment,
             integer_environment,
+            functions,
             "generated parameter '" + constant.name + "'",
             "FSIM-ELAB-GEN-011",
             diagnostics);
@@ -157,12 +157,25 @@ void prepare_body(
         domains[constant.name] = ConstantTypeInfo{
             constant.type.domain, false, {}};
     }
+    for (auto& alias : body.type_aliases) {
+        substitute_parameters(
+            alias.type,
+            integer_environment,
+            domains,
+            diagnostics,
+            frontend::Language::SystemVerilog2017);
+    }
     substitute_systemverilog_strings(
         body,
         string_environment,
         integer_environment,
         diagnostics);
     substitute_systemverilog_parameters(body, environment);
+    // Iterative-generate variables become constant only when this body is
+    // expanded. Fold calls after that substitution so generated ROM/table
+    // entries do not survive as runtime callable work.
+    fold_systemverilog_constant_functions(
+        body, functions, environment, integer_environment);
     body.constants.clear();
     prepare_regions(
         body.generate_regions,
@@ -170,6 +183,7 @@ void prepare_body(
         string_environment,
         integer_environment,
         domains,
+        functions,
         diagnostics);
 }
 
@@ -179,6 +193,7 @@ void prepare_selection(
     const SystemVerilogStringEnvironment& string_environment,
     const ConstantEnvironment& integer_environment,
     const ConstantDomainEnvironment& domains,
+    const std::vector<frontend::FunctionDeclaration>& functions,
     std::vector<Diagnostic>& diagnostics) {
     std::string string_error;
     if (const auto string_selector =
@@ -276,6 +291,7 @@ void prepare_selection(
             string_environment,
             integer_environment,
             domains,
+            functions,
             diagnostics);
         region.kind = frontend::GenerateKind::StaticBlock;
         region.then_scope = std::move(selected_scope);
@@ -288,6 +304,7 @@ void prepare_selection(
         region.condition,
         environment,
         integer_environment,
+        functions,
         "selection-generate expression",
         "FSIM-ELAB-GEN-008",
         diagnostics);
@@ -308,6 +325,7 @@ void prepare_selection(
                     choice.left,
                     environment,
                     integer_environment,
+                    functions,
                     "selection-generate choice",
                     "FSIM-ELAB-GEN-009",
                     diagnostics);
@@ -329,6 +347,7 @@ void prepare_selection(
                         *choice.right,
                         environment,
                         integer_environment,
+                        functions,
                         "selection-generate range bound",
                         "FSIM-ELAB-GEN-009",
                         diagnostics);
@@ -354,6 +373,7 @@ void prepare_selection(
                 string_environment,
                 integer_environment,
                 domains,
+                functions,
                 diagnostics);
         }
         return;
@@ -392,6 +412,7 @@ void prepare_selection(
                 choice.left,
                 environment,
                 integer_environment,
+                functions,
                 "selection-generate choice",
                 "FSIM-ELAB-GEN-009",
                 diagnostics);
@@ -445,6 +466,7 @@ void prepare_selection(
         string_environment,
         integer_environment,
         domains,
+        functions,
         diagnostics);
     region.kind = frontend::GenerateKind::StaticBlock;
     region.then_scope = std::move(selected_scope);
@@ -459,6 +481,7 @@ void prepare_regions(
     const SystemVerilogStringEnvironment& string_environment,
     const ConstantEnvironment& integer_environment,
     const ConstantDomainEnvironment& domains,
+    const std::vector<frontend::FunctionDeclaration>& functions,
     std::vector<Diagnostic>& diagnostics) {
     for (auto& region : regions) {
         substitute_systemverilog_strings(
@@ -486,6 +509,7 @@ void prepare_regions(
                 string_environment,
                 integer_environment,
                 domains,
+                functions,
                 diagnostics);
             continue;
         }
@@ -494,6 +518,7 @@ void prepare_regions(
                 region.condition,
                 environment,
                 integer_environment,
+                functions,
                 "conditional-generate expression",
                 "FSIM-ELAB-GEN-001",
                 diagnostics);
@@ -517,6 +542,7 @@ void prepare_regions(
                 string_environment,
                 integer_environment,
                 domains,
+                functions,
                 diagnostics);
             prepare_body(
                 region.else_body,
@@ -524,6 +550,7 @@ void prepare_regions(
                 string_environment,
                 integer_environment,
                 domains,
+                functions,
                 diagnostics);
         } else {
             substitute_systemverilog_strings(
@@ -545,6 +572,7 @@ void prepare_systemverilog_generate_regions(
     const SystemVerilogStringEnvironment& string_environment,
     const ConstantEnvironment& integer_environment,
     const ConstantDomainEnvironment& domains,
+    const std::vector<frontend::FunctionDeclaration>& functions,
     std::vector<Diagnostic>& diagnostics) {
     prepare_regions(
         regions,
@@ -552,6 +580,23 @@ void prepare_systemverilog_generate_regions(
         string_environment,
         integer_environment,
         domains,
+        functions,
+        diagnostics);
+}
+
+void prepare_systemverilog_generate_body(
+    frontend::GenerateBody& body,
+    const ConstantEnvironment& integer_environment,
+    const ConstantDomainEnvironment& domains,
+    const std::vector<frontend::FunctionDeclaration>& functions,
+    std::vector<Diagnostic>& diagnostics) {
+    prepare_body(
+        body,
+        {},
+        {},
+        integer_environment,
+        domains,
+        functions,
         diagnostics);
 }
 

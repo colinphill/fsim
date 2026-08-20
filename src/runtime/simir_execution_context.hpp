@@ -14,6 +14,10 @@ struct Interpreter::Impl::ExecutionContext final
         , process(process_value)
     {
     }
+    [[nodiscard]] std::uint64_t static_trigger_mask() const noexcept override
+    {
+        return owner.processes[process].static_trigger_mask;
+    }
     [[nodiscard]] PackedLogic4
     read_signal(const SignalId signal) const override
     {
@@ -22,7 +26,108 @@ struct Interpreter::Impl::ExecutionContext final
     [[nodiscard]] Logic4Word
     read_signal_word(const SignalId signal) const override
     {
-        return owner.get_signal(signal).initial_value.low_word();
+        // Native lowering selects this callback only for validated nonempty
+        // Logic4 signals no wider than one ABI word. Avoid repeating the
+        // public checked conversion on every generated signal read.
+        return owner.get_signal(signal).initial_value.unchecked_low_word();
+    }
+    [[nodiscard]] std::span<const std::uint64_t>
+    direct_signal_aval() const noexcept override
+    {
+        return owner.direct_signal_aval;
+    }
+    [[nodiscard]] std::span<const std::uint64_t>
+    direct_signal_bval() const noexcept override
+    {
+        return owner.direct_signal_bval;
+    }
+    [[nodiscard]] std::span<const std::uint64_t>
+    direct_signal_logic9_plane0() const noexcept override
+    {
+        return owner.direct_signal_logic9_plane0;
+    }
+    [[nodiscard]] std::span<const std::uint64_t>
+    direct_signal_logic9_plane1() const noexcept override
+    {
+        return owner.direct_signal_logic9_plane1;
+    }
+    [[nodiscard]] std::span<const std::uint64_t>
+    direct_signal_logic9_plane2() const noexcept override
+    {
+        return owner.direct_signal_logic9_plane2;
+    }
+    [[nodiscard]] std::span<const std::uint64_t>
+    direct_signal_logic9_plane3() const noexcept override
+    {
+        return owner.direct_signal_logic9_plane3;
+    }
+    [[nodiscard]] std::span<const std::uint64_t>
+    direct_wide_signal_aval() const noexcept override
+    {
+        return owner.direct_wide_signal_aval;
+    }
+    [[nodiscard]] std::span<const std::uint64_t>
+    direct_wide_signal_bval() const noexcept override
+    {
+        return owner.direct_wide_signal_bval;
+    }
+    [[nodiscard]] std::span<const std::uint64_t>
+    direct_wide_signal_logic9_plane2() const noexcept override
+    {
+        return owner.direct_wide_signal_logic9_plane2;
+    }
+    [[nodiscard]] std::span<const std::uint64_t>
+    direct_wide_signal_logic9_plane3() const noexcept override
+    {
+        return owner.direct_wide_signal_logic9_plane3;
+    }
+    [[nodiscard]] std::span<const std::uint32_t>
+    direct_wide_signal_offsets() const noexcept override
+    {
+        return owner.direct_wide_signal_offsets;
+    }
+    [[nodiscard]] std::span<const ProcessId>
+    direct_single_driver_processes() const noexcept override
+    {
+        return owner.direct_single_driver_processes;
+    }
+    [[nodiscard]] std::span<const ProcessId>
+    stable_single_writer_processes() const noexcept override
+    {
+        return owner.stable_single_writer_processes;
+    }
+    [[nodiscard]] std::uint64_t
+    signal_writer_revision() const noexcept override
+    {
+        return owner.signal_writer_revision;
+    }
+    void read_signal_planes(
+        const SignalId signal,
+        const std::span<std::uint64_t> aval,
+        const std::span<std::uint64_t> bval,
+        const std::span<std::uint64_t> logic9_plane2,
+        const std::span<std::uint64_t> logic9_plane3) const override
+    {
+        const auto& value = owner.get_signal(signal).initial_value;
+        const auto expected_words = (value.width() + 63U) / 64U;
+        if (aval.size() != expected_words || bval.size() != expected_words
+            || (!value.is_logic9()
+                && (!logic9_plane2.empty() || !logic9_plane3.empty()))
+            || (value.is_logic9()
+                && (logic9_plane2.size() != expected_words
+                    || logic9_plane3.size() != expected_words))) {
+            throw std::logic_error {
+                "arbitrary-width signal destination planes have an invalid size"
+            };
+        }
+        std::ranges::copy(value.aval_words(), aval.begin());
+        std::ranges::copy(value.bval_words(), bval.begin());
+        if (value.is_logic9()) {
+            std::ranges::copy(
+                value.logic9_plane_words(2), logic9_plane2.begin());
+            std::ranges::copy(
+                value.logic9_plane_words(3), logic9_plane3.begin());
+        }
     }
     [[nodiscard]] std::string
     read_string_object(const StringObjectId object) const override
@@ -46,11 +151,53 @@ struct Interpreter::Impl::ExecutionContext final
     {
         return owner.read_container_object_value(object);
     }
+    [[nodiscard]] bool copy_container_object(
+        const ContainerObjectId object,
+        ContainerValue& destination) const override
+    {
+        const auto& source = owner.read_container_object_value(object);
+        if (destination.type != source.type) {
+            return false;
+        }
+        destination = source;
+        return true;
+    }
+    [[nodiscard]] const ContainerValue* borrow_container_object(
+        const ContainerObjectId object) const override
+    {
+        return &owner.read_container_object_value(object);
+    }
+    [[nodiscard]] bool container_object_has_type(
+        const ContainerObjectId object,
+        const ContainerType& type) const override
+    {
+        return owner.get_container_object(object).initial_value.type == type;
+    }
+    [[nodiscard]] bool read_container_object_element(
+        const ContainerObjectId object,
+        const std::size_t ordinal,
+        PackedLogic4& result) const override
+    {
+        return owner.read_container_object_element(object, ordinal, result);
+    }
     void write_container_object(
         const ContainerObjectId object,
         const ContainerValue& value) override
     {
         owner.write_container_object_value(object, value);
+    }
+    void write_container_object_element(
+        const ContainerObjectId object,
+        const PackedLogic4& index,
+        const bool signed_index,
+        const bool linear_index,
+        const PackedLogic4& value,
+        const ProcessId generated_process,
+        const InstructionIndex instruction) override
+    {
+        owner.write_container_object_element_value(
+            object, index, signed_index, linear_index, value,
+            generated_process, instruction);
     }
     [[nodiscard]] FileHandle open_file(
         const std::string_view path,
@@ -176,6 +323,15 @@ struct Interpreter::Impl::ExecutionContext final
         const SignalId signal,
         const Logic4Word value) override
     {
+        if (owner.can_publish_blocking_word(signal)) {
+            if (owner.signals[signal].initial_value.width()
+                != value.width) {
+                throw std::invalid_argument(
+                    "SimIR signal assignment width mismatch");
+            }
+            owner.publish_native_word(signal, value);
+            return;
+        }
         owner.commit_driver(
             process,
             signal,
@@ -269,6 +425,46 @@ struct Interpreter::Impl::ExecutionContext final
             PackedLogic4::from_aval_bval(
                 value.width, value.aval, value.bval),
             offset);
+    }
+
+    void write_update_words(
+        const std::span<const ProcessUpdateWord> updates) override
+    {
+        owner.stage_update_words(process, updates);
+    }
+
+    void write_validated_update_words(
+        const std::span<const ProcessUpdateWord> updates) override
+    {
+        owner.stage_validated_update_words(process, updates);
+    }
+
+    [[nodiscard]] const void* direct_update_domain() const noexcept override
+    {
+        return &owner;
+    }
+
+    bool write_validated_update_slot_batches(
+        const std::span<const ProcessUpdateSlotBatch> batches) override
+    {
+        return owner.stage_validated_update_slot_batches(batches);
+    }
+
+    bool write_validated_logic9_update_batch(
+        const ProcessLogic9UpdateBatch& batch) override
+    {
+        return owner.stage_validated_logic9_update_batch(batch);
+    }
+
+    bool write_validated_logic9_update_batches(
+        const std::span<const ProcessLogic9UpdateBatch> batches) override
+    {
+        return owner.stage_validated_logic9_update_batches(batches);
+    }
+
+    [[nodiscard]] bool supports_direct_word_updates() const noexcept override
+    {
+        return owner.module_paths.empty();
     }
 
     void write_after(

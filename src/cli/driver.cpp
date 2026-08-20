@@ -1529,7 +1529,7 @@ std::optional<Invocation> parse_arguments(
             || !invocation.defines.empty() || !invocation.search_libraries.empty()
             || !invocation.library_mappings.empty()
             || !invocation.library_exports.empty()
-            || invocation.jobs.has_value() || invocation.optimization.has_value()) {
+            || invocation.jobs.has_value()) {
             argument_error(
                 diagnostics,
                 "simulate received a source, compile, elaboration, or project option");

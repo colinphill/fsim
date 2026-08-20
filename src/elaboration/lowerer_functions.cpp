@@ -17,8 +17,10 @@ const frontend::FunctionDeclaration* Lowerer::visible_function(
 
 void Lowerer::initialize_function_support()
 {
+    vhdl_function_specializations_.clear();
     function_frames_.clear();
     function_indices_.clear();
+    vhdl_function_specialization_indices_.clear();
     pending_functions_.clear();
     function_dependencies_.clear();
     active_function_.reset();
@@ -142,6 +144,33 @@ void Lowerer::initialize_function_support()
         for (const auto& variable : function.variables) {
             dependencies.erase(variable.name);
         }
+        for (const auto& constant : function.constants) {
+            dependencies.erase(constant.name);
+        }
+        for (const auto& alias : function.signal_aliases) {
+            dependencies.erase(alias.name);
+        }
+        const auto erase_statement_locals =
+            [&](const auto& self,
+                const std::vector<Statement>& statements) -> void {
+              for (const auto& statement : statements) {
+                  if (!statement.loop_variable.empty()) {
+                      dependencies.erase(statement.loop_variable);
+                  }
+                  for (const auto& declaration :
+                       statement.declarations) {
+                      dependencies.erase(declaration.name);
+                  }
+                  self(self, statement.statements);
+                  self(self, statement.else_statements);
+                  for (const auto& alternative :
+                       statement.case_alternatives) {
+                      self(self, alternative.statements);
+                  }
+              }
+            };
+        erase_statement_locals(
+            erase_statement_locals, function.statements);
         const auto signal = std::ranges::find_if(
             dependencies,
             [&](const auto& name) {
@@ -217,36 +246,213 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
     if (!selected.index) {
         return std::nullopt;
     }
-    const auto function_index = *selected.index;
-    auto& frame = function_frames_[function_index];
-    const auto& function = *frame.source;
-    if (function.return_type.domain
+    auto function_index = *selected.index;
+    const auto& declared_function =
+        *function_frames_[function_index].source;
+    if (declared_function.return_type.domain
             == frontend::ValueDomain::String
-        || function.return_type.systemverilog_container) {
+        || declared_function.return_type.systemverilog_container) {
         return ExpressionAttempt { };
     }
     const bool has_defaults = std::ranges::any_of(
-        function.arguments,
+        declared_function.arguments,
         [](const frontend::FunctionArgument& argument) {
             return argument.default_value.has_value();
         });
     if (expression.call_argument_names.empty()
         && !has_defaults
-        && expression.operands.size() != function.arguments.size()) {
+        && expression.operands.size()
+            != declared_function.arguments.size()) {
         report(
             "FSIM-ELAB-SVFUNC-003",
-            "function '" + function.name + "' expects "
-                + std::to_string(function.arguments.size())
+            "function '" + declared_function.name + "' expects "
+                + std::to_string(declared_function.arguments.size())
                 + " arguments but received "
                 + std::to_string(expression.operands.size()),
             expression.span);
         return std::nullopt;
     }
-    const auto actuals = bind_function_actuals(expression, function);
+    const auto actuals = bind_function_actuals(
+        expression, declared_function);
     if (!actuals
-        || !validate_function_reference_actuals(function, *actuals)) {
+        || !validate_function_reference_actuals(
+            declared_function, *actuals)) {
         return std::nullopt;
     }
+
+    if (declared_function.language
+        == frontend::Language::Vhdl2008) {
+        const auto simple_type_name = [](const std::string_view spelling) {
+          const auto separator = spelling.find_last_of('.');
+          return spelling.substr(
+              separator == std::string_view::npos
+                  ? 0U
+                  : separator + 1U);
+        };
+        const auto unconstrained_builtin_array =
+            [&](const frontend::Type& type) {
+              const auto name = simple_type_name(type.spelling);
+              return !type.packed_range && !type.vhdl_array
+                  && (name == "bit_vector"
+                      || name == "std_logic_vector"
+                      || name == "std_ulogic_vector"
+                      || name == "signed"
+                      || name == "unsigned");
+            };
+        auto specialized = declared_function;
+        ConstantEnvironment formal_environment;
+        ConstantDomainEnvironment formal_domains;
+        for (std::size_t index = 0;
+             index < specialized.arguments.size(); ++index) {
+            auto& formal = specialized.arguments[index];
+            const auto& actual = *(*actuals)[index];
+            if (unconstrained_builtin_array(formal.type)) {
+                if (const auto actual_type =
+                        vhdl_expression_type(actual)) {
+                    formal.type = *actual_type;
+                } else if (const auto width = infer_width(actual);
+                           width && *width != 0U) {
+                    formal.type.packed_range = frontend::PackedRange{
+                        static_cast<std::int64_t>(*width - 1U),
+                        0,
+                        true};
+                }
+            }
+            if (formal.type.domain
+                == frontend::ValueDomain::Integer) {
+                if (const auto value = static_integer_value(actual)) {
+                    formal_environment.insert_or_assign(
+                        formal.name, *value);
+                    formal_domains.insert_or_assign(
+                        formal.name,
+                        ConstantTypeInfo{
+                            frontend::ValueDomain::Integer,
+                            false,
+                            {}});
+                }
+            }
+        }
+        if (unconstrained_builtin_array(specialized.return_type)) {
+            if (expected_type != nullptr
+                && !unconstrained_builtin_array(*expected_type)
+                && expected_type->width().value_or(0U) != 0U) {
+                specialized.return_type = *expected_type;
+            } else if (expected_width != 0U) {
+                specialized.return_type.packed_range =
+                    frontend::PackedRange{
+                        static_cast<std::int64_t>(expected_width - 1U),
+                        0,
+                        true};
+            }
+        }
+        for (auto& alias : specialized.type_aliases) {
+            substitute_parameters(
+                alias.type,
+                formal_environment,
+                formal_domains,
+                diagnostics_,
+                frontend::Language::Vhdl2008);
+        }
+        for (auto& variable : specialized.variables) {
+            substitute_parameters(
+                variable,
+                formal_environment,
+                formal_domains,
+                diagnostics_,
+                frontend::Language::Vhdl2008);
+        }
+        substitute_parameters(
+            specialized.statements,
+            formal_environment,
+            formal_domains,
+            diagnostics_,
+            frontend::Language::Vhdl2008);
+        const auto append_type_identity = [](
+            std::string& identity,
+            const frontend::Type& type) {
+          identity += "|" + type.spelling + ":" + type.nominal_type
+              + ":" + std::to_string(
+                  static_cast<unsigned>(type.domain))
+              + ":" + (type.is_signed ? "s" : "u") + ":";
+          if (const auto width = type.width()) {
+            identity += std::to_string(*width);
+          } else {
+            identity += "?";
+          }
+          if (type.packed_range) {
+            identity += ":" + std::to_string(type.packed_range->left)
+                + ":" + std::to_string(type.packed_range->right)
+                + (type.packed_range->descending ? ":d" : ":a");
+          }
+          if (type.vhdl_array) {
+            for (const auto& dimension :
+                 type.vhdl_array->dimensions) {
+              identity += ":dim=";
+              if (dimension.range) {
+                identity += std::to_string(dimension.range->left)
+                    + ":" + std::to_string(dimension.range->right)
+                    + (dimension.range->descending ? ":d" : ":a");
+              } else {
+                identity += "?";
+              }
+            }
+          }
+        };
+        std::string specialization_identity =
+            std::to_string(function_index);
+        append_type_identity(
+            specialization_identity, specialized.return_type);
+        for (std::size_t index = 0;
+             index < specialized.arguments.size(); ++index) {
+          append_type_identity(
+              specialization_identity,
+              specialized.arguments[index].type);
+          if (specialized.arguments[index].type.domain
+              == frontend::ValueDomain::Integer) {
+            specialization_identity += ":value=";
+            if (const auto value = static_integer_value(
+                    *(*actuals)[index])) {
+              specialization_identity += std::to_string(*value);
+            } else {
+              specialization_identity += "?";
+            }
+          }
+        }
+        if (const auto found =
+                vhdl_function_specialization_indices_.find(
+                    specialization_identity);
+            found
+                != vhdl_function_specialization_indices_.end()) {
+          function_index = found->second;
+        } else {
+          specialized.specialization_identity =
+              specialization_identity;
+          vhdl_function_specializations_.push_back(
+              std::move(specialized));
+          FunctionFrame specialized_frame;
+          specialized_frame.source =
+              &vhdl_function_specializations_.back();
+          specialized_frame.invocation_identity =
+              next_callable_invocation_identity_++;
+          if (!specialized_frame.source->automatic) {
+            specialized_frame.static_variables =
+                allocate_static_callable_variables(
+                    specialized_frame.source->variables,
+                    specialized_frame.source->statements,
+                    specialized_frame.source->name);
+          }
+          function_index = function_frames_.size();
+          function_frames_.push_back(
+              std::move(specialized_frame));
+          function_dependencies_.emplace_back();
+          function_procedure_dependencies_.emplace_back();
+          vhdl_function_specialization_indices_.emplace(
+              std::move(specialization_identity),
+              function_index);
+        }
+    }
+    auto& frame = function_frames_[function_index];
+    const auto& function = *frame.source;
 
     if (!frame.allocated) {
         const auto return_width = function.return_type.width();
@@ -434,7 +640,8 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
             frame.invocation_identity,
             frame.invocation_packed,
             frame.invocation_strings,
-            frame.invocation_containers });
+            frame.invocation_containers,
+            true });
         if (!frame.invocation_layout_finalized) {
             frame.invocation_push_sites.push_back(push_site);
         }
@@ -781,7 +988,8 @@ Lowerer::lower_user_container_function_expression(
             frame.invocation_identity,
             frame.invocation_packed,
             frame.invocation_strings,
-            frame.invocation_containers });
+            frame.invocation_containers,
+            true });
         if (!frame.invocation_layout_finalized) {
             frame.invocation_push_sites.push_back(push_site);
         }
@@ -1156,7 +1364,8 @@ void Lowerer::lower_function_body(const std::size_t function_index)
             frame.invocation_identity,
             frame.invocation_packed,
             frame.invocation_strings,
-            frame.invocation_containers
+            frame.invocation_containers,
+            true
         };
     }
     frame.invocation_push_sites.clear();

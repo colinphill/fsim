@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_internal.hpp"
+
 #include "vhdl_array_boundary.hpp"
+
+#include <cstdlib>
+#include <numeric>
+#include <unordered_map>
 
 namespace fsim::elaboration {
 using namespace runtime::simir;
@@ -116,6 +121,277 @@ namespace {
         std::vector<std::string> segments;
         bool matched { };
     };
+
+    struct ConcurrentComponentGroups {
+        std::vector<std::vector<std::size_t>> groups;
+        std::size_t dependency_components { };
+    };
+
+    [[maybe_unused]] ConcurrentComponentGroups concurrent_dependency_components(
+        const std::span<const frontend::Statement> statements,
+        const std::unordered_map<std::string, SignalId>& signals)
+    {
+        const auto one_component = [&] {
+            ConcurrentComponentGroups result;
+            result.groups.resize(1);
+            result.groups.front().resize(statements.size());
+            std::iota(
+                result.groups.front().begin(),
+                result.groups.front().end(),
+                std::size_t { });
+            result.dependency_components = 1U;
+            return result;
+        };
+        const auto static_expression_key = [](
+                                               const auto& self,
+                                               const frontend::Expression& expression)
+            -> std::optional<std::string> {
+            if (expression.kind == frontend::ExpressionKind::IntegerLiteral
+                || expression.kind == frontend::ExpressionKind::LogicLiteral
+                || expression.kind == frontend::ExpressionKind::BooleanLiteral) {
+                return expression.text;
+            }
+            if ((expression.kind == frontend::ExpressionKind::Unary
+                    || expression.kind == frontend::ExpressionKind::Binary)
+                && !expression.operands.empty()) {
+                auto result = expression.text + "(";
+                for (std::size_t index = 0;
+                     index < expression.operands.size(); ++index) {
+                    const auto operand = self(self, expression.operands[index]);
+                    if (!operand) {
+                        return std::nullopt;
+                    }
+                    if (index != 0U) {
+                        result += ",";
+                    }
+                    result += *operand;
+                }
+                result += ")";
+                return result;
+            }
+            return std::nullopt;
+        };
+        const auto expression_key = [&static_expression_key](
+                                        const auto& self,
+                                        const frontend::Expression& expression)
+            -> std::optional<std::string> {
+            if (expression.kind == frontend::ExpressionKind::Identifier) {
+                return expression.text;
+            }
+            if ((expression.kind == frontend::ExpressionKind::Index
+                    || expression.kind == frontend::ExpressionKind::Slice)
+                && !expression.operands.empty()) {
+                auto base = self(self, expression.operands.front());
+                if (!base) {
+                    return std::nullopt;
+                }
+                auto result = *base + "[";
+                for (std::size_t index = 1U;
+                     index < expression.operands.size(); ++index) {
+                    const auto selector = static_expression_key(
+                        static_expression_key, expression.operands[index]);
+                    if (!selector) {
+                        return std::nullopt;
+                    }
+                    if (index != 1U) {
+                        result += ":";
+                    }
+                    result += *selector;
+                }
+                result += "]";
+                return result;
+            }
+            return std::nullopt;
+        };
+        const auto contains_call = [](const auto& self,
+                                      const frontend::Expression& expression)
+            -> bool {
+            return (expression.kind == frontend::ExpressionKind::Call
+                    && expression.text != "?:")
+                || std::ranges::any_of(
+                    expression.operands,
+                    [&](const auto& operand) {
+                        return self(self, operand);
+                    });
+        };
+        const auto collect_reads = [&expression_key](
+                                       const auto& self,
+                                       const frontend::Expression& expression,
+                                       std::vector<std::string>& reads) -> void {
+            if (expression.kind == frontend::ExpressionKind::Identifier) {
+                reads.push_back(expression.text);
+                return;
+            }
+            if (expression.kind == frontend::ExpressionKind::Index
+                || expression.kind == frontend::ExpressionKind::Slice) {
+                if (const auto key = expression_key(
+                        expression_key, expression)) {
+                    reads.push_back(*key);
+                    return;
+                }
+            }
+            for (const auto& operand : expression.operands) {
+                self(self, operand, reads);
+            }
+        };
+        const auto base = [](const std::string& key) {
+            const auto selected = key.find('[');
+            return key.substr(0, selected);
+        };
+        const auto overlaps = [&base](const std::string& left,
+                                      const std::string& right) {
+            if (left == right) {
+                return true;
+            }
+            const auto selected_prefix = [](const std::string& prefix,
+                                             const std::string& value) {
+                return value.size() > prefix.size()
+                    && value.starts_with(prefix)
+                    && value[prefix.size()] == '[';
+            };
+            if (selected_prefix(left, right)
+                || selected_prefix(right, left)) {
+                return true;
+            }
+            if (base(left) != base(right)) {
+                return false;
+            }
+            return left.find('[') == std::string::npos
+                || right.find('[') == std::string::npos;
+        };
+
+        std::vector<std::string> targets;
+        std::vector<std::vector<std::string>> reads(statements.size());
+        targets.reserve(statements.size());
+        for (std::size_t index = 0; index < statements.size(); ++index) {
+            const auto& statement = statements[index];
+            if (contains_call(contains_call, statement.value)) {
+                return one_component();
+            }
+            const auto target = expression_key(
+                expression_key, statement.target);
+            if (!target) {
+                return one_component();
+            }
+            targets.push_back(*target);
+            collect_reads(collect_reads, statement.value, reads[index]);
+            for (std::size_t operand = 1U;
+                 operand < statement.target.operands.size(); ++operand) {
+                if (contains_call(
+                        contains_call, statement.target.operands[operand])) {
+                    return one_component();
+                }
+                collect_reads(
+                    collect_reads,
+                    statement.target.operands[operand],
+                    reads[index]);
+            }
+        }
+
+        std::vector<std::size_t> parent(statements.size());
+        std::iota(parent.begin(), parent.end(), std::size_t { });
+        const auto find_root = [&](const auto& self, std::size_t node)
+            -> std::size_t {
+            if (parent[node] != node) {
+                parent[node] = self(self, parent[node]);
+            }
+            return parent[node];
+        };
+        const auto connect = [&](const std::size_t left,
+                                 const std::size_t right) {
+            const auto left_root = find_root(find_root, left);
+            const auto right_root = find_root(find_root, right);
+            if (left_root != right_root) {
+                parent[right_root] = left_root;
+            }
+        };
+        for (std::size_t left = 0; left < statements.size(); ++left) {
+            for (std::size_t right = left + 1U;
+                 right < statements.size(); ++right) {
+                const auto reads_target = [&](const std::size_t reader,
+                                              const std::size_t writer) {
+                    return std::ranges::any_of(
+                        reads[reader], [&](const auto& read) {
+                            return overlaps(read, targets[writer]);
+                        });
+                };
+                if (base(targets[left]) == base(targets[right])
+                    || reads_target(left, right)
+                    || reads_target(right, left)) {
+                    connect(left, right);
+                }
+            }
+        }
+        std::vector<std::vector<std::size_t>> components;
+        std::unordered_map<std::size_t, std::size_t> component_by_root;
+        for (std::size_t index = 0; index < statements.size(); ++index) {
+            const auto root = find_root(find_root, index);
+            const auto [found, inserted] = component_by_root.try_emplace(
+                root, components.size());
+            if (inserted) {
+                components.emplace_back();
+            }
+            components[found->second].push_back(index);
+        }
+
+        // Dependency components must remain intact so that forwarding chains
+        // are evaluated together. Independent components, however, should not
+        // become separate scheduler processes when they wake on the same
+        // external signals. Coalesce those components by the exact elaborated
+        // signal identities in their external sensitivity sets. This retains
+        // the useful partitioning while avoiding a process/resume explosion.
+        ConcurrentComponentGroups result;
+        result.dependency_components = components.size();
+        std::unordered_map<std::string, std::size_t> group_by_sensitivity;
+        for (const auto& component : components) {
+            std::vector<std::string> component_targets;
+            component_targets.reserve(component.size());
+            for (const auto statement : component) {
+                component_targets.push_back(targets[statement]);
+            }
+
+            std::vector<SignalId> sensitivity;
+            for (const auto statement : component) {
+                for (const auto& read : reads[statement]) {
+                    if (std::ranges::any_of(
+                            component_targets,
+                            [&](const auto& target) {
+                                return overlaps(read, target);
+                            })) {
+                        continue;
+                    }
+                    const auto found = signals.find(base(read));
+                    if (found != signals.end()) {
+                        sensitivity.push_back(found->second);
+                    }
+                }
+            }
+            std::ranges::sort(sensitivity);
+            sensitivity.erase(
+                std::ranges::unique(sensitivity).begin(), sensitivity.end());
+            std::string signature;
+            for (const auto signal : sensitivity) {
+                signature += std::to_string(
+                    static_cast<std::size_t>(signal));
+                signature += ';';
+            }
+            const auto [found, inserted] = group_by_sensitivity.try_emplace(
+                std::move(signature), result.groups.size());
+            if (inserted) {
+                result.groups.emplace_back();
+            }
+            auto& group = result.groups[found->second];
+            group.insert(group.end(), component.begin(), component.end());
+        }
+        for (auto& group : result.groups) {
+            std::ranges::sort(group);
+        }
+        std::ranges::sort(
+            result.groups,
+            { },
+            [](const auto& group) { return group.front(); });
+        return result;
+    }
 
     std::optional<std::vector<std::string>> resolve_defparam_path(
         const frontend::VerilogDefparamDeclaration& declaration,
@@ -660,7 +936,27 @@ void HierarchyBuilder::instantiate(
         visible_types.emplace(signal.name, &signal.type);
         visible_types.emplace(
             path + "." + signal.name, &signal.type);
-        (void)add_or_bind_signal(signal);
+        auto initialized_signal = signal;
+        if (unit.language == frontend::Language::Vhdl2008
+            && initialized_signal.default_value) {
+            std::string initializer_error;
+            if (const auto initialized =
+                    evaluate_systemverilog_constant_function_expression(
+                        *initialized_signal.default_value,
+                        parameter_integral_environment,
+                        parameter_environment,
+                        unit.functions,
+                        initializer_error)) {
+                auto expression = initialized->expression(
+                    initialized_signal.default_value->span);
+                if (!initialized_signal.type.nominal_type.empty()) {
+                    expression.nominal_type =
+                        initialized_signal.type.nominal_type;
+                }
+                initialized_signal.default_value = std::move(expression);
+            }
+        }
+        (void)add_or_bind_signal(initialized_signal);
     }
     for (const auto& alias : unit.signal_aliases) {
         expose_type_mark(alias.type.spelling, alias.type);
@@ -749,10 +1045,17 @@ void HierarchyBuilder::instantiate(
             path + "." + variable.name, &variable.type);
         if (variable.vhdl_shared
             && !variable.type.vhdl_protected) {
+            const bool bounded_memory_extension =
+                variable.type.vhdl_array
+                && variable.type.vhdl_array->dimensions.size() == 1U
+                && variable.type.vhdl_array->dimensions.front().range
+                && !variable.type.vhdl_array->dimensions.front().null
+                && variable.type.width().value_or(0U) != 0U;
             if (unit.language == frontend::Language::Vhdl2008
-                && unit.vhdl_standard
-                    == frontend::VhdlStandard::Vhdl1993) {
-                materialize_vhdl_1993_shared_variable(
+                && (unit.vhdl_standard
+                        == frontend::VhdlStandard::Vhdl1993
+                    || bounded_memory_extension)) {
+                materialize_vhdl_shared_variable(
                     variable, path, local);
             } else {
                 report(
@@ -959,6 +1262,47 @@ void HierarchyBuilder::instantiate(
                     full_name,
                     default_container_value(type),
                     std::nullopt });
+            if (type.fixed && type.dimensions.size() == 1U
+                && (type.element_kind == ContainerElementKind::Packed
+                    || type.element_kind
+                        == ContainerElementKind::Scalar)) {
+                const auto packed_width = container_signal_bridge_width(type);
+                if (packed_width && *packed_width != 0U) {
+                    const auto signal_index = design_.signals_.size();
+                    const auto signal_id = static_cast<SignalId>(signal_index);
+                    if (static_cast<std::size_t>(signal_id) != signal_index) {
+                        throw std::length_error {
+                            "too many elaborated signals"
+                        };
+                    }
+                    const auto signal_name =
+                        full_name + ".$container_storage";
+                    SignalInfo info;
+                    info.id = signal_id;
+                    info.name = signal_name;
+                    info.width = *packed_width;
+                    info.type_name = variable.type.spelling;
+                    info.source_domain = type.two_state
+                        ? frontend::ValueDomain::Bit2
+                        : frontend::ValueDomain::Logic4;
+                    info.systemverilog_net_type =
+                        variable.type.systemverilog_net_type;
+                    info.declaration_span = variable.span;
+                    design_.signal_info_.push_back(std::move(info));
+                    design_.signals_.push_back(Signal {
+                        signal_name,
+                        pack_container_signal_value(
+                            design_.container_objects_.back().initial_value,
+                            false),
+                        ResolutionKind::none,
+                        ValueKind::logic4 });
+                    design_.signal_by_name_.emplace(
+                        signal_name, signal_id);
+                    design_.container_signal_aliases_.push_back(
+                        ContainerSignalAlias {
+                            id, signal_id, true, true });
+                }
+            }
             local_container_objects.emplace(
                 variable.name, id);
             local_container_objects.emplace(
@@ -1600,19 +1944,249 @@ void HierarchyBuilder::instantiate(
             append_profiled_process(std::move(generated));
         }
     }
-    for (std::size_t index = 0;
-        index < unit.concurrent_statements.size(); ++index) {
-        auto process = lowerer.lower_concurrent(
-            unit.concurrent_statements[index],
-            unit.language,
-            path,
-            index);
-        append_profiled_process(std::move(process));
+    const auto append_generated_processes = [&] {
         for (auto& generated : lowerer.take_generated_processes()) {
             generated.reactive = program_owner.has_value();
             generated.program_owner = program_owner;
             append_profiled_process(std::move(generated));
         }
+    };
+    const auto fusion_eligible = [&](const frontend::Statement& statement) {
+        return statement.kind == frontend::StatementKind::Assignment
+            && statement.assignment_kind
+                == frontend::AssignmentKind::Continuous
+            && statement.label != "$port_input_driver"
+            && !statement.delay
+            && (unit.language != frontend::Language::Vhdl2008
+                || (statement.vhdl_waveform.size() == 1U
+                    && !statement.vhdl_waveform.front().disconnect
+                    && !statement.vhdl_unaffected))
+            && !statement.verilog_drive_strength
+            && !statement.verilog_switch_driver
+            && !statement.vhdl_guarded_assignment
+            && !statement.vhdl_postponed;
+    };
+    const auto exact_conditional_fusion_eligible
+        = [&](const auto& self, const frontend::Statement& statement)
+        -> bool {
+        if (fusion_eligible(statement)) {
+            return true;
+        }
+        if (unit.language != frontend::Language::Vhdl2008
+            || statement.kind != frontend::StatementKind::If
+            || !statement.vhdl_conditional_assignment
+            || statement.vhdl_guarded_assignment
+            || statement.vhdl_postponed
+            || statement.statements.empty()
+            || statement.else_statements.empty()) {
+            return false;
+        }
+        return std::ranges::all_of(
+                   statement.statements,
+                   [&](const frontend::Statement& nested) {
+                       return self(self, nested);
+                   })
+            && std::ranges::all_of(
+                statement.else_statements,
+                [&](const frontend::Statement& nested) {
+                    return self(self, nested);
+                });
+    };
+    const auto fusion_assignment = [&](const auto& self,
+                                       const frontend::Statement& statement)
+        -> const frontend::Statement* {
+        if (statement.kind == frontend::StatementKind::Assignment) {
+            return &statement;
+        }
+        for (const auto& nested : statement.statements) {
+            if (const auto* assignment = self(self, nested)) {
+                return assignment;
+            }
+        }
+        for (const auto& nested : statement.else_statements) {
+            if (const auto* assignment = self(self, nested)) {
+                return assignment;
+            }
+        }
+        return nullptr;
+    };
+    const auto fusion_target = [&](const frontend::Statement& statement)
+        -> std::optional<SignalId> {
+        const auto* assignment = fusion_assignment(
+            fusion_assignment, statement);
+        if (assignment == nullptr) {
+            return std::nullopt;
+        }
+        const auto* target = &assignment->target;
+        while ((target->kind == frontend::ExpressionKind::Index
+                   || target->kind == frontend::ExpressionKind::Slice)
+            && !target->operands.empty()) {
+            target = &target->operands.front();
+        }
+        if (target->kind != frontend::ExpressionKind::Identifier) {
+            return std::nullopt;
+        }
+        const auto found = local.find(target->text);
+        return found == local.end()
+            ? std::nullopt
+            : std::optional<SignalId> { found->second };
+    };
+    constexpr std::size_t minimum_fused_group_size = 8U;
+    const std::span<const frontend::Statement> concurrent_statements {
+        unit.concurrent_statements
+    };
+
+    struct VhdlFusionBank {
+        std::vector<std::size_t> members;
+        std::unordered_set<SignalId> targets;
+        std::vector<SignalId> sensitivity;
+        bool exact_sensitivity { };
+    };
+    std::vector<VhdlFusionBank> vhdl_fusion_banks;
+    std::vector<std::optional<std::size_t>> vhdl_fusion_bank_by_statement(
+        concurrent_statements.size());
+    if (unit.language == frontend::Language::Vhdl2008
+        && std::getenv("FSIM_DISABLE_CONTINUOUS_FUSION") == nullptr) {
+        constexpr std::size_t maximum_bank_members = 64U;
+        constexpr std::size_t maximum_bank_sensitivity = 63U;
+        for (std::size_t statement = 0U;
+             statement < concurrent_statements.size(); ++statement) {
+            const auto& source = concurrent_statements[statement];
+            const bool eligible = fusion_eligible(source);
+            const bool exact_conditional
+                = !eligible
+                && exact_conditional_fusion_eligible(
+                    exact_conditional_fusion_eligible, source);
+            const bool trigger_safe = (eligible || exact_conditional)
+                && lowerer.concurrent_trigger_fusion_safe(source);
+            if ((!eligible && !exact_conditional) || !trigger_safe) {
+                continue;
+            }
+            const auto target = fusion_target(source);
+            const auto sensitivity = lowerer.concurrent_sensitivity(source);
+            if (!target || sensitivity.empty()) {
+                continue;
+            }
+            std::optional<std::size_t> selected_bank;
+            std::vector<SignalId> selected_sensitivity;
+            for (std::size_t bank = 0U;
+                 bank < vhdl_fusion_banks.size(); ++bank) {
+                const auto& candidate = vhdl_fusion_banks[bank];
+                if (candidate.members.size() >= maximum_bank_members
+                    || candidate.targets.contains(*target)
+                    || candidate.exact_sensitivity
+                        != exact_conditional) {
+                    continue;
+                }
+                if (exact_conditional
+                    && candidate.sensitivity != sensitivity) {
+                    continue;
+                }
+                std::vector<SignalId> combined;
+                if (exact_conditional) {
+                    combined = sensitivity;
+                } else {
+                    std::ranges::set_union(
+                        candidate.sensitivity, sensitivity,
+                        std::back_inserter(combined));
+                }
+                if (combined.size() > maximum_bank_sensitivity) {
+                    continue;
+                }
+                selected_bank = bank;
+                selected_sensitivity = std::move(combined);
+                break;
+            }
+            if (!selected_bank) {
+                vhdl_fusion_banks.push_back(VhdlFusionBank {
+                    { }, { }, sensitivity, exact_conditional
+                });
+                selected_bank = vhdl_fusion_banks.size() - 1U;
+            } else {
+                vhdl_fusion_banks[*selected_bank].sensitivity
+                    = std::move(selected_sensitivity);
+            }
+            auto& bank = vhdl_fusion_banks[*selected_bank];
+            bank.targets.insert(*target);
+            bank.members.push_back(statement);
+            vhdl_fusion_bank_by_statement[statement]
+                = *selected_bank;
+        }
+        for (std::size_t bank = 0U; bank < vhdl_fusion_banks.size(); ++bank) {
+            if (vhdl_fusion_banks[bank].members.size()
+                >= minimum_fused_group_size) {
+                continue;
+            }
+            for (const auto statement : vhdl_fusion_banks[bank].members) {
+                vhdl_fusion_bank_by_statement[statement].reset();
+            }
+        }
+    }
+
+    if (unit.language == frontend::Language::Vhdl2008) {
+        for (std::size_t index = 0U;
+             index < concurrent_statements.size(); ++index) {
+            const auto bank_id = vhdl_fusion_bank_by_statement[index];
+            if (!bank_id) {
+                append_profiled_process(lowerer.lower_concurrent(
+                    concurrent_statements[index], unit.language, path, index));
+                append_generated_processes();
+                continue;
+            }
+            const auto& bank = vhdl_fusion_banks[*bank_id];
+            if (bank.members.front() == index) {
+                std::vector<frontend::Statement> statements;
+                statements.reserve(bank.members.size());
+                for (const auto member : bank.members) {
+                    statements.push_back(concurrent_statements[member]);
+                }
+                auto lowered = lowerer.lower_concurrent_group(
+                    statements, unit.language, path, index);
+                if (bank.exact_sensitivity) {
+                    lowered.static_trigger_regions.clear();
+                }
+                append_profiled_process(std::move(lowered));
+                append_generated_processes();
+                continue;
+            }
+            // Retain the vacated process identity so later process handles and
+            // per-process random streams are invariant under banking.
+            Process placeholder;
+            placeholder.id = static_cast<ProcessId>(design_.processes_.size());
+            placeholder.name = path + ".concurrent_fused_slot_"
+                + std::to_string(index);
+            placeholder.operations.emplace_back(Halt { });
+            append_profiled_process(std::move(placeholder));
+        }
+    } else {
+
+    for (std::size_t index = 0; index < concurrent_statements.size();) {
+        std::size_t end = index;
+        while (end < concurrent_statements.size()
+            && fusion_eligible(concurrent_statements[end])) {
+            ++end;
+        }
+        if (end - index >= minimum_fused_group_size
+            && std::getenv("FSIM_DISABLE_CONTINUOUS_FUSION") == nullptr) {
+            const auto run
+                = concurrent_statements.subspan(index, end - index);
+            append_profiled_process(lowerer.lower_concurrent_group(
+                run, unit.language, path, index));
+            append_generated_processes();
+            index = end;
+            continue;
+        }
+        const auto individual_end = end == index ? index + 1U : end;
+        for (; index < individual_end; ++index) {
+            auto process = lowerer.lower_concurrent(
+                concurrent_statements[index],
+                unit.language,
+                path,
+                index);
+            append_profiled_process(std::move(process));
+            append_generated_processes();
+        }
+    }
     }
     for (const auto& source_process : unit.processes) {
         auto process = source_process;
@@ -1999,6 +2573,9 @@ void HierarchyBuilder::instantiate(
             read_only_container_objects,
             binding,
             target->language != unit.language);
+        for (auto& alias : child_aliases.vhdl_input_aliases) {
+            child_specialized.unit.signals.push_back(std::move(alias));
+        }
         for (auto& driver : child_aliases.vhdl_input_drivers) {
             child_specialized.unit.concurrent_statements.push_back(
                 std::move(driver));

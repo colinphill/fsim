@@ -60,6 +60,7 @@ using ContainerOperationGroup = OperationGroup<SystemVerilogScalarBinary, System
     ReadContainerObject, WriteContainerObject, ContainerSize,
     ContainerReduction, OrderContainer, LocateContainer,
     ContainerRead, ContainerWrite,
+    WriteContainerObjectElement,
     ContainerAggregateRead, ContainerAggregateWrite,
     CopyContainerAggregateElement, DeleteContainer,
     ContainerExists, TraverseContainer, LoadMemory,
@@ -207,7 +208,7 @@ static_assert(
         + std::variant_size_v<ControlOperationGroup::Storage>
         + std::variant_size_v<OutputOperationGroup::Storage>
         + std::variant_size_v<ClassOperationGroup::Storage>
-    == 177);
+    == 178);
 
 template <typename Alternative>
 [[nodiscard]] Alternative* operation_get_if(Operation* operation) noexcept

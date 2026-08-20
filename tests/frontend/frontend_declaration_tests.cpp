@@ -852,6 +852,27 @@ endmodule
               invalid_verilog_memories, "FSIM-SV-SEM-079"),
       "multidimensional and net Verilog memories diagnose precisely");
 
+  const auto systemverilog_net_array = parse_text(
+      "systemverilog-net-array.sv",
+      "module net_array; wire [7:0] values [0:3]; endmodule",
+      Language::SystemVerilog2017);
+  require(
+      systemverilog_net_array.ok()
+          && systemverilog_net_array.design.units.size() == 1
+          && systemverilog_net_array.design.units.front()
+                 .variables.size()
+              == 1
+          && systemverilog_net_array.design.units.front()
+                 .variables.front().name
+              == "values"
+          && systemverilog_net_array.design.units.front()
+                 .variables.front().type.width()
+              == 8
+          && systemverilog_net_array.design.units.front()
+                 .variables.front().type.systemverilog_container
+                 .has_value(),
+      "SystemVerilog unpacked net arrays retain their container HIR");
+
   const auto nettypes = parse_text(
       "nettypes.sv",
       R"(
@@ -1743,23 +1764,24 @@ end architecture;
               == "panic",
       "VHDL assertion severity remains a contextual expression");
 
-  const auto invalid_sv_report = parse_text(
-      "bad_report.sv",
+  const auto expression_sv_report = parse_text(
+      "expression_report.sv",
       R"(
-module bad_report;
+module expression_report;
   initial $warning(1'b1, "extra");
 endmodule
 )",
       Language::SystemVerilog2017);
   require(
-      !invalid_sv_report.ok()
-          && std::any_of(
-              invalid_sv_report.diagnostics.begin(),
-              invalid_sv_report.diagnostics.end(),
-              [](const Diagnostic& diagnostic) {
-                return diagnostic.code == "FSIM-SV-SEM-043";
-              }),
-      "nonliteral severity-task arguments need a targeted diagnostic");
+      expression_sv_report.ok()
+          && expression_sv_report.design.units.front()
+                 .processes.front().statements.front().value.text
+              == "1'b1"
+          && expression_sv_report.design.units.front()
+                 .processes.front().statements.front()
+                 .task_arguments.size()
+              == 1,
+      "severity tasks retain expression argument lists");
 
   const auto missing_assertion_action = parse_text(
       "missing_assertion_action.sv",
@@ -1786,6 +1808,8 @@ module fatal_tasks;
     $fatal;
     $fatal("standalone\nfatal");
     $fatal(1, "controlled\tfatal");
+    $fatal(1, "formatted=%0d/%0d", 7, 9);
+    $fatal("formatted-without-control=%0d", 11);
     assert (1'b0) else $fatal("assertion \"fatal\"");
   end
 endmodule
@@ -1795,21 +1819,31 @@ endmodule
   const auto& fatal_statements =
       fatal.design.units.front().processes.front().statements;
   require(
-      fatal_statements.size() == 4
+      fatal_statements.size() == 6
           && fatal_statements[0].kind == StatementKind::Report
           && fatal_statements[1].kind == StatementKind::Report
           && fatal_statements[2].kind == StatementKind::Report
+          && fatal_statements[3].kind == StatementKind::Report
           && fatal_statements[0].output_text == "$fatal"
           && fatal_statements[1].output_text == "standalone\nfatal"
           && fatal_statements[2].output_text == "controlled\tfatal"
-          && fatal_statements[3].kind == StatementKind::Assert
-          && fatal_statements[3].assertion_has_failure_action
-          && fatal_statements[3].else_statements.size() == 1
-          && fatal_statements[3].else_statements.front().kind
+          && fatal_statements[3].output_text == "formatted=%0d/%0d"
+          && fatal_statements[3].task_arguments.size() == 2
+          && fatal_statements[3].task_arguments[0].text == "7"
+          && fatal_statements[3].task_arguments[1].text == "9"
+          && fatal_statements[4].kind == StatementKind::Report
+          && fatal_statements[4].output_text
+              == "formatted-without-control=%0d"
+          && fatal_statements[4].task_arguments.size() == 1
+          && fatal_statements[4].task_arguments.front().text == "11"
+          && fatal_statements[5].kind == StatementKind::Assert
+          && fatal_statements[5].assertion_has_failure_action
+          && fatal_statements[5].else_statements.size() == 1
+          && fatal_statements[5].else_statements.front().kind
               == StatementKind::Report
-          && fatal_statements[3].else_statements.front().output_text
+          && fatal_statements[5].else_statements.front().output_text
               == "assertion \"fatal\"",
-      "standalone and assertion-action $fatal metadata");
+      "standalone, formatted, and assertion-action $fatal metadata");
 
   const auto severity_tasks = parse_text(
       "severity_tasks.sv",
@@ -1825,6 +1859,7 @@ module severity_tasks;
     $error;
     $error();
     $error("error");
+    $error("beat %0d expected %x got %x", 2, 8'h11, 8'h22);
   end
 endmodule
 )",
@@ -1835,7 +1870,7 @@ endmodule
   const auto& reports =
       severity_tasks.design.units.front().processes.front().statements;
   require(
-      reports.size() == 9
+      reports.size() == 10
           && std::ranges::all_of(
               reports,
               [](const auto& statement) {
@@ -1848,7 +1883,10 @@ endmodule
           && reports[5].output_text == "warning"
           && reports[6].assertion_severity
               == AssertionSeverity::Error
-          && reports[8].output_text == "error",
+          && reports[8].output_text == "error"
+          && reports[9].output_text
+              == "beat %0d expected %x got %x"
+          && reports[9].task_arguments.size() == 3,
       "standalone severity task forms and metadata");
 
   const auto verilog_fatal = parse_text(

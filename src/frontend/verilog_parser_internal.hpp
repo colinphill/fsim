@@ -934,6 +934,10 @@ class VerilogParser final : private detail::ParserBase {
 
   void parse_genvar_declaration(DesignUnit& unit);
 
+  void parse_generated_genvar_declaration(
+      GenerateBody& body,
+      std::vector<std::string>& local_genvars);
+
   void parse_generate_region(
       DesignUnit& unit, const Token& generate_token);
 

@@ -28,12 +28,14 @@ struct EncodedValue {
 };
 
 struct RegisterSlot {
-    llvm::Value* aval { };
-    llvm::Value* bval { };
-    llvm::Value* initialized { };
+    llvm::Value* aval_base { };
+    llvm::Value* bval_base { };
+    llvm::Value* initialized_base { };
+    llvm::Value* logic9_plane2_base { };
+    llvm::Value* logic9_plane3_base { };
+    std::uint64_t word_offset { };
+    std::uint32_t index { };
     std::uint32_t width { };
-    llvm::Value* logic9_plane2 { };
-    llvm::Value* logic9_plane3 { };
     runtime::simir::ValueKind kind {
         runtime::simir::ValueKind::logic4
     };
@@ -83,11 +85,11 @@ struct EncodedDynamicPartWrite {
     const EncodedValue& value,
     const std::array<runtime::Logic9, 9>& table);
 
-[[nodiscard]] EncodedValue map_logic9_binary(
+[[nodiscard]] EncodedValue lower_logic9_binary(
     llvm::IRBuilder<>& builder,
     const EncodedValue& lhs,
     const EncodedValue& rhs,
-    const std::array<std::array<runtime::Logic9, 9>, 9>& table);
+    runtime::simir::BinaryOperator operation);
 
 void store_register(
     llvm::IRBuilder<>& builder,
@@ -164,6 +166,16 @@ struct ValueOperationLowerer {
     std::function<llvm::Value*(
         const runtime::simir::DynamicIndex&)>
         dynamic_offset;
+    /// Non-null only when control-flow analysis proves that this instruction
+    /// immediately consumes the preceding immutable LoadConstant value.
+    const runtime::PackedLogic4* constant_part_select_source { };
+    std::optional<runtime::simir::SignalId> dynamic_part_signal_source;
+    llvm::Value* context_pointer;
+    std::uint32_t process;
+    std::uint32_t instruction;
+    llvm::Value* read_signal_dynamic_part_callback;
+    llvm::FunctionType* read_signal_dynamic_part_type;
+    llvm::Value* logic9_word_slot;
 
     void lower(const runtime::simir::CopyRegister& operation);
     void lower(const runtime::simir::ConvertToTwoState& operation);
@@ -316,6 +328,18 @@ struct ContainerOperationLowerer {
     std::uint32_t instruction;
     llvm::Value* callback;
     llvm::FunctionType* callback_type;
+    llvm::Value* read_word_callback;
+    llvm::Value* write_word_callback;
+    llvm::StructType* runtime_type_value;
+    llvm::Value* runtime_argument_value;
+    llvm::FunctionType* read_word_callback_type;
+    llvm::FunctionType* write_word_callback_type;
+    llvm::FunctionType* read_packed_callback_type;
+    llvm::FunctionType* write_packed_callback_type;
+    std::span<const runtime::simir::ContainerType> container_types;
+    llvm::Value* result_aval;
+    llvm::Value* result_bval;
+    std::uint32_t fused_container_object_read_distance;
     std::function<void(
         llvm::Value*,
         JitGeneratedRuntimeErrorReason,
@@ -334,6 +358,10 @@ struct ContainerOperationLowerer {
         std::uint32_t,
         llvm::StructType*,
         llvm::Value*,
+        std::span<const runtime::simir::ContainerType>,
+        llvm::Value*,
+        llvm::Value*,
+        std::uint32_t,
         std::function<void(
             llvm::Value*,
             JitGeneratedRuntimeErrorReason,
@@ -354,6 +382,7 @@ struct ContainerOperationLowerer {
     void lower(const runtime::simir::LocateContainer&);
     void lower(const runtime::simir::ContainerRead&);
     void lower(const runtime::simir::ContainerWrite&);
+    void lower(const runtime::simir::WriteContainerObjectElement&);
     void lower(const runtime::simir::ContainerStringRead&);
     void lower(const runtime::simir::ContainerStringWrite&);
     void lower(const runtime::simir::ContainerElementRead&);
@@ -389,6 +418,14 @@ struct ControlFlowOperationLowerer {
     llvm::Value* register_bval;
     llvm::Value* register_initialized;
     const std::vector<llvm::BasicBlock*>& instruction_blocks;
+    std::span<const runtime::simir::InstructionIndex> static_return_targets;
+    std::span<const runtime::simir::InstructionIndex> native_return_targets;
+    llvm::StructType* frame_type;
+    llvm::Value* frame_argument;
+    bool native_call;
+    bool native_return;
+    bool native_frame;
+    llvm::Value* ssa_callable_return;
     llvm::BasicBlock* invalid_pc;
     llvm::Function* function;
     runtime::simir::InstructionIndex instruction;
@@ -419,10 +456,25 @@ struct SignalOperationLowerer {
     std::vector<RegisterSlot>& registers;
     std::span<const std::uint32_t> signal_widths;
     std::span<const runtime::simir::ValueKind> signal_value_kinds;
+    std::span<const runtime::simir::SignalId> direct_read_signals;
+    std::span<const runtime::simir::SignalId> direct_update_signals;
+    llvm::StructType* direct_update_slot_type;
+    llvm::Value* direct_update_slots;
+    llvm::Value* direct_update_active_words;
+    bool require_direct_update_slots;
     llvm::LLVMContext& context;
     llvm::Type* i32;
     llvm::Type* i64;
     llvm::Value* context_pointer;
+    llvm::Value* direct_signal_aval;
+    llvm::Value* direct_signal_bval;
+    llvm::Value* direct_signal_logic9_plane0;
+    llvm::Value* direct_signal_logic9_plane1;
+    llvm::Value* direct_signal_logic9_plane2;
+    llvm::Value* direct_signal_logic9_plane3;
+    llvm::Value* direct_read_signal_map;
+    llvm::Value* direct_read_signal_count;
+    llvm::Value* direct_signal_count;
     std::uint32_t process_id;
     runtime::simir::InstructionIndex instruction;
     llvm::Value* read_callback;
@@ -506,6 +558,28 @@ struct SignalOperationLowerer {
     std::function<llvm::Value*(const runtime::simir::DynamicIndex&)>
         dynamic_offset;
 
+    [[nodiscard]] bool begin_direct_update(
+        runtime::simir::SignalId signal,
+        std::uint32_t offset,
+        EncodedValue source);
+    void mark_direct_update_active(
+        llvm::Value* slot,
+        std::uint32_t slot_index,
+        llvm::Value* enabled = nullptr);
+    [[nodiscard]] bool begin_direct_update(
+        runtime::simir::SignalId signal,
+        llvm::Value* offset,
+        llvm::Value* width,
+        EncodedValue source);
+    [[nodiscard]] bool begin_direct_wide_update(
+        runtime::simir::SignalId signal,
+        std::uint32_t offset,
+        EncodedValue source);
+    [[nodiscard]] bool begin_direct_wide_update(
+        runtime::simir::SignalId signal,
+        llvm::Value* offset,
+        llvm::Value* width,
+        EncodedValue source);
     void lower(const runtime::simir::LoadConstant& operation);
     void lower(const runtime::simir::WriteBlocking& operation);
     void lower(const runtime::simir::WriteUpdate& operation);

@@ -26,6 +26,22 @@ namespace {
       || target.width() != source.width()) {
     return false;
   }
+  const auto simple_type_name = [](const std::string_view spelling) {
+    const auto separator = spelling.find_last_of('.');
+    return spelling.substr(
+        separator == std::string_view::npos ? 0U : separator + 1U);
+  };
+  const auto builtin_vector = [&](const std::string_view spelling) {
+    const auto name = simple_type_name(spelling);
+    return name == "bit_vector" || name == "std_logic_vector"
+        || name == "std_ulogic_vector" || name == "signed"
+        || name == "unsigned";
+  };
+  if (simple_type_name(target.spelling)
+          == simple_type_name(source.spelling)
+      && builtin_vector(target.spelling)) {
+    return true;
+  }
   const bool target_array = target.vhdl_array.has_value();
   const bool source_array = source.vhdl_array.has_value();
   if (target_array || source_array) {
@@ -57,13 +73,18 @@ namespace {
 [[nodiscard]] bool supported_conversion_match(
     const frontend::Type& target,
     const frontend::Type& source) {
-  const auto numeric_vector = [](const frontend::Type& type) {
+  const auto vector_name = [](const frontend::Type& type) {
     const auto separator = type.spelling.find_last_of('.');
-    const auto name = std::string_view{type.spelling}.substr(
+    return std::string_view{type.spelling}.substr(
         separator == std::string::npos ? 0 : separator + 1);
-    return name == "signed" || name == "unsigned";
   };
-  if (numeric_vector(target) && numeric_vector(source)
+  const auto logic_vector = [&](const frontend::Type& type) {
+    const auto name = vector_name(type);
+    return name == "std_logic_vector"
+        || name == "std_ulogic_vector" || name == "signed"
+        || name == "unsigned";
+  };
+  if (logic_vector(target) && logic_vector(source)
       && target.domain == source.domain
       && target.width() == source.width()) {
     return true;
@@ -128,21 +149,56 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_conversion_expression(
       && builtin.domain != frontend::ValueDomain::Unknown) {
     conversion_type = &builtin;
   }
+  const auto simple_type_name = [](const std::string_view name) {
+    const auto separator = name.find_last_of('.');
+    return name.substr(
+        separator == std::string_view::npos ? 0 : separator + 1);
+  };
+  const auto conversion_simple = simple_type_name(conversion_name);
+  const bool builtin_vector = conversion_simple == "bit_vector"
+      || conversion_simple == "std_logic_vector"
+      || conversion_simple == "std_ulogic_vector"
+      || conversion_simple == "signed"
+      || conversion_simple == "unsigned";
+  if (builtin_vector) {
+    if (const auto operand_type = vhdl_expression_type(
+            expression.operands.front())) {
+      builtin = *operand_type;
+      builtin.spelling = std::string{conversion_simple};
+      builtin.named_type = std::string{conversion_simple};
+      builtin.nominal_type.clear();
+      builtin.is_signed = conversion_simple == "signed";
+      conversion_type = &builtin;
+    } else if (const auto operand_width = infer_width(
+                   expression.operands.front());
+               operand_width && *operand_width != 0U
+               && *operand_width - 1U
+                   <= static_cast<std::uint64_t>(
+                       std::numeric_limits<std::int64_t>::max())) {
+      if (conversion_type != nullptr) {
+        builtin = *conversion_type;
+      } else {
+        builtin.domain = conversion_simple == "bit_vector"
+            ? frontend::ValueDomain::Bit2
+            : frontend::ValueDomain::Logic9;
+      }
+      builtin.spelling = std::string{conversion_simple};
+      builtin.named_type = std::string{conversion_simple};
+      builtin.nominal_type.clear();
+      builtin.vhdl_array.reset();
+      builtin.packed_range = frontend::PackedRange{
+          static_cast<std::int64_t>(*operand_width - 1U), 0, true};
+      builtin.is_signed = conversion_simple == "signed";
+      conversion_type = &builtin;
+    }
+  }
   if (expected_type != nullptr) {
-    const auto simple_type_name = [](const std::string_view name) {
-      const auto separator = name.find_last_of('.');
-      return name.substr(
-          separator == std::string_view::npos ? 0 : separator + 1);
-    };
     const auto expected_name = expected_type->named_type.empty()
         ? std::string_view{expected_type->spelling}
         : std::string_view{expected_type->named_type};
-    const auto conversion_simple = simple_type_name(conversion_name);
     if (simple_type_name(conversion_name)
             == simple_type_name(expected_name)
-        && (conversion_type == nullptr
-            || conversion_simple == "signed"
-            || conversion_simple == "unsigned")) {
+        && conversion_type == nullptr) {
       conversion_type = expected_type;
     }
   }
@@ -173,7 +229,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_conversion_expression(
     return std::nullopt;
   }
 
-  if (expected_type != nullptr
+  if (expected_type != nullptr && !builtin_vector
       && (expected_width != *width
           || !vhdl_callable_type_matches(
               *expected_type, *conversion_type))) {

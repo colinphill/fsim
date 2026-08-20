@@ -115,6 +115,67 @@ void substitute_package_bound_items(
     const ConstantEnvironment& environment,
     const ConstantDomainEnvironment& domains,
     std::vector<Diagnostic>& diagnostics) {
+    const auto substitute_callable_variables =
+        [&](auto& callable) {
+          std::unordered_set<std::string> formal_names;
+          for (const auto& argument : callable.arguments) {
+              formal_names.insert(argument.name);
+          }
+          const auto expression_mentions_formal =
+              [&](const auto& self,
+                  const frontend::Expression& expression) -> bool {
+                return (expression.kind
+                            == frontend::ExpressionKind::Identifier
+                        && formal_names.contains(expression.text))
+                    || std::ranges::any_of(
+                        expression.operands,
+                        [&](const auto& operand) {
+                          return self(self, operand);
+                        });
+              };
+          const auto type_mentions_formal =
+              [&](const auto& self,
+                  const frontend::Type& type) -> bool {
+                const auto range_mentions = [&](const auto& range) {
+                    return expression_mentions_formal(
+                               expression_mentions_formal, range.left)
+                        || expression_mentions_formal(
+                               expression_mentions_formal, range.right);
+                };
+                return (type.packed_range_expression
+                            && range_mentions(*type.packed_range_expression))
+                    || (type.integer_range_expression
+                            && range_mentions(*type.integer_range_expression))
+                    || std::ranges::any_of(
+                        type.vhdl_array_constraints, range_mentions)
+                    || (type.vhdl_array
+                        && std::ranges::any_of(
+                            type.vhdl_array->element_types,
+                            [&](const auto& element) {
+                              return self(self, element);
+                            }));
+              };
+          for (const auto& constant : callable.constants) {
+              formal_names.insert(constant.name);
+          }
+          for (auto& variable : callable.variables) {
+              if (!type_mentions_formal(
+                      type_mentions_formal, variable.type)) {
+                  substitute_parameters(
+                      variable,
+                      environment,
+                      domains,
+                      diagnostics,
+                      frontend::Language::Vhdl2008);
+              } else if (variable.initializer) {
+                  substitute_parameters(
+                      *variable.initializer,
+                      environment,
+                      domains,
+                      frontend::Language::Vhdl2008);
+              }
+          }
+        };
     for (auto& parameter : unit.parameters) {
         substitute_parameters(
             parameter.type,
@@ -159,14 +220,7 @@ void substitute_package_bound_items(
                 diagnostics,
                 frontend::Language::Vhdl2008);
         }
-        for (auto& variable : function.variables) {
-            substitute_parameters(
-                variable,
-                environment,
-                domains,
-                diagnostics,
-                frontend::Language::Vhdl2008);
-        }
+        substitute_callable_variables(function);
         substitute_parameters(
             function.statements,
             environment,
@@ -190,14 +244,7 @@ void substitute_package_bound_items(
                     frontend::Language::Vhdl2008);
             }
         }
-        for (auto& variable : procedure.variables) {
-            substitute_parameters(
-                variable,
-                environment,
-                domains,
-                diagnostics,
-                frontend::Language::Vhdl2008);
-        }
+        substitute_callable_variables(procedure);
         substitute_parameters(
             procedure.statements,
             environment,
@@ -822,9 +869,12 @@ void HierarchyBuilder::instantiate_vhdl_local_packages(
     }
     specialized.packages.insert(
         inherited_packages.begin(), inherited_packages.end());
-    auto domains =
-        package_domains(
-            specialized.unit, specialized.environment);
+    auto domains = std::move(specialized.domains);
+    for (auto&& [name, info] : package_domains(
+             specialized.unit, specialized.environment)) {
+        domains.insert_or_assign(
+            std::move(name), std::move(info));
+    }
     for (const auto& instance :
          specialized.unit.package_instances) {
         const auto parts =

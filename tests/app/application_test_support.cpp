@@ -82,9 +82,8 @@ void ApplicationTestFixture::compare_captures(
       assert(reference.result.status == hybrid.result.status);
       assert(reference.result.time == hybrid.result.time);
       assert(reference.result.delta == hybrid.result.delta);
-      assert(
-          reference.result.callbacks_executed
-          == hybrid.result.callbacks_executed);
+      // Native coalescing may execute fewer internal scheduler callbacks while
+      // preserving the same time, delta, signal changes, and final state.
       assert(reference.changes == hybrid.changes);
       assert(reference.final_values == hybrid.final_values);
       assert(reference.normalized_vcd == hybrid.normalized_vcd);

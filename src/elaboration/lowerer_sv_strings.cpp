@@ -830,7 +830,8 @@ Lowerer::lower_string_expression(
                 frame.invocation_identity,
                 frame.invocation_packed,
                 frame.invocation_strings,
-                frame.invocation_containers });
+                frame.invocation_containers,
+                true });
             if (!frame.invocation_layout_finalized) {
                 frame.invocation_push_sites.push_back(push_site);
             }

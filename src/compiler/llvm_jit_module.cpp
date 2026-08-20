@@ -5,6 +5,7 @@
 #include <llvm/IR/Verifier.h>
 #include <llvm/Passes/OptimizationLevel.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/Error.h>
 #include <llvm/Support/raw_ostream.h>
 
 namespace fsim::compiler::llvm_detail {
@@ -24,10 +25,27 @@ void optimize_module(llvm::Module &module,
   builder.crossRegisterProxies(loop_analyses, function_analyses,
                               cgscc_analyses, module_analyses);
 
-  const auto level = optimization == JitOptimizationLevel::o0
-                         ? llvm::OptimizationLevel::O0
-                         : llvm::OptimizationLevel::O2;
-  auto pipeline = builder.buildPerModuleDefaultPipeline(level);
+  llvm::ModulePassManager pipeline;
+  if (optimization == JitOptimizationLevel::o0) {
+    pipeline = builder.buildPerModuleDefaultPipeline(
+        llvm::OptimizationLevel::O0);
+  } else if (optimization == JitOptimizationLevel::o1) {
+    llvm::cantFail(builder.parsePassPipeline(
+        pipeline,
+        "function(sroa,early-cse,simplifycfg,instcombine<no-verify-fixpoint>,"
+        "reassociate,gvn,dse,"
+        "simplifycfg)"));
+  } else {
+    // Generated SimIR functions benefit from scalar propagation and dead-code
+    // cleanup, but the stock O2 pipeline and generic jump-threading passes
+    // spend substantial cold-start time repeatedly analyzing the generated
+    // process dispatch CFG. Keep the profitable scalar subset explicit and
+    // bounded; SimIR lowering has already coalesced its straight-line blocks.
+    llvm::cantFail(builder.parsePassPipeline(
+        pipeline,
+        "function(sroa,early-cse,simplifycfg,"
+        "instcombine<no-verify-fixpoint>,simplifycfg)"));
+  }
   pipeline.run(module, module_analyses);
 }
 

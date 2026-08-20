@@ -25,14 +25,14 @@ namespace fsim::test {
 void ApplicationTestFixture::test_artifact_phase_semantics()
 {
     install_governed_process_address_space_ceiling();
-    static_assert(app::kRuntimeStateSchema == 48);
-    static_assert(app::kSemanticStateSchema == 3);
-    static_assert(app::kDesignIrStateSchema == 3);
-    static_assert(app::kClassStateSchema == 10);
-    static_assert(app::kSystemVerilogConstraintHirStateSchema == 6);
-    static_assert(app::kSystemVerilogCoverageStateSchema == 4);
-    static_assert(app::kSystemVerilogUvmStateSchema == 2);
-    static_assert(app::kVhdlHirStateSchema == 1);
+    static_assert(app::kRuntimeStateSchema == 50);
+    static_assert(app::kSemanticStateSchema == 4);
+    static_assert(app::kDesignIrStateSchema == 4);
+    static_assert(app::kClassStateSchema == 11);
+    static_assert(app::kSystemVerilogConstraintHirStateSchema == 7);
+    static_assert(app::kSystemVerilogCoverageStateSchema == 5);
+    static_assert(app::kSystemVerilogUvmStateSchema == 3);
+    static_assert(app::kVhdlHirStateSchema == 2);
     const auto copy_artifact_tree = [](
                                         const std::filesystem::path& source_root,
                                         const std::filesystem::path& destination) {
@@ -167,6 +167,20 @@ module scalar_artifact;
     checks[4] = handle == null;
     checks[5] = wide_shift == {137{1'b1}};
   end
+endmodule
+
+module container_alias_artifact;
+  integer values [0:3];
+  logic [31:0] observed;
+  task automatic fill;
+    integer index;
+    begin
+      for (index = 0; index < 4; index = index + 1)
+        values[index] = index + 1;
+      observed = values[0] + values[1] + values[2] + values[3];
+    end
+  endtask
+  initial fill();
 endmodule
 
 interface artifact_if #(parameter int WIDTH = 4);
@@ -447,6 +461,7 @@ end architecture;
         "--object", sv_object_text.c_str(), "--top",
         "main=sv:work.phase_tb", "--top", "observer=sv:work.phase_watch",
         "--top", "scalar=sv:work.scalar_artifact",
+        "--top", "container=sv:work.container_alias_artifact",
         "--top", "virtual=sv:work.interface_artifact",
         "--output", design_text.c_str(), "--seed", "23"
     };
@@ -467,7 +482,7 @@ end architecture;
     assert(design_inspection->runtime_abi == runtime_abi_version);
     assert(design_inspection->roots
         == std::vector<std::string>(
-            { "main", "observer", "scalar", "virtual" }));
+            { "main", "observer", "scalar", "container", "virtual" }));
     assert(design_inspection->process_count != 0);
     diagnostic::Engine design_metadata_diagnostics;
     const auto design_metadata = artifact::load_design_metadata(
@@ -696,7 +711,7 @@ end architecture;
         && uvm_checkpoint.foreign_abi == FSIM_UVM_FOREIGN_ABI_VERSION
         && uvm_checkpoint.provenance.roots
             == std::vector<std::string>(
-                { "main", "observer", "scalar", "virtual" })
+                { "main", "observer", "scalar", "container", "virtual" })
         && uvm_checkpoint.records.size()
             == runtime::kSystemVerilogUvmStandardPhaseCount
         && uvm_checkpoint.external_state.phase_processes == 0
@@ -721,7 +736,7 @@ end architecture;
             return diagnostic.code == "FSIM-ART-0013"
                 && diagnostic.message
                 == "unsupported design state FSIMUVM1 identity: found "
-                   "schema 3; required schema 2; regenerate .fsimdesign "
+                   "schema 4; required schema 3; regenerate .fsimdesign "
                    "with this fsim build";
         }));
     const auto truncated_uvm = uvm_bytes->substr(0, uvm_bytes->size() - 1U);
@@ -998,7 +1013,7 @@ end architecture;
         assert(built && !diagnostics.has_error());
         assert(built->design.roots()
             == std::vector<std::string>(
-                { "main", "observer", "scalar", "virtual" }));
+                { "main", "observer", "scalar", "container", "virtual" }));
         assert(built->semantics.source_files().size() >= 2);
         assert(built->design.verilog_specify_paths().size() == 1);
         assert(built->design.verilog_timing_checks().size() == 1);
@@ -1084,12 +1099,15 @@ end architecture;
         const auto scalar_time = simulation.find_signal("scalar.ticks");
         const auto scalar_handle = simulation.find_signal("scalar.handle");
         const auto scalar_wide = simulation.find_signal("scalar.wide_value");
+        const auto container_observed =
+            simulation.find_signal("container.observed");
         const auto virtual_selected = simulation.find_signal("virtual.selected");
         const auto forwarded_selected = simulation.find_signal("virtual.leaf.selected");
         const auto clocking_sample = simulation.find_signal("virtual.leaf.bus.cb.data");
         assert(counter && watch && stable_probe && vital_probe && scalar_checks
             && scalar_real && scalar_short && scalar_realtime && scalar_time
-            && scalar_handle && scalar_wide && virtual_selected
+            && scalar_handle && scalar_wide && container_observed
+            && virtual_selected
             && forwarded_selected && clocking_sample);
         std::size_t callbacks { };
         simulation.set_signal_change_hook(
@@ -1120,6 +1138,8 @@ end architecture;
         expected_wide.set(3, runtime::Logic4::one);
         expected_wide.set(1, runtime::Logic4::z);
         assert(simulation.read_signal(*scalar_wide) == expected_wide);
+        assert(simulation.read_signal(*container_observed).to_msb_string()
+            == "00000000000000000000000000001010");
         assert(simulation.read_scalar_signal(*scalar_real).as_real() == 1.25);
         assert(simulation.read_scalar_signal(*scalar_short).as_shortreal() == -2.5F);
         assert(simulation.read_scalar_signal(*scalar_realtime).as_real() == 3.75);
@@ -1604,6 +1624,38 @@ endmodule
         && verilog_design_metadata->verilog_unit_provenance.front()
                .compatibility_profile
             == "sizing");
+
+    const auto implicit_alias_design =
+        directory / "artifact-verilog-implicit-alias.fsimdesign";
+    const auto implicit_alias_design_text =
+        support::path_to_utf8(implicit_alias_design);
+    const std::vector<const char*> implicit_alias_elaborate {
+        "fsim", "elaborate", "--object", verilog_object_text.c_str(),
+        "--top", "legacy_phase", "--output",
+        implicit_alias_design_text.c_str()
+    };
+    output.str({ });
+    error.str({ });
+    assert(cli::run(
+               static_cast<int>(implicit_alias_elaborate.size()),
+               implicit_alias_elaborate.data(), services, output, error)
+        == 0);
+    assert(error.str().empty());
+    diagnostic::Engine implicit_alias_diagnostics;
+    const auto implicit_alias_metadata = artifact::load_design_metadata(
+        implicit_alias_design, implicit_alias_diagnostics);
+    assert(implicit_alias_metadata
+        && !implicit_alias_diagnostics.has_error()
+        && implicit_alias_metadata->roots.size() == 1
+        && implicit_alias_metadata->roots.front().alias == "legacy_phase");
+    auto implicit_alias_project = app::load_design_artifact(
+        implicit_alias_design, implicit_alias_diagnostics);
+    assert(implicit_alias_project
+        && !implicit_alias_diagnostics.has_error()
+        && implicit_alias_project->systemverilog_uvm_checkpoint
+        && implicit_alias_project->systemverilog_uvm_checkpoint
+               ->provenance.roots
+            == std::vector<std::string> { "legacy_phase" });
 
     struct VerilogArtifactCapture {
         std::string wide;

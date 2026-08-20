@@ -18,6 +18,7 @@ void test_strings_at_level(
         .debug_container_locals = { },
         .container_register_types = { },
         .static_sensitivity = { },
+        .static_trigger_regions = { },
         .operations = {
             LoadStringConstant { 0, "A\xcf\x80" },
             LoadStringConstant { 1, "\xf0\x9f\x98\x80" },

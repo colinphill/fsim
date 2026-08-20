@@ -563,7 +563,8 @@ void Lowerer::lower_procedure_call(const Statement& statement)
         frame.invocation_identity,
         frame.invocation_packed,
         { },
-        { } });
+        { },
+        true });
     if (!frame.invocation_layout_finalized) {
         frame.invocation_push_sites.push_back(push_site);
     }
@@ -804,7 +805,8 @@ void Lowerer::lower_procedure_body(
             frame.invocation_identity,
             frame.invocation_packed,
             { },
-            { }
+            { },
+            true
         };
     }
     frame.invocation_push_sites.clear();

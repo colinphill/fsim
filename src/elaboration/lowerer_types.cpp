@@ -38,8 +38,7 @@ std::optional<std::size_t> Lowerer::infer_width(const Expression& expression) co
             return infer_width(expression.operands.front());
         }
     }
-    if (expression.kind == ExpressionKind::Call
-        && expression.call_result_width != 0
+    if (expression.call_result_width != 0
         && expression.call_result_width
             <= std::numeric_limits<std::size_t>::max()) {
         return static_cast<std::size_t>(expression.call_result_width);
@@ -154,6 +153,15 @@ std::optional<std::size_t> Lowerer::infer_width(const Expression& expression) co
     if (expression.kind == ExpressionKind::Concatenation) {
         std::size_t width = 0;
         for (const auto& operand : expression.operands) {
+            if (operand.kind == ExpressionKind::Replication
+                && !operand.operands.empty()) {
+                std::string count_error;
+                const auto count = evaluate_constant_expression(
+                    operand.operands.front(), { }, count_error);
+                if (count && *count == 0) {
+                    continue;
+                }
+            }
             const auto operand_width = infer_width(operand);
             if (!operand_width
                 || *operand_width
@@ -1226,7 +1234,7 @@ void Lowerer::collect_identifiers(
 }
 
 void Lowerer::collect_statement_identifiers(
-    const std::vector<Statement>& statements,
+    const std::span<const Statement> statements,
     std::set<std::string>& output) const
 {
     for (const auto& statement : statements) {
@@ -1376,7 +1384,7 @@ void Lowerer::collect_statement_identifiers(
 }
 
 void Lowerer::collect_wildcard_identifiers(
-    const std::vector<Statement>& statements,
+    const std::span<const Statement> statements,
     std::set<std::string>& output) const
 {
     std::deque<std::string> pending_functions;
@@ -1396,7 +1404,7 @@ void Lowerer::collect_wildcard_identifiers(
     };
     const auto collect_statement_calls =
         [&](const auto& self,
-            const std::vector<Statement>& body) -> void {
+            const std::span<const Statement> body) -> void {
         for (const auto& statement : body) {
             collect_expression_calls(
                 collect_expression_calls, statement.target);

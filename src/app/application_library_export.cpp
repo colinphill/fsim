@@ -263,9 +263,8 @@ namespace {
         if (keys.empty()) {
             return true;
         }
-        const auto optimization = config.build.optimization == project::Optimization::o0
-            ? compiler::JitOptimizationLevel::o0
-            : compiler::JitOptimizationLevel::o2;
+        const auto optimization = application_detail::jit_optimization(
+            config.build.optimization);
         const auto host = compiler::LlvmJit::native_host_identity(optimization);
         compiler::ObjectCache cache { object_root };
         for (const auto& key : keys) {
@@ -286,7 +285,7 @@ namespace {
                 runtime_abi_version, 0, { }, host.fingerprint,
                 host.llvm_version, host.target,
                 host.data_layout, host.cpu, feature_identity(host.features),
-                optimization == compiler::JitOptimizationLevel::o0 ? "O0" : "O2",
+                std::string { compiler::to_string(optimization) },
                 key });
             payloads.push_back({ artifact, raw });
         }
