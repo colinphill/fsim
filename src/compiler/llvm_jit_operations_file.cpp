@@ -17,6 +17,7 @@ namespace {
 FileOperationLowerer::FileOperationLowerer(
     llvm::IRBuilder<>& builder_value,
     std::vector<RegisterSlot>& registers_value,
+    std::vector<RegisterSlot>& frame_registers_value,
     llvm::LLVMContext& context_value,
     llvm::Type* i32_value,
     llvm::Type* i64_value,
@@ -32,6 +33,7 @@ FileOperationLowerer::FileOperationLowerer(
     std::function<void()> branch_to_next_value)
     : builder(builder_value),
       registers(registers_value),
+      frame_registers(frame_registers_value),
       context(context_value),
       i32(i32_value),
       i64(i64_value),
@@ -156,6 +158,16 @@ void FileOperationLowerer::lower(
 
 void FileOperationLowerer::lower(
     const runtime::simir::FileWriteFormatted& operation) {
+  const auto& source = registers.at(operation.source);
+  const auto& destination = frame_registers.at(operation.source);
+  if (source.aval_base != destination.aval_base
+      || source.word_offset != destination.word_offset) {
+    store_register(
+        builder,
+        frame_registers,
+        operation.source,
+        load_register(builder, registers, operation.source));
+  }
   lower_handle_only(operation.handle, 2, "file.write.formatted");
 }
 

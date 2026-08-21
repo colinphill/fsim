@@ -62,6 +62,12 @@ file(READ "${FSIM_TEST_CMAKE}" FSIM_TEST_CMAKE_CONTENTS)
 file(READ "${FSIM_WORKFLOW}" FSIM_WORKFLOW_CONTENTS)
 file(READ "${FSIM_APPLICATION}" FSIM_APPLICATION_CONTENTS)
 file(READ "${FSIM_JIT}" FSIM_JIT_CONTENTS)
+file(GLOB FSIM_JIT_FRAGMENTS
+  "${FSIM_SOURCE_DIR}/src/compiler/llvm_jit_*.tpp")
+foreach(FSIM_JIT_FRAGMENT IN LISTS FSIM_JIT_FRAGMENTS)
+  file(READ "${FSIM_JIT_FRAGMENT}" FSIM_JIT_FRAGMENT_CONTENTS)
+  string(APPEND FSIM_JIT_CONTENTS "\n${FSIM_JIT_FRAGMENT_CONTENTS}")
+endforeach()
 file(READ "${FSIM_JIT_KEY}" FSIM_JIT_KEY_CONTENTS)
 file(READ "${FSIM_CACHE}" FSIM_CACHE_CONTENTS)
 file(READ "${FSIM_LIBRARY}" FSIM_LIBRARY_CONTENTS)
@@ -226,8 +232,8 @@ foreach(FSIM_ABI_EVIDENCE IN ITEMS
     "offsetof(fsim_jit_runtime_v1, force_driver_signal_slice_logic9) == 576"
     "offsetof(fsim_jit_runtime_v1, release_driver_signal_slice) == 584"
     "offsetof(fsim_jit_runtime_v1, execute_signal_operation) == 592"
-    "sizeof(fsim_jit_runtime_v1) == 600"
-    "sizeof(fsim_jit_frame_v1) == 80"
+    "sizeof(fsim_jit_runtime_v1) == 816"
+    "sizeof(fsim_jit_frame_v1) == 344"
     "sizeof(fsim_jit_resume_result_v1) == 24")
   string(FIND "${FSIM_ABI_TEST_CONTENTS}" "${FSIM_ABI_EVIDENCE}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)

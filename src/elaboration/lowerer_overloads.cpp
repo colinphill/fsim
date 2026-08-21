@@ -70,9 +70,14 @@ bool Lowerer::vhdl_callable_type_matches(
   const bool formal_nominal = !formal.nominal_type.empty();
   const bool actual_nominal = !actual.nominal_type.empty();
   if (formal_nominal || actual_nominal) {
+    const bool same_predefined_logic = formal.spelling == actual.spelling
+        && (formal.spelling == "std_logic"
+            || formal.spelling == "std_ulogic");
     if (!formal_nominal || !actual_nominal
         || formal.nominal_type != actual.nominal_type) {
-      return false;
+      if (!same_predefined_logic) {
+        return false;
+      }
     }
     return !formal.vhdl_array || !actual.vhdl_array
         || vhdl_array_shape_matches(

@@ -1238,43 +1238,31 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 || source_type == nullptr) {
                 return true;
             }
-            const bool expected_array = is_vhdl_array_like(*expected_type);
-            const bool source_array = is_vhdl_array_like(*source_type);
-            if (expected_array || source_array) {
-                if (!expected_array || !source_array) {
-                    return true;
-                }
-                const auto simple_name = [](const std::string_view spelling) {
-                    const auto separator = spelling.find_last_of('.');
-                    return spelling.substr(
-                        separator == std::string_view::npos
-                            ? 0U
-                            : separator + 1U);
-                };
-                const auto expected_name = simple_name(
-                    expected_type->spelling);
-                const auto source_name = simple_name(
-                    source_type->spelling);
-                const bool logic_vector_family =
-                    (expected_name == "std_logic_vector"
-                        || expected_name == "std_ulogic_vector")
-                    && (source_name == "std_logic_vector"
-                        || source_name == "std_ulogic_vector");
-                const bool standard_array = logic_vector_family
-                    || (expected_name == source_name
-                        && (expected_name == "bit_vector"
-                            || expected_name == "signed"
-                            || expected_name == "unsigned"));
-                const bool same_base = standard_array
-                    || ((!expected_type->nominal_type.empty()
-                        && !source_type->nominal_type.empty())
-                    ? expected_type->nominal_type
-                        == source_type->nominal_type
-                    : false);
-                if (expected_array && source_array
-                    && same_base
-                    && expected_type->domain == source_type->domain
-                    && expected_type->width() == source_type->width()) {
+            const auto builtin_array = [](const frontend::Type& type) {
+                return type.spelling == "bit_vector"
+                    || type.spelling == "std_logic_vector"
+                    || type.spelling == "std_ulogic_vector"
+                    || type.spelling == "signed"
+                    || type.spelling == "unsigned";
+            };
+            const bool expected_array = expected_type->vhdl_array.has_value()
+                || builtin_array(*expected_type);
+            const bool source_array = source_type->vhdl_array.has_value()
+                || builtin_array(*source_type);
+            if (expected_array && source_array) {
+                const bool same_builtin = builtin_array(*expected_type)
+                    && builtin_array(*source_type)
+                    && (expected_type->spelling == source_type->spelling
+                        || ((expected_type->spelling == "std_logic_vector"
+                                || expected_type->spelling
+                                    == "std_ulogic_vector")
+                            && (source_type->spelling == "std_logic_vector"
+                                || source_type->spelling
+                                    == "std_ulogic_vector")));
+                const bool same_nominal = !expected_type->nominal_type.empty()
+                    && expected_type->nominal_type
+                        == source_type->nominal_type;
+                if (same_builtin || same_nominal) {
                     return true;
                 }
                 report(
@@ -1285,6 +1273,9 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                         + "' but found '" + source_type->spelling + "'",
                     expression.span);
                 return false;
+            }
+            if (expected_array != source_array) {
+                return true;
             }
             const bool expected_enumeration = !expected_type->enumeration_literals.empty();
             const bool source_enumeration = !source_type->enumeration_literals.empty();

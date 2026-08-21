@@ -722,6 +722,22 @@ fsim simulate --design design.fsimdesign --engine compiled \
   --cache .fsim-native --file-root . --trace run.vcd
 ```
 
+Elaboration can optionally populate the external native cache without changing
+the portable `.fsimdesign`. A forced-all AOT result is consumed automatically
+by a matching compiled simulation; no simulation-side switch is required:
+
+```sh
+fsim elaborate --object unit.fsimobj --top top=sv:work.top \
+  --output design.fsimdesign --aot --aot-scope all --cache .fsim-native
+fsim simulate --design design.fsimdesign --engine compiled \
+  --cache .fsim-native
+```
+
+`--compiled-processes selected` explicitly ignores that receipt, while
+`--compiled-processes all` forces eager compilation when no receipt exists.
+If a cached object was pruned after forced-all AOT, simulation rebuilds it
+before time zero.
+
 SystemC translation units and their linked logical-library plug-in are equally
 explicit:
 

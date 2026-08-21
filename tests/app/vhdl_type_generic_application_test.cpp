@@ -370,9 +370,11 @@ end architecture;
     assert(
         key_for(cold, "type_generic_top.bit_copy")
         == key_for(changed, "type_generic_top.bit_copy"));
-    assert(changed.cache.hits == 2);
-    assert(changed.cache.misses == 1);
-    assert(changed.cache.stores == 1);
+    // The changed word specialization shares a native module with one peer,
+    // while the independent bit specialization remains reusable.
+    assert(changed.cache.hits == 1);
+    assert(changed.cache.misses == 2);
+    assert(changed.cache.stores == 2);
 #else
     assert(cold.compiled_processes == 0);
     assert(cold.compiled_modules == 0);

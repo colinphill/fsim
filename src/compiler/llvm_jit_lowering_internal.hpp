@@ -256,6 +256,7 @@ private:
 struct FileOperationLowerer {
     llvm::IRBuilder<>& builder;
     std::vector<RegisterSlot>& registers;
+    std::vector<RegisterSlot>& frame_registers;
     llvm::LLVMContext& context;
     llvm::Type* i32;
     llvm::Type* i64;
@@ -276,6 +277,7 @@ struct FileOperationLowerer {
     FileOperationLowerer(
         llvm::IRBuilder<>& builder,
         std::vector<RegisterSlot>& registers,
+        std::vector<RegisterSlot>& frame_registers,
         llvm::LLVMContext& context,
         llvm::Type* i32,
         llvm::Type* i64,
@@ -320,6 +322,8 @@ private:
 struct ContainerOperationLowerer {
     llvm::IRBuilder<>& builder;
     std::vector<RegisterSlot>& registers;
+    std::vector<RegisterSlot>& frame_registers;
+    std::span<const runtime::simir::RegisterId> instruction_uses;
     llvm::LLVMContext& context;
     llvm::Type* i32;
     llvm::Type* i64;
@@ -350,6 +354,8 @@ struct ContainerOperationLowerer {
     ContainerOperationLowerer(
         llvm::IRBuilder<>&,
         std::vector<RegisterSlot>&,
+        std::vector<RegisterSlot>&,
+        std::span<const runtime::simir::RegisterId>,
         llvm::LLVMContext&,
         llvm::Type*,
         llvm::Type*,

@@ -1297,6 +1297,211 @@ std::optional<ArtifactInspection> inspect_artifact(
 } // namespace fsim::app
 
 namespace fsim::app::application_detail {
+namespace {
+
+constexpr std::string_view kAotReceiptSchema = "fsim-aot-receipt-v1";
+constexpr std::string_view kAotSelectionPolicy = "fsim-native-selection-v1";
+constexpr std::uintmax_t kMaximumAotReceiptBytes = 8192U;
+
+#if defined(FSIM_HAS_LLVM)
+struct AotReceiptContext {
+    std::string key;
+    std::string design;
+    std::string optimization;
+    std::string host;
+    std::string inventory;
+};
+
+struct AotReceipt {
+    cli::AotScope scope { cli::AotScope::selected };
+    std::uint64_t processes { };
+    std::uint64_t modules { };
+};
+
+[[nodiscard]] std::string aot_process_inventory(
+    const BuiltProject& built)
+{
+    compiler::CacheKeyBuilder builder;
+    builder.add("kind", kAotSelectionPolicy);
+    builder.add("design", built.artifact_identity);
+    builder.add("process-count",
+        std::to_string(built.design_ir.processes().size()));
+    builder.add("specialization-count",
+        std::to_string(built.design_ir.specializations().size()));
+    for (const auto& specialization : built.design_ir.specializations()) {
+        builder.add("specialization-id",
+            std::to_string(specialization.id.value()));
+        builder.add("specialization-name", specialization.name);
+        builder.add("specialization-instance",
+            std::to_string(specialization.instance.value()));
+        builder.add("specialization-process-count",
+            std::to_string(specialization.processes.size()));
+        for (const auto process : specialization.processes) {
+            builder.add("process", std::to_string(process.value()));
+        }
+    }
+    for (const auto& key : built.specialization_cache_keys) {
+        builder.add("specialization-cache-key", key);
+    }
+    return builder.finish();
+}
+
+[[nodiscard]] AotReceiptContext aot_receipt_context(
+    const BuiltProject& built)
+{
+    const auto optimization = jit_optimization(built.optimization);
+    const auto host = compiler::LlvmJit::native_host_identity(optimization);
+    compiler::CacheKeyBuilder builder;
+    builder.add("kind", kAotReceiptSchema);
+    builder.add("selection-policy", kAotSelectionPolicy);
+    builder.add("design", built.artifact_identity);
+    builder.add("optimization", project::to_string(built.optimization));
+    builder.add("native-host", host.fingerprint);
+    return {
+        builder.finish(), built.artifact_identity,
+        std::string { project::to_string(built.optimization) },
+        host.fingerprint, aot_process_inventory(built)
+    };
+}
+
+[[nodiscard]] compiler::ObjectCache aot_receipt_cache(
+    const std::filesystem::path& cache_path)
+{
+    return compiler::ObjectCache {
+        cache_path / "llvm-native" / "aot-receipts"
+    };
+}
+
+[[nodiscard]] std::string serialize_aot_receipt(
+    const AotReceiptContext& context,
+    const cli::AotScope scope,
+    const std::uint64_t processes,
+    const std::uint64_t modules)
+{
+    std::ostringstream output;
+    output << kAotReceiptSchema << '\n'
+           << "scope="
+           << (scope == cli::AotScope::all ? "all" : "selected") << '\n'
+           << "design=" << context.design << '\n'
+           << "optimization=" << context.optimization << '\n'
+           << "host=" << context.host << '\n'
+           << "inventory=" << context.inventory << '\n'
+           << "processes=" << processes << '\n'
+           << "modules=" << modules << '\n';
+    return std::move(output).str();
+}
+
+[[nodiscard]] bool parse_aot_count(
+    const std::string_view value, std::uint64_t& result)
+{
+    const auto [end, error]
+        = std::from_chars(value.begin(), value.end(), result);
+    return error == std::errc { } && end == value.end();
+}
+
+[[nodiscard]] std::optional<AotReceipt> parse_aot_receipt(
+    const std::span<const std::byte> payload,
+    const AotReceiptContext& context)
+{
+    if (payload.empty() || payload.size() > kMaximumAotReceiptBytes) {
+        return std::nullopt;
+    }
+    const std::string text {
+        reinterpret_cast<const char*>(payload.data()), payload.size()
+    };
+    std::array<std::string_view, 8> lines;
+    auto remaining = std::string_view { text };
+    for (auto& line : lines) {
+        const auto newline = remaining.find('\n');
+        if (newline == std::string_view::npos) {
+            return std::nullopt;
+        }
+        line = remaining.substr(0U, newline);
+        remaining.remove_prefix(newline + 1U);
+    }
+    if (!remaining.empty() || lines[0] != kAotReceiptSchema
+        || !lines[1].starts_with("scope=")
+        || lines[2] != "design=" + context.design
+        || lines[3] != "optimization=" + context.optimization
+        || lines[4] != "host=" + context.host
+        || lines[5] != "inventory=" + context.inventory
+        || !lines[6].starts_with("processes=")
+        || !lines[7].starts_with("modules=")) {
+        return std::nullopt;
+    }
+    const auto scope = lines[1].substr(std::string_view { "scope=" }.size());
+    AotReceipt receipt;
+    if (scope == "all") {
+        receipt.scope = cli::AotScope::all;
+    } else if (scope != "selected") {
+        return std::nullopt;
+    }
+    if (!parse_aot_count(
+            lines[6].substr(std::string_view { "processes=" }.size()),
+            receipt.processes)
+        || !parse_aot_count(
+            lines[7].substr(std::string_view { "modules=" }.size()),
+            receipt.modules)) {
+        return std::nullopt;
+    }
+    return receipt;
+}
+
+[[nodiscard]] std::optional<AotReceipt> load_aot_receipt(
+    const BuiltProject& built,
+    diagnostic::Engine& diagnostics)
+{
+    const auto context = aot_receipt_context(built);
+    const auto cache = aot_receipt_cache(built.cache_path);
+    const auto path = cache.path_for(context.key);
+    std::error_code size_error;
+    const auto bytes = std::filesystem::file_size(path, size_error);
+    if (!size_error && bytes > kMaximumAotReceiptBytes) {
+        diagnostics.warning("FSIM-AOT-002",
+            "ignoring an oversized native AOT receipt");
+        return std::nullopt;
+    }
+    std::error_code error;
+    const auto payload = cache.load(context.key, error);
+    if (!payload) {
+        if (error != std::errc::no_such_file_or_directory) {
+            diagnostics.warning("FSIM-AOT-002",
+                "ignoring an unreadable native AOT receipt: "
+                    + error.message());
+        }
+        return std::nullopt;
+    }
+    const auto receipt = parse_aot_receipt(*payload, context);
+    if (!receipt) {
+        diagnostics.warning("FSIM-AOT-002",
+            "ignoring an incompatible native AOT receipt");
+    }
+    return receipt;
+}
+
+[[nodiscard]] bool store_aot_receipt(
+    const AotReceiptContext& context,
+    const std::filesystem::path& cache_path,
+    const cli::AotScope scope,
+    const std::uint64_t processes,
+    const std::uint64_t modules,
+    diagnostic::Engine& diagnostics)
+{
+    const auto payload
+        = serialize_aot_receipt(context, scope, processes, modules);
+    const auto bytes = std::as_bytes(
+        std::span { payload.data(), payload.size() });
+    std::error_code error;
+    if (!aot_receipt_cache(cache_path).store(context.key, bytes, error)) {
+        diagnostics.error("FSIM-AOT-001",
+            "cannot publish the native AOT receipt: " + error.message());
+        return false;
+    }
+    return true;
+}
+#endif
+
+} // namespace
 
 int handle_elaborate(
     const cli::Invocation& invocation,
@@ -1318,7 +1523,72 @@ int handle_elaborate(
     output << "elaborated " << root_count
            << " root(s) into "
            << support::path_to_utf8(*invocation.artifact_output) << '\n';
+    if (invocation.aot != std::optional<bool> { true }) {
+        return 0;
+    }
+#if defined(FSIM_HAS_LLVM)
+    try {
+        auto reloaded = load_design_artifact(
+            *invocation.artifact_output, diagnostics);
+        if (!reloaded) {
+            return 1;
+        }
+        reloaded->optimization = config.build.optimization;
+        if (invocation.cache_directory) {
+            reloaded->cache_path = *invocation.cache_directory;
+        }
+        const auto scope
+            = invocation.aot_scope.value_or(cli::AotScope::selected);
+        reloaded->compiled_process_selection = scope == cli::AotScope::all
+            ? BuiltProject::CompiledProcessSelection::all
+            : BuiltProject::CompiledProcessSelection::selected;
+        const auto receipt_context = aot_receipt_context(*reloaded);
+        const auto receipt_cache_path = reloaded->cache_path;
+        Simulation simulation { std::move(*reloaded), config.run.max_deltas,
+            SimulationEngine::compiled,
+            SystemVerilogVpiRuntimeUpdates::omitted };
+        simulation.await_all_native_compilation();
+        const auto statistics = simulation.native_cache_statistics(false);
+        if (statistics.store_failures != 0U) {
+            diagnostics.error("FSIM-AOT-001",
+                "native AOT compilation could not publish "
+                    + std::to_string(statistics.store_failures)
+                    + " cache object(s); the portable design remains valid");
+            return 1;
+        }
+        if (statistics.load_failures != 0U
+            || statistics.prune_failures != 0U) {
+            diagnostics.warning("FSIM-AOT-002",
+                "native AOT recovered from cache read or pruning failures");
+        }
+        if (!store_aot_receipt(receipt_context, receipt_cache_path, scope,
+                simulation.compiled_process_count(),
+                simulation.compiled_module_count(), diagnostics)) {
+            return 1;
+        }
+        output << "AOT populated " << simulation.compiled_process_count()
+               << " process(es) in " << simulation.compiled_module_count()
+               << " module(s), scope="
+               << (scope == cli::AotScope::all ? "all" : "selected")
+               << ", cache="
+               << support::path_to_utf8(receipt_cache_path)
+               << ", hits=" << statistics.hits
+               << ", misses=" << statistics.misses
+               << ", stores=" << statistics.stores << '\n';
+    } catch (const std::exception& error) {
+        diagnostics.error("FSIM-AOT-001",
+            std::string { "native AOT compilation failed; the portable design "
+                          "remains valid: " }
+                + error.what());
+        return 1;
+    }
     return 0;
+#else
+    diagnostics.error("FSIM-AOT-001",
+        "native AOT compilation requires an LLVM-enabled fsim build; the "
+        "portable design remains valid");
+    return 1;
+#endif
 }
 
 int handle_simulate(
@@ -1373,6 +1643,35 @@ int handle_simulate(
         ? SimulationEngine::interpreter
         : engine == "debug" ? SimulationEngine::debug
                             : SimulationEngine::compiled;
+    if (simulation_engine == SimulationEngine::compiled) {
+        const auto policy = invocation.compiled_processes.value_or(
+            cli::CompiledProcessPolicy::automatic);
+        if (policy == cli::CompiledProcessPolicy::all) {
+            built->compiled_process_selection
+                = BuiltProject::CompiledProcessSelection::all;
+        } else if (policy == cli::CompiledProcessPolicy::selected) {
+            built->compiled_process_selection
+                = BuiltProject::CompiledProcessSelection::selected;
+        } else {
+#if defined(FSIM_HAS_LLVM)
+            try {
+                const auto receipt = load_aot_receipt(*built, diagnostics);
+                if (receipt && receipt->scope == cli::AotScope::all) {
+                    built->compiled_process_selection
+                        = BuiltProject::CompiledProcessSelection::all;
+                    output << "using forced-all AOT cache receipt ("
+                           << receipt->processes << " process(es), "
+                           << receipt->modules << " module(s))\n";
+                }
+            } catch (const std::exception& error) {
+                diagnostics.warning("FSIM-AOT-002",
+                    std::string { "cannot inspect the native AOT receipt; "
+                                  "using selected compilation: " }
+                        + error.what());
+            }
+#endif
+        }
+    }
     return run_built_project(
         std::move(*built), simulation_engine,
         config, invocation.plusargs, diagnostics, output);

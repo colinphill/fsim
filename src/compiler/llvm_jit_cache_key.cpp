@@ -266,6 +266,8 @@ void add_dynamic_index_key(
         static_cast<std::uint64_t>(selection.right));
     add_key_u64(
         builder, "index-base-offset", selection.base_offset);
+    add_key_u64(
+        builder, "index-strict", selection.strict ? 1U : 0U);
 }
 
 void add_dynamic_part_index_key(

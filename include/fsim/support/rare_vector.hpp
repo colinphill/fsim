@@ -171,7 +171,7 @@ public:
     RareVector() = default;
     RareVector(std::initializer_list<T> values)
     {
-        if (!values.empty()) {
+        if (values.size() != 0U) {
             values_ = std::make_unique<Storage>(values);
         }
     }
@@ -241,13 +241,13 @@ public:
     {
         return storage().end();
     }
-    [[nodiscard]] iterator begin() noexcept
+    [[nodiscard]] iterator begin()
     {
-        return values_ ? values_->begin() : iterator { };
+        return mutable_storage().begin();
     }
-    [[nodiscard]] iterator end() noexcept
+    [[nodiscard]] iterator end()
     {
-        return values_ ? values_->end() : iterator { };
+        return mutable_storage().end();
     }
     [[nodiscard]] const T& operator[](const size_type index) const noexcept
     {
@@ -270,9 +270,9 @@ public:
     [[nodiscard]] const T& back() const { return storage().back(); }
     [[nodiscard]] T& back() { return mutable_storage().back(); }
     [[nodiscard]] const T* data() const noexcept { return storage().data(); }
-    [[nodiscard]] T* data() noexcept
+    [[nodiscard]] T* data()
     {
-        return values_ ? values_->data() : nullptr;
+        return mutable_storage().data();
     }
 
     void clear() noexcept { values_.reset(); }

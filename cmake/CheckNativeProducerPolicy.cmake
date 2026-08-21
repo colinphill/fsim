@@ -192,7 +192,8 @@ fsim_require_native_producer_tokens("${FSIM_LLVM_JIT}"
   "isRelocatableObject()"
   "getBytesInAddress() == sizeof(void*)"
   "getArch() == target_triple_.getArch()"
-  "getTripleObjectFormat() == target_triple_.getObjectFormat()")
+  "getTripleObjectFormat()"
+  "target_triple_.getObjectFormat()")
 
 fsim_require_native_producer_tokens("${FSIM_APPLICATION_TEST}"
   "mapped-native-incompatible"

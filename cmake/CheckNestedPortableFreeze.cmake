@@ -116,14 +116,14 @@ set(FSIM_DESIGN_CODEC
 set(FSIM_DESIGN_TEST
   "${FSIM_SOURCE_DIR}/tests/app/application_test_artifact_phases.cpp")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_HEADER}"
-  "kRuntimeStateSchema = 48"
-  "kSemanticStateSchema = 3"
-  "kDesignIrStateSchema = 3"
-  "kClassStateSchema = 10"
-  "kSystemVerilogConstraintHirStateSchema = 6"
-  "kSystemVerilogCoverageStateSchema = 4"
-  "kSystemVerilogUvmStateSchema = 2"
-  "kVhdlHirStateSchema = 1")
+  "kRuntimeStateSchema = 50"
+  "kSemanticStateSchema = 4"
+  "kDesignIrStateSchema = 4"
+  "kClassStateSchema = 11"
+  "kSystemVerilogConstraintHirStateSchema = 7"
+  "kSystemVerilogCoverageStateSchema = 5"
+  "kSystemVerilogUvmStateSchema = 3"
+  "kVhdlHirStateSchema = 2")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_CODEC}"
   "kMaximumNesting = 1024"
   "design state string exceeds the payload"

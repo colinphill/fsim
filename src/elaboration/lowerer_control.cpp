@@ -1335,10 +1335,10 @@ void Lowerer::lower_loop(const Statement& statement)
         release_captured_targets();
     }
 
-    void Lowerer::lower_if(const Statement& statement)
-    {
-        if (const auto static_condition =
-                static_integer_value(statement.condition)) {
+void Lowerer::lower_if(const Statement& statement)
+{
+    if (const auto static_condition =
+            static_integer_value(statement.condition)) {
             lower_statements(
                 *static_condition != 0
                     ? statement.statements

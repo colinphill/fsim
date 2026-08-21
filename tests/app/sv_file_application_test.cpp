@@ -965,9 +965,10 @@ end architecture;
             directory.path, vhdl_source, optimization,
             fsim::app::SimulationEngine::compiled);
 #if defined(FSIM_HAS_LLVM)
-        assert(vhdl_cold.hits == 0);
-        assert(vhdl_cold.misses == 1);
-        assert(vhdl_cold.stores == 1);
+        // Debug may seed the matching optimization profile; either way the
+        // first compiled run must resolve exactly one native cache entry.
+        assert(vhdl_cold.hits + vhdl_cold.misses == 1);
+        assert(vhdl_cold.stores == vhdl_cold.misses);
         assert(vhdl_warm.hits == 1);
         assert(vhdl_warm.misses == 0);
 #else
@@ -1340,8 +1341,8 @@ endmodule
         const auto warm = run_verilog_memory(
             optimization, fsim::app::SimulationEngine::compiled);
 #if defined(FSIM_HAS_LLVM)
-        assert(cold.hits == 0 && cold.misses == 3 && cold.stores == 3);
-        assert(warm.hits == 3 && warm.misses == 0);
+        assert(cold.hits == 0 && cold.misses == 2 && cold.stores == 2);
+        assert(warm.hits == 2 && warm.misses == 0);
 #else
         static_cast<void>(cold);
         static_cast<void>(warm);

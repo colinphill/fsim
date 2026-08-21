@@ -62,6 +62,16 @@ void ValueOperationLowerer::lower(
       builder.CreateAnd(
           builder.CreateICmpSGE(selected, lower),
           builder.CreateICmpSLE(selected, upper)));
+  if (operation.selection.strict) {
+    runtime_error_if(
+        unknown,
+        JitGeneratedRuntimeErrorReason::dynamic_index_unknown,
+        "dynamic.extract.index.unknown");
+    runtime_error_if(
+        builder.CreateNot(valid),
+        JitGeneratedRuntimeErrorReason::dynamic_index_range,
+        "dynamic.extract.index.range");
+  }
   auto* right = llvm::ConstantInt::getSigned(
       i64, operation.selection.right);
   auto* offset = builder.CreateSelect(
@@ -529,6 +539,16 @@ void ValueOperationLowerer::lower(
                   builder.CreateAnd(
                       builder.CreateICmpSGE(selected, lower),
                       builder.CreateICmpSLE(selected, upper)));
+              if (operation.selection.strict) {
+                  runtime_error_if(
+                      unknown,
+                      JitGeneratedRuntimeErrorReason::dynamic_index_unknown,
+                      "dynamic.insert.index.unknown");
+                  runtime_error_if(
+                      builder.CreateNot(valid),
+                      JitGeneratedRuntimeErrorReason::dynamic_index_range,
+                      "dynamic.insert.index.range");
+              }
               auto* right = llvm::ConstantInt::getSigned(
                   i64, operation.selection.right);
               auto* offset = builder.CreateSelect(

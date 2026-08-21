@@ -19,7 +19,7 @@ Interpreter::Interpreter(
 Interpreter::~Interpreter()
 {
     if (impl_->native_phase_profile_enabled) {
-        std::cerr << "FSIM-NATIVE-PHASE-PROFILE attempts="
+        std::cerr << "fsim-profile: native-phase attempts="
                   << impl_->native_phase_profile_attempts
                   << " published=" << impl_->native_phase_profile_published
                   << " rejected_structure="
@@ -74,7 +74,7 @@ Interpreter::~Interpreter()
             impl_->native_process_cohort_static_wait_counts.begin(),
             impl_->native_process_cohort_static_wait_counts.end(),
             std::uint64_t { });
-        std::cerr << "FSIM-NATIVE-PROCESS-COUNTS processes="
+        std::cerr << "fsim-profile: native-process-counts processes="
                   << impl_->native_process_resume_counts.size()
                   << " resumes=" << total
                   << " single=" << single_total
@@ -114,7 +114,7 @@ Interpreter::~Interpreter()
              index < impl_->native_process_scheduling_boundaries.size();
              ++index) {
             if (impl_->native_process_scheduling_boundaries[index] != 0U) {
-                std::cerr << "FSIM-NATIVE-SCHEDULING-BOUNDARY index="
+                std::cerr << "fsim-profile: native-scheduling-boundary index="
                           << index << " count="
                           << impl_->native_process_scheduling_boundaries[index]
                           << '\n';
@@ -126,7 +126,7 @@ Interpreter::~Interpreter()
             if (count == 0U || id >= impl_->processes.size()) {
                 continue;
             }
-            std::cerr << "FSIM-NATIVE-PROCESS-COUNT id=" << id
+            std::cerr << "fsim-profile: native-process-count id=" << id
                       << " resumes=" << count
                       << " single="
                       << impl_->native_process_single_resume_counts[id]
@@ -145,7 +145,7 @@ Interpreter::~Interpreter()
                       << " name='" << impl_->processes[id].program.name
                       << "'\n";
             if (!impl_->processes[id].program.static_sensitivity.empty()) {
-                std::cerr << "FSIM-NATIVE-PROCESS-SENSITIVITY id=" << id
+                std::cerr << "fsim-profile: native-process-sensitivity id=" << id
                           << " signals=";
                 const auto& sensitivity
                     = impl_->processes[id].program.static_sensitivity;
@@ -173,7 +173,7 @@ Interpreter::~Interpreter()
                             ? left.second > right.second
                             : left.first < right.first;
                     });
-                std::cerr << "FSIM-NATIVE-PROCESS-TRIGGERS id=" << id
+                std::cerr << "fsim-profile: native-process-triggers id=" << id
                           << " total=";
                 const auto trigger_total = std::accumulate(
                     triggers.begin(), triggers.end(), std::uint64_t { },
@@ -423,7 +423,7 @@ Interpreter::~Interpreter()
             [&](const auto left, const auto right) {
                 return component_resumes[left] > component_resumes[right];
             });
-        std::cerr << "FSIM-NATIVE-STATIC-REGIONS processes="
+        std::cerr << "fsim-profile: native-static-regions processes="
                   << eligible_processes
                   << " components=" << components.size()
                   << " edges=" << edges.size()
@@ -457,7 +457,7 @@ Interpreter::~Interpreter()
                     break;
                 }
             }
-            std::cerr << "FSIM-NATIVE-STATIC-REGION size="
+            std::cerr << "fsim-profile: native-static-region size="
                       << component_size[component]
                       << " resumes=" << component_resumes[component]
                       << " word_fanout_ready="
@@ -485,7 +485,7 @@ Interpreter::~Interpreter()
         }
     }
     if (impl_->native_update_profile_enabled) {
-        std::cerr << "FSIM-NATIVE-UPDATE-PROFILE calls="
+        std::cerr << "fsim-profile: native-update calls="
                   << impl_->native_update_profile_calls
                   << " fallbacks=" << impl_->native_update_profile_fallbacks
                   << " batches=" << impl_->native_update_profile_batches
@@ -541,7 +541,7 @@ Interpreter::~Interpreter()
             [](const auto total, const auto& region) {
                 return total + region.members.size();
             });
-        std::cerr << "FSIM-NATIVE-REGION-PROFILE regions="
+        std::cerr << "fsim-profile: native-region regions="
                   << impl_->native_static_regions.size()
                   << " members=" << members
                   << " attempts=" << impl_->native_static_region_attempts
@@ -591,7 +591,7 @@ void Interpreter::Impl::report_process_profile()
         native_resumes += process.profile_native_resumes;
         interpreter_operations += process.profile_interpreter_operations;
     }
-    std::cerr << "FSIM-PROCESS-PROFILE-SUMMARY processes=" << processes.size()
+    std::cerr << "fsim-profile: process-summary processes=" << processes.size()
               << " calls=" << calls
               << " interpreter_operations=" << interpreter_operations
               << " native_resumes=" << native_resumes
@@ -610,7 +610,7 @@ void Interpreter::Impl::report_process_profile()
         if (process.profile_calls == 0U) {
             break;
         }
-        std::cerr << "FSIM-PROCESS-PROFILE rank=" << rank + 1U
+        std::cerr << "fsim-profile: process rank=" << rank + 1U
                   << " id=" << id
                   << " compiled=" << (process.executor ? 1 : 0)
                   << " static_operations=" << process.program.operations.size()
@@ -637,7 +637,7 @@ void Interpreter::Impl::report_update_profile()
         return;
     }
     update_profile_reported = true;
-    std::cerr << "FSIM-UPDATE-PROFILE commits=" << update_profile_commits
+    std::cerr << "fsim-profile: update commits=" << update_profile_commits
               << " updates=" << update_profile_updates
               << " whole=" << update_profile_whole
               << " slices=" << update_profile_slices
@@ -795,6 +795,8 @@ SignalId Interpreter::add_signal(Signal signal)
             };
         }
     }
+    signal.initial_value = Interpreter::Impl::coerce_value_kind(
+        std::move(signal.initial_value), signal.value_kind);
     impl_->driven_values.push_back(signal.initial_value);
     impl_->driver_values.emplace_back();
     impl_->driver_strengths.emplace_back();
@@ -807,6 +809,7 @@ SignalId Interpreter::add_signal(Signal signal)
         std::numeric_limits<ProcessId>::max());
     impl_->stable_single_writer_processes.push_back(
         std::numeric_limits<ProcessId>::max());
+    impl_->signal_transaction_observed.push_back(false);
     impl_->signal_writer_counts.push_back(0U);
     impl_->forced_driver_values.emplace_back();
     impl_->forced_driver_masks.emplace_back();
@@ -833,6 +836,7 @@ SignalId Interpreter::add_signal(Signal signal)
         impl_->direct_signal_last_bval.push_back(0U);
     }
     if (signal.initial_value.is_logic9()
+        && signal.initial_value.width() != 0U
         && signal.initial_value.width() <= 64U) {
         impl_->direct_signal_logic9_plane0.resize(id, 0U);
         impl_->direct_signal_logic9_plane1.resize(id, 0U);
@@ -1147,6 +1151,24 @@ ProcessId Interpreter::add_process_impl(
         throw std::invalid_argument(
             "SimIR register value-kind count does not match register_count");
     }
+    const auto observe_signal_transaction = [&](const SignalId signal) {
+        if (signal >= impl_->signals.size()) {
+            throw std::invalid_argument(
+                "process transaction observation references invalid signal");
+        }
+        if (impl_->signal_transaction_observed[signal]) {
+            return;
+        }
+        impl_->signal_transaction_observed[signal] = true;
+        impl_->stable_single_writer_processes[signal]
+            = std::numeric_limits<ProcessId>::max();
+        ++impl_->signal_writer_revision;
+        if (impl_->signal_writer_revision == 0U) {
+            throw std::overflow_error {
+                "SimIR signal-writer topology revision overflow"
+            };
+        }
+    };
     for (std::size_t sensitivity_index = 0;
          sensitivity_index < process.static_sensitivity.size();
          ++sensitivity_index) {
@@ -1166,6 +1188,26 @@ ProcessId Interpreter::add_process_impl(
             : Process::full_static_trigger_mask;
         impl_->static_fanout[signal.signal].push_back(
             { id, signal.edge, trigger_mask });
+        if (signal.edge == EdgeKind::transaction) {
+            observe_signal_transaction(signal.signal);
+        }
+    }
+    for (const auto& operation : process.operations) {
+        if (const auto* active = operation_get_if<SignalActive>(&operation)) {
+            observe_signal_transaction(active->signal);
+        } else if (const auto* last_active
+                   = operation_get_if<SignalLastActive>(&operation)) {
+            observe_signal_transaction(last_active->signal);
+        }
+        const auto* wait = operation_get_if<WaitOn>(&operation);
+        if (wait == nullptr) {
+            continue;
+        }
+        for (std::size_t index = 0; index < wait->edges.size(); ++index) {
+            if (wait->edges[index] == EdgeKind::transaction) {
+                observe_signal_transaction(wait->signals.at(index));
+            }
+        }
     }
     std::set<std::string> local_names;
     for (const auto& local : process.debug_locals) {
@@ -1261,6 +1303,7 @@ ProcessId Interpreter::add_process_impl(
             }
             impl_->stable_single_writer_processes[signal]
                 = writer_count == 1U
+                    && !impl_->signal_transaction_observed[signal]
                 ? id
                 : std::numeric_limits<ProcessId>::max();
             ++impl_->signal_writer_revision;
@@ -1928,7 +1971,7 @@ void Interpreter::start()
         for (const auto cohort : cohorts) {
             grouped_processes += impl_->static_sensitivity_cohorts[cohort].members.size();
         }
-        std::cerr << "FSIM-STATIC-COHORTS cohorts=" << cohorts.size()
+        std::cerr << "fsim-profile: static-cohorts cohorts=" << cohorts.size()
                   << " processes=" << grouped_processes << '\n';
         for (const auto cohort : cohorts | std::views::take(20U)) {
             const auto& members

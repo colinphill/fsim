@@ -677,6 +677,12 @@ void compare_capture(const Capture& reference, const Capture& actual)
     assert(reference.result.delta == actual.result.delta);
     assert(reference.psl_attempts == actual.psl_attempts);
     assert(reference.value == actual.value);
+    if (reference.wide_value != actual.wide_value) {
+        std::cerr << "typed boundary reference wide value: "
+                  << reference.wide_value << '\n';
+        std::cerr << "typed boundary compiled wide value: "
+                  << actual.wide_value << '\n';
+    }
     assert(reference.wide_value == actual.wide_value);
     assert(reference.changes == actual.changes);
     assert(reference.debugger == actual.debugger);

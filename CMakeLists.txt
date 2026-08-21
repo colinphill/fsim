@@ -499,6 +499,7 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_strength.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_expressions.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_functions.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_process_helpers.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_processes.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_udp.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_events.cpp"
@@ -1118,7 +1119,10 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_executors.cpp
       src/app/application_executor_vital.cpp
       src/app/application_executor_signal_attributes.cpp
+      src/app/application_executor_container_operation.cpp
       src/app/application_executor_services.cpp
+      src/app/application_executor_signals.cpp
+      src/app/application_executor_values.cpp
       src/app/application_library_export.cpp
       src/app/application_library_import.cpp
       src/app/application_phase_compile.cpp

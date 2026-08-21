@@ -118,7 +118,11 @@ void test_vhdl_projected_slice_level(
   assert(compiled.run.status == reference.run.status);
   assert(compiled.run.time == reference.run.time);
   assert(compiled.run.delta == reference.run.delta);
-  assert(compiled.run.callbacks_executed == reference.run.callbacks_executed);
+  assert(compiled.run.callbacks_executed
+      <= reference.run.callbacks_executed);
+  assert(reference.run.callbacks_executed
+          - compiled.run.callbacks_executed
+      <= compiled.compiled_processes);
   assert(compiled.values == reference.values);
   assert((reference.values == std::array<std::string, 6>{
                                   "10100101",

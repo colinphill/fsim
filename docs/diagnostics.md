@@ -51,6 +51,8 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-CLI-0001` | error | Invalid command-line argument, option, value, command, or direct-source combination. |
 | `FSIM-CLI-0002` | error | The selected command has no connected implementation in this build. |
 | `FSIM-CLI-0003` | error | An exception escaped command dispatch. |
+| `FSIM-AOT-001` | error | Explicit post-elaboration native compilation or atomic AOT receipt publication failed; the already-published portable design remains valid. |
+| `FSIM-AOT-002` | warning | A native AOT receipt was unreadable, oversized, incompatible, or recovered alongside non-fatal cache read/pruning failures; simulation uses selected compilation when the receipt cannot be trusted. |
 | `FSIM-TCL-0001` | error | The selected build has no embedded Tcl interface. |
 | `FSIM-TCL-0002` | error | The Tcl interpreter, standard library, fsim namespace, or standard channels could not be initialized. |
 | `FSIM-TCL-0003` | error | A batch Tcl command or script failed during evaluation. |
@@ -798,7 +800,6 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-UNSUPPORTED-006` | error | Unsupported concurrent statement. |
 | `FSIM-VHDL-UNSUPPORTED-007` | error | A process declarative item is outside the bounded constant, type/subtype, variable, alias, package-instance, and local-callable subset. |
 | `FSIM-VHDL-UNSUPPORTED-008` | error | Unsupported sequential statement. |
-| `FSIM-VHDL-UNSUPPORTED-012` | error | Signal initializers are parsed but not executable. |
 | `FSIM-VHDL-UNSUPPORTED-014` | error | An integer-family subtype appears in a declaration context that does not yet admit scalar integer objects. |
 | `FSIM-VHDL-UNSUPPORTED-015` | error | A nested context declaration appears where only a context reference is permitted. |
 | `FSIM-VHDL-UNSUPPORTED-018` | error | A generic type is outside the bounded scalar integer, Boolean, bit, and physical-time subset. |
@@ -927,7 +928,6 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-PARSE-032` | error | Expected `]` after an expression part-select. |
 | `FSIM-SV-PARSE-033` | error | Expected `]` after an expression index. |
 | `FSIM-SV-PARSE-034` | error | Expected `(` after an instance name. |
-| `FSIM-SV-PARSE-035` | error | Expected `(` after a named port. |
 | `FSIM-SV-PARSE-036` | error | Expected `)` after a named port connection. |
 | `FSIM-SV-PARSE-037` | error | Expected `)` after instance connections. |
 | `FSIM-SV-PARSE-038` | error | Expected `;` after a module instance. |
@@ -1524,7 +1524,6 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-SEM-040` | error | A Verilog/SystemVerilog output string uses an unsupported, incomplete, or out-of-byte-range escape. |
 | `FSIM-SV-SEM-041` | error | A `$monitor` format string has more value-consuming conversions than value arguments. |
 | `FSIM-SV-SEM-042` | error | An output format string uses an unsupported conversion/modifier, an invalid or overflowing field width, or a malformed percent escape. |
-| `FSIM-SV-SEM-043` | error | A bounded `$info`, `$warning`, or `$error` call has a nonliteral or additional message argument. |
 | `FSIM-SV-SEM-044` | error | A `timeunit` or `timeprecision` declaration appears in Verilog-2005 input. |
 | `FSIM-SV-SEM-045` | error | A time declaration has an illegal magnitude or physical unit. |
 | `FSIM-SV-SEM-046` | error | A scope repeats a `timeunit` or `timeprecision` declaration. |
@@ -2081,6 +2080,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-ELAB-VHENUM-001` | error | A contextual VHDL enumeration type has no matching identifier or character literal. |
 | `FSIM-ELAB-VHENUM-002` | error | Assignment or comparison mixes values from different nominal VHDL enumeration types. |
 | `FSIM-ELAB-VHENUM-003` | error | An operator that is not defined for VHDL enumeration values was applied to an enumeration object. |
+| `FSIM-ELAB-VHINIT-001` | error | A VHDL signal initializer is not a statically foldable value compatible with the signal subtype. |
 | `FSIM-ELAB-VHENUMATTR-001` | error | A VHDL enumeration scalar attribute has an invalid prefix, arity, argument type, result context, or executable ordinal range. |
 | `FSIM-ELAB-VHENUMATTR-002` | error | A locally static or executable VHDL enumeration scalar attribute argument is outside the type's declaration range or has no predecessor/successor. |
 | `FSIM-ELAB-VHSCALARATTR-001` | error | A non-enumeration VHDL scalar attribute has an invalid type-mark prefix, arity, argument type, or executable range. |

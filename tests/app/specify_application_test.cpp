@@ -227,13 +227,17 @@ Capture run_once(
     assert(!fsim::app::deserialize_runtime_state(
         wrong_schema, "old-specify-runtime", wrong_schema_diagnostics));
     auto excessive_roots = *encoded;
+    constexpr std::size_t runtime_header_size
+        = 8U + sizeof(std::uint32_t);
     std::uint64_t top_size { };
     for (std::size_t byte = 0; byte < 8; ++byte) {
         top_size |= static_cast<std::uint64_t>(
-                        static_cast<unsigned char>(excessive_roots[16 + byte]))
+                        static_cast<unsigned char>(
+                            excessive_roots[runtime_header_size + byte]))
             << (byte * 8U);
     }
-    const auto roots_size_offset = static_cast<std::size_t>(24 + top_size);
+    const auto roots_size_offset = runtime_header_size + 8U
+        + static_cast<std::size_t>(top_size);
     assert(roots_size_offset + 8 <= excessive_roots.size());
     for (std::size_t byte = 0; byte < 8; ++byte) {
         excessive_roots[roots_size_offset + byte] = '\xff';

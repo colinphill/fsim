@@ -387,7 +387,7 @@ Process Lowerer::lower_concurrent_group(
             source_sensitivity_group_sizes,
             { },
             [](const auto& group) { return group.second; });
-        std::cerr << "FSIM-FUSED-SENSITIVITY name='" << process_.name
+        std::cerr << "fsim-profile: fused-sensitivity name='" << process_.name
                   << "' statements=" << statements.size()
                   << " groups=" << source_sensitivity_group_sizes.size()
                   << " largest="
@@ -420,7 +420,7 @@ Process Lowerer::lower_concurrent_group(
             collect_calls(collect_calls, statement.value, statement_call);
             call_statements += statement_call ? 1U : 0U;
         }
-        std::cerr << "FSIM-FUSED-FORWARDING name='" << process_.name
+        std::cerr << "fsim-profile: fused-forwarding name='" << process_.name
                   << "' statements=" << statements.size()
                   << " call_statements=" << call_statements << " calls=";
         bool first = true;
@@ -673,7 +673,7 @@ Process Lowerer::lower_concurrent_group(
     }
     if (std::getenv("FSIM_PROFILE_FUSED_STATIC") != nullptr
         && hoisted_static_assignments != 0U) {
-        std::cerr << "FSIM-FUSED-STATIC name=" << process_.name
+        std::cerr << "fsim-profile: fused-static name=" << process_.name
                   << " count=" << hoisted_static_assignments << '\n';
         for (std::size_t hoisted = 0;
              hoisted < hoisted_static_assignments; ++hoisted) {
@@ -815,7 +815,7 @@ Process Lowerer::lower_concurrent_group(
                     operation_count += lowered_statement_ranges[block].second
                         - lowered_statement_ranges[block].first;
                 }
-                std::cerr << "FSIM-FUSED-REACHABILITY name='"
+                std::cerr << "fsim-profile: fused-reachability name='"
                           << process_.name << "' signal="
                           << static_cast<std::size_t>(sensitivity.signal)
                           << " blocks=" << pending.size() << '/'
@@ -1241,7 +1241,7 @@ Process Lowerer::lower_concurrent_group(
             && (std::string_view { forwarding_filter } == "1"
                 || process_.name.find(forwarding_filter)
                     != std::string::npos)) {
-            std::cerr << "FSIM-FUSED-COALESCED name='" << process_.name
+            std::cerr << "fsim-profile: fused-coalesced name='" << process_.name
                       << "' signals=" << coalesced_updates.size() << '\n';
         }
     }

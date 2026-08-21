@@ -185,11 +185,9 @@ void verify(
         return point.kind
             == fsim::runtime::simir::ExecutionPointKind::call;
       });
-  // Optimized native callables are deliberately inlined and therefore do
-  // not expose the interpreter's internal Call boundaries.
-  assert(capture.compiled_processes == 0
-      ? call_points >= 9
-      : call_points == 0);
+  // Observable compiled execution retains source-level call safe points even
+  // when the callable body is lowered into native control flow.
+  assert(call_points >= 8);
   assert(capture.vcd.find(expected[1]) != std::string::npos);
   assert(capture.vcd.find(expected[7]) != std::string::npos);
   assert(capture.vcd.find(expected[9]) != std::string::npos);

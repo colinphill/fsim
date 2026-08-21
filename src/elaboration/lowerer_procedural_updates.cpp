@@ -57,7 +57,11 @@ std::optional<DynamicIndex> Lowerer::lower_dynamic_index(
     const auto normalized = resize_register(
         *lowered, 32, is_signed_expression(index));
     return DynamicIndex {
-        normalized, range->left, range->right, base_offset
+        normalized,
+        range->left,
+        range->right,
+        base_offset,
+        language_ == frontend::Language::Vhdl2008
     };
 }
 

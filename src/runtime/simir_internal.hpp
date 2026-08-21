@@ -612,6 +612,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<std::uint32_t> direct_wide_signal_offsets;
     std::vector<ProcessId> direct_single_driver_processes;
     std::vector<ProcessId> stable_single_writer_processes;
+    std::vector<bool> signal_transaction_observed;
     std::vector<std::uint32_t> signal_writer_counts;
     std::uint64_t signal_writer_revision { };
     std::vector<PackedLogic4> driven_values;

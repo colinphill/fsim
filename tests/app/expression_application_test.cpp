@@ -361,10 +361,10 @@ void test_vhdl_shift_rotate(
     assert(reference.compiled_processes == 0);
     assert(reference.compiled_modules == 0);
 #if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 11);
-    // Three structurally shared signal-process templates are emitted beside
-    // the specialization module containing the remaining processes.
-    assert(compiled.compiled_modules == 4);
+    // Forced-all compilation includes every design process in one
+    // specialization module.
+    assert(compiled.compiled_processes == 12);
+    assert(compiled.compiled_modules == 1);
 #else
     assert(compiled.compiled_processes == 0);
     assert(compiled.compiled_modules == 0);
@@ -1014,8 +1014,8 @@ void test_vhdl_falling_edge(
             "1" }));
 #if defined(FSIM_HAS_LLVM)
     assert(compiled.compiled_processes == 12);
-    assert(compiled.compiled_modules == 3);
-    assert(warm.native_cache.hits == 3);
+    assert(compiled.compiled_modules == 1);
+    assert(warm.native_cache.hits == 1);
     assert(warm.native_cache.misses == 0);
 #else
     assert(compiled.compiled_processes == 0);

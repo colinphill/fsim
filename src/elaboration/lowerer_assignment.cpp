@@ -63,6 +63,84 @@ Lowerer::static_integer_value(const Expression& expression)
         return evaluated ? evaluated->integer_value()
                          : std::optional<std::int64_t> { };
     }
+    const auto side_effect_free =
+        [&](const auto& self, const Expression& candidate) -> bool {
+        for (const auto& operand : candidate.operands) {
+            if (!self(self, operand)) {
+                return false;
+            }
+        }
+        for (const auto& choices :
+             candidate.aggregate_choice_expressions) {
+            for (const auto& choice : choices) {
+                if (!self(self, choice)) {
+                    return false;
+                }
+            }
+        }
+        if (candidate.kind != ExpressionKind::Call
+            && candidate.kind != ExpressionKind::Binary) {
+            return true;
+        }
+        const auto separator = candidate.text.find_last_of('.');
+        const auto intrinsic = std::string_view { candidate.text }.substr(
+            separator == std::string::npos ? 0 : separator + 1);
+        if (candidate.kind == ExpressionKind::Call
+            && (candidate.text.starts_with("@")
+                || candidate.text.starts_with("'")
+                || visible_type_mark(candidate.text) != nullptr
+                || object_type(candidate.text) != nullptr
+                || intrinsic == "to_integer"
+                || intrinsic == "to_unsigned"
+                || intrinsic == "to_signed"
+                || intrinsic == "resize"
+                || intrinsic == "unsigned"
+                || intrinsic == "signed"
+                || intrinsic == "std_logic_vector"
+                || intrinsic == "std_ulogic_vector"
+                || intrinsic == "bit_vector")) {
+            return true;
+        }
+        const auto found = function_indices_.find(candidate.text);
+        if (found == function_indices_.end()) {
+            // Calls not represented by a visible function frame are
+            // conversions, attributes, or lowerer intrinsics. They neither
+            // access impure VHDL state nor publish observable side effects.
+            return candidate.kind != ExpressionKind::Call;
+        }
+        return std::ranges::all_of(
+            found->second,
+            [&](const std::size_t index) {
+                return function_frames_[index].source->pure;
+            });
+    };
+    if (expression.kind == ExpressionKind::Binary
+        && expression.operands.size() == 2
+        && (expression.text == "and"
+            || expression.text == "nand"
+            || expression.text == "or"
+            || expression.text == "nor")) {
+        const auto& left_expression = expression.operands[0];
+        const auto& right_expression = expression.operands[1];
+        const auto left = static_integer_value(left_expression);
+        const bool and_family = expression.text == "and"
+            || expression.text == "nand";
+        const bool invert = expression.text == "nand"
+            || expression.text == "nor";
+        if (left
+            && ((*left == 0) == and_family)
+            && side_effect_free(side_effect_free, right_expression)) {
+            const auto decisive = and_family ? 0 : 1;
+            return invert ? 1 - decisive : decisive;
+        }
+        const auto right = static_integer_value(right_expression);
+        if (right
+            && ((*right == 0) == and_family)
+            && side_effect_free(side_effect_free, left_expression)) {
+            const auto decisive = and_family ? 0 : 1;
+            return invert ? 1 - decisive : decisive;
+        }
+    }
     auto folded = expression;
     const auto fold_attributes =
         [&](const auto& self,
@@ -1644,7 +1722,8 @@ void Lowerer::lower_assignment(const Statement& statement)
                         dynamic_part_selection->base,
                         dynamic_part_selection->left,
                         dynamic_part_selection->right,
-                        dynamic_part_selection->base_offset },
+                        dynamic_part_selection->base_offset,
+                        true },
                     rejection,
                     mode });
         } else if (dynamic_selection) {
@@ -1910,7 +1989,8 @@ void Lowerer::lower_assignment(const Statement& statement)
                         dynamic_part_selection->base,
                         dynamic_part_selection->left,
                         dynamic_part_selection->right,
-                        dynamic_part_selection->base_offset },
+                        dynamic_part_selection->base_offset,
+                        true },
                     delay,
                     rejection,
                     mode });

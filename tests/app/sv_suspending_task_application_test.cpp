@@ -156,18 +156,16 @@ void verify(
             return point.kind
                 == fsim::runtime::simir::ExecutionPointKind::call;
         });
-    // Optimized native callables are deliberately inlined and therefore do
-    // not expose the interpreter's internal Call boundaries.
-    assert(call_points == (capture.compiled_processes == 0 ? 9 : 0));
+    // Observable native execution retains the same source-level callable
+    // boundaries as interpreted execution.
+    assert(call_points >= 9);
     const auto wait_points = std::ranges::count_if(
         capture.points,
         [](const auto& point) {
             return point.kind
                 == fsim::runtime::simir::ExecutionPointKind::wait;
         });
-    assert(capture.compiled_processes == 0
-        ? wait_points >= 6
-        : wait_points == 0);
+    assert(wait_points >= 6);
     assert(std::ranges::count_if(
                capture.points,
                [](const auto& point) {

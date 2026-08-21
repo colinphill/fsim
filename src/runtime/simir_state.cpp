@@ -1917,7 +1917,7 @@ void Interpreter::Impl::refresh_direct_signal_planes(
 {
     const auto& value = signals[signal_id].initial_value;
     if (value.is_logic9()) {
-        if (value.width() <= 64U) {
+        if (value.width() != 0U && value.width() <= 64U) {
             const auto word = value.logic9_low_word();
             direct_signal_logic9_plane0[signal_id] = word.planes[0];
             direct_signal_logic9_plane1[signal_id] = word.planes[1];

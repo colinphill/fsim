@@ -253,6 +253,15 @@ struct BuiltProject {
     std::vector<std::shared_ptr<const SdfPhaseArtifact>> sdf_phase_artifacts { };
     /// Versioned trace policy carried across object/design/cache/checkpoint phases.
     std::shared_ptr<const TraceArchiveSnapshot> trace_archive;
+    enum class CompiledProcessSelection : std::uint8_t {
+        selected,
+        all,
+    };
+    /// Native-process admission policy for this in-memory consumer. Portable
+    /// design artifacts intentionally do not persist this cache-local choice.
+    CompiledProcessSelection compiled_process_selection {
+        CompiledProcessSelection::selected
+    };
 };
 
 [[nodiscard]] std::vector<VerilogScopeProvenance>
@@ -935,6 +944,9 @@ public:
     /// cache failure. Larger recurring kernels promote asynchronously only
     /// for runs long enough to amortize compilation.
     void await_native_compilation() const;
+    /// Force every selected native tier, join all materialization work, and
+    /// surface lowering, codegen, and cache failures before returning.
+    void await_all_native_compilation() const;
     void set_signal_change_hook(SignalChangeHook hook);
     /// Add an independent signal observer without replacing the trace/API hook.
     /// The returned token remains valid until removed or the Simulation dies.

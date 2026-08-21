@@ -484,7 +484,8 @@ namespace codec_detail {
             while (!bytes.empty() && failure_.empty()) {
                 const auto available = buffer_.size() - buffered_;
                 const auto count = std::min(available, bytes.size());
-                std::ranges::copy_n(bytes.begin(), count,
+                std::ranges::copy_n(bytes.begin(),
+                    static_cast<std::ptrdiff_t>(count),
                     buffer_.begin() + static_cast<std::ptrdiff_t>(buffered_));
                 buffered_ += count;
                 bytes.remove_prefix(count);
@@ -1023,7 +1024,7 @@ namespace codec_detail {
             if (input_ == nullptr) {
                 std::ranges::copy_n(
                     bytes_.begin() + static_cast<std::ptrdiff_t>(position_),
-                    size, destination);
+                    static_cast<std::ptrdiff_t>(size), destination);
                 position_ += size;
                 remaining_ -= size;
                 return true;
@@ -1044,7 +1045,7 @@ namespace codec_detail {
                 std::ranges::copy_n(
                     buffer_.begin()
                         + static_cast<std::ptrdiff_t>(buffer_position_),
-                    count, destination);
+                    static_cast<std::ptrdiff_t>(count), destination);
                 destination += count;
                 size -= count;
                 buffer_position_ += count;

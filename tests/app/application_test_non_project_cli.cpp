@@ -174,6 +174,10 @@ void ApplicationTestFixture::test_non_project_cli()
     const auto extra_object = directory / "extra.fsimobj";
     const auto extra_source = directory / "extra.sv";
     const auto design = directory / "design.fsimdesign";
+    const auto aot_design = directory / "aot-design.fsimdesign";
+    const auto selected_aot_design
+        = directory / "selected-aot-design.fsimdesign";
+    const auto final_aot_design = directory / "final-aot-design.fsimdesign";
     const auto trace = directory / "phase.fst";
     const auto fst_trace = directory / "phase.fst";
     const auto conflict_trace = directory / "phase.vcd";
@@ -184,6 +188,11 @@ void ApplicationTestFixture::test_non_project_cli()
     const auto extra_object_text = fsim::support::path_to_utf8(extra_object);
     const auto extra_source_text = fsim::support::path_to_utf8(extra_source);
     const auto design_text = fsim::support::path_to_utf8(design);
+    const auto aot_design_text = fsim::support::path_to_utf8(aot_design);
+    const auto selected_aot_design_text
+        = fsim::support::path_to_utf8(selected_aot_design);
+    const auto final_aot_design_text
+        = fsim::support::path_to_utf8(final_aot_design);
     const auto trace_text = fsim::support::path_to_utf8(trace);
     const auto fst_trace_text = fsim::support::path_to_utf8(fst_trace);
     const auto conflict_trace_text = fsim::support::path_to_utf8(conflict_trace);
@@ -299,6 +308,47 @@ void ApplicationTestFixture::test_non_project_cli()
     assert(elaborate->trace_format == project::TraceFormat::fst);
     assert(elaborate->trace_compression == project::TraceCompression::deterministic);
 
+    const std::vector<const char*> aot_parse_arguments {
+        "fsim", "elaborate",
+        "--object", object_text.c_str(),
+        "--top", "primary=sv:work.tb",
+        "--output", aot_design_text.c_str(),
+        "--aot", "--aot-scope", "all",
+        "--cache", consumer_cache_text.c_str()
+    };
+    diagnostic::Engine aot_parse_diagnostics;
+    const auto aot_parse = cli::parse_arguments(
+        static_cast<int>(aot_parse_arguments.size()),
+        aot_parse_arguments.data(), aot_parse_diagnostics);
+    assert(aot_parse && !aot_parse_diagnostics.has_error());
+    assert(aot_parse->aot == true);
+    assert(aot_parse->aot_scope == cli::AotScope::all);
+    assert(aot_parse->cache_directory == consumer_cache);
+    const std::vector<const char*> disabled_aot_arguments {
+        "fsim", "elaborate",
+        "--object", object_text.c_str(),
+        "--top", "primary=sv:work.tb",
+        "--output", selected_aot_design_text.c_str(),
+        "--aot", "--no-aot"
+    };
+    diagnostic::Engine disabled_aot_diagnostics;
+    const auto disabled_aot = cli::parse_arguments(
+        static_cast<int>(disabled_aot_arguments.size()),
+        disabled_aot_arguments.data(), disabled_aot_diagnostics);
+    assert(disabled_aot && !disabled_aot_diagnostics.has_error());
+    assert(disabled_aot->aot == false);
+    const std::vector<const char*> invalid_aot_scope_arguments {
+        "fsim", "elaborate",
+        "--object", object_text.c_str(),
+        "--top", "primary=sv:work.tb",
+        "--output", design_text.c_str(),
+        "--aot-scope", "all"
+    };
+    diagnostic::Engine invalid_aot_scope_diagnostics;
+    assert(!cli::parse_arguments(
+        static_cast<int>(invalid_aot_scope_arguments.size()),
+        invalid_aot_scope_arguments.data(), invalid_aot_scope_diagnostics));
+
     const std::vector<const char*> simulate_arguments {
         "fsim", "simulate",
         "--design", design_text.c_str(),
@@ -330,6 +380,27 @@ void ApplicationTestFixture::test_non_project_cli()
     assert(simulate->trace_enabled == true);
     assert(simulate->cache_directory == consumer_cache);
     assert(simulate->file_root == consumer_file_root);
+    assert(!simulate->compiled_processes.has_value());
+    const std::vector<const char*> selected_simulate_arguments {
+        "fsim", "simulate", "--design", design_text.c_str(),
+        "--compiled-processes", "selected"
+    };
+    diagnostic::Engine selected_simulate_diagnostics;
+    const auto selected_simulate = cli::parse_arguments(
+        static_cast<int>(selected_simulate_arguments.size()),
+        selected_simulate_arguments.data(), selected_simulate_diagnostics);
+    assert(selected_simulate && !selected_simulate_diagnostics.has_error());
+    assert(selected_simulate->compiled_processes
+        == cli::CompiledProcessPolicy::selected);
+    const std::vector<const char*> invalid_interpreter_policy_arguments {
+        "fsim", "simulate", "--design", design_text.c_str(),
+        "--engine", "interpreter", "--compiled-processes", "all"
+    };
+    diagnostic::Engine invalid_interpreter_policy_diagnostics;
+    assert(!cli::parse_arguments(
+        static_cast<int>(invalid_interpreter_policy_arguments.size()),
+        invalid_interpreter_policy_arguments.data(),
+        invalid_interpreter_policy_diagnostics));
 
     const auto incremental_systemc_source = directory / "incremental.cpp";
     const auto systemc_object = directory / "incremental.fsimscobj";
@@ -926,7 +997,8 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
         "--top", "primary=sv:work.tb",
         "--output", design_text.c_str(),
         "--delay-mode", "typ",
-        "--seed", "9"
+        "--seed", "9",
+        "--optimization", "O0"
     };
     output.str({ });
     error.str({ });
@@ -936,6 +1008,139 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
         == 0);
     assert(error.str().empty());
     assert(output.str().find("elaborated 1 root(s)") != std::string::npos);
+#if defined(FSIM_HAS_LLVM)
+    const std::vector<const char*> aot_elaborate_arguments {
+        "fsim", "elaborate",
+        "--object", object_text.c_str(),
+        "--object", extra_object_text.c_str(),
+        "--top", "primary=sv:work.tb",
+        "--output", aot_design_text.c_str(),
+        "--delay-mode", "typ", "--seed", "9",
+        "--optimization", "O0",
+        "--aot", "--aot-scope", "all",
+        "--cache", consumer_cache_text.c_str()
+    };
+    output.str({ });
+    error.str({ });
+    const auto aot_status = cli::run(
+        static_cast<int>(aot_elaborate_arguments.size()),
+        aot_elaborate_arguments.data(), production_services, output, error);
+    if (aot_status != 0) {
+        std::cerr << error.str();
+    }
+    assert(aot_status == 0);
+    assert(error.str().empty());
+    assert(output.str().find("scope=all") != std::string::npos);
+    assert(std::filesystem::is_directory(
+        consumer_cache / "llvm-native" / "aot-receipts"));
+    std::optional<std::filesystem::path> receipt_path;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(
+             consumer_cache / "llvm-native" / "aot-receipts")) {
+        if (entry.is_regular_file() && entry.path().extension() == ".fobj") {
+            receipt_path = entry.path();
+            break;
+        }
+    }
+    assert(receipt_path.has_value());
+    {
+        std::ofstream corrupt_receipt(
+            *receipt_path, std::ios::binary | std::ios::trunc);
+        corrupt_receipt << "corrupt receipt";
+        assert(corrupt_receipt.good());
+    }
+    const std::vector<const char*> receipt_probe_arguments {
+        "fsim", "simulate", "--design", design_text.c_str(),
+        "--engine", "compiled", "--optimization", "O0",
+        "--duration", "1ns", "--cache", consumer_cache_text.c_str(),
+        "--trace-lifecycle", "disabled"
+    };
+    output.str({ });
+    error.str({ });
+    assert(cli::run(static_cast<int>(receipt_probe_arguments.size()),
+               receipt_probe_arguments.data(), production_services,
+               output, error)
+        == 0);
+    assert(error.str().find("FSIM-AOT-002") != std::string::npos);
+    assert(output.str().find("using forced-all AOT cache receipt")
+        == std::string::npos);
+
+    const std::vector<const char*> selected_aot_arguments {
+        "fsim", "elaborate",
+        "--object", object_text.c_str(),
+        "--object", extra_object_text.c_str(),
+        "--top", "primary=sv:work.tb",
+        "--output", selected_aot_design_text.c_str(),
+        "--delay-mode", "typ", "--seed", "9",
+        "--optimization", "O0",
+        "--aot", "--aot-scope", "selected",
+        "--cache", consumer_cache_text.c_str()
+    };
+    output.str({ });
+    error.str({ });
+    assert(cli::run(static_cast<int>(selected_aot_arguments.size()),
+               selected_aot_arguments.data(), production_services,
+               output, error)
+        == 0);
+    assert(error.str().empty());
+    assert(output.str().find("scope=selected") != std::string::npos);
+    output.str({ });
+    error.str({ });
+    assert(cli::run(static_cast<int>(receipt_probe_arguments.size()),
+               receipt_probe_arguments.data(), production_services,
+               output, error)
+        == 0);
+    assert(error.str().empty());
+    assert(output.str().find("using forced-all AOT cache receipt")
+        == std::string::npos);
+
+    output.str({ });
+    error.str({ });
+    const std::vector<const char*> final_aot_arguments {
+        "fsim", "elaborate",
+        "--object", object_text.c_str(),
+        "--object", extra_object_text.c_str(),
+        "--top", "primary=sv:work.tb",
+        "--output", final_aot_design_text.c_str(),
+        "--delay-mode", "typ", "--seed", "9",
+        "--optimization", "O0",
+        "--aot", "--aot-scope", "all",
+        "--cache", consumer_cache_text.c_str()
+    };
+    assert(cli::run(static_cast<int>(final_aot_arguments.size()),
+               final_aot_arguments.data(), production_services,
+               output, error)
+        == 0);
+    assert(error.str().empty());
+    assert(output.str().find("scope=all") != std::string::npos);
+    const std::vector<const char*> selected_override_arguments {
+        "fsim", "simulate", "--design", design_text.c_str(),
+        "--engine", "compiled", "--compiled-processes", "selected",
+        "--optimization", "O0", "--duration", "1ns",
+        "--cache", consumer_cache_text.c_str(),
+        "--trace-lifecycle", "disabled"
+    };
+    output.str({ });
+    error.str({ });
+    assert(cli::run(static_cast<int>(selected_override_arguments.size()),
+               selected_override_arguments.data(), production_services,
+               output, error)
+        == 0);
+    assert(error.str().empty());
+    assert(output.str().find("using forced-all AOT cache receipt")
+        == std::string::npos);
+    std::optional<std::filesystem::path> removed_native_object;
+    const auto native_objects
+        = consumer_cache / "llvm-native" / "llvm" / "objects";
+    for (const auto& entry :
+        std::filesystem::recursive_directory_iterator(native_objects)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".fobj") {
+            removed_native_object = entry.path();
+            assert(std::filesystem::remove(*removed_native_object));
+            break;
+        }
+    }
+    assert(removed_native_object.has_value());
+#endif
     diagnostic::Engine design_metadata_diagnostics;
     const auto published_design_metadata = artifact::load_design_metadata(design, design_metadata_diagnostics);
     assert(published_design_metadata && !design_metadata_diagnostics.has_error());
@@ -1182,6 +1387,11 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
                error)
         == 0);
     assert(error.str().empty());
+#if defined(FSIM_HAS_LLVM)
+    assert(output.str().find("using forced-all AOT cache receipt")
+        != std::string::npos);
+    assert(std::filesystem::is_regular_file(*removed_native_object));
+#endif
     assert(output.str().find("simulation stopped at tick 3") != std::string::npos);
     assert(std::filesystem::is_regular_file(trace));
     const auto compiled_fst_bytes = read_binary_file(trace);
@@ -1369,6 +1579,9 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     assert(provenance_signature(debug_simulation.verilog_scope_provenance()) == object_provenance_signature);
     const auto debug_cache = debug_simulation.native_cache_statistics();
 #if defined(FSIM_HAS_LLVM)
+    // Debug instrumentation changes both frame layout and restart-point code,
+    // so it must not reuse the ordinary compiled cache entry.
+    assert(debug_cache.hits == 0);
     assert(debug_cache.misses != 0);
     assert(debug_cache.stores != 0);
 #else

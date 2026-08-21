@@ -1215,6 +1215,13 @@ end architecture;
             }
         }
         assert(reference.values == expected);
+        if (reference.values != compiled.values) {
+            for (std::size_t index = 0; index < names.size(); ++index) {
+                std::cerr << "compiled " << names[index] << '='
+                          << compiled.values[index] << " reference "
+                          << reference.values[index] << '\n';
+            }
+        }
         assert(reference.values == compiled.values);
         assert(reference.values == warm.values);
         if (debug)

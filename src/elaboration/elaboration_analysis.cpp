@@ -1086,6 +1086,34 @@ void evaluate_generated_constants(
     const std::vector<frontend::FunctionDeclaration>& functions,
     std::vector<Diagnostic>& diagnostics) {
     if (language == frontend::Language::Vhdl2008) {
+        // Type constraints in a generated declarative region may refer to a
+        // scalar constant declared earlier in that same region.  The parsed
+        // representation stores constants and type declarations separately,
+        // so seed the successfully evaluable scalar constants before type
+        // substitution.  The main pass below still owns diagnostics and the
+        // final, declaration-complete values.
+        for (const auto& constant : body.constants) {
+            if (constant.type.vhdl_array
+                || !constant.type.packed_members.empty()) {
+                continue;
+            }
+            auto value_expression = constant.default_value;
+            substitute_parameters(
+                value_expression, environment, domains, language);
+            std::string error;
+            const auto value = evaluate_constant_expression(
+                value_expression, environment, error);
+            if (!value) {
+                continue;
+            }
+            environment.insert_or_assign(constant.name, *value);
+            domains.insert_or_assign(
+                constant.name,
+                ConstantTypeInfo{
+                    constant.type.domain,
+                    !constant.type.enumeration_literals.empty(),
+                    constant.type.nominal_type});
+        }
         for (auto& alias : body.type_aliases) {
             substitute_parameters(
                 alias.type,

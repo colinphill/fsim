@@ -371,7 +371,7 @@ namespace {
                 Simulation simulation(
                     std::move(*built), seed_config.run.max_deltas,
                     SimulationEngine::compiled);
-                (void)simulation.compiled_process_count();
+                simulation.await_all_native_compilation();
                 (void)append_llvm_native_artifacts(
                     seed_config, metadata, payloads, seed_diagnostics);
             }

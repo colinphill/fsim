@@ -16,6 +16,8 @@ namespace {
 ContainerOperationLowerer::ContainerOperationLowerer(
     llvm::IRBuilder<>& builder_value,
     std::vector<RegisterSlot>& registers_value,
+    std::vector<RegisterSlot>& frame_registers_value,
+    const std::span<const runtime::simir::RegisterId> instruction_uses_value,
     llvm::LLVMContext& context_value,
     llvm::Type* i32_value,
     llvm::Type* i64_value,
@@ -36,6 +38,8 @@ ContainerOperationLowerer::ContainerOperationLowerer(
     std::function<void()> branch_to_next_value)
     : builder(builder_value)
     , registers(registers_value)
+    , frame_registers(frame_registers_value)
+    , instruction_uses(instruction_uses_value)
     , context(context_value)
     , i32(i32_value)
     , i64(i64_value)
@@ -94,6 +98,22 @@ void ContainerOperationLowerer::invoke(
     const std::optional<runtime::simir::RegisterId> destination,
     const std::string_view label)
 {
+    // Container and mutable-string callbacks own their non-packed state in the
+    // executor. Publish exactly the live packed operands they may inspect;
+    // fast JIT processes otherwise keep those values in transient storage.
+    for (const auto register_id : instruction_uses) {
+        const auto& source = registers[register_id];
+        const auto& frame_destination = frame_registers[register_id];
+        if (source.aval_base == frame_destination.aval_base
+            && source.word_offset == frame_destination.word_offset) {
+            continue;
+        }
+        store_register(
+            builder,
+            frame_registers,
+            register_id,
+            load_register(builder, registers, register_id));
+    }
     auto* zero = constant_i64(context, 0);
     const auto first = input0
         ? load_register(builder, registers, *input0)

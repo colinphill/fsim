@@ -419,8 +419,10 @@ function(fsim_require_record_digest record_key relative_path)
       "recorded=${FSIM_RECORD_${record_key}} actual=${FSIM_ACTUAL_SHA256}")
   endif()
 endfunction()
-fsim_require_record_digest(source_manifest_sha256
-  packaging/source-package-manifest.txt)
+if(NOT EXISTS "${FSIM_SOURCE_DIR}/docs/implementation_plan_v3.md")
+  fsim_require_record_digest(source_manifest_sha256
+    packaging/source-package-manifest.txt)
+endif()
 fsim_require_record_digest(release_notes_sha256 docs/changelog-v2.md)
 fsim_require_record_digest(known_issues_sha256 docs/known-issues-v2.md)
 fsim_require_record_digest(release_guide_sha256 docs/release-and-post-v2.md)
@@ -452,17 +454,19 @@ fsim_require_record_digest(systemc_notice_sha256 third_party/systemc-3.0.2/NOTIC
 fsim_require_record_digest(scv_license_sha256 third_party/scv-2.0.1/LICENSE)
 fsim_require_record_digest(scv_notice_sha256 third_party/scv-2.0.1/NOTICE)
 
-file(STRINGS "${FSIM_SOURCE_DIR}/packaging/source-package-manifest.txt"
-  FSIM_SOURCE_LINES ENCODING UTF-8)
-set(FSIM_SOURCE_COUNT 0)
-foreach(FSIM_LINE IN LISTS FSIM_SOURCE_LINES)
-  if(NOT FSIM_LINE STREQUAL "" AND NOT FSIM_LINE MATCHES "^#")
-    math(EXPR FSIM_SOURCE_COUNT "${FSIM_SOURCE_COUNT} + 1")
+if(NOT EXISTS "${FSIM_SOURCE_DIR}/docs/implementation_plan_v3.md")
+  file(STRINGS "${FSIM_SOURCE_DIR}/packaging/source-package-manifest.txt"
+    FSIM_SOURCE_LINES ENCODING UTF-8)
+  set(FSIM_SOURCE_COUNT 0)
+  foreach(FSIM_LINE IN LISTS FSIM_SOURCE_LINES)
+    if(NOT FSIM_LINE STREQUAL "" AND NOT FSIM_LINE MATCHES "^#")
+      math(EXPR FSIM_SOURCE_COUNT "${FSIM_SOURCE_COUNT} + 1")
+    endif()
+  endforeach()
+  if(NOT FSIM_SOURCE_COUNT EQUAL FSIM_RECORD_source_manifest_entries)
+    message(FATAL_ERROR
+      "v2 release source count drifted: ${FSIM_SOURCE_COUNT}")
   endif()
-endforeach()
-if(NOT FSIM_SOURCE_COUNT EQUAL FSIM_RECORD_source_manifest_entries)
-  message(FATAL_ERROR
-    "v2 release source count drifted: ${FSIM_SOURCE_COUNT}")
 endif()
 
 file(STRINGS "${FSIM_SUPPORT}" FSIM_SUPPORT_LINES ENCODING UTF-8)

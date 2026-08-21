@@ -143,6 +143,7 @@ docs/diagnostics.md
 docs/feature-matrix.md
 docs/implementation-plan.md
 docs/implementation_plan_v2.md
+docs/implementation_plan_v3.md
 docs/known-issues-v2.md
 docs/language-support.md
 docs/release-and-post-v2.md
@@ -175,6 +176,7 @@ docs/v2-resume.md
 docs/v2-scv-release-audit.md
 docs/v2-sdf-application-release-audit.md
 docs/v2-sdf-vital-release-audit.md
+docs/v3-resume.md
 docs/verilog-2005-closure-audit.md
 docs/verilog-2005-tutorial.md
 docs/verilog-2005.md
@@ -317,6 +319,7 @@ include/fsim/runtime/simir_class.hpp
 include/fsim/runtime/simir_container_value.hpp
 include/fsim/runtime/simir_debug.hpp
 include/fsim/runtime/simir_operation_storage.hpp
+include/fsim/runtime/simir_operations_extended.hpp
 include/fsim/runtime/simir_process_execution_context.hpp
 include/fsim/runtime/simir_randomize.hpp
 include/fsim/runtime/simir_scalar_interpreter.hpp
@@ -390,6 +393,7 @@ include/fsim/semantic/systemverilog_hir.hpp
 include/fsim/semantic/vhdl_hir.hpp
 include/fsim/support/environment.hpp
 include/fsim/support/path.hpp
+include/fsim/support/rare_vector.hpp
 include/fsim/support/sha256.hpp
 include/fsim/systemc.hpp
 include/fsim/systemc/accellera.hpp
@@ -448,6 +452,7 @@ src/app/application_check.cpp
 src/app/application_class_inspection.cpp
 src/app/application_class_randomization.cpp
 src/app/application_constraint_lowering.cpp
+src/app/application_container_profile.hpp
 src/app/application_debug_control.cpp
 src/app/application_debugger.cpp
 src/app/application_design_artifact_codec.cpp
@@ -470,9 +475,12 @@ src/app/application_design_artifact_codec_semantic.cpp
 src/app/application_design_artifact_codec_sv_hir.cpp
 src/app/application_design_artifact_codec_vhdl_hir.cpp
 src/app/application_design_ir.cpp
+src/app/application_executor_container_operation.cpp
 src/app/application_executor_frame.cpp
 src/app/application_executor_services.cpp
 src/app/application_executor_signal_attributes.cpp
+src/app/application_executor_signals.cpp
+src/app/application_executor_values.cpp
 src/app/application_executor_vital.cpp
 src/app/application_executors.cpp
 src/app/application_internal.hpp
@@ -525,6 +533,7 @@ src/app/application_simulation.cpp
 src/app/application_simulation_accessors.tpp
 src/app/application_simulation_scalar.tpp
 src/app/application_simulation_setup.tpp
+src/app/application_simulation_setup_execution.tpp
 src/app/application_simulation_source_methods.tpp
 src/app/application_simulation_uvm_phase.tpp
 src/app/application_standard_library.cpp
@@ -561,9 +570,13 @@ src/compiler/llvm_jit.cpp
 src/compiler/llvm_jit_cache_key.cpp
 src/compiler/llvm_jit_cache_key_operations.tpp
 src/compiler/llvm_jit_dynamic_part.cpp
+src/compiler/llvm_jit_execution.tpp
 src/compiler/llvm_jit_internal.hpp
 src/compiler/llvm_jit_lowering.cpp
 src/compiler/llvm_jit_lowering_internal.hpp
+src/compiler/llvm_jit_lowering_operations_prefix.tpp
+src/compiler/llvm_jit_lowering_operations_suffix.tpp
+src/compiler/llvm_jit_lowering_setup.tpp
 src/compiler/llvm_jit_module.cpp
 src/compiler/llvm_jit_operations_container.cpp
 src/compiler/llvm_jit_operations_control.cpp
@@ -573,6 +586,7 @@ src/compiler/llvm_jit_operations_output.cpp
 src/compiler/llvm_jit_operations_signal.cpp
 src/compiler/llvm_jit_operations_string.cpp
 src/compiler/llvm_jit_operations_value.cpp
+src/compiler/llvm_jit_process_modules.tpp
 src/compiler/llvm_jit_validation.cpp
 src/compiler/llvm_jit_validation_class.hpp
 src/compiler/llvm_jit_validation_selection.cpp
@@ -590,9 +604,12 @@ src/elaboration/elaboration_defaults.cpp
 src/elaboration/elaboration_generate_substitution.cpp
 src/elaboration/elaboration_literals.cpp
 src/elaboration/elaboration_specialization.cpp
+src/elaboration/elaboration_sv_constant_evaluator.tpp
 src/elaboration/elaboration_sv_constant_services.cpp
 src/elaboration/elaboration_sv_constants.cpp
 src/elaboration/elaboration_sv_container_type.cpp
+src/elaboration/elaboration_sv_function_evaluator_execution.tpp
+src/elaboration/elaboration_sv_function_evaluator_expression.tpp
 src/elaboration/elaboration_sv_functions.cpp
 src/elaboration/elaboration_sv_generate.cpp
 src/elaboration/elaboration_sv_lets.cpp
@@ -619,6 +636,7 @@ src/elaboration/hierarchy_builder.cpp
 src/elaboration/hierarchy_builder_types.hpp
 src/elaboration/hierarchy_generic_interfaces.cpp
 src/elaboration/hierarchy_instantiate.cpp
+src/elaboration/hierarchy_instantiate_processes_and_children.tpp
 src/elaboration/hierarchy_packages.cpp
 src/elaboration/hierarchy_ports.cpp
 src/elaboration/hierarchy_resolution.cpp
@@ -733,6 +751,7 @@ src/frontend/verilog_parser_fork.cpp
 src/frontend/verilog_parser_functions.cpp
 src/frontend/verilog_parser_hierarchy.cpp
 src/frontend/verilog_parser_internal.hpp
+src/frontend/verilog_parser_process_helpers.cpp
 src/frontend/verilog_parser_processes.cpp
 src/frontend/verilog_parser_specify.cpp
 src/frontend/verilog_parser_strength.cpp
@@ -795,6 +814,7 @@ src/runtime/simir_containers.cpp
 src/runtime/simir_execution.cpp
 src/runtime/simir_execution_boundaries.tpp
 src/runtime/simir_execution_context.hpp
+src/runtime/simir_execution_interpreter.tpp
 src/runtime/simir_file_binary.cpp
 src/runtime/simir_file_scanning.cpp
 src/runtime/simir_files.cpp
@@ -807,6 +827,8 @@ src/runtime/simir_module_path.cpp
 src/runtime/simir_random_distribution.cpp
 src/runtime/simir_sampled_values.cpp
 src/runtime/simir_scheduling.cpp
+src/runtime/simir_scheduling_commit.tpp
+src/runtime/simir_scheduling_stage.tpp
 src/runtime/simir_signal_attributes.hpp
 src/runtime/simir_state.cpp
 src/runtime/simir_string_methods.cpp
@@ -1038,6 +1060,7 @@ tests/app/sdf_vital_target_plan_test.cpp
 tests/app/sdf_vital_timing_checks_test.cpp
 tests/app/specify_application_test.cpp
 tests/app/stochastic_queue_application_test.cpp
+tests/app/structural_signal_remap_application_test.cpp
 tests/app/sv_aggregate_multidimensional_application_test.cpp
 tests/app/sv_callable_closure_application_test.cpp
 tests/app/sv_conformance_application_test.cpp
@@ -1277,6 +1300,7 @@ tests/frontend/frontend_vhdl_generic_subprogram_tests.cpp
 tests/frontend/frontend_vhdl_package_generic_tests.cpp
 tests/frontend/frontend_vhdl_psl_tests.cpp
 tests/frontend/frontend_vhdl_revision_profile_tests.cpp
+tests/frontend/frontend_vhdl_statement_core_tests.tpp
 tests/frontend/frontend_vhdl_statement_tests.cpp
 tests/frontend/frontend_vhdl_subprogram_tests.cpp
 tests/frontend/frontend_vhdl_time_file_tests.cpp
@@ -1358,6 +1382,7 @@ tests/runtime/runtime_uvm_test_runner_tests.cpp
 tests/runtime/runtime_uvm_tlm1_execution_tests.cpp
 tests/runtime/runtime_uvm_tlm1_tests.cpp
 tests/runtime/runtime_uvm_tlm2_tests.cpp
+tests/runtime/runtime_value_primitives_tests.tpp
 tests/runtime/runtime_value_tests.cpp
 tests/runtime/runtime_vhdl_psl_tests.cpp
 tests/runtime/runtime_vhpi_abi_c_test.c

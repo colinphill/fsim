@@ -50,6 +50,54 @@ std::string parameter_identity(
 
 } // namespace
 
+void test_systemverilog_constant_function_memoization_dependencies()
+{
+    const auto parsed = fsim::frontend::parse_text(
+        "constant-function-memoization-dependencies.sv",
+        R"(
+module memoized_function_child #(
+  parameter integer OFFSET = 0
+) ();
+  function automatic [7:0] leaf(input integer value);
+    leaf = OFFSET + value;
+  endfunction
+  function automatic [7:0] build_value(input integer ignored);
+    build_value = leaf(1);
+  endfunction
+  localparam logic [7:0] VALUE = build_value(0);
+endmodule
+
+module memoized_function_top;
+  memoized_function_child #(.OFFSET(3)) first();
+  memoized_function_child #(.OFFSET(9)) second();
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    if (!parsed.ok()) {
+        for (const auto& diagnostic : parsed.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(parsed.ok());
+    const auto elaborated = fsim::elaboration::elaborate(
+        parsed.design, "sv:work.memoized_function_top");
+    if (!elaborated.ok()) {
+        for (const auto& diagnostic : elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated.ok());
+    const auto* first = specialization_at(
+        *elaborated.design, "memoized_function_top.first");
+    const auto* second = specialization_at(
+        *elaborated.design, "memoized_function_top.second");
+    assert(first != nullptr && second != nullptr);
+    assert(parameter_value(*first, "VALUE") == "4");
+    assert(parameter_value(*second, "VALUE") == "10");
+}
+
 void test_systemverilog_typed_constants() {
     const auto parsed = fsim::frontend::parse_text(
         "typed-constants.sv",

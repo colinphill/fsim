@@ -469,7 +469,49 @@ endmodule
            == "00001010");
     assert(read_vhdl_width("width_vhdl_parent.child.sign_in")
            == "11111010");
-    assert(read_vhdl_width("width_vhdl_parent.child.trunc_in") == "0110");
+    const auto trunc_in_value = read_vhdl_width(
+        "width_vhdl_parent.child.trunc_in");
+    if (trunc_in_value != "0110") {
+      std::cerr << "unexpected trunc_in value: " << trunc_in_value << '\n';
+      std::cerr << "trunc_source value: "
+                << read_vhdl_width("trunc_source") << '\n';
+      for (const auto& conversion : vhdl_width_conversions) {
+        std::cerr << "conversion formal=" << conversion.formal_signal
+                  << " actual=" << conversion.actual_signal
+                  << " process="
+                  << conversion.process.value_or(
+                         std::numeric_limits<fsim::runtime::simir::ProcessId>::max())
+                  << '\n';
+      }
+      for (const auto& process : elaborated_vhdl_width.design->processes()) {
+        std::cerr << "process " << process.id << " " << process.name
+                  << " operations=" << process.operations.size()
+                  << " initialize=" << process.initialize
+                  << " sensitivity=" << process.static_sensitivity.size()
+                  << " drivers=" << process.driver_regions.size() << '\n';
+        std::cerr << "  pc="
+                  << vhdl_width_interpreter->process_instruction(process.id)
+                  << '\n';
+        for (const auto& operation : process.operations) {
+          if (const auto* load = fsim::runtime::simir::operation_get_if<
+                  fsim::runtime::simir::LoadConstant>(&operation)) {
+            std::cerr << "  load r" << load->destination << '='
+                      << load->value.to_msb_string() << '\n';
+          }
+          if (const auto* write = fsim::runtime::simir::operation_get_if<
+                  fsim::runtime::simir::WriteUpdate>(&operation)) {
+            std::cerr << "  write-update s" << write->signal
+                      << " from r" << write->source << '\n';
+          }
+          if (const auto* write = fsim::runtime::simir::operation_get_if<
+                  fsim::runtime::simir::WriteProjected>(&operation)) {
+            std::cerr << "  write-projected s" << write->signal
+                      << " from r" << write->source << '\n';
+          }
+        }
+      }
+    }
+    assert(trunc_in_value == "0110");
     assert(read_vhdl_width("widened_result") == "00001010");
     assert(read_vhdl_width("truncated_result") == "0110");
 

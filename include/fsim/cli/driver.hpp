@@ -33,6 +33,17 @@ enum class DiagnosticFormat {
   json,
 };
 
+enum class AotScope {
+  selected,
+  all,
+};
+
+enum class CompiledProcessPolicy {
+  automatic,
+  selected,
+  all,
+};
+
 struct Invocation {
   std::string program_name{"fsim"};
   std::filesystem::path program_path{"fsim"};
@@ -66,6 +77,9 @@ struct Invocation {
   std::optional<std::filesystem::path> cache_directory;
   std::optional<std::filesystem::path> file_root;
   std::optional<std::string> engine;
+  std::optional<bool> aot;
+  std::optional<AotScope> aot_scope;
+  std::optional<CompiledProcessPolicy> compiled_processes;
   std::vector<std::string> plusargs;
   std::vector<std::string> trace_filters;
   std::optional<std::string> duration;

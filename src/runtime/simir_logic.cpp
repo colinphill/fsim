@@ -311,7 +311,10 @@ namespace fsim::runtime::simir {
       std::max(selection.left, selection.right);
   if (signed_index < lower || signed_index > upper) {
     throw std::invalid_argument(
-        "dynamic packed index is outside the declared range");
+        "dynamic packed index is outside the declared range: index "
+        + std::to_string(signed_index) + ", range "
+        + std::to_string(selection.left) + " to "
+        + std::to_string(selection.right));
   }
   const auto offset =
       signed_index >= selection.right

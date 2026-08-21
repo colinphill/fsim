@@ -1784,6 +1784,12 @@ struct Simulation::Impl {
     // Keep their process programs alive alongside the JIT and interpreter.
     std::vector<std::unique_ptr<runtime::simir::Process>>
         jit_specialized_processes;
+    // Ordinary compiled execution deliberately omits source restart points.
+    // Retain exactly the LLVM-owned process IDs so a pre-start execution-point
+    // observer can return those processes to the reference interpreter without
+    // disturbing SystemC or other alternate executors.
+    std::vector<runtime::simir::ProcessId> jit_processes;
+    bool jit_debug_instrumentation { };
     // The interpreter owns executors referring to this JIT. Member destruction
     // is reversed, so declaring the JIT first destroys the interpreter first.
     std::unique_ptr<compiler::LlvmJit> jit;
@@ -2240,6 +2246,20 @@ void Simulation::await_native_compilation() const
 #endif
 }
 
+void Simulation::await_all_native_compilation() const
+{
+#if defined(FSIM_HAS_LLVM)
+    impl_->request_background_jit_compilation(true);
+    if (impl_->jit_materialization.valid()) {
+        impl_->jit_materialization.get();
+    }
+    for (const auto& compilation : impl_->jit_compilations) {
+        static_cast<void>(compilation.get());
+    }
+    impl_->interpreter->materialize_ready_process_executors();
+#endif
+}
+
 std::vector<ConcurrentAssertionCoverage>
 Simulation::concurrent_assertion_coverage() const
 {
@@ -2389,6 +2409,20 @@ void Simulation::remove_safe_point_hook(const std::uint64_t token) noexcept
 
 void Simulation::set_execution_point_hook(ExecutionPointHook hook)
 {
+#if defined(FSIM_HAS_LLVM)
+    if (hook && impl_->jit && !impl_->jit_debug_instrumentation) {
+        for (const auto process : impl_->jit_processes) {
+            if (!impl_->interpreter->clear_process_executor(process)) {
+                // A late observer still applies to interpreter-owned processes;
+                // already-running native frames cannot be replaced safely.
+                break;
+            }
+        }
+        if (impl_->lifecycle == Impl::Lifecycle::ready) {
+            impl_->jit_processes.clear();
+        }
+    }
+#endif
     impl_->interpreter->set_execution_point_hook(std::move(hook));
 }
 

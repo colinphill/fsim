@@ -562,6 +562,10 @@ namespace {
             << "      --link-option ARG    SystemC linker option; repeatable\n"
             << "      --link-library ARG   SystemC link library/path; repeatable\n"
             << "      --design PATH        Input design for simulate\n"
+            << "      --aot                Populate native code after elaborate\n"
+            << "      --no-aot             Disable post-elaboration native compilation\n"
+            << "      --aot-scope selected|all\n"
+            << "                           Select filtered or every capable HDL process\n"
             << "\n"
             << "Build and run options:\n"
             << "  -O, --optimization O0..O3\n"
@@ -581,9 +585,11 @@ namespace {
             << "      --trace-lifecycle configured|disabled\n"
             << "      --trace-report-limit COUNT\n"
             << "                           Bound detailed trace report entries\n"
-            << "      --cache PATH         Native cache for standalone simulate\n"
+            << "      --cache PATH         Native cache for elaborate AOT or simulate\n"
             << "      --file-root PATH     File-I/O root for standalone simulate\n"
             << "      --engine interpreter|compiled|debug\n"
+            << "      --compiled-processes auto|selected|all\n"
+            << "                           Auto-consume matching forced-all AOT receipts\n"
             << "      --seed COUNT|random\n"
             << "      --diagnostics text|json\n"
             << "\n"
@@ -919,6 +925,47 @@ std::optional<Invocation> parse_arguments(
                     return std::nullopt;
                 }
                 invocation.cache_directory = fsim::support::path_from_utf8(*value);
+            } else if (argument == "--aot") {
+                invocation.aot = true;
+            } else if (argument == "--no-aot") {
+                invocation.aot = false;
+            } else if (is_option(argument, "", "--aot-scope")) {
+                const auto value = take_value(
+                    index, argc, argv, argument, "--aot-scope", diagnostics);
+                if (!value.has_value()) {
+                    return std::nullopt;
+                }
+                const auto normalized = lowercase(*value);
+                if (normalized == "selected") {
+                    invocation.aot_scope = AotScope::selected;
+                } else if (normalized == "all") {
+                    invocation.aot_scope = AotScope::all;
+                } else {
+                    argument_error(
+                        diagnostics, "--aot-scope must be selected or all");
+                    return std::nullopt;
+                }
+            } else if (is_option(argument, "", "--compiled-processes")) {
+                const auto value = take_value(index, argc, argv, argument,
+                    "--compiled-processes", diagnostics);
+                if (!value.has_value()) {
+                    return std::nullopt;
+                }
+                const auto normalized = lowercase(*value);
+                if (normalized == "auto") {
+                    invocation.compiled_processes
+                        = CompiledProcessPolicy::automatic;
+                } else if (normalized == "selected") {
+                    invocation.compiled_processes
+                        = CompiledProcessPolicy::selected;
+                } else if (normalized == "all") {
+                    invocation.compiled_processes
+                        = CompiledProcessPolicy::all;
+                } else {
+                    argument_error(diagnostics,
+                        "--compiled-processes must be auto, selected, or all");
+                    return std::nullopt;
+                }
             } else if (is_option(argument, "", "--file-root")) {
                 const auto value = take_value(
                     index, argc, argv, argument, "--file-root", diagnostics);
@@ -1513,6 +1560,12 @@ std::optional<Invocation> parse_arguments(
                 "elaborate received a source, project-mapping, or simulation option");
             return std::nullopt;
         }
+        if (invocation.aot_scope.has_value()
+            && invocation.aot != std::optional<bool> { true }) {
+            argument_error(
+                diagnostics, "--aot-scope requires effective --aot");
+            return std::nullopt;
+        }
     }
     if (!invocation.help && !invocation.version
         && invocation.command == Command::simulate) {
@@ -1537,11 +1590,44 @@ std::optional<Invocation> parse_arguments(
         }
     }
     if (invocation.command != Command::simulate
+        && invocation.command != Command::elaborate
         && (invocation.cache_directory.has_value()
             || invocation.file_root.has_value())) {
         argument_error(
             diagnostics,
             "--cache and --file-root are available only with simulate");
+        return std::nullopt;
+    }
+    if (invocation.command == Command::elaborate
+        && invocation.cache_directory.has_value()
+        && invocation.aot != std::optional<bool> { true }) {
+        argument_error(diagnostics, "elaborate --cache requires effective --aot");
+        return std::nullopt;
+    }
+    if (invocation.command == Command::elaborate
+        && invocation.file_root.has_value()) {
+        argument_error(diagnostics, "--file-root is available only with simulate");
+        return std::nullopt;
+    }
+    if (invocation.command != Command::elaborate
+        && (invocation.aot.has_value() || invocation.aot_scope.has_value())) {
+        argument_error(
+            diagnostics, "--aot, --no-aot, and --aot-scope require elaborate");
+        return std::nullopt;
+    }
+    if (invocation.command != Command::simulate
+        && invocation.compiled_processes.has_value()) {
+        argument_error(
+            diagnostics, "--compiled-processes is available only with simulate");
+        return std::nullopt;
+    }
+    if (invocation.command == Command::simulate
+        && invocation.compiled_processes.has_value()
+        && *invocation.compiled_processes
+            != CompiledProcessPolicy::automatic
+        && invocation.engine.value_or("compiled") != "compiled") {
+        argument_error(diagnostics,
+            "--compiled-processes selected or all requires --engine compiled");
         return std::nullopt;
     }
     if (!non_project_command

@@ -444,13 +444,14 @@ void Interpreter::Impl::write_container_object_value(
             container_materialized_revisions[id]
                 = signal_value_revisions.at(alias->signal);
         }
-        if (changed) {
+        if (changed && (!alias || !alias->writable)) {
             const auto waiters = container_dynamic_fanout.at(id);
             for (const auto process : waiters) {
                 queue_next_delta(process);
             }
         }
-        if (changed && container_object_change_hook) {
+        if (changed && (!alias || !alias->writable)
+            && container_object_change_hook) {
             container_object_change_hook(id, scheduler.now());
         }
         return;
@@ -563,12 +564,14 @@ void Interpreter::Impl::write_container_object_element_value(
     if (!changed) {
         return;
     }
-    const auto waiters = container_dynamic_fanout.at(id);
-    for (const auto waiter : waiters) {
-        queue_next_delta(waiter);
-    }
-    if (container_object_change_hook) {
-        container_object_change_hook(id, scheduler.now());
+    if (!alias || !alias->writable) {
+        const auto waiters = container_dynamic_fanout.at(id);
+        for (const auto waiter : waiters) {
+            queue_next_delta(waiter);
+        }
+        if (container_object_change_hook) {
+            container_object_change_hook(id, scheduler.now());
+        }
     }
 }
 

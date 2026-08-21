@@ -129,6 +129,13 @@ void test_pla(
         "0101", "1010", "1100", "0011",
         "11", std::string(137U, '1')
     };
+    if (interpreted.values != expected) {
+        for (std::size_t index = 0; index < expected.size(); ++index) {
+            std::cerr << "PLA value " << index << " observed="
+                      << interpreted.values[index] << " expected="
+                      << expected[index] << '\n';
+        }
+    }
     assert(interpreted.values == expected);
     assert(compiled.values == expected);
     assert(interpreted.compiled_processes == 0);

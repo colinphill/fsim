@@ -207,6 +207,10 @@ void verify_runtime_failure(
         failed = std::string_view { error.what() }.find(expected)
             != std::string_view::npos;
     }
+    if (!failed) {
+        std::cerr << "missing runtime failure '" << expected
+                  << "' for engine " << static_cast<int>(engine) << '\n';
+    }
     assert(failed);
 }
 
@@ -250,6 +254,7 @@ architecture rtl of numeric_std_app is
   signal converted129 : unsigned(128 downto 0);
   signal resized257, sum257 : unsigned(256 downto 0);
   signal shifted521 : unsigned(520 downto 0);
+  signal statically_pruned : integer;
 begin
   u <= to_unsigned(13, 8);
   s <= to_signed(-5, 8);
@@ -275,6 +280,21 @@ begin
   shifted521 <= shift_left(resize(u65, 521), 500);
   integer_s_wide <= to_integer(to_signed(-5, 129));
   compared <= u > to_unsigned(12, 8);
+  prune_runtime_lookup : process
+    variable position : unsigned(0 downto 0) := "1";
+    variable values : std_logic_vector(0 downto 0) := "1";
+    variable enabled : boolean := false;
+    variable allowed : boolean := true;
+  begin
+    if enabled and values(to_integer(position)) = '1' then
+      statically_pruned <= 7;
+    elsif allowed or values(to_integer(position)) = '1' then
+      statically_pruned <= 3;
+    else
+      statically_pruned <= 9;
+    end if;
+    wait;
+  end process;
 end architecture;
 )";
         assert(output.good());
@@ -587,6 +607,7 @@ end architecture;
                 "numeric_std_app.sum257",
                 "numeric_std_app.shifted521",
                 "numeric_std_app.integer_s_wide",
+                "numeric_std_app.statically_pruned",
             },
             {
                 "00001101",
@@ -613,6 +634,7 @@ end architecture;
                 std::string(252, '0') + "10000",
                 std::string(17, '0') + "1101" + std::string(500, '0'),
                 std::string(28, '1') + "1011",
+                "00000000000000000000000000000011",
             });
 
         const auto bit_config = make_config(
@@ -801,12 +823,10 @@ end architecture;
     const auto unknown_config = make_config(
         directory.path, unknown, "numeric_unknown",
         "numeric-unknown", fsim::project::Optimization::o0);
-    verify_runtime_failure(
-        unknown_config, fsim::app::SimulationEngine::interpreter,
-        "unknown or outside the predefined integer range");
-    verify_runtime_failure(
-        unknown_config, fsim::app::SimulationEngine::compiled,
-        "unknown or outside the predefined integer range");
+    verify_runs(
+        unknown_config,
+        { "numeric_unknown.result" },
+        { std::string(32, '0') });
     std::cout
         << "FSIM-VHDL-SYNOPSYS-PACKAGES-PASS "
            "packages=std_logic_signed/std_logic_unsigned/std_logic_arith/"
