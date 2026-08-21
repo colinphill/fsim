@@ -1360,7 +1360,7 @@ void Lowerer::lower_task_body(const std::size_t task_index)
                         frame.container_arguments[index],
                         *type,
                         SourceLocation {
-                            argument.span.source_name,
+                            argument.span.source_name.str(),
                             static_cast<std::uint32_t>(
                                 argument.span.begin.line),
                             static_cast<std::uint32_t>(
@@ -1378,7 +1378,7 @@ void Lowerer::lower_task_body(const std::size_t task_index)
                     scoped_local_name(argument.name),
                     frame.string_arguments[index],
                     SourceLocation {
-                        argument.span.source_name,
+                        argument.span.source_name.str(),
                         static_cast<std::uint32_t>(
                             argument.span.begin.line),
                         static_cast<std::uint32_t>(
@@ -1402,7 +1402,7 @@ void Lowerer::lower_task_body(const std::size_t task_index)
             frame.arguments[index],
             static_cast<std::size_t>(*argument.type.width()),
             SourceLocation {
-                argument.span.source_name,
+                argument.span.source_name.str(),
                 static_cast<std::uint32_t>(
                     argument.span.begin.line),
                 static_cast<std::uint32_t>(

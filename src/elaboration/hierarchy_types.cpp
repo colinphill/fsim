@@ -6,6 +6,8 @@ using namespace runtime::simir;
 using namespace elaboration_detail;
 namespace {
 
+constexpr std::size_t specialization_cache_limit = 4U;
+
 void append_specialization_key_component(
     std::string& key,
     const std::string_view component)
@@ -613,6 +615,14 @@ SpecializedUnit HierarchyBuilder::specialize_selected_unit(
         association_language);
     if (const auto cached = specialized_unit_cache_.find(cache_key);
         cached != specialized_unit_cache_.end()) {
+        const auto retained = std::ranges::find(
+            cached_specialization_lru_, cache_key);
+        if (retained != cached_specialization_lru_.end()) {
+            std::rotate(
+                retained,
+                retained + 1,
+                cached_specialization_lru_.end());
+        }
         return cached->second;
     }
     PackageEnvironment interface_packages;
@@ -681,14 +691,14 @@ SpecializedUnit HierarchyBuilder::specialize_selected_unit(
     auto type_specialized = selected.language
             == frontend::Language::SystemVerilog2017
         ? specialize_systemverilog_type_parameters(
-              effective,
+              std::move(effective),
               normalized_overrides,
               parent_environment,
               parent_types,
               association_language,
               diagnostics_)
         : specialize_vhdl_interface_types(
-              effective,
+              std::move(effective),
               normalized_overrides,
               parent_environment,
               parent_domains,
@@ -713,6 +723,10 @@ SpecializedUnit HierarchyBuilder::specialize_selected_unit(
         false,
         parent_integral_environment,
         parent_functions);
+    // specialize_unit owns a complete copy of the transformed unit.  Keep the
+    // independently returned type/value metadata, but release the now-dead AST
+    // before local-package and generate expansion grow the final unit.
+    type_specialized.unit = { };
     if (selected.language
             == frontend::Language::SystemVerilog2017
         && type_specialized.applied) {
@@ -823,13 +837,24 @@ SpecializedUnit HierarchyBuilder::specialize_selected_unit(
         specialized, interface_packages);
     expand_vhdl_block_generates(specialized);
     if (diagnostics_.size() == diagnostics_before) {
-        const bool admit = selected.language
-                != frontend::Language::Vhdl2008
-            || !seen_vhdl_specialization_keys_.insert(
-                    cache_key).second;
+        // A one-use specialization only bloats the retained frontend model.
+        // Admit entries on reuse and keep a small working set for every HDL;
+        // the cache is an elaboration accelerator, not design state.
+        const bool admit = !seen_specialization_keys_.insert(
+            cache_key).second;
         if (admit) {
-            specialized_unit_cache_.try_emplace(
-                cache_key, specialized);
+            const auto inserted = specialized_unit_cache_.try_emplace(
+                cache_key, specialized).second;
+            if (inserted) {
+                cached_specialization_lru_.push_back(cache_key);
+                while (cached_specialization_lru_.size()
+                    > specialization_cache_limit) {
+                    specialized_unit_cache_.erase(
+                        cached_specialization_lru_.front());
+                    cached_specialization_lru_.erase(
+                        cached_specialization_lru_.begin());
+                }
+            }
         }
     }
     return specialized;
@@ -926,9 +951,18 @@ std::optional<SignalId> HierarchyBuilder::add_owned_signal(
         declaration.type.systemverilog_net_type,
         declaration.type.is_signed,
         declaration.type.packed_range,
-        declaration.type.vhdl_array,
-        declaration.type.vhdl_access,
-        declaration.type.vhdl_physical,
+        declaration.type.vhdl_array
+            ? std::make_shared<frontend::VhdlArrayInfo>(
+                  *declaration.type.vhdl_array)
+            : nullptr,
+        declaration.type.vhdl_access
+            ? std::make_shared<frontend::VhdlAccessInfo>(
+                  *declaration.type.vhdl_access)
+            : nullptr,
+        declaration.type.vhdl_physical
+            ? std::make_shared<frontend::VhdlPhysicalInfo>(
+                  *declaration.type.vhdl_physical)
+            : nullptr,
         declaration.type.packed_members,
         declaration.type.integer_range,
         declaration.type.nominal_type,

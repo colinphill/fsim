@@ -796,6 +796,40 @@ int main() {
                                          mismatch_diagnostics));
   assert(!std::filesystem::exists(mismatch_directory));
 
+  const auto generated_directory = directory.parent_path()
+      / (directory.filename().string() + "-generated");
+  const std::vector<fsim::library::PortablePayload> retained_payloads {
+      payloads.begin() + 1, payloads.end()
+  };
+  const std::vector<fsim::artifact::GeneratedDesignPayload>
+      generated_payloads { {
+          metadata.payloads.front().artifact,
+          metadata.payloads.front().checksum,
+          [&](const std::filesystem::path& path,
+              fsim::diagnostic::Engine&) {
+            std::ofstream output(path, std::ios::binary | std::ios::trunc);
+            output.write(state_bytes.data(),
+                static_cast<std::streamsize>(state_bytes.size()));
+            return static_cast<bool>(output);
+          } } };
+  fsim::diagnostic::Engine generated_diagnostics;
+  assert(fsim::artifact::publish_design(generated_directory, metadata,
+      retained_payloads, generated_payloads, generated_diagnostics));
+  assert(!generated_diagnostics.has_error());
+  {
+    std::ifstream input(
+        generated_directory / metadata.payloads.front().artifact,
+        std::ios::binary);
+    assert((std::string { std::istreambuf_iterator<char> { input },
+                std::istreambuf_iterator<char> { } }
+        == state_bytes));
+  }
+  make_tree_writable(generated_directory);
+  std::error_code generated_cleanup_error;
+  std::filesystem::remove_all(
+      generated_directory, generated_cleanup_error);
+  assert(!generated_cleanup_error);
+
   make_tree_writable(directory);
   std::error_code cleanup_error;
   std::filesystem::remove_all(directory, cleanup_error);

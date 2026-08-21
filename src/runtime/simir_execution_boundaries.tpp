@@ -70,7 +70,8 @@ void Interpreter::Impl::handle_boundary(
         fail(process, "executor returned an invalid boundary instruction");
     }
 
-    const auto& operation = process.program.operations[instruction];
+    const auto& operation
+        = std::as_const(process.program.operations)[instruction];
     const auto* dynamic_call = fsim::runtime::simir::operation_get_if<Call>(&operation);
     const auto* dynamic_return = fsim::runtime::simir::operation_get_if<Return>(&operation);
     const auto* frame_push = fsim::runtime::simir::operation_get_if<CallableFramePush>(&operation);
@@ -341,11 +342,14 @@ void Interpreter::Impl::handle_boundary(
         return;
     }
     if (const auto* point = fsim::runtime::simir::operation_get_if<DebugPoint>(&operation)) {
+        const auto& actual_point = process.program.operations.debug_point(
+            instruction, *point);
         clear_wait_timeout(process);
-        process.current_source = point->source;
-        process.current_scope = point->scope;
+        process.current_source = actual_point.source;
+        process.current_scope = process.program.operations.debug_scope(
+            actual_point.scope);
         auto kind = ExecutionPointKind::statement;
-        switch (point->kind) {
+        switch (actual_point.kind) {
         case DebugPointKind::statement:
             kind = ExecutionPointKind::statement;
             break;
@@ -474,7 +478,8 @@ void Interpreter::Impl::handle_boundary(
                     "WaitOn timeout origin must precede its rearm");
             }
             const auto* origin = fsim::runtime::simir::operation_get_if<WaitOn>(
-                &process.program.operations[*wait->timeout_origin]);
+                &std::as_const(process.program.operations)[
+                    *wait->timeout_origin]);
             if (origin == nullptr
                 || !origin->timeout
                 || origin->timeout_origin

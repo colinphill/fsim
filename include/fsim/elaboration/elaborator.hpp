@@ -202,9 +202,13 @@ struct SignalInfo {
     std::string systemverilog_net_type;
     bool is_signed { };
     std::optional<frontend::PackedRange> packed_range;
-    std::optional<frontend::VhdlArrayInfo> vhdl_array;
-    std::optional<frontend::VhdlAccessInfo> vhdl_access;
-    std::optional<frontend::VhdlPhysicalInfo> vhdl_physical;
+    // VHDL-only type metadata is large (physical-type metadata alone exceeds
+    // one KiB) and absent from the overwhelmingly common scalar/SV signal.
+    // Box it so every SignalInfo does not reserve storage for inactive
+    // language-specific alternatives.
+    std::shared_ptr<frontend::VhdlArrayInfo> vhdl_array;
+    std::shared_ptr<frontend::VhdlAccessInfo> vhdl_access;
+    std::shared_ptr<frontend::VhdlPhysicalInfo> vhdl_physical;
     std::vector<frontend::PackedMember> packed_members;
     std::optional<frontend::IntegerRange> integer_range;
     std::string nominal_type;
@@ -561,7 +565,11 @@ public:
         runtime::SchedulerOptions options = { },
         std::uint64_t seed = 1) &&;
 
-    [[nodiscard]] ElaboratedDesignState state() const;
+    [[nodiscard]] ElaboratedDesignState state() const &;
+    /// Transfer the complete portable state out of a design that has reached
+    /// its final ownership boundary. This avoids duplicating every process
+    /// program while publishing a standalone design artifact.
+    [[nodiscard]] ElaboratedDesignState state() &&;
     [[nodiscard]] static std::optional<ElaboratedDesign> from_state(
         ElaboratedDesignState state);
 

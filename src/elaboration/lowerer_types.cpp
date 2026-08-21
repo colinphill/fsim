@@ -1717,7 +1717,7 @@ void Lowerer::initialize_variables(
                 handle,
                 32,
                 SourceLocation {
-                    variable.span.source_name,
+                    variable.span.source_name.str(),
                     static_cast<std::uint32_t>(
                         variable.span.begin.line),
                     static_cast<std::uint32_t>(
@@ -1789,7 +1789,7 @@ void Lowerer::initialize_variables(
                     register_id,
                     *type,
                     SourceLocation {
-                        variable.span.source_name,
+                        variable.span.source_name.str(),
                         static_cast<std::uint32_t>(
                             variable.span.begin.line),
                         static_cast<std::uint32_t>(
@@ -1848,7 +1848,7 @@ void Lowerer::initialize_variables(
                     scoped_local_name(variable.name),
                     register_id,
                     SourceLocation {
-                        variable.span.source_name,
+                        variable.span.source_name.str(),
                         static_cast<std::uint32_t>(
                             variable.span.begin.line),
                         static_cast<std::uint32_t>(
@@ -1906,7 +1906,7 @@ void Lowerer::initialize_variables(
                 register_id,
                 *width,
                 SourceLocation {
-                    variable.span.source_name,
+                    variable.span.source_name.str(),
                     static_cast<std::uint32_t>(
                         variable.span.begin.line),
                     static_cast<std::uint32_t>(

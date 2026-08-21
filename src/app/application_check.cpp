@@ -85,9 +85,10 @@ bool validate_uvm_api_release(
 
 }  // namespace
 
-std::optional<CheckedProject> check_project(
+static std::optional<CheckedProject> check_project_impl(
     const project::Config& config,
-    diagnostic::Engine& diagnostics) {
+    diagnostic::Engine& diagnostics,
+    const bool build_semantic_projection) {
   const auto uvm_release = selected_uvm_release(config, diagnostics);
   if (!uvm_release) {
     return std::nullopt;
@@ -641,26 +642,42 @@ std::optional<CheckedProject> check_project(
   if (diagnostics.has_error()) {
     return std::nullopt;
   }
-  checked.semantics = build_semantic_model(
-      checked.parsed,
-      checked.hdl_sources,
-      checked.systemc_sources,
-      checked.standard_sources);
-  checked.vhdl_hir = build_vhdl_hir(checked.parsed, checked.semantics);
-  checked.systemverilog_hir = build_systemverilog_hir(
-      checked.parsed,
-      checked.semantics,
-      checked.systemverilog_class_specializations);
-  if (!checked.semantics.valid()) {
-    diagnostics.error(
-        "FSIM-SEM-0001",
-        "source analysis produced an invalid owning semantic projection");
-    return std::nullopt;
+  if (build_semantic_projection) {
+    checked.semantics = build_semantic_model(
+        checked.parsed,
+        checked.hdl_sources,
+        checked.systemc_sources,
+        checked.standard_sources);
+    checked.vhdl_hir = build_vhdl_hir(checked.parsed, checked.semantics);
+    checked.systemverilog_hir = build_systemverilog_hir(
+        checked.parsed,
+        checked.semantics,
+        checked.systemverilog_class_specializations);
+    if (!checked.semantics.valid()) {
+      diagnostics.error(
+          "FSIM-SEM-0001",
+          "source analysis produced an invalid owning semantic projection");
+      return std::nullopt;
+    }
   }
   checked.systemverilog_uvm_provenance.release = *uvm_release;
   checked.systemverilog_uvm_provenance.source_identity =
       uvm_source_identity(*uvm_release, checked.hdl_sources);
   return checked;
+}
+
+std::optional<CheckedProject> check_project(
+    const project::Config& config,
+    diagnostic::Engine& diagnostics)
+{
+  return check_project_impl(config, diagnostics, true);
+}
+
+std::optional<CheckedProject> application_detail::check_project_for_object(
+    const project::Config& config,
+    diagnostic::Engine& diagnostics)
+{
+  return check_project_impl(config, diagnostics, false);
 }
 
 

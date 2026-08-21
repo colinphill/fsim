@@ -26,8 +26,8 @@ struct ScopeRandomizeTarget {
 /// lvalues by the ordinary callable-association path after this operation.
 struct ScopeRandomize {
   RegisterId destination{};
-  std::vector<ScopeRandomizeTarget> targets;
-  std::vector<SystemVerilogConstraintTemplate> inline_constraints { };
+  RareVector<ScopeRandomizeTarget> targets;
+  RareVector<SystemVerilogConstraintTemplate> inline_constraints { };
   std::size_t maximum_domain_values{
       std::numeric_limits<std::size_t>::max()};
 };

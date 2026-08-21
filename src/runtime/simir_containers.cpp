@@ -800,7 +800,8 @@ void Interpreter::Impl::execute_container(
         false, "dynamic-array size");
     const ContainerValue* initializer { };
     if (operation.initializer) {
-        const auto& source = get_container_register(process, *operation.initializer);
+        const auto& source = read_container_register(
+            process, *operation.initializer);
         if (source.type != target.type) {
             container_error(
                 process.program.id, process.pc,
@@ -822,7 +823,7 @@ void Interpreter::Impl::execute_container(
     const CopyContainerRegister& operation)
 {
     auto& destination = get_container_register(process, operation.destination);
-    const auto& source = get_container_register(process, operation.source);
+    const auto& source = read_container_register(process, operation.source);
     require_same_type(
         process.program.id, process.pc,
         destination.type, source.type);
@@ -835,8 +836,8 @@ void Interpreter::Impl::execute_container(
     const ConditionalContainerSelect& operation)
 {
     auto& destination = get_container_register(process, operation.destination);
-    const auto& when_true = get_container_register(process, operation.when_true);
-    const auto& when_false = get_container_register(process, operation.when_false);
+    const auto& when_true = read_container_register(process, operation.when_true);
+    const auto& when_false = read_container_register(process, operation.when_false);
     const auto& condition = get_register(process, operation.condition);
     try {
         select_container_value(
@@ -854,8 +855,8 @@ void Interpreter::Impl::execute_container(
 {
     try {
         get_register(process, operation.destination) = compare_container_values(
-            get_container_register(process, operation.lhs),
-            get_container_register(process, operation.rhs),
+            read_container_register(process, operation.lhs),
+            read_container_register(process, operation.rhs),
             operation.case_equal);
     } catch (const std::exception& error) {
         container_error(
@@ -881,7 +882,7 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const WriteContainerObject& operation)
 {
-    const auto& source = get_container_register(process, operation.source);
+    const auto& source = read_container_register(process, operation.source);
     try {
         write_container_object_value(
             operation.object, source);
@@ -902,7 +903,7 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const ContainerSize& operation)
 {
-    const auto size = container_value_size(get_container_register(
+    const auto size = container_value_size(read_container_register(
         process, operation.source));
     get_register(process, operation.destination) = PackedLogic4::from_aval_bval(32, size, 0);
     ++process.pc;
@@ -913,7 +914,7 @@ void Interpreter::Impl::execute_container(
     const ContainerReduction& operation)
 {
     get_register(process, operation.destination) = reduce_container_value(
-        get_container_register(process, operation.source),
+        read_container_register(process, operation.source),
         operation.operation, operation.transformation);
     ++process.pc;
 }
@@ -934,7 +935,7 @@ void Interpreter::Impl::execute_container(
     const LocateContainer& operation)
 {
     auto& destination = get_container_register(process, operation.destination);
-    const auto& source = get_container_register(process, operation.source);
+    const auto& source = read_container_register(process, operation.source);
     locate_container_values(
         destination, source, operation.operation,
         operation.predicate, operation.transformation);
@@ -945,7 +946,7 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const ContainerRead& operation)
 {
-    const auto& source = get_container_register(process, operation.source);
+    const auto& source = read_container_register(process, operation.source);
     if (source.type.associative) {
         if (operation.string_index) {
             const auto& key = associative_string_key(
@@ -1141,7 +1142,7 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const ContainerStringRead& operation)
 {
-    const auto& source = get_container_register(process, operation.source);
+    const auto& source = read_container_register(process, operation.source);
     if (source.type.element_kind != ContainerElementKind::String) {
         container_error(
             process.program.id, process.pc,
@@ -1273,7 +1274,7 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const ContainerElementRead& operation)
 {
-    const auto& source = get_container_register(process, operation.source);
+    const auto& source = read_container_register(process, operation.source);
     if (source.type.element_kind != ContainerElementKind::Container
         || source.type.element_types.size() != 1) {
         container_error(
@@ -1325,7 +1326,7 @@ void Interpreter::Impl::execute_container(
     const ContainerElementWrite& operation)
 {
     auto& target = get_container_register(process, operation.target);
-    const auto& source = get_container_register(process, operation.source);
+    const auto& source = read_container_register(process, operation.source);
     if (target.type.element_kind != ContainerElementKind::Container
         || target.type.element_types.size() != 1
         || target.type.element_types.front() != source.type) {
@@ -1375,7 +1376,7 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const ContainerAggregateRead& operation)
 {
-    const auto& source = get_container_register(process, operation.source);
+    const auto& source = read_container_register(process, operation.source);
     if (source.type.element_kind != ContainerElementKind::Aggregate
         || operation.members.empty()) {
         container_error(
@@ -1530,7 +1531,7 @@ void Interpreter::Impl::execute_container(
     const CopyContainerAggregateElement& operation)
 {
     auto& target = get_container_register(process, operation.target);
-    const auto& source = get_container_register(process, operation.source);
+    const auto& source = read_container_register(process, operation.source);
     if (target.type != source.type
         || target.type.element_kind != ContainerElementKind::Aggregate) {
         container_error(
@@ -1846,7 +1847,7 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const ContainerExists& operation)
 {
-    const auto& source = get_container_register(process, operation.source);
+    const auto& source = read_container_register(process, operation.source);
     require_associative(
         process.program.id, process.pc, source, "exists(index)");
     if (operation.string_index) {
@@ -1873,7 +1874,7 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const TraverseContainer& operation)
 {
-    const auto& source = get_container_register(process, operation.source);
+    const auto& source = read_container_register(process, operation.source);
     require_associative(
         process.program.id, process.pc, source,
         "first/last/next/prev");

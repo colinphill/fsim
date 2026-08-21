@@ -125,7 +125,7 @@ bool compile_object(
     return false;
   }
   const auto& source_set = config.source_sets.front();
-  auto checked = check_project(config, diagnostics);
+  auto checked = check_project_for_object(config, diagnostics);
   if (!checked.has_value()) {
     return false;
   }
@@ -211,13 +211,12 @@ bool compile_object(
   }
 
   std::size_t unit_index = 0;
-  for (const auto& original : checked->parsed.units) {
-    const auto unit_library = original.library.empty()
-        ? std::string_view{"work"} : std::string_view{original.library};
+  for (auto& unit : checked->parsed.units) {
+    const auto unit_library = unit.library.empty()
+        ? std::string_view{"work"} : std::string_view{unit.library};
     if (unit_library != source_set.library) {
       continue;
     }
-    auto unit = original;
     // Class resolution has copied every valid out-of-block method body into
     // its package-owned class declaration.  Do not archive the raw definition
     // list too, because object loading performs semantic resolution again.
@@ -235,7 +234,13 @@ bool compile_object(
     if (!library::relocate_unit_sources(unit, source_mappings, diagnostics)) {
       return false;
     }
-    auto bytes = library::serialize_portable_unit(unit, diagnostics);
+    const auto language = unit_language(unit);
+    const auto kind = unit_kind(unit.kind);
+    const auto name = unit.name;
+    const auto primary_name = unit.primary_name;
+    const auto architecture = unit.kind == frontend::UnitKind::VhdlArchitecture
+        ? unit.name : std::string{};
+    auto bytes = library::serialize_portable_unit(std::move(unit), diagnostics);
     if (!bytes.has_value()) {
       return false;
     }
@@ -244,25 +249,25 @@ bool compile_object(
     const auto checksum = support::Sha256::hex(
         support::Sha256::digest(*bytes));
     metadata.units.push_back({
-        unit_language(unit), unit_kind(unit.kind), unit.name,
-        unit.primary_name,
-        unit.kind == frontend::UnitKind::VhdlArchitecture
-            ? unit.name : std::string{},
+        language, kind, name, primary_name, architecture,
         path, checksum, metadata.standard, metadata.compatibility_profile});
     payloads.push_back({path, std::move(*bytes)});
   }
-  for (const auto& original : checked->parsed.udp_declarations) {
-    const auto unit_library = original.library.empty()
-        ? std::string_view{"work"} : std::string_view{original.library};
+  for (auto& declaration : checked->parsed.udp_declarations) {
+    const auto unit_library = declaration.library.empty()
+        ? std::string_view{"work"} : std::string_view{declaration.library};
     if (unit_library != source_set.library) {
       continue;
     }
-    auto declaration = original;
     if (!library::relocate_udp_sources(
             declaration, source_mappings, diagnostics)) {
       return false;
     }
-    auto bytes = library::serialize_portable_udp(declaration, diagnostics);
+    const auto language = declaration.language == frontend::Language::Verilog2005
+        ? std::string{"verilog"} : std::string{"systemverilog"};
+    const auto name = declaration.name;
+    auto bytes = library::serialize_portable_udp(
+        std::move(declaration), diagnostics);
     if (!bytes.has_value()) {
       return false;
     }
@@ -271,14 +276,12 @@ bool compile_object(
     const auto checksum = support::Sha256::hex(
         support::Sha256::digest(*bytes));
     metadata.units.push_back({
-        declaration.language == frontend::Language::Verilog2005
-            ? "verilog" : "systemverilog",
-        "primitive", declaration.name, {}, {}, path, checksum,
+        language, "primitive", name, {}, {}, path, checksum,
         metadata.standard, metadata.compatibility_profile});
     payloads.push_back({path, std::move(*bytes)});
   }
   std::map<std::string, library::PortableSystemVerilogClassUnit> class_units;
-  for (const auto& declaration : checked->parsed.systemverilog_classes) {
+  for (auto& declaration : checked->parsed.systemverilog_classes) {
     const auto declaration_library = declaration.library.empty()
         ? std::string_view{"work"} : std::string_view{declaration.library};
     if (declaration_library != source_set.library) continue;
@@ -286,7 +289,7 @@ bool compile_object(
     unit.library = std::string{declaration_library};
     unit.compilation_unit_identity = declaration.compilation_unit_identity;
     unit.uvm_release = metadata.uvm_release;
-    unit.declarations.push_back(declaration);
+    unit.declarations.push_back(std::move(declaration));
   }
   // Class resolution has already transactionally linked every valid
   // out-of-block definition into its owning declaration.  Persisting the raw
@@ -303,7 +306,7 @@ bool compile_object(
       return false;
     }
     auto bytes = library::serialize_portable_class_unit(
-        class_unit, diagnostics);
+        std::move(class_unit), diagnostics);
     if (!bytes) return false;
     const auto path = std::filesystem::path{indexed_path(
         "units", unit_index++, ".fsimclass")};

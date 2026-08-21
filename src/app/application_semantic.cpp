@@ -422,7 +422,7 @@ semantic::SourceSpanId intern_semantic_span(
       *file,
       source_span.source_name.empty()
           ? physical
-          : source_span.source_name,
+          : source_span.source_name.str(),
       begin,
       end,
       expansion);

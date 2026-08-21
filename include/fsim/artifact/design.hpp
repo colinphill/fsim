@@ -7,7 +7,9 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -94,6 +96,16 @@ struct DesignPayload {
   friend bool operator==(const DesignPayload&, const DesignPayload&) = default;
 };
 
+/// A payload produced directly in the artifact staging tree. The checksum is
+/// established before publication and verified again from the generated file,
+/// so large payloads need not be retained in memory.
+struct GeneratedDesignPayload {
+  std::filesystem::path path;
+  std::string checksum;
+  std::function<bool(
+      const std::filesystem::path&, diagnostic::Engine&)> write;
+};
+
 struct DesignSystemCPlugin {
   std::string logical_library;
   std::string input_digest;
@@ -160,6 +172,12 @@ struct DesignMetadata {
     const std::filesystem::path& destination,
     const DesignMetadata& metadata,
     const std::vector<library::PortablePayload>& payloads,
+    diagnostic::Engine& diagnostics);
+[[nodiscard]] bool publish_design(
+    const std::filesystem::path& destination,
+    const DesignMetadata& metadata,
+    const std::vector<library::PortablePayload>& payloads,
+    std::span<const GeneratedDesignPayload> generated_payloads,
     diagnostic::Engine& diagnostics);
 
 }  // namespace fsim::artifact

@@ -269,11 +269,16 @@ DebuggerSession::DebuggerSession(
       retain_scope(process.name);
       const auto& runtime_process =
           simulation.process_program(process.runtime_index);
-      for (const auto& operation : runtime_process.operations) {
+      for (std::size_t instruction = 0;
+           instruction < runtime_process.operations.size();
+           ++instruction) {
+        const auto& operation = runtime_process.operations[instruction];
         if (const auto* point =
                 runtime::simir::operation_get_if<
                     runtime::simir::DebugPoint>(&operation)) {
-          retain_scope(point->scope);
+          const auto& actual = runtime_process.operations.debug_point(
+              instruction, *point);
+          retain_scope(runtime_process.operations.debug_scope(actual.scope));
         }
       }
     }

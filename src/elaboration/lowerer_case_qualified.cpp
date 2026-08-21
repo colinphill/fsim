@@ -390,7 +390,7 @@ void Lowerer::lower_qualified_case(const Statement& statement) {
   }
 
   const auto source = SourceLocation{
-      statement.span.source_name,
+      statement.span.source_name.str(),
       static_cast<std::uint32_t>(statement.span.begin.line),
       static_cast<std::uint32_t>(statement.span.begin.column)};
   const auto warn_if = [&](const RegisterId condition,

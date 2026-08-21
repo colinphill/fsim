@@ -942,7 +942,7 @@ void Interpreter::Impl::execute_file(
         };
         std::optional<ContainerValue> container;
         if (operation.target_kind == FileBinaryTargetKind::container_register) {
-            container = get_container_register(process, operation.target);
+            container = read_container_register(process, operation.target);
         } else if (operation.target_kind
             == FileBinaryTargetKind::container_object) {
             container = read_container_object_value(operation.target);

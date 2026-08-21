@@ -330,7 +330,7 @@ namespace {
         result.pulse_error_delays = path.pulse_error_delays;
         result.retain_delays = path.retain_delays;
         result.source = runtime::simir::SourceLocation {
-            path.source.source_name,
+            path.source.source_name.str(),
             static_cast<std::uint32_t>(path.source.begin.line),
             static_cast<std::uint32_t>(path.source.begin.column)
         };

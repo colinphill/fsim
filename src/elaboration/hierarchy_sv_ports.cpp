@@ -582,7 +582,7 @@ void HierarchyBuilder::validate_boundary_type(
     return;
   }
   const bool port_array = port.type.vhdl_array.has_value();
-  const bool actual_array = actual.vhdl_array.has_value();
+  const bool actual_array = static_cast<bool>(actual.vhdl_array);
   if (cross_language && (port_array || actual_array)) {
     report(
         "FSIM-ELAB-BIND-055",

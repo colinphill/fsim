@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -48,7 +49,7 @@ public:
     [[nodiscard]] static PackedBit2 from_msb_string(std::string_view value);
 
     [[nodiscard]] std::size_t width() const noexcept { return width_; }
-    [[nodiscard]] bool empty() const noexcept { return width_ == 0; }
+    [[nodiscard]] bool empty() const noexcept { return width() == 0; }
     [[nodiscard]] bool get(std::size_t index) const;
     void set(std::size_t index, bool value);
     void fill(bool value) noexcept;
@@ -100,9 +101,15 @@ public:
     [[nodiscard]] static PackedLogic4
     from_logic9_word(const Logic9Word& value);
 
-    [[nodiscard]] std::size_t width() const noexcept { return width_; }
-    [[nodiscard]] bool empty() const noexcept { return width_ == 0; }
-    [[nodiscard]] bool is_logic9() const noexcept { return logic9_; }
+    [[nodiscard]] std::size_t width() const noexcept
+    {
+        return width_and_logic9_ & ~logic9_mask;
+    }
+    [[nodiscard]] bool empty() const noexcept { return width() == 0; }
+    [[nodiscard]] bool is_logic9() const noexcept
+    {
+        return (width_and_logic9_ & logic9_mask) != 0U;
+    }
     [[nodiscard]] Logic4 get(std::size_t index) const;
     [[nodiscard]] Logic9 get_logic9(std::size_t index) const;
     void set(std::size_t index, Logic4 value);
@@ -157,7 +164,7 @@ public:
     /// nonempty Logic4 width no greater than 64 bits.
     [[nodiscard]] Logic4Word unchecked_low_word() const noexcept
     {
-        return { width_, inline_aval_, inline_bval_ };
+        return { width(), inline_aval_, inline_bval_ };
     }
     [[nodiscard]] Logic9Word logic9_low_word() const;
     [[nodiscard]] PackedLogic4 promoted_to_logic9() const;
@@ -179,6 +186,53 @@ private:
         std::vector<std::uint64_t> logic9_plane3;
     };
 
+    struct InlineExtraStorage {
+        std::uint64_t logic9_plane2 { };
+        std::uint64_t logic9_plane3 { };
+    };
+
+    union ExtraStorage {
+        InlineExtraStorage inline_storage;
+        std::shared_ptr<WideStorage> wide;
+
+        ExtraStorage() noexcept { }
+        ~ExtraStorage() noexcept { }
+    };
+
+    [[nodiscard]] std::shared_ptr<WideStorage>& wide_storage()
+    {
+        return extra_.wide;
+    }
+    [[nodiscard]] const std::shared_ptr<WideStorage>& wide_storage() const
+    {
+        return extra_.wide;
+    }
+    [[nodiscard]] std::uint64_t& inline_logic9_plane2()
+    {
+        return extra_.inline_storage.logic9_plane2;
+    }
+    [[nodiscard]] const std::uint64_t& inline_logic9_plane2() const
+    {
+        return extra_.inline_storage.logic9_plane2;
+    }
+    [[nodiscard]] std::uint64_t& inline_logic9_plane3()
+    {
+        return extra_.inline_storage.logic9_plane3;
+    }
+    [[nodiscard]] const std::uint64_t& inline_logic9_plane3() const
+    {
+        return extra_.inline_storage.logic9_plane3;
+    }
+
+    void set_logic9(const bool enabled) noexcept
+    {
+        if (enabled) {
+            width_and_logic9_ |= logic9_mask;
+        } else {
+            width_and_logic9_ &= ~logic9_mask;
+        }
+    }
+
     void ensure_unique_wide();
     void promote_to_logic9();
     [[nodiscard]] std::span<std::uint64_t>
@@ -191,13 +245,13 @@ private:
     mutable_logic9_plane(std::size_t index);
     void mask_unused_bits();
 
-    std::size_t width_ { };
-    bool logic9_ { };
+    static constexpr std::size_t logic9_mask
+        = std::size_t { 1 }
+        << (std::numeric_limits<std::size_t>::digits - 1U);
+    std::size_t width_and_logic9_ { };
     std::uint64_t inline_aval_ { };
     std::uint64_t inline_bval_ { };
-    std::uint64_t inline_logic9_plane2_ { };
-    std::uint64_t inline_logic9_plane3_ { };
-    std::shared_ptr<WideStorage> wide_;
+    ExtraStorage extra_;
 };
 
 /// Preferred name for the common packed transport value. PackedLogic4 remains

@@ -767,7 +767,7 @@ void Lowerer::lower_procedure_body(
             frame.arguments[index],
             static_cast<std::size_t>(*argument.type.width()),
             SourceLocation {
-                argument.span.source_name,
+                argument.span.source_name.str(),
                 static_cast<std::uint32_t>(
                     argument.span.begin.line),
                 static_cast<std::uint32_t>(

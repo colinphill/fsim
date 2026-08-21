@@ -39,7 +39,7 @@ std::optional<std::uint16_t> timing_edge(
 
 SourceLocation timing_source(const frontend::SourceSpan& span) {
   return SourceLocation{
-      span.source_name,
+      span.source_name.str(),
       static_cast<std::uint32_t>(span.begin.line),
       static_cast<std::uint32_t>(span.begin.column)};
 }

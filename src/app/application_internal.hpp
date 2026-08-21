@@ -336,8 +336,14 @@ public:
     void write_container_register(
         runtime::simir::ContainerRegisterId id,
         const runtime::simir::ContainerValue& value) override;
+    void write_container_register_storage(
+        runtime::simir::ContainerRegisterId id,
+        std::shared_ptr<runtime::simir::ContainerValue> value) override;
 
 private:
+    static constexpr runtime::simir::ContainerObjectId invalid_container_object
+        = std::numeric_limits<runtime::simir::ContainerObjectId>::max();
+
     struct FrameStorage {
         std::vector<std::uint64_t> register_aval;
         std::vector<std::uint64_t> register_bval;
@@ -345,9 +351,10 @@ private:
         std::vector<std::uint64_t> register_logic9_plane3;
         std::vector<std::uint8_t> register_initialized;
         std::vector<std::string> string_registers;
-        std::vector<runtime::simir::ContainerValue> container_registers;
-        std::vector<std::optional<runtime::simir::ContainerObjectId>>
-            container_object_aliases;
+        std::vector<std::shared_ptr<runtime::simir::ContainerValue>>
+            container_registers;
+        std::vector<std::uint8_t> container_register_shared;
+        std::vector<runtime::simir::ContainerObjectId> container_object_aliases;
         std::vector<runtime::simir::ContainerRegisterId>
             active_container_object_aliases;
         std::vector<runtime::simir::VitalMemoryState> vital_memories;
@@ -984,9 +991,10 @@ private:
     std::vector<std::uint64_t>& register_logic9_plane3_;
     std::vector<std::uint8_t>& register_initialized_;
     std::vector<std::string>& string_registers_;
-    std::vector<runtime::simir::ContainerValue>& container_registers_;
-    std::vector<std::optional<runtime::simir::ContainerObjectId>>&
-        container_object_aliases_;
+    std::vector<std::shared_ptr<runtime::simir::ContainerValue>>&
+        container_registers_;
+    std::vector<std::uint8_t>& container_register_shared_;
+    std::vector<runtime::simir::ContainerObjectId>& container_object_aliases_;
     std::vector<runtime::simir::ContainerRegisterId>&
         active_container_object_aliases_;
     std::vector<std::uint32_t> direct_read_signals_;
@@ -994,6 +1002,7 @@ private:
     std::vector<fsim_jit_update_slot_v1> direct_update_slots_;
     std::uint64_t direct_update_writer_revision_
         { std::numeric_limits<std::uint64_t>::max() };
+    bool stable_direct_update_suppression_allowed_ { true };
     std::vector<std::uint64_t> direct_update_active_words_;
     std::vector<std::uint64_t> direct_update_wide_aval_;
     std::vector<std::uint64_t> direct_update_wide_bval_;
@@ -1393,6 +1402,7 @@ struct HdlVcdState {
     SimulationTick tick_multiplier { 1 };
     std::optional<SimulationTick> dumpvars_time;
     std::optional<std::uint64_t> byte_limit;
+    bool inventory_initialized { };
     bool begun { };
     bool enabled { true };
     bool limit_reached { };
@@ -1489,6 +1499,10 @@ int run_built_project(
 bool compile_object(
     const project::Config& config,
     const std::filesystem::path& destination,
+    diagnostic::Engine& diagnostics);
+
+std::optional<CheckedProject> check_project_for_object(
+    const project::Config& config,
     diagnostic::Engine& diagnostics);
 
 int handle_compile(

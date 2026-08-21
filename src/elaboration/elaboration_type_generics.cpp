@@ -1477,4 +1477,49 @@ InterfaceTypeSpecialization specialize_vhdl_interface_types(
     return result;
 }
 
+InterfaceTypeSpecialization specialize_vhdl_interface_types(
+    DesignUnit&& source,
+    const std::vector<frontend::ParameterOverride>& overrides,
+    const ConstantEnvironment& parent_environment,
+    const ConstantDomainEnvironment& parent_domains,
+    const NamedTypeEnvironment& parent_types,
+    const std::vector<frontend::FunctionDeclaration>& parent_functions,
+    const std::vector<frontend::ProcedureDeclaration>& parent_procedures,
+    const frontend::Language association_language,
+    std::vector<Diagnostic>& diagnostics)
+{
+    const bool has_interface_formals = std::ranges::any_of(
+        source.parameters,
+        [](const auto& parameter) {
+            return !parameter.local
+                && parameter.kind != frontend::ParameterKind::Value;
+        });
+    if (has_interface_formals) {
+        return specialize_vhdl_interface_types(
+            static_cast<const DesignUnit&>(source),
+            overrides,
+            parent_environment,
+            parent_domains,
+            parent_types,
+            parent_functions,
+            parent_procedures,
+            association_language,
+            diagnostics);
+    }
+
+    InterfaceTypeSpecialization result;
+    result.unit = std::move(source);
+    for (const auto& actual : overrides) {
+        if (actual.type_value) {
+            diagnostics.push_back({ "FSIM-ELAB-GENTYPE-005",
+                "a value generic cannot receive a subtype-indication "
+                "actual",
+                actual.span });
+        } else {
+            result.value_overrides.push_back(actual);
+        }
+    }
+    return result;
+}
+
 } // namespace fsim::elaboration::elaboration_detail

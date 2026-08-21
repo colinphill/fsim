@@ -1335,20 +1335,23 @@ void lower_process(llvm::Module& module, const std::string& symbol,
     }
     auto* local_register_type = llvm::ArrayType::get(
         i64, std::max<std::uint64_t>(register_word_count, 1U));
-    llvm::Value* register_aval = nullptr;
-    llvm::Value* register_bval = nullptr;
+    llvm::Value* frame_register_aval = nullptr;
+    llvm::Value* frame_register_bval = nullptr;
+    if (!transient_register_frame || validated.uses_exact_signal_operation) {
+        frame_register_aval = builder.CreateLoad(
+            pointer, builder.CreateStructGEP(frame_type, frame_argument, 8),
+            "register.aval.base");
+        frame_register_bval = builder.CreateLoad(
+            pointer, builder.CreateStructGEP(frame_type, frame_argument, 9),
+            "register.bval.base");
+    }
+    llvm::Value* register_aval = frame_register_aval;
+    llvm::Value* register_bval = frame_register_bval;
     if (transient_register_frame && !split_transient_register_frame) {
         register_aval = builder.CreateAlloca(
             local_register_type, nullptr, "register.aval.local");
         register_bval = builder.CreateAlloca(
             local_register_type, nullptr, "register.bval.local");
-    } else if (!transient_register_frame) {
-        register_aval = builder.CreateLoad(
-            pointer, builder.CreateStructGEP(frame_type, frame_argument, 8),
-            "register.aval.base");
-        register_bval = builder.CreateLoad(
-            pointer, builder.CreateStructGEP(frame_type, frame_argument, 9),
-            "register.bval.base");
     }
     llvm::Value* register_initialized = nullptr;
     if (debug_instrumentation || !process.debug_locals.empty()) {
@@ -1356,26 +1359,32 @@ void lower_process(llvm::Module& module, const std::string& symbol,
             pointer, builder.CreateStructGEP(frame_type, frame_argument, 10),
             "register.initialized.base");
     }
-    llvm::Value* register_logic9_plane2 = nullptr;
-    llvm::Value* register_logic9_plane3 = nullptr;
+    llvm::Value* frame_register_logic9_plane2 = nullptr;
+    llvm::Value* frame_register_logic9_plane3 = nullptr;
+    if ((!transient_register_frame
+            || validated.uses_exact_signal_operation)
+        && validated.uses_logic9) {
+        frame_register_logic9_plane2 = builder.CreateLoad(
+            pointer,
+            builder.CreateStructGEP(frame_type, frame_argument, 11),
+            "register.logic9.plane2.base");
+        frame_register_logic9_plane3 = builder.CreateLoad(
+            pointer,
+            builder.CreateStructGEP(frame_type, frame_argument, 12),
+            "register.logic9.plane3.base");
+    }
+    llvm::Value* register_logic9_plane2 = frame_register_logic9_plane2;
+    llvm::Value* register_logic9_plane3 = frame_register_logic9_plane3;
     if (transient_register_frame && !split_transient_register_frame
         && validated.uses_logic9) {
         register_logic9_plane2 = builder.CreateAlloca(
             local_register_type, nullptr, "register.logic9.plane2.local");
         register_logic9_plane3 = builder.CreateAlloca(
             local_register_type, nullptr, "register.logic9.plane3.local");
-    } else if (!transient_register_frame) {
-        register_logic9_plane2 = builder.CreateLoad(
-            pointer,
-            builder.CreateStructGEP(frame_type, frame_argument, 11),
-            "register.logic9.plane2.base");
-        register_logic9_plane3 = builder.CreateLoad(
-            pointer,
-            builder.CreateStructGEP(frame_type, frame_argument, 12),
-            "register.logic9.plane3.base");
     }
     auto* i8 = llvm::Type::getInt8Ty(context);
     std::vector<RegisterSlot> registers(process.register_count);
+    std::vector<RegisterSlot> frame_registers(process.register_count);
     std::uint64_t register_word_offset { };
     for (std::size_t index = 0; index < process.register_count; ++index) {
         const auto width = validated.register_widths[index];
@@ -1426,6 +1435,17 @@ void lower_process(llvm::Module& module, const std::string& symbol,
             plane2_base,
             plane3_base,
             word_offset,
+            static_cast<std::uint32_t>(index),
+            width,
+            kind,
+        };
+        frame_registers[index] = {
+            frame_register_aval,
+            frame_register_bval,
+            register_initialized,
+            frame_register_logic9_plane2,
+            frame_register_logic9_plane3,
+            register_word_offset,
             static_cast<std::uint32_t>(index),
             width,
             kind,
@@ -2103,6 +2123,20 @@ void lower_process(llvm::Module& module, const std::string& symbol,
                 builder.SetInsertPoint(continue_block);
             };
         const auto execute_exact_signal = [&] {
+            for (const auto register_id :
+                validated.instruction_uses[index]) {
+                const auto& source = registers[register_id];
+                const auto& destination = frame_registers[register_id];
+                if (source.aval_base == destination.aval_base
+                    && source.word_offset == destination.word_offset) {
+                    continue;
+                }
+                store_register(
+                    builder,
+                    frame_registers,
+                    register_id,
+                    load_register(builder, registers, register_id));
+            }
             auto* status = builder.CreateCall(
                 exact_signal_type,
                 exact_signal_callback,
@@ -3826,9 +3860,9 @@ void lower_process(llvm::Module& module, const std::string& symbol,
                     builder.SetInsertPoint(failed_block);
                     if (operation.severity
                         == runtime::simir::AssertionSeverity::failure) {
-                        const auto& message = operation.message.empty()
+                        const auto message = operation.message.empty()
                             ? std::string { "assertion failed" }
-                            : operation.message;
+                            : operation.message.str();
                         auto* message_pointer = builder.CreateGlobalString(
                             message,
                             symbol + ".assert." + std::to_string(index));

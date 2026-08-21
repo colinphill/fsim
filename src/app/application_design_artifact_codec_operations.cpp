@@ -9,8 +9,9 @@ namespace {
         Reader& reader,
         runtime::simir::Operation& operation)
     {
-        operation.storage.emplace<Group>();
-        return read_operation_group(reader, std::get<Group>(operation.storage));
+        return read_operation_group(
+            reader,
+            runtime::simir::operation_emplace_group<Group>(operation));
     }
 
 } // namespace
@@ -19,10 +20,15 @@ void write_operation(
     Writer& writer,
     const runtime::simir::Operation& operation)
 {
-    writer.u64(operation.storage.index());
-    std::visit(
-        [&](const auto& group) { write_operation_group(writer, group); },
-        operation.storage);
+    writer.u64(runtime::simir::operation_group_index(operation));
+    runtime::simir::visit_operation(
+        [&](const auto& value) {
+            using Group = runtime::simir::OperationGroupFor<decltype(value)>;
+            const auto* group
+                = runtime::simir::operation_group_if<Group>(&operation);
+            write_operation_group(writer, *group);
+        },
+        operation);
 }
 
 bool read_operation(

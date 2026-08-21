@@ -12,6 +12,7 @@
 #include "fsim/systemc/scv_artifact.hpp"
 #include "fsim/version.hpp"
 
+#include <array>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -66,6 +67,50 @@ namespace {
             return std::nullopt;
         }
         return bytes;
+    }
+
+    std::optional<std::uint64_t> verify_design_payload(
+        const std::filesystem::path& path,
+        const std::string_view checksum,
+        diagnostic::Engine& diagnostics)
+    {
+        std::ifstream input(path, std::ios::binary);
+        std::error_code size_error;
+        const auto file_size = std::filesystem::file_size(path, size_error);
+        if (!input || size_error
+            || file_size > static_cast<std::uintmax_t>(
+                std::numeric_limits<std::streamsize>::max())) {
+            diagnostics.error("FSIM-ART-0014",
+                "cannot open or size .fsimdesign payload: "
+                    + support::path_to_utf8(path));
+            return std::nullopt;
+        }
+        support::Sha256 digest;
+        std::array<char, 64 * 1024> buffer { };
+        std::uint64_t total { };
+        while (input) {
+            input.read(buffer.data(),
+                static_cast<std::streamsize>(buffer.size()));
+            const auto count = input.gcount();
+            if (count > 0) {
+                digest.update(std::string_view { buffer.data(),
+                    static_cast<std::size_t>(count) });
+                total += static_cast<std::uint64_t>(count);
+            }
+        }
+        if (!input.eof() || total != file_size) {
+            diagnostics.error("FSIM-ART-0014",
+                "cannot read .fsimdesign payload: "
+                    + support::path_to_utf8(path));
+            return std::nullopt;
+        }
+        if (support::Sha256::hex(digest.finish()) != checksum) {
+            diagnostics.error("FSIM-ART-0014",
+                ".fsimdesign payload checksum mismatch: "
+                    + support::path_to_utf8(path));
+            return std::nullopt;
+        }
+        return static_cast<std::uint64_t>(file_size);
     }
 
     std::string selected_root_identity(
@@ -452,13 +497,13 @@ namespace {
 
 } // namespace
 
-bool publish_design_artifact(
+static bool publish_design_artifact_impl(
     const project::Config& config,
     const BuiltProject& project,
     const std::filesystem::path& destination,
-    diagnostic::Engine& diagnostics)
+    diagnostic::Engine& diagnostics,
+    elaboration::ElaboratedDesign* consumable_design)
 {
-    auto runtime = serialize_runtime_state(project.design, diagnostics);
     auto semantics = serialize_semantic_state(project.semantics, diagnostics);
     auto design_ir = serialize_design_ir_state(project.design_ir, diagnostics);
     auto classes = serialize_class_state(
@@ -469,7 +514,7 @@ bool publish_design_artifact(
         project.vhdl_hir, project.semantics, diagnostics);
     auto coverage = serialize_systemverilog_coverage_state(
         project.systemverilog_coverage, diagnostics);
-    if (!runtime || !semantics || !design_ir || !classes || !constraint_hir
+    if (!semantics || !design_ir || !classes || !constraint_hir
         || !vhdl_hir || !coverage) {
         return false;
     }
@@ -576,6 +621,32 @@ bool publish_design_artifact(
             std::string { frontend::revision_string(revision->second) },
             profile->second });
     }
+    std::set<std::string> selected_plugin_libraries;
+    for (const auto& instance : project.design.systemc_instances()) {
+        if (const auto target = systemc_target(instance.target)) {
+            selected_plugin_libraries.insert(target->first);
+        }
+    }
+    metadata.specialization_count = project.design.specializations().size();
+    metadata.signal_count = project.design.signals().size();
+    metadata.process_count = project.design.processes().size();
+
+    std::optional<std::string> runtime;
+    std::optional<elaboration::ElaboratedDesignState> runtime_state;
+    std::optional<std::string> runtime_checksum;
+    if (consumable_design != nullptr) {
+        runtime_state.emplace(std::move(*consumable_design).state());
+        runtime_checksum = runtime_state_checksum(*runtime_state, diagnostics);
+    } else {
+        runtime = serialize_runtime_state(project.design, diagnostics);
+        if (runtime) {
+            runtime_checksum = support::Sha256::hex(
+                support::Sha256::digest(*runtime));
+        }
+    }
+    if (!runtime_checksum) {
+        return false;
+    }
     const auto add_payload = [&](
                                  const std::string_view kind,
                                  const std::filesystem::path& path,
@@ -583,7 +654,8 @@ bool publish_design_artifact(
         metadata.payloads.push_back({ std::string { kind }, path,
             support::Sha256::hex(support::Sha256::digest(bytes)) });
     };
-    add_payload("runtime", "state/runtime.bin", *runtime);
+    metadata.payloads.push_back(
+        { "runtime", "state/runtime.bin", *runtime_checksum });
     add_payload("semantics", "state/semantics.bin", *semantics);
     add_payload("design-ir", "state/design-ir.bin", *design_ir);
     add_payload("classes", "state/classes.bin", *classes);
@@ -592,8 +664,13 @@ bool publish_design_artifact(
     add_payload("vhdl-hir", "state/vhdl-hir.bin", *vhdl_hir);
     add_payload("sv-coverage", "state/sv-coverage.bin", *coverage);
     add_payload("sv-uvm", "state/sv-uvm.bin", *uvm_state);
-    std::vector<library::PortablePayload> payloads {
-        { metadata.payloads[0].artifact, std::move(*runtime) },
+    std::vector<library::PortablePayload> payloads;
+    payloads.reserve(runtime ? 8 : 7);
+    if (runtime) {
+        payloads.push_back(
+            { metadata.payloads[0].artifact, std::move(*runtime) });
+    }
+    payloads.insert(payloads.end(), {
         { metadata.payloads[1].artifact, std::move(*semantics) },
         { metadata.payloads[2].artifact, std::move(*design_ir) },
         { metadata.payloads[3].artifact, std::move(*classes) },
@@ -601,12 +678,33 @@ bool publish_design_artifact(
         { metadata.payloads[5].artifact, std::move(*vhdl_hir) },
         { metadata.payloads[6].artifact, std::move(*coverage) },
         { metadata.payloads[7].artifact, std::move(*uvm_state) }
-    };
-    std::set<std::string> selected_plugin_libraries;
-    for (const auto& instance : project.design.systemc_instances()) {
-        if (const auto target = systemc_target(instance.target)) {
-            selected_plugin_libraries.insert(target->first);
-        }
+    });
+    std::vector<artifact::GeneratedDesignPayload> generated_payloads;
+    if (runtime_state) {
+        generated_payloads.push_back({ metadata.payloads[0].artifact,
+            *runtime_checksum,
+            [&](const std::filesystem::path& path,
+                diagnostic::Engine& writer_diagnostics) {
+                std::ofstream output(path, std::ios::binary | std::ios::trunc);
+                if (!output) {
+                    writer_diagnostics.error("FSIM-ART-0014",
+                        "cannot open generated runtime payload: "
+                            + support::path_to_utf8(path));
+                    return false;
+                }
+                if (!serialize_runtime_state(
+                        *runtime_state, output, writer_diagnostics)) {
+                    return false;
+                }
+                output.close();
+                if (!output) {
+                    writer_diagnostics.error("FSIM-ART-0014",
+                        "cannot finish generated runtime payload: "
+                            + support::path_to_utf8(path));
+                    return false;
+                }
+                return true;
+            } });
     }
     std::set<std::string> plugin_libraries;
     for (std::size_t index = 0; index < project.systemc_plugins.size(); ++index) {
@@ -682,9 +780,6 @@ bool publish_design_artifact(
     metadata.specialization_cache_keys = project.specialization_cache_keys;
     metadata.unit_count = project.semantics.units().size();
     metadata.semantic_source_count = project.semantics.source_files().size();
-    metadata.specialization_count = project.design.specializations().size();
-    metadata.signal_count = project.design.signals().size();
-    metadata.process_count = project.design.processes().size();
     if (project.trace_archive) {
         auto trace = encode_trace_archive(
             *project.trace_archive, TraceArchiveKind::Design);
@@ -708,11 +803,39 @@ bool publish_design_artifact(
             return false;
         metadata.payloads[7].checksum = support::Sha256::hex(
             support::Sha256::digest(*updated_uvm_state));
-        payloads[7].bytes = std::move(*updated_uvm_state);
+        const auto uvm_artifact = metadata.payloads[7].artifact;
+        const auto payload = std::ranges::find(
+            payloads, uvm_artifact, &library::PortablePayload::path);
+        if (payload == payloads.end()) {
+            diagnostics.error("FSIM-ART-0014",
+                "standalone design publication lost its UVM state payload");
+            return false;
+        }
+        payload->bytes = std::move(*updated_uvm_state);
     }
     metadata.design_digest = artifact::compute_design_digest(metadata);
-    return artifact::publish_design(
-        destination, metadata, payloads, diagnostics);
+    return artifact::publish_design(destination, metadata, payloads,
+        generated_payloads, diagnostics);
+}
+
+bool publish_design_artifact(
+    const project::Config& config,
+    const BuiltProject& project,
+    const std::filesystem::path& destination,
+    diagnostic::Engine& diagnostics)
+{
+    return publish_design_artifact_impl(
+        config, project, destination, diagnostics, nullptr);
+}
+
+bool publish_design_artifact(
+    const project::Config& config,
+    BuiltProject&& project,
+    const std::filesystem::path& destination,
+    diagnostic::Engine& diagnostics)
+{
+    return publish_design_artifact_impl(
+        config, project, destination, diagnostics, &project.design);
 }
 
 std::optional<BuiltProject> load_design_artifact(
@@ -771,64 +894,88 @@ std::optional<BuiltProject> load_design_artifact(
             "FSIM-ART-0014", ".fsimdesign is missing a required state payload");
         return std::nullopt;
     }
-    auto runtime_bytes = read_design_payload(
-        directory / runtime_index->artifact, runtime_index->checksum,
-        diagnostics);
+    const auto runtime_path = directory / runtime_index->artifact;
+    const auto runtime_size = verify_design_payload(
+        runtime_path, runtime_index->checksum, diagnostics);
+    if (!runtime_size) {
+        return std::nullopt;
+    }
+    std::ifstream runtime_input(runtime_path, std::ios::binary);
+    if (!runtime_input) {
+        diagnostics.error("FSIM-ART-0014",
+            "cannot open .fsimdesign payload: "
+                + support::path_to_utf8(runtime_path));
+        return std::nullopt;
+    }
+    auto runtime = deserialize_runtime_state(runtime_input, *runtime_size,
+        support::path_to_utf8(runtime_index->artifact), diagnostics);
+
     auto semantic_bytes = read_design_payload(
         directory / semantic_index->artifact, semantic_index->checksum,
         diagnostics);
+    auto semantics = semantic_bytes
+        ? deserialize_semantic_state(*semantic_bytes,
+              support::path_to_utf8(semantic_index->artifact), diagnostics)
+        : std::optional<semantic::Model> { };
+    semantic_bytes.reset();
+
     auto design_ir_bytes = read_design_payload(
         directory / design_ir_index->artifact, design_ir_index->checksum,
         diagnostics);
+    auto design_ir = design_ir_bytes
+        ? deserialize_design_ir_state(*design_ir_bytes,
+              support::path_to_utf8(design_ir_index->artifact), diagnostics)
+        : std::optional<semantic::design::DesignIr> { };
+    design_ir_bytes.reset();
+
     auto class_bytes = read_design_payload(
         directory / class_index->artifact, class_index->checksum,
         diagnostics);
+    auto classes = class_bytes
+        ? deserialize_class_state(*class_bytes,
+              support::path_to_utf8(class_index->artifact), diagnostics)
+        : std::optional<std::vector<
+              frontend::SystemVerilogClassSpecialization>> { };
+    class_bytes.reset();
+
     auto constraint_hir_bytes = read_design_payload(
         directory / constraint_hir_index->artifact,
         constraint_hir_index->checksum,
         diagnostics);
-    auto vhdl_hir_bytes = read_design_payload(
-        directory / vhdl_hir_index->artifact, vhdl_hir_index->checksum,
-        diagnostics);
-    auto coverage_bytes = read_design_payload(
-        directory / coverage_index->artifact, coverage_index->checksum,
-        diagnostics);
-    auto uvm_bytes = read_design_payload(
-        directory / uvm_index->artifact, uvm_index->checksum, diagnostics);
-    if (!runtime_bytes || !semantic_bytes || !design_ir_bytes || !class_bytes
-        || !constraint_hir_bytes || !vhdl_hir_bytes || !coverage_bytes
-        || !uvm_bytes) {
-        return std::nullopt;
-    }
-    auto runtime = deserialize_runtime_state(
-        *runtime_bytes, support::path_to_utf8(runtime_index->artifact),
-        diagnostics);
-    auto semantics = deserialize_semantic_state(
-        *semantic_bytes, support::path_to_utf8(semantic_index->artifact),
-        diagnostics);
-    auto design_ir = deserialize_design_ir_state(
-        *design_ir_bytes, support::path_to_utf8(design_ir_index->artifact),
-        diagnostics);
-    auto classes = deserialize_class_state(
-        *class_bytes, support::path_to_utf8(class_index->artifact),
-        diagnostics);
-    auto constraint_hir = semantics
+    auto constraint_hir = semantics && constraint_hir_bytes
         ? deserialize_systemverilog_constraint_hir_state(
               *constraint_hir_bytes,
               support::path_to_utf8(constraint_hir_index->artifact),
               *semantics, diagnostics)
         : std::optional<semantic::sv::Hir> { };
-    auto vhdl_hir = semantics
-        ? deserialize_vhdl_hir_state(
-              *vhdl_hir_bytes,
+    constraint_hir_bytes.reset();
+
+    auto vhdl_hir_bytes = read_design_payload(
+        directory / vhdl_hir_index->artifact, vhdl_hir_index->checksum,
+        diagnostics);
+    auto vhdl_hir = semantics && vhdl_hir_bytes
+        ? deserialize_vhdl_hir_state(*vhdl_hir_bytes,
               support::path_to_utf8(vhdl_hir_index->artifact), *semantics,
               diagnostics)
         : std::optional<semantic::vhdl::Hir> { };
-    auto coverage = deserialize_systemverilog_coverage_state(
-        *coverage_bytes, support::path_to_utf8(coverage_index->artifact),
+    vhdl_hir_bytes.reset();
+
+    auto coverage_bytes = read_design_payload(
+        directory / coverage_index->artifact, coverage_index->checksum,
         diagnostics);
-    auto uvm_state = deserialize_systemverilog_uvm_state(
-        *uvm_bytes, support::path_to_utf8(uvm_index->artifact), diagnostics);
+    auto coverage = coverage_bytes
+        ? deserialize_systemverilog_coverage_state(*coverage_bytes,
+              support::path_to_utf8(coverage_index->artifact), diagnostics)
+        : std::optional<frontend::SystemVerilogCoverageState> { };
+    coverage_bytes.reset();
+
+    auto uvm_bytes = read_design_payload(
+        directory / uvm_index->artifact, uvm_index->checksum, diagnostics);
+    auto uvm_state = uvm_bytes
+        ? deserialize_systemverilog_uvm_state(*uvm_bytes,
+              support::path_to_utf8(uvm_index->artifact), diagnostics)
+        : std::optional<fsim::runtime::SystemVerilogUvmCheckpointArtifact> { };
+    uvm_bytes.reset();
     if (!runtime || !semantics || !design_ir || !classes || !constraint_hir
         || !vhdl_hir || !coverage || !uvm_state
         || !design_ir->valid(*semantics)
@@ -1014,7 +1161,7 @@ bool elaborate_artifact(
     auto built = build_objects(config, objects, diagnostics);
     return built
         && publish_design_artifact(
-            config, *built, destination, diagnostics);
+            config, std::move(*built), destination, diagnostics);
 }
 
 bool elaborate_artifact(
@@ -1027,7 +1174,7 @@ bool elaborate_artifact(
     auto built = build_objects(config, objects, systemc_plugins, diagnostics);
     return built
         && publish_design_artifact(
-            config, *built, destination, diagnostics);
+            config, std::move(*built), destination, diagnostics);
 }
 
 std::optional<ArtifactInspection> inspect_artifact(
@@ -1163,10 +1310,12 @@ int handle_elaborate(
     }
     auto built = build_objects(
         config, invocation.objects, invocation.systemc_plugins, diagnostics);
-    if (!built || !publish_design_artifact(config, *built, *invocation.artifact_output, diagnostics)) {
+    const auto root_count = built ? built->design.roots().size() : 0;
+    if (!built || !publish_design_artifact(config, std::move(*built),
+            *invocation.artifact_output, diagnostics)) {
         return 1;
     }
-    output << "elaborated " << built->design.roots().size()
+    output << "elaborated " << root_count
            << " root(s) into "
            << support::path_to_utf8(*invocation.artifact_output) << '\n';
     return 0;

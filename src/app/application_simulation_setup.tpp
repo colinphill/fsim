@@ -520,7 +520,6 @@ Impl(
             };
         }
     }
-    vhdl_vhpi_registry = make_vhdl_debug_registry(built);
     vhdl_psl = std::make_unique<VhdlPslExecution>(built.vhdl_hir, built.design,
         built.design_ir,
         [this](const runtime::simir::SignalId signal) {
@@ -705,7 +704,7 @@ Impl(
         std::vector<bool> static_vhdl_arrays(
             built.design.signals().size(), false);
         for (const auto& signal : built.design.signals()) {
-            static_vhdl_arrays.at(signal.id) = signal.vhdl_array.has_value()
+            static_vhdl_arrays.at(signal.id) = static_cast<bool>(signal.vhdl_array)
                 && !signal.is_port && !written_signals.at(signal.id);
         }
         for (std::size_t process = 0;
@@ -714,7 +713,11 @@ Impl(
                 static_cast<runtime::simir::ProcessId>(process));
             std::unique_ptr<runtime::simir::Process> specialized;
             if (engine != SimulationEngine::debug) {
-                for (const auto& operation : program.operations) {
+                for (std::size_t operation_index = 0;
+                     operation_index < program.operations.size();
+                     ++operation_index) {
+                    const auto& operation
+                        = program.operations[operation_index];
                     const auto* read
                         = runtime::simir::operation_get_if<
                             runtime::simir::ReadSignal>(&operation);
@@ -728,12 +731,11 @@ Impl(
                         specialized = std::make_unique<
                             runtime::simir::Process>(program);
                     }
-                    const auto operation_index = static_cast<std::size_t>(
-                        &operation - program.operations.data());
-                    specialized->operations[operation_index]
-                        = runtime::simir::LoadConstant {
+                    specialized->operations.replace(
+                        operation_index,
+                        runtime::simir::LoadConstant {
                             read->destination,
-                            interpreter->signal_value(read->signal) };
+                            interpreter->signal_value(read->signal) });
                 }
             }
             if (specialized) {
@@ -844,7 +846,14 @@ Impl(
         auto* const jit_pointer = jit.get();
         const bool selective_large_design_compilation
             = !process_filter && processes.size() >= 128U;
-        jit_overlap_startup = selective_large_design_compilation;
+        // Startup-tier kernels are selected because their cold compilation
+        // cost is expected to amortize even in short runs. Starting the
+        // interpreter before that bounded tier completes duplicates every
+        // activated process frame and competes with all backend workers. Wait
+        // for the startup tier while preserving full materialization
+        // concurrency; only the separately governed background tier overlaps
+        // simulation.
+        jit_overlap_startup = false;
         const auto materialize_pending_modules = [&] {
             const auto registration_begin = std::chrono::steady_clock::now();
             using CompilationResult

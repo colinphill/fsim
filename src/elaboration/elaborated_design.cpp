@@ -289,7 +289,7 @@ void ElaboratedDesign::populate_interpreter(
         runtime_path.pulse_error_delays = path.pulse_error_delays;
         runtime_path.retain_delays = path.retain_delays;
         runtime_path.source = runtime::simir::SourceLocation {
-            path.source.source_name,
+            path.source.source_name.str(),
             static_cast<std::uint32_t>(path.source.begin.line),
             static_cast<std::uint32_t>(path.source.begin.column)
         };
@@ -300,7 +300,7 @@ void ElaboratedDesign::populate_interpreter(
     }
 }
 
-ElaboratedDesignState ElaboratedDesign::state() const
+ElaboratedDesignState ElaboratedDesign::state() const &
 {
     ElaboratedDesignState result {
         top_, roots_, signal_info_, boundary_conversions_, signals_,
@@ -315,6 +315,41 @@ ElaboratedDesignState ElaboratedDesign::state() const
     result.string_names.assign(string_by_name_.begin(), string_by_name_.end());
     result.container_names.assign(
         container_by_name_.begin(), container_by_name_.end());
+    const auto by_name = [](const auto& left, const auto& right) {
+        return left.first < right.first;
+    };
+    std::ranges::sort(result.signal_names, by_name);
+    std::ranges::sort(result.string_names, by_name);
+    std::ranges::sort(result.container_names, by_name);
+    return result;
+}
+
+ElaboratedDesignState ElaboratedDesign::state() &&
+{
+    ElaboratedDesignState result {
+        std::move(top_), std::move(roots_), std::move(signal_info_),
+        std::move(boundary_conversions_), std::move(signals_),
+        std::move(string_object_info_), std::move(string_objects_),
+        std::move(container_object_info_), std::move(container_objects_),
+        std::move(container_signal_aliases_),
+        std::move(vhdl_protected_object_info_), std::move(processes_),
+        std::move(specializations_), std::move(udp_tables_),
+        std::move(verilog_specify_paths_), std::move(verilog_timing_checks_),
+        std::move(systemc_instances_), std::move(systemc_processes_),
+        std::move(systemc_objects_), { }, { }, { }
+    };
+    result.signal_names.reserve(signal_by_name_.size());
+    for (auto& entry : signal_by_name_) {
+        result.signal_names.emplace_back(std::move(entry.first), entry.second);
+    }
+    result.string_names.reserve(string_by_name_.size());
+    for (auto& entry : string_by_name_) {
+        result.string_names.emplace_back(std::move(entry.first), entry.second);
+    }
+    result.container_names.reserve(container_by_name_.size());
+    for (auto& entry : container_by_name_) {
+        result.container_names.emplace_back(std::move(entry.first), entry.second);
+    }
     const auto by_name = [](const auto& left, const auto& right) {
         return left.first < right.first;
     };

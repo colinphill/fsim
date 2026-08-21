@@ -8,6 +8,8 @@
 #include "fsim/semantic/model.hpp"
 
 #include <optional>
+#include <istream>
+#include <ostream>
 #include <string>
 #include <string_view>
 
@@ -25,9 +27,25 @@ inline constexpr std::uint32_t kVhdlHirStateSchema = 2;
 [[nodiscard]] std::optional<std::string> serialize_runtime_state(
     const elaboration::ElaboratedDesign& design,
     diagnostic::Engine& diagnostics);
+[[nodiscard]] std::optional<std::string> serialize_runtime_state(
+    elaboration::ElaboratedDesign&& design,
+    diagnostic::Engine& diagnostics);
+[[nodiscard]] std::optional<std::string> runtime_state_checksum(
+    const elaboration::ElaboratedDesignState& state,
+    diagnostic::Engine& diagnostics);
+[[nodiscard]] bool serialize_runtime_state(
+    const elaboration::ElaboratedDesignState& state,
+    std::ostream& output,
+    diagnostic::Engine& diagnostics);
 [[nodiscard]] std::optional<elaboration::ElaboratedDesign>
 deserialize_runtime_state(
     std::string_view bytes,
+    std::string source_name,
+    diagnostic::Engine& diagnostics);
+[[nodiscard]] std::optional<elaboration::ElaboratedDesign>
+deserialize_runtime_state(
+    std::istream& input,
+    std::uint64_t size,
     std::string source_name,
     diagnostic::Engine& diagnostics);
 
@@ -103,6 +121,11 @@ deserialize_systemverilog_uvm_state(
 [[nodiscard]] bool publish_design_artifact(
     const project::Config& config,
     const BuiltProject& project,
+    const std::filesystem::path& destination,
+    diagnostic::Engine& diagnostics);
+[[nodiscard]] bool publish_design_artifact(
+    const project::Config& config,
+    BuiltProject&& project,
     const std::filesystem::path& destination,
     diagnostic::Engine& diagnostics);
 

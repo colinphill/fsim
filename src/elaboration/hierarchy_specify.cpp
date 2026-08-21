@@ -925,7 +925,7 @@ void HierarchyBuilder::validate_verilog_specify(
                 "remain-active flag",
                 normalized.remain_active);
             normalized.source = runtime::simir::SourceLocation {
-                check.span.source_name,
+                check.span.source_name.str(),
                 static_cast<std::uint32_t>(check.span.begin.line),
                 static_cast<std::uint32_t>(check.span.begin.column)
             };

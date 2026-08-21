@@ -4,10 +4,85 @@
 #include "fsim/frontend/source.hpp"
 
 #include <algorithm>
+#include <array>
 #include <limits>
+#include <mutex>
 #include <sstream>
+#include <unordered_map>
 
 namespace fsim::frontend {
+
+namespace {
+
+struct SourceNameBucket {
+    std::mutex mutex;
+    std::unordered_map<std::string, std::weak_ptr<const std::string>> values;
+};
+
+std::array<SourceNameBucket, 64>& source_name_buckets()
+{
+    static std::array<SourceNameBucket, 64> buckets;
+    return buckets;
+}
+
+} // namespace
+
+std::shared_ptr<const std::string> SourceName::intern(std::string value)
+{
+    if (value.empty()) {
+        return { };
+    }
+    auto& buckets = source_name_buckets();
+    auto& bucket = buckets[std::hash<std::string_view> { }(value)
+        % buckets.size()];
+    const std::lock_guard lock { bucket.mutex };
+    if (const auto found = bucket.values.find(value);
+        found != bucket.values.end()) {
+        if (auto existing = found->second.lock()) {
+            return existing;
+        }
+    }
+    auto result = std::make_shared<const std::string>(std::move(value));
+    bucket.values.insert_or_assign(*result, result);
+    return result;
+}
+
+SourceName::SourceName(std::string value)
+    : value_ { intern(std::move(value)) }
+{
+}
+
+SourceName::SourceName(const std::string_view value)
+    : SourceName(std::string { value })
+{
+}
+
+SourceName::SourceName(const char* const value)
+    : SourceName(value == nullptr ? std::string { } : std::string { value })
+{
+}
+
+SourceName& SourceName::operator=(std::string value)
+{
+    value_ = intern(std::move(value));
+    return *this;
+}
+
+SourceName& SourceName::operator=(const std::string_view value)
+{
+    return *this = std::string { value };
+}
+
+SourceName& SourceName::operator=(const char* const value)
+{
+    return *this = value == nullptr ? std::string { } : std::string { value };
+}
+
+const std::string& SourceName::str() const noexcept
+{
+    static const std::string empty;
+    return value_ ? *value_ : empty;
+}
 
 SourceSpan cover(const SourceSpan& first, const SourceSpan& last)
 {

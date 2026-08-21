@@ -947,7 +947,7 @@ void invoke_safe_point(
             = session.simulation->verilog_scope_provenance();
         const auto source_owner = std::ranges::find_if(
             candidates, [&](const auto& candidate) {
-              return candidate.source_path == point->source.path
+              return candidate.source_path == point->source.path.str()
                   || std::filesystem::path(candidate.source_path).filename()
                       == std::filesystem::path(point->source.path).filename();
             });

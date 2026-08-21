@@ -765,6 +765,33 @@ bool write_file(
   return true;
 }
 
+std::optional<std::string> file_checksum(
+    const std::filesystem::path& path,
+    diagnostic::Engine& diagnostics) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input) {
+    report(diagnostics, kIoCode, "cannot read generated design payload",
+        support::path_to_utf8(path));
+    return std::nullopt;
+  }
+  support::Sha256 checksum;
+  std::array<char, 64 * 1024> buffer{};
+  while (input) {
+    input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+    const auto count = input.gcount();
+    if (count > 0) {
+      checksum.update(std::string_view{
+          buffer.data(), static_cast<std::size_t>(count)});
+    }
+  }
+  if (!input.eof()) {
+    report(diagnostics, kIoCode, "cannot read generated design payload",
+        support::path_to_utf8(path));
+    return std::nullopt;
+  }
+  return support::Sha256::hex(checksum.finish());
+}
+
 bool make_read_only(
     const std::filesystem::path& root,
     diagnostic::Engine& diagnostics) {
@@ -1171,6 +1198,7 @@ bool publish_design(
     const std::filesystem::path& destination,
     const DesignMetadata& metadata,
     const std::vector<library::PortablePayload>& payloads,
+    const std::span<const GeneratedDesignPayload> generated_payloads,
     diagnostic::Engine& diagnostics) {
   if (destination.empty()) {
     report(diagnostics, kIoCode, "design output path must not be empty");
@@ -1241,6 +1269,19 @@ bool publish_design(
       return false;
     }
   }
+  for (const auto& payload : generated_payloads) {
+    const auto path = support::path_to_utf8(payload.path);
+    const auto found = expected.find(path);
+    if (!safe_relative_path(payload.path) || found == expected.end()
+        || !supplied.insert(path).second || !payload.write
+        || found->second != payload.checksum) {
+      report(
+          diagnostics, kIoCode,
+          "generated design payload is unsafe, duplicate, unindexed, or has "
+          "a checksum mismatch: " + path);
+      return false;
+    }
+  }
   if (supplied.size() != expected.size()) {
     report(diagnostics, kIoCode, "design payload set is incomplete");
     return false;
@@ -1269,6 +1310,29 @@ bool publish_design(
       return false;
     }
   }
+  for (const auto& payload : generated_payloads) {
+    const auto path = staging / payload.path;
+    std::error_code directory_error;
+    std::filesystem::create_directories(path.parent_path(), directory_error);
+    if (directory_error || !payload.write(path, diagnostics)) {
+      if (directory_error) {
+        report(diagnostics, kIoCode,
+            "cannot create generated design payload directory: "
+                + directory_error.message(),
+            support::path_to_utf8(path.parent_path()));
+      }
+      return false;
+    }
+    const auto checksum = file_checksum(path, diagnostics);
+    if (!checksum || *checksum != payload.checksum) {
+      if (checksum) {
+        report(diagnostics, kIoCode,
+            "generated design payload checksum mismatch",
+            support::path_to_utf8(path));
+      }
+      return false;
+    }
+  }
   if (!write_file(staging / kDesignMetadataFilename, canonical, diagnostics)
       || !make_read_only(staging, diagnostics)) {
     return false;
@@ -1283,6 +1347,16 @@ bool publish_design(
   }
   cleanup.release();
   return true;
+}
+
+bool publish_design(
+    const std::filesystem::path& destination,
+    const DesignMetadata& metadata,
+    const std::vector<library::PortablePayload>& payloads,
+    diagnostic::Engine& diagnostics) {
+  return publish_design(
+      destination, metadata, payloads,
+      std::span<const GeneratedDesignPayload>{}, diagnostics);
 }
 
 }  // namespace fsim::artifact

@@ -1845,7 +1845,8 @@ struct Simulation::Impl {
     std::recursive_mutex vpi_bridge_mutex;
     bool vpi_started { };
     bool vpi_ended { };
-    std::unique_ptr<runtime::VhdlVhpiObjectRegistry> vhdl_vhpi_registry;
+    mutable std::unique_ptr<runtime::VhdlVhpiObjectRegistry>
+        vhdl_vhpi_registry;
     std::unique_ptr<VhdlPslExecution> vhdl_psl;
     std::size_t compiled_processes { };
     std::size_t compiled_modules { };
@@ -2271,14 +2272,21 @@ std::vector<ConcurrentAssertionCoverage> Simulation::vhdl_psl_coverage() const
     return impl_->vhdl_psl->coverage();
 }
 
-runtime::VhdlVhpiObjectRegistry& Simulation::vhdl_vhpi_objects() noexcept
+runtime::VhdlVhpiObjectRegistry& Simulation::vhdl_vhpi_objects()
 {
+    if (!impl_->vhdl_vhpi_registry) {
+        impl_->vhdl_vhpi_registry
+            = application_detail::make_vhdl_debug_registry(impl_->built);
+    }
     return *impl_->vhdl_vhpi_registry;
 }
 
 const runtime::VhdlVhpiObjectRegistry& Simulation::vhdl_vhpi_objects() const
-    noexcept
 {
+    if (!impl_->vhdl_vhpi_registry) {
+        impl_->vhdl_vhpi_registry
+            = application_detail::make_vhdl_debug_registry(impl_->built);
+    }
     return *impl_->vhdl_vhpi_registry;
 }
 

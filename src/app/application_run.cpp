@@ -259,7 +259,7 @@ make_specialization_cache_keys(
         source_set.compilation_unit = "file";
         return source_set;
     }();
-    const auto settings_for =
+    const auto resolve_settings =
         [&](const semantic::design::Specialization& specialization,
             const std::string_view source,
             const bool require_specialization_library)
@@ -365,6 +365,34 @@ make_specialization_cache_keys(
             }
         }
         return std::nullopt;
+    };
+    std::unordered_map<std::string, std::optional<SourceSettings>> settings_cache;
+    const auto settings_for =
+        [&](const semantic::design::Specialization& specialization,
+            const std::string_view source,
+            const bool require_specialization_library)
+        -> std::optional<SourceSettings> {
+        std::string key = std::to_string(
+            static_cast<unsigned>(specialization.language));
+        key.push_back('\0');
+        key.push_back(require_specialization_library ? '1' : '0');
+        key.push_back('\0');
+        if (require_specialization_library) {
+            key.append(specialization.library);
+        }
+        key.push_back('\0');
+        key.append(fsim::support::path_to_utf8(
+            fsim::support::path_from_utf8(source).lexically_normal()));
+        if (const auto found = settings_cache.find(key);
+            found != settings_cache.end()) {
+            return found->second;
+        }
+        const auto inserted = settings_cache.emplace(
+            std::move(key),
+            resolve_settings(
+                specialization, source, require_specialization_library))
+                                  .first;
+        return inserted->second;
     };
 
 #if defined(FSIM_HAS_LLVM)
@@ -1748,13 +1776,13 @@ namespace {
 
 } // namespace
 
-void attach_hdl_vcd_control(
-    Simulation& simulation,
-    HdlVcdState& state,
-    const std::filesystem::path& file_root)
+void initialize_hdl_vcd_inventory(HdlVcdState& state)
 {
-    state.simulation = &simulation;
-    state.file_root = file_root;
+    if (state.inventory_initialized) {
+        return;
+    }
+    state.inventory_initialized = true;
+    auto& simulation = *state.simulation;
     state.handles.resize(simulation.runtime_adapter().signals().size());
     state.selected.resize(simulation.runtime_adapter().signals().size());
     state.scalar_kinds.resize(
@@ -1813,9 +1841,22 @@ void attach_hdl_vcd_control(
         }
         state.extended_ports.push_back(std::move(extended));
     }
+}
+
+void attach_hdl_vcd_control(
+    Simulation& simulation,
+    HdlVcdState& state,
+    const std::filesystem::path& file_root)
+{
+    state.simulation = &simulation;
+    state.file_root = file_root;
     simulation.set_vcd_control_hook(
         [&state](const runtime::simir::VcdControlEvent& event) {
             using runtime::simir::VcdControlKind;
+            if (event.kind == VcdControlKind::variables
+                || event.kind == VcdControlKind::ports) {
+                initialize_hdl_vcd_inventory(state);
+            }
             if (handle_extended_vcd_control(state, event)) {
                 return;
             }

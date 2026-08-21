@@ -64,7 +64,7 @@ void Lowerer::lower_assert(const Statement& statement) {
               : statement.assertion_message,
           AssertionSeverity::error,
           SourceLocation{
-              statement.span.source_name,
+              statement.span.source_name.str(),
               static_cast<std::uint32_t>(statement.span.begin.line),
               static_cast<std::uint32_t>(statement.span.begin.column)}});
     }
@@ -110,7 +110,7 @@ void Lowerer::lower_assert(const Statement& statement) {
           statement.assertion_message,
           *static_severity,
           SourceLocation{
-              statement.span.source_name,
+              statement.span.source_name.str(),
               static_cast<std::uint32_t>(statement.span.begin.line),
               static_cast<std::uint32_t>(statement.span.begin.column)}});
       return;
@@ -120,7 +120,7 @@ void Lowerer::lower_assert(const Statement& statement) {
         statement.output_text,
         *static_severity,
         SourceLocation{
-            statement.span.source_name,
+            statement.span.source_name.str(),
             static_cast<std::uint32_t>(statement.span.begin.line),
             static_cast<std::uint32_t>(statement.span.begin.column)}});
     return;
@@ -184,7 +184,7 @@ void Lowerer::lower_assert(const Statement& statement) {
         *message,
         *severity_register,
         SourceLocation{
-            statement.span.source_name,
+            statement.span.source_name.str(),
             static_cast<std::uint32_t>(statement.span.begin.line),
             static_cast<std::uint32_t>(statement.span.begin.column)},
         standalone});

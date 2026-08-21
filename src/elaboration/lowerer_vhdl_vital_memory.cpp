@@ -16,7 +16,7 @@ std::string_view simple_name(const std::string_view name) {
 
 SourceLocation source_location(const frontend::SourceSpan& span) {
   return SourceLocation{
-      span.source_name,
+      span.source_name.str(),
       static_cast<std::uint32_t>(span.begin.line),
       static_cast<std::uint32_t>(span.begin.column)};
 }

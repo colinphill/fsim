@@ -442,4 +442,42 @@ InterfaceTypeSpecialization specialize_systemverilog_type_parameters(
     return result;
 }
 
+InterfaceTypeSpecialization specialize_systemverilog_type_parameters(
+    DesignUnit&& source,
+    const std::vector<frontend::ParameterOverride>& overrides,
+    const ConstantEnvironment& parent_environment,
+    const NamedTypeEnvironment& parent_types,
+    const frontend::Language association_language,
+    std::vector<Diagnostic>& diagnostics)
+{
+    const bool has_type_formals = std::ranges::any_of(
+        source.parameters,
+        [](const auto& parameter) {
+            return parameter.kind == frontend::ParameterKind::Type;
+        });
+    if (has_type_formals) {
+        return specialize_systemverilog_type_parameters(
+            static_cast<const DesignUnit&>(source),
+            overrides,
+            parent_environment,
+            parent_types,
+            association_language,
+            diagnostics);
+    }
+
+    InterfaceTypeSpecialization result;
+    result.unit = std::move(source);
+    for (const auto& actual : overrides) {
+        if (actual.type_value) {
+            diagnostics.push_back({
+                "FSIM-ELAB-SVTYPEPARAM-002",
+                "a value parameter cannot receive a data-type actual",
+                actual.span});
+        } else {
+            result.value_overrides.push_back(actual);
+        }
+    }
+    return result;
+}
+
 } // namespace fsim::elaboration::elaboration_detail

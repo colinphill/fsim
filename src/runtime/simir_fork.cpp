@@ -447,7 +447,7 @@ void Interpreter::Impl::spawn_fork(
     const Fork& operation)
 {
     const auto parent_id = parent.program.id;
-    if (!parent.frame) {
+    if (!parent.frame && !parent.executor) {
         fail(parent, "fork parent has no lexical frame");
     }
     if (instruction + 1 >= parent.program.operations.size()) {

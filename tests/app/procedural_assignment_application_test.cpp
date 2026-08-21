@@ -469,11 +469,11 @@ void verify_mode(
     assert(reference.debugger == actual->debugger);
   }
 #if defined(FSIM_HAS_LLVM)
-  assert(cold.compiled_processes == 29);
+  assert(cold.compiled_processes == 30);
   assert(cold.native_cache.hits == 0);
   assert(cold.native_cache.misses == 1);
   assert(cold.native_cache.stores == 1);
-  assert(warm.compiled_processes == 29);
+  assert(warm.compiled_processes == 30);
   assert(warm.native_cache.hits == 1);
   assert(warm.native_cache.misses == 0);
 #else
@@ -572,6 +572,8 @@ module procedural_assignments;
   logic [3:0] concat_indexed;
   logic [2:0] concat_index_capture;
   logic [256:0] wide_target;
+  logic [128:0] exact_callback_target;
+  logic exact_callback_result;
   logic [256:0] wide_proc_source;
   logic [128:0] wide_selected_source;
   logic signed [31:0] wide_base;
@@ -600,6 +602,7 @@ module procedural_assignments;
   initial begin
     clock = 1'b0;
     source = 1'b0;
+    exact_callback_target = '0;
     compound_rhs = 4'd1;
     event_index = 0;
     delayed_nba <= #5ps source;
@@ -610,6 +613,13 @@ module procedural_assignments;
     event_index = 1;
     #1ps source = 1'b0;
     #6ps $finish;
+  end
+
+  always @(posedge clock) begin : exact_callback
+    integer dynamic_index;
+    dynamic_index = 64;
+    exact_callback_target[dynamic_index] <= source ^ 1'b0;
+    exact_callback_result = source;
   end
 
   initial event_blocking = @(posedge clock) source;

@@ -148,7 +148,7 @@ void Interpreter::Impl::execute_stochastic_queue(
     const auto write_status = [&](const std::int32_t value) {
         write_i32(operation.status, value);
     };
-    const auto required = [&](const std::optional<RegisterId> value,
+    const auto required = [&](const auto& value,
                               const std::string_view role) {
         if (!value) {
             fail(
@@ -532,10 +532,11 @@ void Interpreter::Impl::push_callable_frame(
     }
     for (const auto register_id : operation.containers) {
         auto value = process.executor
-            ? process.executor->read_container_register(register_id)
-            : get_container_register(process, register_id);
+            ? std::make_shared<ContainerValue>(
+                process.executor->read_container_register(register_id))
+            : container_register_storage(process, register_id);
         frame.storage_bytes += sizeof(ContainerValue)
-            + container_value_storage_bytes(value);
+            + container_value_storage_bytes(*value);
         frame.containers.push_back(std::move(value));
     }
     if (frame.storage_bytes
@@ -560,7 +561,7 @@ void Interpreter::Impl::pop_callable_frame(
     }
     std::vector<PackedLogic4> preserved_packed;
     std::vector<std::string> preserved_strings;
-    std::vector<ContainerValue> preserved_containers;
+    std::vector<SharedContainerValue> preserved_containers;
     preserved_packed.reserve(operation.preserve_packed.size());
     preserved_strings.reserve(operation.preserve_strings.size());
     preserved_containers.reserve(operation.preserve_containers.size());
@@ -597,10 +598,11 @@ void Interpreter::Impl::pop_callable_frame(
     }
     for (const auto register_id : operation.preserve_containers) {
         auto value = process.executor
-            ? process.executor->read_container_register(register_id)
-            : get_container_register(process, register_id);
+            ? std::make_shared<ContainerValue>(
+                process.executor->read_container_register(register_id))
+            : container_register_storage(process, register_id);
         account_preserved_storage(
-            sizeof(ContainerValue) + container_value_storage_bytes(value));
+            sizeof(ContainerValue) + container_value_storage_bytes(*value));
         preserved_containers.push_back(std::move(value));
     }
     auto frame = std::move(process.callable_frames.back());
@@ -626,10 +628,11 @@ void Interpreter::Impl::pop_callable_frame(
     for (std::size_t index = 0; index < frame.containers.size(); ++index) {
         if (process.executor) {
             process.executor->write_container_register(
-                frame.container_ids[index], frame.containers[index]);
+                frame.container_ids[index], *frame.containers[index]);
         } else {
-            get_container_register(process, frame.container_ids[index])
-                = std::move(frame.containers[index]);
+            set_container_register_storage(
+                process, frame.container_ids[index],
+                std::move(frame.containers[index]));
         }
     }
     process.callable_frame_storage_bytes -= frame.storage_bytes;
@@ -658,11 +661,11 @@ void Interpreter::Impl::pop_callable_frame(
         if (process.executor) {
             process.executor->write_container_register(
                 operation.preserve_containers[index],
-                preserved_containers[index]);
+                *preserved_containers[index]);
         } else {
-            get_container_register(
-                process, operation.preserve_containers[index])
-                = std::move(preserved_containers[index]);
+            set_container_register_storage(
+                process, operation.preserve_containers[index],
+                std::move(preserved_containers[index]));
         }
     }
     ++process.pc;
@@ -725,10 +728,11 @@ void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
     }
     for (const auto register_id : context.container_ids) {
         auto value = process.executor
-            ? process.executor->read_container_register(register_id)
-            : get_container_register(process, register_id);
+            ? std::make_shared<ContainerValue>(
+                process.executor->read_container_register(register_id))
+            : container_register_storage(process, register_id);
         account_context_storage(
-            sizeof(ContainerValue) + container_value_storage_bytes(value));
+            sizeof(ContainerValue) + container_value_storage_bytes(*value));
         context.containers.push_back(std::move(value));
     }
     process.callable_context_storage_bytes = context.storage_bytes;
@@ -764,10 +768,11 @@ void Interpreter::Impl::restore_callable_context(ProcessState& process)
     for (std::size_t index = 0; index < context.containers.size(); ++index) {
         if (process.executor) {
             process.executor->write_container_register(
-                context.container_ids[index], context.containers[index]);
+                context.container_ids[index], *context.containers[index]);
         } else {
-            get_container_register(process, context.container_ids[index])
-                = std::move(context.containers[index]);
+            set_container_register_storage(
+                process, context.container_ids[index],
+                std::move(context.containers[index]));
         }
     }
 }
@@ -781,32 +786,44 @@ void Interpreter::Impl::install_deferred_executor(ProcessState& process)
             "deferred SimIR process executor produced a null executor"
         };
     }
-    for (std::size_t register_index = 0;
-         register_index < process.frame->registers.size();
-         ++register_index) {
-        const auto& value = process.frame->registers[register_index];
-        if (value.width() != 0) {
-            executor->write_register(
-                static_cast<RegisterId>(register_index), value);
+    if (process.frame) {
+        for (std::size_t register_index = 0;
+             register_index < process.frame->registers.size();
+             ++register_index) {
+            const auto& value = process.frame->registers[register_index];
+            if (value.width() != 0) {
+                executor->write_register(
+                    static_cast<RegisterId>(register_index), value);
+            }
         }
-    }
-    for (std::size_t register_index = 0;
-         register_index < process.frame->string_registers.size();
-         ++register_index) {
-        executor->write_string_register(
-            static_cast<StringRegisterId>(register_index),
-            process.frame->string_registers[register_index]);
-    }
-    for (std::size_t register_index = 0;
-         register_index < process.frame->container_registers.size();
-         ++register_index) {
-        executor->write_container_register(
-            static_cast<ContainerRegisterId>(register_index),
-            process.frame->container_registers[register_index]);
+        for (std::size_t register_index = 0;
+             register_index < process.frame->string_registers.size();
+             ++register_index) {
+            executor->write_string_register(
+                static_cast<StringRegisterId>(register_index),
+                process.frame->string_registers[register_index]);
+        }
+        for (std::size_t register_index = 0;
+             register_index < process.frame->container_registers.size();
+             ++register_index) {
+            executor->write_container_register_storage(
+                static_cast<ContainerRegisterId>(register_index),
+                process.frame->container_registers[register_index]);
+        }
+    } else {
+        for (std::size_t register_index = 0;
+             register_index < process.program.container_register_types.size();
+             ++register_index) {
+            executor->write_container_register_storage(
+                static_cast<ContainerRegisterId>(register_index),
+                default_container_register(
+                    process.program.container_register_types[register_index]));
+        }
     }
     executor->redirect(process.pc);
     process.executor = std::move(executor);
     process.deferred_executor.reset();
+    process.frame.reset();
 }
 
 [[nodiscard]] bool Interpreter::Impl::handle_executor_resume(
@@ -814,7 +831,7 @@ void Interpreter::Impl::install_deferred_executor(ProcessState& process)
 {
     const auto* operation
         = boundary.instruction < process.program.operations.size()
-        ? &process.program.operations[boundary.instruction]
+        ? &std::as_const(process.program.operations)[boundary.instruction]
         : nullptr;
     if (boundary.external.kind != ExternalSuspendKind::simir_boundary) {
         handle_external_boundary(
@@ -896,10 +913,7 @@ void Interpreter::Impl::execute(ProcessId id)
     }
     restore_callable_context(process);
     if (!process.executor && process.deferred_executor
-        && process.frame.use_count() == 1
-        && process.frame->vital_memories.empty()
-        && process.dynamic_call_stack.empty()
-        && process.callable_frames.empty()
+        && can_install_deferred_executor(process)
         && process.deferred_executor->ready()) {
         install_deferred_executor(process);
     }
@@ -962,6 +976,10 @@ void Interpreter::Impl::execute(ProcessId id)
         return;
     }
 
+    if (!process.halted) {
+        (void)ensure_process_frame(process);
+    }
+
     while (!process.halted) {
         if (process.pc >= process.program.operations.size()) {
             fail(process, "program counter is outside the operation stream");
@@ -974,7 +992,8 @@ void Interpreter::Impl::execute(ProcessId id)
         if (process_profile_enabled) {
             ++process.profile_interpreter_operations;
         }
-        const auto& operation = process.program.operations[instruction];
+        const auto& operation
+            = std::as_const(process.program.operations)[instruction];
         bool boundary = false;
         const auto selected_offset =
             [&](const DynamicIndex& selection) -> std::uint32_t {
@@ -2601,10 +2620,7 @@ void Interpreter::Impl::execute(ProcessId id)
             const bool debug_boundary = fsim::runtime::simir::operation_holds<DebugPoint>(operation);
             if (fsim::runtime::simir::operation_holds<Fork>(operation)
                 && !process.executor && process.deferred_executor
-                && process.frame.use_count() == 1
-                && process.frame->vital_memories.empty()
-                && process.dynamic_call_stack.empty()
-                && process.callable_frames.empty()
+                && can_install_deferred_executor(process)
                 && process.deferred_executor->ready()) {
                 install_deferred_executor(process);
                 queue_current(process.program.id);
@@ -2652,10 +2668,7 @@ void Interpreter::Impl::execute_static_cohort(
         auto& state = get_process(id);
         restore_callable_context(state);
         if (!state.executor && state.deferred_executor
-            && state.frame.use_count() == 1
-            && state.frame->vital_memories.empty()
-            && state.dynamic_call_stack.empty()
-            && state.callable_frames.empty()
+            && can_install_deferred_executor(state)
             && state.deferred_executor->ready()) {
             install_deferred_executor(state);
         }
@@ -2870,10 +2883,7 @@ void Interpreter::Impl::build_native_static_regions()
             continue;
         }
         if (!state.executor && state.deferred_executor
-            && state.frame.use_count() == 1
-            && state.frame->vital_memories.empty()
-            && state.dynamic_call_stack.empty()
-            && state.callable_frames.empty()
+            && can_install_deferred_executor(state)
             && state.deferred_executor->ready()) {
             install_deferred_executor(state);
         }
@@ -2994,10 +3004,7 @@ std::size_t Interpreter::Impl::execute_native_static_region(
             auto& state = get_process(region.members[offset]);
             restore_callable_context(state);
             if (!state.executor && state.deferred_executor
-                && state.frame.use_count() == 1
-                && state.frame->vital_memories.empty()
-                && state.dynamic_call_stack.empty()
-                && state.callable_frames.empty()
+                && can_install_deferred_executor(state)
                 && state.deferred_executor->ready()) {
                 install_deferred_executor(state);
             }

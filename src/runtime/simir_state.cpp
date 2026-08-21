@@ -137,25 +137,59 @@ Interpreter::Impl::get_process(ProcessId id)
     return processes[id];
 }
 
+[[nodiscard]] Interpreter::Impl::ProcessFrame&
+Interpreter::Impl::ensure_process_frame(ProcessState& process)
+{
+    if (process.frame) {
+        return *process.frame;
+    }
+
+    auto frame = std::make_shared<ProcessFrame>();
+    frame->registers.assign(
+        process.program.register_count, PackedLogic4 { });
+    frame->string_registers.assign(
+        process.program.string_register_count, { });
+    frame->container_registers.reserve(
+        process.program.container_register_count);
+    for (const auto& type : process.program.container_register_types) {
+        frame->container_registers.push_back(
+            default_container_register(type));
+    }
+    process.frame = std::move(frame);
+    return *process.frame;
+}
+
+[[nodiscard]] bool Interpreter::Impl::can_install_deferred_executor(
+    const ProcessState& process) noexcept
+{
+    return (!process.frame
+               || (process.frame.use_count() == 1
+                   && process.frame->vital_memories.empty()))
+        && process.dynamic_call_stack.empty()
+        && process.callable_frames.empty();
+}
+
 [[nodiscard]] PackedLogic4& Interpreter::Impl::get_register(ProcessState& process,
     RegisterId id)
 {
-    if (!process.frame || id >= process.frame->registers.size()) {
+    auto& frame = ensure_process_frame(process);
+    if (id >= frame.registers.size()) {
         throw InterpreterError(process.program.id, process.pc,
             "invalid register ID");
     }
-    return process.frame->registers[id];
+    return frame.registers[id];
 }
 
 [[nodiscard]] std::string& Interpreter::Impl::get_string_register(
     ProcessState& process,
     const StringRegisterId id)
 {
-    if (!process.frame || id >= process.frame->string_registers.size()) {
+    auto& frame = ensure_process_frame(process);
+    if (id >= frame.string_registers.size()) {
         throw InterpreterError(
             process.program.id, process.pc, "invalid string register ID");
     }
-    return process.frame->string_registers[id];
+    return frame.string_registers[id];
 }
 
 [[nodiscard]] StringObject& Interpreter::Impl::get_string_object(
@@ -186,7 +220,70 @@ Interpreter::Impl::get_container_register(
             process.program.id, process.pc,
             "invalid container register ID");
     }
+    auto& storage = process.frame->container_registers[id];
+    if (!storage) {
+        throw InterpreterError(
+            process.program.id, process.pc,
+            "uninitialized container register storage");
+    }
+    if (!storage.unique()) {
+        storage = std::make_shared<ContainerValue>(*storage);
+    }
+    return *storage;
+}
+
+[[nodiscard]] const ContainerValue&
+Interpreter::Impl::read_container_register(
+    const ProcessState& process,
+    const ContainerRegisterId id) const
+{
+    if (!process.frame || id >= process.frame->container_registers.size()
+        || !process.frame->container_registers[id]) {
+        throw InterpreterError(
+            process.program.id, process.pc,
+            "invalid container register ID");
+    }
+    return *process.frame->container_registers[id];
+}
+
+[[nodiscard]] Interpreter::Impl::SharedContainerValue
+Interpreter::Impl::container_register_storage(
+    const ProcessState& process,
+    const ContainerRegisterId id) const
+{
+    (void)read_container_register(process, id);
     return process.frame->container_registers[id];
+}
+
+void Interpreter::Impl::set_container_register_storage(
+    ProcessState& process,
+    const ContainerRegisterId id,
+    SharedContainerValue value)
+{
+    if (!value || !process.frame
+        || id >= process.frame->container_registers.size()) {
+        throw InterpreterError(
+            process.program.id, process.pc,
+            "invalid container register storage");
+    }
+    process.frame->container_registers[id] = std::move(value);
+}
+
+[[nodiscard]] Interpreter::Impl::SharedContainerValue
+Interpreter::Impl::default_container_register(const ContainerType& type)
+{
+    const auto found = std::ranges::find_if(
+        default_container_values,
+        [&](const SharedContainerValue& value) {
+            return value && value->type == type;
+        });
+    if (found != default_container_values.end()) {
+        return *found;
+    }
+    auto value = std::make_shared<ContainerValue>(
+        default_container_value(type));
+    default_container_values.push_back(value);
+    return value;
 }
 
 [[nodiscard]] ContainerObject& Interpreter::Impl::get_container_object(
@@ -1374,7 +1471,7 @@ bool Interpreter::Impl::can_publish_native_word_prevalidated(
         || signal.event_variable || signal.implicit_driver
         || signal.charge_strength || external_driver_values[signal_id]
         || forced_values[signal_id]
-        || !forced_driver_values[signal_id].empty()
+        || forced_driver_values[signal_id]
         || signal.initial_value.width() == 0U
         || signal.initial_value.width() > 64U) {
         if (native_phase_profile_enabled) {
@@ -1417,7 +1514,7 @@ bool Interpreter::Impl::can_publish_native_logic9_word(
         && !signal.event_variable && !signal.implicit_driver
         && !signal.charge_strength && !external_driver_values[signal_id]
         && !forced_values[signal_id]
-        && forced_driver_values[signal_id].empty()
+        && !forced_driver_values[signal_id]
         && signal.initial_value.width() != 0U
         && signal.initial_value.width() <= 64U;
 }
@@ -1451,7 +1548,7 @@ bool Interpreter::Impl::can_publish_blocking_word(
         && !signal.event_variable && !signal.implicit_driver
         && !signal.charge_strength && !external_driver_values[signal_id]
         && !forced_values[signal_id]
-        && forced_driver_values[signal_id].empty()
+        && !forced_driver_values[signal_id]
         && signal.initial_value.width() != 0U
         && signal.initial_value.width() <= 64U;
 }

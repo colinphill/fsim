@@ -191,7 +191,7 @@ PackedLogic4 Interpreter::Impl::apply_force(
         return value;
     }
     const auto& forced = *forced_values[signal_id];
-    const auto& mask = forced_masks[signal_id];
+    const auto& mask = *forced_masks[signal_id];
     for (std::size_t bit = 0; bit < value.width(); ++bit) {
         if (mask.get(bit) != Logic4::one) {
             continue;
@@ -223,12 +223,15 @@ void Interpreter::Impl::force_slice(
     }
     value = coerce_value_kind(std::move(value), signal.value_kind);
     if (!forced_values[signal_id]) {
-        forced_values[signal_id] = driven_values[signal_id];
+        forced_values[signal_id]
+            = std::make_unique<PackedLogic4>(driven_values[signal_id]);
+        forced_masks[signal_id] = std::make_unique<PackedLogic4>(
+            signal.initial_value.width(), Logic4::zero);
     }
-    forced_values[signal_id] = insert_value(
+    *forced_values[signal_id] = insert_value(
         std::move(*forced_values[signal_id]), value, offset);
     for (std::size_t bit = 0; bit < value.width(); ++bit) {
-        forced_masks[signal_id].set(offset + bit, Logic4::one);
+        forced_masks[signal_id]->set(offset + bit, Logic4::one);
     }
     refresh_direct_single_driver_route(signal_id);
     publish(
@@ -256,15 +259,16 @@ void Interpreter::Impl::release_slice(
         return;
     }
     for (std::size_t bit = 0; bit < width; ++bit) {
-        forced_masks[signal_id].set(offset + bit, Logic4::zero);
+        forced_masks[signal_id]->set(offset + bit, Logic4::zero);
     }
     bool any_forced = false;
     for (std::size_t bit = 0; bit < signal.initial_value.width(); ++bit) {
         any_forced = any_forced
-            || forced_masks[signal_id].get(bit) == Logic4::one;
+            || forced_masks[signal_id]->get(bit) == Logic4::one;
     }
     if (!any_forced) {
         forced_values[signal_id].reset();
+        forced_masks[signal_id].reset();
     }
     refresh_direct_single_driver_route(signal_id);
     publish(
@@ -277,12 +281,17 @@ PackedLogic4 Interpreter::Impl::apply_driver_force(
     const ProcessId process,
     PackedLogic4 value) const
 {
-    const auto forced = forced_driver_values.at(signal_id).find(process);
-    if (forced == forced_driver_values.at(signal_id).end()) {
+    const auto& values = forced_driver_values.at(signal_id);
+    if (!values) {
         return value;
     }
-    const auto mask = forced_driver_masks.at(signal_id).find(process);
-    if (mask == forced_driver_masks.at(signal_id).end()) {
+    const auto forced = values->find(process);
+    if (forced == values->end()) {
+        return value;
+    }
+    const auto& masks = forced_driver_masks.at(signal_id);
+    const auto mask = masks->find(process);
+    if (mask == masks->end()) {
         throw std::logic_error { "forced driver has no force mask" };
     }
     for (std::size_t bit = 0; bit < value.width(); ++bit) {
@@ -304,12 +313,17 @@ Logic4 Interpreter::Impl::driver_force_logic4_at(
     const PackedLogic4& value,
     const std::size_t bit) const
 {
-    const auto forced = forced_driver_values.at(signal_id).find(process);
-    if (forced == forced_driver_values.at(signal_id).end()) {
+    const auto& values = forced_driver_values.at(signal_id);
+    if (!values) {
         return value.get(bit);
     }
-    const auto mask = forced_driver_masks.at(signal_id).find(process);
-    if (mask == forced_driver_masks.at(signal_id).end()) {
+    const auto forced = values->find(process);
+    if (forced == values->end()) {
+        return value.get(bit);
+    }
+    const auto& masks = forced_driver_masks.at(signal_id);
+    const auto mask = masks->find(process);
+    if (mask == masks->end()) {
         throw std::logic_error { "forced driver has no force mask" };
     }
     return mask->second.get(bit) == Logic4::one
@@ -337,16 +351,20 @@ void Interpreter::Impl::force_driver_slice(
     value = coerce_value_kind(std::move(value), signal.value_kind);
     auto& forced = forced_driver_values.at(signal_id);
     auto& masks = forced_driver_masks.at(signal_id);
-    auto [forced_entry, inserted] = forced.try_emplace(
+    if (!forced) {
+        forced = std::make_unique<ForcedDriverMap>();
+        masks = std::make_unique<ForcedDriverMap>();
+    }
+    auto [forced_entry, inserted] = forced->try_emplace(
         process, driver_slot(process, signal_id));
     if (inserted) {
-        masks.emplace(
+        masks->emplace(
             process,
             PackedLogic4 { signal.initial_value.width(), Logic4::zero });
     }
     forced_entry->second = insert_value(
         std::move(forced_entry->second), value, offset);
-    auto& mask = masks.at(process);
+    auto& mask = masks->at(process);
     for (std::size_t bit = 0; bit < value.width(); ++bit) {
         mask.set(offset + bit, Logic4::one);
     }
@@ -375,9 +393,12 @@ void Interpreter::Impl::release_driver_slice(
     }
     auto& forced = forced_driver_values.at(signal_id);
     auto& masks = forced_driver_masks.at(signal_id);
-    const auto forced_entry = forced.find(process);
-    const auto mask_entry = masks.find(process);
-    if (forced_entry == forced.end() || mask_entry == masks.end()) {
+    if (!forced) {
+        return;
+    }
+    const auto forced_entry = forced->find(process);
+    const auto mask_entry = masks->find(process);
+    if (forced_entry == forced->end() || mask_entry == masks->end()) {
         return;
     }
     for (std::size_t bit = 0; bit < width; ++bit) {
@@ -389,8 +410,12 @@ void Interpreter::Impl::release_driver_slice(
             || mask_entry->second.get(bit) == Logic4::one;
     }
     if (!any_forced) {
-        forced.erase(forced_entry);
-        masks.erase(mask_entry);
+        forced->erase(forced_entry);
+        masks->erase(mask_entry);
+        if (forced->empty()) {
+            forced.reset();
+            masks.reset();
+        }
     }
     refresh_direct_single_driver_route(signal_id);
     auto resolved = resolved_driver_value(signal_id);
@@ -461,7 +486,7 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
         || signal.charge_strength
         || external_driver_values.at(signal_id)
         || forced_values.at(signal_id)
-        || !forced_driver_values.at(signal_id).empty()) {
+        || forced_driver_values.at(signal_id)) {
         return;
     }
     const auto process = values.begin()->first;
@@ -862,7 +887,8 @@ PackedLogic4& Interpreter::Impl::external_driver_slot(
 {
     auto& value = external_driver_values.at(signal_id);
     if (!value) {
-        value = initial_driver_value(signal_id);
+        value = std::make_unique<PackedLogic4>(
+            initial_driver_value(signal_id));
     }
     return *value;
 }
@@ -1356,7 +1382,7 @@ void Interpreter::Impl::schedule_update_commit()
                         = driver && direct_route.value != nullptr
                         && direct_route.process == *driver
                         && !external_driver_values[pending.signal]
-                        && forced_driver_values[pending.signal].empty();
+                        && !forced_driver_values[pending.signal];
                     if (direct_single_driver) {
                         auto& staged
                             = unresolved_update_scratch[pending.signal];
@@ -1438,7 +1464,7 @@ void Interpreter::Impl::schedule_update_commit()
                 const auto& route = direct_single_driver_routes[signal];
                 if (route.value == nullptr || route.process != process
                     || external_driver_values[signal]
-                    || !forced_driver_values[signal].empty()) {
+                    || forced_driver_values[signal]) {
                     set_driver(
                         process,
                         signal,
@@ -1860,7 +1886,7 @@ void Interpreter::Impl::stage_validated_update_words(
             = direct_route.value != nullptr
             && direct_route.process == process
             && !external_driver_values[update.signal]
-            && forced_driver_values[update.signal].empty();
+            && !forced_driver_values[update.signal];
         if (!disable_direct_word_commit && direct_single_driver
             && direct_route.value->width() <= 64U) {
             auto& staged = direct_single_driver_word_scratch[update.signal];
@@ -2228,7 +2254,7 @@ bool Interpreter::Impl::stage_validated_update_slot_batches(
                 = direct_route.value != nullptr
                 && direct_route.process == batch.process
                 && !external_driver_values[signal]
-                && forced_driver_values[signal].empty();
+                && !forced_driver_values[signal];
             if (!disable_direct_word_commit && direct_single_driver
                 && slot.width <= 64U
                 && slot.word_count == 1U) {

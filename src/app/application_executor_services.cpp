@@ -236,26 +236,44 @@ runtime::simir::ContainerValue
 LlvmProcessExecutor::read_container_register(
     const runtime::simir::ContainerRegisterId id) const
 {
-    if (container_object_aliases_.at(id)) {
+    if (container_object_aliases_.at(id) != invalid_container_object) {
         throw compiler::LlvmJitError {
             "compiled process exposed an unmaterialized container register"
         };
     }
-    return container_registers_.at(id);
+    return *container_registers_.at(id);
 }
 
 void LlvmProcessExecutor::write_container_register(
     const runtime::simir::ContainerRegisterId id,
     const runtime::simir::ContainerValue& value)
 {
-    if (id >= container_registers_.size()
-        || container_registers_[id].type != value.type) {
+    if (id >= container_registers_.size() || !container_registers_[id]
+        || container_registers_[id]->type != value.type) {
         throw compiler::LlvmJitError {
             "compiled process container-register write is out of range"
         };
     }
-    container_registers_[id] = value;
-    container_object_aliases_[id].reset();
+    container_registers_[id]
+        = std::make_shared<runtime::simir::ContainerValue>(value);
+    container_register_shared_[id] = 0U;
+    container_object_aliases_[id] = invalid_container_object;
+}
+
+void LlvmProcessExecutor::write_container_register_storage(
+    const runtime::simir::ContainerRegisterId id,
+    std::shared_ptr<runtime::simir::ContainerValue> value)
+{
+    if (!value || id >= container_registers_.size()
+        || !container_registers_[id]
+        || container_registers_[id]->type != value->type) {
+        throw compiler::LlvmJitError {
+            "compiled process container-register storage is out of range"
+        };
+    }
+    container_registers_[id] = std::move(value);
+    container_register_shared_[id] = 1U;
+    container_object_aliases_[id] = invalid_container_object;
 }
 
 const runtime::simir::ContainerValue&
@@ -263,15 +281,26 @@ LlvmProcessExecutor::container_register_value(
     const runtime::simir::ContainerRegisterId id,
     const runtime::simir::ProcessExecutionContext& context)
 {
-    if (const auto alias = container_object_aliases_.at(id)) {
-        if (!context.copy_container_object(*alias, container_registers_.at(id))) {
+    auto& value = container_registers_.at(id);
+    if (!value) {
+        throw compiler::LlvmJitError {
+            "compiled process container register has no storage"
+        };
+    }
+    if (const auto alias = container_object_aliases_.at(id);
+        alias != invalid_container_object) {
+        if (container_register_shared_[id] != 0U) {
+            value = std::make_shared<runtime::simir::ContainerValue>(*value);
+            container_register_shared_[id] = 0U;
+        }
+        if (!context.copy_container_object(alias, *value)) {
             throw compiler::LlvmJitError {
                 "compiled process could not materialize a container-object alias"
             };
         }
-        container_object_aliases_[id].reset();
+        container_object_aliases_[id] = invalid_container_object;
     }
-    return container_registers_.at(id);
+    return *value;
 }
 
 runtime::simir::ContainerValue&
@@ -280,7 +309,12 @@ LlvmProcessExecutor::mutable_container_register_value(
     const runtime::simir::ProcessExecutionContext& context)
 {
     (void)container_register_value(id, context);
-    return container_registers_[id];
+    auto& value = container_registers_[id];
+    if (container_register_shared_[id] != 0U) {
+        value = std::make_shared<runtime::simir::ContainerValue>(*value);
+        container_register_shared_[id] = 0U;
+    }
+    return *value;
 }
 
 void LlvmProcessExecutor::alias_container_register(
@@ -289,12 +323,12 @@ void LlvmProcessExecutor::alias_container_register(
     const runtime::simir::ProcessExecutionContext& context)
 {
     if (!context.container_object_has_type(
-            object, container_registers_.at(destination).type)) {
+            object, container_registers_.at(destination)->type)) {
         throw compiler::LlvmJitError {
             "compiled process container-object type mismatch"
         };
     }
-    if (!container_object_aliases_.at(destination)) {
+    if (container_object_aliases_.at(destination) == invalid_container_object) {
         active_container_object_aliases_.push_back(destination);
     }
     container_object_aliases_.at(destination) = object;
@@ -304,7 +338,7 @@ void LlvmProcessExecutor::materialize_container_object_aliases(
     const runtime::simir::ProcessExecutionContext& context)
 {
     for (const auto id : active_container_object_aliases_) {
-        if (container_object_aliases_[id]) {
+        if (container_object_aliases_[id] != invalid_container_object) {
             (void)mutable_container_register_value(id, context);
         }
     }
@@ -314,7 +348,7 @@ void LlvmProcessExecutor::materialize_container_object_aliases(
 void LlvmProcessExecutor::discard_container_object_aliases() noexcept
 {
     for (const auto id : active_container_object_aliases_) {
-        container_object_aliases_[id].reset();
+        container_object_aliases_[id] = invalid_container_object;
     }
     active_container_object_aliases_.clear();
 }
@@ -744,7 +778,7 @@ std::uint32_t LlvmProcessExecutor::container_read_packed(
             state.executor->alias_container_register(
                 container, read_object->object, *state.context);
         }
-        const auto& source = state.executor->container_registers_.at(container);
+        const auto& source = *state.executor->container_registers_.at(container);
         const auto expected_words = static_cast<std::uint32_t>(
             (source.type.element_width + 63U) / 64U);
         if (word_count != expected_words || word_count == 0U) {
@@ -814,10 +848,11 @@ std::uint32_t LlvmProcessExecutor::container_read_packed(
             selected = static_cast<std::size_t>(index_aval);
         }
         if (const auto alias
-            = state.executor->container_object_aliases_.at(container)) {
+                = state.executor->container_object_aliases_.at(container);
+            alias != invalid_container_object) {
             PackedLogic4 value;
             if (state.context->read_container_object_element(
-                    *alias, selected, value)) {
+                    alias, selected, value)) {
                 if (value.width() != source.type.element_width) {
                     throw compiler::LlvmJitError {
                         "compiled process direct container-element width mismatch"
@@ -1089,7 +1124,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         };
         if (const auto* read = fsim::runtime::simir::operation_get_if<
                 runtime::simir::ContainerRead>(&operation)) {
-            const auto& source = state.executor->container_registers_.at(
+            const auto& source = *state.executor->container_registers_.at(
                 read->source);
             if (!read->string_index && fast_packed_type(source)
                 && state.executor->layout_.register_widths.at(read->index)
@@ -1135,8 +1170,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             }
         } else if (const auto* write = fsim::runtime::simir::operation_get_if<
                        runtime::simir::ContainerWrite>(&operation)) {
-            auto& target = state.executor->container_registers_.at(
-                write->target);
+            auto& target = state.executor->mutable_container_register_value(
+                write->target, *state.context);
             if (!write->string_index && fast_packed_type(target)
                 && state.executor->layout_.register_widths.at(write->index)
                     <= 64U
@@ -1400,7 +1435,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             std::optional<runtime::simir::ContainerValue> container;
             if (binary->target_kind
                 == runtime::simir::FileBinaryTargetKind::container_register) {
-                container = state.executor->container_registers_.at(binary->target);
+                container = *state.executor->container_registers_.at(
+                    binary->target);
             } else if (binary->target_kind
                 == runtime::simir::FileBinaryTargetKind::container_object) {
                 container = state.context->read_container_object(binary->target);
@@ -1436,7 +1472,16 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             *result_aval = value.bytes;
             return 0;
         }
-        auto& registers = state.executor->container_registers_;
+        const auto read_container = [&](const auto id)
+            -> const runtime::simir::ContainerValue& {
+            return state.executor->container_register_value(
+                id, *state.context);
+        };
+        const auto mutable_container = [&](const auto id)
+            -> runtime::simir::ContainerValue& {
+            return state.executor->mutable_container_register_value(
+                id, *state.context);
+        };
         const auto index =
             [&](const std::uint64_t aval,
                 const std::uint64_t bval,
@@ -1748,7 +1793,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             *result_bval = word.bval;
         } else if (const auto* resize = fsim::runtime::simir::operation_get_if<runtime::simir::ResizeContainer>(
                        &operation)) {
-            auto& target = registers.at(resize->target);
+            auto& target = mutable_container(resize->target);
             if ((target.type.queue && !resize->allow_queue)
                 || target.type.associative || target.type.fixed) {
                 throw runtime::simir::InterpreterError {
@@ -1765,7 +1810,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 "dynamic-array size");
             const runtime::simir::ContainerValue* initializer { };
             if (resize->initializer) {
-                const auto& source = registers.at(*resize->initializer);
+                const auto& source = read_container(*resize->initializer);
                 require_same(target, source);
                 initializer = &source;
             }
@@ -1774,16 +1819,16 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         } else if (const auto* copy = fsim::runtime::simir::operation_get_if<
                        runtime::simir::CopyContainerRegister>(
                        &operation)) {
-            auto& target = registers.at(copy->destination);
-            const auto& source = registers.at(copy->source);
+            auto& target = mutable_container(copy->destination);
+            const auto& source = read_container(copy->source);
             require_same(target, source);
             target = source;
         } else if (const auto* conditional = fsim::runtime::simir::operation_get_if<
                        runtime::simir::ConditionalContainerSelect>(
                        &operation)) {
-            auto& target = registers.at(conditional->destination);
-            const auto& when_true = registers.at(conditional->when_true);
-            const auto& when_false = registers.at(conditional->when_false);
+            auto& target = mutable_container(conditional->destination);
+            const auto& when_true = read_container(conditional->when_true);
+            const auto& when_false = read_container(conditional->when_false);
             runtime::simir::select_container_value(
                 target,
                 PackedLogic4::from_aval_bval(
@@ -1793,8 +1838,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         } else if (const auto* comparison = fsim::runtime::simir::operation_get_if<runtime::simir::CompareContainers>(
                        &operation)) {
             const auto result = runtime::simir::compare_container_values(
-                registers.at(comparison->lhs),
-                registers.at(comparison->rhs),
+                read_container(comparison->lhs),
+                read_container(comparison->rhs),
                 comparison->case_equal);
             const auto word = result.low_word();
             *result_aval = word.aval;
@@ -1809,7 +1854,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                        &operation)) {
             state.context->write_container_object(
                 write_object->object,
-                registers.at(write_object->source));
+                read_container(write_object->source));
             if (write_object->transaction_signal) {
                 state.context->write_update_word(
                     *write_object->transaction_signal,
@@ -1844,11 +1889,11 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         } else if (const auto* size = fsim::runtime::simir::operation_get_if<runtime::simir::ContainerSize>(
                        &operation)) {
             *result_aval = runtime::simir::container_value_size(
-                registers.at(size->source));
+                read_container(size->source));
         } else if (const auto* reduction = fsim::runtime::simir::operation_get_if<runtime::simir::ContainerReduction>(
                        &operation)) {
             const auto result = runtime::simir::reduce_container_value(
-                registers.at(reduction->source),
+                read_container(reduction->source),
                 reduction->operation,
                 reduction->transformation);
             const auto word = result.low_word();
@@ -1857,7 +1902,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         } else if (const auto* ordering = fsim::runtime::simir::operation_get_if<runtime::simir::OrderContainer>(
                        &operation)) {
             runtime::simir::order_container_value(
-                registers.at(ordering->target),
+                mutable_container(ordering->target),
                 ordering->operation, ordering->key,
                 [&]() {
                     const auto word = state.context->random_value(
@@ -1874,14 +1919,14 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         } else if (const auto* locator = fsim::runtime::simir::operation_get_if<runtime::simir::LocateContainer>(
                        &operation)) {
             runtime::simir::locate_container_values(
-                registers.at(locator->destination),
-                registers.at(locator->source),
+                mutable_container(locator->destination),
+                read_container(locator->source),
                 locator->operation,
                 locator->predicate,
                 locator->transformation);
         } else if (const auto* read = fsim::runtime::simir::operation_get_if<runtime::simir::ContainerRead>(
                        &operation)) {
-            const auto& source = registers.at(read->source);
+            const auto& source = read_container(read->source);
             const auto publish = [&](const PackedLogic4& value) {
                 if (value.width() > 64) {
                     state.executor->write_register(read->destination, value);
@@ -1956,7 +2001,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             publish(source.elements[at]);
         } else if (const auto* write = fsim::runtime::simir::operation_get_if<runtime::simir::ContainerWrite>(
                        &operation)) {
-            auto& target = registers.at(write->target);
+            auto& target = mutable_container(write->target);
             const auto source_element = [&] {
                 return target.type.element_width > 64
                     ? state.executor->read_register(
@@ -2042,7 +2087,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             target.elements[at] = source_element();
         } else if (const auto* string_read = fsim::runtime::simir::operation_get_if<
                        runtime::simir::ContainerStringRead>(&operation)) {
-            const auto& source = registers.at(string_read->source);
+            const auto& source = read_container(string_read->source);
             if (source.type.element_kind
                 != runtime::simir::ContainerElementKind::String) {
                 throw runtime::simir::InterpreterError {
@@ -2091,7 +2136,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 string_read->destination, source.string_elements[at]);
         } else if (const auto* string_write = fsim::runtime::simir::operation_get_if<
                        runtime::simir::ContainerStringWrite>(&operation)) {
-            auto& target = registers.at(string_write->target);
+            auto& target = mutable_container(string_write->target);
             if (target.type.element_kind
                 != runtime::simir::ContainerElementKind::String) {
                 throw runtime::simir::InterpreterError {
@@ -2175,7 +2220,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             target.string_elements[at] = source;
         } else if (const auto* element_read = fsim::runtime::simir::operation_get_if<
                        runtime::simir::ContainerElementRead>(&operation)) {
-            const auto& source = registers.at(element_read->source);
+            const auto& source = read_container(element_read->source);
             if (source.type.element_kind
                     != runtime::simir::ContainerElementKind::Container
                 || source.type.element_types.size() != 1) {
@@ -2211,7 +2256,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 }
                 selected = &source.nested_elements[at];
             }
-            auto& destination = registers.at(element_read->destination);
+            auto& destination = mutable_container(element_read->destination);
             if (destination.type != selected->type) {
                 throw runtime::simir::InterpreterError {
                     process, instruction,
@@ -2221,8 +2266,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             destination = *selected;
         } else if (const auto* element_write = fsim::runtime::simir::operation_get_if<
                        runtime::simir::ContainerElementWrite>(&operation)) {
-            auto& target = registers.at(element_write->target);
-            const auto& source = registers.at(element_write->source);
+            auto& target = mutable_container(element_write->target);
+            const auto& source = read_container(element_write->source);
             if (target.type.element_kind
                     != runtime::simir::ContainerElementKind::Container
                 || target.type.element_types.size() != 1
@@ -2271,7 +2316,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             target.nested_elements[at] = source;
         } else if (const auto* aggregate_read = fsim::runtime::simir::operation_get_if<
                        runtime::simir::ContainerAggregateRead>(&operation)) {
-            const auto& source = registers.at(aggregate_read->source);
+            const auto& source = read_container(aggregate_read->source);
             if (source.type.element_kind
                     != runtime::simir::ContainerElementKind::Aggregate
                 || aggregate_read->members.empty()) {
@@ -2336,7 +2381,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             *result_bval = word.bval;
         } else if (const auto* aggregate_write = fsim::runtime::simir::operation_get_if<
                        runtime::simir::ContainerAggregateWrite>(&operation)) {
-            auto& target = registers.at(aggregate_write->target);
+            auto& target = mutable_container(aggregate_write->target);
             if (target.type.element_kind
                     != runtime::simir::ContainerElementKind::Aggregate
                 || aggregate_write->members.empty()) {
@@ -2428,8 +2473,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         } else if (const auto* aggregate_copy = fsim::runtime::simir::operation_get_if<
                        runtime::simir::CopyContainerAggregateElement>(
                        &operation)) {
-            auto& target = registers.at(aggregate_copy->target);
-            const auto& source = registers.at(aggregate_copy->source);
+            auto& target = mutable_container(aggregate_copy->target);
+            const auto& source = read_container(aggregate_copy->source);
             if (target.type != source.type
                 || target.type.element_kind
                     != runtime::simir::ContainerElementKind::Aggregate) {
@@ -2513,7 +2558,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             target.nested_elements[target_at] = snapshot;
         } else if (const auto* erase = fsim::runtime::simir::operation_get_if<runtime::simir::DeleteContainer>(
                        &operation)) {
-            auto& target = registers.at(erase->target);
+            auto& target = mutable_container(erase->target);
             const bool aggregate = target.type.element_kind
                 == runtime::simir::ContainerElementKind::Aggregate;
             const bool string_element = target.type.element_kind
@@ -2632,7 +2677,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 load->write ? "write-memory finish" : "read-memory finish");
             if (load->write) {
                 const auto text = runtime::simir::write_memory_text(
-                    registers.at(load->target), load->hexadecimal, start, finish);
+                    read_container(load->target), load->hexadecimal, start,
+                    finish);
                 const auto handle = state.context->open_file(
                     state.executor->string_registers_.at(load->path), "w");
                 try {
@@ -2671,11 +2717,11 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 throw;
             }
             runtime::simir::load_memory_text(
-                registers.at(load->target), text, load->hexadecimal,
+                mutable_container(load->target), text, load->hexadecimal,
                 start, finish);
         } else if (const auto* exists = fsim::runtime::simir::operation_get_if<runtime::simir::ContainerExists>(
                        &operation)) {
-            const auto& source = registers.at(exists->source);
+            const auto& source = read_container(exists->source);
             if (exists->string_index) {
                 const auto& sought = string_key(source, exists->index);
                 const auto at = lower_string_key(source, sought);
@@ -2693,7 +2739,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 : 0U;
         } else if (const auto* traverse = fsim::runtime::simir::operation_get_if<runtime::simir::TraverseContainer>(
                        &operation)) {
-            const auto& source = registers.at(traverse->source);
+            const auto& source = read_container(traverse->source);
             if (!source.type.associative) {
                 throw runtime::simir::InterpreterError {
                     process, instruction,
@@ -2772,7 +2818,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             }
         } else if (const auto* push = fsim::runtime::simir::operation_get_if<runtime::simir::PushContainer>(
                        &operation)) {
-            auto& target = registers.at(push->target);
+            auto& target = mutable_container(push->target);
             if (!target.type.queue) {
                 throw runtime::simir::InterpreterError {
                     process, instruction,
@@ -2816,7 +2862,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             }
         } else if (const auto* pop = fsim::runtime::simir::operation_get_if<runtime::simir::PopContainer>(
                        &operation)) {
-            auto& target = registers.at(pop->target);
+            auto& target = mutable_container(pop->target);
             if (!target.type.queue || target.elements.empty()) {
                 throw runtime::simir::InterpreterError {
                     process, instruction,
@@ -2839,14 +2885,15 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 target.elements.pop_back();
             }
         } else {
-            const auto alternative = std::visit(
-                [](const auto& group) { return group.storage.index(); },
-                operation.storage);
+            const auto alternative
+                = runtime::simir::operation_alternative_index(operation);
             throw compiler::LlvmJitError {
                 "compiled container callback has the wrong operation at process "
                 + std::to_string(process) + ", instruction "
                 + std::to_string(instruction) + " (group "
-                + std::to_string(operation.storage.index()) + ", alternative "
+                + std::to_string(
+                    runtime::simir::operation_group_index(operation))
+                + ", alternative "
                 + std::to_string(alternative) + ")"
             };
         }

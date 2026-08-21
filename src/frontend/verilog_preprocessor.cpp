@@ -768,12 +768,16 @@ namespace {
                 0
             };
             processed.mappings.push_back(mapping);
+            const auto remap_tail = [&](const std::size_t begin) {
+                for (auto position = begin; position < tokens.size(); ++position) {
+                    mapped_tokens[position].span =
+                        remap_span(tokens[position].span, mapping);
+                }
+            };
+            remap_tail(0);
             std::size_t index = 0;
             while (index < tokens.size()
                 && tokens[index].kind != TokenKind::EndOfFile) {
-                for (auto position = index; position < tokens.size(); ++position) {
-                    mapped_tokens[position].span = remap_span(tokens[position].span, mapping);
-                }
                 if (protected_envelope_) {
                     if (mapped_tokens[index].kind == TokenKind::Backtick
                         && index + 1 < tokens.size()
@@ -807,6 +811,7 @@ namespace {
                                     next_physical_line)) {
                                 mapping = std::move(*next_mapping);
                                 processed.mappings.push_back(mapping);
+                                remap_tail(end);
                             }
                             index = end;
                             continue;

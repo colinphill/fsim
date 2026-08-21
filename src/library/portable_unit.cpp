@@ -32,11 +32,15 @@ template <typename T>
 struct IsVector : std::false_type {};
 template <typename T, typename Allocator>
 struct IsVector<std::vector<T, Allocator>> : std::true_type {};
+template <typename T>
+struct IsVector<support::RareVector<T>> : std::true_type {};
 
 template <typename T>
 struct IsOptional : std::false_type {};
 template <typename T>
 struct IsOptional<std::optional<T>> : std::true_type {};
+template <typename T>
+struct IsOptional<support::RareOptional<T>> : std::true_type {};
 
 template <typename T>
 struct IsSharedPtr : std::false_type {};
@@ -218,6 +222,9 @@ class Writer final {
       } else {
         unsigned64(static_cast<std::uint64_t>(value));
       }
+    } else if constexpr (std::same_as<Value, frontend::SourceName>) {
+      auto spelling = value.str();
+      write(spelling);
     } else if constexpr (std::same_as<Value, std::string>) {
       unsigned64(value.size());
       raw(value);
@@ -327,7 +334,14 @@ class Reader final {
           value = static_cast<Value>(encoded);
         }
         return true;
-      } else if constexpr (std::same_as<Value, std::string>) {
+    } else if constexpr (std::same_as<Value, frontend::SourceName>) {
+      std::string spelling;
+      if (!read(spelling)) {
+        return false;
+      }
+      value = std::move(spelling);
+      return true;
+    } else if constexpr (std::same_as<Value, std::string>) {
         std::uint64_t size{};
         if (!unsigned64(size) || size > remaining()) {
           return fail("portable string length exceeds the artifact");
@@ -803,6 +817,13 @@ bool relocate_class_unit_sources(
 std::optional<std::string> serialize_portable_unit(
     const frontend::DesignUnit& unit,
     diagnostic::Engine& diagnostics) {
+  auto owning = unit;
+  return serialize_portable_unit(std::move(owning), diagnostics);
+}
+
+std::optional<std::string> serialize_portable_unit(
+    frontend::DesignUnit&& unit,
+    diagnostic::Engine& diagnostics) {
   std::unordered_set<const void*> visited;
   if (!valid_unit_strengths(unit) || !valid_unit_specify(unit)
       || !valid_unit_hierarchy(unit)) {
@@ -821,8 +842,7 @@ std::optional<std::string> serialize_portable_unit(
   writer.raw(kMagic);
   auto schema = kOwningUnitSchemaVersion;
   writer.write(schema);
-  auto owning = unit;
-  writer.write(owning);
+  writer.write(unit);
   if (!writer.failure().empty()) {
     diagnostics.error(std::string{kCode}, writer.failure());
     return std::nullopt;
@@ -832,6 +852,13 @@ std::optional<std::string> serialize_portable_unit(
 
 std::optional<std::string> serialize_portable_udp(
     const frontend::VerilogUdpDeclaration& declaration,
+    diagnostic::Engine& diagnostics) {
+  auto owning = declaration;
+  return serialize_portable_udp(std::move(owning), diagnostics);
+}
+
+std::optional<std::string> serialize_portable_udp(
+    frontend::VerilogUdpDeclaration&& declaration,
     diagnostic::Engine& diagnostics) {
   if (!frontend::verilog_udp_declaration_well_formed(declaration)) {
     diagnostics.error(
@@ -851,8 +878,7 @@ std::optional<std::string> serialize_portable_udp(
   writer.raw(kUdpMagic);
   auto schema = kUdpDeclarationSchemaVersion;
   writer.write(schema);
-  auto owning = declaration;
-  writer.write(owning);
+  writer.write(declaration);
   if (!writer.failure().empty()) {
     diagnostics.error(std::string{kCode}, writer.failure());
     return std::nullopt;
@@ -862,6 +888,13 @@ std::optional<std::string> serialize_portable_udp(
 
 std::optional<std::string> serialize_portable_class_unit(
     const PortableSystemVerilogClassUnit& unit,
+    diagnostic::Engine& diagnostics) {
+  auto owning = unit;
+  return serialize_portable_class_unit(std::move(owning), diagnostics);
+}
+
+std::optional<std::string> serialize_portable_class_unit(
+    PortableSystemVerilogClassUnit&& unit,
     diagnostic::Engine& diagnostics) {
   if (unit.library.empty() || unit.compilation_unit_identity.empty()
       || (unit.uvm_release != "none" && unit.uvm_release != "1.2"
@@ -882,8 +915,7 @@ std::optional<std::string> serialize_portable_class_unit(
   writer.raw(kClassMagic);
   auto schema = kOwningUnitSchemaVersion;
   writer.write(schema);
-  auto owning = unit;
-  writer.write(owning);
+  writer.write(unit);
   if (!writer.failure().empty()) {
     diagnostics.error(std::string{kCode}, writer.failure());
     return std::nullopt;

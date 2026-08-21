@@ -1,16 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/design_artifact.hpp"
+#include "fsim/support/sha256.hpp"
 
 #include "../diagnostic/artifact_identity.hpp"
 
 #include <boost/pfr/core.hpp>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <filesystem>
 #include <functional>
 #include <limits>
 #include <memory>
+#include <ostream>
 #include <ranges>
 #include <set>
 #include <string>
@@ -50,11 +53,15 @@ namespace codec_detail {
     struct IsVector : std::false_type { };
     template <typename T, typename Allocator>
     struct IsVector<std::vector<T, Allocator>> : std::true_type { };
+    template <typename T>
+    struct IsVector<support::RareVector<T>> : std::true_type { };
 
     template <typename T>
     struct IsOptional : std::false_type { };
     template <typename T>
     struct IsOptional<std::optional<T>> : std::true_type { };
+    template <typename T>
+    struct IsOptional<support::RareOptional<T>> : std::true_type { };
 
     template <typename T>
     struct IsVariant : std::false_type { };
@@ -461,11 +468,41 @@ namespace codec_detail {
 
     class Writer {
     public:
-        void raw(const std::string_view bytes) { bytes_.append(bytes); }
+        Writer() = default;
+        Writer(std::ostream* output, support::Sha256* checksum)
+            : output_(output)
+            , checksum_(checksum)
+        {
+        }
+
+        void raw(std::string_view bytes)
+        {
+            if (output_ == nullptr && checksum_ == nullptr) {
+                bytes_.append(bytes);
+                return;
+            }
+            while (!bytes.empty() && failure_.empty()) {
+                const auto available = buffer_.size() - buffered_;
+                const auto count = std::min(available, bytes.size());
+                std::ranges::copy_n(bytes.begin(), count,
+                    buffer_.begin() + static_cast<std::ptrdiff_t>(buffered_));
+                buffered_ += count;
+                bytes.remove_prefix(count);
+                if (buffered_ == buffer_.size()) {
+                    flush();
+                }
+            }
+        }
+
+        void byte(const char value)
+        {
+            raw(std::string_view { &value, 1 });
+        }
+
         void u64(const std::uint64_t value)
         {
             for (unsigned shift = 0; shift < 64; shift += 8) {
-                bytes_.push_back(static_cast<char>((value >> shift) & 0xffU));
+                byte(static_cast<char>((value >> shift) & 0xffU));
             }
         }
 
@@ -482,7 +519,7 @@ namespace codec_detail {
             }
             using Value = std::remove_cv_t<T>;
             if constexpr (std::same_as<Value, bool>) {
-                bytes_.push_back(value ? '\1' : '\0');
+                byte(value ? '\1' : '\0');
             } else if constexpr (std::is_enum_v<Value>) {
                 if (!valid_archive_enum(value)) {
                     failure_ = "design state contains an invalid scalar enumeration";
@@ -500,9 +537,15 @@ namespace codec_detail {
                 const auto encoded = std::bit_cast<Unsigned>(value);
                 for (unsigned shift = 0;
                      shift < sizeof(Value) * 8U; shift += 8U) {
-                    bytes_.push_back(static_cast<char>(
+                    byte(static_cast<char>(
                         (encoded >> shift) & static_cast<Unsigned>(0xffU)));
                 }
+            } else if constexpr (
+                std::same_as<Value, runtime::simir::InternedString>) {
+                write(value.str());
+            } else if constexpr (
+                std::same_as<Value, frontend::SourceName>) {
+                write(value.str());
             } else if constexpr (std::same_as<Value, std::string>) {
                 u64(value.size());
                 raw(value);
@@ -513,8 +556,28 @@ namespace codec_detail {
                 write(value.to_msb_string());
             } else if constexpr (std::same_as<Value, runtime::simir::Operation>) {
                 write_operation(*this, value);
+            } else if constexpr (
+                std::same_as<Value, runtime::simir::OperationList>) {
+                u64(value.size());
+                for (std::size_t index = 0; index < value.size(); ++index) {
+                    write(value.expanded(index));
+                }
+            } else if constexpr (
+                std::same_as<Value,
+                    runtime::simir::ExpressionProfileList>) {
+                u64(value.size());
+                for (const auto& profile : value) {
+                    write(profile);
+                }
             } else if constexpr (DenseId<Value>) {
                 write(value.value());
+            } else if constexpr (requires {
+                typename Value::rare_optional_value_type;
+            }) {
+                write(value.has_value());
+                if (value) {
+                    write(*value);
+                }
             } else if constexpr (IsVector<Value>::value) {
                 u64(value.size());
                 for (const auto& item : value) {
@@ -556,10 +619,38 @@ namespace codec_detail {
         }
 
         std::string finish() && { return std::move(bytes_); }
+        bool complete()
+        {
+            flush();
+            return failure_.empty();
+        }
         const std::string& failure() const noexcept { return failure_; }
 
     private:
+        void flush()
+        {
+            if (buffered_ == 0 || !failure_.empty()) {
+                return;
+            }
+            const std::string_view bytes { buffer_.data(), buffered_ };
+            if (checksum_ != nullptr) {
+                checksum_->update(bytes);
+            }
+            if (output_ != nullptr) {
+                output_->write(bytes.data(),
+                    static_cast<std::streamsize>(bytes.size()));
+                if (!*output_) {
+                    failure_ = "could not write design state";
+                }
+            }
+            buffered_ = 0;
+        }
+
         std::string bytes_;
+        std::ostream* output_ { };
+        support::Sha256* checksum_ { };
+        std::array<char, 64 * 1024> buffer_ { };
+        std::size_t buffered_ { };
         std::size_t depth_ { };
         std::string failure_;
     };
@@ -568,16 +659,28 @@ namespace codec_detail {
     public:
         explicit Reader(const std::string_view bytes)
             : bytes_(bytes)
+            , remaining_(bytes.size())
+        {
+        }
+
+        Reader(std::istream& input, const std::uint64_t size)
+            : input_(&input)
+            , remaining_(size)
         {
         }
 
         bool raw(const std::string_view expected)
         {
-            if (remaining() < expected.size()
-                || bytes_.substr(position_, expected.size()) != expected) {
+            if (remaining() < expected.size()) {
                 return fail("design state has an invalid magic header");
             }
-            position_ += expected.size();
+            for (const auto expected_byte : expected) {
+                unsigned char actual { };
+                if (!read_byte(actual)
+                    || actual != static_cast<unsigned char>(expected_byte)) {
+                    return fail("design state has an invalid magic header");
+                }
+            }
             return true;
         }
 
@@ -588,9 +691,11 @@ namespace codec_detail {
             }
             value = 0;
             for (unsigned shift = 0; shift < 64; shift += 8) {
-                value |= static_cast<std::uint64_t>(
-                             static_cast<unsigned char>(bytes_[position_++]))
-                    << shift;
+                unsigned char byte { };
+                if (!read_byte(byte)) {
+                    return false;
+                }
+                value |= static_cast<std::uint64_t>(byte) << shift;
             }
             return true;
         }
@@ -620,11 +725,11 @@ namespace codec_detail {
             }
             const bool result = [&]() {
                 if constexpr (std::same_as<Value, bool>) {
-                    if (remaining() == 0
-                        || static_cast<unsigned char>(bytes_[position_]) > 1) {
+                    unsigned char byte { };
+                    if (!read_byte(byte) || byte > 1) {
                         return fail("design state contains an invalid boolean");
                     }
-                    value = bytes_[position_++] != 0;
+                    value = byte != 0;
                     return true;
                 } else if constexpr (std::is_enum_v<Value>) {
                     std::underlying_type_t<Value> decoded { };
@@ -643,21 +748,38 @@ namespace codec_detail {
                     std::uint64_t encoded { };
                     for (unsigned shift = 0;
                          shift < sizeof(Value) * 8U; shift += 8U) {
-                        encoded |= static_cast<std::uint64_t>(
-                            static_cast<unsigned char>(bytes_[position_++]))
-                            << shift;
+                        unsigned char byte { };
+                        if (!read_byte(byte)) {
+                            return false;
+                        }
+                        encoded |= static_cast<std::uint64_t>(byte) << shift;
                     }
                     value = std::bit_cast<Value>(
                         static_cast<Unsigned>(encoded));
+                    return true;
+                } else if constexpr (
+                    std::same_as<Value, runtime::simir::InternedString>) {
+                    std::string decoded;
+                    if (!read(decoded)) {
+                        return false;
+                    }
+                    value = std::move(decoded);
+                    return true;
+                } else if constexpr (
+                    std::same_as<Value, frontend::SourceName>) {
+                    std::string decoded;
+                    if (!read(decoded)) {
+                        return false;
+                    }
+                    value = std::move(decoded);
                     return true;
                 } else if constexpr (std::same_as<Value, std::string>) {
                     std::uint64_t size { };
                     if (!u64(size) || size > remaining()) {
                         return fail("design state string exceeds the payload");
                     }
-                    value.assign(bytes_.substr(position_, static_cast<std::size_t>(size)));
-                    position_ += static_cast<std::size_t>(size);
-                    return true;
+                    value.resize(static_cast<std::size_t>(size));
+                    return read_exact(value.data(), value.size());
                 } else if constexpr (std::same_as<Value, std::filesystem::path>) {
                     std::string spelling;
                     if (!read(spelling)) {
@@ -677,12 +799,68 @@ namespace codec_detail {
                     return true;
                 } else if constexpr (std::same_as<Value, runtime::simir::Operation>) {
                     return read_operation(*this, value);
+                } else if constexpr (
+                    std::same_as<Value, runtime::simir::OperationList>) {
+                    std::uint64_t size { };
+                    auto operations = std::move(operation_scratch_);
+                    operations.clear();
+                    if (!u64(size)
+                        || size > static_cast<std::uint64_t>(remaining()) + 1U
+                        || size > operations.max_size()) {
+                        return fail("design state vector exceeds the payload");
+                    }
+                    operations.reserve(static_cast<std::size_t>(size));
+                    for (std::uint64_t index = 0; index < size; ++index) {
+                        operations.emplace_back();
+                        if (!read(operations.back())) {
+                            return false;
+                        }
+                    }
+                    value = std::move(operations);
+                    return true;
+                } else if constexpr (
+                    std::same_as<Value,
+                        runtime::simir::ExpressionProfileList>) {
+                    std::uint64_t size { };
+                    runtime::simir::ExpressionProfileList::Storage profiles;
+                    if (!u64(size)
+                        || size > static_cast<std::uint64_t>(remaining()) + 1U
+                        || size > profiles.max_size()) {
+                        return fail("design state vector exceeds the payload");
+                    }
+                    profiles.reserve(static_cast<std::size_t>(size));
+                    for (std::uint64_t index = 0; index < size; ++index) {
+                        profiles.emplace_back();
+                        if (!read(profiles.back())) {
+                            return false;
+                        }
+                    }
+                    value = runtime::simir::ExpressionProfileList {
+                        std::move(profiles) };
+                    return true;
                 } else if constexpr (DenseId<Value>) {
                     std::uint32_t index { };
                     if (!read(index)) {
                         return false;
                     }
                     value = Value::from_index(index);
+                    return true;
+                } else if constexpr (requires {
+                    typename Value::rare_optional_value_type;
+                }) {
+                    bool present { };
+                    if (!read(present)) {
+                        return false;
+                    }
+                    if (!present) {
+                        value.reset();
+                        return true;
+                    }
+                    typename Value::rare_optional_value_type decoded { };
+                    if (!read(decoded)) {
+                        return false;
+                    }
+                    value = decoded;
                     return true;
                 } else if constexpr (IsVector<Value>::value) {
                     std::uint64_t size { };
@@ -697,6 +875,16 @@ namespace codec_detail {
                         if (!read(value.back())) {
                             return false;
                         }
+                        if constexpr (std::same_as<
+                                          typename Value::value_type,
+                                          runtime::simir::Process>) {
+                            canonicalize_process(value.back());
+                        }
+                    }
+                    if constexpr (std::same_as<
+                                      typename Value::value_type,
+                                      runtime::simir::Signal>) {
+                        signals_ = &value;
                     }
                     return true;
                 } else if constexpr (IsOptional<Value>::value) {
@@ -756,7 +944,10 @@ namespace codec_detail {
             return result;
         }
 
-        std::size_t remaining() const noexcept { return bytes_.size() - position_; }
+        std::size_t remaining() const noexcept
+        {
+            return static_cast<std::size_t>(remaining_);
+        }
         const std::string& failure() const noexcept { return failure_; }
         bool invalid_variant()
         {
@@ -764,6 +955,39 @@ namespace codec_detail {
         }
 
     private:
+        void canonicalize_process(runtime::simir::Process& process)
+        {
+            if (signals_ == nullptr
+                || !runtime::simir::process_operations_shareable(process)) {
+                return;
+            }
+            std::uint64_t bucket = UINT64_C(1469598103934665603);
+            const auto mix = [&](const std::uint64_t value) {
+                bucket ^= value;
+                bucket *= UINT64_C(1099511628211);
+            };
+            mix(process.operations.size());
+            mix(process.register_count);
+            mix(process.string_register_count);
+            mix(process.container_register_count);
+            for (const auto kind : process.register_value_kinds) {
+                mix(static_cast<std::uint64_t>(kind));
+            }
+            for (const auto& operation : process.operations) {
+                mix(runtime::simir::operation_group_index(operation));
+                mix(runtime::simir::operation_alternative_index(operation));
+            }
+            auto& representatives = process_bodies_[bucket];
+            for (const auto* representative : representatives) {
+                if (runtime::simir::share_process_operations(
+                        *representative, process, *signals_,
+                        &operation_scratch_)) {
+                    return;
+                }
+            }
+            representatives.push_back(&process);
+        }
+
         bool enter()
         {
             if (++depth_ > kMaximumNesting) {
@@ -781,10 +1005,67 @@ namespace codec_detail {
             return false;
         }
 
+        bool read_byte(unsigned char& value)
+        {
+            char byte { };
+            if (!read_exact(&byte, 1)) {
+                return false;
+            }
+            value = static_cast<unsigned char>(byte);
+            return true;
+        }
+
+        bool read_exact(char* destination, std::size_t size)
+        {
+            if (size > remaining_) {
+                return fail("design state is truncated");
+            }
+            if (input_ == nullptr) {
+                std::ranges::copy_n(
+                    bytes_.begin() + static_cast<std::ptrdiff_t>(position_),
+                    size, destination);
+                position_ += size;
+                remaining_ -= size;
+                return true;
+            }
+            while (size > 0) {
+                if (buffer_position_ == buffer_size_) {
+                    const auto request = static_cast<std::streamsize>(
+                        std::min<std::uint64_t>(buffer_.size(), remaining_));
+                    input_->read(buffer_.data(), request);
+                    buffer_size_ = static_cast<std::size_t>(input_->gcount());
+                    buffer_position_ = 0;
+                    if (buffer_size_ == 0) {
+                        return fail("design state is truncated");
+                    }
+                }
+                const auto count = std::min(
+                    size, buffer_size_ - buffer_position_);
+                std::ranges::copy_n(
+                    buffer_.begin()
+                        + static_cast<std::ptrdiff_t>(buffer_position_),
+                    count, destination);
+                destination += count;
+                size -= count;
+                buffer_position_ += count;
+                remaining_ -= count;
+            }
+            return true;
+        }
+
         std::string_view bytes_;
+        std::istream* input_ { };
+        std::uint64_t remaining_ { };
         std::size_t position_ { };
+        std::array<char, 64 * 1024> buffer_ { };
+        std::size_t buffer_position_ { };
+        std::size_t buffer_size_ { };
         std::size_t depth_ { };
         std::string failure_;
+        const std::vector<runtime::simir::Signal>* signals_ { };
+        std::unordered_map<std::uint64_t,
+            std::vector<const runtime::simir::Process*>> process_bodies_;
+        runtime::simir::OperationList::Storage operation_scratch_;
     };
 
 #if defined(FSIM_DESIGN_ARTIFACT_CODEC_DESIGN_IR)
@@ -823,6 +1104,44 @@ namespace codec_detail {
     }
 
     template <typename Value>
+    std::optional<std::string> serialized_checksum(
+        const std::string_view magic,
+        const std::uint32_t schema,
+        const Value& value,
+        diagnostic::Engine& diagnostics)
+    {
+        support::Sha256 checksum;
+        Writer writer { nullptr, &checksum };
+        writer.raw(magic);
+        writer.write(schema);
+        writer.write(value);
+        if (!writer.complete()) {
+            diagnostics.error(std::string { kCode }, writer.failure());
+            return std::nullopt;
+        }
+        return support::Sha256::hex(checksum.finish());
+    }
+
+    template <typename Value>
+    bool serialize_to_stream(
+        const std::string_view magic,
+        const std::uint32_t schema,
+        const Value& value,
+        std::ostream& output,
+        diagnostic::Engine& diagnostics)
+    {
+        Writer writer { &output, nullptr };
+        writer.raw(magic);
+        writer.write(schema);
+        writer.write(value);
+        if (!writer.complete()) {
+            diagnostics.error(std::string { kCode }, writer.failure());
+            return false;
+        }
+        return true;
+    }
+
+    template <typename Value>
     std::optional<Value> deserialize(
         const std::string_view magic,
         const std::uint32_t expected_schema,
@@ -831,6 +1150,39 @@ namespace codec_detail {
         diagnostic::Engine& diagnostics)
     {
         Reader reader { bytes };
+        std::uint32_t schema { };
+        Value value;
+        if (!reader.raw(magic) || !reader.read(schema)
+            || schema != expected_schema || !reader.read(value)
+            || reader.remaining() != 0) {
+            auto message = reader.failure();
+            if (message.empty() && schema != expected_schema) {
+                message = diagnostic::unsupported_artifact_identity(
+                    "design state " + std::string { magic },
+                    "schema " + std::to_string(schema),
+                    "schema " + std::to_string(expected_schema),
+                    ".fsimdesign");
+            } else if (message.empty()) {
+                message = "design state contains trailing bytes";
+            }
+            diagnostics.error(
+                std::string { kCode }, std::move(message),
+                { std::move(source_name), { 1, 1, 0 }, { 1, 1, 0 } });
+            return std::nullopt;
+        }
+        return value;
+    }
+
+    template <typename Value>
+    std::optional<Value> deserialize(
+        const std::string_view magic,
+        const std::uint32_t expected_schema,
+        std::istream& input,
+        const std::uint64_t size,
+        std::string source_name,
+        diagnostic::Engine& diagnostics)
+    {
+        Reader reader { input, size };
         std::uint32_t schema { };
         Value value;
         if (!reader.raw(magic) || !reader.read(schema)
@@ -1123,6 +1475,31 @@ std::optional<std::string> serialize_runtime_state(
         "FSIMRUN1", kRuntimeStateSchema, design.state(), diagnostics);
 }
 
+std::optional<std::string> serialize_runtime_state(
+    elaboration::ElaboratedDesign&& design,
+    diagnostic::Engine& diagnostics)
+{
+    return serialize("FSIMRUN1", kRuntimeStateSchema,
+        std::move(design).state(), diagnostics);
+}
+
+std::optional<std::string> runtime_state_checksum(
+    const elaboration::ElaboratedDesignState& state,
+    diagnostic::Engine& diagnostics)
+{
+    return serialized_checksum(
+        "FSIMRUN1", kRuntimeStateSchema, state, diagnostics);
+}
+
+bool serialize_runtime_state(
+    const elaboration::ElaboratedDesignState& state,
+    std::ostream& output,
+    diagnostic::Engine& diagnostics)
+{
+    return serialize_to_stream(
+        "FSIMRUN1", kRuntimeStateSchema, state, output, diagnostics);
+}
+
 std::optional<elaboration::ElaboratedDesign> deserialize_runtime_state(
     const std::string_view bytes,
     std::string source_name,
@@ -1130,6 +1507,28 @@ std::optional<elaboration::ElaboratedDesign> deserialize_runtime_state(
 {
     auto state = deserialize<elaboration::ElaboratedDesignState>(
         "FSIMRUN1", kRuntimeStateSchema, bytes, std::move(source_name),
+        diagnostics);
+    if (!state) {
+        return std::nullopt;
+    }
+    auto design = elaboration::ElaboratedDesign::from_state(std::move(*state));
+    if (!design) {
+        diagnostics.error(
+            std::string { kCode },
+            "runtime state is structurally invalid");
+        return std::nullopt;
+    }
+    return design;
+}
+
+std::optional<elaboration::ElaboratedDesign> deserialize_runtime_state(
+    std::istream& input,
+    const std::uint64_t size,
+    std::string source_name,
+    diagnostic::Engine& diagnostics)
+{
+    auto state = deserialize<elaboration::ElaboratedDesignState>(
+        "FSIMRUN1", kRuntimeStateSchema, input, size, std::move(source_name),
         diagnostics);
     if (!state) {
         return std::nullopt;

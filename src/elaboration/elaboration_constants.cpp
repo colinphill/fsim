@@ -1375,7 +1375,7 @@ void substitute_parameters(
         }
     }
     const auto evaluate_integer_range =
-        [&](std::optional<frontend::IntegerRangeExpression>& expression,
+        [&](support::RareOptional<frontend::IntegerRangeExpression>& expression,
             std::optional<frontend::IntegerRange>& range,
             const std::string_view description) {
             auto span = frontend::SourceSpan { };
@@ -1492,7 +1492,7 @@ void substitute_parameters(
         }
     }
     const auto evaluate_enumeration_range =
-        [&](std::optional<
+        [&](support::RareOptional<
                 frontend::DiscreteRangeExpression>& expression,
             std::optional<frontend::EnumerationRange>& range,
             const std::string_view description) {

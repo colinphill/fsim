@@ -751,9 +751,9 @@ public:
     [[nodiscard]] VhdlDebugSnapshot vhdl_debug_snapshot(
         VhdlDebugLimits limits = { }) const;
     [[nodiscard]] runtime::VhdlVhpiObjectRegistry&
-    vhdl_vhpi_objects() noexcept;
+    vhdl_vhpi_objects();
     [[nodiscard]] const runtime::VhdlVhpiObjectRegistry&
-    vhdl_vhpi_objects() const noexcept;
+    vhdl_vhpi_objects() const;
     /// Live Verilog/SystemVerilog VPI hierarchy and effective/stored values.
     [[nodiscard]] runtime::SystemVerilogVpiObjectRegistry&
     systemverilog_vpi_objects() noexcept;

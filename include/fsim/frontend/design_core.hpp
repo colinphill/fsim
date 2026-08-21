@@ -4,6 +4,7 @@
 #include "fsim/frontend/source.hpp"
 #include "fsim/frontend/systemverilog_scalars.hpp"
 #include "fsim/frontend/token.hpp"
+#include "fsim/support/rare_vector.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -87,8 +88,9 @@ struct Expression {
     // `others`, `@array`, SystemVerilog `@key`, and `default` associations retain
     // their source choices in aggregate_choice_expressions. A SystemVerilog
     // default retains one source-spanned DefaultChoice node.
-    std::vector<std::string> aggregate_choices { };
-    std::vector<std::vector<Expression>> aggregate_choice_expressions { };
+    support::RareVector<std::string> aggregate_choices { };
+    support::RareVector<std::vector<Expression>>
+        aggregate_choice_expressions { };
     // Set only on elaboration-internal folded VHDL enumeration constants so
     // contextual nominal typing survives substitution into comparisons and
     // conditional expressions.
@@ -98,8 +100,8 @@ struct Expression {
     // cache/source provenance.
     std::optional<std::string> decoded_string;
     std::optional<SystemVerilogDecimalLiteral> systemverilog_decimal_literal;
-    std::vector<std::string> call_argument_names;
-    std::vector<PortDirection> call_argument_directions;
+    support::RareVector<std::string> call_argument_names;
+    support::RareVector<PortDirection> call_argument_directions;
     std::uint64_t call_result_width { };
     ValueDomain call_result_domain { ValueDomain::Unknown };
     bool call_result_signed { };
@@ -275,7 +277,7 @@ struct PackedMember {
     std::string spelling;
     std::optional<PackedRange> packed_range;
     bool is_signed { };
-    std::optional<PackedRangeExpression> packed_range_expression;
+    support::RareOptional<PackedRangeExpression> packed_range_expression;
     // Normalized offset from the least-significant bit of the containing
     // packed aggregate. Filled once every member width is concrete.
     std::uint64_t lsb_offset { };
@@ -486,11 +488,11 @@ struct Type {
     // ordinals above. A base enumeration covers its complete ascending range;
     // derived subtypes retain their own direction and inclusive bounds.
     std::optional<EnumerationRange> enumeration_range;
-    std::optional<DiscreteRangeExpression> enumeration_range_expression;
+    support::RareOptional<DiscreteRangeExpression> enumeration_range_expression;
     // A derived enumeration constraint retains its resolved base independently
     // so specialization can prove containment after folding bound constants.
     std::optional<EnumerationRange> enumeration_base_range;
-    std::optional<DiscreteRangeExpression> enumeration_base_range_expression;
+    support::RareOptional<DiscreteRangeExpression> enumeration_base_range_expression;
     // Non-empty for a bounded packed struct or union. A member may retain one
     // nested aggregate or enum type in PackedMember::nested_types.
     std::vector<PackedMember> packed_members;
@@ -498,29 +500,29 @@ struct Type {
     // Concrete or specialization-dependent VHDL scalar constraint. This never
     // changes the fixed 32-bit runtime representation returned by width().
     std::optional<IntegerRange> integer_range;
-    std::optional<IntegerRangeExpression> integer_range_expression;
+    support::RareOptional<IntegerRangeExpression> integer_range_expression;
     // When a derived VHDL subtype adds an integer range, retain the resolved
     // base subtype's range independently so specialization can prove that the
     // derived constraint remains inside it.
     std::optional<IntegerRange> integer_base_range;
-    std::optional<IntegerRangeExpression> integer_base_range_expression;
+    support::RareOptional<IntegerRangeExpression> integer_base_range_expression;
     // A range parsed on an unresolved named VHDL type. Type resolution moves
     // this to integer_range_expression or enumeration_range_expression.
-    std::optional<DiscreteRangeExpression> discrete_range_expression;
+    support::RareOptional<DiscreteRangeExpression> discrete_range_expression;
     // Present only for a source-level VHDL array declaration or resolved view.
-    std::optional<VhdlArrayInfo> vhdl_array;
+    support::RareOptional<VhdlArrayInfo> vhdl_array;
     // Present only for a source-level VHDL access declaration or a resolved
     // view of one. Allocation and ownership semantics are added during
     // elaboration; the frontend never loses the designated subtype.
-    std::optional<VhdlAccessInfo> vhdl_access;
+    support::RareOptional<VhdlAccessInfo> vhdl_access;
     // Present only for a source-level VHDL file type declaration or a resolved
     // view of one. Runtime lifetime and services are semantic concerns; the
     // frontend retains the exact element subtype.
-    std::optional<VhdlFileInfo> vhdl_file;
+    support::RareOptional<VhdlFileInfo> vhdl_file;
     // Present only for a source-level VHDL physical type declaration or a
     // resolved view of one. Source units and exact scale expressions remain
     // declaration ordered.
-    std::optional<VhdlPhysicalInfo> vhdl_physical;
+    support::RareOptional<VhdlPhysicalInfo> vhdl_physical;
     // Present on a VHDL protected declaration or body. A shared indirection is
     // required because protected method profiles contain Type values.
     std::shared_ptr<VhdlProtectedInfo> vhdl_protected;
@@ -530,7 +532,7 @@ struct Type {
     std::vector<DiscreteRangeExpression> vhdl_array_constraints;
     // Present only for a SystemVerilog dynamic array, queue, or associative
     // array. All scalar fields above describe one element, not the container.
-    std::optional<SystemVerilogContainerInfo> systemverilog_container;
+    support::RareOptional<SystemVerilogContainerInfo> systemverilog_container;
     // Resolved SystemVerilog class handles are nullable and never host pointers.
     std::string systemverilog_class_name;
     std::string systemverilog_class_declaration;
@@ -1255,18 +1257,18 @@ struct Statement {
     // SystemVerilog user-task invocation. Kept separate from expression calls
     // because task formals have direction and copy-out semantics.
     std::string task_name;
-    std::vector<Expression> task_arguments;
+    support::RareVector<Expression> task_arguments;
     // Procedural assertion-control system tasks retain their exact policy while
     // sharing the ordinary task-call argument representation.
     SystemVerilogAssertionControlKind assertion_control {
         SystemVerilogAssertionControlKind::None
     };
     // Empty entries are positional; nonempty entries retain named task actuals.
-    std::vector<std::string> task_argument_names;
-    std::vector<FunctionArgument> class_method_arguments;
+    support::RareVector<std::string> task_argument_names;
+    support::RareVector<FunctionArgument> class_method_arguments;
     // VHDL procedure calls retain positional or named association spans.
     std::string procedure_name;
-    std::vector<SubprogramAssociation> procedure_arguments;
+    support::RareVector<SubprogramAssociation> procedure_arguments;
     // A VHDL sequential for-loop retains its implicit constant name and
     // locally-static discrete range until elaboration unrolls the body.
     std::string loop_variable;
@@ -1283,7 +1285,7 @@ struct Statement {
     Expression loop_update_target;
     // Additional comma-separated SystemVerilog for-loop updates execute in
     // source order after the legacy primary target/value pair.
-    std::vector<Statement> loop_updates;
+    support::RareVector<Statement> loop_updates;
     bool loop_descending { };
     // SystemVerilog `<`/`>` loop conditions exclude the retained limit;
     // VHDL discrete ranges and SV `<=`/`>=` include it.
@@ -1311,7 +1313,7 @@ struct Statement {
     bool vhdl_postponed { };
     // Delay selected by a declarative VHDL disconnection specification. This
     // is independent of the guarded assignment's ordinary waveform delay.
-    std::optional<Delay> vhdl_disconnection_delay;
+    support::RareOptional<Delay> vhdl_disconnection_delay;
     Expression vhdl_guard;
     // Verilog/SystemVerilog intra-assignment timing. The associated `delay` or
     // `sensitivities` payload is distinct from statement-level timing controls.
@@ -1326,7 +1328,7 @@ struct Statement {
     // uses this metadata to capture the lvalue once for read-modify-write.
     ProceduralUpdateKind procedural_update_kind { ProceduralUpdateKind::None };
     std::string procedural_update_operator;
-    std::optional<Delay> delay;
+    support::RareOptional<Delay> delay;
     // A SystemVerilog ## control counts occurrences of the enclosing/default
     // clocking event rather than project-time ticks. It remains a WaitOn node
     // so existing suspension and callable-legality checks stay conservative.
@@ -1348,16 +1350,16 @@ struct Statement {
     // Present only on VHDL signal assignments. VHDL variable assignments and
     // assignments from the Verilog/SystemVerilog frontends leave this empty.
     std::optional<VhdlDelayMechanism> vhdl_delay_mechanism;
-    std::optional<Delay> vhdl_rejection_limit;
+    support::RareOptional<Delay> vhdl_rejection_limit;
     // VHDL force/release `out` mode targets this process-owned driver rather
     // than the signal's effective value. Default and `in` leave this false.
     bool vhdl_force_driving_value { };
     // VHDL signal-assignment leaves preserve their complete ordered waveform.
     // `value` and `delay` mirror the first element for source compatibility
     // with consumers that have not yet opted into the multi-element form.
-    std::vector<VhdlWaveformElement> vhdl_waveform;
+    support::RareVector<VhdlWaveformElement> vhdl_waveform;
     bool vhdl_unaffected { };
-    std::vector<Sensitivity> sensitivities;
+    support::RareVector<Sensitivity> sensitivities;
     // Exact VHDL report and severity expressions. Literal text and predefined
     // severity literals also mirror into the compact legacy fields below.
     Expression vhdl_report_expression;
@@ -1398,21 +1400,21 @@ struct Statement {
     // Multi-conversion and additional unformatted arguments retain source
     // order here. The legacy singular fields above remain the compact form for
     // one conversion and one value.
-    std::vector<OutputValue> output_values;
+    support::RareVector<OutputValue> output_values;
     std::string output_trailing_text;
 
     // Block contents or the true branch/delayed statement.
-    std::vector<Statement> statements;
+    support::RareVector<Statement> statements;
     // The false branch of an If statement.
-    std::vector<Statement> else_statements;
+    support::RareVector<Statement> else_statements;
     // Ordered alternatives and matching policy of a Verilog/SystemVerilog case
     // statement. VHDL sequential case retains the exact default.
     CaseMatchKind case_match_kind { CaseMatchKind::Exact };
     CaseQualifier case_qualifier { CaseQualifier::None };
-    std::vector<CaseAlternative> case_alternatives;
+    support::RareVector<CaseAlternative> case_alternatives;
     // Declarations directly owned by a procedural block.
-    std::vector<TypeAliasDeclaration> type_aliases;
-    std::vector<VariableDeclaration> declarations;
+    support::RareVector<TypeAliasDeclaration> type_aliases;
+    support::RareVector<VariableDeclaration> declarations;
 };
 
 struct CaseAlternative {

@@ -220,10 +220,12 @@ void validate_container_value(const ContainerValue& value);
 struct Interpreter::Impl : SchedulerBatchTask {
     struct ExecutionContext;
 
+    using SharedContainerValue = std::shared_ptr<ContainerValue>;
+
     struct ProcessFrame {
         std::vector<PackedLogic4> registers;
         std::vector<std::string> string_registers;
-        std::vector<ContainerValue> container_registers;
+        std::vector<SharedContainerValue> container_registers;
         std::vector<VitalMemoryState> vital_memories;
     };
 
@@ -240,7 +242,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
             std::vector<ContainerRegisterId> container_ids;
             std::vector<PackedLogic4> packed;
             std::vector<std::string> strings;
-            std::vector<ContainerValue> containers;
+            std::vector<SharedContainerValue> containers;
             std::size_t storage_bytes { };
         };
 
@@ -574,6 +576,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<Signal> signals;
     std::vector<StringObject> string_objects;
     std::vector<ContainerObject> container_objects;
+    std::vector<SharedContainerValue> default_container_values;
     std::vector<std::optional<ContainerSignalAlias>>
         container_signal_aliases;
     std::vector<std::optional<std::uint64_t>>
@@ -614,19 +617,20 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<PackedLogic4> driven_values;
     std::vector<std::map<ProcessId, PackedLogic4>> driver_values;
     std::vector<std::map<ProcessId, DriveStrength>> driver_strengths;
-    std::vector<std::map<ProcessId, PackedLogic4>> forced_driver_values;
-    std::vector<std::map<ProcessId, PackedLogic4>> forced_driver_masks;
-    std::vector<std::optional<PackedLogic4>> external_driver_values;
+    using ForcedDriverMap = std::map<ProcessId, PackedLogic4>;
+    std::vector<std::unique_ptr<ForcedDriverMap>> forced_driver_values;
+    std::vector<std::unique_ptr<ForcedDriverMap>> forced_driver_masks;
+    std::vector<std::unique_ptr<PackedLogic4>> external_driver_values;
     std::vector<std::optional<ScheduledTaskHandle>> charge_decay_handles;
-    std::vector<std::optional<PackedLogic4>> charge_values;
+    std::vector<std::unique_ptr<PackedLogic4>> charge_values;
     std::vector<PackedLogic4> signal_last_values;
     std::vector<std::uint64_t> signal_value_revisions;
     std::vector<PackedLogic4> sampled_values;
     std::vector<PackedLogic4> sampled_defaults;
     bool requires_sampled_values { };
     std::map<SampledHistoryKey, SampledHistoryState> sampled_histories;
-    std::vector<std::optional<PackedLogic4>> forced_values;
-    std::vector<PackedLogic4> forced_masks;
+    std::vector<std::unique_ptr<PackedLogic4>> forced_values;
+    std::vector<std::unique_ptr<PackedLogic4>> forced_masks;
     // Named-event variables carry synchronization-object identities rather
     // than copied packed values. Each event starts with its own stable object.
     std::vector<std::optional<SignalId>> event_identities;
@@ -838,6 +842,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     [[nodiscard]] ProcessState& get_process(ProcessId id);
 
+    [[nodiscard]] ProcessFrame& ensure_process_frame(ProcessState& process);
+
+    [[nodiscard]] static bool can_install_deferred_executor(
+        const ProcessState& process) noexcept;
+
     [[nodiscard]] Logic9 execute_vital_timing_check(
         ProcessId process,
         InstructionIndex instruction,
@@ -868,6 +877,16 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     [[nodiscard]] ContainerValue& get_container_register(
         ProcessState& process, ContainerRegisterId id);
+    [[nodiscard]] const ContainerValue& read_container_register(
+        const ProcessState& process, ContainerRegisterId id) const;
+    [[nodiscard]] SharedContainerValue container_register_storage(
+        const ProcessState& process, ContainerRegisterId id) const;
+    void set_container_register_storage(
+        ProcessState& process,
+        ContainerRegisterId id,
+        SharedContainerValue value);
+    [[nodiscard]] SharedContainerValue default_container_register(
+        const ContainerType& type);
     [[nodiscard]] ContainerObject& get_container_object(
         ContainerObjectId id);
     [[nodiscard]] const ContainerObject& get_container_object(

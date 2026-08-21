@@ -104,7 +104,7 @@ namespace {
                 || formal.type.nominal_type != info.nominal_type) {
                 continue;
             }
-            formal.type.vhdl_array = info.vhdl_array;
+            formal.type.vhdl_array = *info.vhdl_array;
             formal.type.vhdl_array_constraints.clear();
             formal.type.packed_range = info.packed_range;
             formal.type.packed_range_expression.reset();
@@ -461,6 +461,47 @@ namespace {
 
 } // namespace
 
+void HierarchyBuilder::canonicalize_process_operations(Process& process)
+{
+    if (!process_operations_shareable(process)) {
+        return;
+    }
+
+    std::uint64_t bucket = UINT64_C(1469598103934665603);
+    const auto mix = [&](const std::uint64_t value) {
+        bucket ^= value;
+        bucket *= UINT64_C(1099511628211);
+    };
+    mix(process.operations.size());
+    mix(process.register_count);
+    mix(process.string_register_count);
+    mix(process.container_register_count);
+    for (const auto kind : process.register_value_kinds) {
+        mix(static_cast<std::uint64_t>(kind));
+    }
+    for (const auto& operation : process.operations) {
+        mix(operation_group_index(operation));
+        mix(operation_alternative_index(operation));
+    }
+
+    auto& representatives = process_operation_representatives_[bucket];
+    std::erase_if(
+        representatives,
+        [&](const ProcessId representative) {
+            return representative >= design_.processes_.size();
+        });
+    for (const auto representative : representatives) {
+        if (share_process_operations(
+                design_.processes_[representative],
+                process,
+                design_.signals_,
+                &operation_scratch_)) {
+            return;
+        }
+    }
+    representatives.push_back(process.id);
+}
+
 HierarchyBuilder::HierarchyCheckpoint
 HierarchyBuilder::hierarchy_checkpoint(std::string path) const
 {
@@ -602,7 +643,7 @@ void HierarchyBuilder::rollback_hierarchy(
 }
 
 void HierarchyBuilder::instantiate(
-    const DesignUnit& unit,
+    DesignUnit& unit,
     const std::string& path,
     SignalMap aliases,
     StringMap string_aliases,
@@ -1915,6 +1956,7 @@ void HierarchyBuilder::instantiate(
                 process.language_standard = frontend::to_string(unit.vhdl_standard);
                 process.compatibility_profile = unit.vhdl_compatibility_profile;
             }
+            canonicalize_process_operations(process);
             specialization.processes.push_back(process.id);
             design_.processes_.push_back(std::move(process));
         };
@@ -2208,6 +2250,18 @@ void HierarchyBuilder::instantiate(
             generated.program_owner = program_owner;
             append_profiled_process(std::move(generated));
         }
+    }
+    // These frontend bodies have been fully lowered.  Child binding still
+    // needs the unit's declarations, callables, configurations, and instance
+    // inventory, but retaining consumed process syntax only overlaps it with
+    // the growing runtime design.
+    {
+        decltype(unit.concurrent_statements) empty;
+        unit.concurrent_statements.swap(empty);
+    }
+    {
+        decltype(unit.processes) empty;
+        unit.processes.swap(empty);
     }
     const auto regions_overlap = [](
                                      const Process::DriverRegion& region,

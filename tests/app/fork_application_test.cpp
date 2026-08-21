@@ -216,6 +216,7 @@ int main()
 module fork_processes;
   logic [7:0] result;
   logic [25:0] lifecycle;
+  logic shadow_regression;
   process handle;
   process killed_handle;
   process suspended_handle;
@@ -223,6 +224,11 @@ module fork_processes;
   initial begin : root
     logic [7:0] shared = 0;
     result = 0;
+    shadow_regression = 1'b1;
+    shadow_regression <= 1'b0;
+    fork
+      #2 shadow_regression <= 1'b1;
+    join_none
     fork : all_children
       shared[0] = 1;
       #2 shared[1] = 1;
@@ -325,6 +331,8 @@ module fork_processes;
     end
     lifecycle[15] = 1;
     #1;
+    if (shadow_regression !== 1'b1)
+      $fatal(1, "fork child stable-update shadow suppressed a real transition");
     $finish;
   end
 endmodule

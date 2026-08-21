@@ -115,6 +115,12 @@ std::optional<BuiltProject> build_checked_project(
             identity, unit.verilog_compatibility_profile);
     }
     auto lowering_adapter = std::move(checked->parsed);
+    // Object loading validates an owning semantic/HIR projection, but build
+    // normalization must replace it. Release that obsolete projection before
+    // the AST-heavy normalization and elaboration phases overlap with it.
+    checked->semantics = { };
+    checked->vhdl_hir = { };
+    checked->systemverilog_hir = { };
     std::vector<std::filesystem::path> systemc_plugins;
     std::vector<SystemCLibraryRegistry> systemc_registries;
     std::shared_ptr<systemc::HierarchyRegistry> systemc_hierarchy;
@@ -253,26 +259,6 @@ std::optional<BuiltProject> build_checked_project(
             lowering_adapter, resolution, diagnostics)) {
         return std::nullopt;
     }
-    // Reproject after delay-mode selection and time normalization so the HIR
-    // consumed by every durable downstream boundary is the exact lowering
-    // input, not the pre-normalization parser snapshot created by `check`.
-    checked->semantics = build_semantic_model(
-        lowering_adapter,
-        checked->hdl_sources,
-        checked->systemc_sources,
-        checked->standard_sources);
-    checked->vhdl_hir = build_vhdl_hir(
-        lowering_adapter, checked->semantics);
-    checked->systemverilog_hir = build_systemverilog_hir(
-        lowering_adapter,
-        checked->semantics,
-        checked->systemverilog_class_specializations);
-    if (!checked->semantics.valid()) {
-        diagnostics.error(
-            "FSIM-SEM-0001",
-            "build normalization produced an invalid owning semantic projection");
-        return std::nullopt;
-    }
     const auto tops = selected_tops(config, lowering_adapter, diagnostics);
     validate_bindings(
         config, lowering_adapter, systemc_registries, diagnostics);
@@ -315,6 +301,20 @@ std::optional<BuiltProject> build_checked_project(
         *systemc_instances,
         systemc_provider.get(),
         config.elaboration.search_libraries);
+    // Reproject only after elaboration has released its temporary AST
+    // specializations. The durable HIR must reflect normalized delays, but no
+    // elaboration operation consumes this owning semantic projection.
+    checked->semantics = build_semantic_model(
+        lowering_adapter,
+        checked->hdl_sources,
+        checked->systemc_sources,
+        checked->standard_sources);
+    if (!checked->semantics.valid()) {
+        diagnostics.error(
+            "FSIM-SEM-0001",
+            "build normalization produced an invalid owning semantic projection");
+        return std::nullopt;
+    }
     for (const auto& input : elaborated.diagnostics) {
         const auto source = intern_semantic_span(
             checked->semantics, input.span);
@@ -327,6 +327,12 @@ std::optional<BuiltProject> build_checked_project(
         return std::nullopt;
     }
     auto systemverilog_coverage = frontend::capture_systemverilog_coverage_state(lowering_adapter);
+    checked->vhdl_hir = build_vhdl_hir(
+        lowering_adapter, checked->semantics);
+    checked->systemverilog_hir = build_systemverilog_hir(
+        lowering_adapter,
+        checked->semantics,
+        checked->systemverilog_class_specializations);
     lowering_adapter = { };
     if (!systemc_registries.empty()) {
         try {

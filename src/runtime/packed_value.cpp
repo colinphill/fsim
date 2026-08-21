@@ -19,6 +19,17 @@ namespace {
         return (width + bits_per_word - 1) / bits_per_word;
     }
 
+    [[nodiscard]] std::size_t checked_packed_width(
+        const std::size_t width)
+    {
+        constexpr auto maximum_width
+            = std::numeric_limits<std::size_t>::max() / 2U;
+        if (width > maximum_width) {
+            throw std::length_error("packed value width is too large");
+        }
+        return width;
+    }
+
     void check_index(std::size_t index, std::size_t width)
     {
         if (index >= width) {
@@ -204,33 +215,112 @@ std::string PackedBit2::to_msb_string() const
 void PackedBit2::mask_unused_bits() noexcept { mask_last(words_, width_); }
 
 PackedLogic4::PackedLogic4(std::size_t width, Logic4 initial)
-    : width_(width)
-    , wide_(width > bits_per_word
-              ? std::make_shared<WideStorage>(word_count(width))
-              : nullptr)
+    : width_and_logic9_(checked_packed_width(width))
 {
+    if (this->width() > bits_per_word) {
+        std::construct_at(
+            &extra_.wide,
+            std::make_shared<WideStorage>(word_count(this->width())));
+    } else {
+        std::construct_at(&extra_.inline_storage);
+    }
     fill(initial);
 }
 
-PackedLogic4::PackedLogic4(const PackedLogic4&) = default;
-PackedLogic4::PackedLogic4(PackedLogic4&&) noexcept = default;
-PackedLogic4& PackedLogic4::operator=(const PackedLogic4&) = default;
-PackedLogic4& PackedLogic4::operator=(PackedLogic4&&) noexcept = default;
-PackedLogic4::~PackedLogic4() = default;
+PackedLogic4::PackedLogic4(const PackedLogic4& other)
+    : width_and_logic9_(other.width_and_logic9_)
+    , inline_aval_(other.inline_aval_)
+    , inline_bval_(other.inline_bval_)
+{
+    if (width() > bits_per_word) {
+        std::construct_at(&extra_.wide, other.extra_.wide);
+    } else {
+        std::construct_at(&extra_.inline_storage, other.extra_.inline_storage);
+    }
+}
+
+PackedLogic4::PackedLogic4(PackedLogic4&& other) noexcept
+    : width_and_logic9_(other.width_and_logic9_)
+    , inline_aval_(other.inline_aval_)
+    , inline_bval_(other.inline_bval_)
+{
+    if (width() > bits_per_word) {
+        std::construct_at(&extra_.wide, std::move(other.extra_.wide));
+    } else {
+        std::construct_at(&extra_.inline_storage, other.extra_.inline_storage);
+    }
+}
+
+PackedLogic4& PackedLogic4::operator=(const PackedLogic4& other)
+{
+    if (this == &other) {
+        return *this;
+    }
+    const bool was_wide = width() > bits_per_word;
+    const bool becomes_wide = other.width() > bits_per_word;
+    if (was_wide && becomes_wide) {
+        extra_.wide = other.extra_.wide;
+    } else if (!was_wide && !becomes_wide) {
+        extra_.inline_storage = other.extra_.inline_storage;
+    } else if (was_wide) {
+        std::destroy_at(&extra_.wide);
+        std::construct_at(&extra_.inline_storage, other.extra_.inline_storage);
+    } else {
+        std::destroy_at(&extra_.inline_storage);
+        std::construct_at(&extra_.wide, other.extra_.wide);
+    }
+    width_and_logic9_ = other.width_and_logic9_;
+    inline_aval_ = other.inline_aval_;
+    inline_bval_ = other.inline_bval_;
+    return *this;
+}
+
+PackedLogic4& PackedLogic4::operator=(PackedLogic4&& other) noexcept
+{
+    if (this == &other) {
+        return *this;
+    }
+    const bool was_wide = width() > bits_per_word;
+    const bool becomes_wide = other.width() > bits_per_word;
+    if (was_wide && becomes_wide) {
+        extra_.wide = std::move(other.extra_.wide);
+    } else if (!was_wide && !becomes_wide) {
+        extra_.inline_storage = other.extra_.inline_storage;
+    } else if (was_wide) {
+        std::destroy_at(&extra_.wide);
+        std::construct_at(&extra_.inline_storage, other.extra_.inline_storage);
+    } else {
+        std::destroy_at(&extra_.inline_storage);
+        std::construct_at(&extra_.wide, std::move(other.extra_.wide));
+    }
+    width_and_logic9_ = other.width_and_logic9_;
+    inline_aval_ = other.inline_aval_;
+    inline_bval_ = other.inline_bval_;
+    return *this;
+}
+
+PackedLogic4::~PackedLogic4()
+{
+    if (width() > bits_per_word) {
+        std::destroy_at(&extra_.wide);
+    } else {
+        std::destroy_at(&extra_.inline_storage);
+    }
+}
 
 void PackedLogic4::ensure_unique_wide()
 {
-    if (width_ <= bits_per_word) {
+    if (width() <= bits_per_word) {
         return;
     }
-    if (!wide_) {
-        wide_ = std::make_shared<WideStorage>(word_count(width_));
+    if (!wide_storage()) {
+        wide_storage() = std::make_shared<WideStorage>(word_count(width()));
         return;
     }
-    if (wide_.unique()) {
+    if (wide_storage().unique()) {
         return;
     }
-    wide_ = std::make_shared<WideStorage>(*wide_);
+    wide_storage() = std::make_shared<WideStorage>(*wide_storage());
 }
 
 bool operator==(
@@ -240,27 +330,27 @@ bool operator==(
     if (&left == &right) {
         return true;
     }
-    if (left.width_ != right.width_ || left.logic9_ != right.logic9_) {
+    if (left.width() != right.width() || left.is_logic9() != right.is_logic9()) {
         return false;
     }
-    if (left.width_ <= bits_per_word) {
+    if (left.width() <= bits_per_word) {
         return left.inline_aval_ == right.inline_aval_
             && left.inline_bval_ == right.inline_bval_
-            && (!left.logic9_
-                || (left.inline_logic9_plane2_
-                        == right.inline_logic9_plane2_
-                    && left.inline_logic9_plane3_
-                        == right.inline_logic9_plane3_));
+            && (!left.is_logic9()
+                || (left.inline_logic9_plane2()
+                        == right.inline_logic9_plane2()
+                    && left.inline_logic9_plane3()
+                        == right.inline_logic9_plane3()));
     }
-    if (left.wide_ == right.wide_) {
+    if (left.wide_storage() == right.wide_storage()) {
         return true;
     }
-    return left.wide_->aval == right.wide_->aval
-        && left.wide_->bval == right.wide_->bval
-        && (!left.logic9_
-            || (left.wide_->logic9_plane2 == right.wide_->logic9_plane2
-                && left.wide_->logic9_plane3
-                    == right.wide_->logic9_plane3));
+    return left.wide_storage()->aval == right.wide_storage()->aval
+        && left.wide_storage()->bval == right.wide_storage()->bval
+        && (!left.is_logic9()
+            || (left.wide_storage()->logic9_plane2 == right.wide_storage()->logic9_plane2
+                && left.wide_storage()->logic9_plane3
+                    == right.wide_storage()->logic9_plane3));
 }
 
 PackedLogic4 PackedLogic4::from_msb_string(std::string_view value)
@@ -339,10 +429,10 @@ PackedLogic4 PackedLogic4::from_logic9_word_planes(
             "nine-state plane dimensions do not match the packed width");
     }
     PackedLogic4 result(width, Logic4::zero);
-    result.logic9_ = true;
+    result.set_logic9(true);
     if (width > bits_per_word) {
-        result.wide_->logic9_plane2.resize(words);
-        result.wide_->logic9_plane3.resize(words);
+        result.wide_storage()->logic9_plane2.resize(words);
+        result.wide_storage()->logic9_plane3.resize(words);
     }
     std::ranges::copy(plane0, result.mutable_logic9_plane(0).begin());
     std::ranges::copy(plane1, result.mutable_logic9_plane(1).begin());
@@ -360,26 +450,26 @@ PackedLogic4 PackedLogic4::from_logic9_word(
             "nine-state word width must be between 1 and 64");
     }
     PackedLogic4 result(value.width, Logic4::zero);
-    result.logic9_ = true;
+    result.set_logic9(true);
     result.inline_aval_ = value.planes[0];
     result.inline_bval_ = value.planes[1];
-    result.inline_logic9_plane2_ = value.planes[2];
-    result.inline_logic9_plane3_ = value.planes[3];
+    result.inline_logic9_plane2() = value.planes[2];
+    result.inline_logic9_plane3() = value.planes[3];
     result.mask_unused_bits();
     return result;
 }
 
 void PackedLogic4::assign_logic9_word(const Logic9Word& source)
 {
-    if (!logic9_ || width_ == 0U || width_ > bits_per_word
-        || source.width != width_) {
+    if (!is_logic9() || width() == 0U || width() > bits_per_word
+        || source.width != width()) {
         throw std::invalid_argument(
             "nine-state word assignment requires a matching inline value");
     }
     inline_aval_ = source.planes[0];
     inline_bval_ = source.planes[1];
-    inline_logic9_plane2_ = source.planes[2];
-    inline_logic9_plane3_ = source.planes[3];
+    inline_logic9_plane2() = source.planes[2];
+    inline_logic9_plane3() = source.planes[3];
     mask_unused_bits();
 }
 
@@ -387,17 +477,17 @@ void PackedLogic4::insert_masked_logic9_word(
     const Logic9Word& source,
     std::uint64_t mask)
 {
-    if (!logic9_ || width_ == 0U || width_ > bits_per_word
-        || source.width != width_) {
+    if (!is_logic9() || width() == 0U || width() > bits_per_word
+        || source.width != width()) {
         throw std::invalid_argument(
             "masked nine-state word assignment requires a matching inline value");
     }
-    mask &= final_word_mask(width_);
+    mask &= final_word_mask(width());
     inline_aval_ = (inline_aval_ & ~mask) | (source.planes[0] & mask);
     inline_bval_ = (inline_bval_ & ~mask) | (source.planes[1] & mask);
-    inline_logic9_plane2_ = (inline_logic9_plane2_ & ~mask)
+    inline_logic9_plane2() = (inline_logic9_plane2() & ~mask)
         | (source.planes[2] & mask);
-    inline_logic9_plane3_ = (inline_logic9_plane3_ & ~mask)
+    inline_logic9_plane3() = (inline_logic9_plane3() & ~mask)
         | (source.planes[3] & mask);
 }
 
@@ -405,45 +495,45 @@ bool PackedLogic4::matches_masked_logic9_word(
     const Logic9Word& source,
     std::uint64_t mask) const
 {
-    if (!logic9_ || width_ == 0U || width_ > bits_per_word
-        || source.width != width_) {
+    if (!is_logic9() || width() == 0U || width() > bits_per_word
+        || source.width != width()) {
         return false;
     }
-    mask &= final_word_mask(width_);
+    mask &= final_word_mask(width());
     return (((inline_aval_ ^ source.planes[0]) & mask) == 0U)
         && (((inline_bval_ ^ source.planes[1]) & mask) == 0U)
-        && (((inline_logic9_plane2_ ^ source.planes[2]) & mask) == 0U)
-        && (((inline_logic9_plane3_ ^ source.planes[3]) & mask) == 0U);
+        && (((inline_logic9_plane2() ^ source.planes[2]) & mask) == 0U)
+        && (((inline_logic9_plane3() ^ source.planes[3]) & mask) == 0U);
 }
 
 std::span<const std::uint64_t>
 PackedLogic4::aval_words() const noexcept
 {
-    if (width_ == 0) {
+    if (width() == 0) {
         return { };
     }
-    if (width_ <= bits_per_word) {
+    if (width() <= bits_per_word) {
         return { &inline_aval_, 1 };
     }
-    return wide_->aval;
+    return wide_storage()->aval;
 }
 
 std::span<const std::uint64_t>
 PackedLogic4::bval_words() const noexcept
 {
-    if (width_ == 0) {
+    if (width() == 0) {
         return { };
     }
-    if (width_ <= bits_per_word) {
+    if (width() <= bits_per_word) {
         return { &inline_bval_, 1 };
     }
-    return wide_->bval;
+    return wide_storage()->bval;
 }
 
 std::span<const std::uint64_t>
 PackedLogic4::logic9_plane_words(const std::size_t plane) const noexcept
 {
-    if (!logic9_ || plane >= 4) {
+    if (!is_logic9() || plane >= 4) {
         return { };
     }
     return logic9_plane(plane);
@@ -452,33 +542,33 @@ PackedLogic4::logic9_plane_words(const std::size_t plane) const noexcept
 std::span<std::uint64_t>
 PackedLogic4::mutable_aval_words()
 {
-    if (width_ == 0) {
+    if (width() == 0) {
         return { };
     }
-    if (width_ <= bits_per_word) {
+    if (width() <= bits_per_word) {
         return { &inline_aval_, 1 };
     }
     ensure_unique_wide();
-    return wide_->aval;
+    return wide_storage()->aval;
 }
 
 std::span<std::uint64_t>
 PackedLogic4::mutable_bval_words()
 {
-    if (width_ == 0) {
+    if (width() == 0) {
         return { };
     }
-    if (width_ <= bits_per_word) {
+    if (width() <= bits_per_word) {
         return { &inline_bval_, 1 };
     }
     ensure_unique_wide();
-    return wide_->bval;
+    return wide_storage()->bval;
 }
 
 std::optional<std::uint64_t>
 PackedLogic4::known_unsigned_value() const noexcept
 {
-    if (width_ == 0 || logic9_) {
+    if (width() == 0 || is_logic9()) {
         return std::nullopt;
     }
     const auto aval = aval_words();
@@ -494,7 +584,7 @@ PackedLogic4::known_unsigned_value() const noexcept
 std::optional<std::int64_t>
 PackedLogic4::known_signed_value() const noexcept
 {
-    if (width_ == 0 || logic9_) {
+    if (width() == 0 || is_logic9()) {
         return std::nullopt;
     }
     const auto aval = aval_words();
@@ -504,10 +594,10 @@ PackedLogic4::known_signed_value() const noexcept
     }
 
     auto low = aval.front();
-    if (width_ < bits_per_word) {
-        const auto sign = UINT64_C(1) << (width_ - 1U);
+    if (width() < bits_per_word) {
+        const auto sign = UINT64_C(1) << (width() - 1U);
         if ((low & sign) != 0) {
-            low |= ~final_word_mask(width_);
+            low |= ~final_word_mask(width());
         }
         return std::bit_cast<std::int64_t>(low);
     }
@@ -515,7 +605,7 @@ PackedLogic4::known_signed_value() const noexcept
     const auto negative = (low & (UINT64_C(1) << 63U)) != 0;
     for (std::size_t index = 1; index < aval.size(); ++index) {
         const auto mask = index + 1U == aval.size()
-            ? final_word_mask(width_)
+            ? final_word_mask(width())
             : std::numeric_limits<std::uint64_t>::max();
         const auto extension = negative ? mask : UINT64_C(0);
         if ((aval[index] & mask) != extension) {
@@ -527,33 +617,33 @@ PackedLogic4::known_signed_value() const noexcept
 
 Logic4Word PackedLogic4::low_word() const
 {
-    if (width_ == 0 || width_ > bits_per_word) {
+    if (width() == 0 || width() > bits_per_word) {
         throw std::invalid_argument(
             "four-state word width must be between 1 and 64");
     }
-    if (logic9_) {
+    if (is_logic9()) {
         throw std::invalid_argument(
             "an exact nine-state value has no lossless aval/bval word");
     }
-    return { width_, inline_aval_, inline_bval_ };
+    return { width(), inline_aval_, inline_bval_ };
 }
 
 void PackedLogic4::assign_word(const Logic4Word& source)
 {
-    if (logic9_ || width_ == 0U || width_ > bits_per_word
-        || source.width != width_) {
+    if (is_logic9() || width() == 0U || width() > bits_per_word
+        || source.width != width()) {
         throw std::invalid_argument(
             "assigned four-state word must match a single-word Logic4 value");
     }
-    const auto mask = final_word_mask(width_);
+    const auto mask = final_word_mask(width());
     inline_aval_ = source.aval & mask;
     inline_bval_ = source.bval & mask;
 }
 
 Logic4 PackedLogic4::get(std::size_t index) const
 {
-    check_index(index, width_);
-    if (logic9_) {
+    check_index(index, width());
+    if (is_logic9()) {
         return to_logic4(get_logic9(index));
     }
     const auto aval = read_bit(aval_words(), index);
@@ -566,8 +656,8 @@ Logic4 PackedLogic4::get(std::size_t index) const
 
 Logic9 PackedLogic4::get_logic9(const std::size_t index) const
 {
-    check_index(index, width_);
-    if (!logic9_) {
+    check_index(index, width());
+    if (!is_logic9()) {
         return to_logic9(get(index));
     }
     std::uint8_t encoded { };
@@ -586,8 +676,8 @@ Logic9 PackedLogic4::get_logic9(const std::size_t index) const
 
 void PackedLogic4::set(std::size_t index, Logic4 value)
 {
-    check_index(index, width_);
-    if (logic9_) {
+    check_index(index, width());
+    if (is_logic9()) {
         set_logic9(index, to_logic9(value));
         return;
     }
@@ -617,8 +707,8 @@ void PackedLogic4::set_logic9(
     const std::size_t index,
     const Logic9 value)
 {
-    check_index(index, width_);
-    if (!logic9_) {
+    check_index(index, width());
+    if (!is_logic9()) {
         promote_to_logic9();
     }
     const auto encoded = static_cast<std::uint8_t>(value);
@@ -635,11 +725,11 @@ void PackedLogic4::insert_word(
     const std::size_t offset)
 {
     if (source.width == 0U || source.width > bits_per_word
-        || offset > width_ || source.width > width_ - offset) {
+        || offset > width() || source.width > width() - offset) {
         throw std::invalid_argument(
             "insert word range is outside its target value");
     }
-    if (!logic9_) {
+    if (!is_logic9()) {
         copy_word_range(
             mutable_aval_words(), source.aval, offset, source.width);
         copy_word_range(
@@ -667,15 +757,15 @@ bool PackedLogic4::matches_word(
     const std::size_t offset) const
 {
     if (source.width == 0U || source.width > bits_per_word
-        || offset > width_ || source.width > width_ - offset) {
+        || offset > width() || source.width > width() - offset) {
         throw std::invalid_argument(
             "word comparison range is outside its target value");
     }
-    if (logic9_) {
+    if (is_logic9()) {
         return false;
     }
     const auto mask = final_word_mask(source.width);
-    if (width_ <= bits_per_word) {
+    if (width() <= bits_per_word) {
         return ((inline_aval_ >> offset) & mask) == (source.aval & mask)
             && ((inline_bval_ >> offset) & mask) == (source.bval & mask);
     }
@@ -691,7 +781,7 @@ void PackedLogic4::insert_masked_word(
     const std::size_t offset)
 {
     if (source.width == 0U || source.width > bits_per_word
-        || offset > width_ || source.width > width_ - offset) {
+        || offset > width() || source.width > width() - offset) {
         throw std::invalid_argument(
             "masked insert word range is outside its target value");
     }
@@ -704,7 +794,7 @@ void PackedLogic4::insert_masked_word(
         insert_word(source, offset);
         return;
     }
-    if (logic9_) {
+    if (is_logic9()) {
         for (std::size_t bit = 0; bit < source.width; ++bit) {
             if (((mask >> bit) & UINT64_C(1)) == 0U) {
                 continue;
@@ -751,11 +841,11 @@ bool PackedLogic4::matches_masked_word(
     const std::size_t offset) const
 {
     if (source.width == 0U || source.width > bits_per_word
-        || offset > width_ || source.width > width_ - offset) {
+        || offset > width() || source.width > width() - offset) {
         throw std::invalid_argument(
             "masked word comparison range is outside its target value");
     }
-    if (logic9_) {
+    if (is_logic9()) {
         return false;
     }
     mask &= final_word_mask(source.width);
@@ -781,8 +871,8 @@ void PackedLogic4::insert_bits(
     const PackedLogic4& source,
     const std::size_t offset)
 {
-    if (source.width_ == 0U || offset > width_
-        || source.width_ > width_ - offset) {
+    if (source.width() == 0U || offset > width()
+        || source.width() > width() - offset) {
         throw std::invalid_argument(
             "insert range is outside its target value");
     }
@@ -791,27 +881,27 @@ void PackedLogic4::insert_bits(
         insert_bits(stable_source, offset);
         return;
     }
-    if (!logic9_ && !source.logic9_) {
+    if (!is_logic9() && !source.is_logic9()) {
         copy_bit_range(
-            mutable_aval_words(), source.aval_words(), offset, source.width_);
+            mutable_aval_words(), source.aval_words(), offset, source.width());
         copy_bit_range(
-            mutable_bval_words(), source.bval_words(), offset, source.width_);
+            mutable_bval_words(), source.bval_words(), offset, source.width());
         mask_unused_bits();
         return;
     }
 
     promote_to_logic9();
-    if (source.logic9_) {
+    if (source.is_logic9()) {
         for (std::size_t plane = 0; plane < 4U; ++plane) {
             copy_bit_range(mutable_logic9_plane(plane),
-                source.logic9_plane(plane), offset, source.width_);
+                source.logic9_plane(plane), offset, source.width());
         }
     } else {
         const auto promoted_source = source.promoted_to_logic9();
         for (std::size_t plane = 0; plane < 4U; ++plane) {
             copy_bit_range(mutable_logic9_plane(plane),
                 promoted_source.logic9_plane(plane), offset,
-                source.width_);
+                source.width());
         }
     }
     mask_unused_bits();
@@ -821,12 +911,13 @@ PackedLogic4 PackedLogic4::extract_bits(
     const std::size_t offset,
     const std::size_t width) const
 {
-    if (width == 0U || offset > width_ || width > width_ - offset) {
+    if (width == 0U || offset > this->width()
+        || width > this->width() - offset) {
         throw std::invalid_argument(
             "extract range is outside its source value");
     }
     PackedLogic4 result(width, Logic4::zero);
-    if (!logic9_) {
+    if (!is_logic9()) {
         extract_bit_range(aval_words(), offset, result.mutable_aval_words());
         extract_bit_range(bval_words(), offset, result.mutable_bval_words());
     } else {
@@ -842,7 +933,7 @@ PackedLogic4 PackedLogic4::extract_bits(
 
 void PackedLogic4::fill(Logic4 value)
 {
-    if (logic9_) {
+    if (is_logic9()) {
         const auto encoded = static_cast<std::uint8_t>(to_logic9(value));
         for (std::size_t plane = 0; plane < 4; ++plane) {
             auto words = mutable_logic9_plane(plane);
@@ -869,7 +960,7 @@ void PackedLogic4::fill(Logic4 value)
 
 void PackedLogic4::fill(const Logic9 value)
 {
-    if (!logic9_) {
+    if (!is_logic9()) {
         promote_to_logic9();
     }
     const auto encoded = static_cast<std::uint8_t>(value);
@@ -887,21 +978,21 @@ void PackedLogic4::fill(const Logic9 value)
 
 Logic9Word PackedLogic4::logic9_low_word() const
 {
-    if (width_ == 0 || width_ > bits_per_word) {
+    if (width() == 0 || width() > bits_per_word) {
         throw std::invalid_argument(
             "nine-state word width must be between 1 and 64");
     }
-    Logic9Word result { width_ };
-    if (logic9_) {
+    Logic9Word result { width() };
+    if (is_logic9()) {
         result.planes = {
             inline_aval_,
             inline_bval_,
-            inline_logic9_plane2_,
-            inline_logic9_plane3_
+            inline_logic9_plane2(),
+            inline_logic9_plane3()
         };
         return result;
     }
-    for (std::size_t index = 0; index < width_; ++index) {
+    for (std::size_t index = 0; index < width(); ++index) {
         const auto encoded = static_cast<std::uint8_t>(to_logic9(get(index)));
         for (std::size_t plane = 0; plane < 4; ++plane) {
             if (((encoded >> plane) & 1U) != 0) {
@@ -921,14 +1012,14 @@ PackedLogic4 PackedLogic4::promoted_to_logic9() const
 
 std::string PackedLogic4::to_msb_string() const
 {
-    std::string result(width_, 'X');
+    std::string result(width(), 'X');
     const auto aval = aval_words();
     const auto bval = bval_words();
-    if (!logic9_) {
-        for (std::size_t index = 0; index < width_; ++index) {
+    if (!is_logic9()) {
+        for (std::size_t index = 0; index < width(); ++index) {
             const auto mask = std::uint64_t{1} << (index % bits_per_word);
             const auto word = index / bits_per_word;
-            result[width_ - index - 1] = (bval[word] & mask) != 0U
+            result[width() - index - 1] = (bval[word] & mask) != 0U
                 ? ((aval[word] & mask) != 0U ? 'X' : 'Z')
                 : ((aval[word] & mask) != 0U ? '1' : '0');
         }
@@ -938,7 +1029,7 @@ std::string PackedLogic4::to_msb_string() const
     constexpr std::array digits{'U', 'X', '0', '1', 'Z', 'W', 'L', 'H', '-'};
     const auto plane2 = logic9_plane(2);
     const auto plane3 = logic9_plane(3);
-    for (std::size_t index = 0; index < width_; ++index) {
+    for (std::size_t index = 0; index < width(); ++index) {
         const auto mask = std::uint64_t{1} << (index % bits_per_word);
         const auto word = index / bits_per_word;
         const auto encoded = static_cast<std::size_t>(
@@ -946,28 +1037,28 @@ std::string PackedLogic4::to_msb_string() const
             | ((bval[word] & mask) != 0U ? 2U : 0U)
             | ((plane2[word] & mask) != 0U ? 4U : 0U)
             | ((plane3[word] & mask) != 0U ? 8U : 0U));
-        result[width_ - index - 1] = digits[encoded];
+        result[width() - index - 1] = digits[encoded];
     }
     return result;
 }
 
 void PackedLogic4::promote_to_logic9()
 {
-    if (logic9_) {
+    if (is_logic9()) {
         return;
     }
     std::vector<Logic4> old_values;
-    old_values.reserve(width_);
-    for (std::size_t index = 0; index < width_; ++index) {
+    old_values.reserve(width());
+    for (std::size_t index = 0; index < width(); ++index) {
         old_values.push_back(get(index));
     }
-    if (width_ > bits_per_word) {
+    if (width() > bits_per_word) {
         ensure_unique_wide();
-        wide_->logic9_plane2.assign(word_count(width_), 0);
-        wide_->logic9_plane3.assign(word_count(width_), 0);
+        wide_storage()->logic9_plane2.assign(word_count(width()), 0);
+        wide_storage()->logic9_plane3.assign(word_count(width()), 0);
     }
-    logic9_ = true;
-    for (std::size_t index = 0; index < width_; ++index) {
+    set_logic9(true);
+    for (std::size_t index = 0; index < width(); ++index) {
         set_logic9(index, to_logic9(old_values[index]));
     }
 }
@@ -975,7 +1066,7 @@ void PackedLogic4::promote_to_logic9()
 std::span<const std::uint64_t>
 PackedLogic4::logic9_plane(const std::size_t index) const noexcept
 {
-    if (width_ == 0 || index >= 4) {
+    if (width() == 0 || index >= 4) {
         return { };
     }
     if (index == 0) {
@@ -984,23 +1075,23 @@ PackedLogic4::logic9_plane(const std::size_t index) const noexcept
     if (index == 1) {
         return bval_words();
     }
-    if (width_ <= bits_per_word) {
+    if (width() <= bits_per_word) {
         return index == 2
             ? std::span<const std::uint64_t> {
-                  &inline_logic9_plane2_, 1
+                  &inline_logic9_plane2(), 1
               }
-            : std::span<const std::uint64_t> { &inline_logic9_plane3_, 1 };
+            : std::span<const std::uint64_t> { &inline_logic9_plane3(), 1 };
     }
     return index == 2
-        ? std::span<const std::uint64_t> { wide_->logic9_plane2 }
-        : std::span<const std::uint64_t> { wide_->logic9_plane3 };
+        ? std::span<const std::uint64_t> { wide_storage()->logic9_plane2 }
+        : std::span<const std::uint64_t> { wide_storage()->logic9_plane3 };
 }
 
 std::span<std::uint64_t>
 PackedLogic4::mutable_logic9_plane(
     const std::size_t index)
 {
-    if (width_ == 0 || index >= 4) {
+    if (width() == 0 || index >= 4) {
         return { };
     }
     if (index == 0) {
@@ -1009,26 +1100,26 @@ PackedLogic4::mutable_logic9_plane(
     if (index == 1) {
         return mutable_bval_words();
     }
-    if (width_ <= bits_per_word) {
+    if (width() <= bits_per_word) {
         return index == 2
             ? std::span<std::uint64_t> {
-                  &inline_logic9_plane2_, 1
+                  &inline_logic9_plane2(), 1
               }
-            : std::span<std::uint64_t> { &inline_logic9_plane3_, 1 };
+            : std::span<std::uint64_t> { &inline_logic9_plane3(), 1 };
     }
     ensure_unique_wide();
     return index == 2
-        ? std::span<std::uint64_t> { wide_->logic9_plane2 }
-        : std::span<std::uint64_t> { wide_->logic9_plane3 };
+        ? std::span<std::uint64_t> { wide_storage()->logic9_plane2 }
+        : std::span<std::uint64_t> { wide_storage()->logic9_plane3 };
 }
 
 void PackedLogic4::mask_unused_bits()
 {
-    mask_last(mutable_aval_words(), width_);
-    mask_last(mutable_bval_words(), width_);
-    if (logic9_) {
-        mask_last(mutable_logic9_plane(2), width_);
-        mask_last(mutable_logic9_plane(3), width_);
+    mask_last(mutable_aval_words(), width());
+    mask_last(mutable_bval_words(), width());
+    if (is_logic9()) {
+        mask_last(mutable_logic9_plane(2), width());
+        mask_last(mutable_logic9_plane(3), width());
     }
 }
 

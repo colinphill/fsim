@@ -429,8 +429,11 @@ private:
                 = context.stable_single_writer_processes();
             const auto direct_aval = context.direct_signal_aval();
             const auto direct_bval = context.direct_signal_bval();
-            const bool enabled = std::getenv(
-                "FSIM_DISABLE_STABLE_DIRECT_UPDATE_SUPPRESSION") == nullptr;
+            const bool enabled
+                = stable_direct_update_suppression_allowed_
+                && std::getenv(
+                       "FSIM_DISABLE_STABLE_DIRECT_UPDATE_SUPPRESSION")
+                    == nullptr;
             for (std::size_t index = 0;
                 index < direct_update_slots_.size(); ++index) {
                 auto& slot = direct_update_slots_[index];
@@ -1355,7 +1358,9 @@ LlvmProcessExecutor::cohort_manages_process_state() const noexcept
     if (layout.tracks_register_initialization
         && register_initialized_[id] == 0) {
         throw std::logic_error {
-            "compiled process debug local has not been initialized"
+            "compiled process '" + process_.name + "' register "
+            + std::to_string(id) + " has not been initialized at instruction "
+            + std::to_string(frame_.program_counter)
         };
     }
     const auto kind = process_.register_value_kinds.empty()

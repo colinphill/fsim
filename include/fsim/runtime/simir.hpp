@@ -8,14 +8,19 @@
 #include "fsim/runtime/systemverilog_scalar.hpp"
 #include <cstddef>
 #include <cstdint>
+#include <compare>
 #include <filesystem>
 #include <functional>
 #include <limits>
+#include <iterator>
 #include <memory>
 #include <optional>
+#include <ostream>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -33,6 +38,165 @@ using SignalId = std::uint32_t;
 using ProcessId = std::uint32_t;
 using InstructionIndex = std::uint32_t;
 enum class OutputFormat : std::uint8_t;
+
+/// Vector semantics with an eight-byte dormant representation. This is used
+/// for operation metadata that is absent from almost every instruction but
+/// would otherwise set the inline size of the complete Operation variant.
+template <typename T>
+class RareVector {
+public:
+    using value_type = T;
+    using Storage = std::vector<T>;
+    using iterator = typename Storage::iterator;
+    using const_iterator = typename Storage::const_iterator;
+
+    RareVector() = default;
+    RareVector(std::initializer_list<T> values)
+    {
+        if (values.size() != 0U) {
+            values_ = std::make_unique<Storage>(values);
+        }
+    }
+    RareVector(Storage values)
+    {
+        if (!values.empty()) {
+            values_ = std::make_unique<Storage>(std::move(values));
+        }
+    }
+    RareVector(const RareVector& other)
+    {
+        if (other.values_) {
+            values_ = std::make_unique<Storage>(*other.values_);
+        }
+    }
+    RareVector(RareVector&&) noexcept = default;
+    RareVector& operator=(const RareVector& other)
+    {
+        if (this != &other) {
+            values_ = other.values_
+                ? std::make_unique<Storage>(*other.values_)
+                : nullptr;
+        }
+        return *this;
+    }
+    RareVector& operator=(RareVector&&) noexcept = default;
+
+    [[nodiscard]] bool empty() const noexcept { return !values_ || values_->empty(); }
+    [[nodiscard]] std::size_t size() const noexcept { return values_ ? values_->size() : 0U; }
+    [[nodiscard]] std::size_t max_size() const noexcept { return empty_storage().max_size(); }
+    [[nodiscard]] const_iterator begin() const noexcept { return storage().begin(); }
+    [[nodiscard]] const_iterator end() const noexcept { return storage().end(); }
+    [[nodiscard]] iterator begin() { return mutable_storage().begin(); }
+    [[nodiscard]] iterator end() { return mutable_storage().end(); }
+    [[nodiscard]] const T& operator[](const std::size_t index) const noexcept
+    {
+        return (*values_)[index];
+    }
+    [[nodiscard]] T& operator[](const std::size_t index) noexcept
+    {
+        return (*values_)[index];
+    }
+    [[nodiscard]] const T& front() const { return storage().front(); }
+    [[nodiscard]] T& front() { return mutable_storage().front(); }
+    [[nodiscard]] const T& back() const { return storage().back(); }
+    [[nodiscard]] T& back() { return mutable_storage().back(); }
+    void clear() noexcept { values_.reset(); }
+    void reserve(const std::size_t capacity) { mutable_storage().reserve(capacity); }
+    template <typename... Arguments>
+    T& emplace_back(Arguments&&... arguments)
+    {
+        return mutable_storage().emplace_back(
+            std::forward<Arguments>(arguments)...);
+    }
+    void push_back(const T& value) { mutable_storage().push_back(value); }
+    void push_back(T&& value) { mutable_storage().push_back(std::move(value)); }
+
+    [[nodiscard]] const Storage& storage() const noexcept
+    {
+        return values_ ? *values_ : empty_storage();
+    }
+    [[nodiscard]] Storage& mutable_storage()
+    {
+        if (!values_) {
+            values_ = std::make_unique<Storage>();
+        }
+        return *values_;
+    }
+    operator const Storage&() const noexcept { return storage(); }
+    friend bool operator==(const RareVector& left, const RareVector& right)
+    {
+        return left.storage() == right.storage();
+    }
+
+private:
+    [[nodiscard]] static const Storage& empty_storage() noexcept
+    {
+        static const Storage empty;
+        return empty;
+    }
+
+    std::unique_ptr<Storage> values_;
+};
+
+template <typename T>
+auto archive_fields(const RareVector<T>& values)
+{
+    return std::tie(values.storage());
+}
+
+template <typename T>
+auto archive_fields(RareVector<T>& values)
+{
+    return std::tie(values.mutable_storage());
+}
+
+/// Optional integral ID encoded in its otherwise-invalid maximum value. The
+/// archive codec preserves the ordinary optional wire representation.
+template <std::unsigned_integral T>
+class RareOptionalId {
+public:
+    using rare_optional_value_type = T;
+
+    constexpr RareOptionalId() noexcept = default;
+    constexpr RareOptionalId(const std::nullopt_t) noexcept { }
+    constexpr RareOptionalId(const T value) noexcept : value_(value) { }
+    constexpr RareOptionalId& operator=(const std::nullopt_t) noexcept
+    {
+        reset();
+        return *this;
+    }
+    constexpr RareOptionalId& operator=(const T value) noexcept
+    {
+        value_ = value;
+        return *this;
+    }
+    [[nodiscard]] constexpr bool has_value() const noexcept
+    {
+        return value_ != absent;
+    }
+    [[nodiscard]] explicit constexpr operator bool() const noexcept
+    {
+        return has_value();
+    }
+    [[nodiscard]] constexpr T operator*() const noexcept { return value_; }
+    [[nodiscard]] constexpr T value_or(const T fallback) const noexcept
+    {
+        return has_value() ? value_ : fallback;
+    }
+    constexpr void reset() noexcept { value_ = absent; }
+    constexpr T& emplace()
+    {
+        value_ = T { };
+        return value_;
+    }
+
+    friend constexpr bool operator==(
+        const RareOptionalId&, const RareOptionalId&) noexcept = default;
+
+private:
+    static constexpr T absent = std::numeric_limits<T>::max();
+    T value_ { absent };
+};
 
 struct LoadConstant {
     RegisterId destination { };
@@ -643,9 +807,28 @@ struct DynamicPartSelect {
 
 /// Runtime base and fixed-width metadata shared by indexed part-select writes.
 struct DynamicPartIndex {
-    RegisterId base { };
+    DynamicPartIndex() = default;
+    DynamicPartIndex(
+        const RegisterId dynamic_base,
+        const std::int64_t dynamic_left,
+        const std::int64_t dynamic_right,
+        const std::uint32_t dynamic_base_offset,
+        const std::uint32_t dynamic_width,
+        const bool dynamic_increasing,
+        const bool dynamic_source_descending)
+        : left(dynamic_left)
+        , right(dynamic_right)
+        , base(dynamic_base)
+        , base_offset(dynamic_base_offset)
+        , width(dynamic_width)
+        , increasing(dynamic_increasing)
+        , source_descending(dynamic_source_descending)
+    {
+    }
+
     std::int64_t left { };
     std::int64_t right { };
+    RegisterId base { };
     std::uint32_t base_offset { };
     std::uint32_t width { };
     bool increasing { };
@@ -654,6 +837,22 @@ struct DynamicPartIndex {
     friend bool operator==(
         const DynamicPartIndex&, const DynamicPartIndex&) = default;
 };
+
+inline auto archive_fields(const DynamicPartIndex& selection)
+{
+    return std::tie(
+        selection.base, selection.left, selection.right,
+        selection.base_offset, selection.width,
+        selection.increasing, selection.source_descending);
+}
+
+inline auto archive_fields(DynamicPartIndex& selection)
+{
+    return std::tie(
+        selection.base, selection.left, selection.right,
+        selection.base_offset, selection.width,
+        selection.increasing, selection.source_descending);
+}
 
 /// The representable intersection of an indexed part-select write.
 struct DynamicPartWrite {
@@ -1060,8 +1259,8 @@ struct WaitOn {
     {
     }
 
-    std::vector<SignalId> signals;
-    std::vector<EdgeKind> edges;
+    RareVector<SignalId> signals;
+    RareVector<EdgeKind> edges;
     // An optional timeout races the listed signal events. A condition-wait
     // lowering uses timeout_result to distinguish timeout resumption from an
     // event resumption. A rearmed wait preserves the absolute deadline
@@ -1276,9 +1475,9 @@ struct Return {
 /// lexical storage outside the callable shared exactly as before.
 struct CallableFramePush {
     std::uint32_t identity { };
-    std::vector<RegisterId> packed;
-    std::vector<StringRegisterId> strings;
-    std::vector<ContainerRegisterId> containers;
+    RareVector<RegisterId> packed;
+    RareVector<StringRegisterId> strings;
+    RareVector<ContainerRegisterId> containers;
     // The elaborator assigns disjoint registers to each callable identity.
     // Optimized native lowering may therefore keep an acyclic call chain in
     // generated code without taking host-owned register snapshots. Hand-built
@@ -1290,9 +1489,9 @@ struct CallableFramePush {
 /// retaining call-result shuttle registers written by the completed callee.
 struct CallableFramePop {
     std::uint32_t identity { };
-    std::vector<RegisterId> preserve_packed;
-    std::vector<StringRegisterId> preserve_strings;
-    std::vector<ContainerRegisterId> preserve_containers;
+    RareVector<RegisterId> preserve_packed;
+    RareVector<StringRegisterId> preserve_strings;
+    RareVector<ContainerRegisterId> preserve_containers;
 };
 
 enum class UnknownBranchPolicy : std::uint8_t {
@@ -1316,8 +1515,103 @@ enum class AssertionSeverity : std::uint8_t {
     failure,
 };
 
+/// Immutable, process-wide interned diagnostic text. Source paths and lexical
+/// scopes are repeated at every DebugPoint; retaining one allocation per
+/// distinct spelling avoids making debug provenance the dominant runtime
+/// memory consumer while preserving its full text.
+class InternedString {
+public:
+    InternedString() = default;
+    InternedString(std::string value);
+    InternedString(std::string_view value);
+    InternedString(const char* value);
+
+    InternedString& operator=(std::string value);
+    InternedString& operator=(std::string_view value);
+    InternedString& operator=(const char* value);
+
+    [[nodiscard]] const std::string& str() const noexcept;
+    [[nodiscard]] const char* c_str() const noexcept { return str().c_str(); }
+    [[nodiscard]] bool empty() const noexcept { return str().empty(); }
+    [[nodiscard]] std::size_t size() const noexcept { return str().size(); }
+    [[nodiscard]] auto begin() const noexcept { return str().begin(); }
+    [[nodiscard]] auto end() const noexcept { return str().end(); }
+    [[nodiscard]] auto find(
+        const std::string_view value,
+        const std::size_t offset = 0) const noexcept
+    {
+        return str().find(value, offset);
+    }
+    [[nodiscard]] bool starts_with(const std::string_view value) const noexcept
+    {
+        return str().starts_with(value);
+    }
+    [[nodiscard]] bool ends_with(const std::string_view value) const noexcept
+    {
+        return str().ends_with(value);
+    }
+    [[nodiscard]] operator std::string_view() const noexcept { return str(); }
+    [[nodiscard]] operator std::string() const { return str(); }
+
+    friend std::ostream& operator<<(
+        std::ostream& output, const InternedString& value)
+    {
+        return output << value.str();
+    }
+
+    friend bool operator==(const InternedString& left,
+        const InternedString& right) noexcept
+    {
+        return left.value_ == right.value_ || left.str() == right.str();
+    }
+    friend bool operator==(const InternedString& left,
+        const std::string_view right) noexcept
+    {
+        return left.str() == right;
+    }
+    friend bool operator==(const InternedString& left,
+        const std::string& right) noexcept
+    {
+        return left.str() == right;
+    }
+    friend bool operator==(const InternedString& left,
+        const char* right) noexcept
+    {
+        return left.str() == right;
+    }
+    friend bool operator==(const std::string_view left,
+        const InternedString& right) noexcept
+    {
+        return left == right.str();
+    }
+    friend bool operator==(const std::string& left,
+        const InternedString& right) noexcept
+    {
+        return left == right.str();
+    }
+    friend bool operator==(const char* left,
+        const InternedString& right) noexcept
+    {
+        return left == right.str();
+    }
+    friend std::string operator+(
+        const InternedString& left, const std::string_view right)
+    {
+        return left.str() + std::string { right };
+    }
+    friend std::string operator+(
+        const std::string_view left, const InternedString& right)
+    {
+        return std::string { left } + right.str();
+    }
+
+private:
+    static std::shared_ptr<const std::string> intern(std::string value);
+    std::shared_ptr<const std::string> value_;
+};
+
 struct SourceLocation {
-    std::string path;
+    InternedString path;
     std::uint32_t line { 1 };
     std::uint32_t column { 1 };
 
@@ -1349,6 +1643,87 @@ struct ExpressionProfile {
     bool is_signed { };
     ExpressionSizingKind sizing { ExpressionSizingKind::self_determined };
     ExpressionValueDomain domain { ExpressionValueDomain::four_state };
+
+    friend bool operator==(
+        const ExpressionProfile&, const ExpressionProfile&) = default;
+};
+
+/// Copy-on-write expression metadata. Generated hierarchy instances commonly
+/// lower the same lexical process body; retain one immutable profile sequence
+/// for those equivalent processes while preserving the serialized sequence.
+class ExpressionProfileList {
+public:
+    using Storage = std::vector<ExpressionProfile>;
+    using value_type = ExpressionProfile;
+    using const_iterator = Storage::const_iterator;
+
+    ExpressionProfileList() = default;
+    ExpressionProfileList(std::initializer_list<ExpressionProfile> profiles)
+        : storage_ { std::make_shared<Storage>(profiles) }
+    {
+    }
+    explicit ExpressionProfileList(Storage storage)
+        : storage_ { std::make_shared<Storage>(std::move(storage)) }
+    {
+    }
+
+    ExpressionProfileList& operator=(
+        std::initializer_list<ExpressionProfile> profiles)
+    {
+        storage_ = std::make_shared<Storage>(profiles);
+        return *this;
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept
+    {
+        return storage_ ? storage_->size() : 0U;
+    }
+    [[nodiscard]] bool empty() const noexcept { return size() == 0U; }
+    [[nodiscard]] const_iterator begin() const noexcept
+    {
+        return storage().begin();
+    }
+    [[nodiscard]] const_iterator end() const noexcept
+    {
+        return storage().end();
+    }
+    void push_back(ExpressionProfile profile)
+    {
+        writable_storage().push_back(std::move(profile));
+    }
+    void share_from(const ExpressionProfileList& representative) noexcept
+    {
+        storage_ = representative.storage_;
+    }
+    [[nodiscard]] operator std::span<const ExpressionProfile>() const noexcept
+    {
+        return storage();
+    }
+
+    friend bool operator==(
+        const ExpressionProfileList& left,
+        const ExpressionProfileList& right)
+    {
+        return left.storage() == right.storage();
+    }
+
+private:
+    [[nodiscard]] const Storage& storage() const noexcept
+    {
+        static const Storage empty_storage;
+        return storage_ ? *storage_ : empty_storage;
+    }
+    Storage& writable_storage()
+    {
+        if (!storage_) {
+            storage_ = std::make_shared<Storage>();
+        } else if (!storage_.unique()) {
+            storage_ = std::make_shared<Storage>(*storage_);
+        }
+        return *storage_;
+    }
+
+    std::shared_ptr<Storage> storage_;
 };
 
 enum class DebugPointKind : std::uint8_t {
@@ -1364,13 +1739,13 @@ struct DebugPoint {
     SourceLocation source;
     // Canonical hierarchy-qualified lexical execution scope. This is metadata
     // rather than a scheduler operand, but remains part of native provenance.
-    std::string scope;
+    InternedString scope;
 
     DebugPoint() = default;
     DebugPoint(
         const DebugPointKind point_kind,
         SourceLocation point_source,
-        std::string point_scope = { })
+        InternedString point_scope = { })
         : kind(point_kind)
         , source(std::move(point_source))
         , scope(std::move(point_scope))
@@ -1379,11 +1754,38 @@ struct DebugPoint {
 };
 
 struct Assert {
-    RegisterId condition { };
-    std::string message;
-    AssertionSeverity severity { AssertionSeverity::error };
+    Assert() = default;
+    Assert(
+        const RegisterId assertion_condition,
+        InternedString assertion_message,
+        const AssertionSeverity assertion_severity,
+        SourceLocation assertion_source)
+        : source(std::move(assertion_source))
+        , message(std::move(assertion_message))
+        , condition(assertion_condition)
+        , severity(assertion_severity)
+    {
+    }
+
     SourceLocation source;
+    InternedString message;
+    RegisterId condition { };
+    AssertionSeverity severity { AssertionSeverity::error };
 };
+
+inline auto archive_fields(const Assert& assertion)
+{
+    return std::tie(
+        assertion.condition, assertion.message,
+        assertion.severity, assertion.source);
+}
+
+inline auto archive_fields(Assert& assertion)
+{
+    return std::tie(
+        assertion.condition, assertion.message,
+        assertion.severity, assertion.source);
+}
 
 /// Emit already-formatted language output synchronously on the simulation
 /// thread. The embedding layer owns the destination stream.
@@ -1578,14 +1980,14 @@ enum class StochasticQueueKind : std::uint8_t {
 struct StochasticQueueOperation {
     StochasticQueueKind kind { StochasticQueueKind::initialize };
     RegisterId queue_id { };
-    std::optional<RegisterId> queue_type;
-    std::optional<RegisterId> maximum_length;
-    std::optional<RegisterId> job_id;
-    std::optional<RegisterId> information_id;
-    std::optional<RegisterId> statistic_code;
-    std::optional<RegisterId> statistic_value;
+    RareOptionalId<RegisterId> queue_type;
+    RareOptionalId<RegisterId> maximum_length;
+    RareOptionalId<RegisterId> job_id;
+    RareOptionalId<RegisterId> information_id;
+    RareOptionalId<RegisterId> statistic_code;
+    RareOptionalId<RegisterId> statistic_value;
     RegisterId status { };
-    std::optional<RegisterId> result;
+    RareOptionalId<RegisterId> result;
 };
 
 enum class PlaLogicKind : std::uint8_t {
@@ -1675,7 +2077,7 @@ struct RandomDistribution {
 #include "fsim/runtime/simir_randomize.hpp"
 /// Emit a nonfatal VHDL report with retained severity and source metadata.
 struct Report {
-    std::string message;
+    InternedString message;
     AssertionSeverity severity { AssertionSeverity::note };
     SourceLocation source;
 };
@@ -1776,7 +2178,7 @@ struct Process {
             const StaticTriggerRegion&, const StaticTriggerRegion&) = default;
     };
     std::vector<StaticTriggerRegion> static_trigger_regions;
-    std::vector<Operation> operations;
+    OperationList operations;
     /// Static packed regions driven by this process. Dynamic or whole-object
     /// targets retain one `whole` region for conservative ownership.
     struct DriverRegion {
@@ -1817,8 +2219,18 @@ struct Process {
     // A SystemVerilog final process is excluded from ordinary initialization
     // and queued exactly once when ordinary simulation terminates.
     bool final { };
-    std::vector<ExpressionProfile> expression_profiles;
+    ExpressionProfileList expression_profiles;
 };
+
+/// Replace candidate's expanded operation stream with representative's
+/// immutable program when the two differ only by hierarchy-local signal,
+/// debugger, assertion, or container-object identities.
+[[nodiscard]] bool share_process_operations(
+    const Process& representative,
+    Process& candidate,
+    std::span<const Signal> signals,
+    OperationList::Storage* recycled_operations = nullptr);
+[[nodiscard]] bool process_operations_shareable(const Process& process);
 
 /// Narrow signal/update surface available to an alternate process executor.
 ///
@@ -2058,6 +2470,18 @@ public:
             "alternate process executor does not expose writable container "
             "registers"
         };
+    }
+
+    virtual void write_container_register_storage(
+        const ContainerRegisterId id,
+        std::shared_ptr<ContainerValue> value)
+    {
+        if (!value) {
+            throw std::invalid_argument {
+                "alternate process executor received null container storage"
+            };
+        }
+        write_container_register(id, *value);
     }
 };
 

@@ -74,6 +74,7 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     , register_initialized_(storage_->register_initialized)
     , string_registers_(storage_->string_registers)
     , container_registers_(storage_->container_registers)
+    , container_register_shared_(storage_->container_register_shared)
     , container_object_aliases_(storage_->container_object_aliases)
     , active_container_object_aliases_(
           storage_->active_container_object_aliases)
@@ -88,10 +89,14 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     string_registers_.resize(layout_.string_register_count);
     container_registers_.reserve(process.container_register_types.size());
     for (const auto& type : process.container_register_types) {
+        runtime::simir::ContainerValue value;
+        value.type = type;
         container_registers_.push_back(
-            runtime::simir::default_container_value(type));
+            std::make_shared<runtime::simir::ContainerValue>(std::move(value)));
     }
-    container_object_aliases_.resize(process.container_register_types.size());
+    container_register_shared_.assign(container_registers_.size(), 0U);
+    container_object_aliases_.assign(
+        process.container_register_types.size(), invalid_container_object);
     build_dense_signal_remap(
         signal_remap_, dense_signal_remap_base_, dense_signal_remap_);
     initialize_direct_read_signals();
@@ -134,6 +139,7 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     , register_initialized_(storage_->register_initialized)
     , string_registers_(storage_->string_registers)
     , container_registers_(storage_->container_registers)
+    , container_register_shared_(storage_->container_register_shared)
     , container_object_aliases_(storage_->container_object_aliases)
     , active_container_object_aliases_(
           storage_->active_container_object_aliases)
@@ -386,13 +392,19 @@ void LlvmProcessExecutor::initialize_buffered_logic9_updates()
 LlvmProcessExecutor::fork_clone(
     const runtime::simir::InstructionIndex start_instruction)
 {
-    return std::unique_ptr<runtime::simir::ProcessExecutor> {
+    auto clone = std::unique_ptr<LlvmProcessExecutor> {
         new LlvmProcessExecutor {
             jit_, binding_, process_, signal_widths_, signal_value_kinds_,
             signal_resolutions_,
             signal_remap_, generated_process_, storage_, frame_,
             start_instruction }
     };
+    // A fork child can begin before a preceding nonblocking update from its
+    // parent commits. Its private update-slot shadow is therefore not a stable
+    // image of the shared static writer, even though both executors retain the
+    // same elaborated process identity.
+    clone->stable_direct_update_suppression_allowed_ = false;
+    return clone;
 }
 
 void LlvmProcessExecutor::redirect(

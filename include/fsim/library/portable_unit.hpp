@@ -52,13 +52,22 @@ struct SourceNameMapping {
 [[nodiscard]] std::optional<std::string> serialize_portable_unit(
     const frontend::DesignUnit& unit,
     diagnostic::Engine& diagnostics);
+[[nodiscard]] std::optional<std::string> serialize_portable_unit(
+    frontend::DesignUnit&& unit,
+    diagnostic::Engine& diagnostics);
 
 [[nodiscard]] std::optional<std::string> serialize_portable_udp(
     const frontend::VerilogUdpDeclaration& declaration,
     diagnostic::Engine& diagnostics);
+[[nodiscard]] std::optional<std::string> serialize_portable_udp(
+    frontend::VerilogUdpDeclaration&& declaration,
+    diagnostic::Engine& diagnostics);
 
 [[nodiscard]] std::optional<std::string> serialize_portable_class_unit(
     const PortableSystemVerilogClassUnit& unit,
+    diagnostic::Engine& diagnostics);
+[[nodiscard]] std::optional<std::string> serialize_portable_class_unit(
+    PortableSystemVerilogClassUnit&& unit,
     diagnostic::Engine& diagnostics);
 
 // Restores one owning unit without invoking an HDL preprocessor or parser.

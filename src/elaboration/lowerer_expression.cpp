@@ -328,7 +328,7 @@ std::optional<RegisterId> Lowerer::lower_expression(
     }
     process_.expression_profiles.push_back(ExpressionProfile {
         SourceLocation {
-            expression.span.source_name,
+            expression.span.source_name.str(),
             static_cast<std::uint32_t>(expression.span.begin.line),
             static_cast<std::uint32_t>(expression.span.begin.column) },
         static_cast<std::uint32_t>(

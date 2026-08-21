@@ -187,7 +187,9 @@ container_element_shape(const ContainerType& type) {
   result.systemverilog_scalar = signal.systemverilog_scalar;
   result.is_signed = signal.is_signed;
   result.packed_range = signal.packed_range;
-  result.vhdl_array = signal.vhdl_array;
+  if (signal.vhdl_array) {
+    result.vhdl_array = *signal.vhdl_array;
+  }
   result.packed_members = signal.packed_members;
   result.nominal_type = signal.nominal_type;
   return result;

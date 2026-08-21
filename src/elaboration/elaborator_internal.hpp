@@ -763,8 +763,27 @@ namespace elaboration_detail {
         frontend::Language association_language,
         std::vector<Diagnostic>& diagnostics);
 
+    InterfaceTypeSpecialization specialize_vhdl_interface_types(
+        DesignUnit&& source,
+        const std::vector<frontend::ParameterOverride>& overrides,
+        const ConstantEnvironment& parent_environment,
+        const ConstantDomainEnvironment& parent_domains,
+        const NamedTypeEnvironment& parent_types,
+        const std::vector<frontend::FunctionDeclaration>& parent_functions,
+        const std::vector<frontend::ProcedureDeclaration>& parent_procedures,
+        frontend::Language association_language,
+        std::vector<Diagnostic>& diagnostics);
+
     InterfaceTypeSpecialization specialize_systemverilog_type_parameters(
         const DesignUnit& source,
+        const std::vector<frontend::ParameterOverride>& overrides,
+        const ConstantEnvironment& parent_environment,
+        const NamedTypeEnvironment& parent_types,
+        frontend::Language association_language,
+        std::vector<Diagnostic>& diagnostics);
+
+    InterfaceTypeSpecialization specialize_systemverilog_type_parameters(
+        DesignUnit&& source,
         const std::vector<frontend::ParameterOverride>& overrides,
         const ConstantEnvironment& parent_environment,
         const NamedTypeEnvironment& parent_types,
@@ -2140,6 +2159,9 @@ private:
 
     void validate_process_drivers();
 
+    void canonicalize_process_operations(
+        runtime::simir::Process& process);
+
     std::optional<SignalId> add_owned_signal(
         const frontend::SignalDeclaration& declaration,
         const std::string_view path,
@@ -2312,7 +2334,7 @@ private:
     UdpTableId normalized_udp_table(
         const frontend::VerilogUdpDeclaration&);
     void instantiate(
-        const DesignUnit& unit,
+        DesignUnit& unit,
         const std::string& path,
         SignalMap aliases,
         StringMap string_aliases,
@@ -2372,8 +2394,9 @@ private:
         prepared_systemverilog_roots_;
     std::unordered_map<std::string, SpecializedUnit>
         specialized_unit_cache_;
+    std::vector<std::string> cached_specialization_lru_;
     std::unordered_set<std::string>
-        seen_vhdl_specialization_keys_;
+        seen_specialization_keys_;
     std::unordered_set<std::string> used_systemc_instances_;
     std::unordered_set<std::string> instance_paths_;
     std::unordered_map<std::string, UdpTableId> udp_table_by_identity_;
@@ -2420,6 +2443,10 @@ private:
         container_boundary_driver_paths_;
     std::unordered_map<StringObjectId, std::vector<std::string>>
         string_boundary_driver_paths_;
+    std::unordered_map<std::uint64_t,
+        std::vector<runtime::simir::ProcessId>>
+        process_operation_representatives_;
+    runtime::simir::OperationList::Storage operation_scratch_;
 };
 
 } // namespace fsim::elaboration

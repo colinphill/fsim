@@ -814,14 +814,11 @@ SignalId Interpreter::add_signal(Signal signal)
     impl_->charge_decay_handles.emplace_back();
     impl_->charge_values.push_back(
         signal.charge_strength
-            ? std::optional<PackedLogic4> { signal.initial_value }
-            : std::nullopt);
+            ? std::make_unique<PackedLogic4>(signal.initial_value)
+            : nullptr);
     impl_->signal_last_values.push_back(signal.initial_value);
-    impl_->sampled_values.push_back(signal.initial_value);
-    impl_->sampled_defaults.push_back(signal.initial_value);
     impl_->forced_values.emplace_back();
-    impl_->forced_masks.emplace_back(
-        signal.initial_value.width(), Logic4::zero);
+    impl_->forced_masks.emplace_back();
     if (!signal.initial_value.is_logic9()
         && signal.initial_value.width() <= 64U) {
         const auto word = signal.initial_value.unchecked_low_word();
@@ -837,6 +834,14 @@ SignalId Interpreter::add_signal(Signal signal)
     }
     if (signal.initial_value.is_logic9()
         && signal.initial_value.width() <= 64U) {
+        impl_->direct_signal_logic9_plane0.resize(id, 0U);
+        impl_->direct_signal_logic9_plane1.resize(id, 0U);
+        impl_->direct_signal_logic9_plane2.resize(id, 0U);
+        impl_->direct_signal_logic9_plane3.resize(id, 0U);
+        impl_->direct_signal_last_logic9_plane0.resize(id, 0U);
+        impl_->direct_signal_last_logic9_plane1.resize(id, 0U);
+        impl_->direct_signal_last_logic9_plane2.resize(id, 0U);
+        impl_->direct_signal_last_logic9_plane3.resize(id, 0U);
         const auto word = signal.initial_value.logic9_low_word();
         impl_->direct_signal_logic9_plane0.push_back(word.planes[0]);
         impl_->direct_signal_logic9_plane1.push_back(word.planes[1]);
@@ -846,15 +851,6 @@ SignalId Interpreter::add_signal(Signal signal)
         impl_->direct_signal_last_logic9_plane1.push_back(word.planes[1]);
         impl_->direct_signal_last_logic9_plane2.push_back(word.planes[2]);
         impl_->direct_signal_last_logic9_plane3.push_back(word.planes[3]);
-    } else {
-        impl_->direct_signal_logic9_plane0.push_back(0U);
-        impl_->direct_signal_logic9_plane1.push_back(0U);
-        impl_->direct_signal_logic9_plane2.push_back(0U);
-        impl_->direct_signal_logic9_plane3.push_back(0U);
-        impl_->direct_signal_last_logic9_plane0.push_back(0U);
-        impl_->direct_signal_last_logic9_plane1.push_back(0U);
-        impl_->direct_signal_last_logic9_plane2.push_back(0U);
-        impl_->direct_signal_last_logic9_plane3.push_back(0U);
     }
     impl_->direct_signal_materialization_pending.push_back(0U);
     if (impl_->direct_wide_signal_aval.size()
@@ -863,9 +859,9 @@ SignalId Interpreter::add_signal(Signal signal)
             "SimIR direct signal plane exceeds its native offset range"
         };
     }
-    impl_->direct_wide_signal_offsets.push_back(
-        static_cast<std::uint32_t>(
-            impl_->direct_wide_signal_aval.size()));
+    const auto wide_offset = static_cast<std::uint32_t>(
+        impl_->direct_wide_signal_aval.size());
+    impl_->direct_wide_signal_offsets.push_back(wide_offset);
     const auto words = signal.initial_value.aval_words().size();
     if (words > std::numeric_limits<std::uint32_t>::max()
             - impl_->direct_wide_signal_aval.size()) {
@@ -882,15 +878,13 @@ SignalId Interpreter::add_signal(Signal signal)
         impl_->direct_wide_signal_bval.insert(
             impl_->direct_wide_signal_bval.end(),
             bval.begin(), bval.end());
-        impl_->direct_wide_signal_logic9_plane2.resize(
-            impl_->direct_wide_signal_logic9_plane2.size() + words);
-        impl_->direct_wide_signal_logic9_plane3.resize(
-            impl_->direct_wide_signal_logic9_plane3.size() + words);
     } else {
         const auto plane0 = signal.initial_value.logic9_plane_words(0U);
         const auto plane1 = signal.initial_value.logic9_plane_words(1U);
         const auto plane2 = signal.initial_value.logic9_plane_words(2U);
         const auto plane3 = signal.initial_value.logic9_plane_words(3U);
+        impl_->direct_wide_signal_logic9_plane2.resize(wide_offset, 0U);
+        impl_->direct_wide_signal_logic9_plane3.resize(wide_offset, 0U);
         impl_->direct_wide_signal_aval.insert(
             impl_->direct_wide_signal_aval.end(),
             plane0.begin(), plane0.end());
@@ -1285,19 +1279,6 @@ ProcessId Interpreter::add_process_impl(
         throw std::overflow_error { "SimIR process generation overflow" };
     }
     state.generation = impl_->next_process_generation++;
-    if (owned_process != nullptr) {
-        state.frame = std::make_shared<Impl::ProcessFrame>();
-        state.frame->registers.assign(
-            process.register_count, PackedLogic4 { });
-        state.frame->string_registers.assign(
-            process.string_register_count, { });
-        state.frame->container_registers.reserve(
-            process.container_register_count);
-        for (const auto& type : process.container_register_types) {
-            state.frame->container_registers.push_back(
-                default_container_value(type));
-        }
-    }
     state.random_state = Impl::initial_random_state(
         impl_->root_seed, id);
     state.design_process = id;
@@ -1742,8 +1723,10 @@ void Interpreter::reannotate_vital_timing(
             };
         }
         auto& process = impl_->processes[annotation.process];
+        const auto& process_operations
+            = std::as_const(process.program.operations);
         const auto& operation
-            = process.program.operations[annotation.instruction];
+            = process_operations[annotation.instruction];
         if (annotation.timing_check) {
             if (annotation.value_count != 4U
                 || operation_get_if<VitalTimingCheck>(&operation) == nullptr) {
@@ -1774,10 +1757,10 @@ void Interpreter::reannotate_vital_timing(
             for (InstructionIndex index = 0; index < annotation.instruction;
                 ++index) {
                 if (const auto* load = operation_get_if<LoadConstant>(
-                        &process.program.operations[index])) {
+                        &process_operations[index])) {
                     retained[load->destination] = index;
                 } else if (const auto* extract = operation_get_if<Extract>(
-                               &process.program.operations[index])) {
+                               &process_operations[index])) {
                     retained[extract->destination] = index;
                 }
             }
@@ -1885,10 +1868,7 @@ void Interpreter::materialize_ready_process_executors()
     }
     for (auto& process : impl_->processes) {
         if (!process.executor && process.deferred_executor
-            && process.frame.use_count() == 1
-            && process.frame->vital_memories.empty()
-            && process.dynamic_call_stack.empty()
-            && process.callable_frames.empty()
+            && Impl::can_install_deferred_executor(process)
             && process.deferred_executor->ready()) {
             impl_->install_deferred_executor(process);
         }
@@ -1905,6 +1885,14 @@ void Interpreter::start()
         return;
     }
     impl_->started = true;
+    if (impl_->requires_sampled_values) {
+        impl_->sampled_defaults.reserve(impl_->signals.size());
+        impl_->sampled_values.reserve(impl_->signals.size());
+        for (const auto& signal : impl_->signals) {
+            impl_->sampled_defaults.push_back(signal.initial_value);
+            impl_->sampled_values.push_back(signal.initial_value);
+        }
+    }
     if (impl_->native_process_count_profile_enabled) {
         impl_->native_process_resume_counts.assign(
             impl_->processes.size(), std::uint64_t { });
@@ -2104,7 +2092,7 @@ void Interpreter::release_signal_slice(
 bool Interpreter::signal_is_forced(const SignalId signal) const
 {
     (void)impl_->get_signal(signal);
-    return impl_->forced_values[signal].has_value();
+    return static_cast<bool>(impl_->forced_values[signal]);
 }
 
 void Interpreter::schedule_signal_at(SignalId signal, PackedLogic4 value,
@@ -2303,7 +2291,8 @@ PackedLogic4 Interpreter::read_debug_local(
         return state.executor->read_register(
             local.register_id, local.width);
     }
-    const auto& value = state.frame->registers.at(local.register_id);
+    const auto& value
+        = impl_->ensure_process_frame(state).registers.at(local.register_id);
     if (value.width() != local.width) {
         throw std::logic_error { "SimIR debug local has not been initialized" };
     }
@@ -2363,7 +2352,8 @@ std::string Interpreter::read_debug_string_local(
     if (state.executor) {
         return state.executor->read_string_register(local.register_id);
     }
-    return state.frame->string_registers.at(local.register_id);
+    return impl_->ensure_process_frame(state).string_registers.at(
+        local.register_id);
 }
 
 ContainerValue Interpreter::read_debug_container_local(
@@ -2380,7 +2370,8 @@ ContainerValue Interpreter::read_debug_container_local(
     if (state.executor) {
         return state.executor->read_container_register(local.register_id);
     }
-    return state.frame->container_registers.at(local.register_id);
+    (void)impl_->ensure_process_frame(state);
+    return impl_->read_container_register(state, local.register_id);
 }
 
 bool Interpreter::stopped_by_design() const noexcept

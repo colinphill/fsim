@@ -20,9 +20,15 @@ frontend::Type signal_type(const SignalInfo& info) {
     type.enumeration_range = info.enumeration_range;
     type.packed_members = info.packed_members;
     type.integer_range = info.integer_range;
-    type.vhdl_array = info.vhdl_array;
-    type.vhdl_access = info.vhdl_access;
-    type.vhdl_physical = info.vhdl_physical;
+    if (info.vhdl_array) {
+        type.vhdl_array = *info.vhdl_array;
+    }
+    if (info.vhdl_access) {
+        type.vhdl_access = *info.vhdl_access;
+    }
+    if (info.vhdl_physical) {
+        type.vhdl_physical = *info.vhdl_physical;
+    }
     return type;
 }
 
@@ -175,18 +181,19 @@ bool HierarchyBuilder::connect_verilog_memory_word_port(
         // rescanning for every selected word makes generated memory banks
         // quadratic in the already-elaborated process count.
         for (auto& process : design_.processes_) {
-            for (auto& operation : process.operations) {
-                visit_operation(
-                    [&](auto& candidate) {
-                        using Operation = std::decay_t<decltype(candidate)>;
-                        if constexpr (std::is_same_v<
-                                          Operation, WriteContainerObject>) {
-                            if (candidate.object == actual->second) {
-                                candidate.transaction_signal = transaction;
-                            }
-                        }
-                    },
-                    operation);
+            const auto& operations = std::as_const(process.operations);
+            for (std::size_t operation_index = 0;
+                 operation_index < operations.size(); ++operation_index) {
+                const auto* write = operation_get_if<WriteContainerObject>(
+                    &operations[operation_index]);
+                if (write == nullptr || write->object != actual->second) {
+                    continue;
+                }
+                auto replacement = operations.expanded(operation_index);
+                operation_get<WriteContainerObject>(replacement)
+                    .transaction_signal = transaction;
+                process.operations.replace(
+                    operation_index, std::move(replacement));
             }
         }
     }
@@ -613,9 +620,18 @@ bool HierarchyBuilder::connect_vhdl_expression_port(
                 selected_info.source_domain = element.domain;
                 selected_info.is_signed = element.is_signed;
                 selected_info.packed_range = element.packed_range;
-                selected_info.vhdl_array = element.vhdl_array;
-                selected_info.vhdl_access = element.vhdl_access;
-                selected_info.vhdl_physical = element.vhdl_physical;
+                selected_info.vhdl_array = element.vhdl_array
+                    ? std::make_shared<frontend::VhdlArrayInfo>(
+                          *element.vhdl_array)
+                    : nullptr;
+                selected_info.vhdl_access = element.vhdl_access
+                    ? std::make_shared<frontend::VhdlAccessInfo>(
+                          *element.vhdl_access)
+                    : nullptr;
+                selected_info.vhdl_physical = element.vhdl_physical
+                    ? std::make_shared<frontend::VhdlPhysicalInfo>(
+                          *element.vhdl_physical)
+                    : nullptr;
                 selected_info.packed_members = element.packed_members;
                 selected_info.integer_range = element.integer_range;
                 selected_info.nominal_type = element.nominal_type;

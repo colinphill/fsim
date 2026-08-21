@@ -1273,7 +1273,7 @@ void Lowerer::lower_function_body(const std::size_t function_index)
                 process_.container_register_types.at(
                     frame.container_result),
                 SourceLocation {
-                    frame.source->span.source_name,
+                    frame.source->span.source_name.str(),
                     static_cast<std::uint32_t>(
                         frame.source->span.begin.line),
                     static_cast<std::uint32_t>(

@@ -16,10 +16,16 @@ namespace {
     struct IsVector<std::vector<T, Allocator>> : std::true_type { };
 
     template <typename T>
+    struct IsVector<support::RareVector<T>> : std::true_type { };
+
+    template <typename T>
     struct IsOptional : std::false_type { };
 
     template <typename T>
     struct IsOptional<std::optional<T>> : std::true_type { };
+
+    template <typename T>
+    struct IsOptional<support::RareOptional<T>> : std::true_type { };
 
     template <typename T>
     struct IsPair : std::false_type { };
