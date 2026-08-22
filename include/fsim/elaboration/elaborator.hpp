@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "fsim/elaboration/coverage_inventory.hpp"
 #include "fsim/frontend/design.hpp"
 #include "fsim/runtime/simir.hpp"
 #include "fsim/systemc_abi.h"
@@ -507,6 +508,7 @@ struct ElaboratedDesignState {
         string_names;
     std::vector<std::pair<std::string, runtime::simir::ContainerObjectId>>
         container_names;
+    std::optional<CodeCoverageInventory> code_coverage_inventory;
 };
 
 class ElaboratedDesign final {
@@ -539,6 +541,13 @@ public:
     systemc_processes() const noexcept;
     [[nodiscard]] const std::vector<SystemCNamedObjectInfo>&
     systemc_objects() const noexcept;
+    [[nodiscard]] const std::optional<CodeCoverageInventory>&
+    code_coverage_inventory() const noexcept;
+    [[nodiscard]] CoverageInventoryValidationResult
+    attach_code_coverage_inventory(
+        std::span<const CoverageInventorySource> sources,
+        std::span<const CoverageInstanceInventoryDraft> instances,
+        CoverageInventoryLimits limits = { }) noexcept;
     [[nodiscard]] std::optional<runtime::simir::SignalId> find_signal(
         std::string_view name) const noexcept;
     /// Return every debug-visible signal path in lexical order. Boundary-port
@@ -634,6 +643,7 @@ private:
     std::vector<SystemCInstanceInfo> systemc_instances_;
     std::vector<SystemCProcessInfo> systemc_processes_;
     std::vector<SystemCNamedObjectInfo> systemc_objects_;
+    std::optional<CodeCoverageInventory> code_coverage_inventory_;
     std::unordered_map<std::string, runtime::simir::SignalId> signal_by_name_;
     std::unordered_map<
         std::string, runtime::simir::StringObjectId>

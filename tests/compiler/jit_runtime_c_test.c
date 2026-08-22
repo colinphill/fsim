@@ -264,7 +264,22 @@ _Static_assert(
 _Static_assert(
     offsetof(fsim_jit_runtime_v1, direct_signal_logic9_plane3) == 808,
     "runtime direct Logic9 plane 3 was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 816,
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, code_coverage_hit_counters) == 816,
+    "runtime code coverage hit map was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, code_coverage_counter_values) == 824,
+    "runtime code coverage counter values were not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, code_coverage_hit_count) == 832,
+    "runtime code coverage hit count was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, code_coverage_counter_count) == 836,
+    "runtime code coverage counter count was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, record_code_coverage_counter) == 840,
+    "runtime code coverage checked service was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 848,
     "unexpected extended runtime ABI size");
 _Static_assert(sizeof(fsim_jit_update_slot_v1) == 80,
     "unexpected direct-update slot size");
@@ -844,6 +859,11 @@ int main(void) {
       NULL,
       NULL,
       NULL,
+      NULL,
+      NULL,
+      0,
+      0,
+      0,
       NULL
   };
   uint64_t bval = UINT64_MAX;

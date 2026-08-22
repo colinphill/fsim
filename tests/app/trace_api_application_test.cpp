@@ -343,7 +343,7 @@ void test_c_api_runtime_lifecycle_and_callback_queries()
         "  end\n"
         "endmodule\n");
     write_text(manifest,
-        "schema = 2\n"
+        "schema = 3\n"
         "[project]\n"
         "name = \"trace-api\"\n"
         "top = \"sv:work.trace_api\"\n"

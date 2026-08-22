@@ -83,7 +83,7 @@ function(fsim_require_design_library_tokens path)
 endfunction()
 
 fsim_require_design_library_tokens("${FSIM_DESIGN_HEADER}"
-  "kDesignFormatVersion = 11"
+  "kDesignFormatVersion = 12"
   "kDesignMetadataFilename = \"fsim-design.bin\""
   "std::string scv_compatibility"
   "Producer paths are deliberately")
@@ -126,7 +126,9 @@ fsim_require_design_library_tokens("${FSIM_LIBRARY_ADMISSION}"
   "library::load_metadata(")
 
 fsim_require_design_library_tokens("${FSIM_DESIGN_TEST}"
-  "kDesignFormatVersion == 11U"
+  "kDesignFormatVersion == 12U"
+  "kCodeCoverageArtifactDiagnostic"
+  "stale-coverage"
   "runtime_abi_version == 1U"
   "embedded-plugin"
   "missing-scv-identity"

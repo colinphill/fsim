@@ -41,6 +41,27 @@ struct Interpreter::Impl::ExecutionContext final
     {
         return owner.direct_signal_bval;
     }
+    [[nodiscard]] std::span<std::uint64_t>
+    direct_code_coverage_counters() noexcept override
+    {
+        return owner.code_coverage_counters.mutable_values();
+    }
+    [[nodiscard]] CodeCoverageCounterRuntimeStatus record_code_coverage_counter(
+        const ::fsim::runtime::CodeCoverageCounterId counter) override
+    {
+        const auto update = owner.code_coverage_counters.record(counter);
+        if (update == CodeCoverageCounterUpdate::Unavailable) {
+            return CodeCoverageCounterRuntimeStatus::Unavailable;
+        }
+        if (update == CodeCoverageCounterUpdate::OutOfRange) {
+            return CodeCoverageCounterRuntimeStatus::OutOfRange;
+        }
+        if (update == CodeCoverageCounterUpdate::FirstOverflow
+            && owner.code_coverage_overflow_hook) {
+            owner.code_coverage_overflow_hook(counter);
+        }
+        return CodeCoverageCounterRuntimeStatus::Recorded;
+    }
     [[nodiscard]] std::span<const std::uint64_t>
     direct_signal_logic9_plane0() const noexcept override
     {

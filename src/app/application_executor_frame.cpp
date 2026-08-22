@@ -100,6 +100,7 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     build_dense_signal_remap(
         signal_remap_, dense_signal_remap_base_, dense_signal_remap_);
     initialize_direct_read_signals();
+    initialize_code_coverage_hit_counters();
     initialize_direct_update_slots();
     initialize_buffered_logic9_updates();
     pending_update_words_.reserve(buffered_update_capacity(process));
@@ -147,12 +148,37 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     build_dense_signal_remap(
         signal_remap_, dense_signal_remap_base_, dense_signal_remap_);
     initialize_direct_read_signals();
+    initialize_code_coverage_hit_counters();
     initialize_direct_update_slots();
     initialize_buffered_logic9_updates();
     pending_update_words_.reserve(buffered_update_capacity(process));
     frame_.program_counter = start_instruction;
     frame_.state = FSIM_JIT_FRAME_STATE_READY;
     frame_.last_instruction = FSIM_JIT_INVALID_INSTRUCTION;
+}
+
+void LlvmProcessExecutor::initialize_code_coverage_hit_counters()
+{
+    code_coverage_hit_counters_.clear();
+    code_coverage_hit_counters_.reserve(static_cast<std::size_t>(
+        std::ranges::count_if(
+            process_.operations,
+            [](const runtime::simir::Operation& operation) {
+                return runtime::simir::operation_holds<
+                    runtime::simir::CodeCoverageHit>(operation);
+            })));
+    for (std::size_t instruction = 0U;
+         instruction < process_.operations.size(); ++instruction) {
+        const auto* hit = runtime::simir::operation_get_if<
+            runtime::simir::CodeCoverageHit>(
+                &process_.operations[instruction]);
+        if (hit == nullptr) {
+            continue;
+        }
+        code_coverage_hit_counters_.push_back(
+            process_.operations.code_coverage_counter(
+                instruction, hit->counter).value);
+    }
 }
 
 void LlvmProcessExecutor::initialize_direct_read_signals()

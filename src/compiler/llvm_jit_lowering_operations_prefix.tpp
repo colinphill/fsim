@@ -12,6 +12,21 @@
         return target >= lowering_plan.operations.size()
             || !lowering_plan.operations[target];
     });
+    std::vector<std::uint32_t> code_coverage_hit_slots;
+    std::uint32_t code_coverage_hit_count_value { };
+    if (validated.uses_code_coverage) {
+        code_coverage_hit_slots.assign(
+            process.operations.size(),
+            std::numeric_limits<std::uint32_t>::max());
+        for (std::size_t index = 0;
+             index < process.operations.size(); ++index) {
+            if (fsim::runtime::simir::operation_holds<CodeCoverageHit>(
+                    process.operations[index])) {
+                code_coverage_hit_slots[index]
+                    = code_coverage_hit_count_value++;
+            }
+        }
+    }
     for (std::size_t index = 0; index < process.operations.size(); ++index) {
         if (!lowering_plan.operations[index]
             || elided_operations[index]) {

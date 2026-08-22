@@ -80,7 +80,7 @@ function(fsim_require_portable_object_tokens path)
 endfunction()
 
 fsim_require_portable_object_tokens("${FSIM_OBJECT_HEADER}"
-  "kObjectFormatVersion = 6"
+  "kObjectFormatVersion = 7"
   "kObjectMetadataFilename = \"fsim-object.bin\""
   "portable_schema{library::kPortableSchemaVersion}"
   "Canonical little-endian metadata codec"
@@ -96,7 +96,7 @@ fsim_require_portable_object_tokens("${FSIM_OBJECT_CODEC}"
   "'F', 'S', 'I', 'M', 'O', 'B', 'J', '\\0'"
   "writer.u32(kObjectFormatVersion)"
   "writer.u32(library::kPortableSchemaVersion)"
-  "fsim-object-compilation-v6-trace-profile"
+  "fsim-object-compilation-v7-code-coverage"
   "unsupported_artifact_identity("
   "\".fsimobj\""
   "portable-unit schema"
@@ -119,7 +119,9 @@ fsim_require_portable_object_tokens("${FSIM_PORTABLE_CODEC}"
   "valid_unit_hierarchy")
 
 fsim_require_portable_object_tokens("${FSIM_OBJECT_TEST}"
-  "kObjectFormatVersion == 6U"
+  "kObjectFormatVersion == 7U"
+  "kCodeCoverageArtifactDiagnostic"
+  "stale-coverage"
   "kPortableSchemaVersion == 10U"
   "kOwningUnitSchemaVersion == 26U"
   "corrupt-magic"

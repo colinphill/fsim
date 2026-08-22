@@ -178,6 +178,7 @@ void OperationList::reset(Storage operations)
     assert_overrides_.clear();
     container_object_overrides_.clear();
     operation_overrides_.clear();
+    coverage_hit_overrides_.clear();
     debug_scope_overrides_.clear();
     operation_override_filter_ = 0;
 }
@@ -191,6 +192,7 @@ OperationList::Storage& OperationList::mutable_storage()
         || !debug_overrides_.empty() || !assert_overrides_.empty()
         || !container_object_overrides_.empty()
         || !operation_overrides_.empty()
+        || !coverage_hit_overrides_.empty()
         || !debug_scope_overrides_.empty()) {
         Storage expanded;
         expanded.reserve(size());
@@ -317,6 +319,22 @@ ContainerObjectId OperationList::container_object(
     return canonical;
 }
 
+::fsim::runtime::CodeCoverageCounterId OperationList::code_coverage_counter(
+    const size_type index,
+    const ::fsim::runtime::CodeCoverageCounterId canonical) const noexcept
+{
+    if ((operation_override_filter_
+            & (UINT64_C(1) << (index & 63U))) != 0U
+        && find_override(operation_overrides_, index) != nullptr) {
+        return canonical;
+    }
+    if (const auto* override = find_override(
+            coverage_hit_overrides_, index)) {
+        return override->counter;
+    }
+    return canonical;
+}
+
 void OperationList::apply_instance_fields(
     Operation& operation, const size_type index) const
 {
@@ -329,6 +347,8 @@ void OperationList::apply_instance_fields(
         *assertion = this->assertion(index, *assertion);
     } else if (auto* read = operation_get_if<ReadContainerObject>(&operation)) {
         read->object = container_object(index, read->object);
+    } else if (auto* hit = operation_get_if<CodeCoverageHit>(&operation)) {
+        hit->counter = code_coverage_counter(index, hit->counter);
     }
 }
 
@@ -387,6 +407,7 @@ bool share_process_operations(
     std::vector<OperationList::ContainerObjectOverride>
         container_object_overrides;
     std::vector<OperationList::OperationOverride> operation_overrides;
+    std::vector<OperationList::CoverageHitOverride> coverage_hit_overrides;
     std::vector<OperationList::DebugScopeOverride> debug_scope_overrides;
     for (std::size_t index = 0;
          index < representative.operations.size(); ++index) {
@@ -625,6 +646,18 @@ bool share_process_operations(
                         && left.source == right->source
                         && left.offset == right->offset
                         && left.width == right->width;
+                } else if constexpr (
+                    std::is_same_v<Type, CodeCoverageHit>) {
+                    compatible = left.point == right->point
+                        && left.metric == right->metric;
+                    const auto right_counter
+                        = candidate.operations.code_coverage_counter(
+                            index, right->counter);
+                    if (compatible && left.counter != right_counter) {
+                        coverage_hit_overrides.push_back(
+                            { static_cast<InstructionIndex>(index),
+                                right_counter });
+                    }
                 } else {
                     // Never share an operation whose instance-dependent
                     // fields have not been audited explicitly.
@@ -651,6 +684,8 @@ bool share_process_operations(
         = std::move(container_object_overrides);
     candidate.operations.operation_overrides_
         = std::move(operation_overrides);
+    candidate.operations.coverage_hit_overrides_
+        = std::move(coverage_hit_overrides);
     candidate.operations.debug_scope_overrides_
         = std::move(debug_scope_overrides);
     candidate.operations.operation_override_filter_ = 0;
@@ -711,7 +746,8 @@ bool process_operations_shareable(const Process& process)
                         || std::is_same_v<Type, Branch>
                         || std::is_same_v<Type, Insert>
                         || std::is_same_v<Type, Return>
-                        || std::is_same_v<Type, Extract>;
+                        || std::is_same_v<Type, Extract>
+                        || std::is_same_v<Type, CodeCoverageHit>;
                 },
                 operation);
             return shareable;

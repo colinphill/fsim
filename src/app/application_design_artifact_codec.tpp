@@ -120,6 +120,10 @@ namespace codec_detail {
             return value >= runtime::simir::CoverageSampleTrigger::explicit_sample
                 && value <= runtime::simir::CoverageSampleTrigger::event;
         } else if constexpr (
+            std::same_as<T, runtime::CodeCoverageMetric>) {
+            return value >= runtime::CodeCoverageMetric::Statement
+                && value <= runtime::CodeCoverageMetric::Line;
+        } else if constexpr (
             std::same_as<T,
                 runtime::simir::CoverageDatabaseControlKind>) {
             return value

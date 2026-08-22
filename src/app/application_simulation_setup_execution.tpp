@@ -62,6 +62,14 @@
         jit_debug_instrumentation = options.debug_instrumentation;
         options.require_direct_update_slots
             = built.design.verilog_specify_paths().empty();
+        const auto coverage_identity
+            = artifact::make_code_coverage_artifact_identity(
+                built.code_coverage_enabled);
+        if (!coverage_identity.ok()) {
+            throw std::runtime_error(
+                "could not construct the v3 native-cache coverage identity");
+        }
+        options.code_coverage_identity = coverage_identity.identity.digest;
         if (!built.cache_path.empty()) {
             options.cache_directory = built.cache_path / "llvm-native";
         }

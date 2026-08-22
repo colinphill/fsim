@@ -91,6 +91,8 @@ class Writer {
     }
   }
 
+  void boolean(const bool value) { output_.push_back(value ? '\1' : '\0'); }
+
   void string(const std::string_view value) {
     u64(value.size());
     output_.append(value);
@@ -154,6 +156,14 @@ class Reader {
     return value;
   }
 
+  std::optional<bool> boolean() {
+    if (remaining() == 0
+        || static_cast<unsigned char>(input_[position_]) > 1) {
+      return std::nullopt;
+    }
+    return input_[position_++] != 0;
+  }
+
   std::optional<std::string> string() {
     const auto size = u64();
     if (!size.has_value() || *size > remaining()
@@ -191,7 +201,7 @@ class Reader {
 
 std::string compilation_digest(const ObjectMetadata& metadata) {
   Writer writer;
-  writer.string("fsim-object-compilation-v6-trace-profile");
+  writer.string("fsim-object-compilation-v7-code-coverage");
   writer.string(metadata.language);
   writer.string(metadata.standard);
   writer.string(metadata.compatibility_profile);
@@ -199,6 +209,10 @@ std::string compilation_digest(const ObjectMetadata& metadata) {
   writer.string(metadata.compilation_unit);
   writer.string(metadata.uvm_release);
   writer.string(metadata.trace_archive);
+  writer.u32(metadata.code_coverage.schema);
+  writer.boolean(metadata.code_coverage.enabled);
+  writer.string(metadata.code_coverage.model);
+  writer.string(metadata.code_coverage.digest);
   writer.sequence(metadata.defines, [&](const auto& item) {
     writer.string(item);
   });
@@ -245,6 +259,12 @@ bool validate_metadata(
                   + std::to_string(library::kPortableSchemaVersion),
               ".fsimobj"),
           source);
+  }
+  if (validate_code_coverage_artifact_identity(metadata.code_coverage)
+      != CodeCoverageArtifactIdentityError::None) {
+    error(
+        diagnostics, kCodeCoverageArtifactDiagnostic,
+        "object code-coverage identity is invalid or incompatible", source);
   }
   const bool known_language = metadata.language == "vhdl"
       || metadata.language == "verilog"
@@ -468,6 +488,10 @@ std::string serialize_object_metadata(const ObjectMetadata& metadata) {
   writer.string(metadata.uvm_release);
   writer.string(metadata.compilation_digest);
   writer.string(metadata.trace_archive);
+  writer.u32(metadata.code_coverage.schema);
+  writer.boolean(metadata.code_coverage.enabled);
+  writer.string(metadata.code_coverage.model);
+  writer.string(metadata.code_coverage.digest);
   writer.sequence(metadata.defines, [&](const auto& item) {
     writer.string(item);
   });
@@ -553,6 +577,18 @@ std::optional<ObjectMetadata> deserialize_object_metadata(
       error(diagnostics, kSchemaCode, "truncated .fsimobj metadata root", source_name);
       return std::nullopt;
   }
+  const auto coverage_schema = canonical.u32();
+  const auto coverage_enabled = canonical.boolean();
+  if (!coverage_schema || !coverage_enabled
+      || !read_string(metadata.code_coverage.model)
+      || !read_string(metadata.code_coverage.digest)) {
+    error(
+        diagnostics, kSchemaCode,
+        "truncated .fsimobj code-coverage identity", source_name);
+    return std::nullopt;
+  }
+  metadata.code_coverage.schema = *coverage_schema;
+  metadata.code_coverage.enabled = *coverage_enabled;
   const auto define_count = canonical.count();
   if (!define_count.has_value()) {
     error(diagnostics, kSchemaCode, "invalid object define count", source_name);

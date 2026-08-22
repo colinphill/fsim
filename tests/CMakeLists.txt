@@ -79,6 +79,129 @@ endif()
 add_test(NAME fsim.frontend COMMAND fsim_frontend_tests)
 
 add_executable(
+  fsim_coverage_point_identity_tests
+  frontend/coverage_point_identity_test.cpp
+)
+fsim_configure_test(fsim_coverage_point_identity_tests)
+target_link_libraries(fsim_coverage_point_identity_tests PRIVATE fsim_frontend)
+add_test(
+  NAME fsim.frontend.coverage_point_identity
+  COMMAND fsim_coverage_point_identity_tests
+)
+set_tests_properties(
+  fsim.frontend.coverage_point_identity
+  PROPERTIES LABELS "fast;frontend;coverage;identity;determinism;relocation;positive;negative"
+)
+
+add_executable(
+  fsim_coverage_source_identity_tests
+  frontend/coverage_source_identity_test.cpp
+)
+fsim_configure_test(fsim_coverage_source_identity_tests)
+target_link_libraries(fsim_coverage_source_identity_tests PRIVATE fsim_frontend)
+add_test(
+  NAME fsim.frontend.coverage_source_identity
+  COMMAND fsim_coverage_source_identity_tests
+)
+set_tests_properties(
+  fsim.frontend.coverage_source_identity
+  PROPERTIES LABELS "fast;frontend;coverage;identity;relocation;positive;negative;resource"
+)
+
+add_executable(
+  fsim_verilog_coverage_points_tests
+  elaboration/verilog_coverage_points_test.cpp
+)
+fsim_configure_test(fsim_verilog_coverage_points_tests)
+target_link_libraries(
+  fsim_verilog_coverage_points_tests PRIVATE fsim_elaboration)
+add_test(
+  NAME fsim.elaboration.verilog_coverage_points
+  COMMAND fsim_verilog_coverage_points_tests
+)
+set_tests_properties(
+  fsim.elaboration.verilog_coverage_points
+  PROPERTIES LABELS "fast;elaboration;coverage;verilog;systemverilog;identity;relocation;positive;negative;resource"
+)
+
+add_executable(
+  fsim_vhdl_coverage_points_tests
+  elaboration/vhdl_coverage_points_test.cpp
+)
+fsim_configure_test(fsim_vhdl_coverage_points_tests)
+target_link_libraries(
+  fsim_vhdl_coverage_points_tests PRIVATE fsim_elaboration)
+add_test(
+  NAME fsim.elaboration.vhdl_coverage_points
+  COMMAND fsim_vhdl_coverage_points_tests
+)
+set_tests_properties(
+  fsim.elaboration.vhdl_coverage_points
+  PROPERTIES LABELS "fast;elaboration;coverage;vhdl;identity;profiles;relocation;positive;negative;resource"
+)
+
+add_executable(
+  fsim_coverage_branches_tests
+  elaboration/coverage_branches_test.cpp
+)
+fsim_configure_test(fsim_coverage_branches_tests)
+target_link_libraries(fsim_coverage_branches_tests PRIVATE fsim_elaboration)
+add_test(
+  NAME fsim.elaboration.coverage_branches
+  COMMAND fsim_coverage_branches_tests
+)
+set_tests_properties(
+  fsim.elaboration.coverage_branches
+  PROPERTIES LABELS "fast;elaboration;coverage;branch;verilog;systemverilog;vhdl;identity;relocation;positive;negative;resource"
+)
+
+add_executable(
+  fsim_coverage_points_tests
+  elaboration/coverage_points_test.cpp
+)
+fsim_configure_test(fsim_coverage_points_tests)
+target_link_libraries(fsim_coverage_points_tests PRIVATE fsim_elaboration)
+add_test(
+  NAME fsim.elaboration.coverage_points
+  COMMAND fsim_coverage_points_tests
+)
+set_tests_properties(
+  fsim.elaboration.coverage_points
+  PROPERTIES LABELS "fast;elaboration;coverage;exclusion;verilog;systemverilog;vhdl;identity;profiles;positive;negative;resource"
+)
+
+add_executable(
+  fsim_coverage_instance_identity_tests
+  elaboration/coverage_instance_identity_test.cpp
+)
+fsim_configure_test(fsim_coverage_instance_identity_tests)
+target_link_libraries(
+  fsim_coverage_instance_identity_tests PRIVATE fsim_elaboration)
+add_test(
+  NAME fsim.elaboration.coverage_instance_identity
+  COMMAND fsim_coverage_instance_identity_tests
+)
+set_tests_properties(
+  fsim.elaboration.coverage_instance_identity
+  PROPERTIES LABELS "fast;elaboration;coverage;instance;identity;hierarchy;generate;parameters;determinism;positive;negative;resource"
+)
+
+add_executable(
+  fsim_coverage_inventory_tests
+  elaboration/coverage_inventory_test.cpp
+)
+fsim_configure_test(fsim_coverage_inventory_tests)
+target_link_libraries(fsim_coverage_inventory_tests PRIVATE fsim_elaboration)
+add_test(
+  NAME fsim.elaboration.coverage_inventory
+  COMMAND fsim_coverage_inventory_tests
+)
+set_tests_properties(
+  fsim.elaboration.coverage_inventory
+  PROPERTIES LABELS "fast;elaboration;coverage;inventory;instance;verilog;systemverilog;vhdl;identity;positive;negative;resource;state"
+)
+
+add_executable(
   fsim_sdf_frontend_tests
   frontend/sdf_lexer_test.cpp
 )
@@ -878,6 +1001,21 @@ set_tests_properties(
   PROPERTIES LABELS "fast;library;artifact;source"
 )
 
+add_executable(
+  fsim_code_coverage_identity_tests
+  artifact/coverage_identity_test.cpp
+)
+fsim_configure_test(fsim_code_coverage_identity_tests)
+target_link_libraries(fsim_code_coverage_identity_tests PRIVATE fsim_library)
+add_test(
+  NAME fsim.artifact.code-coverage-identity
+  COMMAND fsim_code_coverage_identity_tests
+)
+set_tests_properties(
+  fsim.artifact.code-coverage-identity
+  PROPERTIES LABELS "fast;artifact;coverage;identity;schema;positive;negative"
+)
+
 add_executable(fsim_object_artifact_tests artifact/object_artifact_test.cpp)
 fsim_configure_test(fsim_object_artifact_tests)
 target_link_libraries(fsim_object_artifact_tests PRIVATE fsim_library)
@@ -1158,6 +1296,18 @@ add_test(
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckVerilogSystemVerilogStandardModeInventory.cmake"
+)
+add_test(
+  NAME fsim.code-coverage-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckCodeCoverageInventory.cmake"
+)
+set_tests_properties(
+  fsim.code-coverage-inventory
+  PROPERTIES
+    LABELS "coverage;inventory;documentation;positive;negative;fast"
 )
 add_test(
   NAME fsim.sdf-inventory
@@ -3406,6 +3556,7 @@ if(FSIM_WITH_LLVM)
       compiler/llvm_jit_scheduling_test.cpp
       compiler/llvm_jit_value_test.cpp
       compiler/llvm_jit_cache_test.cpp
+      compiler/llvm_jit_coverage_test.cpp
       compiler/llvm_jit_vhdl_profile_cache_test.cpp
       compiler/llvm_jit_control_cache_test.cpp
       compiler/llvm_jit_slice_cache_test.cpp
@@ -3424,6 +3575,54 @@ if(FSIM_WITH_LLVM)
 endif()
 
 if(TARGET fsim_application)
+  add_executable(
+    fsim_code_coverage_control_tests
+    app/code_coverage_control_test.cpp
+  )
+  fsim_configure_test(fsim_code_coverage_control_tests)
+  target_link_libraries(
+    fsim_code_coverage_control_tests PRIVATE fsim_application fsim_cli)
+  add_test(
+    NAME fsim.application.code-coverage-control
+    COMMAND fsim_code_coverage_control_tests
+  )
+  set_tests_properties(
+    fsim.application.code-coverage-control
+    PROPERTIES LABELS "fast;application;coverage;project;cli;schema;resource"
+  )
+
+  add_executable(
+    fsim_code_coverage_application_tests
+    app/code_coverage_application_test.cpp
+  )
+  fsim_configure_test(fsim_code_coverage_application_tests)
+  target_link_libraries(
+    fsim_code_coverage_application_tests PRIVATE fsim_application)
+  add_test(
+    NAME fsim.application.code-coverage
+    COMMAND fsim_code_coverage_application_tests
+  )
+  set_tests_properties(
+    fsim.application.code-coverage
+    PROPERTIES LABELS "fast;application;coverage;debug;interpreter;llvm;o0;o1;o2;o3;saturation;instance"
+  )
+
+  add_executable(
+    fsim_code_coverage_equivalence_tests
+    app/code_coverage_equivalence_test.cpp
+  )
+  fsim_configure_test(fsim_code_coverage_equivalence_tests)
+  target_link_libraries(
+    fsim_code_coverage_equivalence_tests PRIVATE fsim_application)
+  add_test(
+    NAME fsim.application.code-coverage-equivalence
+    COMMAND fsim_code_coverage_equivalence_tests
+  )
+  set_tests_properties(
+    fsim.application.code-coverage-equivalence
+    PROPERTIES LABELS "fast;application;coverage;equivalence;verilog;systemverilog;vhdl;interpreter;llvm;o0;o1;o2;o3;debug;instance;aggregation"
+  )
+
   add_executable(
     fsim_vpi_application_tests
     app/vpi_application_test.cpp

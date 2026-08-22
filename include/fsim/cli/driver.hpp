@@ -98,6 +98,7 @@ struct Invocation {
   bool random_seed{false};
   std::optional<std::uint32_t> jobs;
   std::optional<project::Optimization> optimization;
+  std::optional<bool> code_coverage;
   std::optional<std::filesystem::path> tcl_script;
   std::vector<std::string> tcl_arguments;
   std::vector<std::string> tcl_commands;

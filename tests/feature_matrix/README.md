@@ -113,6 +113,25 @@ diagnostics and physical resource ownership. Change 2 target planning is
 preserved and sixteen rows remain active. The current SHA-256 identity is
 `59de8a2f5a0ff3dcd65a907a6355bbfd9952d75417650a6db89a0fab5f4ff095`.
 
+Batch 178 starts with the clause-neutral 17-row
+`code_coverage_inventory.tsv` ledger. Its stable rows assign Changes 2-18
+one-to-one across the language-neutral model, source and point identity,
+Verilog/SystemVerilog and VHDL statement discovery, branches, line state,
+instance inventories, SimIR hits, interpreter/LLVM/Debug execution,
+exclusions, instance identity, aggregation, opt-in control, and v3
+artifact/cache identity. Every row binds all thirteen retained HDL profiles to
+independently written obligations and planned positive, negative, engine,
+aggregation, artifact, diagnostic, and resource owners. The language-neutral
+coverage-model, relocation-independent source-identity, stable point-ID, both
+language statement-discovery rows, and individually addressable branch arms
+plus derived line states and immutable per-instance inventories are preserved,
+the typed, ownership-validated SimIR hit, and saturating interpreter counters
+are preserved; seven rows remain
+active. Change 19
+owns cross-row engine and aggregation equivalence, and Change 20 owns the batch
+freeze. The registered normalized SHA-256 identity is
+`f46e9700c20df9868cf345d231085bc2b43516d46a6b906bcc51ee192d6a80a0`.
+
 ## Intended atomic layout
 
 New tests should use the stable feature ID from the matrix and keep one

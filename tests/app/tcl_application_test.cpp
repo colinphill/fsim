@@ -124,7 +124,7 @@ puts "sdf-control-tcl-ok"
     {
         std::ofstream file(older_vhdl_manifest);
         file
-            << "schema = 2\n"
+            << "schema = 3\n"
             << "[project]\n"
             << "name = \"older-standard\"\n"
             << "top = \"vhdl:work.older_standard\"\n"
@@ -181,7 +181,7 @@ puts "vhdl-standard-profile-ok"
     {
         std::ofstream file(older_verilog_manifest);
         file
-            << "schema = 2\n"
+            << "schema = 3\n"
             << "[project]\n"
             << "name = \"older-verilog\"\n"
             << "top = \"verilog:work.older_verilog\"\n"
@@ -267,7 +267,7 @@ puts "verilog-standard-profiles-ok"
     {
         std::ofstream file(display_manifest);
         file
-            << "schema = 2\n"
+            << "schema = 3\n"
             << "[project]\n"
             << "name = \"tcl-display\"\n"
             << "top = \"sv:work.display\"\n"
@@ -321,7 +321,7 @@ puts "verilog-standard-profiles-ok"
     {
         std::ofstream file(mapped_manifest);
         file
-            << "schema = 2\n"
+            << "schema = 3\n"
             << "[project]\n"
             << "name = \"tcl-mapped-display\"\n"
             << "top = \"sv:work.display\"\n"
@@ -496,7 +496,7 @@ puts "diagnostics-ok"
     {
         std::ofstream file(manifest);
         file
-            << "schema = 2\n"
+            << "schema = 3\n"
             << "[project]\n"
             << "name = \"tcl-control\"\n"
             << "top = \"sv:work.tb\"\n"
@@ -527,7 +527,7 @@ puts "diagnostics-ok"
     {
         std::ofstream file(assertion_manifest);
         file
-            << "schema = 2\n"
+            << "schema = 3\n"
             << "[project]\n"
             << "name = \"tcl-assertion\"\n"
             << "top = \"sv:work.assertion_tb\"\n"

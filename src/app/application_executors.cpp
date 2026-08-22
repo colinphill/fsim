@@ -303,6 +303,8 @@ private:
             runtime.read_signal_packed = read_signal_packed;
             runtime.write_signal_packed = write_signal_packed;
             runtime.read_signal_dynamic_part = read_signal_dynamic_part;
+            runtime.record_code_coverage_counter
+                = record_code_coverage_counter;
             const auto direct_aval = context.direct_signal_aval();
             const auto direct_bval = context.direct_signal_bval();
             const bool supports_direct_planes
@@ -403,6 +405,24 @@ private:
                 : nullptr;
         }
         runtime.context = &callback_state;
+        runtime.code_coverage_hit_counters
+            = code_coverage_hit_counters_.empty()
+            ? nullptr
+            : code_coverage_hit_counters_.data();
+        runtime.code_coverage_hit_count = static_cast<std::uint32_t>(
+            code_coverage_hit_counters_.size());
+        const auto direct_code_coverage_counters
+            = context.direct_code_coverage_counters();
+        runtime.code_coverage_counter_values
+            = direct_code_coverage_counters.empty()
+            ? nullptr
+            : direct_code_coverage_counters.data();
+        runtime.code_coverage_counter_count
+            = direct_code_coverage_counters.size()
+                    <= std::numeric_limits<std::uint32_t>::max()
+            ? static_cast<std::uint32_t>(
+                  direct_code_coverage_counters.size())
+            : 0U;
         runtime.flags = context.execution_points_enabled()
             ? FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS
             : 0;
@@ -618,6 +638,12 @@ private:
                     process_.id,
                     error.instruction(),
                     "exact-width signal runtime callback failed");
+            case compiler::JitGeneratedRuntimeErrorReason::
+                coverage_callback_failure:
+                throw runtime::simir::InterpreterError(
+                    process_.id,
+                    error.instruction(),
+                    "code coverage counter runtime callback failed");
             }
             throw;
         } catch (...) {
@@ -1497,6 +1523,40 @@ void LlvmProcessExecutor::capture_failure(CallbackState& state) noexcept
 {
     if (!state.failure) {
         state.failure = std::current_exception();
+    }
+}
+
+std::uint32_t LlvmProcessExecutor::record_code_coverage_counter(
+    void* context,
+    const std::uint32_t process,
+    const std::uint32_t instruction,
+    const std::uint32_t counter) noexcept
+{
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+        return 1U;
+    }
+    try {
+        const auto status = state.context->record_code_coverage_counter(
+            ::fsim::runtime::CodeCoverageCounterId { counter });
+        if (status
+            == runtime::simir::CodeCoverageCounterRuntimeStatus::Unavailable) {
+            throw runtime::simir::InterpreterError(
+                process,
+                instruction,
+                "code coverage counter service is unavailable");
+        }
+        if (status
+            == runtime::simir::CodeCoverageCounterRuntimeStatus::OutOfRange) {
+            throw runtime::simir::InterpreterError(
+                process,
+                instruction,
+                "code coverage counter is out of range");
+        }
+        return 0U;
+    } catch (...) {
+        capture_failure(state);
+        return 1U;
     }
 }
 

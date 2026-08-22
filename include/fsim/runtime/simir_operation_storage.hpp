@@ -88,7 +88,7 @@ using ControlOperationGroup = OperationGroup<Jump, Call, Return,
 
 using OutputOperationGroup = OperationGroup<Display, FormatDisplay, StringDisplay, StringReport,
     TimeDisplay, MonitorInstall, MonitorControl, TimeFormatControl,
-    CoverageSample, CoverageQuery>;
+    CoverageSample, CoverageQuery, CodeCoverageHit>;
 
 using ClassOperationGroup = OperationGroup<
     ClassAllocate, ClassPropertyRead, ClassPropertyWrite, ClassMethodCall,
@@ -325,7 +325,7 @@ static_assert(
         + std::variant_size_v<ControlOperationGroup::Storage>
         + std::variant_size_v<OutputOperationGroup::Storage>
         + std::variant_size_v<ClassOperationGroup::Storage>
-    == 178);
+    == 179);
 
 template <typename Alternative>
 [[nodiscard]] Alternative* operation_get_if(Operation* operation) noexcept
@@ -569,6 +569,9 @@ public:
         size_type index, const Assert& canonical) const;
     [[nodiscard]] ContainerObjectId container_object(
         size_type index, ContainerObjectId canonical) const noexcept;
+    [[nodiscard]] ::fsim::runtime::CodeCoverageCounterId code_coverage_counter(
+        size_type index,
+        ::fsim::runtime::CodeCoverageCounterId canonical) const noexcept;
 
     [[nodiscard]] bool shares_body_with(
         const OperationList& other) const noexcept;
@@ -593,6 +596,10 @@ private:
         InstructionIndex instruction { };
         Operation operation;
     };
+    struct CoverageHitOverride {
+        InstructionIndex instruction { };
+        ::fsim::runtime::CodeCoverageCounterId counter;
+    };
     struct DebugScopeOverride {
         InternedString canonical;
         InternedString instance;
@@ -609,6 +616,7 @@ private:
     std::vector<AssertOverride> assert_overrides_;
     std::vector<ContainerObjectOverride> container_object_overrides_;
     std::vector<OperationOverride> operation_overrides_;
+    std::vector<CoverageHitOverride> coverage_hit_overrides_;
     std::vector<DebugScopeOverride> debug_scope_overrides_;
     std::uint64_t operation_override_filter_ { };
 

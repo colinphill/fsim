@@ -141,6 +141,10 @@ void Interpreter::Impl::handle_boundary(
             sample->trigger);
         return;
     }
+    if (fsim::runtime::simir::operation_holds<CodeCoverageHit>(operation)) {
+        process.pc = instruction;
+        fail(process, "code coverage counter service is unavailable");
+    }
     if (const auto* query
         = fsim::runtime::simir::operation_get_if<CoverageQuery>(&operation)) {
         if (query->kind != CoverageQueryKind::overall_type

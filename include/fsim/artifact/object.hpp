@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "fsim/artifact/coverage_identity.hpp"
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/library/artifact.hpp"
 
@@ -13,7 +14,7 @@
 
 namespace fsim::artifact {
 
-inline constexpr std::uint32_t kObjectFormatVersion = 6;
+inline constexpr std::uint32_t kObjectFormatVersion = 7;
 inline constexpr std::string_view kObjectMetadataFilename = "fsim-object.bin";
 
 // One explicitly scripted HDL compilation unit. Paths stored here are
@@ -30,6 +31,7 @@ struct ObjectMetadata {
   std::string uvm_release{"none"};
   std::string compilation_digest;
   std::string trace_archive;
+  CodeCoverageArtifactIdentity code_coverage;
   std::vector<std::string> defines;
   std::vector<std::filesystem::path> include_roots;
   std::vector<library::VhdlPackageDependency> vhdl_package_dependencies;

@@ -55,12 +55,14 @@ void make_tree_writable(const std::filesystem::path& root) {
 }  // namespace
 
 int main() {
-    static_assert(fsim::artifact::kObjectFormatVersion == 6U);
+    static_assert(fsim::artifact::kObjectFormatVersion == 7U);
     static_assert(fsim::library::kPortableSchemaVersion == 10U);
     static_assert(fsim::library::kOwningUnitSchemaVersion == 26U);
     const std::string source_bytes = "module child; endmodule\n";
     const std::string unit_bytes = "portable-unit";
     fsim::artifact::ObjectMetadata metadata;
+    metadata.code_coverage
+        = fsim::artifact::make_code_coverage_artifact_identity(false).identity;
     metadata.producer = "fsim test";
     metadata.language = "systemverilog";
     metadata.standard = "2017";
@@ -85,6 +87,23 @@ int main() {
     assert(decoded == metadata);
     assert(!decode_diagnostics.has_error());
     assert(encoded.starts_with(std::string_view { "FSIMOBJ\0", 8U }));
+    auto enabled_metadata = metadata;
+    enabled_metadata.code_coverage
+        = fsim::artifact::make_code_coverage_artifact_identity(true).identity;
+    enabled_metadata.compilation_digest
+        = fsim::artifact::compute_object_compilation_digest(enabled_metadata);
+    assert(enabled_metadata.compilation_digest != metadata.compilation_digest);
+    auto stale_coverage = metadata;
+    stale_coverage.code_coverage.schema = 2U;
+    fsim::diagnostic::Engine stale_coverage_diagnostics;
+    assert(!fsim::artifact::deserialize_object_metadata(
+        fsim::artifact::serialize_object_metadata(stale_coverage),
+        "stale-coverage", stale_coverage_diagnostics));
+    assert(std::ranges::any_of(
+        stale_coverage_diagnostics.diagnostics(), [](const auto& diagnostic) {
+          return diagnostic.code
+              == fsim::artifact::kCodeCoverageArtifactDiagnostic;
+        }));
 
     const auto expect_metadata_rejection = [&](std::string bytes,
                                                const char* source) {
@@ -100,7 +119,7 @@ int main() {
         assert(!fsim::artifact::deserialize_object_metadata(
             bytes, source, diagnostics));
         const auto expected = "unsupported .fsimobj identity: found " + found
-            + "; required format 6 and portable-unit schema 10; regenerate "
+            + "; required format 7 and portable-unit schema 10; regenerate "
               ".fsimobj with this fsim build";
         assert(std::ranges::any_of(
             diagnostics.diagnostics(), [&](const auto& diagnostic) {
@@ -125,14 +144,14 @@ int main() {
         future_format, 8U, fsim::artifact::kObjectFormatVersion + 1U);
     expect_identity_rejection(
         std::move(future_format), "future-format",
-        "format 7 and portable-unit schema 10");
+        "format 8 and portable-unit schema 10");
     for (std::uint32_t schema = 0;
         schema < fsim::library::kPortableSchemaVersion; ++schema) {
         auto noncurrent_header = encoded.substr(0, 16U);
         store_u32(noncurrent_header, 12U, schema);
         expect_identity_rejection(
             std::move(noncurrent_header), "stale-portable-schema",
-            "format 6 and portable-unit schema " + std::to_string(schema));
+            "format 7 and portable-unit schema " + std::to_string(schema));
     }
     auto future_portable_schema = encoded.substr(0, 16U);
     store_u32(
@@ -140,7 +159,7 @@ int main() {
         fsim::library::kPortableSchemaVersion + 1U);
     expect_identity_rejection(
         std::move(future_portable_schema), "future-portable-schema",
-        "format 6 and portable-unit schema 11");
+        "format 7 and portable-unit schema 11");
     expect_metadata_rejection(encoded.substr(0, 15U), "truncated-header");
     auto oversized_root = encoded;
     store_u64(oversized_root, 16U, UINT64_MAX);

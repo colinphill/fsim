@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "llvm_jit_internal.hpp"
 #include "llvm_jit_lowering_internal.hpp"
+#include "llvm_jit_coverage.hpp"
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -47,6 +48,7 @@ using runtime::simir::CopyRegister;
 using runtime::simir::CountBits;
 using runtime::simir::CountOnes;
 using runtime::simir::CoverageDatabaseControl;
+using runtime::simir::CodeCoverageHit;
 using runtime::simir::CoverageQuery;
 using runtime::simir::CoverageSample;
 using runtime::simir::DebugPoint;
@@ -615,6 +617,10 @@ void lower_process(llvm::Module& module, const std::string& symbol,
         106U, offsetof(fsim_jit_runtime_v1, direct_signal_logic9_plane2));
     require_runtime_member(
         107U, offsetof(fsim_jit_runtime_v1, direct_signal_logic9_plane3));
+    require_runtime_member(
+        108U, offsetof(fsim_jit_runtime_v1, code_coverage_hit_counters));
+    require_runtime_member(
+        112U, offsetof(fsim_jit_runtime_v1, record_code_coverage_counter));
     auto* direct_update_slot_type = llvm::StructType::create(
         context,
         { i64, i64, i64, i64, i64, i32, i32,
@@ -654,6 +660,36 @@ void lower_process(llvm::Module& module, const std::string& symbol,
     auto* assert_callback = builder.CreateLoad(
         pointer, builder.CreateStructGEP(runtime_type, runtime_argument, 5),
         "assert_failed");
+    llvm::Value* code_coverage_hit_counters = nullptr;
+    llvm::Value* code_coverage_counter_values = nullptr;
+    llvm::Value* code_coverage_hit_count = nullptr;
+    llvm::Value* code_coverage_counter_count = nullptr;
+    llvm::Value* record_code_coverage_counter = nullptr;
+    llvm::FunctionType* record_code_coverage_counter_type = nullptr;
+    if (validated.uses_code_coverage) {
+        code_coverage_hit_counters = builder.CreateLoad(
+            pointer,
+            builder.CreateStructGEP(runtime_type, runtime_argument, 108),
+            "code_coverage_hit_counters");
+        code_coverage_counter_values = builder.CreateLoad(
+            pointer,
+            builder.CreateStructGEP(runtime_type, runtime_argument, 109),
+            "code_coverage_counter_values");
+        code_coverage_hit_count = builder.CreateLoad(
+            i32,
+            builder.CreateStructGEP(runtime_type, runtime_argument, 110),
+            "code_coverage_hit_count");
+        code_coverage_counter_count = builder.CreateLoad(
+            i32,
+            builder.CreateStructGEP(runtime_type, runtime_argument, 111),
+            "code_coverage_counter_count");
+        record_code_coverage_counter = builder.CreateLoad(
+            pointer,
+            builder.CreateStructGEP(runtime_type, runtime_argument, 112),
+            "record_code_coverage_counter");
+        record_code_coverage_counter_type = llvm::FunctionType::get(
+            i32, { pointer, i32, i32, i32 }, false);
+    }
     llvm::Value* direct_update_slots = nullptr;
     llvm::Value* direct_update_active_words = nullptr;
     llvm::Value* static_trigger_mask = nullptr;

@@ -71,7 +71,7 @@ void test_mapped_library_api(const std::filesystem::path& directory) {
   {
     std::ofstream manifest(manifest_path, std::ios::binary);
     manifest
-        << "schema = 2\n"
+        << "schema = 3\n"
         << "[project]\n"
         << "name = \"api-mapped-library-consumer\"\n"
         << "top = \"sv:vendor.api_mapped_library\"\n"

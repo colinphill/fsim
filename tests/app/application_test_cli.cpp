@@ -1520,7 +1520,7 @@ endmodule
     {
         std::ofstream output(manifest);
         output << R"(
-schema = 2
+schema = 3
 
 [project]
 name = "debug-cli-test"
@@ -1842,7 +1842,7 @@ trace_filters = ["__none__"]
     const auto search_manifest = directory / "search-override.toml";
     {
         std::ofstream output(search_manifest);
-        output << R"(schema = 2
+        output << R"(schema = 3
 [project]
 top = "actual_top"
 [elaboration]
@@ -1974,7 +1974,7 @@ endmodule
     {
         std::ofstream output(wide_cli_manifest);
         output << R"(
-schema = 2
+schema = 3
 [project]
 name = "wide-cli"
 top = "sv:work.wide_cli"
@@ -2032,7 +2032,7 @@ trace_file = "wide-cli.vcd"
     {
         std::ofstream output(scaled_manifest);
         output << R"(
-schema = 2
+schema = 3
 [project]
 name = "scaled-vcd"
 top = "sv:work.tb"

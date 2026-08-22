@@ -775,7 +775,17 @@ namespace {
         offsetof(fsim_jit_runtime_v1, direct_signal_logic9_plane2) == 800);
     static_assert(
         offsetof(fsim_jit_runtime_v1, direct_signal_logic9_plane3) == 808);
-    static_assert(sizeof(fsim_jit_runtime_v1) == 816);
+    static_assert(
+        offsetof(fsim_jit_runtime_v1, code_coverage_hit_counters) == 816);
+    static_assert(
+        offsetof(fsim_jit_runtime_v1, code_coverage_counter_values) == 824);
+    static_assert(
+        offsetof(fsim_jit_runtime_v1, code_coverage_hit_count) == 832);
+    static_assert(
+        offsetof(fsim_jit_runtime_v1, code_coverage_counter_count) == 836);
+    static_assert(
+        offsetof(fsim_jit_runtime_v1, record_code_coverage_counter) == 840);
+    static_assert(sizeof(fsim_jit_runtime_v1) == 848);
     static_assert(sizeof(fsim_jit_projected_element_v1) == 24);
     static_assert(sizeof(fsim_jit_logic9_word_v1) == 32);
     static_assert(sizeof(fsim_jit_logic9_projected_element_v1) == 40);
@@ -1188,6 +1198,7 @@ struct LlvmJit::Impl {
         bool uses_exact_signal_operation { };
         bool uses_wide_signal_read { };
         bool uses_wide_signal_write { };
+        bool uses_code_coverage { };
         std::vector<runtime::simir::InstructionIndex> entry_points;
 
         static constexpr std::array flags {
@@ -1234,6 +1245,7 @@ struct LlvmJit::Impl {
             &ProcessInfo::uses_exact_signal_operation,
             &ProcessInfo::uses_wide_signal_read,
             &ProcessInfo::uses_wide_signal_write,
+            &ProcessInfo::uses_code_coverage,
         };
     };
 

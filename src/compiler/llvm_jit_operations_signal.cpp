@@ -60,7 +60,8 @@ llvm::StructType* create_jit_runtime_type(llvm::LLVMContext& context) {
           pointer, pointer, pointer, i32, i32, i32,
           pointer, pointer, pointer, i32, i32,
           pointer, i32, i32, i64, pointer, pointer, pointer,
-          pointer, pointer, pointer, pointer },
+          pointer, pointer, pointer, pointer,
+          pointer, pointer, i32, i32, pointer },
       "fsim_jit_runtime_v1");
 }
 

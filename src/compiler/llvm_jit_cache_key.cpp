@@ -40,6 +40,7 @@ using runtime::simir::CountBits;
 using runtime::simir::CountOnes;
 using runtime::simir::CoverageDatabaseControl;
 using runtime::simir::CoverageDatabaseControlKind;
+using runtime::simir::CodeCoverageHit;
 using runtime::simir::CoverageQuery;
 using runtime::simir::CoverageSample;
 using runtime::simir::CoverageSampleTrigger;
@@ -188,7 +189,7 @@ using runtime::simir::WriteUpdateDynamicSlice;
 using runtime::simir::WriteUpdateSlice;
 using runtime::simir::Yield;
 
-constexpr std::string_view kNativeObjectCacheSchema = "fsim-llvm-native-object-v167";
+constexpr std::string_view kNativeObjectCacheSchema = "fsim-llvm-native-object-v168";
 
 void add_key_u64(CacheKeyBuilder& builder, const std::string_view label,
     const std::uint64_t value)
@@ -367,6 +368,7 @@ void add_container_type_key(
     const JitOptimizationLevel optimization,
     const bool debug_instrumentation,
     const bool require_direct_update_slots,
+    const std::string_view code_coverage_identity,
     const llvm::Triple& target_triple, const llvm::DataLayout& data_layout,
     const std::string_view target_cpu,
     const std::span<const std::string> target_features)
@@ -378,6 +380,7 @@ void add_container_type_key(
     add_key_u64(builder, "debug-instrumentation", debug_instrumentation);
     add_key_u64(
         builder, "require-direct-update-slots", require_direct_update_slots);
+    builder.add("code-coverage-identity", code_coverage_identity);
     add_key_u64(builder, "runtime-abi-version",
         FSIM_JIT_RUNTIME_ABI_VERSION_V1);
     add_key_u64(builder, "runtime-abi-structure-size",
@@ -579,6 +582,7 @@ void add_container_type_key(
     const JitOptimizationLevel optimization,
     const bool debug_instrumentation,
     const bool require_direct_update_slots,
+    const std::string_view code_coverage_identity,
     const llvm::Triple& target_triple,
     const llvm::DataLayout& data_layout,
     const std::string_view target_cpu,
@@ -591,6 +595,7 @@ void add_container_type_key(
     add_key_u64(builder, "debug-instrumentation", debug_instrumentation);
     add_key_u64(
         builder, "require-direct-update-slots", require_direct_update_slots);
+    builder.add("code-coverage-identity", code_coverage_identity);
     add_key_u64(builder, "runtime-abi-version",
         FSIM_JIT_RUNTIME_ABI_VERSION_V1);
     add_key_u64(builder, "runtime-abi-structure-size",

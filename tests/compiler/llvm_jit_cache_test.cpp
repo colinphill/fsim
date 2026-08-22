@@ -2460,7 +2460,6 @@ void test_persistent_object_cache()
     test_callable_frame_cache_identity(root / "callable-frame");
     test_vhdl_language_profile_cache_identity(
         root / "vhdl-language-profile");
-
     const auto language_mode_key = [](
         const std::string_view language,
         const std::string_view standard,

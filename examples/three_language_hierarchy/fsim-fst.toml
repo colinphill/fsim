@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-schema = 2
+schema = 3
 
 [project]
 name = "three-language-hierarchy-fst"

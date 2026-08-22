@@ -72,7 +72,7 @@ endforeach()
 
 file(READ "${FSIM_REFERENCE}" FSIM_REFERENCE_TEXT)
 foreach(FSIM_TOKEN IN ITEMS
-    "# fsim v2 ABI and schema reference"
+    "# fsim v3 ABI and schema reference"
     "## Compatibility policy"
     "## Installed packages and targets"
     "## Core C API"
@@ -87,8 +87,10 @@ foreach(FSIM_TOKEN IN ITEMS
     "`SystemC::systemc`"
     "`SCV::scv`"
     "| SystemC | ABI 4 |"
-    "format 6, portable schema 10"
-    "format 11, runtime ABI 1"
+    "project schema 3"
+    "format 7, portable schema 10"
+    "format 12, runtime ABI 1"
+    "fsim-code-coverage-foundation-v3"
     "format 5, portable schema 10"
     "format 2, runtime ABI 1, SystemC ABI 4"
     "runtime 48"

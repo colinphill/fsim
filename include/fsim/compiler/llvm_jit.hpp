@@ -45,6 +45,9 @@ struct LlvmJitOptions {
   /// update slot is present. Application simulations enable this only when
   /// module-path routing cannot disable callback-free update staging.
   bool require_direct_update_slots = false;
+  /// v3 code-coverage model/configuration digest. It is part of every native
+  /// object cache identity even when instrumentation is disabled.
+  std::string code_coverage_identity { "disabled" };
 };
 
 struct LlvmJitCacheStatistics {
@@ -244,6 +247,7 @@ enum class JitGeneratedRuntimeErrorReason : std::uint8_t {
     file_callback_failure,
     container_callback_failure,
     signal_callback_failure,
+    coverage_callback_failure,
 };
 
 /// A failure deliberately reported by generated SimIR code.

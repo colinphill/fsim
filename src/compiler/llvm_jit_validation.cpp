@@ -467,6 +467,23 @@ using namespace runtime::simir;
                     }
                     record_definition(operation.destination, index);
                     constrain_width(operation.destination, 64U, index);
+                } else if constexpr (
+                    std::is_same_v<OperationType, CodeCoverageHit>) {
+                    result.uses_code_coverage = true;
+                    if (!runtime::is_code_coverage_identity_valid(
+                            operation.point)) {
+                        reject(
+                            process, index,
+                            "CodeCoverageHit point identity is invalid");
+                    }
+                    if (operation.metric
+                            != runtime::CodeCoverageMetric::Statement
+                        && operation.metric
+                            != runtime::CodeCoverageMetric::Branch) {
+                        reject(
+                            process, index,
+                            "CodeCoverageHit metric is invalid");
+                    }
                 } else if constexpr (std::is_same_v<OperationType, CopyRegister>) {
                     record_definition(operation.destination, index);
                     record_use(operation.source, index);

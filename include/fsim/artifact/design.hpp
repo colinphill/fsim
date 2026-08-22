@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "fsim/artifact/coverage_identity.hpp"
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/library/artifact.hpp"
 #include "fsim/version.hpp"
@@ -16,7 +17,7 @@
 
 namespace fsim::artifact {
 
-inline constexpr std::uint32_t kDesignFormatVersion = 11;
+inline constexpr std::uint32_t kDesignFormatVersion = 12;
 inline constexpr std::string_view kDesignMetadataFilename = "fsim-design.bin";
 
 struct DesignRoot {
@@ -40,6 +41,7 @@ struct DesignObjectInput {
   std::string standard;
   std::string compatibility_profile { "none" };
   std::string library;
+  CodeCoverageArtifactIdentity code_coverage;
   std::vector<library::VhdlPackageDependency> vhdl_package_dependencies;
   std::vector<std::string> unit_checksums;
   friend bool operator==(
@@ -133,6 +135,7 @@ struct DesignMetadata {
   std::string optimization;
   std::string cache_key;
   std::string trace_archive;
+  CodeCoverageArtifactIdentity code_coverage;
   std::string uvm_release{"none"};
   std::string uvm_source_identity;
   std::uint64_t seed{1};

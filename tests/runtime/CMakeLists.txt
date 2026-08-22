@@ -171,6 +171,58 @@ set_tests_properties(
   PROPERTIES LABELS "fast;runtime;trace;vcd;model;positive;negative;equivalence"
 )
 
+add_executable(
+  fsim_code_coverage_model_tests code_coverage_model_test.cpp)
+target_link_libraries(fsim_code_coverage_model_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_code_coverage_model_tests)
+add_test(
+  NAME fsim.runtime.code_coverage_model
+  COMMAND fsim_code_coverage_model_tests
+)
+set_tests_properties(
+  fsim.runtime.code_coverage_model
+  PROPERTIES LABELS "fast;runtime;coverage;model;positive;negative;resource"
+)
+
+add_executable(
+  fsim_coverage_aggregation_tests coverage_aggregation_test.cpp)
+target_link_libraries(fsim_coverage_aggregation_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_coverage_aggregation_tests)
+add_test(
+  NAME fsim.runtime.coverage_aggregation
+  COMMAND fsim_coverage_aggregation_tests
+)
+set_tests_properties(
+  fsim.runtime.coverage_aggregation
+  PROPERTIES LABELS "fast;runtime;coverage;aggregation;source;instance;union;determinism;saturation;positive;negative;resource"
+)
+
+add_executable(
+  fsim_coverage_line_state_tests coverage_line_state_test.cpp)
+target_link_libraries(fsim_coverage_line_state_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_coverage_line_state_tests)
+add_test(
+  NAME fsim.runtime.coverage_line_state
+  COMMAND fsim_coverage_line_state_tests
+)
+set_tests_properties(
+  fsim.runtime.coverage_line_state
+  PROPERTIES LABELS "fast;runtime;coverage;line;derived;determinism;positive;negative;resource"
+)
+
+add_executable(
+  fsim_simir_coverage_tests simir_coverage_test.cpp)
+target_link_libraries(fsim_simir_coverage_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_simir_coverage_tests)
+add_test(
+  NAME fsim.runtime.simir_coverage
+  COMMAND fsim_simir_coverage_tests
+)
+set_tests_properties(
+  fsim.runtime.simir_coverage
+  PROPERTIES LABELS "fast;runtime;coverage;simir;ownership;sharing;positive;negative;resource"
+)
+
 add_executable(fsim_fst_writer_tests fst_writer_tests.cpp)
 target_link_libraries(fsim_fst_writer_tests PRIVATE fsim_runtime)
 fsim_configure_test(fsim_fst_writer_tests)

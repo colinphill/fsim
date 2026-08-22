@@ -12,7 +12,7 @@
 
 namespace fsim::project {
 
-inline constexpr std::uint32_t kSchemaVersion = 2;
+inline constexpr std::uint32_t kSchemaVersion = 3;
 
 enum class Language : std::uint8_t {
     vhdl,
@@ -156,6 +156,10 @@ struct BuildSection {
   std::filesystem::path cache_path{".fsim-cache"};
 };
 
+struct CoverageSection {
+  bool enabled{false};
+};
+
 struct RunSection {
   std::optional<std::string> duration;
   std::uint64_t max_deltas{100'000};
@@ -187,6 +191,7 @@ struct Config {
     std::vector<LibraryMapping> library_mappings;
     ElaborationSection elaboration;
     BuildSection build;
+    CoverageSection coverage;
     RunSection run;
     SystemCSection systemc;
 };
@@ -227,7 +232,7 @@ systemverilog_uvm_compatibility(SystemVerilogUvmRelease release) noexcept;
 [[nodiscard]] std::optional<TraceCompression> parse_trace_compression(
     std::string_view spelling) noexcept;
 
-// Parses, validates, and resolves a schema-2 fsim.toml. Relative paths are
+// Parses, validates, and resolves a schema-3 fsim.toml. Relative paths are
 // resolved against the manifest directory. Source globs are expanded in listed
 // pattern order, with the matches for each pattern sorted lexicographically.
 [[nodiscard]] std::optional<Config> load(

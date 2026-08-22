@@ -148,6 +148,9 @@ namespace {
         std::uint32_t container_packed_reads { };
         std::uint32_t container_packed_writes { };
         std::uint32_t dynamic_part_signal_reads { };
+        std::uint32_t code_coverage_checked_calls { };
+        std::uint32_t code_coverage_callback_status { };
+        std::vector<std::uint32_t> code_coverage_checked_counters;
     };
 
     extern "C" inline std::uint32_t container_operation_stub(
@@ -1166,6 +1169,18 @@ namespace {
         return 0;
     }
 
+    extern "C" inline std::uint32_t record_code_coverage_counter(
+        void* opaque,
+        std::uint32_t,
+        std::uint32_t,
+        const std::uint32_t counter)
+    {
+        auto& runtime = *static_cast<TestRuntime*>(opaque);
+        ++runtime.code_coverage_checked_calls;
+        runtime.code_coverage_checked_counters.push_back(counter);
+        return runtime.code_coverage_callback_status;
+    }
+
     [[nodiscard]] inline fsim_jit_runtime_v1 abi(TestRuntime& runtime)
     {
         fsim_jit_runtime_v1 result { };
@@ -1244,6 +1259,8 @@ namespace {
         result.read_signal_packed = &read_signal_packed;
         result.write_signal_packed = &write_signal_packed;
         result.read_signal_dynamic_part = &read_signal_dynamic_part;
+        result.record_code_coverage_counter
+            = &record_code_coverage_counter;
         return result;
     }
 
@@ -1524,6 +1541,10 @@ void test_direct_update_accumulator_at_level(
 void test_static_trigger_regions_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
+void test_code_coverage_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_code_coverage_cache_identity();
 void test_debug_point_instrumentation();
 void test_logic9_at_level(
     fsim::compiler::JitOptimizationLevel optimization,

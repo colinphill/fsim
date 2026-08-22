@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_coverage.hpp"
 #include <deque>
 
 #include <algorithm>
@@ -734,6 +735,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
     ReportHook report_hook;
     CoverageSampleHook coverage_sample_hook;
     CoverageQueryHook coverage_query_hook;
+    CodeCoverageCounters code_coverage_counters;
+    CodeCoverageOverflowHook code_coverage_overflow_hook;
     SystemCommandHook system_command_hook;
     VcdControlHook vcd_control_hook;
     CoverageDatabaseControlHook coverage_database_control_hook;

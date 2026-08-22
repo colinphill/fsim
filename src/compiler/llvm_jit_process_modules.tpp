@@ -26,6 +26,7 @@ void LlvmJit::add_process_module(
                   impl_->options.optimization,
                   impl_->options.debug_instrumentation,
                   impl_->options.require_direct_update_slots,
+                  impl_->options.code_coverage_identity,
                   impl_->jit->getTargetTriple(),
                   impl_->jit->getDataLayout(), impl_->target_cpu,
                   impl_->target_features)
@@ -36,6 +37,7 @@ void LlvmJit::add_process_module(
                   impl_->options.optimization,
                   impl_->options.debug_instrumentation,
                   impl_->options.require_direct_update_slots,
+                  impl_->options.code_coverage_identity,
                   impl_->jit->getTargetTriple(),
                   impl_->jit->getDataLayout(), impl_->target_cpu,
                   impl_->target_features);
@@ -237,6 +239,7 @@ void LlvmJit::add_process_module(
             validated.uses_exact_signal_operation,
             validated.uses_wide_signal_read,
             validated.uses_wide_signal_write,
+            validated.uses_code_coverage,
             { },
         };
         process_info.entry_points = make_process_lowering_plan(

@@ -84,6 +84,23 @@ std::optional<BuiltProject> build_checked_project(
     if (!checked) {
         return std::nullopt;
     }
+    const auto coverage_identity = artifact::make_code_coverage_artifact_identity(
+        code_coverage_enabled(config));
+    if (!coverage_identity.ok()) {
+        diagnostics.error(
+            std::string { artifact::kCodeCoverageArtifactDiagnostic },
+            "could not construct the v3 build code-coverage identity");
+        return std::nullopt;
+    }
+    for (const auto& object : checked->objects) {
+        if (object.code_coverage != coverage_identity.identity) {
+            diagnostics.error(
+                std::string { artifact::kCodeCoverageArtifactDiagnostic },
+                ".fsimobj code-coverage configuration does not match the "
+                "current v3 elaboration request");
+            return std::nullopt;
+        }
+    }
     auto vhdl_provenance = vhdl_unit_provenance(*checked);
     for (const auto& source_set : config.source_sets) {
         if (source_set.uvm_release != project::SystemVerilogUvmRelease::none
@@ -453,7 +470,8 @@ std::optional<BuiltProject> build_checked_project(
                 "discarded an unreadable or incompatible cache entry: "
                     + cache_error.message());
         }
-        std::string record = "FSIM-DESIGN-CACHE-V2\n";
+        std::string record = "FSIM-DESIGN-CACHE-V3\n";
+        record += coverage_identity.identity.digest + "\n";
         for (const auto& top : tops) {
             record += top.alias + "=" + top.target + "\n";
         }
@@ -518,6 +536,7 @@ std::optional<BuiltProject> build_checked_project(
     };
     result.vhdl_unit_provenance = std::move(vhdl_provenance);
     result.trace_archive = std::move(checked->trace_archive);
+    result.code_coverage_enabled = code_coverage_enabled(config);
     return result;
 }
 

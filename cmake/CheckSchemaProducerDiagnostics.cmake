@@ -152,7 +152,8 @@ fsim_require_schema_diagnostic_tokens("${FSIM_BUILDER}"
   "; regenerate "
   " with this fsim build")
 fsim_require_schema_diagnostic_tokens("${FSIM_PROJECT}"
-  "\"project manifest\", \"no schema\", \"schema 2\", \"fsim.toml\""
+  "\"project manifest\", \"no schema\""
+  "\"schema \" + std::to_string(kSchemaVersion), \"fsim.toml\""
   "\"schema outside the uint32 range\""
   "config_.schema != kSchemaVersion")
 fsim_require_schema_diagnostic_tokens("${FSIM_OBJECT}"

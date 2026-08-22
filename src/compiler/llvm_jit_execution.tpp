@@ -724,6 +724,16 @@ LlvmJit::resume(const JitProcessBinding process,
                 "JIT runtime ABI requires write_update for this process");
         }
     }
+    if (entry.info.uses_code_coverage) {
+        if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+            throw LlvmJitError(
+                "JIT runtime ABI structure does not include code coverage counters");
+        }
+        if (runtime.record_code_coverage_counter == nullptr) {
+            throw LlvmJitError(
+                "JIT runtime ABI requires the code coverage checked service");
+        }
+    }
     if (entry.info.uses_write_after) {
         if (runtime.struct_size < offsetof(fsim_jit_runtime_v1, flags)) {
             throw LlvmJitError(

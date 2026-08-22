@@ -255,6 +255,7 @@ std::optional<CheckedProject> load_objects(
     provenance.standard = metadata->standard;
     provenance.compatibility_profile = metadata->compatibility_profile;
     provenance.library = metadata->library;
+    provenance.code_coverage = metadata->code_coverage;
     provenance.vhdl_package_dependencies =
         metadata->vhdl_package_dependencies;
     const auto source_language = project::parse_language(metadata->language);

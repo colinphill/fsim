@@ -300,6 +300,7 @@ enum class Context {
   library_map,
   elaboration,
   build,
+  coverage,
   run,
   systemc,
   unknown,
@@ -498,6 +499,8 @@ class Parser {
       select_single_table(Context::project, "project", header_span);
     } else if (normalized == "build") {
       select_single_table(Context::build, "build", header_span);
+    } else if (normalized == "coverage") {
+      select_single_table(Context::coverage, "coverage", header_span);
     } else if (normalized == "elaboration") {
       select_single_table(Context::elaboration, "elaboration", header_span);
     } else if (normalized == "run") {
@@ -629,6 +632,8 @@ class Parser {
         return "elaboration";
       case Context::build:
         return "build";
+      case Context::coverage:
+        return "coverage";
       case Context::run:
         return "run";
       case Context::systemc:
@@ -730,6 +735,9 @@ class Parser {
       case Context::build:
         assign_build(key, value, key_span);
         break;
+      case Context::coverage:
+        assign_coverage(key, value, key_span);
+        break;
       case Context::run:
         assign_run(key, value, key_span);
         break;
@@ -756,7 +764,7 @@ class Parser {
               std::string(kSchemaCode),
               diagnostic::unsupported_artifact_identity(
                   "project manifest", "schema outside the uint32 range",
-                  "schema 2", "fsim.toml"),
+                  "schema " + std::to_string(kSchemaVersion), "fsim.toml"),
               value.span);
       } else {
         config_.schema = static_cast<std::uint32_t>(*schema);
@@ -1113,6 +1121,19 @@ class Parser {
     unknown_key(key, span);
   }
 
+  void assign_coverage(
+      const std::string& key,
+      const Value& value,
+      const diagnostic::SourceSpan& span) {
+    if (key == "enabled") {
+      if (require_kind(value, Value::Kind::boolean, key, "a boolean")) {
+        config_.coverage.enabled = value.boolean;
+      }
+      return;
+    }
+    unknown_key(key, span);
+  }
+
   void assign_systemc(
       const std::string& key,
       const Value& value,
@@ -1157,7 +1178,8 @@ class Parser {
         diagnostics_.error(
             std::string(kSchemaCode),
             diagnostic::unsupported_artifact_identity(
-                "project manifest", "no schema", "schema 2", "fsim.toml"),
+                "project manifest", "no schema",
+                "schema " + std::to_string(kSchemaVersion), "fsim.toml"),
             document_span);
     } else if (config_.schema != kSchemaVersion) {
         diagnostics_.error(

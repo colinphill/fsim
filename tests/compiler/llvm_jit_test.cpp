@@ -28,6 +28,14 @@ int main() {
   run_at_level(JitOptimizationLevel::o0, "arithmetic_o0");
   run_at_level(JitOptimizationLevel::o1, "arithmetic_o1");
   run_at_level(JitOptimizationLevel::o2, "arithmetic_o2");
+  test_code_coverage_at_level(
+      JitOptimizationLevel::o0, "code_coverage_o0");
+  test_code_coverage_at_level(
+      JitOptimizationLevel::o1, "code_coverage_o1");
+  // Application O2 and O3 both select this optimized native profile.
+  test_code_coverage_at_level(
+      JitOptimizationLevel::o2, "code_coverage_o2_o3");
+  test_code_coverage_cache_identity();
   test_scalar_truth_tables_and_64_bits();
   test_systemverilog_scalar_transport_at_level(
       JitOptimizationLevel::o0, "systemverilog_scalar_o0");

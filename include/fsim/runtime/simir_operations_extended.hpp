@@ -702,6 +702,20 @@ struct CoverageQuery {
     CoverageQueryKind kind { CoverageQueryKind::overall_type };
 };
 
+/// Record one hit against the exact code-coverage point and dense counter
+/// owned by the elaborated design instance. This operation intentionally has
+/// no register, signal, object, or scheduling operand.
+struct CodeCoverageHit {
+    ::fsim::runtime::CodeCoveragePointId point;
+    ::fsim::runtime::CodeCoverageMetric metric {
+        ::fsim::runtime::CodeCoverageMetric::Statement
+    };
+    ::fsim::runtime::CodeCoverageCounterId counter;
+
+    friend constexpr bool operator==(
+        const CodeCoverageHit&, const CodeCoverageHit&) = default;
+};
+
 enum class RandomKind : std::uint8_t {
     urandom,
     random,

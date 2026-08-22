@@ -1493,6 +1493,14 @@ for (const auto& operation : process.operations) {
                 add_key_u64(
                     builder, "kind",
                     static_cast<std::uint64_t>(value.kind));
+            } else if constexpr (
+                std::is_same_v<OperationType, CodeCoverageHit>) {
+                builder.add("operation", "CodeCoverageHit");
+                add_key_u64(builder, "point-high", value.point.high);
+                add_key_u64(builder, "point-low", value.point.low);
+                add_key_u64(
+                    builder, "metric",
+                    static_cast<std::uint64_t>(value.metric));
             } else if constexpr (std::is_same_v<OperationType, RandomValue>) {
                 builder.add("operation", "RandomValue");
                 add_key_u64(

@@ -46,6 +46,12 @@ struct ProcessLogic9UpdateBatch {
     std::span<const ProcessLogic9UpdateSlotView> slots;
 };
 
+enum class CodeCoverageCounterRuntimeStatus : std::uint8_t {
+    Recorded,
+    Unavailable,
+    OutOfRange,
+};
+
 /// Shared simulator-owned state for a generated native update phase. Empty
 /// spans disable the phase path without changing the established callbacks.
 struct ProcessNativeWordUpdate {
@@ -248,6 +254,19 @@ public:
     direct_signal_bval() const noexcept
     {
         return { };
+    }
+    /// Dense simulation-owned code-coverage counters. Generated code updates
+    /// these directly; an empty span requests the checked rare-path service.
+    [[nodiscard]] virtual std::span<std::uint64_t>
+    direct_code_coverage_counters() noexcept
+    {
+        return { };
+    }
+    /// Checked fallback for saturation and unavailable/range diagnostics.
+    [[nodiscard]] virtual CodeCoverageCounterRuntimeStatus
+    record_code_coverage_counter(::fsim::runtime::CodeCoverageCounterId)
+    {
+        return CodeCoverageCounterRuntimeStatus::Unavailable;
     }
     /// Dense exact Logic9 planes for callback-free native reads of signals no
     /// wider than one word. Entries for non-Logic9 signals are zero.

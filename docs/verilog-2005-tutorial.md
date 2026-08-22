@@ -34,7 +34,7 @@ Save this beside the source as `fsim.toml`:
 
 ```toml
 # SPDX-License-Identifier: Apache-2.0
-schema = 2
+schema = 3
 
 [project]
 name = "wide-verilog"

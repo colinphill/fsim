@@ -33,7 +33,7 @@ void test_multiple_root_api(const std::filesystem::path& directory)
     {
         std::ofstream manifest(manifest_path);
         manifest << R"(
-schema = 2
+schema = 3
 [project]
 name = "api-multiple-roots"
 time_resolution = "1ns"

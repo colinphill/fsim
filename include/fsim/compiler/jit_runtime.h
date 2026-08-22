@@ -817,6 +817,22 @@ typedef struct fsim_jit_runtime_v1 {
   const uint64_t* direct_signal_logic9_plane2;
   const uint64_t* direct_signal_logic9_plane3;
 
+  /*
+   * Append-only callback-free code-coverage counters. The hit map is owned by
+   * the process executor so structurally shared native code can retain exact
+   * per-instance counter identities. Generated code calls the checked service
+   * only when a counter is saturated or direct storage is unavailable.
+   */
+  const uint32_t* code_coverage_hit_counters;
+  uint64_t* code_coverage_counter_values;
+  uint32_t code_coverage_hit_count;
+  uint32_t code_coverage_counter_count;
+  uint32_t (*record_code_coverage_counter)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      uint32_t counter);
+
 } fsim_jit_runtime_v1;
 
 /*

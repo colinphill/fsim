@@ -132,15 +132,18 @@ Fixture make_fixture(const fsim::elaboration::ElaboratedDesign& design,
 fsim::artifact::DesignMetadata base_metadata()
 {
     fsim::artifact::DesignMetadata metadata;
+    const auto coverage_identity
+        = fsim::artifact::make_code_coverage_artifact_identity(false).identity;
     metadata.producer = "fsim SDF artifact test";
     metadata.time_resolution = "1ns";
     metadata.delay_mode = "typ";
     metadata.optimization = "O2";
     metadata.cache_key = checksum("base-design-cache");
+    metadata.code_coverage = coverage_identity;
     metadata.roots.push_back({ "top", "sv:work.top", "sv:work.top" });
     metadata.objects.push_back({ checksum("object-metadata"),
         checksum("object-compilation"), "systemverilog", "2017", "none",
-        "work", { }, { checksum("unit") } });
+        "work", coverage_identity, { }, { checksum("unit") } });
     metadata.verilog_unit_provenance.push_back(
         { 0U, "systemverilog", "2017", "none" });
     metadata.payloads = {

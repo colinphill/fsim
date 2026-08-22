@@ -473,8 +473,10 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_persistence.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_resolution.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_percentage.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/coverage_point_identity.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_report.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_sampling.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/coverage_source_identity.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/lexer.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/sdf_lexer.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/sdf21_adapter.cpp"
@@ -526,7 +528,7 @@ fsim_configure_library(fsim_frontend)
 target_link_libraries(
   fsim_frontend
   PUBLIC fsim_semantic
-  PRIVATE fsim_boost_pfr_headers
+  PRIVATE fsim_boost_pfr_headers fsim_support
 )
 
 add_library(
@@ -537,6 +539,8 @@ add_library(
     src/runtime/class_containers.cpp
     src/runtime/class_methods.cpp
     src/runtime/class_static.cpp
+    src/runtime/coverage_aggregation.cpp
+    src/runtime/coverage_line_state.cpp
   src/runtime/uvm_object.cpp
   src/runtime/uvm_object_copy.cpp
   src/runtime/uvm_object_policy.cpp
@@ -626,6 +630,7 @@ add_library(
     src/runtime/systemverilog_chandle.cpp
     src/runtime/systemverilog_string.cpp
     src/runtime/simir.cpp
+    src/runtime/simir_coverage.cpp
     src/runtime/simir_arithmetic.cpp
     src/runtime/simir_container_algorithms.cpp
     src/runtime/simir_container_bridge.cpp
@@ -663,8 +668,14 @@ fsim_configure_library(fsim_runtime)
   add_library(
     fsim_elaboration
     STATIC
+      src/elaboration/coverage_branches.cpp
+      src/elaboration/coverage_instance_identity.cpp
+      src/elaboration/coverage_inventory.cpp
+      src/elaboration/coverage_points.cpp
       src/elaboration/elaborated_design.cpp
       src/elaboration/elaborate.cpp
+      src/elaboration/verilog_coverage_points.cpp
+      src/elaboration/vhdl_coverage_points.cpp
       src/elaboration/elaboration_analysis.cpp
       src/elaboration/elaboration_generate_substitution.cpp
       src/elaboration/elaboration_constants.cpp
@@ -786,6 +797,7 @@ fsim_configure_library(fsim_support)
 
 add_library(
   fsim_library STATIC
+  src/artifact/coverage_identity.cpp
   src/artifact/design.cpp
   src/artifact/object.cpp
   src/library/artifact.cpp
@@ -992,6 +1004,7 @@ if(FSIM_WITH_LLVM)
     STATIC
       src/compiler/llvm_jit.cpp
       src/compiler/llvm_jit_cache_key.cpp
+      src/compiler/llvm_jit_coverage.cpp
       src/compiler/llvm_jit_lowering.cpp
       src/compiler/llvm_jit_dynamic_part.cpp
       src/compiler/llvm_jit_module.cpp
@@ -1091,10 +1104,12 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
   src/app/application_sdf_portable_archive.cpp
   src/app/application_sdf_phase_persistence.cpp
       src/app/application_build.cpp
+      src/app/application_coverage_control.cpp
       src/app/application_check.cpp
       src/app/application_standard_library.cpp
       src/app/application_vhdl_analysis.cpp
       src/app/application_debug_control.cpp
+      src/app/application_debug_coverage.cpp
       src/app/application_debugger.cpp
       src/app/application_uvm_inspection.cpp
       src/app/application_design_ir.cpp

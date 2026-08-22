@@ -97,6 +97,7 @@ bool supports_wide_register_operation(
                 || std::is_same_v<OperationType, CallableFramePop>
                 || std::is_same_v<OperationType, CoverageSample>
                 || std::is_same_v<OperationType, CoverageQuery>
+                || std::is_same_v<OperationType, CodeCoverageHit>
                 || std::is_same_v<OperationType, ReadSignal>
                 || std::is_same_v<OperationType, WriteBlocking>
                 || std::is_same_v<OperationType, WriteBlockingSlice>
@@ -678,6 +679,8 @@ std::optional<std::string> validate_file_position_metadata(
         return "bounded container runtime callback failed";
     case JitGeneratedRuntimeErrorReason::signal_callback_failure:
         return "exact-width signal runtime callback failed";
+    case JitGeneratedRuntimeErrorReason::coverage_callback_failure:
+        return "code coverage counter runtime callback failed";
     }
     return "unknown generated runtime error";
 }
@@ -712,6 +715,7 @@ decode_generated_runtime_error(const std::uint64_t value) noexcept
     case JitGeneratedRuntimeErrorReason::file_callback_failure:
     case JitGeneratedRuntimeErrorReason::container_callback_failure:
     case JitGeneratedRuntimeErrorReason::signal_callback_failure:
+    case JitGeneratedRuntimeErrorReason::coverage_callback_failure:
         return reason;
     }
     return std::nullopt;

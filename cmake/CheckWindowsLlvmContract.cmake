@@ -232,7 +232,12 @@ foreach(FSIM_ABI_EVIDENCE IN ITEMS
     "offsetof(fsim_jit_runtime_v1, force_driver_signal_slice_logic9) == 576"
     "offsetof(fsim_jit_runtime_v1, release_driver_signal_slice) == 584"
     "offsetof(fsim_jit_runtime_v1, execute_signal_operation) == 592"
-    "sizeof(fsim_jit_runtime_v1) == 816"
+    "offsetof(fsim_jit_runtime_v1, code_coverage_hit_counters) == 816"
+    "offsetof(fsim_jit_runtime_v1, code_coverage_counter_values) == 824"
+    "offsetof(fsim_jit_runtime_v1, code_coverage_hit_count) == 832"
+    "offsetof(fsim_jit_runtime_v1, code_coverage_counter_count) == 836"
+    "offsetof(fsim_jit_runtime_v1, record_code_coverage_counter) == 840"
+    "sizeof(fsim_jit_runtime_v1) == 848"
     "sizeof(fsim_jit_frame_v1) == 344"
     "sizeof(fsim_jit_resume_result_v1) == 24")
   string(FIND "${FSIM_ABI_TEST_CONTENTS}" "${FSIM_ABI_EVIDENCE}" FSIM_INDEX)

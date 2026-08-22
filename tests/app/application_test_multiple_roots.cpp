@@ -231,7 +231,7 @@ endmodule
   {
     std::ofstream output(manifest, std::ios::binary);
     output << R"(
-schema = 2
+schema = 3
 
 [project]
 name = "multiple-root-cli"

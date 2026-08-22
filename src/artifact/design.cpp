@@ -327,13 +327,17 @@ void validate_sdf_annotations(
 }
 
 void write_digest_fields(Writer& writer, const DesignMetadata& metadata) {
-    writer.string("fsim-design-provenance-v9-trace-profile");
+    writer.string("fsim-design-provenance-v10-code-coverage");
     writer.u32(metadata.runtime_abi);
     writer.string(metadata.time_resolution);
     writer.string(metadata.delay_mode);
     writer.string(metadata.optimization);
     writer.string(metadata.cache_key);
     writer.string(metadata.trace_archive);
+    writer.u32(metadata.code_coverage.schema);
+    writer.boolean(metadata.code_coverage.enabled);
+    writer.string(metadata.code_coverage.model);
+    writer.string(metadata.code_coverage.digest);
     writer.string(metadata.uvm_release);
     writer.string(metadata.uvm_source_identity);
     writer.u64(metadata.seed);
@@ -358,6 +362,10 @@ void write_digest_fields(Writer& writer, const DesignMetadata& metadata) {
         writer.string(object.standard);
         writer.string(object.compatibility_profile);
         writer.string(object.library);
+        writer.u32(object.code_coverage.schema);
+        writer.boolean(object.code_coverage.enabled);
+        writer.string(object.code_coverage.model);
+        writer.string(object.code_coverage.digest);
         writer.sequence(
             object.vhdl_package_dependencies, [&](const auto& dependency) {
                 writer.string(dependency.standard);
@@ -432,6 +440,12 @@ bool validate(
                 ".fsimdesign"),
             source);
     }
+    if (validate_code_coverage_artifact_identity(metadata.code_coverage)
+        != CodeCoverageArtifactIdentityError::None) {
+        report(
+            diagnostics, kCodeCoverageArtifactDiagnostic,
+            "design code-coverage identity is invalid or incompatible", source);
+    }
     if (metadata.producer.empty() || metadata.time_resolution.empty()
         || (metadata.delay_mode != "min" && metadata.delay_mode != "typ"
             && metadata.delay_mode != "max")
@@ -497,6 +511,9 @@ bool validate(
           || (object.language == "vhdl"
               && object.compatibility_profile == "none")
           || !safe_name(object.library)
+          || object.code_coverage != metadata.code_coverage
+          || validate_code_coverage_artifact_identity(object.code_coverage)
+              != CodeCoverageArtifactIdentityError::None
           || std::ranges::any_of(
               object.vhdl_package_dependencies,
               [&](const auto& dependency) {
@@ -855,6 +872,10 @@ std::string serialize_design_metadata(const DesignMetadata& metadata) {
   writer.string(metadata.trace_archive);
   writer.string(metadata.uvm_release);
   writer.string(metadata.uvm_source_identity);
+  writer.u32(metadata.code_coverage.schema);
+  writer.boolean(metadata.code_coverage.enabled);
+  writer.string(metadata.code_coverage.model);
+  writer.string(metadata.code_coverage.digest);
   writer.u64(metadata.seed);
   writer.boolean(metadata.entropy_seed);
   writer.sequence(metadata.search_libraries, [&](const auto& value) {
@@ -877,6 +898,10 @@ std::string serialize_design_metadata(const DesignMetadata& metadata) {
     writer.string(object.standard);
     writer.string(object.compatibility_profile);
     writer.string(object.library);
+    writer.u32(object.code_coverage.schema);
+    writer.boolean(object.code_coverage.enabled);
+    writer.string(object.code_coverage.model);
+    writer.string(object.code_coverage.digest);
     writer.sequence(
         object.vhdl_package_dependencies, [&](const auto& dependency) {
             writer.string(dependency.standard);
@@ -989,6 +1014,18 @@ std::optional<DesignMetadata> deserialize_design_metadata(
       report(diagnostics, kSchemaCode, "truncated .fsimdesign root", source_name);
       return std::nullopt;
   }
+  const auto coverage_schema = reader.u32();
+  const auto coverage_enabled = reader.boolean();
+  if (!coverage_schema || !coverage_enabled
+      || !read_string(metadata.code_coverage.model)
+      || !read_string(metadata.code_coverage.digest)) {
+    report(
+        diagnostics, kSchemaCode,
+        "truncated .fsimdesign code-coverage identity", source_name);
+    return std::nullopt;
+  }
+  metadata.code_coverage.schema = *coverage_schema;
+  metadata.code_coverage.enabled = *coverage_enabled;
   const auto seed = reader.u64();
   const auto entropy = reader.boolean();
   if (!seed || !entropy) {
@@ -1045,6 +1082,14 @@ std::optional<DesignMetadata> deserialize_design_metadata(
                  || !read_string(object.compatibility_profile)
                  || !read_string(object.library))
                  return false;
+             const auto object_coverage_schema = reader.u32();
+             const auto object_coverage_enabled = reader.boolean();
+             if (!object_coverage_schema || !object_coverage_enabled
+                 || !read_string(object.code_coverage.model)
+                 || !read_string(object.code_coverage.digest))
+                 return false;
+             object.code_coverage.schema = *object_coverage_schema;
+             object.code_coverage.enabled = *object_coverage_enabled;
              if (!read_sequence([&] {
                      library::VhdlPackageDependency dependency;
                      if (!read_string(dependency.standard)

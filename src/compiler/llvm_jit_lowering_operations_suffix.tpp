@@ -818,6 +818,26 @@
                         0,
                         FSIM_JIT_FRAME_STATE_READY,
                         next_instruction);
+                } else if constexpr (
+                    std::is_same_v<OperationType, CodeCoverageHit>) {
+                    lower_code_coverage_hit({
+                        builder,
+                        context,
+                        i32,
+                        i64,
+                        context_pointer,
+                        code_coverage_hit_counters,
+                        code_coverage_counter_values,
+                        code_coverage_hit_count,
+                        code_coverage_counter_count,
+                        record_code_coverage_counter,
+                        record_code_coverage_counter_type,
+                        process.id,
+                        instruction,
+                        code_coverage_hit_slots[index],
+                        runtime_error_if,
+                        branch_to_next
+                    });
                 } else if constexpr (std::is_same_v<OperationType, RandomValue>) {
                     const auto zero = constant_i64(context, 0);
                     const auto maximum = operation.maximum

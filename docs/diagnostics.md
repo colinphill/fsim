@@ -10,7 +10,7 @@ diagnostic interface; message wording may evolve.
 
 Unsupported ABI, schema, artifact, and native-producer diagnostics follow the
 transactional identity and regeneration policy in the
-[v2 ABI and schema reference](abi-schema-reference.md).
+[v3 ABI and schema reference](abi-schema-reference.md).
 
 The Batch 175 performance-baseline gate is a qualification/test contract, not
 a production diagnostic family. Its wall-time, peak-memory and throughput
@@ -29,7 +29,7 @@ line accounting as LF while physical byte offsets remain source-accurate.
 The severity column is the severity assigned by the current emitter. All
 entries are errors unless explicitly marked as warnings. The four strings
 `FSIM-OBJECT-CACHE-V1`, `FSIM-CACHE-LOCK-V1`, `FSIM-DESIGN-CACHE-V1`, and
-`FSIM-DESIGN-CACHE-V2` are persistent-format markers, not diagnostics, and
+`FSIM-DESIGN-CACHE-V3` are persistent-format markers, not diagnostics, and
 are therefore excluded.
 
 The governed VPI boundary reports ABI, object, iterator, value, callback,
@@ -66,6 +66,25 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-API-REPORT-0001` | report severity | A nonfatal VHDL report was delivered through the C API assertion callback. |
 | `FSIM-API-RUN-0001` | error | Simulation invoked through the C API failed at runtime. |
 | `FSIM-API-VALUE-0001` | error | A C API deposit or force value is invalid for the selected signal. |
+
+## Code coverage model
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `FSIM-COV-001` | error | A language-neutral code-coverage run or result has an invalid identity, metric, counter owner, count, status, relationship, or bounded resource size. |
+| `FSIM-COV-002` | error | A code-coverage source has a missing, unsafe, noncanonical, unencodable, or excessive logical path or exceeds the bounded content size. |
+| `FSIM-COV-003` | error | A code-coverage point has an invalid source identity, language, construct kind, exact source span, or zero generated identity. |
+| `FSIM-COV-004` | error | Verilog/SystemVerilog statement-point discovery received an unsupported language, invalid or ambiguous authenticated source map, invalid statement span, duplicate point, or excessive source, statement, or nesting count. |
+| `FSIM-COV-005` | error | VHDL statement-point discovery received a non-VHDL language family, unknown VHDL revision, invalid or ambiguous authenticated source map, invalid statement span, duplicate point, or excessive source, statement, or nesting count. |
+| `FSIM-COV-006` | error | Branch-arm discovery received an invalid language, malformed explicit arm, invalid or ambiguous authenticated source map, invalid arm span, duplicate arm identity, or excessive source, statement, arm, or nesting count. |
+| `FSIM-COV-007` | error | Line-state derivation received mismatched or duplicate statement ownership, an invalid physical source line or point state, or excessive source, statement-point, line-number, or derived-line count. |
+| `FSIM-COV-008` | error | Coverage-inventory attachment received incomplete, duplicate, unknown, or mismatched elaborated-instance ownership; invalid source, span, line, point, metric, or counter ownership; noncanonical stored order; or excessive source, instance, or point counts. |
+| `FSIM-COV-009` | error | A SimIR code-coverage hit has an invalid point identity or executable metric, does not match its exact dense instance counter owner, duplicates instrumentation, uses noncanonical ownership, or exceeds the bounded point or operation count. |
+| `FSIM-COV-010` | error | Interpreter code-coverage counter execution has no configured dense table, names a counter outside that table, exceeds the bounded table size, or attempts to increment beyond uint64; overflow saturates and is reported once per counter. |
+| `FSIM-COV-011` | error | Compiled LLVM code-coverage execution has a missing or truncated instance hit map, unavailable dense counter storage, an out-of-range effective counter, or a failed checked saturation service. |
+| `FSIM-COV-012` | error | A hierarchical coverage-instance identity has missing, malformed, duplicate, or excessive canonical hierarchy, language, library, unit, or parameter identity inputs. |
+| `FSIM-COV-013` | error | Code-coverage source aggregation received an invalid result, incomplete or noncanonical point ownership, unknown instance/source, conflicting point definition, duplicate instance point, or excessive bounded input. |
+| `FSIM-COV-014` | error | A v3 object, design, elaboration request, or native-cache coverage identity has the wrong schema, enablement/model pairing, or content digest; v2 identities and cross-configuration reuse are rejected directly. |
 
 ## Project manifest
 

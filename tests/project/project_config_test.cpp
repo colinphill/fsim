@@ -48,7 +48,7 @@ void test_complete_manifest_and_glob_order() {
   write_file(workspace / "vhdl" / "counter.vhd", "entity counter is end;\n");
 
   const std::string manifest = R"toml(
-schema = 2
+schema = 3
 
 [project]
 name = "mixed"
@@ -126,7 +126,7 @@ libraries = ["m"]
   check(config.has_value(), "complete manifest parses");
   check(!diagnostics.has_error(), "complete manifest has no diagnostics");
   if (config.has_value()) {
-    check(config->schema == 2, "schema is retained");
+    check(config->schema == 3, "schema is retained");
     check(config->project.name == "mixed", "project name is retained");
     check(config->project.top == "tb", "top is retained");
     check(
@@ -159,7 +159,7 @@ libraries = ["m"]
             && !config->bindings[1].target.has_value()
             && config->bindings[1].resolver
                 == std::optional<std::string>{"sv_wire"},
-        "schema 2 retains a resolver-only inferred binding");
+        "schema 3 retains a resolver-only inferred binding");
     check(
         config->elaboration.search_libraries
             == std::vector<std::string>{"vendor", "shared", "vendor"},
@@ -209,7 +209,7 @@ void test_multiple_top_manifest_model() {
   const auto parse_manifest = [&](const std::string_view project_text) {
     fsim::diagnostic::Engine diagnostics;
     const auto config = fsim::project::parse(
-        "schema = 2\n" + std::string{project_text}
+        "schema = 3\n" + std::string{project_text}
             + "\n[[source_set]]\nlanguage = \"systemverilog\"\n"
               "files = [\"tops.sv\"]\n",
         (workspace / "fsim.toml").generic_string(),
@@ -335,7 +335,7 @@ mystery = true
           [](const fsim::diagnostic::Diagnostic& diagnostic) {
               return diagnostic.code == "FSIM-PROJ-0005"
                   && diagnostic.message
-                  == "unsupported project manifest identity: found schema 1; required schema 2; regenerate fsim.toml with this fsim build";
+                  == "unsupported project manifest identity: found schema 1; required schema 3; regenerate fsim.toml with this fsim build";
           }),
       "schema 1 rejection identifies the current schema and regeneration action");
 
@@ -359,30 +359,36 @@ mystery = true
       R"([project]
 top = "top"
 )",
-      "unsupported project manifest identity: found no schema; required schema 2; regenerate fsim.toml with this fsim build");
+      "unsupported project manifest identity: found no schema; required schema 3; regenerate fsim.toml with this fsim build");
   require_schema_rejection(
       R"(schema = 0
 [project]
 top = "top"
 )",
-      "unsupported project manifest identity: found schema 0; required schema 2; regenerate fsim.toml with this fsim build");
+      "unsupported project manifest identity: found schema 0; required schema 3; regenerate fsim.toml with this fsim build");
   require_schema_rejection(
-      R"(schema = 3
+      R"(schema = 2
 [project]
 top = "top"
 )",
-      "unsupported project manifest identity: found schema 3; required schema 2; regenerate fsim.toml with this fsim build");
+      "unsupported project manifest identity: found schema 2; required schema 3; regenerate fsim.toml with this fsim build");
+  require_schema_rejection(
+      R"(schema = 4
+[project]
+top = "top"
+)",
+      "unsupported project manifest identity: found schema 4; required schema 3; regenerate fsim.toml with this fsim build");
   require_schema_rejection(
       R"(schema = 18446744073709551615
 [project]
 top = "top"
 )",
-      "unsupported project manifest identity: found schema outside the uint32 range; required schema 2; regenerate fsim.toml with this fsim build");
+      "unsupported project manifest identity: found schema outside the uint32 range; required schema 3; regenerate fsim.toml with this fsim build");
 }
 
 void test_elaboration_search_library_validation() {
   const std::string manifest = R"(
-schema = 2
+schema = 3
 [project]
 top = "top"
 [elaboration]
@@ -409,7 +415,7 @@ files = ["top.sv"]
 void test_library_mapping_validation() {
   fsim::diagnostic::Engine mapping_only_diagnostics;
   const auto mapping_only = fsim::project::parse(
-      "schema = 2\n[project]\ntop = \"sv:vendor.top\"\n"
+      "schema = 3\n[project]\ntop = \"sv:vendor.top\"\n"
       "[[library_map]]\nlibrary = \"vendor\"\n"
       "path = \"vendor.fsimlib\"\n",
       "mapping-only.toml", ".", mapping_only_diagnostics);
@@ -420,7 +426,7 @@ void test_library_mapping_validation() {
   const auto parse_mapping = [](const std::string_view mapping_text) {
     fsim::diagnostic::Engine diagnostics;
     const auto config = fsim::project::parse(
-        "schema = 2\n[project]\ntop = \"top\"\n"
+        "schema = 3\n[project]\ntop = \"top\"\n"
         "[[source_set]]\nlanguage = \"systemverilog\"\n"
         "library = \"work\"\nfiles = [\"top.sv\"]\n"
             + std::string{mapping_text},
@@ -522,7 +528,7 @@ void test_zero_time_resolution_is_rejected() {
   const auto workspace = make_workspace();
   write_file(workspace / "top.sv", "module top; endmodule\n");
   const std::string manifest = R"(
-schema = 2
+schema = 3
 [project]
 top = "top"
 time_resolution = "0ns"
@@ -574,7 +580,7 @@ void test_delay_mode_values() {
 
   fsim::diagnostic::Engine diagnostics;
   const auto config = fsim::project::parse(
-      R"(schema = 2
+      R"(schema = 3
 [project]
 top = "top"
 [run]
@@ -611,7 +617,7 @@ void test_trace_format_values() {
 
   fsim::diagnostic::Engine diagnostics;
   const auto config = fsim::project::parse(
-      R"(schema = 2
+      R"(schema = 3
 [project]
 top = "top"
 [run]
@@ -651,7 +657,7 @@ trace_format = "wave"
 
   diagnostics.clear();
   const auto bad_compression = fsim::project::parse(
-      R"(schema = 2
+      R"(schema = 3
 [project]
 top = "top"
 [run]
@@ -674,7 +680,7 @@ trace_compression = "host"
 
   diagnostics.clear();
   const auto zero_report = fsim::project::parse(
-      R"(schema = 2
+      R"(schema = 3
 [project]
 top = "top"
 [run]
@@ -710,7 +716,7 @@ void test_uvm_release_values() {
 
   fsim::diagnostic::Engine diagnostics;
   const auto config = fsim::project::parse(
-      R"(schema = 2
+      R"(schema = 3
 [[source_set]]
 language = "vhdl"
 uvm_release = "1.2"
@@ -747,7 +753,7 @@ void test_vhdl_standard_values()
     };
     for (const auto& [spelling, canonical, identity] : aliases) {
         fsim::diagnostic::Engine diagnostics;
-        const auto manifest = std::string { "schema = 2\n[project]\ntop = \"standard_mode\"\n"
+        const auto manifest = std::string { "schema = 3\n[project]\ntop = \"standard_mode\"\n"
                                             "[[source_set]]\nlanguage = \"vhdl\"\nstandard = \"" }
             + spelling
             + "\"\nfiles = [\"project_config_test.cpp\"]\n";
@@ -773,7 +779,7 @@ void test_vhdl_standard_values()
 
     fsim::diagnostic::Engine legacy_diagnostics;
     const auto legacy = fsim::project::parse(
-        R"(schema = 2
+        R"(schema = 3
 [project]
 top = "legacy_mode"
 [[source_set]]
@@ -812,7 +818,7 @@ void test_verilog_systemverilog_standard_values()
     };
     for (const auto& [spelling, canonical, identity] : verilog_aliases) {
         fsim::diagnostic::Engine diagnostics;
-        const auto manifest = std::string { "schema = 2\n[project]\ntop = \"standard_mode\"\n"
+        const auto manifest = std::string { "schema = 3\n[project]\ntop = \"standard_mode\"\n"
                                             "[[source_set]]\nlanguage = \"verilog\"\nstandard = \"" }
             + spelling
             + "\"\nfiles = [\"project_config_test.cpp\"]\n";
@@ -852,7 +858,7 @@ void test_verilog_systemverilog_standard_values()
     };
     for (const auto& [spelling, canonical, identity] : systemverilog_aliases) {
         fsim::diagnostic::Engine diagnostics;
-        const auto manifest = std::string { "schema = 2\n[project]\ntop = \"standard_mode\"\n"
+        const auto manifest = std::string { "schema = 3\n[project]\ntop = \"standard_mode\"\n"
                                             "[[source_set]]\nlanguage = \"systemverilog\"\nstandard = \"" }
             + spelling
             + "\"\nfiles = [\"project_config_test.cpp\"]\n";
@@ -899,7 +905,7 @@ void test_verilog_systemverilog_standard_values()
     };
     for (const auto& [language, standard] : rejected) {
         fsim::diagnostic::Engine diagnostics;
-        const auto manifest = std::string { "schema = 2\n[project]\ntop = \"standard_mode\"\n"
+        const auto manifest = std::string { "schema = 3\n[project]\ntop = \"standard_mode\"\n"
                                             "[[source_set]]\nlanguage = \"" }
             + language + "\"\nstandard = \"" + standard
             + "\"\nfiles = [\"project_config_test.cpp\"]\n";
@@ -923,7 +929,7 @@ void test_verilog_systemverilog_compatibility_selection()
 {
     fsim::diagnostic::Engine diagnostics;
     const auto config = fsim::project::parse(
-        R"(schema = 2
+        R"(schema = 3
 [project]
 top = "compatibility_mode"
 [[source_set]]
@@ -948,7 +954,7 @@ files = ["project_config_test.cpp"]
 
     fsim::diagnostic::Engine invalid_diagnostics;
     const auto invalid = fsim::project::parse(
-        R"(schema = 2
+        R"(schema = 3
 [project]
 top = "invalid_compatibility"
 [[source_set]]

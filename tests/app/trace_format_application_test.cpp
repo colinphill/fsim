@@ -92,7 +92,7 @@ void write_text(
 {
     const auto manifest = directory / (std::string { identity } + ".toml");
     std::ostringstream text;
-    text << "schema = 2\n"
+    text << "schema = 3\n"
          << "[project]\n"
          << "name = \"trace-format\"\n"
          << "top = \"sv:work.trace_format\"\n"
@@ -119,7 +119,7 @@ void write_text(
     const std::filesystem::path& directory)
 {
     const auto manifest = directory / "logic9.toml";
-    write_text(manifest, R"toml(schema = 2
+    write_text(manifest, R"toml(schema = 3
 [project]
 name = "logic9-trace"
 top = "vhdl:work.trace_format(rtl)"

@@ -525,6 +525,15 @@ static bool publish_design_artifact_impl(
     metadata.delay_mode = std::string { project::to_string(config.run.delay_mode) };
     metadata.optimization = std::string { project::to_string(project.optimization) };
     metadata.cache_key = project.cache_key;
+    const auto coverage_identity = artifact::make_code_coverage_artifact_identity(
+        project.code_coverage_enabled);
+    if (!coverage_identity.ok()) {
+        diagnostics.error(
+            std::string { artifact::kCodeCoverageArtifactDiagnostic },
+            "could not construct the v3 design code-coverage identity");
+        return false;
+    }
+    metadata.code_coverage = coverage_identity.identity;
     metadata.uvm_release = std::string { project::to_string(
         project.systemverilog_uvm_provenance.release) };
     metadata.uvm_source_identity = project.systemverilog_uvm_provenance.source_identity;
@@ -583,6 +592,7 @@ static bool publish_design_artifact_impl(
         input.standard = object.standard;
         input.compatibility_profile = object.compatibility_profile;
         input.library = object.library;
+        input.code_coverage = object.code_coverage;
         input.vhdl_package_dependencies = object.vhdl_package_dependencies;
         input.unit_checksums = object.unit_checksums;
         metadata.objects.push_back(std::move(input));
@@ -1029,6 +1039,7 @@ std::optional<BuiltProject> load_design_artifact(
         provenance.standard = object.standard;
         provenance.compatibility_profile = object.compatibility_profile;
         provenance.library = object.library;
+        provenance.code_coverage = object.code_coverage;
         provenance.vhdl_package_dependencies = object.vhdl_package_dependencies;
         provenance.unit_checksums = object.unit_checksums;
         objects.push_back(std::move(provenance));
@@ -1149,6 +1160,7 @@ std::optional<BuiltProject> load_design_artifact(
     if (!restore_sdf_phase_artifacts(directory, *metadata, built, diagnostics))
         return std::nullopt;
     built.trace_archive = std::move(trace_archive);
+    built.code_coverage_enabled = metadata->code_coverage.enabled;
     return built;
 }
 

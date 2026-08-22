@@ -1,15 +1,15 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# fsim v2 ABI and schema reference
+# fsim v3 ABI and schema reference
 
-This is the compact reference for fsim v2 public ABIs, installed targets,
+This is the compact reference for fsim v3 public ABIs, installed targets,
 persisted formats, native-cache identities, compatibility rules, and recovery
 workflows. The checked contracts linked below are normative for exact fields,
 offsets, limits, and evidence. This page explains how those boundaries compose.
 
 ## Compatibility policy
 
-fsim v2 distinguishes public native ABIs from persisted development artifacts:
+fsim v3 distinguishes public native ABIs from persisted development artifacts:
 
 - Public C and plug-in records are versioned, size-prefixed where specified,
   and append-only. A consumer validates the required prefix before using it.
@@ -143,18 +143,24 @@ whole bind succeeds. Shutdown precedes unload.
 
 | Family | Current identity | Top-level content |
 | --- | --- | --- |
-| `fsim.toml` | project schema 2 | user-authored project, source, library, build, run, trace, SDF, and SystemC settings |
-| `.fsimobj` | `FSIMOBJ\0`, format 6, portable schema 10 | canonical metadata, optional source payloads, portable owning units |
-| `.fsimdesign` | `FSIMDES\0`, format 11, runtime ABI 1 | roots/bindings/provenance and checksummed runtime, semantic, DesignIR, HIR, coverage, UVM, SDF, trace, SystemC, and SCV state |
+| `fsim.toml` | project schema 3 | user-authored project, source, library, build, run, trace, SDF, SystemC, and code-coverage settings |
+| `.fsimobj` | `FSIMOBJ\0`, format 7, portable schema 10 | canonical metadata, v3 code-coverage identity, optional source payloads, portable owning units |
+| `.fsimdesign` | `FSIMDES\0`, format 12, runtime ABI 1 | roots/bindings/provenance, v3 code-coverage identity, and checksummed runtime, semantic, DesignIR, HIR, coverage, UVM, SDF, trace, SystemC, and SCV state |
 | `.fsimlib` | canonical TOML format 5, portable schema 10 | logical-library metadata, optional sources, portable units, optional exact native accelerators |
 | `.fsimscobj` | `FSIMSCO\0`, format 2, runtime ABI 1, SystemC ABI 4 | one C++20 translation unit, dependency identity, and native object |
 | `.fsimscplugin` | format 2, runtime ABI 1, SystemC ABI 4 | ordered object identities, link settings, sorted factory schema, and native shared library |
-| LLVM object cache | `FSIM-OBJECT-CACHE-V1` | checksum-framed native object, canonical lowercase SHA-256 key, 256 MiB read ceiling |
+| LLVM object cache | `FSIM-OBJECT-CACHE-V1`, key schema `fsim-llvm-native-object-v168` | checksum-framed native object keyed by target, lowering controls, and v3 code-coverage identity; canonical lowercase SHA-256 key; 256 MiB read ceiling |
 
 All numeric binary fields are canonical little-endian. Artifact payload paths
 are relative, normalized, contained, and unique within their artifact. Trees
 publish through an atomic sibling stage, become read-only, and do not overwrite
 an existing destination.
+
+Objects, designs, design-cache records, and LLVM native-object keys retain the
+schema-3 code-coverage configuration and model identity. Disabled coverage uses
+model `none`; enabled foundation coverage uses
+`fsim-code-coverage-foundation-v3`. Versioned v2 objects and designs are
+rejected directly; there is no compatibility reader or migration.
 
 The portable owning-unit and class codecs are schema 26; UDP declarations are
 schema 1. The standalone design's current state schemas are runtime 48,
@@ -249,7 +255,7 @@ fsim build -p fsim.toml --export-library work=work.fsimlib
 ```
 
 For `fsim.toml`, recreate or update the source manifest with top-level
-`schema = 2`; do not copy a schema-0/1 file forward without revalidating all
+`schema = 3`; do not copy a schema-0/1 file forward without revalidating all
 current fields. For a native cache mismatch, remove only the affected cache
 root or let a distinct content key miss and repopulate it. Do not edit cache or
 artifact metadata to claim compatibility.

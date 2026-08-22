@@ -182,7 +182,7 @@ ElaboratedDesign::container_paths() const
 std::unique_ptr<runtime::simir::Interpreter>
 ElaboratedDesign::create_interpreter(
     const runtime::SchedulerOptions options,
-    const std::uint64_t seed) const &
+    const std::uint64_t seed) const&
 {
     auto interpreter = std::make_unique<runtime::simir::Interpreter>(options, seed);
     populate_interpreter(interpreter.get(), false);
@@ -300,7 +300,7 @@ void ElaboratedDesign::populate_interpreter(
     }
 }
 
-ElaboratedDesignState ElaboratedDesign::state() const &
+ElaboratedDesignState ElaboratedDesign::state() const&
 {
     ElaboratedDesignState result {
         top_, roots_, signal_info_, boundary_conversions_, signals_,
@@ -309,7 +309,8 @@ ElaboratedDesignState ElaboratedDesign::state() const &
         vhdl_protected_object_info_, processes_,
         specializations_, udp_tables_, verilog_specify_paths_,
         verilog_timing_checks_,
-        systemc_instances_, systemc_processes_, systemc_objects_, { }, { }, { }
+        systemc_instances_, systemc_processes_, systemc_objects_, { }, { },
+        { }, code_coverage_inventory_
     };
     result.signal_names.assign(signal_by_name_.begin(), signal_by_name_.end());
     result.string_names.assign(string_by_name_.begin(), string_by_name_.end());
@@ -336,7 +337,8 @@ ElaboratedDesignState ElaboratedDesign::state() &&
         std::move(specializations_), std::move(udp_tables_),
         std::move(verilog_specify_paths_), std::move(verilog_timing_checks_),
         std::move(systemc_instances_), std::move(systemc_processes_),
-        std::move(systemc_objects_), { }, { }, { }
+        std::move(systemc_objects_), { }, { }, { },
+        std::move(code_coverage_inventory_)
     };
     result.signal_names.reserve(signal_by_name_.size());
     for (auto& entry : signal_by_name_) {
@@ -367,6 +369,26 @@ std::optional<ElaboratedDesign> ElaboratedDesign::from_state(
         || state.string_object_info.size() != state.string_objects.size()
         || state.container_object_info.size() != state.container_objects.size()) {
         return std::nullopt;
+    }
+    if (state.code_coverage_inventory) {
+        std::vector<CoverageInventoryOwner> owners;
+        owners.reserve(state.specializations.size());
+        for (const auto& specialization : state.specializations) {
+            const auto& parameters
+                = specialization.parameter_identity_values.empty()
+                ? specialization.parameter_values
+                : specialization.parameter_identity_values;
+            owners.push_back(CoverageInventoryOwner {
+                specialization.id, specialization.instance,
+                specialization.language, specialization.source,
+                specialization.source_dependencies, specialization.library,
+                specialization.unit, parameters });
+        }
+        if (!validate_code_coverage_inventory(
+                *state.code_coverage_inventory, owners)
+                .ok()) {
+            return std::nullopt;
+        }
     }
     for (std::size_t index = 0; index < state.signal_info.size(); ++index) {
         const auto valid_strength = [](const runtime::simir::StrengthRank rank) {
@@ -584,8 +606,7 @@ std::optional<ElaboratedDesign> ElaboratedDesign::from_state(
     result.string_objects_ = std::move(state.string_objects);
     result.container_object_info_ = std::move(state.container_object_info);
     result.container_objects_ = std::move(state.container_objects);
-    result.container_signal_aliases_ =
-        std::move(state.container_signal_aliases);
+    result.container_signal_aliases_ = std::move(state.container_signal_aliases);
     result.vhdl_protected_object_info_ = std::move(state.vhdl_protected_object_info);
     result.processes_ = std::move(state.processes);
     result.specializations_ = std::move(state.specializations);
@@ -595,6 +616,8 @@ std::optional<ElaboratedDesign> ElaboratedDesign::from_state(
     result.systemc_instances_ = std::move(state.systemc_instances);
     result.systemc_processes_ = std::move(state.systemc_processes);
     result.systemc_objects_ = std::move(state.systemc_objects);
+    result.code_coverage_inventory_
+        = std::move(state.code_coverage_inventory);
     for (auto& entry : state.signal_names) {
         if (entry.first.empty() || entry.second >= result.signals_.size()
             || !result.signal_by_name_.emplace(std::move(entry)).second) {

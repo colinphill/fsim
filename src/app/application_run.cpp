@@ -105,6 +105,15 @@ std::string make_cache_key(
     key.add("time-resolution", resolution);
     key.add("delay-mode", project::to_string(config.run.delay_mode));
     key.add("optimization", project::to_string(config.build.optimization));
+    const auto coverage_identity = artifact::make_code_coverage_artifact_identity(
+        code_coverage_enabled(config));
+    if (!coverage_identity.ok()) {
+        diagnostics.error(
+            std::string { artifact::kCodeCoverageArtifactDiagnostic },
+            "could not construct the v3 design-cache coverage identity");
+        return { };
+    }
+    key.add("code-coverage-identity", coverage_identity.identity.digest);
     key.add("llvm", production_llvm_version);
     key.add("standard-library", standard_library_cache_version);
     key.add("vhdl-compatibility-profile", vhdl_compatibility_profile());
@@ -210,6 +219,7 @@ std::string make_cache_key(
         key.add("object-standard", object.standard);
         key.add("object-compatibility-profile", object.compatibility_profile);
         key.add("object-library", object.library);
+        key.add("object-code-coverage", object.code_coverage.digest);
         for (const auto& checksum : object.unit_checksums) {
             key.add("object-unit", checksum);
         }

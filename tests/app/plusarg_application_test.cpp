@@ -576,7 +576,7 @@ endmodule
     {
         std::ofstream output(manifest);
         output
-            << "schema = 2\n"
+            << "schema = 3\n"
             << "[project]\n"
             << "name = \"plusarg-test\"\n"
             << "top = \"sv:work.plusarg_test\"\n"

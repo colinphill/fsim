@@ -140,6 +140,15 @@ bool compile_object(
   metadata.library = source_set.library;
   metadata.compilation_unit = source_set.compilation_unit;
   metadata.uvm_release = std::string{project::to_string(source_set.uvm_release)};
+  const auto coverage_identity = artifact::make_code_coverage_artifact_identity(
+      app::code_coverage_enabled(config));
+  if (!coverage_identity.ok()) {
+    diagnostics.error(
+        std::string{artifact::kCodeCoverageArtifactDiagnostic},
+        "could not construct the v3 object code-coverage identity");
+    return false;
+  }
+  metadata.code_coverage = coverage_identity.identity;
   metadata.defines = source_set.defines;
   metadata.vhdl_package_dependencies =
       application_detail::vhdl_package_dependencies(*checked);

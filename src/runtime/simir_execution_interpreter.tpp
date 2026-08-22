@@ -1619,6 +1619,23 @@ void Interpreter::Impl::execute(ProcessId id)
                     }
                     get_register(process, op.destination) = std::move(value);
                     ++process.pc;
+                } else if constexpr (
+                    std::is_same_v<OperationType, CodeCoverageHit>) {
+                    const auto counter
+                        = process.program.operations.code_coverage_counter(
+                            process.pc, op.counter);
+                    const auto update = code_coverage_counters.record(counter);
+                    if (update == CodeCoverageCounterUpdate::Unavailable) {
+                        fail(process, "code coverage counter service is unavailable");
+                    }
+                    if (update == CodeCoverageCounterUpdate::OutOfRange) {
+                        fail(process, "code coverage counter is out of range");
+                    }
+                    if (update == CodeCoverageCounterUpdate::FirstOverflow
+                        && code_coverage_overflow_hook) {
+                        code_coverage_overflow_hook(counter);
+                    }
+                    ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, RandomValue>) {
                     const auto maximum = op.maximum
                         ? std::optional<PackedLogic4> {

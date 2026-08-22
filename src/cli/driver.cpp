@@ -419,6 +419,9 @@ namespace {
         if (invocation.optimization.has_value()) {
             config.build.optimization = *invocation.optimization;
         }
+        if (invocation.code_coverage.has_value()) {
+            config.coverage.enabled = *invocation.code_coverage;
+        }
         if (!invocation.search_libraries.empty()) {
             config.elaboration.search_libraries = invocation.search_libraries;
         }
@@ -490,6 +493,9 @@ namespace {
         }
         if (invocation.optimization.has_value()) {
             config.build.optimization = *invocation.optimization;
+        }
+        if (invocation.code_coverage.has_value()) {
+            config.coverage.enabled = *invocation.code_coverage;
         }
         if (!invocation.search_libraries.empty()) {
             config.elaboration.search_libraries = invocation.search_libraries;
@@ -570,6 +576,7 @@ namespace {
             << "Build and run options:\n"
             << "  -O, --optimization O0..O3\n"
             << "  -j, --jobs COUNT\n"
+            << "      --code-coverage      Enable statement, branch, and line coverage\n"
             << "      --duration TIME\n"
             << "      --max-deltas COUNT\n"
             << "      --delay-mode min|typ|max\n"
@@ -1029,6 +1036,8 @@ std::optional<Invocation> parse_arguments(
                     return std::nullopt;
                 }
                 invocation.jobs = static_cast<std::uint32_t>(number);
+            } else if (argument == "--code-coverage") {
+                invocation.code_coverage = true;
             } else if (is_option(argument, "", "--duration")) {
                 const auto value = take_value(index, argc, argv, argument, "--duration", diagnostics);
                 if (!value.has_value()) {
@@ -1432,6 +1441,18 @@ std::optional<Invocation> parse_arguments(
     if (has_trace_option && !trace_phase) {
         argument_error(diagnostics,
             "trace control is available only during compile, elaborate, or simulate phases");
+        return std::nullopt;
+    }
+    const bool coverage_phase = invocation.command == Command::build
+        || invocation.command == Command::run
+        || invocation.command == Command::debug
+        || invocation.command == Command::tcl
+        || invocation.command == Command::compile
+        || invocation.command == Command::elaborate
+        || invocation.command == Command::simulate;
+    if (invocation.code_coverage.has_value() && !coverage_phase) {
+        argument_error(diagnostics,
+            "--code-coverage is available only during compile, elaborate, or simulate phases");
         return std::nullopt;
     }
     for (std::size_t index = 0; index < invocation.trace_filters.size(); ++index) {

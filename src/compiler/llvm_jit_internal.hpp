@@ -68,6 +68,7 @@ struct ValidatedProcess {
     bool uses_exact_signal_operation { };
     bool uses_wide_signal_read { };
     bool uses_wide_signal_write { };
+    bool uses_code_coverage { };
 };
 
 [[nodiscard]] bool valid_symbol(std::string_view symbol) noexcept;
@@ -210,6 +211,7 @@ void validate_fork_operation(
     JitOptimizationLevel optimization,
     bool debug_instrumentation,
     bool require_direct_update_slots,
+    std::string_view code_coverage_identity,
     const llvm::Triple& target_triple,
     const llvm::DataLayout& data_layout,
     std::string_view target_cpu,
@@ -222,6 +224,7 @@ void validate_fork_operation(
     JitOptimizationLevel optimization,
     bool debug_instrumentation,
     bool require_direct_update_slots,
+    std::string_view code_coverage_identity,
     const llvm::Triple& target_triple,
     const llvm::DataLayout& data_layout,
     std::string_view target_cpu,

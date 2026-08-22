@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/app/trace_archive.hpp"
+#include "fsim/artifact/coverage_identity.hpp"
 #include "fsim/cli/driver.hpp"
 #include "fsim/elaboration/elaborator.hpp"
 #include "fsim/frontend/class_specialization.hpp"
@@ -114,6 +115,7 @@ struct CheckedProject {
         std::string standard;
         std::string compatibility_profile { "none" };
         std::string library;
+        artifact::CodeCoverageArtifactIdentity code_coverage;
         std::vector<library::VhdlPackageDependency> vhdl_package_dependencies;
         std::vector<std::string> unit_checksums;
         project::SourceSet source_settings;
@@ -262,7 +264,13 @@ struct BuiltProject {
     CompiledProcessSelection compiled_process_selection {
         CompiledProcessSelection::selected
     };
+    /// Immutable opt-in capability. Disabled builds do not create coverage
+    /// inventories, counters, callbacks, or runtime-operation checks.
+    bool code_coverage_enabled { };
 };
+
+[[nodiscard]] bool code_coverage_enabled(
+    const project::Config& config) noexcept;
 
 [[nodiscard]] std::vector<VerilogScopeProvenance>
 verilog_scope_provenance(const BuiltProject& project);

@@ -275,6 +275,49 @@ private:
     std::uint64_t process_ { };
 };
 
+struct DebugCodeCoverageObservation {
+    runtime::simir::InstructionIndex instruction { };
+    runtime::CodeCoveragePointId point;
+    runtime::CodeCoverageMetric metric {
+        runtime::CodeCoverageMetric::Statement
+    };
+    runtime::CodeCoverageCounterId counter;
+    std::uint64_t hits { };
+
+    friend bool operator==(
+        const DebugCodeCoverageObservation&,
+        const DebugCodeCoverageObservation&)
+        = default;
+};
+
+enum class DebugCodeCoverageSnapshotError : std::uint8_t {
+    none,
+    resource_limit,
+    invalid_point,
+    invalid_metric,
+    duplicate_point,
+    counter_out_of_range,
+};
+
+struct DebugCodeCoverageSnapshotResult {
+    std::vector<DebugCodeCoverageObservation> observations;
+    DebugCodeCoverageSnapshotError error {
+        DebugCodeCoverageSnapshotError::none
+    };
+    runtime::simir::InstructionIndex instruction { };
+
+    [[nodiscard]] bool ok() const noexcept
+    {
+        return error == DebugCodeCoverageSnapshotError::none;
+    }
+};
+
+[[nodiscard]] DebugCodeCoverageSnapshotResult
+debug_code_coverage_snapshot(
+    const runtime::simir::Process& process,
+    std::span<const std::uint64_t> counters,
+    std::size_t maximum_points = 1U << 20U) noexcept;
+
 #if defined(FSIM_HAS_LLVM)
 
 class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
@@ -418,6 +461,7 @@ private:
         const runtime::simir::ProcessExecutionContext& context);
     void discard_container_object_aliases() noexcept;
     void initialize_direct_read_signals();
+    void initialize_code_coverage_hit_counters();
     void initialize_direct_update_slots();
     void initialize_buffered_logic9_updates();
     [[nodiscard]] bool buffer_logic9_update(
@@ -432,6 +476,11 @@ private:
 
     static void capture_failure(CallbackState& state) noexcept;
     static void invalidate_signal_read_cache(CallbackState& state) noexcept;
+    static std::uint32_t record_code_coverage_counter(
+        void* context,
+        std::uint32_t process,
+        std::uint32_t instruction,
+        std::uint32_t counter) noexcept;
     [[nodiscard]] static std::uint32_t mapped_signal_sparse(
         const CallbackState& state, std::uint32_t signal);
     [[nodiscard]] static std::uint32_t mapped_signal(
@@ -998,6 +1047,7 @@ private:
     std::vector<runtime::simir::ContainerRegisterId>&
         active_container_object_aliases_;
     std::vector<std::uint32_t> direct_read_signals_;
+    std::vector<std::uint32_t> code_coverage_hit_counters_;
     std::vector<std::uint32_t> direct_update_signals_;
     std::vector<fsim_jit_update_slot_v1> direct_update_slots_;
     std::uint64_t direct_update_writer_revision_
