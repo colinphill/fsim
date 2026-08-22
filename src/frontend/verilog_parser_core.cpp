@@ -530,9 +530,25 @@ bool VerilogParser::verilog_attribute_instance_start() const
 
 void VerilogParser::parse_verilog_attribute_instances()
 {
+    pending_systemverilog_fsm_pragmas_.clear();
+    pending_systemverilog_fsm_pragma_target_position_.reset();
+    const auto fsm_kind = [](const std::string_view name)
+        -> std::optional<SystemVerilogFsmPragmaKind> {
+        if (name == "fsm_current_state") {
+            return SystemVerilogFsmPragmaKind::CurrentState;
+        }
+        if (name == "fsm_next_state") {
+            return SystemVerilogFsmPragmaKind::NextState;
+        }
+        if (name == "fsm_legal_states") {
+            return SystemVerilogFsmPragmaKind::LegalStates;
+        }
+        return std::nullopt;
+    };
     while (verilog_attribute_instance_start()) {
         const auto start = advance();
         (void)advance();
+        SystemVerilogFsmPragma fsm_pragma;
         bool require_specification = true;
         while (!at_end()
             && !(at(TokenKind::Star) && at(TokenKind::RightParen, 1))) {
@@ -548,7 +564,8 @@ void VerilogParser::parse_verilog_attribute_instances()
                     (void)advance();
                 }
             } else {
-                (void)advance();
+                const auto name = advance();
+                std::optional<Expression> value;
                 if (match(TokenKind::Assign)) {
                     if (at(TokenKind::Comma)
                         || (at(TokenKind::Star)
@@ -559,8 +576,15 @@ void VerilogParser::parse_verilog_attribute_instances()
                             "an attribute assignment requires a constant expression");
                     } else {
                         in_verilog_attribute_ = true;
-                        (void)parse_expression();
+                        value = parse_expression();
                         in_verilog_attribute_ = false;
+                    }
+                }
+                if (language_ == Language::SystemVerilog2017) {
+                    if (const auto kind = fsm_kind(name.text)) {
+                        fsm_pragma.specifications.push_back(
+                            SystemVerilogFsmPragmaSpecification {
+                                *kind, std::move(value), name.span });
                     }
                 }
             }
@@ -589,6 +613,14 @@ void VerilogParser::parse_verilog_attribute_instances()
                 "FSIM-SV-PARSE-337",
                 "an attribute instance is missing its closing '*)'");
         }
+        if (!fsm_pragma.specifications.empty()) {
+            fsm_pragma.span = span_from(start, previous());
+            pending_systemverilog_fsm_pragmas_.push_back(
+                std::move(fsm_pragma));
+        }
+    }
+    if (!pending_systemverilog_fsm_pragmas_.empty()) {
+        pending_systemverilog_fsm_pragma_target_position_ = position();
     }
 }
 
@@ -1387,6 +1419,14 @@ DesignUnit VerilogParser::parse_module(
     module_time_precision_declared_ = false;
     module_has_non_time_item_ = false;
     DesignUnit unit;
+    if (pending_systemverilog_fsm_pragma_target_position_
+            && *pending_systemverilog_fsm_pragma_target_position_ + 1U
+                == position()) {
+        unit.systemverilog_fsm_pragmas
+            = std::move(pending_systemverilog_fsm_pragmas_);
+    }
+    pending_systemverilog_fsm_pragmas_.clear();
+    pending_systemverilog_fsm_pragma_target_position_.reset();
     unit.kind = kind;
     const bool interface_unit = kind == UnitKind::SystemVerilogInterface;
     const bool program_unit = kind == UnitKind::SystemVerilogProgram;
@@ -1906,6 +1946,8 @@ DesignUnit VerilogParser::parse_module(
         unit.systemverilog_dpi_declarations,
         unit.functions,
         unit.tasks);
+    pending_systemverilog_fsm_pragmas_.clear();
+    pending_systemverilog_fsm_pragma_target_position_.reset();
     unit.span = span_from(start, previous());
     return unit;
 }

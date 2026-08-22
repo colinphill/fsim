@@ -205,6 +205,18 @@ void test_typed_names()
                 CodeCoverageConstructKind::BranchImplicitArm)
                 == "branch-implicit"
             && code_coverage_construct_kind_name(
+                CodeCoverageConstructKind::AtomicCondition)
+                == "atomic-condition"
+            && code_coverage_construct_kind_name(
+                CodeCoverageConstructKind::ToggleObject)
+                == "toggle-object"
+            && code_coverage_construct_kind_name(
+                CodeCoverageConstructKind::FsmCurrentStateObject)
+                == "fsm-current-state-object"
+            && code_coverage_construct_kind_name(
+                CodeCoverageConstructKind::FsmNextStateObject)
+                == "fsm-next-state-object"
+            && code_coverage_construct_kind_name(
                 static_cast<CodeCoverageConstructKind>(255U))
                 .empty(),
         "construct-kind identities must remain explicit and bounded");

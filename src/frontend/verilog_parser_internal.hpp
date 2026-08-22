@@ -1235,6 +1235,9 @@ class VerilogParser final : private detail::ParserBase {
   std::size_t next_bind_unit_ { };
   bool module_has_non_time_item_{};
   bool in_verilog_attribute_ { };
+  std::vector<SystemVerilogFsmPragma> pending_systemverilog_fsm_pragmas_;
+  std::optional<std::size_t>
+      pending_systemverilog_fsm_pragma_target_position_;
 };
 
 }  // namespace fsim::frontend

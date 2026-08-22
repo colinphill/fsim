@@ -47,7 +47,7 @@ make_code_coverage_artifact_identity(const bool enabled) noexcept
     try {
         CodeCoverageArtifactIdentity identity;
         identity.enabled = enabled;
-        identity.model = enabled ? kCodeCoverageFoundationModel
+        identity.model = enabled ? kCodeCoverageBroadMetricsModel
                                  : kCodeCoverageDisabledModel;
         identity.digest = identity_digest(
             identity.schema, identity.enabled, identity.model);
@@ -65,7 +65,7 @@ CodeCoverageArtifactIdentityError validate_code_coverage_artifact_identity(
         return CodeCoverageArtifactIdentityError::SchemaMismatch;
     }
     const auto expected_model = identity.enabled
-        ? kCodeCoverageFoundationModel
+        ? kCodeCoverageBroadMetricsModel
         : kCodeCoverageDisabledModel;
     if (identity.model != expected_model) {
         return CodeCoverageArtifactIdentityError::ModelMismatch;

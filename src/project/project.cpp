@@ -301,6 +301,7 @@ enum class Context {
   elaboration,
   build,
   coverage,
+  coverage_fsm,
   run,
   systemc,
   unknown,
@@ -485,6 +486,12 @@ class Parser {
         top_has_alias_.push_back(false);
         context_ = Context::top;
         context_index_ = config_.project.tops.size() - 1;
+      } else if (normalized == "coverage.fsm") {
+        config_.coverage.fsm_hints.emplace_back();
+        coverage_fsm_has_instance_.push_back(false);
+        coverage_fsm_has_current_state_.push_back(false);
+        context_ = Context::coverage_fsm;
+        context_index_ = config_.coverage.fsm_hints.size() - 1;
       } else {
         diagnostics_.error(
             std::string(kUnknownCode),
@@ -634,6 +641,8 @@ class Parser {
         return "build";
       case Context::coverage:
         return "coverage";
+      case Context::coverage_fsm:
+        return "coverage.fsm#" + std::to_string(context_index_);
       case Context::run:
         return "run";
       case Context::systemc:
@@ -737,6 +746,9 @@ class Parser {
         break;
       case Context::coverage:
         assign_coverage(key, value, key_span);
+        break;
+      case Context::coverage_fsm:
+        assign_coverage_fsm(key, value, key_span);
         break;
       case Context::run:
         assign_run(key, value, key_span);
@@ -1134,6 +1146,36 @@ class Parser {
     unknown_key(key, span);
   }
 
+  void assign_coverage_fsm(
+      const std::string& key,
+      const Value& value,
+      const diagnostic::SourceSpan& span) {
+    auto& hint = config_.coverage.fsm_hints[context_index_];
+    if (key == "legal_states") {
+      if (const auto states = string_array(value, key)) {
+        hint.legal_states = *states;
+      }
+      return;
+    }
+    if (key != "instance" && key != "current_state"
+        && key != "next_state") {
+      unknown_key(key, span);
+      return;
+    }
+    if (!require_kind(value, Value::Kind::string, key, "a string")) {
+      return;
+    }
+    if (key == "instance") {
+      hint.instance = value.text;
+      coverage_fsm_has_instance_[context_index_] = true;
+    } else if (key == "current_state") {
+      hint.current_state = value.text;
+      coverage_fsm_has_current_state_[context_index_] = true;
+    } else {
+      hint.next_state = value.text;
+    }
+  }
+
   void assign_systemc(
       const std::string& key,
       const Value& value,
@@ -1426,6 +1468,41 @@ class Parser {
             document_span);
       }
     }
+
+    for (std::size_t index = 0;
+         index < config_.coverage.fsm_hints.size(); ++index) {
+      const auto& hint = config_.coverage.fsm_hints[index];
+      const auto number = std::to_string(index + 1);
+      if (!coverage_fsm_has_instance_[index] || hint.instance.empty()) {
+        diagnostics_.error(
+            std::string(kRequiredCode),
+            "[[coverage.fsm]] #" + number
+                + " is missing a non-empty 'instance'",
+            document_span);
+      }
+      if (!coverage_fsm_has_current_state_[index]
+          || hint.current_state.empty()) {
+        diagnostics_.error(
+            std::string(kRequiredCode),
+            "[[coverage.fsm]] #" + number
+                + " is missing a non-empty 'current_state'",
+            document_span);
+      }
+      if (hint.next_state && hint.next_state->empty()) {
+        diagnostics_.error(
+            std::string(kValueCode),
+            "[[coverage.fsm]] #" + number
+                + " has an empty 'next_state'",
+            document_span);
+      }
+      if (hint.legal_states && hint.legal_states->empty()) {
+        diagnostics_.error(
+            std::string(kValueCode),
+            "[[coverage.fsm]] #" + number
+                + " has an empty 'legal_states' array",
+            document_span);
+      }
+    }
   }
 
   static bool valid_time_value(const std::string_view value, const bool allow_auto) {
@@ -1514,6 +1591,8 @@ class Parser {
   std::vector<bool> source_has_language_;
   std::vector<bool> source_has_files_;
   std::vector<bool> binding_has_instance_;
+  std::vector<bool> coverage_fsm_has_instance_;
+  std::vector<bool> coverage_fsm_has_current_state_;
   std::vector<bool> library_map_has_library_;
   std::vector<bool> library_map_has_path_;
   std::vector<bool> top_has_target_;

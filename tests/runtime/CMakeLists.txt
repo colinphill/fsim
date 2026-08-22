@@ -211,6 +211,73 @@ set_tests_properties(
 )
 
 add_executable(
+  fsim_coverage_condition_evaluation_tests
+  coverage_condition_evaluation_test.cpp)
+target_link_libraries(
+  fsim_coverage_condition_evaluation_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_coverage_condition_evaluation_tests)
+add_test(
+  NAME fsim.runtime.coverage_condition_evaluation
+  COMMAND fsim_coverage_condition_evaluation_tests
+)
+set_tests_properties(
+  fsim.runtime.coverage_condition_evaluation
+  PROPERTIES LABELS "fast;runtime;coverage;condition;short-circuit;verilog;systemverilog;vhdl;positive;negative;resource"
+)
+
+add_executable(
+  fsim_coverage_condition_outcomes_tests
+  coverage_condition_outcomes_test.cpp)
+target_link_libraries(
+  fsim_coverage_condition_outcomes_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_coverage_condition_outcomes_tests)
+add_test(
+  NAME fsim.runtime.coverage_condition_outcomes
+  COMMAND fsim_coverage_condition_outcomes_tests
+)
+set_tests_properties(
+  fsim.runtime.coverage_condition_outcomes
+  PROPERTIES LABELS "fast;runtime;coverage;condition;outcomes;four-state;scoring;saturation;positive;negative;resource"
+)
+
+add_executable(
+  fsim_coverage_expression_tests coverage_expression_test.cpp)
+target_link_libraries(fsim_coverage_expression_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_coverage_expression_tests)
+add_test(
+  NAME fsim.runtime.coverage_expression
+  COMMAND fsim_coverage_expression_tests
+)
+set_tests_properties(
+  fsim.runtime.coverage_expression
+  PROPERTIES LABELS "fast;runtime;coverage;condition;expression;combination;omission;determinism;positive;negative;resource"
+)
+
+add_executable(fsim_coverage_toggle_tests coverage_toggle_test.cpp)
+target_link_libraries(fsim_coverage_toggle_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_coverage_toggle_tests)
+add_test(
+  NAME fsim.runtime.coverage_toggle
+  COMMAND fsim_coverage_toggle_tests
+)
+set_tests_properties(
+  fsim.runtime.coverage_toggle
+  PROPERTIES LABELS "fast;runtime;coverage;toggle;binary;direction;identity;saturation;positive;negative;resource"
+)
+
+add_executable(fsim_coverage_fsm_tests coverage_fsm_test.cpp)
+target_link_libraries(fsim_coverage_fsm_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_coverage_fsm_tests)
+add_test(
+  NAME fsim.runtime.coverage_fsm
+  COMMAND fsim_coverage_fsm_tests
+)
+set_tests_properties(
+  fsim.runtime.coverage_fsm
+  PROPERTIES LABELS "fast;runtime;coverage;fsm;state;transition;identity;saturation;positive;negative;resource"
+)
+
+add_executable(
   fsim_simir_coverage_tests simir_coverage_test.cpp)
 target_link_libraries(fsim_simir_coverage_tests PRIVATE fsim_runtime)
 fsim_configure_test(fsim_simir_coverage_tests)

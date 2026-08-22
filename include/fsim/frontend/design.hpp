@@ -1370,6 +1370,29 @@ struct SystemVerilogBindDirective {
     SourceSpan span;
 };
 
+// A bounded, vendor-neutral FSM description carried by the standard
+// SystemVerilog attribute-instance syntax on a module/interface/program
+// declaration. Unknown attribute names remain ordinary tool attributes and are
+// not retained here.
+enum class SystemVerilogFsmPragmaKind : std::uint8_t {
+    CurrentState,
+    NextState,
+    LegalStates,
+};
+
+struct SystemVerilogFsmPragmaSpecification {
+    SystemVerilogFsmPragmaKind kind {
+        SystemVerilogFsmPragmaKind::CurrentState
+    };
+    std::optional<Expression> value;
+    SourceSpan span;
+};
+
+struct SystemVerilogFsmPragma {
+    std::vector<SystemVerilogFsmPragmaSpecification> specifications;
+    SourceSpan span;
+};
+
 // The implicit environment attached to every VHDL design unit. Keeping this
 // data on the owning unit avoids sharing a VHDL-2008 namespace with an older
 // source in a mixed-revision project and gives portable libraries an explicit
@@ -1424,6 +1447,7 @@ struct DesignUnit {
     std::optional<SystemVerilogConfigurationDeclaration>
         systemverilog_configuration;
     std::vector<SystemVerilogBindDirective> systemverilog_binds;
+    std::vector<SystemVerilogFsmPragma> systemverilog_fsm_pragmas;
     // VHDL context items immediately preceding this library unit, or the
     // reusable items contained by a bounded VHDL context declaration.
     std::vector<VhdlContextItem> vhdl_context;

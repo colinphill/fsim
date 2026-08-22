@@ -540,7 +540,12 @@ add_library(
     src/runtime/class_methods.cpp
     src/runtime/class_static.cpp
     src/runtime/coverage_aggregation.cpp
+    src/runtime/coverage_condition_evaluation.cpp
+    src/runtime/coverage_condition_outcomes.cpp
+    src/runtime/coverage_expression.cpp
+    src/runtime/coverage_fsm.cpp
     src/runtime/coverage_line_state.cpp
+    src/runtime/coverage_toggle.cpp
   src/runtime/uvm_object.cpp
   src/runtime/uvm_object_copy.cpp
   src/runtime/uvm_object_policy.cpp
@@ -668,14 +673,24 @@ fsim_configure_library(fsim_runtime)
   add_library(
     fsim_elaboration
     STATIC
+      src/elaboration/coverage_conditions.cpp
       src/elaboration/coverage_branches.cpp
+      src/elaboration/coverage_fsm_inference.cpp
+      src/elaboration/coverage_fsm_hints.cpp
+      src/elaboration/coverage_fsm_validation.cpp
+      src/elaboration/coverage_memory_toggle.cpp
+      src/elaboration/coverage_toggle_selection.cpp
       src/elaboration/coverage_instance_identity.cpp
       src/elaboration/coverage_inventory.cpp
       src/elaboration/coverage_points.cpp
       src/elaboration/elaborated_design.cpp
       src/elaboration/elaborate.cpp
       src/elaboration/verilog_coverage_points.cpp
+      src/elaboration/verilog_coverage_conditions.cpp
+      src/elaboration/verilog_toggle_inventory.cpp
+      src/elaboration/vhdl_coverage_conditions.cpp
       src/elaboration/vhdl_coverage_points.cpp
+      src/elaboration/vhdl_toggle_inventory.cpp
       src/elaboration/elaboration_analysis.cpp
       src/elaboration/elaboration_generate_substitution.cpp
       src/elaboration/elaboration_constants.cpp

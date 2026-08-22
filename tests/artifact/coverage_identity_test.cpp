@@ -16,7 +16,7 @@ int main()
     assert(!disabled.identity.enabled
         && disabled.identity.model == kCodeCoverageDisabledModel);
     assert(enabled.identity.enabled
-        && enabled.identity.model == kCodeCoverageFoundationModel);
+        && enabled.identity.model == kCodeCoverageBroadMetricsModel);
     assert(disabled.identity.digest.size() == 64U);
     assert(enabled.identity.digest.size() == 64U);
     assert(disabled.identity.digest != enabled.identity.digest);
@@ -30,6 +30,10 @@ int main()
     invalid.schema = 2U;
     assert(validate_code_coverage_artifact_identity(invalid)
         == CodeCoverageArtifactIdentityError::SchemaMismatch);
+    invalid = enabled.identity;
+    invalid.model = std::string { kCodeCoverageFoundationModel };
+    assert(validate_code_coverage_artifact_identity(invalid)
+        == CodeCoverageArtifactIdentityError::ModelMismatch);
     invalid = enabled.identity;
     invalid.model = std::string { kCodeCoverageDisabledModel };
     assert(validate_code_coverage_artifact_identity(invalid)

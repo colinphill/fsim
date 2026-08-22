@@ -34,6 +34,100 @@ set(FSIM_VERILOG_COVERAGE_POINTS_IMPLEMENTATION
   "${FSIM_SOURCE_DIR}/src/elaboration/verilog_coverage_points.cpp")
 set(FSIM_VERILOG_COVERAGE_POINTS_TEST
   "${FSIM_SOURCE_DIR}/tests/elaboration/verilog_coverage_points_test.cpp")
+set(FSIM_VERILOG_COVERAGE_CONDITIONS
+  "${FSIM_SOURCE_DIR}/include/fsim/elaboration/verilog_coverage_conditions.hpp")
+set(FSIM_VERILOG_COVERAGE_CONDITIONS_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/elaboration/verilog_coverage_conditions.cpp")
+set(FSIM_VERILOG_COVERAGE_CONDITIONS_TEST
+  "${FSIM_SOURCE_DIR}/tests/elaboration/verilog_coverage_conditions_test.cpp")
+set(FSIM_COVERAGE_CONDITIONS
+  "${FSIM_SOURCE_DIR}/include/fsim/elaboration/coverage_conditions.hpp")
+set(FSIM_COVERAGE_CONDITIONS_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/elaboration/coverage_conditions.cpp")
+set(FSIM_VHDL_COVERAGE_CONDITIONS
+  "${FSIM_SOURCE_DIR}/include/fsim/elaboration/vhdl_coverage_conditions.hpp")
+set(FSIM_VHDL_COVERAGE_CONDITIONS_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/elaboration/vhdl_coverage_conditions.cpp")
+set(FSIM_VHDL_COVERAGE_CONDITIONS_TEST
+  "${FSIM_SOURCE_DIR}/tests/elaboration/vhdl_coverage_conditions_test.cpp")
+set(FSIM_COVERAGE_CONDITION_EVALUATION
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/coverage_condition_evaluation.hpp")
+set(FSIM_COVERAGE_CONDITION_EVALUATION_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/coverage_condition_evaluation.cpp")
+set(FSIM_COVERAGE_CONDITION_EVALUATION_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/coverage_condition_evaluation_test.cpp")
+set(FSIM_COVERAGE_CONDITION_OUTCOMES
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/coverage_condition_outcomes.hpp")
+set(FSIM_COVERAGE_CONDITION_OUTCOMES_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/coverage_condition_outcomes.cpp")
+set(FSIM_COVERAGE_CONDITION_OUTCOMES_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/coverage_condition_outcomes_test.cpp")
+set(FSIM_COVERAGE_EXPRESSION
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/coverage_expression.hpp")
+set(FSIM_COVERAGE_EXPRESSION_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/coverage_expression.cpp")
+set(FSIM_COVERAGE_EXPRESSION_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/coverage_expression_test.cpp")
+set(FSIM_COVERAGE_TOGGLE
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/coverage_toggle.hpp")
+set(FSIM_COVERAGE_TOGGLE_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/coverage_toggle.cpp")
+set(FSIM_COVERAGE_TOGGLE_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/coverage_toggle_test.cpp")
+set(FSIM_VERILOG_TOGGLE_INVENTORY
+  "${FSIM_SOURCE_DIR}/include/fsim/elaboration/verilog_toggle_inventory.hpp")
+set(FSIM_VERILOG_TOGGLE_INVENTORY_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/elaboration/verilog_toggle_inventory.cpp")
+set(FSIM_VERILOG_TOGGLE_INVENTORY_TEST
+  "${FSIM_SOURCE_DIR}/tests/elaboration/verilog_toggle_inventory_test.cpp")
+set(FSIM_VHDL_TOGGLE_INVENTORY
+  "${FSIM_SOURCE_DIR}/include/fsim/elaboration/vhdl_toggle_inventory.hpp")
+set(FSIM_VHDL_TOGGLE_INVENTORY_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/elaboration/vhdl_toggle_inventory.cpp")
+set(FSIM_VHDL_TOGGLE_INVENTORY_TEST
+  "${FSIM_SOURCE_DIR}/tests/elaboration/vhdl_toggle_inventory_test.cpp")
+set(FSIM_COVERAGE_TOGGLE_SELECTION
+  "${FSIM_SOURCE_DIR}/include/fsim/elaboration/coverage_toggle_selection.hpp")
+set(FSIM_COVERAGE_TOGGLE_SELECTION_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/elaboration/coverage_toggle_selection.cpp")
+set(FSIM_COVERAGE_TOGGLE_SELECTION_TEST
+  "${FSIM_SOURCE_DIR}/tests/elaboration/coverage_toggle_selection_test.cpp")
+set(FSIM_COVERAGE_MEMORY_TOGGLE
+  "${FSIM_SOURCE_DIR}/include/fsim/elaboration/coverage_memory_toggle.hpp")
+set(FSIM_COVERAGE_MEMORY_TOGGLE_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/elaboration/coverage_memory_toggle.cpp")
+set(FSIM_COVERAGE_MEMORY_TOGGLE_TEST
+  "${FSIM_SOURCE_DIR}/tests/elaboration/coverage_memory_toggle_test.cpp")
+set(FSIM_COVERAGE_FSM_INFERENCE
+  "${FSIM_SOURCE_DIR}/include/fsim/elaboration/coverage_fsm_inference.hpp")
+set(FSIM_COVERAGE_FSM_INFERENCE_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/elaboration/coverage_fsm_inference.cpp")
+set(FSIM_COVERAGE_FSM_INFERENCE_TEST
+  "${FSIM_SOURCE_DIR}/tests/elaboration/coverage_fsm_inference_test.cpp")
+set(FSIM_COVERAGE_FSM_HINTS
+  "${FSIM_SOURCE_DIR}/include/fsim/elaboration/coverage_fsm_hints.hpp")
+set(FSIM_COVERAGE_FSM_HINTS_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/elaboration/coverage_fsm_hints.cpp")
+set(FSIM_COVERAGE_FSM_HINTS_TEST
+  "${FSIM_SOURCE_DIR}/tests/elaboration/coverage_fsm_hints_test.cpp")
+set(FSIM_COVERAGE_FSM_HINTS_PROJECT_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/project/project.cpp")
+set(FSIM_COVERAGE_FSM_RUNTIME
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/coverage_fsm.hpp")
+set(FSIM_COVERAGE_FSM_RUNTIME_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/coverage_fsm.cpp")
+set(FSIM_COVERAGE_FSM_RUNTIME_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/coverage_fsm_test.cpp")
+set(FSIM_COVERAGE_FSM_VALIDATION
+  "${FSIM_SOURCE_DIR}/include/fsim/elaboration/coverage_fsm_validation.hpp")
+set(FSIM_COVERAGE_FSM_VALIDATION_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/elaboration/coverage_fsm_validation.cpp")
+set(FSIM_COVERAGE_FSM_VALIDATION_TEST
+  "${FSIM_SOURCE_DIR}/tests/elaboration/coverage_fsm_validation_test.cpp")
+set(FSIM_FRONTEND_DESIGN
+  "${FSIM_SOURCE_DIR}/include/fsim/frontend/design.hpp")
+set(FSIM_VERILOG_PARSER_CORE
+  "${FSIM_SOURCE_DIR}/src/frontend/verilog_parser_core.cpp")
 set(FSIM_VHDL_COVERAGE_POINTS
   "${FSIM_SOURCE_DIR}/include/fsim/elaboration/vhdl_coverage_points.hpp")
 set(FSIM_VHDL_COVERAGE_POINTS_IMPLEMENTATION
@@ -108,6 +202,16 @@ set(FSIM_CODE_COVERAGE_ARTIFACT_IDENTITY_TEST
   "${FSIM_SOURCE_DIR}/tests/artifact/coverage_identity_test.cpp")
 set(FSIM_CODE_COVERAGE_EQUIVALENCE_TEST
   "${FSIM_SOURCE_DIR}/tests/app/code_coverage_equivalence_test.cpp")
+set(FSIM_CODE_COVERAGE_METRICS_APPLICATION_TEST
+  "${FSIM_SOURCE_DIR}/tests/app/code_coverage_metrics_application_test.cpp")
+set(FSIM_CODE_COVERAGE_METRICS_EQUIVALENCE_TEST
+  "${FSIM_SOURCE_DIR}/tests/app/code_coverage_metrics_equivalence_test.cpp")
+set(FSIM_CODE_COVERAGE_METRICS_IDENTITY_TEST
+  "${FSIM_SOURCE_DIR}/tests/artifact/coverage_metrics_identity_test.cpp")
+set(FSIM_CODE_COVERAGE_METRICS_INVENTORY
+  "${FSIM_SOURCE_DIR}/tests/feature_matrix/code_coverage_metrics_inventory.tsv")
+set(FSIM_CODE_COVERAGE_METRICS_CHECKER
+  "${FSIM_SOURCE_DIR}/cmake/CheckCodeCoverageMetricsInventory.cmake")
 set(FSIM_JIT_RUNTIME
   "${FSIM_SOURCE_DIR}/include/fsim/compiler/jit_runtime.h")
 set(FSIM_FST_WRITER "${FSIM_SOURCE_DIR}/include/fsim/runtime/fst_writer.hpp")
@@ -159,6 +263,26 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_VERILOG_COVERAGE_POINTS}"
     "${FSIM_VERILOG_COVERAGE_POINTS_IMPLEMENTATION}"
     "${FSIM_VERILOG_COVERAGE_POINTS_TEST}"
+    "${FSIM_VERILOG_COVERAGE_CONDITIONS}"
+    "${FSIM_VERILOG_COVERAGE_CONDITIONS_IMPLEMENTATION}"
+    "${FSIM_VERILOG_COVERAGE_CONDITIONS_TEST}"
+    "${FSIM_COVERAGE_CONDITIONS}"
+    "${FSIM_COVERAGE_CONDITIONS_IMPLEMENTATION}"
+    "${FSIM_VHDL_COVERAGE_CONDITIONS}"
+    "${FSIM_VHDL_COVERAGE_CONDITIONS_IMPLEMENTATION}"
+    "${FSIM_VHDL_COVERAGE_CONDITIONS_TEST}"
+    "${FSIM_COVERAGE_CONDITION_EVALUATION}"
+    "${FSIM_COVERAGE_CONDITION_EVALUATION_IMPLEMENTATION}"
+    "${FSIM_COVERAGE_CONDITION_EVALUATION_TEST}"
+    "${FSIM_COVERAGE_CONDITION_OUTCOMES}"
+    "${FSIM_COVERAGE_CONDITION_OUTCOMES_IMPLEMENTATION}"
+    "${FSIM_COVERAGE_CONDITION_OUTCOMES_TEST}"
+    "${FSIM_COVERAGE_EXPRESSION}"
+    "${FSIM_COVERAGE_EXPRESSION_IMPLEMENTATION}"
+    "${FSIM_COVERAGE_EXPRESSION_TEST}"
+    "${FSIM_COVERAGE_TOGGLE}"
+    "${FSIM_COVERAGE_TOGGLE_IMPLEMENTATION}"
+    "${FSIM_COVERAGE_TOGGLE_TEST}"
     "${FSIM_VHDL_COVERAGE_POINTS}"
     "${FSIM_VHDL_COVERAGE_POINTS_IMPLEMENTATION}"
     "${FSIM_VHDL_COVERAGE_POINTS_TEST}"
@@ -190,6 +314,11 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_CODE_COVERAGE_ARTIFACT_IDENTITY_IMPLEMENTATION}"
     "${FSIM_CODE_COVERAGE_ARTIFACT_IDENTITY_TEST}"
     "${FSIM_CODE_COVERAGE_EQUIVALENCE_TEST}"
+    "${FSIM_CODE_COVERAGE_METRICS_APPLICATION_TEST}"
+    "${FSIM_CODE_COVERAGE_METRICS_EQUIVALENCE_TEST}"
+    "${FSIM_CODE_COVERAGE_METRICS_IDENTITY_TEST}"
+    "${FSIM_CODE_COVERAGE_METRICS_INVENTORY}"
+    "${FSIM_CODE_COVERAGE_METRICS_CHECKER}"
     "${FSIM_JIT_RUNTIME}"
     "${FSIM_FST_WRITER}"
     "${FSIM_FST_WRITER_IMPLEMENTATION}"
@@ -237,6 +366,16 @@ file(READ "${FSIM_CODE_COVERAGE_ARTIFACT_IDENTITY_TEST}"
   FSIM_CODE_COVERAGE_ARTIFACT_IDENTITY_TEST_CONTENTS)
 file(READ "${FSIM_CODE_COVERAGE_EQUIVALENCE_TEST}"
   FSIM_CODE_COVERAGE_EQUIVALENCE_TEST_CONTENTS)
+file(READ "${FSIM_CODE_COVERAGE_METRICS_APPLICATION_TEST}"
+  FSIM_CODE_COVERAGE_METRICS_APPLICATION_TEST_CONTENTS)
+file(READ "${FSIM_CODE_COVERAGE_METRICS_EQUIVALENCE_TEST}"
+  FSIM_CODE_COVERAGE_METRICS_EQUIVALENCE_TEST_CONTENTS)
+file(READ "${FSIM_CODE_COVERAGE_METRICS_IDENTITY_TEST}"
+  FSIM_CODE_COVERAGE_METRICS_IDENTITY_TEST_CONTENTS)
+file(READ "${FSIM_CODE_COVERAGE_METRICS_INVENTORY}"
+  FSIM_CODE_COVERAGE_METRICS_INVENTORY_CONTENTS)
+file(READ "${FSIM_CODE_COVERAGE_METRICS_CHECKER}"
+  FSIM_CODE_COVERAGE_METRICS_CHECKER_CONTENTS)
 
 foreach(FSIM_RUNNER_TEMP_POLICY IN ITEMS
     "llvm_installer=\"\${RUNNER_TEMP}/llvm-22-installer.sh\""
@@ -274,6 +413,100 @@ file(READ "${FSIM_VERILOG_COVERAGE_POINTS_IMPLEMENTATION}"
   FSIM_VERILOG_COVERAGE_POINTS_IMPLEMENTATION_CONTENTS)
 file(READ "${FSIM_VERILOG_COVERAGE_POINTS_TEST}"
   FSIM_VERILOG_COVERAGE_POINTS_TEST_CONTENTS)
+file(READ "${FSIM_VERILOG_COVERAGE_CONDITIONS}"
+  FSIM_VERILOG_COVERAGE_CONDITIONS_CONTENTS)
+file(READ "${FSIM_VERILOG_COVERAGE_CONDITIONS_IMPLEMENTATION}"
+  FSIM_VERILOG_COVERAGE_CONDITIONS_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_VERILOG_COVERAGE_CONDITIONS_TEST}"
+  FSIM_VERILOG_COVERAGE_CONDITIONS_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_CONDITIONS}"
+  FSIM_COVERAGE_CONDITIONS_CONTENTS)
+file(READ "${FSIM_COVERAGE_CONDITIONS_IMPLEMENTATION}"
+  FSIM_COVERAGE_CONDITIONS_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_VHDL_COVERAGE_CONDITIONS}"
+  FSIM_VHDL_COVERAGE_CONDITIONS_CONTENTS)
+file(READ "${FSIM_VHDL_COVERAGE_CONDITIONS_IMPLEMENTATION}"
+  FSIM_VHDL_COVERAGE_CONDITIONS_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_VHDL_COVERAGE_CONDITIONS_TEST}"
+  FSIM_VHDL_COVERAGE_CONDITIONS_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_CONDITION_EVALUATION}"
+  FSIM_COVERAGE_CONDITION_EVALUATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_CONDITION_EVALUATION_IMPLEMENTATION}"
+  FSIM_COVERAGE_CONDITION_EVALUATION_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_CONDITION_EVALUATION_TEST}"
+  FSIM_COVERAGE_CONDITION_EVALUATION_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_CONDITION_OUTCOMES}"
+  FSIM_COVERAGE_CONDITION_OUTCOMES_CONTENTS)
+file(READ "${FSIM_COVERAGE_CONDITION_OUTCOMES_IMPLEMENTATION}"
+  FSIM_COVERAGE_CONDITION_OUTCOMES_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_CONDITION_OUTCOMES_TEST}"
+  FSIM_COVERAGE_CONDITION_OUTCOMES_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_EXPRESSION}"
+  FSIM_COVERAGE_EXPRESSION_CONTENTS)
+file(READ "${FSIM_COVERAGE_EXPRESSION_IMPLEMENTATION}"
+  FSIM_COVERAGE_EXPRESSION_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_EXPRESSION_TEST}"
+  FSIM_COVERAGE_EXPRESSION_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_TOGGLE}"
+  FSIM_COVERAGE_TOGGLE_CONTENTS)
+file(READ "${FSIM_COVERAGE_TOGGLE_IMPLEMENTATION}"
+  FSIM_COVERAGE_TOGGLE_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_TOGGLE_TEST}"
+  FSIM_COVERAGE_TOGGLE_TEST_CONTENTS)
+file(READ "${FSIM_VERILOG_TOGGLE_INVENTORY}"
+  FSIM_VERILOG_TOGGLE_INVENTORY_CONTENTS)
+file(READ "${FSIM_VERILOG_TOGGLE_INVENTORY_IMPLEMENTATION}"
+  FSIM_VERILOG_TOGGLE_INVENTORY_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_VERILOG_TOGGLE_INVENTORY_TEST}"
+  FSIM_VERILOG_TOGGLE_INVENTORY_TEST_CONTENTS)
+file(READ "${FSIM_VHDL_TOGGLE_INVENTORY}"
+  FSIM_VHDL_TOGGLE_INVENTORY_CONTENTS)
+file(READ "${FSIM_VHDL_TOGGLE_INVENTORY_IMPLEMENTATION}"
+  FSIM_VHDL_TOGGLE_INVENTORY_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_VHDL_TOGGLE_INVENTORY_TEST}"
+  FSIM_VHDL_TOGGLE_INVENTORY_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_TOGGLE_SELECTION}"
+  FSIM_COVERAGE_TOGGLE_SELECTION_CONTENTS)
+file(READ "${FSIM_COVERAGE_TOGGLE_SELECTION_IMPLEMENTATION}"
+  FSIM_COVERAGE_TOGGLE_SELECTION_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_TOGGLE_SELECTION_TEST}"
+  FSIM_COVERAGE_TOGGLE_SELECTION_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_MEMORY_TOGGLE}"
+  FSIM_COVERAGE_MEMORY_TOGGLE_CONTENTS)
+file(READ "${FSIM_COVERAGE_MEMORY_TOGGLE_IMPLEMENTATION}"
+  FSIM_COVERAGE_MEMORY_TOGGLE_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_MEMORY_TOGGLE_TEST}"
+  FSIM_COVERAGE_MEMORY_TOGGLE_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_FSM_INFERENCE}"
+  FSIM_COVERAGE_FSM_INFERENCE_CONTENTS)
+file(READ "${FSIM_COVERAGE_FSM_INFERENCE_IMPLEMENTATION}"
+  FSIM_COVERAGE_FSM_INFERENCE_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_FSM_INFERENCE_TEST}"
+  FSIM_COVERAGE_FSM_INFERENCE_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_FSM_HINTS}"
+  FSIM_COVERAGE_FSM_HINTS_CONTENTS)
+file(READ "${FSIM_COVERAGE_FSM_HINTS_IMPLEMENTATION}"
+  FSIM_COVERAGE_FSM_HINTS_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_FSM_HINTS_TEST}"
+  FSIM_COVERAGE_FSM_HINTS_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_FSM_HINTS_PROJECT_IMPLEMENTATION}"
+  FSIM_COVERAGE_FSM_HINTS_PROJECT_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_FSM_RUNTIME}"
+  FSIM_COVERAGE_FSM_RUNTIME_CONTENTS)
+file(READ "${FSIM_COVERAGE_FSM_RUNTIME_IMPLEMENTATION}"
+  FSIM_COVERAGE_FSM_RUNTIME_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_FSM_RUNTIME_TEST}"
+  FSIM_COVERAGE_FSM_RUNTIME_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_FSM_VALIDATION}"
+  FSIM_COVERAGE_FSM_VALIDATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_FSM_VALIDATION_IMPLEMENTATION}"
+  FSIM_COVERAGE_FSM_VALIDATION_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_FSM_VALIDATION_TEST}"
+  FSIM_COVERAGE_FSM_VALIDATION_TEST_CONTENTS)
+file(READ "${FSIM_FRONTEND_DESIGN}"
+  FSIM_FRONTEND_DESIGN_CONTENTS)
+file(READ "${FSIM_VERILOG_PARSER_CORE}"
+  FSIM_VERILOG_PARSER_CORE_CONTENTS)
 file(READ "${FSIM_VHDL_COVERAGE_POINTS}"
   FSIM_VHDL_COVERAGE_POINTS_CONTENTS)
 file(READ "${FSIM_VHDL_COVERAGE_POINTS_IMPLEMENTATION}"
@@ -383,6 +616,282 @@ foreach(FSIM_FOOTPRINT_POLICY IN ITEMS
   string(FIND "${FSIM_FOOTPRINT_CONTENTS}" "${FSIM_FOOTPRINT_POLICY}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR "debug/link footprint lost policy: ${FSIM_FOOTPRINT_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_FSM_VALIDATION_POLICY IN ITEMS
+    "fsim-coverage-fsm-validation-v3"
+    "FSIM-COV-028"
+    "FSIM-COV-029"
+    "FSIM-COV-030"
+    "CoverageFsmDescriptionIssueKind"
+    "Ambiguous"
+    "Incomplete"
+    "Conflicting"
+    "CoverageFsmDescriptionSubject"
+    "CurrentState"
+    "NextState"
+    "LegalStates"
+    "SystemVerilogPragma"
+    "VhdlSource"
+    "Manifest"
+    "maximum_candidates { 1U << 20U }"
+    "maximum_diagnostics { 1U << 20U }"
+    "maximum_origins { 6U }"
+    "maximum_instance_bytes { 1U << 20U }"
+    "maximum_object_bytes { 1U << 16U }"
+    "make_coverage_fsm_description_diagnostics"
+    "Equivalent candidates are coalesced"
+    "diagnostic input order must not change stable coalesced results"
+    "each description issue kind must own one stable diagnostic code"
+    "complete input is validated before any")
+  string(FIND
+    "${FSIM_COVERAGE_FSM_VALIDATION_CONTENTS}${FSIM_COVERAGE_FSM_VALIDATION_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_FSM_VALIDATION_TEST_CONTENTS}${FSIM_COVERAGE_FSM_INFERENCE_CONTENTS}${FSIM_COVERAGE_FSM_INFERENCE_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_FSM_INFERENCE_TEST_CONTENTS}${FSIM_COVERAGE_FSM_HINTS_TEST_CONTENTS}"
+    "${FSIM_COVERAGE_FSM_VALIDATION_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "coverage FSM validation lost ambiguity, incompleteness, conflict, identity, origin, transaction, or resource policy: ${FSIM_COVERAGE_FSM_VALIDATION_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_FSM_RUNTIME_POLICY IN ITEMS
+    "fsim-coverage-fsm-runtime-v3"
+    "FSIM-COV-027"
+    "struct CoverageFsmVisitBin"
+    "struct CoverageFsmTransitionBin"
+    "struct CoverageFsmMachineRuntimeState"
+    "Intentionally has no combined or synthetic FSM score"
+    "maximum_machines { 1U << 20U }"
+    "maximum_states { 1U << 22U }"
+    "maximum_legal_transitions { 1U << 24U }"
+    "maximum_observations { 1U << 24U }"
+    "maximum_instance_bytes { 1U << 20U }"
+    "state-visit"
+    "legal-transition"
+    "record_coverage_fsm_observations"
+    "undeclared pair updates only the separate diagnostic count"
+    "interleaved machines must retain independent previous-state history"
+    "visit, transition, and diagnostic counters must saturate explicitly"
+    "the complete observation batch must validate before mutation")
+  string(FIND
+    "${FSIM_COVERAGE_FSM_RUNTIME_CONTENTS}${FSIM_COVERAGE_FSM_RUNTIME_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_FSM_RUNTIME_TEST_CONTENTS}"
+    "${FSIM_COVERAGE_FSM_RUNTIME_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "coverage FSM runtime lost visit, transition, identity, saturation, transaction, or resource policy: ${FSIM_COVERAGE_FSM_RUNTIME_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_FSM_INFERENCE_POLICY IN ITEMS
+    "fsim-coverage-fsm-inference-v3"
+    "maximum_sources { 1U << 16U }"
+    "maximum_objects { 1U << 20U }"
+    "maximum_cases { 1U << 20U }"
+    "maximum_case_choices { 1U << 22U }"
+    "maximum_assignments { 1U << 22U }"
+    "maximum_pragmas { 1U << 16U }"
+    "maximum_pragma_specifications { 1U << 18U }"
+    "maximum_pragma_value_bytes { 1U << 20U }"
+    "maximum_states { 1U << 22U }"
+    "maximum_next_state_objects { 1U << 20U }"
+    "maximum_legal_state_sets { 1U << 20U }"
+    "maximum_state_name_bytes { 1U << 16U }"
+    "maximum_hierarchy_bytes { 1U << 20U }"
+    "maximum_statement_depth { 1U << 12U }"
+    "maximum_line_number { 1ULL << 31U }"
+    "CodeCoverageConstructKind::FsmCurrentStateObject"
+    "CodeCoverageConstructKind::FsmNextStateObject"
+    "statement.case_match_kind"
+    "unit.type_aliases"
+    "compatible_state_types"
+    "SystemVerilogFsmPragma"
+    "fsm_current_state"
+    "fsm_next_state"
+    "fsm_legal_states"
+    "valid_systemverilog_pragma_standard"
+    "vendor_fsm_encoding"
+    "only exact vendor-neutral FSM pragma keys must be retained by group"
+    "every retained SystemVerilog profile must honor exact FSM pragmas"
+    "SystemVerilog FSM pragma semantics must not leak into Verilog profiles"
+    "FSM pragma-group ceiling must be enforced"
+    "FSM pragma-specification ceiling must be enforced"
+    "FSM pragma-value byte ceiling must be enforced"
+    "enum- and exact-case-driven retained objects must be inferred"
+    "every retained VHDL profile must infer enum/case current state equivalently"
+    "conflicting case-only descriptions must not infer an ambiguous object"
+    "a process-local shadow must prevent unit-object case inference"
+    "compatible scalar assignment must infer an optional next-state object"
+    "legal-state sets must reference existing stable state identities"
+    "multiple compatible next-state candidates must suppress the optional relation only"
+    "a process-local shadow must prevent retained next-state inference"
+    "candidate-object ceiling must be enforced"
+    "case-choice ceiling must be enforced"
+    "aggregate inferred-state ceiling must be enforced"
+    "statement-depth ceiling must be enforced"
+    "assignment traversal ceiling must be enforced"
+    "next-state object ceiling must be enforced"
+    "legal-state-set ceiling must be enforced")
+  string(FIND
+    "${FSIM_COVERAGE_FSM_INFERENCE_CONTENTS}${FSIM_COVERAGE_FSM_INFERENCE_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_FSM_INFERENCE_TEST_CONTENTS}${FSIM_FRONTEND_DESIGN_CONTENTS}${FSIM_VERILOG_PARSER_CORE_CONTENTS}"
+    "${FSIM_COVERAGE_FSM_INFERENCE_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "coverage FSM inference lost enum/case, identity, ambiguity, profile, or resource policy: ${FSIM_COVERAGE_FSM_INFERENCE_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_FSM_HINT_POLICY IN ITEMS
+    "fsim-coverage-fsm-hints-v3"
+    "FSIM-COV-026"
+    "CoverageFsmHintOrigin"
+    "VhdlSource"
+    "Manifest"
+    "maximum_attributes { 1U << 18U }"
+    "maximum_attribute_entity_names { 1U << 18U }"
+    "maximum_manifest_hints { 1U << 16U }"
+    "maximum_hints { 1U << 18U }"
+    "maximum_legal_states { 1U << 20U }"
+    "maximum_name_bytes { 1U << 16U }"
+    "maximum_value_bytes { 1U << 20U }"
+    "maximum_instance_bytes { 1U << 20U }"
+    "fsm_current_state"
+    "fsm_next_state"
+    "fsm_legal_states"
+    "attribute.entity_class != \"signal\""
+    "marker != \"true\" && marker != \"false\""
+    "struct CoverageFsmHintEntry"
+    "normalized == \"coverage.fsm\""
+    "assign_coverage_fsm"
+    "current_state = \"state\""
+    "next_state = \"next_state\""
+    "legal_states = [\"idle\", \"run\"]"
+    "all retained VHDL profiles must construct identical FSM hints"
+    "the same manifest model must describe a SystemVerilog FSM without source semantics"
+    "matching SystemVerilog pragma and manifest descriptions must retain both provenance sources"
+    "conflicting source and manifest descriptions must suppress explicit evidence without losing enum inference"
+    "unknown vendor keys must not become manifest FSM aliases"
+    "inference must revalidate its untrusted hint-count ceiling"
+    "inference must revalidate its aggregate hint-state ceiling")
+  string(FIND
+    "${FSIM_COVERAGE_FSM_HINTS_CONTENTS}${FSIM_COVERAGE_FSM_HINTS_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_FSM_HINTS_TEST_CONTENTS}${FSIM_COVERAGE_FSM_HINTS_PROJECT_IMPLEMENTATION_CONTENTS}${FSIM_CODE_COVERAGE_CONTROL_PROJECT_CONTENTS}${FSIM_COVERAGE_FSM_INFERENCE_CONTENTS}${FSIM_COVERAGE_FSM_INFERENCE_IMPLEMENTATION_CONTENTS}"
+    "${FSIM_COVERAGE_FSM_HINT_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "coverage FSM hints lost VHDL, manifest, composition, or resource policy: ${FSIM_COVERAGE_FSM_HINT_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_VERILOG_TOGGLE_INVENTORY_POLICY IN ITEMS
+    "maximum_sources { 1U << 16U }"
+    "maximum_objects { 1U << 20U }"
+    "maximum_bits { 1U << 22U }"
+    "maximum_object_width { 1U << 20U }"
+    "maximum_hierarchy_bytes { 1U << 20U }"
+    "CoverageInstanceIdentity instance_identity"
+    "CodeCoverageConstructKind::ToggleObject"
+    "instance_point_identity"
+    "VerilogToggleObjectKind::RetainedVariable"
+    "width_value > limits.maximum_bits - total_bits"
+    "real, string, and whole-container objects must not manufacture binary bins"
+    "the real parser semantic surface must expose every packed port, net, signal, and retained variable bit"
+    "empty semantic libraries must normalize to the elaborated work owner"
+    "aggregate bit ceiling must be enforced"
+    "per-object width ceiling must be enforced")
+  string(FIND
+    "${FSIM_VERILOG_TOGGLE_INVENTORY_CONTENTS}${FSIM_VERILOG_TOGGLE_INVENTORY_IMPLEMENTATION_CONTENTS}${FSIM_VERILOG_TOGGLE_INVENTORY_TEST_CONTENTS}"
+    "${FSIM_VERILOG_TOGGLE_INVENTORY_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "Verilog toggle inventory lost hierarchy, identity, or resource policy: ${FSIM_VERILOG_TOGGLE_INVENTORY_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_VHDL_TOGGLE_INVENTORY_POLICY IN ITEMS
+    "maximum_sources { 1U << 16U }"
+    "maximum_objects { 1U << 20U }"
+    "maximum_bits { 1U << 22U }"
+    "maximum_object_width { 1U << 20U }"
+    "maximum_hierarchy_bytes { 1U << 20U }"
+    "CoverageInstanceIdentity instance_identity"
+    "CodeCoverageConstructKind::ToggleObject"
+    "instance_point_identity"
+    "VhdlToggleObjectKind::RetainedVariable"
+    "valid_standard"
+    "directly_packed_vhdl_vector"
+    "owner.source_dependencies"
+    "every retained VHDL profile must inventory ports, signals, and shared retained variables equivalently"
+    "entity ports must be authenticated through the architecture owner's exact source dependency"
+    "ordinary locals, files, protected/physical objects, and process locals must remain outside default VHDL toggle selection"
+    "aggregate-bit, and per-object width ceilings must be enforced")
+  string(FIND
+    "${FSIM_VHDL_TOGGLE_INVENTORY_CONTENTS}${FSIM_VHDL_TOGGLE_INVENTORY_IMPLEMENTATION_CONTENTS}${FSIM_VHDL_TOGGLE_INVENTORY_TEST_CONTENTS}"
+    "${FSIM_VHDL_TOGGLE_INVENTORY_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "VHDL toggle inventory lost profile, hierarchy, identity, or resource policy: ${FSIM_VHDL_TOGGLE_INVENTORY_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_TOGGLE_SELECTION_POLICY IN ITEMS
+    "fsim-coverage-toggle-selection-v3"
+    "maximum_sources { 1U << 16U }"
+    "maximum_declarations { 1U << 20U }"
+    "maximum_exclusions { 1U << 20U }"
+    "maximum_reasons { 1U << 21U }"
+    "maximum_scope_depth { 64U }"
+    "CoverageToggleExclusionReason"
+    "AutomaticLocal"
+    "ProceduralLocal"
+    "Memory"
+    "Array"
+    "CodeCoverageConstructKind::ToggleObject"
+    "owner.source_dependencies"
+    "every default-excluded local, memory, and array must remain explicit"
+    "default exclusions must be checkout-location independent"
+    "non-vector VHDL arrays and retained array memories must be explicit default exclusions"
+    "invalid callable or procedural scope text must be rejected"
+    "declaration, exclusion, reason, and lexical-depth ceilings must be enforced")
+  string(FIND
+    "${FSIM_COVERAGE_TOGGLE_SELECTION_CONTENTS}${FSIM_COVERAGE_TOGGLE_SELECTION_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_TOGGLE_SELECTION_TEST_CONTENTS}"
+    "${FSIM_COVERAGE_TOGGLE_SELECTION_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "coverage toggle default selection lost exclusion, identity, or resource policy: ${FSIM_COVERAGE_TOGGLE_SELECTION_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_MEMORY_TOGGLE_POLICY IN ITEMS
+    "fsim-coverage-memory-toggle-v3"
+    "maximum_exclusions { 1U << 20U }"
+    "maximum_rules { 1U << 16U }"
+    "maximum_selectors { 1U << 20U }"
+    "maximum_dimensions { 64U }"
+    "maximum_string_keys { 1U << 20U }"
+    "maximum_range_span { 1U << 20U }"
+    "maximum_elements { 1U << 20U }"
+    "maximum_bits { 1U << 22U }"
+    "No wildcard or"
+    "element_identity"
+    "DuplicateBitSelection"
+    "post-parse static memory shape must retain exact dimensions and packed element width"
+    "no empty selector may silently enable a whole container"
+    "static selection must reject unresolved elaboration-time bounds"
+    "rule and key declaration order must not affect the canonical inventory"
+    "exclusion, range, element, bit, and selector ceilings must reject before publication")
+  string(FIND
+    "${FSIM_COVERAGE_MEMORY_TOGGLE_CONTENTS}${FSIM_COVERAGE_MEMORY_TOGGLE_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_MEMORY_TOGGLE_TEST_CONTENTS}"
+    "${FSIM_COVERAGE_MEMORY_TOGGLE_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "coverage memory/array toggle selection lost explicit range, identity, or resource policy: ${FSIM_COVERAGE_MEMORY_TOGGLE_POLICY}")
   endif()
 endforeach()
 
@@ -667,6 +1176,7 @@ foreach(FSIM_CODE_COVERAGE_ARTIFACT_IDENTITY_POLICY IN ITEMS
     "kCodeCoverageArtifactSchema = 3U"
     "kCodeCoverageDisabledModel = \"none\""
     "fsim-code-coverage-foundation-v3"
+    "fsim-code-coverage-broad-metrics-v3"
     "fsim-code-coverage-artifact-identity-v3"
     "identity.digest.size() == 64U"
     "invalid.schema = 2U")
@@ -677,6 +1187,36 @@ foreach(FSIM_CODE_COVERAGE_ARTIFACT_IDENTITY_POLICY IN ITEMS
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR
       "code coverage artifact identity lost fixed v3 policy: ${FSIM_CODE_COVERAGE_ARTIFACT_IDENTITY_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_CODE_COVERAGE_METRICS_INTEGRATION_POLICY IN ITEMS
+    "kSystemVerilogSource"
+    "kVhdlSource"
+    "top.sv_gen[0]"
+    "top.vhdl_gen[1]"
+    "coverage_condition_outcome_status"
+    "coverage_expression_combination_truth"
+    "coverage_toggle_status"
+    "summarize_coverage_fsm"
+    "kInstanceCount = 6U"
+    "project::Optimization::o0"
+    "project::Optimization::o1"
+    "project::Optimization::o2"
+    "project::Optimization::o3"
+    "debug_engine"
+    "kCodeCoverageBroadMetricsModel"
+    "kCodeCoverageFoundationModel"
+    "fsim.application.code-coverage-metrics"
+    "fsim.application.code-coverage-metrics-equivalence"
+    "fsim.artifact.code-coverage-metrics-identity")
+  string(FIND
+    "${FSIM_CODE_COVERAGE_METRICS_APPLICATION_TEST_CONTENTS}${FSIM_CODE_COVERAGE_METRICS_EQUIVALENCE_TEST_CONTENTS}${FSIM_CODE_COVERAGE_METRICS_IDENTITY_TEST_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}"
+    "${FSIM_CODE_COVERAGE_METRICS_INTEGRATION_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "code coverage broad-metric integration lost policy: ${FSIM_CODE_COVERAGE_METRICS_INTEGRATION_POLICY}")
   endif()
 endforeach()
 
@@ -699,6 +1239,43 @@ foreach(FSIM_CODE_COVERAGE_EQUIVALENCE_POLICY IN ITEMS
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR
       "code coverage engine/aggregation equivalence lost policy: ${FSIM_CODE_COVERAGE_EQUIVALENCE_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_CODE_COVERAGE_METRICS_POLICY IN ITEMS
+    "COVMET-C02"
+    "COVMET-C18"
+    "verilog-condition-decomposition"
+    "vhdl-condition-decomposition"
+    "short-circuit-recording"
+    "four-state-outcomes"
+    "expression-combinations"
+    "binary-toggle-bins"
+    "verilog-toggle-objects"
+    "vhdl-toggle-objects"
+    "toggle-default-exclusions"
+    "memory-array-selection"
+    "unknown-toggle-diagnostics"
+    "current-state-inference"
+    "next-state-legal-sets"
+    "systemverilog-fsm-pragmas"
+    "vhdl-manifest-fsm-hints"
+    "fsm-visits-transitions"
+    "fsm-description-validation"
+    "set(FSIM_COMPLETED_CHANGE 18)"
+    "set(FSIM_COMPLETED_INTEGRATION_CHANGE 19)"
+    "mc/dc"
+    "fsim.code-coverage-metrics-inventory")
+  string(TOLOWER
+    "${FSIM_CODE_COVERAGE_METRICS_INVENTORY_CONTENTS}${FSIM_CODE_COVERAGE_METRICS_CHECKER_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}"
+    FSIM_CODE_COVERAGE_METRICS_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_CODE_COVERAGE_METRICS_POLICY}"
+    FSIM_CODE_COVERAGE_METRICS_POLICY_LOWER)
+  string(FIND "${FSIM_CODE_COVERAGE_METRICS_CONTENTS_LOWER}"
+    "${FSIM_CODE_COVERAGE_METRICS_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "code coverage metrics inventory lost resource policy: ${FSIM_CODE_COVERAGE_METRICS_POLICY}")
   endif()
 endforeach()
 
@@ -737,6 +1314,151 @@ foreach(FSIM_CODE_COVERAGE_POINT_POLICY IN ITEMS
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR
       "code coverage point identity lost fixed resource policy: ${FSIM_CODE_COVERAGE_POINT_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_VERILOG_COVERAGE_CONDITION_POLICY IN ITEMS
+    "AtomicCondition = 7U"
+    "maximum_sources { 1U << 16U }"
+    "maximum_statements { 1U << 20U }"
+    "maximum_conditions { 1U << 20U }"
+    "maximum_expression_nodes { 1U << 22U }"
+    "maximum_path_steps { 1U << 22U }"
+    "maximum_statement_nesting { 1U << 12U }"
+    "maximum_expression_nesting { 1U << 12U }"
+    "CoverageConditionLogicalOperator::Not"
+    "CoverageConditionOperand::Only"
+    "expression.expression->operands.size() != 2U"
+    "decomposition must not rewrite or flatten the retained expression tree"
+    "every retained Verilog/SystemVerilog profile must parse the condition corpus"
+    "duplicate atomic identities must not publish partial output")
+  string(FIND
+    "${FSIM_CODE_COVERAGE_POINT_CONTENTS}${FSIM_COVERAGE_CONDITIONS_CONTENTS}${FSIM_COVERAGE_CONDITIONS_IMPLEMENTATION_CONTENTS}${FSIM_VERILOG_COVERAGE_CONDITIONS_CONTENTS}${FSIM_VERILOG_COVERAGE_CONDITIONS_IMPLEMENTATION_CONTENTS}${FSIM_VERILOG_COVERAGE_CONDITIONS_TEST_CONTENTS}"
+    "${FSIM_VERILOG_COVERAGE_CONDITION_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "Verilog atomic-condition decomposition lost policy: ${FSIM_VERILOG_COVERAGE_CONDITION_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_VHDL_COVERAGE_CONDITION_POLICY IN ITEMS
+    "CoverageConditionLogicalOperator::Nand"
+    "CoverageConditionLogicalOperator::Nor"
+    "CoverageConditionLogicalOperator::Xor"
+    "CoverageConditionLogicalOperator::Xnor"
+    "CoverageConditionDecisionKind::WaitUntil"
+    "frontend::VhdlStandard::Vhdl1987"
+    "frontend::VhdlStandard::Vhdl2008"
+    "every retained VHDL profile must parse the Boolean corpus"
+    "VHDL decomposition must not mutate the retained expression tree"
+    "duplicate VHDL condition identities must not publish partial output"
+    "synthetic unconditional loop and bare-wait conditions must not manufacture atoms")
+  string(FIND
+    "${FSIM_COVERAGE_CONDITIONS_CONTENTS}${FSIM_COVERAGE_CONDITIONS_IMPLEMENTATION_CONTENTS}${FSIM_VHDL_COVERAGE_CONDITIONS_CONTENTS}${FSIM_VHDL_COVERAGE_CONDITIONS_IMPLEMENTATION_CONTENTS}${FSIM_VHDL_COVERAGE_CONDITIONS_TEST_CONTENTS}"
+    "${FSIM_VHDL_COVERAGE_CONDITION_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "VHDL atomic-condition decomposition lost policy: ${FSIM_VHDL_COVERAGE_CONDITION_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_CONDITION_EVALUATION_POLICY IN ITEMS
+    "maximum_atoms { 1U << 20U }"
+    "maximum_nodes { 1U << 22U }"
+    "maximum_path_steps { 1U << 22U }"
+    "maximum_nesting { 1U << 12U }"
+    "CoverageConditionTruth::Unknown"
+    "short_circuit_result(operation, frame.left)"
+    "result.observations.clear()"
+    "result.skipped.clear()"
+    "four-state logical evaluation must skip only determined results"
+    "VHDL Boolean operators must match the governed lowering contract"
+    "callback failure must discard every partial observation"
+    "tree node ceilings must fail before evaluation")
+  string(FIND
+    "${FSIM_COVERAGE_CONDITION_EVALUATION_CONTENTS}${FSIM_COVERAGE_CONDITION_EVALUATION_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_CONDITION_EVALUATION_TEST_CONTENTS}"
+    "${FSIM_COVERAGE_CONDITION_EVALUATION_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "condition evaluation lost short-circuit or resource policy: ${FSIM_COVERAGE_CONDITION_EVALUATION_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_CONDITION_OUTCOME_POLICY IN ITEMS
+    "maximum_outcomes { 1U << 20U }"
+    "maximum_observations { 1U << 20U }"
+    "unknown_observations"
+    "coverage_condition_outcome_status"
+    "observed[observation.condition_index]"
+    "std::numeric_limits<std::uint64_t>::max()"
+    "unknown observations must not satisfy either binary score bin"
+    "a short-circuited atom with no observation must remain unchanged"
+    "every saturated update must be reported explicitly"
+    "overflow flags without saturated counters must be rejected"
+    "outcome-table ceilings must apply before mutation")
+  string(FIND
+    "${FSIM_COVERAGE_CONDITION_OUTCOMES_CONTENTS}${FSIM_COVERAGE_CONDITION_OUTCOMES_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_CONDITION_OUTCOMES_TEST_CONTENTS}"
+    "${FSIM_COVERAGE_CONDITION_OUTCOME_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "condition outcomes lost binary, unknown, saturation, or resource policy: ${FSIM_COVERAGE_CONDITION_OUTCOME_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_EXPRESSION_POLICY IN ITEMS
+    "maximum_atoms { 1U << 20U }"
+    "maximum_combinations { 1U << 20U }"
+    "maximum_combination_words { 1U << 22U }"
+    "omitted_count_exact"
+    "limits.maximum_combination_words / word_count"
+    "2^"
+    "combination ceiling must retain a deterministic canonical prefix"
+    "every bounded-away binary combination must be reported exactly"
+    "wide omissions must publish the exact symbolic space expression"
+    "whole-combination word storage must be bounded without partial bins"
+    "invalid identities must not publish a partial inventory")
+  string(FIND
+    "${FSIM_COVERAGE_EXPRESSION_CONTENTS}${FSIM_COVERAGE_EXPRESSION_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_EXPRESSION_TEST_CONTENTS}"
+    "${FSIM_COVERAGE_EXPRESSION_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "coverage expression lost bounded expansion or omission policy: ${FSIM_COVERAGE_EXPRESSION_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_TOGGLE_POLICY IN ITEMS
+    "CoverageToggleDirection::ZeroToOne"
+    "CoverageToggleDirection::OneToZero"
+    "maximum_outcomes { 1U << 22U }"
+    "maximum_transitions { 1U << 22U }"
+    "transition.previous == transition.current"
+    "outcome.zero_to_one_hits"
+    "outcome.one_to_zero_hits"
+    "CoverageToggleLogicValue::Unknown"
+    "CoverageToggleLogicValue::HighImpedance"
+    "outcome.unknown_transition_observations"
+    "outcome.high_impedance_transition_observations"
+    "both endpoints are"
+    "one selected bit must own distinct direction-qualified bin identities"
+    "only actual binary transitions may increment their exact direction"
+    "observing the reverse direction must complete rather than alias a bin"
+    "both direction counters must saturate explicitly without wrapping"
+    "X/Z activity must remain diagnostic and never satisfy a binary toggle bin"
+    "X and Z diagnostic counters must saturate independently without wrapping"
+    "invalid four-state encodings must fail before observation mutation"
+    "transition ceiling must apply before mutation")
+  string(FIND
+    "${FSIM_COVERAGE_TOGGLE_CONTENTS}${FSIM_COVERAGE_TOGGLE_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_TOGGLE_TEST_CONTENTS}"
+    "${FSIM_COVERAGE_TOGGLE_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "coverage toggle lost direction, saturation, or resource policy: ${FSIM_COVERAGE_TOGGLE_POLICY}")
   endif()
 endforeach()
 
@@ -882,4 +1604,4 @@ message(STATUS
   "large-test, code-coverage model/source/point/statement/branch discovery, opt-in control, v3 artifact identity, and mixed-language engine/aggregation equivalence "
   "line-state derivation and instance inventory attachment, FST value/change/hierarchy storage, pinned "
   "Boost headers, "
-  "and scoped/SystemC phase traces are present")
+  "broad coverage-metric generate/mixed-engine equivalence, and scoped/SystemC phase traces are present")

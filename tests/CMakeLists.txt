@@ -125,6 +125,150 @@ set_tests_properties(
 )
 
 add_executable(
+  fsim_verilog_coverage_conditions_tests
+  elaboration/verilog_coverage_conditions_test.cpp
+)
+fsim_configure_test(fsim_verilog_coverage_conditions_tests)
+target_link_libraries(
+  fsim_verilog_coverage_conditions_tests PRIVATE fsim_elaboration)
+add_test(
+  NAME fsim.elaboration.verilog_coverage_conditions
+  COMMAND fsim_verilog_coverage_conditions_tests
+)
+set_tests_properties(
+  fsim.elaboration.verilog_coverage_conditions
+  PROPERTIES LABELS "fast;elaboration;coverage;condition;verilog;systemverilog;identity;profiles;relocation;positive;negative;resource"
+)
+
+add_executable(
+  fsim_verilog_toggle_inventory_tests
+  elaboration/verilog_toggle_inventory_test.cpp
+)
+fsim_configure_test(fsim_verilog_toggle_inventory_tests)
+target_link_libraries(
+  fsim_verilog_toggle_inventory_tests PRIVATE fsim_elaboration)
+add_test(
+  NAME fsim.elaboration.verilog_toggle_inventory
+  COMMAND fsim_verilog_toggle_inventory_tests
+)
+set_tests_properties(
+  fsim.elaboration.verilog_toggle_inventory
+  PROPERTIES LABELS "fast;elaboration;coverage;toggle;verilog;systemverilog;hierarchy;identity;profiles;relocation;positive;negative;resource"
+)
+
+add_executable(
+  fsim_coverage_toggle_selection_tests
+  elaboration/coverage_toggle_selection_test.cpp
+)
+fsim_configure_test(fsim_coverage_toggle_selection_tests)
+target_link_libraries(
+  fsim_coverage_toggle_selection_tests PRIVATE fsim_elaboration)
+add_test(
+  NAME fsim.elaboration.coverage_toggle_selection
+  COMMAND fsim_coverage_toggle_selection_tests
+)
+set_tests_properties(
+  fsim.elaboration.coverage_toggle_selection
+  PROPERTIES LABELS "fast;elaboration;coverage;toggle;exclusion;memory;array;verilog;systemverilog;vhdl;hierarchy;identity;profiles;relocation;positive;negative;resource"
+)
+
+add_executable(
+  fsim_coverage_memory_toggle_tests
+  elaboration/coverage_memory_toggle_test.cpp
+)
+fsim_configure_test(fsim_coverage_memory_toggle_tests)
+target_link_libraries(
+  fsim_coverage_memory_toggle_tests PRIVATE fsim_elaboration)
+add_test(
+  NAME fsim.elaboration.coverage_memory_toggle
+  COMMAND fsim_coverage_memory_toggle_tests
+)
+set_tests_properties(
+  fsim.elaboration.coverage_memory_toggle
+  PROPERTIES LABELS "fast;elaboration;coverage;toggle;memory;array;selection;verilog;systemverilog;vhdl;hierarchy;identity;positive;negative;resource"
+)
+
+add_executable(
+  fsim_coverage_fsm_inference_tests
+  elaboration/coverage_fsm_inference_test.cpp
+)
+fsim_configure_test(fsim_coverage_fsm_inference_tests)
+target_link_libraries(
+  fsim_coverage_fsm_inference_tests PRIVATE fsim_elaboration)
+add_test(
+  NAME fsim.elaboration.coverage_fsm_inference
+  COMMAND fsim_coverage_fsm_inference_tests
+)
+set_tests_properties(
+  fsim.elaboration.coverage_fsm_inference
+  PROPERTIES LABELS "fast;elaboration;coverage;fsm;state;enum;case;verilog;systemverilog;vhdl;hierarchy;identity;profiles;relocation;positive;negative;resource"
+)
+
+add_executable(
+  fsim_coverage_fsm_hints_tests
+  elaboration/coverage_fsm_hints_test.cpp
+)
+fsim_configure_test(fsim_coverage_fsm_hints_tests)
+target_link_libraries(
+  fsim_coverage_fsm_hints_tests PRIVATE fsim_elaboration fsim_project)
+add_test(
+  NAME fsim.elaboration.coverage_fsm_hints
+  COMMAND fsim_coverage_fsm_hints_tests
+)
+set_tests_properties(
+  fsim.elaboration.coverage_fsm_hints
+  PROPERTIES LABELS "fast;elaboration;project;manifest;coverage;fsm;state;systemverilog;vhdl;hierarchy;identity;profiles;relocation;positive;negative;resource"
+)
+
+add_executable(
+  fsim_coverage_fsm_validation_tests
+  elaboration/coverage_fsm_validation_test.cpp
+)
+fsim_configure_test(fsim_coverage_fsm_validation_tests)
+target_link_libraries(
+  fsim_coverage_fsm_validation_tests PRIVATE fsim_elaboration)
+add_test(
+  NAME fsim.elaboration.coverage_fsm_validation
+  COMMAND fsim_coverage_fsm_validation_tests
+)
+set_tests_properties(
+  fsim.elaboration.coverage_fsm_validation
+  PROPERTIES LABELS "fast;elaboration;coverage;fsm;diagnostic;ambiguity;incomplete;conflict;identity;positive;negative;resource"
+)
+
+add_executable(
+  fsim_vhdl_toggle_inventory_tests
+  elaboration/vhdl_toggle_inventory_test.cpp
+)
+fsim_configure_test(fsim_vhdl_toggle_inventory_tests)
+target_link_libraries(
+  fsim_vhdl_toggle_inventory_tests PRIVATE fsim_elaboration)
+add_test(
+  NAME fsim.elaboration.vhdl_toggle_inventory
+  COMMAND fsim_vhdl_toggle_inventory_tests
+)
+set_tests_properties(
+  fsim.elaboration.vhdl_toggle_inventory
+  PROPERTIES LABELS "fast;elaboration;coverage;toggle;vhdl;hierarchy;identity;profiles;relocation;positive;negative;resource"
+)
+
+add_executable(
+  fsim_vhdl_coverage_conditions_tests
+  elaboration/vhdl_coverage_conditions_test.cpp
+)
+fsim_configure_test(fsim_vhdl_coverage_conditions_tests)
+target_link_libraries(
+  fsim_vhdl_coverage_conditions_tests PRIVATE fsim_elaboration)
+add_test(
+  NAME fsim.elaboration.vhdl_coverage_conditions
+  COMMAND fsim_vhdl_coverage_conditions_tests
+)
+set_tests_properties(
+  fsim.elaboration.vhdl_coverage_conditions
+  PROPERTIES LABELS "fast;elaboration;coverage;condition;vhdl;identity;profiles;relocation;positive;negative;resource"
+)
+
+add_executable(
   fsim_vhdl_coverage_points_tests
   elaboration/vhdl_coverage_points_test.cpp
 )
@@ -1016,6 +1160,22 @@ set_tests_properties(
   PROPERTIES LABELS "fast;artifact;coverage;identity;schema;positive;negative"
 )
 
+add_executable(
+  fsim_code_coverage_metrics_identity_tests
+  artifact/coverage_metrics_identity_test.cpp
+)
+fsim_configure_test(fsim_code_coverage_metrics_identity_tests)
+target_link_libraries(
+  fsim_code_coverage_metrics_identity_tests PRIVATE fsim_library)
+add_test(
+  NAME fsim.artifact.code-coverage-metrics-identity
+  COMMAND fsim_code_coverage_metrics_identity_tests
+)
+set_tests_properties(
+  fsim.artifact.code-coverage-metrics-identity
+  PROPERTIES LABELS "fast;artifact;coverage;metrics;identity;schema;positive;negative"
+)
+
 add_executable(fsim_object_artifact_tests artifact/object_artifact_test.cpp)
 fsim_configure_test(fsim_object_artifact_tests)
 target_link_libraries(fsim_object_artifact_tests PRIVATE fsim_library)
@@ -1308,6 +1468,18 @@ set_tests_properties(
   fsim.code-coverage-inventory
   PROPERTIES
     LABELS "coverage;inventory;documentation;positive;negative;fast"
+)
+add_test(
+  NAME fsim.code-coverage-metrics-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckCodeCoverageMetricsInventory.cmake"
+)
+set_tests_properties(
+  fsim.code-coverage-metrics-inventory
+  PROPERTIES
+    LABELS "coverage;condition;expression;toggle;fsm;inventory;documentation;positive;negative;fast"
 )
 add_test(
   NAME fsim.sdf-inventory
@@ -3621,6 +3793,38 @@ if(TARGET fsim_application)
   set_tests_properties(
     fsim.application.code-coverage-equivalence
     PROPERTIES LABELS "fast;application;coverage;equivalence;verilog;systemverilog;vhdl;interpreter;llvm;o0;o1;o2;o3;debug;instance;aggregation"
+  )
+
+  add_executable(
+    fsim_code_coverage_metrics_equivalence_tests
+    app/code_coverage_metrics_equivalence_test.cpp
+  )
+  fsim_configure_test(fsim_code_coverage_metrics_equivalence_tests)
+  target_link_libraries(
+    fsim_code_coverage_metrics_equivalence_tests PRIVATE fsim_application)
+  add_test(
+    NAME fsim.application.code-coverage-metrics-equivalence
+    COMMAND fsim_code_coverage_metrics_equivalence_tests
+  )
+  set_tests_properties(
+    fsim.application.code-coverage-metrics-equivalence
+    PROPERTIES LABELS "fast;application;coverage;condition;expression;toggle;fsm;equivalence;verilog;systemverilog;vhdl;interpreter;llvm;o0;o1;o2;o3;debug;generate;instance;aggregation"
+  )
+
+  add_executable(
+    fsim_code_coverage_metrics_application_tests
+    app/code_coverage_metrics_application_test.cpp
+  )
+  fsim_configure_test(fsim_code_coverage_metrics_application_tests)
+  target_link_libraries(
+    fsim_code_coverage_metrics_application_tests PRIVATE fsim_application)
+  add_test(
+    NAME fsim.application.code-coverage-metrics
+    COMMAND fsim_code_coverage_metrics_application_tests
+  )
+  set_tests_properties(
+    fsim.application.code-coverage-metrics
+    PROPERTIES LABELS "fast;application;coverage;condition;expression;toggle;fsm;verilog;systemverilog;vhdl;generate;instance;aggregation"
   )
 
   add_executable(

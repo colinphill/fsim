@@ -122,15 +122,29 @@ exclusions, instance identity, aggregation, opt-in control, and v3
 artifact/cache identity. Every row binds all thirteen retained HDL profiles to
 independently written obligations and planned positive, negative, engine,
 aggregation, artifact, diagnostic, and resource owners. The language-neutral
-coverage-model, relocation-independent source-identity, stable point-ID, both
-language statement-discovery rows, and individually addressable branch arms
-plus derived line states and immutable per-instance inventories are preserved,
-the typed, ownership-validated SimIR hit, and saturating interpreter counters
-are preserved; seven rows remain
-active. Change 19
-owns cross-row engine and aggregation equivalence, and Change 20 owns the batch
-freeze. The registered normalized SHA-256 identity is
-`f46e9700c20df9868cf345d231085bc2b43516d46a6b906bcc51ee192d6a80a0`.
+All seventeen rows are preserved. Change 19 proves cross-row engine and
+aggregation equivalence, and Change 20 freezes the completed batch. The
+registered normalized SHA-256 identity is
+`06039618ff2c8530265b14e3250578f3fd0aa77d6e9b2a53a8049e7b760e8234`.
+
+Batch 179 starts with the exact 17-row
+`code_coverage_metrics_inventory.tsv` ledger. All seventeen rows are preserved
+and zero remain active. Its stable rows assign
+Changes 2-18 one-to-one across Verilog/SystemVerilog and VHDL atomic-condition
+decomposition, short-circuit preservation, binary and auxiliary unknown
+outcomes, bounded expression combinations, binary toggle bins and selected
+objects, default and explicit container selection, unknown transition
+diagnostics, inferred current/next/legal FSM state, standard pragmas, VHDL and
+manifest hints, separate visit/transition recording, and transactional
+description validation. Every row binds all thirteen retained HDL profiles to
+independently written obligations and planned positive, negative, engine,
+aggregation, artifact, diagnostic, and resource owners. MC/DC is explicitly
+outside Batch 179. Change 19 proves generate-instance, engine, and
+mixed-language equivalence and advances enabled artifact identity to the
+broad-metrics model; Change 20 freezes the complete broad-metric set with
+MC/DC still excluded. The registered normalized
+SHA-256 identity is
+`e145b9139cf58989ddbd683ff5b478c966d473944684ea11b60cde661dba7443`.
 
 ## Intended atomic layout
 

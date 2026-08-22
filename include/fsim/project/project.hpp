@@ -156,8 +156,22 @@ struct BuildSection {
   std::filesystem::path cache_path{".fsim-cache"};
 };
 
+// One exact, language-neutral FSM description selected by stable elaborated
+// instance and retained object names. The elaboration coverage layer validates
+// and combines these entries with language-source hints transactionally.
+struct CoverageFsmHintEntry {
+  std::string instance;
+  std::string current_state;
+  std::optional<std::string> next_state;
+  std::optional<std::vector<std::string>> legal_states;
+
+  friend bool operator==(const CoverageFsmHintEntry&,
+      const CoverageFsmHintEntry&) = default;
+};
+
 struct CoverageSection {
   bool enabled{false};
+  std::vector<CoverageFsmHintEntry> fsm_hints;
 };
 
 struct RunSection {

@@ -13,6 +13,8 @@ inline constexpr std::string_view kCodeCoverageArtifactDiagnostic
 inline constexpr std::string_view kCodeCoverageDisabledModel = "none";
 inline constexpr std::string_view kCodeCoverageFoundationModel
     = "fsim-code-coverage-foundation-v3";
+inline constexpr std::string_view kCodeCoverageBroadMetricsModel
+    = "fsim-code-coverage-broad-metrics-v3";
 
 struct CodeCoverageArtifactIdentity {
     std::uint32_t schema { kCodeCoverageArtifactSchema };

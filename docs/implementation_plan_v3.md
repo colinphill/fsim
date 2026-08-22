@@ -652,26 +652,645 @@ starts on branch codex/v3 from clean v2 checkpoint
 
 ### Batch 179 - condition, expression, toggle, and FSM metrics
 
-1. Register exact condition, expression, toggle, and FSM obligations.
-2. Decompose Verilog/SystemVerilog decisions into stable atomic conditions.
-3. Decompose VHDL Boolean decisions using equivalent rules.
-4. Preserve short-circuit evaluation when recording condition outcomes.
-5. Record true, false, and auxiliary unknown four-state outcomes.
-6. Bound expression-combination expansion and report omitted combinations explicitly.
-7. Define 0-to-1 and 1-to-0 toggle bins.
-8. Instrument Verilog/SystemVerilog ports, nets, signals, and retained variables.
-9. Instrument equivalent VHDL ports, signals, and retained variables.
-10. Exclude automatic locals and memories by default.
-11. Add explicit memory and array toggle-selection rules.
-12. Track X/Z transitions diagnostically without scoring them as binary toggles.
-13. Infer enum- and case-based current-state objects.
-14. Infer optional next-state objects and legal-state sets.
-15. Implement standard SystemVerilog FSM description pragmas.
-16. Add VHDL source hints and language-neutral manifest FSM hints.
-17. Record state visits and legal transitions separately.
-18. Diagnose ambiguous, incomplete, and conflicting FSM descriptions.
-19. Prove metric semantics across generate instances, engines, and mixed designs.
-20. Run standard batch closure and freeze the broad metric set; MC/DC remains excluded.
+1. **Complete.** Register exact condition, expression, toggle, and FSM obligations.
+   The clause-neutral `code_coverage_metrics_inventory.tsv` matrix contains
+   seventeen unique active COVMET-C02 through COVMET-C18 rows assigned
+   one-to-one to Changes 2-18. It binds IEEE1076, IEEE1364, and IEEE1800 plus
+   all thirteen retained HDL profiles to exact condition decomposition,
+   short-circuit, binary and auxiliary unknown outcome, bounded expression,
+   toggle-bin and selected-object, default/container-selection, unknown
+   transition, inferred and described FSM, separate visit/transition, and
+   transactional validation obligations. Every row has independently written
+   scope and explicit implementation, positive, negative, engine,
+   aggregation, artifact, diagnostic, and resource owners. The bounded
+   validator enforces the twenty-batch/twenty-change plan, exact row/change/
+   domain allocation, safe relative owners, active-to-preserved transitions,
+   retained profiles, private-reference exclusion, and the explicit Batch 179
+   exclusion of MC/DC. The resource contract and feature-matrix README freeze
+   the same registration. The normalized ledger SHA-256 is
+   ccbe30e82d1fa7954165a516c4930319eca69bb91382a3be291d9cb8805857c2;
+   the regenerated 1,574-path source manifest SHA-256 is
+   9b5d9e14c26b2b3f75eef8df4d39c02e634bcb06cc7a59fead02c5e6fe62df98.
+   The exact-LLVM warnings-as-errors Debug tree regenerates with eight workers
+   and requires no compilation. The seven-gate focused slice passes 7/7 in
+   6.59 wall seconds at 22,752 KiB peak RSS with zero swaps; its retained
+   pre-documentation log SHA-256 is
+   93bedafd9ed7347acffe9c79fa0b011a5668c9fac43cecc962814b7f723b7342.
+   The post-documentation rerun passes the same 7/7 in 7.05 wall seconds at
+   22,596 KiB peak RSS with zero swaps; its retained log SHA-256 is
+   431438923687df2bfd453d4e8e77d1d14e0f41db7c2475c012984ae34d5af01a.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+2. **Complete.** Decompose Verilog/SystemVerilog decisions into stable atomic
+   conditions. The new `verilog_coverage_conditions` elaboration seam walks
+   retained if, conditional-loop, and immediate-assertion decisions without
+   mutating their frontend expression trees. It preserves `&&`, `||`, and `!`
+   as ordered path steps and publishes only the source-exact nonlogical atoms,
+   so nested negation and future short-circuit instrumentation retain the
+   original evaluation structure. Atomic identities use the canonical
+   checkout-independent point algorithm and its new `atomic-condition`
+   construct domain. Discovery is transactional and bounds authenticated
+   sources, statement traversal, expression nodes, conditions, retained path
+   steps, and both statement/expression nesting depths. Malformed arity,
+   missing decisions, unknown sources, invalid spans, and duplicate identities
+   have stable `FSIM-COV-015` ownership. The focused test covers all eight
+   retained Verilog/SystemVerilog revisions, relocation, lexical identity,
+   tree immutability, composite negation, assertions, diagnostics, and every
+   governed resource family. COVMET-C02 is preserved; sixteen rows remain
+   active. The normalized ledger SHA-256 is
+   8bd4c99af60d486455f9fa6db513613ac0b28a9c7829fb90d6e96e8a450c36f2,
+   and the 1,577-path source manifest SHA-256 is
+   dbc2341d0eee406ab5ad13636e44a2c731bd6b6ca07fdaa467d5fcd66a091fc3.
+   The exact-LLVM 22.1.8 warnings-as-errors Debug build uses eight workers.
+   The nine-gate pre-documentation slice passes 9/9 in 7.05 wall seconds at
+   22,560 KiB peak RSS with zero swaps; its retained log SHA-256 is
+   c0ae27cd21d1e96d5177ea2c6d52b5852ea029e720a4425eb8a2145ef160ef96.
+   The post-documentation rerun passes 9/9 in 7.65 wall seconds at 22,680 KiB
+   peak RSS with zero swaps; its retained log SHA-256 is
+   8aebeae90bf597b861aa52ee8eaa00e339b2c63edd95dbface66c78ccf1e307b.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+3. **Complete.** Decompose VHDL Boolean decisions using equivalent rules. A
+   shared `coverage_conditions` engine now owns the immutable bounded walk,
+   source authentication, lexical decision/condition order, stable atomic
+   identities, transactional publication, and common path/result types used
+   by both language families. The VHDL wrapper validates all five retained
+   revisions and recognizes if, conditional while, assertion, and explicit
+   wait-until decisions. It preserves binary `and`, `or`, `nand`, `nor`,
+   `xor`, and `xnor` plus unary `not` as exact ordered path nodes; comparisons,
+   unary reductions, and the VHDL-2008 `??` condition conversion remain
+   source-exact atoms. Synthetic true conditions used for unconditional loops
+   and bare waits manufacture no coverage point. `FSIM-COV-016` owns VHDL
+   language/revision, source, expression, span, duplicate, and resource
+   failures. The focused corpus proves VHDL-87/93/2000/2002/2008 parsing,
+   relocation, all logical operator families, AST immutability, decision
+   ownership, profile rejection, malformed arity, source authentication,
+   duplicate containment, and shared ceilings. COVMET-C02-C03 are preserved;
+   fifteen rows remain active. The normalized ledger SHA-256 is
+   12e6f0a9bfe99533b40331b625bc99f077958c83f603ae79a1457d7597f5a0aa,
+   and the 1,582-path source manifest SHA-256 is
+   432937b2bab3dd7418917e49e4d1db572bd05baecfb67646130392b562222118.
+   The exact-LLVM warnings-as-errors Debug build uses eight workers. The
+   ten-gate pre-documentation slice passes 10/10 in 8.20 wall seconds at
+   22,864 KiB peak RSS with zero swaps; its retained log SHA-256 is
+   eb7a9c2e27744485e89ba3f50da5bc49e6b91c5ccd5e12055994278933a78965.
+   The post-documentation rerun passes 10/10 in 6.93 wall seconds at 22,644
+   KiB peak RSS with zero swaps; its retained log SHA-256 is
+   3a0f29c1cb9f31dbc59a203bbb3040cb4defe3ef52d6edd098aa405e9ecb5983.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+4. **Complete.** Preserve short-circuit evaluation when recording condition
+   outcomes. The language-neutral path operator/operand model now lives beside
+   the new runtime `coverage_condition_evaluation` seam and remains available
+   through the elaboration aliases used by Changes 2-3. For one decision, the
+   runtime reconstructs and validates the complete expression tree from stable
+   atomic paths, then invokes atom evaluators lazily in actual expression
+   order. Definite false `and`/`nand` and definite true `or`/`nor` operands
+   skip the complete right subtree; an unknown SystemVerilog operand evaluates
+   the right side so four-state resolution remains correct. `xor`/`xnor` are
+   eager and `not` preserves unknown truth. Evaluated observations and
+   lexically ordered skipped atoms are separate; callback failure, exception,
+   malformed/incomplete paths, duplicate/noncanonical identity, and every
+   resource failure discard partial publication under `FSIM-COV-017`.
+   Construction and evaluation are iterative and bound atoms, nodes, total
+   path storage, and nesting. The focused corpus proves nested subtree skips,
+   callback order, four-state determining/non-determining cases, VHDL
+   `nand`/`nor` short-circuit behavior, eager `xor`/`xnor`, shuffled input,
+   rollback, malformed plans, and all ceilings. The implementation audit also
+   confirms existing SystemVerilog and VHDL lowering use the same governed
+   branch behavior. No result counters or scoring were pulled forward from
+   Change 5. COVMET-C02-C04 are preserved; fourteen rows remain active. The
+   normalized ledger SHA-256 is
+   f4c5bc29d245027bf0d47df29e98c98541079d56d6d58033fc8adb63e176157b,
+   and the 1,585-path source manifest SHA-256 is
+   92db9db0aab112cd7ffaeb3c06f83c06f565bc85bcfb67d70049a5acf3f1d640.
+   The exact-LLVM warnings-as-errors Debug build uses eight workers. The
+   eleven-gate pre-documentation slice passes 11/11 in 7.24 wall seconds at
+   22,816 KiB peak RSS with zero swaps. The post-documentation rerun passes
+   11/11 in 7.32 wall seconds at 22,640 KiB peak RSS with zero swaps. No
+   Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+5. **Complete.** Record true, false, and auxiliary unknown four-state
+   outcomes. The new runtime `coverage_condition_outcomes` model owns a dense
+   point table with independent true/false scored counters and a third
+   unknown-observation counter. Condition status is derived only from the two
+   binary bins: neither is uncovered, one is partial, and both are covered;
+   unknown activity never satisfies either bin. Updates authenticate unique
+   table identities and exact condition-index/point ownership, reject invalid
+   truth encodings and duplicate observations, and validate saturation state
+   and all resource limits before mutation. The mutation pass allocates
+   nothing, cannot fail, and saturates all three uint64 counters explicitly
+   with per-counter overflow state and per-update overflow reporting, so
+   transactional behavior requires no whole-table snapshot. Atoms omitted by
+   Change 4 short-circuiting remain unchanged. `FSIM-COV-018` owns stable
+   table, observation, saturation, and resource failures. The focused corpus
+   proves true/false separation, unknown-only non-scoring, later completion of
+   binary bins, skipped-atom stability, nonwrapping saturation, rollback for
+   every invalid owner/truth/duplicate/state input, and both configured
+   ceilings. No expression-combination expansion from Change 6 was pulled
+   forward. COVMET-C02-C05 are preserved; thirteen rows remain active. The
+   normalized ledger SHA-256 is
+   6ce16dde407eeb50a7802363fb6652c7ff48a62f94c139cb56b083978bf2db6e,
+   and the 1,588-path source manifest SHA-256 is
+   2fb5ebfd35d1c50b0819d1124367e12d8e447e4013f31259410bd8182582c056.
+   The exact-LLVM warnings-as-errors Debug build uses eight workers. The
+   twelve-gate pre-documentation slice passes 12/12 in 7.15 wall seconds at
+   22,592 KiB peak RSS with zero swaps. The post-documentation rerun passes
+   12/12 in 7.27 wall seconds at 22,776 KiB peak RSS with zero swaps. No
+   Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+6. **Complete.** Bound expression-combination expansion and report omitted
+   combinations explicitly. The new runtime `coverage_expression` model
+   authenticates an ordered atomic-point set, then emits a deterministic
+   canonical binary prefix with the last lexical atom as the least significant
+   bit. Independent ceilings bound atom count, retained combination count, and
+   total packed uint64 words; the storage ceiling never creates a partial bin.
+   For fewer than 64 atoms, the model reports the exact `2^N - retained`
+   omitted count. Wider expressions publish the same exact formula
+   symbolically (for example, `2^70-4`) and mark the numeric count inexact,
+   avoiding both arithmetic overflow and a synthetic completion claim. A zero
+   expansion budget is valid and reports the complete space as omitted.
+   Invalid/duplicate identities and resource exhaustion fail transactionally
+   under `FSIM-COV-019`. The focused corpus proves complete three-atom order,
+   combination and packed-storage truncation, exact and symbolic omissions,
+   wide packed truth layout, zero-budget behavior, transactional rejection,
+   atom ceilings, and repeat determinism. No toggle behavior from Change 7
+   was pulled forward. COVMET-C02-C06 are preserved; twelve rows remain
+   active. The normalized ledger SHA-256 is
+   d97a03c13050be51b8c792b5963b4634a5f2fee11ab7df78755c32478eaec66b,
+   and the 1,591-path source manifest SHA-256 is
+   5de6b0277c75ce52468cc84923229d96b0702b82a83d5a41a2378634e4808674.
+   The exact-LLVM warnings-as-errors Debug build uses eight workers. The
+   thirteen-gate pre-documentation slice passes 13/13 in 7.34 wall seconds at
+   22,736 KiB peak RSS with zero swaps. The post-documentation rerun passes
+   13/13 in 7.37 wall seconds at 22,944 KiB peak RSS with zero swaps. No
+   Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+7. **Complete.** Define 0-to-1 and 1-to-0 toggle bins. The new runtime
+   `coverage_toggle` model gives every stable point/bit owner two explicitly
+   direction-qualified bin identities, independent uint64 counters, overflow
+   flags, and uncovered/partial/covered status. A dense transition names its
+   exact point, bit index, and outcome owner; the complete outcome table and
+   batch are validated before an allocation-free mutation pass. Actual false
+   to true and true to false events increment only their matching direction,
+   same-value samples are no-ops, and ordered batches may contain multiple
+   events for one bit. Both counters saturate and report overflow separately.
+   Invalid/duplicate point-bit owners, inconsistent saturation, mismatched
+   transition ownership, and resource excess fail transactionally under
+   `FSIM-COV-020`. The focused corpus proves distinct bin identities, no
+   direction aliasing, same-value behavior, status progression, repeated
+   transitions, independent saturation, rollback, and both ceilings. The API
+   accepts only binary transitions; X/Z diagnostics remain exclusively owned
+   by Change 12. No object-inventory behavior from Change 8 was pulled
+   forward. COVMET-C02-C07 are preserved; eleven rows remain active. The
+   normalized ledger SHA-256 is
+   65df83d604f7c074c0c1d426e6fed0762c9ca2aed0301a92cc8acc7c32899c15,
+   and the 1,594-path source manifest SHA-256 is
+   5a80f0114cb0a7914df029aa921cab0b95e0e660a3254ca9040dd60e5a66a9d6.
+   The exact-LLVM warnings-as-errors Debug build uses eight workers. The
+   fourteen-gate pre-documentation slice passes 14/14 in 7.85 wall seconds at
+   22,644 KiB peak RSS with zero swaps. The post-documentation rerun passes
+   14/14 in 7.44 wall seconds at 22,732 KiB peak RSS with zero swaps. No
+   Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+8. **Complete.** Instrument Verilog/SystemVerilog ports, nets, signals, and
+   retained variables. The new elaboration `verilog_toggle_inventory` model
+   consumes one already-specialized semantic design unit and its immutable
+   `CoverageInventoryOwner`; it never recovers ownership from source text or
+   runtime process names. Verilog modules and SystemVerilog modules,
+   interfaces, and programs share the model, while the source language remains
+   part of every point identity. The builder normalizes the semantic unit's
+   library exactly as hierarchy elaboration does, authenticates its canonical
+   specialization identity and stable instance identity, and qualifies every
+   selected declaration through the exact instance and already-expanded
+   generate name. Each object retains one checkout-independent source
+   `ToggleObject` point plus a distinct instance/path-qualified point. Ports,
+   net spellings and user-defined nettypes, residual signals, and packed
+   module/generate-scope variables receive explicit semantic kinds; every bit
+   maps contiguously to an empty Change 7 outcome. Object order is canonical
+   independently of declaration-container order. Real, string, handle,
+   interface, and whole-container objects do not manufacture binary bins;
+   explicit default-exclusion records and selected memory/array elements
+   remain Changes 10 and 11. Independent ceilings bound authenticated sources,
+   semantic input objects, selected objects, aggregate bits, per-object width,
+   names, paths, lines, and instance identity. Invalid owners, languages,
+   unit kinds, source mappings, spans, widths, duplicate paths/identities, and
+   resource excess fail transactionally under `FSIM-COV-021`. The focused
+   corpus proves real parser classification, all retained Verilog/SystemVerilog
+   unit families, generated names, hierarchy separation, checkout relocation,
+   canonical order, contiguous bit ownership, skipped nonbinary/container
+   objects, rollback, and every resource boundary. No VHDL selection from
+   Change 9 was pulled forward. COVMET-C02-C08 are preserved; ten rows remain
+   active. The normalized ledger SHA-256 is
+   acee3ca8c5d69e2caeb9e7bf1768fbeeb82e061bd8fc69b8a3ebfe5df1a486c5,
+   and the 1,597-path source manifest SHA-256 is
+   0d533fb73adc05a7a779e7d7efd1e91393e75555a1894013bf4febd53d58383e.
+   The exact-LLVM warnings-as-errors Debug build uses eight workers. The
+   fifteen-gate pre-documentation slice passes 15/15 in 7.54 wall seconds at
+   22,844 KiB peak RSS with zero swaps. The post-documentation result is
+   recorded in the active resume checkpoint. No Release, clean-first,
+   sanitizer, hosted-CI, commit, or push action ran.
+9. **Complete.** Instrument equivalent VHDL ports, signals, and retained
+   variables. The new elaboration `vhdl_toggle_inventory` model consumes one
+   already-specialized VHDL architecture, its resolved specialized entity-port
+   view, and the immutable `CoverageInventoryOwner` for exactly one elaborated
+   occurrence. This explicit two-unit boundary matches VHDL hierarchy
+   elaboration: architecture declarations remain primary while entity ports
+   are authenticated through the owner's exact source dependencies. Empty
+   semantic libraries normalize to `work`; canonical
+   `vhdl:library.entity(architecture)` identity, all five retained revision
+   values, and the existing v3 instance identity are validated before object
+   discovery. Ports, architecture signals, and architecture-scope shared
+   variables receive explicit semantic kinds, checkout-independent source
+   `ToggleObject` points, distinct instance/path-qualified points, and dense
+   Change 7 outcomes for every directly packed bit. Scalar bit, std_logic,
+   Boolean, and integer objects are eligible. One-dimensional concrete vectors
+   qualify only when their element is exactly one bit or std_logic value;
+   composite/multidimensional arrays remain Changes 10-11 work. Ordinary
+   process/callable variables, non-shared architecture variables, files,
+   access, protected, physical, string, and foreign SystemVerilog type shapes
+   do not manufacture bins. Canonical path order is independent of declaration
+   container order, source points are shared across hierarchy occurrences and
+   retained revisions, and concrete points remain instance-distinct.
+   Independent ceilings bound sources, semantic input objects, selected
+   objects, aggregate bits, per-object width, names, paths, lines, and instance
+   identity. Invalid revision/language/unit/owner/source/span/width metadata,
+   source ownership, duplicate paths/identities, and resource excess fail
+   transactionally under `FSIM-COV-022`. The focused corpus proves every
+   retained VHDL profile, real parser entity/architecture separation, split
+   entity-source ownership, shared-variable retention, dense outcomes,
+   hierarchy separation, relocation and declaration-order stability, default
+   nonbinary/composite/local omission, rollback, and resource boundaries. No
+   explicit exclusion records from Change 10 were pulled forward. COVMET-C02-
+   C09 are preserved; nine rows remain active. The normalized ledger SHA-256 is
+   0946cbf0fa2084011b98cf6ae6ff2fac2b6a1955109a52a8b631c7e96d12fe4b,
+   and the 1,600-path source manifest SHA-256 is
+   743c690e13dd0ce177bb60f3471e4e4267211338bfcd8589f466d76f1eae08de.
+   The exact-LLVM warnings-as-errors Debug build uses eight workers. The
+   sixteen-gate pre-documentation slice passes 16/16 in 7.36 wall seconds at
+   22,960 KiB peak RSS with zero swaps. The post-documentation result is
+   recorded in the active resume checkpoint. No Release, clean-first,
+   sanitizer, hosted-CI, commit, or push action ran.
+10. **Complete.** Exclude automatic locals and memories by default. The new
+    language-neutral `coverage_toggle_selection` elaboration model walks one
+    already-specialized Verilog, SystemVerilog, or VHDL unit together with the
+    resolved entity-port view used by VHDL. It records every default exclusion
+    explicitly rather than silently dropping it: automatic callable locals,
+    process and nested-block locals, static memories, SystemVerilog containers,
+    and non-directly-packed VHDL arrays retain ordered reason sets. An object
+    may therefore preserve multiple applicable reasons, such as procedural
+    local, memory, and array, without manufacturing a scored bin. Ordinary
+    retained scalar objects produce no exclusion and remain owned by Changes
+    8-9. Each exclusion authenticates the source/span, retains a stable
+    checkout-independent source `ToggleObject` point, and receives a distinct
+    instance/path/reason-qualified identity. Recursive process, statement,
+    function, task, and VHDL procedure traversal uses source-offset-qualified
+    lexical scopes, canonical output ordering, and exact architecture/entity
+    source ownership. Independent ceilings bound sources, declarations,
+    exclusions, total reasons, names, hierarchy paths, nesting depth, lines,
+    and instance identity. Invalid language/unit/owner/source/span/line/text,
+    duplicate paths/identities, and resource excess discard all output under
+    `FSIM-COV-023`. The focused corpus proves complete and ordered reason sets,
+    default non-selection, hierarchy/relocation/declaration-order stability,
+    VHDL array/shared-memory treatment, transactional failures, invalid scope
+    text, and every configured ceiling. Explicit memory/array element opt-in
+    remains exclusively Change 11 work. COVMET-C02-C10 are preserved; eight
+    rows remain active. The normalized ledger SHA-256 is
+    9bc16f6d399e3ec7807281fc41fcf6569bda6a668078bb076a1c3b66e4ac4503,
+    and the 1,603-path source manifest SHA-256 is
+    f2a52a4bfbcb9ae5b93ba895345872f1d9665e6b5075559693a71605d557ee30.
+    The exact-LLVM warnings-as-errors Debug build uses eight workers. The
+    seventeen-gate pre-documentation slice passes 17/17 in 7.14 wall seconds
+    at 22,876 KiB peak RSS with zero swaps. The post-documentation result is
+    recorded in the active resume checkpoint. No Release, clean-first,
+    sanitizer, hosted-CI, commit, or push action ran.
+11. **Complete.** Add explicit memory and array toggle-selection rules. The new
+    language-neutral `coverage_memory_toggle` elaboration model consumes the
+    authenticated default-exclusion inventory from Change 10 and exact
+    hierarchy-path rules. Numeric static, dynamic, queue, integer-associative,
+    and VHDL arrays require one explicit inclusive range per dimension;
+    string-keyed associative arrays require exact nonempty keys. Every selector
+    also names a nonempty packed-element bit slice. There is deliberately no
+    wildcard, omitted-coordinate, omitted-bit, or implicit whole-container
+    form. Change 10 exclusions now retain a bounded semantic shape: container
+    kind, concrete elaborated dimensions where available, binary element width,
+    and string-index classification. Parsed two-dimensional SystemVerilog
+    memory evidence proves this metadata comes from the real semantic surface.
+    Static and VHDL endpoints must lie inside every declared concrete bound;
+    unresolved bounds fail rather than guessing. Dynamic/queue indices must be
+    nonnegative, while associative indices retain their exact integer or string
+    key. Canonical expansion gives each selected element a point derived from
+    its exclusion identity and coordinates/key, preserves its common source
+    point, and maps the exact bit slice densely into Change 7 outcomes. Output
+    is independent of rule/range/key order. Overlapping selectors cannot alias
+    a scored bit. Independent ceilings bound exclusions, rules, selectors,
+    dimensions, keys/key bytes, range span, expanded elements/bits, and paths;
+    all ownership, shape, selector, bound, key, overlap, collision, and resource
+    failures discard the result under `FSIM-COV-024`. The focused corpus covers
+    parsed multidimensional memory, dynamic and queue ranges, string
+    associative keys, VHDL ranges, bit slices, canonical order, no implicit
+    whole-container selection, transactional negatives, and all configured
+    ceilings. Unknown/X/Z observation remains solely Change 12 work.
+    COVMET-C02-C11 are preserved; seven rows remain active. The normalized
+    ledger SHA-256 is
+    5c33ffb1cb6200a0b33ba3e71c5690a42bfa8b7753750afaae36399319bb891f,
+    and the 1,606-path source manifest SHA-256 is
+    283b40814ca847f1f34783819ee1d3644c21033f14e749808f7283811b9ee420.
+    The exact-LLVM warnings-as-errors Debug build uses eight workers. The
+    eighteen-gate pre-documentation slice passes 18/18 in 7.42 wall seconds at
+    22,980 KiB peak RSS with zero swaps. The post-documentation result is
+    recorded in the active resume checkpoint. No Release, clean-first,
+    sanitizer, hosted-CI, commit, or push action ran.
+12. **Complete.** Track X/Z transitions diagnostically without scoring them as
+    binary toggles. The Change 7 runtime outcome now retains independent
+    saturating unknown-participation and high-impedance-participation counters
+    and overflow flags beside the unchanged zero-to-one and one-to-zero scored
+    counters. A new four-state transition surface accepts only canonical zero,
+    one, unknown, and high-impedance values. A changed transition involving X
+    increments the unknown diagnostic counter; one involving Z increments the
+    high-impedance counter; X-to-Z increments each once. Same-value samples are
+    no-ops. A scored direction can increment only when both endpoints are exact
+    binary values, so X-to-one, zero-to-Z, and all other nonbinary transitions
+    leave coverage status unchanged. Exact zero-to-one and one-to-zero events
+    through the four-state path still reach their original bins. All four
+    counters saturate independently without wrapping. The existing binary API
+    remains source-compatible and validates the complete outcome saturation
+    state. Both entry points authenticate unique point/bit owners, dense
+    transition ownership, logic encodings, saturation invariants, and resource
+    ceilings before an allocation-free mutation pass; invalid input publishes
+    no observation under the existing `FSIM-COV-020` family. The focused
+    corpus proves separate X/Z accounting including X-to-Z, same-nonbinary
+    no-ops, zero binary score from diagnostic activity, later exact-binary
+    completion, independent saturation, invalid encoding/state/ownership, and
+    transactional limits. COVMET-C02-C12 are preserved; six rows remain
+    active. The normalized ledger SHA-256 is
+    544b1abfc20f62eb35af062e5be5051d377103b0b4d69d5ac3c62119e12d32ae.
+    The source manifest remains 1,606 paths at SHA-256
+    283b40814ca847f1f34783819ee1d3644c21033f14e749808f7283811b9ee420.
+    The exact-LLVM warnings-as-errors Debug build uses eight workers. The
+    eighteen-gate pre-documentation slice passes 18/18 in 7.60 wall seconds at
+    22,980 KiB peak RSS with zero swaps. The post-documentation result is
+    recorded in the active resume checkpoint. No Release, clean-first,
+    sanitizer, hosted-CI, commit, or push action ran.
+13. **Complete.** Infer enum- and case-based current-state objects. The new
+    language-neutral `coverage_fsm_inference` elaboration model considers only
+    retained unit signals/variables and output or buffer ports. It accepts
+    VHDL enumeration literals, parsed SystemVerilog enum typedefs, and
+    unambiguous exact-case evidence whose selector is a direct retained-object
+    identifier and whose choices are simple explicit values. Enum declaration
+    order is preserved; case-only state names are canonicalized. Wildcard,
+    range, pattern, shadowed, duplicate-owner, and conflicting case-only
+    descriptions cannot manufacture a current-state object. Stable source,
+    instance-object, and per-state identities include the new
+    `fsm-current-state-object` construct kind while remaining independent of
+    checkout location and declaration-container order. No next-state object or
+    legal-state set is present; Change 14 retains that ownership. Construction
+    authenticates source and hierarchy ownership and enforces bounded source,
+    object, case, choice, state, name, path, statement-depth, line, and instance
+    inputs transactionally under `FSIM-COV-025`. The independently authored
+    corpus covers parsed SystemVerilog enum/case and case-only objects, all five
+    retained VHDL profiles, relocation and sibling instances, ambiguity,
+    lexical shadowing, duplicate declarations, source failure, and resource
+    ceilings. COVMET-C02-C13 are preserved; five rows remain active. The
+    normalized ledger SHA-256 is
+    9953619a01ad6b350a6f2b93ab31a8681441fefc6a48b6ef15b88c19dc71b5f7,
+    and the 1,609-path source manifest SHA-256 is
+    2590fd8392ba51d778cd9a2cad952aaf10db850d42176523c2af55850ecaef23.
+    The exact-LLVM warnings-as-errors Debug build uses eight workers. The
+    nineteen-gate pre-documentation slice passes 19/19 in 7.29 wall seconds at
+    23,068 KiB peak RSS with zero swaps. The post-documentation result is
+    recorded in the active resume checkpoint. No Release, clean-first,
+    sanitizer, hosted-CI, commit, or push action ran.
+14. **Complete.** Infer optional next-state objects and legal-state sets. The
+    Change 13 model now recognizes a next-state object only when a direct
+    procedural assignment connects a retained current-state target to a
+    different retained identifier. Both declarations must have compatible
+    enum sets, nominal/named types, or fully concrete scalar domain, width, and
+    signedness. Lexical shadows, self-assignment, non-identifier expressions,
+    incompatible types, multiple candidates, duplicate declarations, and a
+    next object shared by multiple current objects cannot establish the
+    optional relation. An enum-only object used solely as a next-state source
+    is no longer misclassified as another current-state object. Every inferred
+    current object publishes one stable legal-state-set identity referencing
+    its existing ordered state IDs; enum evidence governs enum sets and exact
+    case evidence is credited only when its canonical choices match that set.
+    No missing state or transition is synthesized. The new stable
+    `fsm-next-state-object` source kind keeps next declarations distinct from
+    current declarations while relocation and sibling-instance behavior remain
+    deterministic. Assignment, next-object, and legal-set ceilings extend the
+    existing transactional `FSIM-COV-025` contract. Independently authored
+    parsed SystemVerilog fixtures prove enum and scalar case-only next objects,
+    while manual VHDL fixtures prove all five retained profiles; the corpus
+    also covers relocation, ambiguity, lexical shadowing, exact ID reuse, and
+    resource failure. Source attributes and pragmas remain solely Change 15/16
+    work. COVMET-C02-C14 are preserved; four rows remain active. The normalized
+    ledger SHA-256 is
+    1254b56412974f2f33771d9d68059497eb72ab94d3deb203673ae9697dfff833,
+    and the 1,609-path source manifest remains at SHA-256
+    2590fd8392ba51d778cd9a2cad952aaf10db850d42176523c2af55850ecaef23.
+    The public construct-kind change passes a complete 871-step, eight-worker,
+    exact-LLVM warnings-as-errors Debug impact rebuild. The nineteen-gate
+    pre-documentation slice passes 19/19 in 7.73 wall seconds at 23,196 KiB
+    peak RSS with zero swaps. The post-documentation result is recorded in the
+    active resume checkpoint. No Release, clean-first, sanitizer, hosted-CI,
+    commit, or push action ran.
+15. **Complete.** Implement standard SystemVerilog FSM description pragmas.
+    Attribute instances immediately preceding a SystemVerilog module,
+    interface, or program may now carry the exact vendor-neutral
+    `fsm_current_state`, `fsm_next_state`, and `fsm_legal_states` keys. The
+    parser preserves recognized specifications by attribute-instance group,
+    retains decoded string values and source spans, ignores unrelated vendor
+    attributes, and does not enable this meaning in Verilog profiles. Each
+    group requires one uniquely resolved retained current-state object; an
+    optional next-state name must resolve uniquely to a distinct compatible
+    retained object, while an optional comma-separated legal-state list must
+    contain at least two unique bounded names. A pragma may augment enum
+    evidence, select a legal subset without manufacturing states, or describe
+    a scalar FSM that has neither enum nor case evidence. Explicit pragma next
+    state evidence takes precedence over procedural assignment inference;
+    multiple compatible candidates suppress only the optional relation, and
+    conflicting repeated descriptions suppress their pragma evidence pending
+    Change 18 diagnostics. All SystemVerilog-2005, 2009, 2012, and 2017
+    profiles behave identically. Malformed values, wrong-profile retained
+    metadata, missing or incompatible objects, unknown enum legal states, and
+    pragma group/specification/value ceilings fail transactionally under the
+    extended `FSIM-COV-025` family. The independently authored corpus also
+    proves relocation stability, grouped parsing, unknown vendor-key
+    isolation, pragma-only scalar inference, enum legal subsets, explicit
+    current/next linkage, ambiguity containment, and evidence provenance.
+    COVMET-C02-C15 are preserved; three rows remain active. The normalized
+    ledger SHA-256 is
+    070d2ee13b6ab1e75d3209a84bb77a4ba368bb1b22ac97fd9f6d5de8717d34b0,
+    and the 1,609-path source manifest remains at SHA-256
+    2590fd8392ba51d778cd9a2cad952aaf10db850d42176523c2af55850ecaef23.
+    The shared frontend-model change passes an 898-step eight-worker
+    exact-LLVM warnings-as-errors Debug impact build in 10:35.31 at 3,949,796
+    KiB peak RSS with zero swaps. The nineteen-gate pre-documentation slice
+    passes 19/19 in 7.39 wall seconds at 23,280 KiB peak RSS with zero swaps.
+    The post-documentation result is recorded in the active resume checkpoint.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+16. **Complete.** Add VHDL source hints and language-neutral manifest FSM
+    hints. The new bounded `coverage_fsm_hints` model carries independent
+    VHDL-source and manifest contributions without changing HDL execution
+    semantics. VHDL uses ordinary string-typed user attributes named exactly
+    `fsm_current_state`, `fsm_next_state`, and `fsm_legal_states` on retained
+    signal or variable names: the current marker accepts exact string values
+    `true`/`false`, next names one retained object, and legal states are a
+    comma-separated list. All five retained VHDL profiles canonicalize names
+    and produce identical hint records; unrelated vendor attributes remain
+    ordinary ignored user metadata. The schema-3 project manifest now accepts
+    repeatable `[[coverage.fsm]]` tables with required exact `instance` and
+    `current_state`, optional `next_state`, and optional string-array
+    `legal_states`. The same table describes VHDL or SystemVerilog instances.
+    The project reader retains typed entries transactionally and its frozen
+    16-row manifest contract now hashes to
+    be2e1aee6cdc3dafd30c8f7e20c933545394a2ebdd39595e6988a0738e0b8430.
+    FSM inference revalidates every hint at its trust boundary, ignores valid
+    entries for other instances, requires exact compatible retained objects,
+    preserves separate source/manifest provenance on current, next, and legal
+    records, and composes matching VHDL, manifest, and SystemVerilog pragma
+    descriptions. Conflicting explicit legal descriptions suppress explicit
+    evidence while preserving independently inferred enum/case results;
+    Change 18 retains detailed conflict diagnostics. Attribute, entity-name,
+    manifest-entry, combined-hint, legal-state, name, value, instance, and
+    inference-side limits fail transactionally under `FSIM-COV-026` or the
+    extended `FSIM-COV-025` boundary. The independently authored corpus proves
+    both languages, all VHDL profiles, relocation, matching and conflicting
+    cross-source composition, other-instance isolation, unknown vendor-key
+    rejection, malformed schema/source entries, unknown states/objects, and
+    every new resource family. COVMET-C02-C16 are preserved; two rows remain
+    active. The normalized ledger SHA-256 is
+    8a459c5baf3bc56592083540e6a828ecccb460fb373d7dbe525ff6f9e9005aa9,
+    and the 1,612-path source manifest SHA-256 is
+    decea49910c11df02edc37a2fb71701f01a8404a3c2b13d7a474c97b59ad1c53.
+    The shared project/inference model changes pass a 632-step, eight-worker,
+    exact-LLVM warnings-as-errors Debug impact build in 7:00.57 at 2,792,604
+    KiB peak RSS with zero swaps. The twenty-two-gate pre-documentation slice
+    passes 22/22 in 7.57 wall seconds at 23,520 KiB peak RSS with zero swaps.
+    The post-documentation result is recorded in the active resume checkpoint.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+17. **Complete.** Record state visits and legal transitions separately. The
+    new language-neutral `coverage_fsm` runtime model consumes already stable
+    instance, current-state-object, state, and explicitly declared legal-
+    transition identities without depending on elaboration internals. It
+    constructs independently identified `state-visit` and
+    `legal-transition` bins, with the hierarchical instance identity included
+    in every bin digest. Definitions are canonicalized across machine, state,
+    and transition input order and retain the specialization and exact
+    instance path. Every sample increments exactly one state-visit counter.
+    The first sample for a machine establishes history without scoring a
+    transition; later samples increment only a matching declared ordered
+    transition. Undeclared pairs never manufacture coverage bins and instead
+    increment a per-machine diagnostic counter. Previous-state history is
+    independent per machine, so observations for multiple FSMs may interleave
+    without cross-machine transitions. Visit, transition, and diagnostic
+    counters saturate without wrapping and expose overflow once. Runtime-model
+    and complete observation-batch validation precede mutation, rejecting
+    invalid identities, duplicate ownership, non-canonical/tampered bins,
+    invalid previous state, inconsistent saturation, foreign observations,
+    and machine/state/transition/observation/path resource ceilings under
+    `FSIM-COV-027`. Summaries publish state-visit and legal-transition totals
+    separately and deliberately contain no synthetic FSM score. The
+    independently authored corpus proves deterministic/reordered definitions,
+    sibling instances, legal and undeclared transitions, independent
+    histories, all saturation families, transactional model and batch
+    failures, and every resource ceiling. COVMET-C02-C17 are preserved; one
+    row remains active. The normalized ledger SHA-256 is
+    b33e6b1d80bceeeee4586411b20b3d3eac8a8b1c7306747a8060532047f84a11,
+    and the 1,615-path source manifest SHA-256 is
+    645470d8324ce8378ce5db7808cac6cba79eb2e0e22a438b773fc7dcbd74f556.
+    The runtime-library change passes a 135-step, eight-worker, exact-LLVM
+    warnings-as-errors Debug impact build in 36.39 wall seconds at 1,649,264
+    KiB peak RSS with zero swaps. The twenty-five-gate pre-documentation slice
+    passes 25/25 in 1.27 wall seconds at 23,520 KiB peak RSS with zero swaps.
+    The post-documentation result is recorded in the active resume checkpoint.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+18. **Complete.** Diagnose ambiguous, incomplete, and conflicting FSM
+    descriptions. The new bounded `coverage_fsm_validation` layer accepts
+    language-neutral diagnostic candidates, validates the complete input,
+    coalesces equal instance/object/kind/subject issues, unions their evidence
+    origins without unbounded accumulation, canonicalizes the result, and
+    generates stable relocation-independent diagnostic identities. It
+    distinguishes current-state, next-state, and legal-state subjects and
+    retains enum, exact-case, assignment, SystemVerilog pragma, VHDL source,
+    and manifest origins. `FSIM-COV-028` reports ambiguous duplicate current
+    state ownership, competing inferred next objects, and next objects shared
+    across current machines. `FSIM-COV-029` reports explicit scalar FSMs that
+    lack a state universe and exact cases that incompletely cover an enum.
+    `FSIM-COV-030` reports differing repeated cases or pragmas, incompatible
+    explicit next relations, enum/case disagreement, and cross-source
+    pragma/VHDL/manifest disagreement. Inference publishes diagnostics on its
+    language-neutral result, omits only the ambiguous, incomplete, or
+    conflicting evidence, and preserves independently valid enum/case
+    fallback. Malformed diagnostic state or candidate, diagnostic, merged-
+    origin, instance-path, and object-name ceilings reject the entire
+    inference construction transactionally. The independently authored
+    corpus proves all three issue kinds and subjects, all evidence-origin
+    families, deterministic coalescing, origin union, sibling-instance
+    identity, fallback preservation, invalid enum/text/identity/origin input,
+    inference-side resource propagation, and every standalone resource
+    ceiling. COVMET-C02-C18 are all preserved and zero rows remain active. The
+    normalized ledger SHA-256 is
+    e145b9139cf58989ddbd683ff5b478c966d473944684ea11b60cde661dba7443,
+    and the 1,618-path source manifest SHA-256 is
+    30ca495468c5079caaff91c6964cbdc9605585be2c3640aa48c1eded6d3dbac6.
+    The public inference-model change passes a 129-step, eight-worker,
+    exact-LLVM warnings-as-errors Debug impact build in 35.18 wall seconds at
+    1,649,292 KiB peak RSS with zero swaps. The twenty-six-gate pre-
+    documentation slice passes 26/26 in 1.34 wall seconds at 23,476 KiB peak
+    RSS with zero swaps. The post-documentation result is recorded in the
+    active resume checkpoint. No Release, clean-first, sanitizer, hosted-CI,
+    commit, or push action ran.
+19. **Complete.** Prove metric semantics across generate instances, engines, and mixed designs.
+    Two independently authored application witnesses now
+    compose the complete Batch 179 runtime metric surface. The parsed-design
+    witness builds real SystemVerilog-2017 and VHDL-2008 condition and toggle
+    inventories for two generated sibling instances per language. It proves
+    identical source identity but distinct hierarchy-qualified object and FSM
+    bin identity, per-instance partial condition/toggle results, covered source
+    unions, bounded expression enumeration, separate state-visit and legal-
+    transition results, and bidirectional source aggregation without a
+    synthetic score. The engine witness executes six generated instances in
+    one mixed Verilog-2005/SystemVerilog-2017/VHDL-2008 design and compares the
+    exact observation and broad-metric snapshot from the serial interpreter,
+    LLVM O0, O1, O2, O3, and compiled Debug. It covers short-circuit skips,
+    true/false/unknown condition accounting, expression bins, binary and X/Z
+    toggle activity, FSM visits/transitions, and stable per-instance IDs.
+    Enabled artifact identity now selects
+    `fsim-code-coverage-broad-metrics-v3`; the former foundation-only model is
+    rejected deterministically, while disabled identity remains `none`.
+    Engine, aggregation, and artifact evidence owners for every COVMET row are
+    now required to exist. The normalized seventeen-row ledger remains
+    `e145b9139cf58989ddbd683ff5b478c966d473944684ea11b60cde661dba7443`;
+    the source manifest contains 1,621 ordered paths at SHA-256
+    `c0542c5b8baae097e53cccf2d282aab580efcf18b2853f76a23f2fb74a39b5b1`.
+    The 334-step warnings-as-errors Debug impact build completes with eight
+    workers in 4:31.29 at 1,649,512 KiB peak RSS and zero swaps. The cumulative
+    pre-documentation focused set passes 34/34 in 1.87 wall seconds at 78,356
+    KiB peak RSS with zero swaps. The post-documentation rerun passes the same
+    34/34 in 1.58 wall seconds at 78,328 KiB peak RSS with zero swaps. No
+    Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+20. **Complete.** Run standard batch closure and freeze the broad metric set; MC/DC remains excluded.
+    The complete broad-metric surface is frozen with all seventeen
+    COVMET-C02-C18 rows preserved, zero active rows, and normalized ledger
+    SHA-256
+    `e145b9139cf58989ddbd683ff5b478c966d473944684ea11b60cde661dba7443`.
+    MC/DC remains explicitly outside Batch 179, and the 1,621-path source
+    manifest remains
+    `c0542c5b8baae097e53cccf2d282aab580efcf18b2853f76a23f2fb74a39b5b1`.
+    Full-tree qualification refreshed the deliberate repository freezes to
+    2,576 production diagnostics, 1,265 bounded authored sources, 1,556
+    SPDX-owned files, 471 conformance test/control files, and 675 FST
+    test/control files. Release optimization additionally exposed one copied
+    structured binding in the toggle-inventory corpus; binding the immutable
+    profile pair by reference removes that warning without changing behavior.
+    The clean exact-LLVM warnings-as-errors Debug build completes 2,595/2,595
+    steps with eight workers in 17:22.80 at 4,322,732 KiB peak RSS with zero
+    swaps. The sequential Debug suite passes 348/348 in 6:26.96 at 1,100,028
+    KiB peak RSS with zero swaps. The final uninterrupted clean LLVM Release
+    build completes 1,351/1,351 steps with eight workers in 14:46.51 at
+    1,893,948 KiB peak RSS with zero swaps. The sequential Release suite
+    passes 348/348 in 8:55.50 at 1,099,516 KiB peak RSS with zero swaps.
+    Normalizing only the new Batch 179 translation units to the repository's
+    WebKit format triggers warning-clean eight-worker incremental rebuilds of
+    196 Debug and 160 Release steps. The exact final tree then passes the full
+    Debug suite 348/348 in 6:44.40 and the full Release suite 348/348 in
+    8:46.99.
+    Batch 179 is neither a sanitizer nor a hosted-CI boundary, so neither lane
+    ran or is claimed here.
 
 ### Batch 180 - unified coverage database, standard API, and reports
 

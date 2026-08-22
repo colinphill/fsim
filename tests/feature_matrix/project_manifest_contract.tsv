@@ -13,6 +13,6 @@ manifest	transactionality	parse-and-load-return-no-config-on-any-error
 manifest	paths	resolve-only-after-parse,relative-to-manifest-directory
 manifest	io	binary-read,open-and-read-failure-diagnostics
 manifest	language	current-schema-standard-and-compatibility-spellings-are-not-schema-readers
-manifest	coverage	optional-single-table,enabled-boolean-default-false
+manifest	coverage	optional-single-table,enabled-boolean-default-false,repeatable-fsm-table-with-exact-instance-current-next-legal-fields
 manifest	in-memory	programmatic-Config-is-not-a-persisted-compatibility-schema
 manifest	evidence	current,missing,zero,stale,future,oversized,unknown-key

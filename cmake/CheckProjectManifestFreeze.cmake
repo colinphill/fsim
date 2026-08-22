@@ -11,12 +11,15 @@ set(FSIM_CONTRACT
 set(FSIM_HEADER "${FSIM_SOURCE_DIR}/include/fsim/project/project.hpp")
 set(FSIM_READER "${FSIM_SOURCE_DIR}/src/project/project.cpp")
 set(FSIM_TEST "${FSIM_SOURCE_DIR}/tests/project/project_config_test.cpp")
+set(FSIM_FSM_HINT_TEST
+  "${FSIM_SOURCE_DIR}/tests/elaboration/coverage_fsm_hints_test.cpp")
 set(FSIM_TEST_BUILD "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
 foreach(FSIM_INPUT IN ITEMS
     "${FSIM_CONTRACT}"
     "${FSIM_HEADER}"
     "${FSIM_READER}"
     "${FSIM_TEST}"
+    "${FSIM_FSM_HINT_TEST}"
     "${FSIM_TEST_BUILD}")
   if(NOT EXISTS "${FSIM_INPUT}")
     message(FATAL_ERROR "project manifest freeze input is missing: ${FSIM_INPUT}")
@@ -28,7 +31,7 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "4d858da38980443e2af0c7d8f25a2ff45b299fc155e1908193c8c95beeed064f")
+  "be2e1aee6cdc3dafd30c8f7e20c933545394a2ebdd39595e6988a0738e0b8430")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "project manifest contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
@@ -67,6 +70,8 @@ fsim_require_project_manifest_tokens("${FSIM_HEADER}"
   "kSchemaVersion = 3"
   "struct CoverageSection"
   "bool enabled{false}"
+  "struct CoverageFsmHintEntry"
+  "std::vector<CoverageFsmHintEntry> fsm_hints"
   "Parses, validates, and resolves a schema-3 fsim.toml"
   "std::optional<Config> parse("
   "std::optional<Config> load(")
@@ -77,6 +82,9 @@ fsim_require_project_manifest_tokens("${FSIM_READER}"
   "\"schema \" + std::to_string(kSchemaVersion)"
   "\"schema outside the uint32 range\""
   "config_.schema != kSchemaVersion"
+  "normalized == \"coverage.fsm\""
+  "assign_coverage_fsm"
+  "[[coverage.fsm]] #"
   "if (diagnostics.has_error())"
   "return std::nullopt;")
 file(READ "${FSIM_READER}" FSIM_READER_TEXT)
@@ -105,6 +113,12 @@ fsim_require_project_manifest_tokens("${FSIM_TEST}"
   "schema = 18446744073709551615"
   "found schema outside the uint32 range"
   "non-current project schema is rejected")
+fsim_require_project_manifest_tokens("${FSIM_FSM_HINT_TEST}"
+  "[[coverage.fsm]]"
+  "current_state = \"state\""
+  "next_state = \"next_state\""
+  "legal_states = [\"idle\", \"run\"]"
+  "unknown vendor keys must not become manifest FSM aliases")
 fsim_require_project_manifest_tokens("${FSIM_TEST_BUILD}"
   "NAME fsim.project-manifest-schema-freeze"
   "CheckProjectManifestFreeze.cmake")

@@ -27,6 +27,10 @@ enum class CodeCoverageConstructKind : std::uint8_t {
     BranchCaseArm = 4U,
     BranchDefaultArm = 5U,
     BranchImplicitArm = 6U,
+    AtomicCondition = 7U,
+    ToggleObject = 8U,
+    FsmCurrentStateObject = 9U,
+    FsmNextStateObject = 10U,
 };
 
 struct CodeCoverageSourceSpan {
@@ -106,6 +110,14 @@ constexpr std::string_view code_coverage_construct_kind_name(
         return "branch-default";
     case CodeCoverageConstructKind::BranchImplicitArm:
         return "branch-implicit";
+    case CodeCoverageConstructKind::AtomicCondition:
+        return "atomic-condition";
+    case CodeCoverageConstructKind::ToggleObject:
+        return "toggle-object";
+    case CodeCoverageConstructKind::FsmCurrentStateObject:
+        return "fsm-current-state-object";
+    case CodeCoverageConstructKind::FsmNextStateObject:
+        return "fsm-next-state-object";
     }
     return { };
 }
