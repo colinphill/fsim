@@ -117,6 +117,10 @@ namespace {
         case SystemVerilogVpiObjectKind::Process:
         case SystemVerilogVpiObjectKind::Assertion:
         case SystemVerilogVpiObjectKind::Driver:
+        case SystemVerilogVpiObjectKind::Constant:
+        case SystemVerilogVpiObjectKind::Concatenation:
+        case SystemVerilogVpiObjectKind::Operation:
+        case SystemVerilogVpiObjectKind::MinTypMax:
             return false;
         }
         return false;

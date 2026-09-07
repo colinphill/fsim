@@ -51,9 +51,9 @@ endforeach()
 
 foreach(FSIM_EXACT_OUTPUT IN ITEMS
     "SDF VITAL inventory passed: rows=17 preserved=17 active=0 digest=3e84f643e6df24090efb1161e0d6836847784268a139e3da3c2fda4568913c6f"
-    "diagnostic catalog covers 2593 production codes"
-    "Checked 1376 authored sources against the 2500-line hard limit with a 2000-line refactor target"
-    "resource portability contract: five four-worker build/test steps, 120-minute hosted jobs, eight-link pool, compact Debug objects, 128 MiB Windows stacks, bounded large-test, code-coverage model/source/point/statement/branch discovery, opt-in and standard SystemVerilog control/query/merge/save, v3 artifact identity, bounded .fsimcov schema, and mixed-language engine/aggregation equivalence line-state derivation and instance inventory attachment, FST value/change/hierarchy storage, pinned Boost headers, broad coverage-metric generate/mixed-engine equivalence, and scoped/SystemC phase traces are present")
+    "diagnostic catalog covers 2599 production codes"
+    "Checked 1417 authored sources against the 2500-line hard limit with a 2000-line refactor target"
+    "resource portability contract: five four-worker build/test steps, 120-minute hosted jobs, eight-link pool, compact Debug objects, 128 MiB Windows stacks, bounded large-test, code-coverage model/source/point/statement/branch discovery, opt-in and standard SystemVerilog control/query/merge/save, v3 artifact identity, bounded .fsimcov schema, and mixed-language engine/aggregation equivalence line-state derivation and instance inventory attachment, FST value/change/hierarchy storage, pinned Boost headers, broad coverage-metric generate/mixed-engine equivalence, complete legacy ACC routine/object inventory, public C/C++ header ABI, bounded transactional ACC lifecycle, generation-qualified ACC/VPI handles, bounded hierarchy lookup, and scoped/SystemC phase traces are present")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_EXACT_OUTPUT}"
     FSIM_OUTPUT_INDEX)
   if(FSIM_OUTPUT_INDEX EQUAL -1)
@@ -83,9 +83,9 @@ list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX
   "/examples/three_language_hierarchy/three_language\\.vcd$")
 list(REMOVE_DUPLICATES FSIM_AUTHORED_FILES)
 list(LENGTH FSIM_AUTHORED_FILES FSIM_AUTHORED_COUNT)
-if(NOT FSIM_AUTHORED_COUNT EQUAL 1671)
+if(NOT FSIM_AUTHORED_COUNT EQUAL 1714)
   message(FATAL_ERROR
-    "authored SDF VITAL inventory changed: expected 1671 files, found ${FSIM_AUTHORED_COUNT}")
+    "authored SDF VITAL inventory changed: expected 1714 files, found ${FSIM_AUTHORED_COUNT}")
 endif()
 foreach(FSIM_FILE IN LISTS FSIM_AUTHORED_FILES)
   file(READ "${FSIM_FILE}" FSIM_PREFIX LIMIT 4096)

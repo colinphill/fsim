@@ -80,6 +80,7 @@ set(FSIM_EXPECTED_PATHS
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/native_plugin_abi.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/tf_plugin_abi.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/veriuser.h"
+  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/acc_user.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc.hpp"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc/accellera.hpp"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc/kernel_backend_protocol.hpp"
@@ -122,7 +123,7 @@ foreach(FSIM_PATH IN LISTS FSIM_EXPECTED_PATHS)
 endforeach()
 
 foreach(FSIM_TF_HEADER IN ITEMS
-    native_plugin_abi.h tf_plugin_abi.h veriuser.h)
+    native_plugin_abi.h tf_plugin_abi.h veriuser.h acc_user.h)
   file(SHA256
     "${FSIM_SOURCE_DIR}/include/fsim/runtime/${FSIM_TF_HEADER}"
     FSIM_SOURCE_DIGEST)

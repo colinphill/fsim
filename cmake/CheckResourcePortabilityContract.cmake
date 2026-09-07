@@ -316,6 +316,76 @@ set(FSIM_LEGACY_TF_INVENTORY
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/legacy_tf_inventory.tsv")
 set(FSIM_LEGACY_TF_CHECKER
   "${FSIM_SOURCE_DIR}/cmake/CheckLegacyTfInventory.cmake")
+set(FSIM_LEGACY_ACC_INVENTORY
+  "${FSIM_SOURCE_DIR}/tests/feature_matrix/legacy_acc_inventory.tsv")
+set(FSIM_LEGACY_ACC_CHECKER
+  "${FSIM_SOURCE_DIR}/cmake/CheckLegacyAccInventory.cmake")
+set(FSIM_ACC_USER_HEADER
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/acc_user.h")
+set(FSIM_ACC_USER_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/acc_user_abi_test.cpp")
+set(FSIM_ACC_USER_C_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/acc_user_abi_c_test.c")
+set(FSIM_ACC_LIFECYCLE_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/acc_lifecycle.cpp")
+set(FSIM_ACC_LIFECYCLE_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/acc_lifecycle_test.cpp")
+set(FSIM_ACC_HANDLE_BRIDGE
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/acc_handle_bridge.h")
+set(FSIM_ACC_HANDLE_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/acc_handle.cpp")
+set(FSIM_ACC_HANDLE_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/acc_handle_test.cpp")
+set(FSIM_ACC_INTERNAL
+  "${FSIM_SOURCE_DIR}/src/runtime/acc_internal.hpp")
+set(FSIM_ACC_LOOKUP_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/acc_lookup.cpp")
+set(FSIM_ACC_LOOKUP_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/acc_lookup_test.cpp")
+set(FSIM_ACC_TRAVERSAL_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/acc_traversal.cpp")
+set(FSIM_ACC_TRAVERSAL_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/acc_traversal_test.cpp")
+set(FSIM_ACC_OBJECT_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/acc_object.cpp")
+set(FSIM_ACC_OBJECT_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/acc_object_test.cpp")
+set(FSIM_ACC_READ_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/acc_read.cpp")
+set(FSIM_ACC_READ_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/acc_read_test.cpp")
+set(FSIM_ACC_WRITE_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/acc_write.cpp")
+set(FSIM_ACC_WRITE_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/acc_write_test.cpp")
+set(FSIM_ACC_ITERATOR_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/acc_iterator.cpp")
+set(FSIM_ACC_ITERATOR_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/acc_iterator_test.cpp")
+set(FSIM_ACC_TIMING_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/acc_timing.cpp")
+set(FSIM_ACC_TIMING_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/acc_timing_test.cpp")
+set(FSIM_ACC_VCL_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/acc_vcl.cpp")
+set(FSIM_ACC_VCL_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/acc_vcl_test.cpp")
+set(FSIM_ACC_CALLBACK_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/acc_callback.cpp")
+set(FSIM_ACC_CALLBACK_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/acc_callback_test.cpp")
+set(FSIM_ACC_HANDLE_LIFETIME_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/acc_handle_lifetime.cpp")
+set(FSIM_ACC_HANDLE_LIFETIME_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/acc_handle_lifetime_test.cpp")
+set(FSIM_ACC_TF_COHERENCE_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/acc_tf_coherence.cpp")
+set(FSIM_ACC_TF_COHERENCE_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/acc_tf_coherence_test.cpp")
+set(FSIM_ACC_VPI_COHERENCE_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/acc_vpi_coherence.cpp")
+set(FSIM_ACC_VPI_COHERENCE_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/acc_vpi_coherence_test.cpp")
 set(FSIM_NATIVE_PLUGIN_ABI
   "${FSIM_SOURCE_DIR}/include/fsim/runtime/native_plugin_abi.h")
 set(FSIM_NATIVE_PLUGIN_MODEL
@@ -422,6 +492,22 @@ set(FSIM_TF_SCHEDULER_IMPLEMENTATION
   "${FSIM_SOURCE_DIR}/src/app/application_tf_scheduler.cpp")
 set(FSIM_TF_SCHEDULER_TEST
   "${FSIM_SOURCE_DIR}/tests/app/tf_scheduler_application_test.cpp")
+set(FSIM_ACC_SCHEDULER_MODEL
+  "${FSIM_SOURCE_DIR}/include/fsim/app/application_acc_scheduler.hpp")
+set(FSIM_ACC_SCHEDULER_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/app/application_acc_scheduler.cpp")
+set(FSIM_ACC_SCHEDULER_TEST
+  "${FSIM_SOURCE_DIR}/tests/app/acc_scheduler_application_test.cpp")
+set(FSIM_ACC_VENDOR_REJECTION_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/acc_vendor_rejection.cpp")
+set(FSIM_ACC_VENDOR_REJECTION_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/acc_vendor_rejection_test.cpp")
+set(FSIM_ACC_C_PLUGIN
+  "${FSIM_SOURCE_DIR}/tests/runtime/acc_link_probe_plugin.c")
+set(FSIM_ACC_CPP_PLUGIN
+  "${FSIM_SOURCE_DIR}/tests/runtime/acc_cpp_probe_plugin.cpp")
+set(FSIM_ACC_CROSS_PLATFORM_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/acc_cross_platform_plugins_test.cpp")
 set(FSIM_TF_CONTAINMENT_MODEL
   "${FSIM_SOURCE_DIR}/include/fsim/runtime/tf_containment.hpp")
 set(FSIM_TF_CONTAINMENT_IMPLEMENTATION
@@ -631,6 +717,33 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_CODE_COVERAGE_METRICS_CHECKER}"
     "${FSIM_LEGACY_TF_INVENTORY}"
     "${FSIM_LEGACY_TF_CHECKER}"
+    "${FSIM_LEGACY_ACC_INVENTORY}"
+    "${FSIM_LEGACY_ACC_CHECKER}"
+    "${FSIM_ACC_USER_HEADER}"
+    "${FSIM_ACC_USER_TEST}"
+    "${FSIM_ACC_USER_C_TEST}"
+    "${FSIM_ACC_LIFECYCLE_IMPLEMENTATION}"
+    "${FSIM_ACC_LIFECYCLE_TEST}"
+    "${FSIM_ACC_HANDLE_BRIDGE}"
+    "${FSIM_ACC_HANDLE_IMPLEMENTATION}"
+    "${FSIM_ACC_HANDLE_TEST}"
+    "${FSIM_ACC_INTERNAL}"
+    "${FSIM_ACC_LOOKUP_IMPLEMENTATION}"
+    "${FSIM_ACC_LOOKUP_TEST}"
+    "${FSIM_ACC_TRAVERSAL_IMPLEMENTATION}"
+    "${FSIM_ACC_TRAVERSAL_TEST}"
+    "${FSIM_ACC_OBJECT_IMPLEMENTATION}"
+    "${FSIM_ACC_OBJECT_TEST}"
+    "${FSIM_ACC_READ_IMPLEMENTATION}"
+    "${FSIM_ACC_READ_TEST}"
+    "${FSIM_ACC_WRITE_IMPLEMENTATION}"
+    "${FSIM_ACC_WRITE_TEST}"
+    "${FSIM_ACC_ITERATOR_IMPLEMENTATION}"
+    "${FSIM_ACC_ITERATOR_TEST}"
+    "${FSIM_ACC_TF_COHERENCE_IMPLEMENTATION}"
+    "${FSIM_ACC_TF_COHERENCE_TEST}"
+    "${FSIM_ACC_VPI_COHERENCE_IMPLEMENTATION}"
+    "${FSIM_ACC_VPI_COHERENCE_TEST}"
     "${FSIM_NATIVE_PLUGIN_ABI}"
     "${FSIM_NATIVE_PLUGIN_MODEL}"
     "${FSIM_NATIVE_PLUGIN_IMPLEMENTATION}"
@@ -684,6 +797,13 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_TF_SCHEDULER_MODEL}"
     "${FSIM_TF_SCHEDULER_IMPLEMENTATION}"
     "${FSIM_TF_SCHEDULER_TEST}"
+    "${FSIM_ACC_SCHEDULER_MODEL}"
+    "${FSIM_ACC_SCHEDULER_IMPLEMENTATION}"
+    "${FSIM_ACC_SCHEDULER_TEST}"
+    "${FSIM_ACC_VENDOR_REJECTION_IMPLEMENTATION}"
+    "${FSIM_ACC_VENDOR_REJECTION_TEST}"
+    "${FSIM_ACC_C_PLUGIN}" "${FSIM_ACC_CPP_PLUGIN}"
+    "${FSIM_ACC_CROSS_PLATFORM_TEST}"
     "${FSIM_TF_CONTAINMENT_MODEL}"
     "${FSIM_TF_CONTAINMENT_IMPLEMENTATION}"
     "${FSIM_TF_CONTAINMENT_TEST}"
@@ -808,6 +928,61 @@ file(READ "${FSIM_LEGACY_TF_INVENTORY}"
   FSIM_LEGACY_TF_INVENTORY_CONTENTS)
 file(READ "${FSIM_LEGACY_TF_CHECKER}"
   FSIM_LEGACY_TF_CHECKER_CONTENTS)
+file(READ "${FSIM_LEGACY_ACC_INVENTORY}"
+  FSIM_LEGACY_ACC_INVENTORY_CONTENTS)
+file(READ "${FSIM_LEGACY_ACC_CHECKER}"
+  FSIM_LEGACY_ACC_CHECKER_CONTENTS)
+file(READ "${FSIM_ACC_USER_HEADER}" FSIM_ACC_USER_HEADER_CONTENTS)
+file(READ "${FSIM_ACC_USER_TEST}" FSIM_ACC_USER_TEST_CONTENTS)
+file(READ "${FSIM_ACC_USER_C_TEST}" FSIM_ACC_USER_C_TEST_CONTENTS)
+file(READ "${FSIM_ACC_LIFECYCLE_IMPLEMENTATION}"
+  FSIM_ACC_LIFECYCLE_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_ACC_LIFECYCLE_TEST}"
+  FSIM_ACC_LIFECYCLE_TEST_CONTENTS)
+file(READ "${FSIM_ACC_HANDLE_BRIDGE}" FSIM_ACC_HANDLE_BRIDGE_CONTENTS)
+file(READ "${FSIM_ACC_HANDLE_IMPLEMENTATION}"
+  FSIM_ACC_HANDLE_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_ACC_HANDLE_TEST}" FSIM_ACC_HANDLE_TEST_CONTENTS)
+file(READ "${FSIM_ACC_INTERNAL}" FSIM_ACC_INTERNAL_CONTENTS)
+file(READ "${FSIM_ACC_LOOKUP_IMPLEMENTATION}"
+  FSIM_ACC_LOOKUP_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_ACC_LOOKUP_TEST}" FSIM_ACC_LOOKUP_TEST_CONTENTS)
+file(READ "${FSIM_ACC_TRAVERSAL_IMPLEMENTATION}"
+  FSIM_ACC_TRAVERSAL_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_ACC_TRAVERSAL_TEST}" FSIM_ACC_TRAVERSAL_TEST_CONTENTS)
+file(READ "${FSIM_ACC_OBJECT_IMPLEMENTATION}"
+  FSIM_ACC_OBJECT_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_ACC_OBJECT_TEST}" FSIM_ACC_OBJECT_TEST_CONTENTS)
+file(READ "${FSIM_ACC_READ_IMPLEMENTATION}"
+  FSIM_ACC_READ_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_ACC_READ_TEST}" FSIM_ACC_READ_TEST_CONTENTS)
+file(READ "${FSIM_ACC_WRITE_IMPLEMENTATION}"
+  FSIM_ACC_WRITE_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_ACC_WRITE_TEST}" FSIM_ACC_WRITE_TEST_CONTENTS)
+file(READ "${FSIM_ACC_ITERATOR_IMPLEMENTATION}"
+  FSIM_ACC_ITERATOR_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_ACC_ITERATOR_TEST}" FSIM_ACC_ITERATOR_TEST_CONTENTS)
+file(READ "${FSIM_ACC_TIMING_IMPLEMENTATION}"
+  FSIM_ACC_TIMING_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_ACC_TIMING_TEST}" FSIM_ACC_TIMING_TEST_CONTENTS)
+file(READ "${FSIM_ACC_VCL_IMPLEMENTATION}"
+  FSIM_ACC_VCL_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_ACC_VCL_TEST}" FSIM_ACC_VCL_TEST_CONTENTS)
+file(READ "${FSIM_ACC_CALLBACK_IMPLEMENTATION}"
+  FSIM_ACC_CALLBACK_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_ACC_CALLBACK_TEST}" FSIM_ACC_CALLBACK_TEST_CONTENTS)
+file(READ "${FSIM_ACC_HANDLE_LIFETIME_IMPLEMENTATION}"
+  FSIM_ACC_HANDLE_LIFETIME_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_ACC_HANDLE_LIFETIME_TEST}"
+  FSIM_ACC_HANDLE_LIFETIME_TEST_CONTENTS)
+file(READ "${FSIM_ACC_TF_COHERENCE_IMPLEMENTATION}"
+  FSIM_ACC_TF_COHERENCE_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_ACC_TF_COHERENCE_TEST}"
+  FSIM_ACC_TF_COHERENCE_TEST_CONTENTS)
+file(READ "${FSIM_ACC_VPI_COHERENCE_IMPLEMENTATION}"
+  FSIM_ACC_VPI_COHERENCE_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_ACC_VPI_COHERENCE_TEST}"
+  FSIM_ACC_VPI_COHERENCE_TEST_CONTENTS)
 file(READ "${FSIM_NATIVE_PLUGIN_ABI}" FSIM_NATIVE_PLUGIN_ABI_CONTENTS)
 file(READ "${FSIM_NATIVE_PLUGIN_MODEL}" FSIM_NATIVE_PLUGIN_MODEL_CONTENTS)
 file(READ "${FSIM_NATIVE_PLUGIN_IMPLEMENTATION}"
@@ -880,6 +1055,20 @@ file(READ "${FSIM_TF_SCHEDULER_MODEL}" FSIM_TF_SCHEDULER_MODEL_CONTENTS)
 file(READ "${FSIM_TF_SCHEDULER_IMPLEMENTATION}"
   FSIM_TF_SCHEDULER_IMPLEMENTATION_CONTENTS)
 file(READ "${FSIM_TF_SCHEDULER_TEST}" FSIM_TF_SCHEDULER_TEST_CONTENTS)
+file(READ "${FSIM_ACC_SCHEDULER_MODEL}"
+  FSIM_ACC_SCHEDULER_MODEL_CONTENTS)
+file(READ "${FSIM_ACC_SCHEDULER_IMPLEMENTATION}"
+  FSIM_ACC_SCHEDULER_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_ACC_SCHEDULER_TEST}"
+  FSIM_ACC_SCHEDULER_TEST_CONTENTS)
+file(READ "${FSIM_ACC_VENDOR_REJECTION_IMPLEMENTATION}"
+  FSIM_ACC_VENDOR_REJECTION_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_ACC_VENDOR_REJECTION_TEST}"
+  FSIM_ACC_VENDOR_REJECTION_TEST_CONTENTS)
+file(READ "${FSIM_ACC_C_PLUGIN}" FSIM_ACC_C_PLUGIN_CONTENTS)
+file(READ "${FSIM_ACC_CPP_PLUGIN}" FSIM_ACC_CPP_PLUGIN_CONTENTS)
+file(READ "${FSIM_ACC_CROSS_PLATFORM_TEST}"
+  FSIM_ACC_CROSS_PLATFORM_TEST_CONTENTS)
 file(READ "${FSIM_TF_CONTAINMENT_MODEL}"
   FSIM_TF_CONTAINMENT_MODEL_CONTENTS)
 file(READ "${FSIM_TF_CONTAINMENT_IMPLEMENTATION}"
@@ -1975,6 +2164,203 @@ foreach(FSIM_CODE_COVERAGE_METRICS_POLICY IN ITEMS
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR
       "code coverage metrics inventory lost resource policy: ${FSIM_CODE_COVERAGE_METRICS_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_LEGACY_ACC_POLICY IN ITEMS
+    "LEGACC-C02"
+    "LEGACC-C19"
+    "public-acc-header"
+    "lifecycle-configuration-errors"
+    "generation-qualified-handles"
+    "name-lookup"
+    "hierarchy-traversal"
+    "complete-object-model"
+    "value-and-property-reads"
+    "value-updates"
+    "indexed-iterators"
+    "path-delay-timing-checks"
+    "value-change-links"
+    "callback-cancellation-order"
+    "safe-point-validity"
+    "tf-acc-coherence"
+    "acc-vpi-object-equivalence"
+    "parallel-coordination"
+    "vendor-name-rejection"
+    "legacy-pli-closure-corpus"
+    "ieee-only-no-vendor-extensions"
+    "set(FSIM_COMPLETED_CHANGE 19)"
+    "FSIM_ROUTINE_COUNT EQUAL 102"
+    "FSIM_OBJECT_COUNT EQUAL 115"
+    "typedef struct t_acc_time"
+    "typedef struct t_setval_value"
+    "typedef struct t_vc_record"
+    "acc_handle_calling_mod_m"
+    "fsim.runtime.acc_user_abi"
+    "kMaximumConfigurationValueSize = 4096"
+    "bounded_configuration_value"
+    "std::scoped_lock"
+    "acc_error_flag = 0"
+    "FSIM_PROJECT_VERSION"
+    "fsim.runtime.acc_lifecycle"
+    "FSIM_ACC_HANDLE_MAX_OBJECTS"
+    "simulation_identity"
+    "hierarchy_generation"
+    "validate_tf_callback_pointer"
+    "fsim_acc_handle_from_vpi_v3"
+    "acc_release_object"
+    "mapping rejects a second valid VPI object at the context limit"
+    "fsim.runtime.acc_handle"
+    "FSIM_ACC_LOOKUP_ABSOLUTE"
+    "FSIM_ACC_LOOKUP_RELATIVE"
+    "FSIM_ACC_LOOKUP_PLI_SCOPE"
+    "FSIM_ACC_RELATION_SIMULATED_NET"
+    "FSIM_ACC_NAME_MAXIMUM_BYTES 4096u"
+    "configuration_enabled"
+    "enabled optional set-scope names select an absolute module"
+    "unreadable lookup names fail before callback dispatch"
+    "fsim.runtime.acc_lookup"
+    "FSIM_ACC_TRAVERSE_BEGIN"
+    "FSIM_ACC_TRAVERSE_NEXT"
+    "FSIM_ACC_TRAVERSE_END"
+    "FSIM_ACC_COLLECTION_MAXIMUM_OBJECTS"
+    "filtered next traversal preserves canonical child creation order"
+    "next traversal can recover position from a valid prior object"
+    "completed and failed traversals release every native cursor"
+    "fsim.runtime.acc_traversal"
+    "FSIM_ACC_OBJECT_QUERY_ABI_VERSION 3u"
+    "fsim_acc_object_query_v3"
+    "type_matches"
+    "full types preserve standardized generic object membership"
+    "enabled module-path arguments select validated connection handles"
+    "enabled timing-check arguments select a validated connection handle"
+    "invalid owners indices names and edges fail before callback dispatch"
+    "fsim.runtime.acc_object"
+    "FSIM_ACC_READ_QUERY_ABI_VERSION 3u"
+    "FSIM_ACC_READ_MAXIMUM_BITS"
+    "fsim_acc_vpi_read_v3_fn"
+    "thread_local std::string string_buffer"
+    "wide four-state values preserve every aval and bval word"
+    "structured string-copy failures retain the ACC error state"
+    "resolver exceptions are contained at the ACC boundary"
+    "fsim.runtime.acc_read"
+    "FSIM_ACC_WRITE_QUERY_ABI_VERSION 3u"
+    "FSIM_ACC_WRITE_CAP_DEPOSIT"
+    "fsim_acc_vpi_write_v3_fn"
+    "no-delay vector deposit copies every four-state word atomically"
+    "every standardized string input format is copied exactly"
+    "release returns the post-release vector in the same transaction"
+    "write callback exceptions are contained at the ACC boundary"
+    "fsim.runtime.acc_write"
+    "FSIM_ACC_ITERATOR_QUERY_ABI_VERSION 3u"
+    "FSIM_ACC_ITERATOR_MAXIMUM_TYPES 256u"
+    "std::map<SessionKey, IteratorSession>"
+    "same result identity can own independent relation-family cursors"
+    "iterator recovers position from a valid prior relation object"
+    "completed and failed indexed iterators release every native cursor"
+    "fsim.runtime.acc_iterator"
+    "FSIM_ACC_TIMING_QUERY_ABI_VERSION 3u"
+    "FSIM_ACC_TIMING_MAXIMUM_DELAYS 12u"
+    "fsim_acc_vpi_timing_v3_fn"
+    "configuration_value"
+    "single delay values publish after validation"
+    "minimum typical maximum delays use one bounded array"
+    "pulse reject and error pairs publish atomically"
+    "malformed results cannot partially publish"
+    "callback exceptions are contained"
+    "fsim.runtime.acc_timing"
+    "FSIM_ACC_VCL_QUERY_ABI_VERSION 3u"
+    "FSIM_ACC_VCL_MAXIMUM_LINKS"
+    "fsim_acc_vcl_dispatch_v3"
+    "logic callback retains time value and user data"
+    "strength callback retains logic and both strengths"
+    "vector callback retains the exact generation-qualified handle"
+    "consumer exceptions are contained at the ACC boundary"
+    "fsim.runtime.acc_vcl"
+    "FSIM_ACC_VCL_UNREGISTER"
+    "sequence_identity"
+    "std::condition_variable link_condition"
+    "cancel_vcl_link"
+    "out-of-order callback sequence is rejected"
+    "cancellation blocks simulator re-entry before unregister returns"
+    "removed callbacks cannot publish late observations"
+    "self-cancellation returns without deadlock"
+    "fsim.runtime.acc_callback"
+    "FSIM_ACC_SAFE_POINT_ABI_VERSION 3u"
+    "fsim_acc_safe_point_advance_v3"
+    "invalidate_iterator_safe_point"
+    "reset_read_borrowed_storage"
+    "reset_write_borrowed_storage"
+    "safe-point advance closes retained iterator cursors"
+    "generation-qualified handles survive safe-point advance"
+    "callback links survive safe-point advance"
+    "an iterator cannot resume across its safe-point boundary"
+    "old handles reject a new hierarchy generation"
+    "fsim.runtime.acc_handle_lifetime"
+    "FSIM_ACC_TF_CONTEXT_ABI_VERSION 3u"
+    "fsim_acc_tf_context_v3"
+    "fsim_tf_current_call_context_v3"
+    "valid_tf_context_binding"
+    "ACC and TF share argument values, instance scope, and work area"
+    "shared call state cannot escape the callback lifetime"
+    "fsim.runtime.acc_tf_coherence"
+    "fsim_acc_vpi_same_object_v3"
+    "SystemVerilogVpiObjectKind::Constant"
+    "SystemVerilogVpiObjectKind::Concatenation"
+    "SystemVerilogVpiObjectKind::Operation"
+    "SystemVerilogVpiObjectKind::MinTypMax"
+    "ACC value reads the same storage as the VPI registry"
+    "ACC hierarchy resolves the same VPI parent and full name"
+    "ACC connectivity returns the exact VPI expression identity"
+    "ACC timing reads the same VPI-keyed path record"
+    "ACC and VPI reject the same released generation"
+    "fsim.runtime.acc_vpi_coherence"
+    "kMaximumAccSchedulerRequests"
+    "AccSchedulerOperationKind"
+    "std::recursive_mutex"
+    "std::map<AccSchedulerSequence"
+    "AccSchedulerError::OutOfOrderEpoch"
+    "impl_->scheduler->running()"
+    "impl_->scheduler->current_phase()"
+    "parallel workers stage every ACC operation family"
+    "publication retains the exact scheduler boundary"
+    "worker completion order cannot change ACC execution order"
+    "a later epoch cannot strand earlier staged ACC operations"
+    "foreign exceptions and callback re-entry are contained deterministically"
+    "fsim.application.acc-scheduler"
+    "FSIM_ACC_STANDARD_QUERY_ABI_VERSION 3u"
+    "FSIM_ACC_STANDARD_NAME_MAXIMUM_BYTES 128u"
+    "kStandardRoutines.size() == 102U"
+    "std::ranges::is_sorted(kStandardRoutines)"
+    "FSIM-ACC-NAME-001"
+    "FSIM-ACC-NAME-002"
+    "FSIM-ACC-NAME-003"
+    "FSIM-ACC-NAME-004"
+    "FSIM-ACC-NAME-005"
+    "FSIM-ACC-NAME-006"
+    "validate_tf_callback_pointer(dispatch)"
+    "an unsupported vendor routine cannot enter fallback dispatch"
+    "every canonical ACC object constant is accepted"
+    "an unsupported behavior selector cannot enter fallback dispatch"
+    "a v2 query is rejected before name inspection or dispatch"
+    "fsim.runtime.acc_vendor_rejection"
+    "standard_acc_symbols.size() == 102U"
+    "fsim_acc_link_probe"
+    "fsim_acc_cpp_probe"
+    "cached ACC plug-in artifacts did not load"
+    "fsim.runtime.acc_cross_platform_plugins"
+    "linux;windows;engine;artifact;cache"
+    "fsim.legacy-acc-inventory")
+  string(TOLOWER
+    "${FSIM_LEGACY_ACC_INVENTORY_CONTENTS}${FSIM_LEGACY_ACC_CHECKER_CONTENTS}${FSIM_ACC_USER_HEADER_CONTENTS}${FSIM_ACC_USER_TEST_CONTENTS}${FSIM_ACC_USER_C_TEST_CONTENTS}${FSIM_ACC_LIFECYCLE_IMPLEMENTATION_CONTENTS}${FSIM_ACC_LIFECYCLE_TEST_CONTENTS}${FSIM_ACC_HANDLE_BRIDGE_CONTENTS}${FSIM_ACC_HANDLE_IMPLEMENTATION_CONTENTS}${FSIM_ACC_HANDLE_TEST_CONTENTS}${FSIM_ACC_INTERNAL_CONTENTS}${FSIM_ACC_LOOKUP_IMPLEMENTATION_CONTENTS}${FSIM_ACC_LOOKUP_TEST_CONTENTS}${FSIM_ACC_TRAVERSAL_IMPLEMENTATION_CONTENTS}${FSIM_ACC_TRAVERSAL_TEST_CONTENTS}${FSIM_ACC_OBJECT_IMPLEMENTATION_CONTENTS}${FSIM_ACC_OBJECT_TEST_CONTENTS}${FSIM_ACC_READ_IMPLEMENTATION_CONTENTS}${FSIM_ACC_READ_TEST_CONTENTS}${FSIM_ACC_WRITE_IMPLEMENTATION_CONTENTS}${FSIM_ACC_WRITE_TEST_CONTENTS}${FSIM_ACC_ITERATOR_IMPLEMENTATION_CONTENTS}${FSIM_ACC_ITERATOR_TEST_CONTENTS}${FSIM_ACC_TIMING_IMPLEMENTATION_CONTENTS}${FSIM_ACC_TIMING_TEST_CONTENTS}${FSIM_ACC_VCL_IMPLEMENTATION_CONTENTS}${FSIM_ACC_VCL_TEST_CONTENTS}${FSIM_ACC_CALLBACK_IMPLEMENTATION_CONTENTS}${FSIM_ACC_CALLBACK_TEST_CONTENTS}${FSIM_ACC_HANDLE_LIFETIME_IMPLEMENTATION_CONTENTS}${FSIM_ACC_HANDLE_LIFETIME_TEST_CONTENTS}${FSIM_ACC_TF_COHERENCE_IMPLEMENTATION_CONTENTS}${FSIM_ACC_TF_COHERENCE_TEST_CONTENTS}${FSIM_ACC_VPI_COHERENCE_IMPLEMENTATION_CONTENTS}${FSIM_ACC_VPI_COHERENCE_TEST_CONTENTS}${FSIM_ACC_SCHEDULER_MODEL_CONTENTS}${FSIM_ACC_SCHEDULER_IMPLEMENTATION_CONTENTS}${FSIM_ACC_SCHEDULER_TEST_CONTENTS}${FSIM_ACC_VENDOR_REJECTION_IMPLEMENTATION_CONTENTS}${FSIM_ACC_VENDOR_REJECTION_TEST_CONTENTS}${FSIM_ACC_C_PLUGIN_CONTENTS}${FSIM_ACC_CPP_PLUGIN_CONTENTS}${FSIM_ACC_CROSS_PLATFORM_TEST_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}${FSIM_RUNTIME_TEST_CMAKE_CONTENTS}${FSIM_ROOT_CONTENTS}"
+    FSIM_LEGACY_ACC_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_LEGACY_ACC_POLICY}"
+    FSIM_LEGACY_ACC_POLICY_LOWER)
+  string(FIND "${FSIM_LEGACY_ACC_CONTENTS_LOWER}"
+    "${FSIM_LEGACY_ACC_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "legacy ACC inventory lost resource policy: ${FSIM_LEGACY_ACC_POLICY}")
   endif()
 endforeach()
 
@@ -3310,4 +3696,4 @@ message(STATUS
   "large-test, code-coverage model/source/point/statement/branch discovery, opt-in and standard SystemVerilog control/query/merge/save, v3 artifact identity, bounded .fsimcov schema, and mixed-language engine/aggregation equivalence "
   "line-state derivation and instance inventory attachment, FST value/change/hierarchy storage, pinned "
   "Boost headers, "
-  "broad coverage-metric generate/mixed-engine equivalence, and scoped/SystemC phase traces are present")
+  "broad coverage-metric generate/mixed-engine equivalence, complete legacy ACC routine/object inventory, public C/C++ header ABI, bounded transactional ACC lifecycle, generation-qualified ACC/VPI handles, bounded hierarchy lookup, and scoped/SystemC phase traces are present")

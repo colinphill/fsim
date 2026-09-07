@@ -106,6 +106,7 @@ set(FSIM_REQUIRED_PATHS
     "${FSIM_INCLUDEDIR}/fsim/runtime/native_plugin_abi.h"
     "${FSIM_INCLUDEDIR}/fsim/runtime/tf_plugin_abi.h"
     "${FSIM_INCLUDEDIR}/fsim/runtime/veriuser.h"
+    "${FSIM_INCLUDEDIR}/fsim/runtime/acc_user.h"
     "${FSIM_INCLUDEDIR}/fsim/systemc.hpp"
     "${FSIM_LIBDIR}/cmake/fsim/fsimConfig.cmake"
     "${FSIM_LIBDIR}/cmake/fsim/fsimConfigVersion.cmake"

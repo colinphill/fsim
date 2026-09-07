@@ -2502,44 +2502,518 @@ starts on branch codex/v3 from clean v2 checkpoint
     `a3bff1ef32fbf3fd412556c63c39e69a45f4efdd5cb599d07b3ac47136b531e0`.
     The source-package manifest remains 1,736 ordered paths at SHA-256
     `e5f344dd3811d355d90252f583dc8dcc0f2f9a530155149e444b4934b718d58a`.
-    The clean Clang 22 Debug ASan/UBSan build completes 2,097 actions with
-    eight workers in 15 minutes 25.17 seconds and 4,494,384 KiB peak RSS; all
-    380 tests pass in 562.04 seconds with the documented local ptrace-only
-    leak-detection exception. Per the user-directed qualification policy this
-    sanitizer pass also carries the clean local Debug and Release result
-    without duplicate rebuilds or retests. Closure refreshes the bounded
+    Local Clang qualification is green; an unnecessary ASan/UBSan run also
+    passed all 380 tests and, under the user-directed carry-forward rule,
+    supplied the Debug/Release result without duplicate rebuilds or retests.
+    This extra run does not alter the governing cadence: sanitizer and hosted
+    monitoring remain restricted to Batch 180, Batch 190, and release-closing
+    Change 20s. Closure refreshes the bounded
     source/license/control inventories to 1,376, 1,671, and 719 entries and
     keeps every composed historical release audit green. Windows hosted audit
     expectations advance by the nineteen unconditional TF tests to 371
     without LLVM and 375 with LLVM, while the three installed headers, DLL,
     and import library advance each deterministic archive to 1,252 entries.
-    The Change 20 push qualifies the complete hosted Clang Linux,
-    LLVM-MinGW Windows Debug/Release, packaging/install, and frontend-fuzz
-    matrix under the retained 120-minute timeouts. Batch 181 publishes one
-    implementation commit and no release tag.
+    The normal push may trigger hosted jobs, but Batch 181 does not monitor or
+    claim them as closure evidence. Batch 181 publishes one implementation
+    commit and no release tag.
 
 ### Batch 182 - IEEE ACC and complete legacy PLI closure
 
-1. Register the complete IEEE ACC routine and object inventory.
-2. Provide standard-compatible acc_user.h.
-3. Implement initialization, shutdown, configuration, and error reporting.
-4. Map ACC handles onto generation-qualified hierarchy/VPI handles.
-5. Implement absolute and relative lookup by name.
-6. Implement top, scope, module, instance, and child traversal.
-7. Implement port, net, variable, parameter, primitive, path, and timing objects.
-8. Implement scalar, vector, real, string, strength, and delay reads.
-9. Implement deposit, force, release, and scheduled value updates.
-10. Implement indexed and iterator-style acc_next_* traversal.
-11. Implement path-delay and timing-check access.
-12. Implement value-change-link callback registration.
-13. Implement callback cancellation, ordering, and re-entry containment.
-14. Preserve handle and callback validity across simulation safe points.
-15. Share values, scopes, and work areas coherently between TF and ACC.
-16. Prove ACC/VPI views refer to the same simulation objects.
-17. Define deterministic PLI behavior under future parallel execution.
-18. Reject unsupported vendor names with stable diagnostics.
-19. Run the full TF/ACC engine, artifact, cache, and platform corpus.
-20. Run standard batch closure and declare legacy IEEE PLI complete.
+1. **Complete.** Register the complete IEEE ACC routine and object inventory.
+   The independently worded `legacy_acc_inventory.tsv` ledger assigns Changes
+   2-19 one-to-one across the public header, lifecycle, generation-qualified
+   handles, name lookup, hierarchy traversal, complete object model, value
+   reads and updates, iterators, path/timing access, value-change links,
+   callback ordering, safe-point validity, TF coherence, VPI equivalence,
+   future parallel coordination, vendor-name rejection, and the closure
+   corpus. It accounts for 102 unique standardized routine names and 115
+   unique canonical object kinds across all eight retained Verilog and
+   SystemVerilog profiles, with exact implementation, positive, negative,
+   coherence, scheduler, diagnostic, and resource owners. The
+   `ieee-only-no-vendor-extensions` contract rejects vendor additions and
+   permits no v2 compatibility reader or migration. The registered normalized
+   SHA-256 identity is
+   `0e1991b462856cb75b85704af3b399420509221ebcb66f55abd98888c9cb147b`;
+   two new paths advance the source-package manifest to 1,738 entries at
+   SHA-256
+   `09460f22807cb933cec82f4f4c95fc2fe067f112870048f4943b1c558846ffb3`.
+   The exact-LLVM Clang warnings-as-errors Debug target is current under an
+   eight-worker build, and the seven focused inventory, policy, diagnostics,
+   source, manifest, and CTest-uniqueness checks pass 7/7 in 9.45 seconds.
+   `acc_user.h`, ACC behavior, Release, sanitizer, hosted monitoring, commit,
+   and push remain deferred.
+2. **Complete.** Provide standard-compatible `acc_user.h`. The independently
+   authored public C header exposes the complete 115-kind ACC object model,
+   standardized aliases and selectors, time/value/delay/vector/strength/VCL/
+   location/timescale records, all 102 inventoried routine declarations, the
+   error flag, and the calling-module helper. It shares the frozen PLI scalar
+   types and platform visibility policy with `veriuser.h`, preserves C linkage
+   in C++, and does not introduce vendor names or a v2 ABI. Independent C11
+   and C++20 witnesses freeze scalar widths, record offsets, aliases,
+   representative constants, function-pointer signatures, and C++ keyword
+   hygiene under warnings-as-errors. The header is installed and owned by the
+   binary-install and installed-public contracts. The ledger advances to 17
+   active/1 preserved at normalized SHA-256
+   `e78b7fee44af319ff367743306e89f4413f31792faa1df09ec73b6e4482c8b70`;
+   three new paths advance the source manifest to 1,741 entries at SHA-256
+   `a74651fc76ca9aeaf52b2995df18debf5bea4f4e1cecaa36488ab8136f938d13`.
+   The exact LLVM 22.1.8 Clang warnings-as-errors Debug target builds with
+   eight workers, and the focused C/C++ ABI, TF/ACC inventory, diagnostics,
+   source, manifest, portability, and CTest-uniqueness slice is green.
+   Lifecycle implementations, Release, sanitizer, hosted monitoring, commit,
+   and push remain deferred.
+3. **Complete.** Implement initialization, shutdown, configuration, and error
+   reporting. The shared ACC link surface now owns one process-wide,
+   mutex-serialized lifecycle. Initialization and close are idempotent;
+   initialization generations cannot wrap; close clears configuration without
+   allocating; buffer-reset generations are active-lifecycle-only and cannot
+   wrap. `acc_configure` accepts only the ten standardized selector identities,
+   validates readable NUL-terminated values in bounded 64-byte windows, rejects
+   null, over-4-KiB, control-bearing, unassigned, and inactive requests, and
+   swaps a fully copied candidate into state only after every check succeeds.
+   All public calls deterministically clear or set `acc_error_flag`; product
+   type, project-version identity, and ACC-interface identity use stable
+   simulator-owned storage. The warnings-as-errors test proves full selector
+   coverage, every negative class, recovery after rejection, idempotent
+   restart, inactive buffer rejection, resource bounds, and concurrent-call
+   serialization. The ledger advances to 16 active/2 preserved at normalized
+   SHA-256
+   `8fd3ba3e49f5948c6dad3cd44773b791eb74be82fcfa127250c779f320a13a69`;
+   two new paths advance the source manifest to 1,743 entries at SHA-256
+   `6a6e41fdb7dc9d81e1f54a48efc7fc0dcab053be955b608ea3f6483e6143b9cd`.
+   Handle mapping, Release, sanitizer, hosted monitoring, commit, and push
+   remain deferred.
+4. **Complete.** Map ACC handles onto generation-qualified hierarchy/VPI
+   handles. A direct-v3, callback-driven bridge maps existing 64-bit VPI object
+   identities into opaque ACC wrappers keyed by simulation identity, hierarchy
+   generation, and VPI handle. The ACC link surface does not acquire a reverse
+   runtime-library dependency. Context entry validates ABI size, reserved
+   fields, readable storage, executable callback storage, nonzero ownership,
+   and bounded capacity before publication. Mappings are stable within one
+   live generation, transactionally published, tombstoned on ACC release, and
+   revalidated against the underlying VPI registry for every observation.
+   Null, malformed, released, stale, cross-simulation, cross-generation,
+   callback-failure, and capacity-limit cases fail without dereferencing
+   caller-controlled handles. `acc_compare_handles`, `acc_object_of_type`,
+   bounded `acc_object_in_typelist`, and `acc_release_object` use the same
+   ownership model; releasing an ACC wrapper does not release its VPI object,
+   and remapping cannot revive the old wrapper. The warnings-as-errors test
+   uses the actual SystemVerilog VPI registry to prove identity, type,
+   containment, release, remapping, and bounds. The ledger advances to 15
+   active/3 preserved at normalized SHA-256
+   `59aa7f7b057bda2208df2a30e52562a71a4a44823d01be2662553f0cee56df90`;
+   three new paths advance the source manifest to 1,746 entries at SHA-256
+   `f29ace63a40eb17f6f2c2c621ee8ea82bf3768ea1d18fd3ca5a1505c890b01c5`.
+   The exact LLVM 22.1.8 Clang warnings-as-errors Debug target builds with
+   eight workers; all eight public/bridge symbols are visible from the shared
+   link surface, and the focused ACC/TF, diagnostics, manifest, resource, and
+   uniqueness slice passes 14/14 in 9.76 seconds. Name lookup, Release,
+   sanitizer, hosted monitoring, commit, and push remain deferred.
+5. **Complete.** Implement absolute and relative lookup by name. The v3 ACC
+   context now supplies bounded lookup, relation, and name callbacks plus
+   calling, default-top, and interactive scopes. `acc_handle_by_name` treats a
+   null scope as an absolute hierarchy name, accepts relative names only from
+   a validated scope, and rejects object families outside its standardized
+   named-object set. `acc_handle_object` searches an absolute name first and
+   otherwise begins at the current PLI scope, which defaults to the calling
+   scope. `acc_set_scope` accepts module/scope handles, chooses the first top
+   scope for a null handle in default mode, and honors the optional absolute
+   module name only after `accEnableArgs` selects `acc_set_scope`; it publishes
+   no scope change unless the full-name result is also available.
+   Generation-keyed PLI and interactive scope state cannot cross simulations.
+   Parent, containing-scope, interactive-scope, and simulated-net queries use
+   the same VPI identity; an uncollapsed net maps to itself. Names are copied
+   in checked windows, capped at 4 KiB, and rejected before callback dispatch
+   for null, unreadable, empty, unterminated, or control-bearing storage. The
+   actual VPI registry witness proves two same-leaf hierarchy branches,
+   absolute/relative/current-scope selection, optional-argument configuration,
+   atomic scope rejection, parents, containing scopes, interactive changes,
+   simulated nets, and malformed pointers. The ledger advances to 14 active/4
+   preserved at normalized SHA-256
+   `41226756b7d37a18efba1297c6bb092ae209450c1e2347b741b8165bf3447511`;
+   three new paths advance the source manifest to 1,749 entries at SHA-256
+   `3fcc03a34e772ab803ebbed112c60f267b8a5caeef404ca1bb3dc2bdbb066853`.
+   The exact LLVM 22.1.8 Clang warnings-as-errors Debug target builds with
+   eight workers; all eight lookup/scope symbols are visible from the shared
+   link surface, and the focused ACC/TF, diagnostics, manifest, resource, and
+   uniqueness slice passes 15/15 in 9.84 seconds. Hierarchy traversal,
+   Release, sanitizer, hosted monitoring, commit, and push remain deferred.
+6. **Complete.** Implement top, scope, module, instance, and child traversal.
+   The direct-v3 ACC context exposes begin/next/end traversal callbacks for
+   cells, children, nets, parameters, ports, primitives, scopes, specparams,
+   and top modules. The ACC link surface streams canonical callback order
+   through generation-qualified wrappers and can recover from a valid prior
+   object when no live cursor exists. Live cursors are bound to simulation,
+   hierarchy generation, family, and owner; mismatched use is rejected and
+   closes a compatible cursor. Callback failures, invalid object types, and
+   failed handle publication also close the native cursor. `acc_collect` and
+   `acc_count` accept only the standardized iterator entry points;
+   collections are bounded to 1,048,576 objects, null-terminated, published
+   transactionally, and owned until one exact `acc_free`. The actual VPI
+   registry witness proves canonical filtered order, top and nested scopes,
+   all nine iterator families, recovery, family isolation, collector/count
+   equivalence, malformed inputs, callback containment, and cursor cleanup.
+   The ledger advances to 13 active/5 preserved at normalized SHA-256
+   `a3982146cd3fc3ef3b619322e9ff435f60047e3a9206a1870bdaf88cdde8da4a`;
+   two new paths advance the source manifest to 1,751 entries at SHA-256
+   `43b9a99f43c036415de8269346b15eb98bc4d71b47edcd22ec85cca2057db07f`.
+   The exact LLVM 22.1.8 Clang warnings-as-errors Debug target builds with
+   eight workers, and all twelve traversal/collection symbols are visible
+   from the shared link surface. The focused ACC/TF, diagnostics, manifest,
+   resource, and uniqueness slice passes 16/16 in 9.77 seconds. Complete
+   object-model work, Release, sanitizer, hosted monitoring, commit, and push
+   remain deferred.
+7. **Complete.** Implement port, net, variable, parameter, primitive, path,
+   and timing objects. A bounded v3 object-query record carries one of fifteen
+   standardized relation/match operations, exact owner and endpoint VPI
+   identities, integer selectors, timing-check types and edges, and copied
+   endpoint names through a synchronous callback. The ACC link surface
+   implements condition, connection, data-path, high/low connection,
+   module-path, notifier, intermodule-path, path endpoint, indexed-port,
+   timing-check/argument, and indexed-terminal handles. It validates source
+   and result families, indices, edge masks, names, configuration-gated
+   variadic handles, callback status, and active generation before returning
+   a wrapper. Full types now retain standardized generic membership for
+   modules/scopes, nets, registers, ports, terminals, primitives, parameters,
+   and timing checks. The actual VPI registry witness covers every object
+   subtype assigned to this change, all fifteen query operations, named and
+   handle-selected paths/checks, successful absence, malformed input, missing
+   callback, and exception containment. The ledger advances to 12 active/6
+   preserved at normalized SHA-256
+   `aab280fd9d5aa9645179e4218f57f7b2116b1297cb2c24ab93894fff7e5b1438`;
+   two new paths advance the source manifest to 1,753 entries at SHA-256
+   `e200e19c57903a150c3c999e227189739bbde76bdc59ef912e0dba9976b5a077`.
+   The exact LLVM 22.1.8 Clang warnings-as-errors Debug object target builds
+   with eight workers, and all fifteen new handle symbols are visible from
+   the shared link surface. The focused ACC/TF, diagnostics, manifest,
+   resource, and uniqueness slice passes 17/17 in 9.96 seconds. Value reads,
+   Release, sanitizer, hosted monitoring, commit, and push remain deferred.
+8. **Complete.** Implement scalar, vector, real, string, strength, and delay
+   reads. A bounded version-3 read query/result ABI now supplies exact generic
+   and full object types, names and definition/source identity, direction,
+   edge, index, parameter metadata, range, width, timescale, design precision,
+   four-state words, native real/string values, formatted radix/strength text,
+   and typed attributes through one synchronous callback. The ACC surface
+   implements all twenty read/property routines assigned to this change.
+   Values support the five direct formatted strings and structured scalar,
+   integer, real, string, and arbitrary-width vector forms; every vector word
+   preserves independent `aval` and `bval` bits. Borrowed strings are copied
+   into bounded thread-local storage, output pointers are checked before
+   callback dispatch, callback and resolver exceptions are contained, and a
+   result whose full type no longer matches its live VPI identity is rejected.
+   Missing attributes retain caller defaults or the configured zero default
+   without consuming omitted variadic arguments. The actual VPI registry
+   witness covers metadata, location/range/time, parameter and attribute
+   forms, wide and unknown four-state values, real/string values, all format
+   families, malformed callback storage, missing callbacks, and exception
+   containment. The inventory checker also proves that the type-string table
+   covers all 115 frozen object identities. The ledger advances to 11 active/7
+   preserved at normalized SHA-256
+   `86b78b3383fa3b7f9142d65b89653d2e6184cae034c1a9c7bf28f4818aa9bff9`;
+   two new paths advance the source manifest to 1,755 entries at SHA-256
+   `4f12fd9f4e15e133b80840c6efb0c05a1412e1f304d51fbcbd302ac27ad87d19`.
+   The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+   workers, all twenty read/property symbols are visible from the shared link
+   surface, and the focused ACC/TF, diagnostics, line-budget, manifest,
+   resource, install, and uniqueness slice passes 18/18 in 15.88 seconds.
+   Value updates, Release, sanitizer, hosted monitoring, commit, and push
+   remain deferred.
+9. **Complete.** Implement deposit, force, release, and scheduled value
+   updates. The direct-v3 context now includes one synchronous write callback
+   with bounded value, object, model, and time records plus an atomic returned-
+   value record. Elaboration-owned capability bits independently authorize
+   deposit, force, release, procedural assign, and procedural deassign, so
+   generic ACC types cannot accidentally make a net or parameter writable.
+   `acc_set_value` checks the live generation and exact full VPI type, target
+   family, capability mask, model, width, pointers, format, scalar encoding,
+   vector extent, finite real, bounded string, and delay before callback
+   dispatch. Integer module/simulator time and finite real module time remain
+   distinct. Scalar, integer, real, empty/nonempty string, all radix-string,
+   and arbitrary-width `aval`/`bval` vector inputs are copied into host-owned
+   storage before the one transaction. Release and deassign validate their
+   output destination before dispatch and return the post-operation value in
+   the same callback rather than crossing the simulator boundary again. The
+   actual VPI registry witness covers no-delay and all three scheduled models,
+   force/release and assign/deassign, all six Change 9 object subtypes, every
+   input format, returned vector/string/scalar values, incompatible targets,
+   invalid delays and destinations, malformed results, callback rejection,
+   missing callbacks, and exception containment. The ledger advances to 10
+   active/8 preserved at normalized SHA-256
+   `7f9bf91e584bda7bd61c9561c9198524613454868a67b6ba254b64d55496a44a`;
+   two new paths advance the source manifest to 1,757 entries at SHA-256
+   `e03310154a6fe4cdd9f927639e00f5a9b2a3d9c14c3dd0499428ba4f42fd6e79`.
+   The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+   workers, `acc_set_value` is visible from the shared link surface, and the
+   focused ACC/TF, diagnostics, line-budget, manifest, resource, install, and
+   uniqueness slice passes 19/19 in 15.83 seconds. Indexed iterators, Release,
+   sanitizer, hosted monitoring, commit, and push remain deferred.
+10. **Complete.** Implement indexed and iterator-style `acc_next_*` traversal.
+    A separate direct-v3 relation-iterator callback now owns begin/next/end for
+    generic filtered children, bits, cell loads, drivers, high/low connections,
+    path inputs/outputs, loads, module paths, output ports, timing checks, and
+    primitive terminals. Generic type lists are copied from checked storage,
+    limited to 256 unique entries, and restricted to the frozen 115-type ACC
+    inventory before callback dispatch. Cursor identity includes simulation,
+    hierarchy generation, family, owner, prior ACC handle, and the exact type
+    list, so the same returned object can participate in independent relation
+    families without session collision. A missing retained session can recover
+    only by finding the exact live prior object in canonical callback order;
+    removal, mutation, or an unrelated prior handle fails deterministically.
+    Owner and result families are validated around every callback, and normal
+    exhaustion, callback/result failure, failed recovery, or handle-publication
+    failure closes the native cursor. The actual VPI registry witness covers
+    generic filtering, all twelve specialized families, canonical order,
+    recovery, same-object cross-family sessions, invalid lists/owners/prior
+    objects, malformed result types/records, exception containment, and cursor
+    cleanup. Shared generic/full-type matching now has one internal owner used
+    by both handle membership and iterator filtering. The ledger advances to 9
+    active/9 preserved at normalized SHA-256
+    `2c0ab781f4da5a6a6cd0f33d821bfa03b79fad0afac2ee2a90e962bb5b9c8990`;
+    two new paths advance the source manifest to 1,759 entries at SHA-256
+    `4f7142fb1b9c393c47fd250775983f94e04bbc523459bc9d8794cd669c9dcff5`.
+    The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+    workers, all thirteen indexed-iterator symbols are visible from the shared
+    link surface, and the focused ACC/TF, diagnostics, line-budget, manifest,
+    resource, install, and uniqueness slice passes 20/20 in 16.08 seconds.
+    Path/timing access, Release, sanitizer, hosted monitoring, commit, and push
+    remain deferred.
+11. **Complete.** Implement path-delay and timing-check access. An append-only
+    direct-v3 timing callback now owns fetch, append, and replacement of path,
+    primitive, timing-check, and module-input-port delays; pulse rejection/error
+    fetch and mutation; percentage-based pulse selection; delay mode; and path
+    polarity. Read metadata advertises exact timing capabilities and a bounded
+    object delay count. Path operations derive their effective arity from the
+    initialized `accPathDelayCount` configuration, while other objects retain
+    their own arity; `accMinTypMaxDelays` switches between individual scalar
+    arguments and one checked triple array, and `accToHiZDelay` is carried into
+    the same simulator transaction. All input values are copied and checked for
+    finite nonnegative values before dispatch. All output pointers are checked
+    before dispatch, then the complete callback result is validated and copied
+    before caller-visible publication. Pulse pairs must be ordered, percentage
+    values are bounded, and callback exceptions or malformed results cannot
+    partially update output. The actual VPI registry witness covers paths,
+    primitives, timing checks, input ports, rejected nets, configuration
+    defaults and overrides, scalar and triple-array forms, all nine routines,
+    neutral error returns, and transaction containment. The ledger advances to
+    8 active/10 preserved at normalized SHA-256
+    `4bc92f4dfa61a154820f9e9441ec6bde7a7b7cabf078bc5b171216b1fd802bf7`;
+    two new paths advance the source manifest to 1,761 entries at SHA-256
+    `eae8992afe529f43540db075c3e483effc4b3bd7cb3abb962256b751476e99e8`.
+    The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+    workers, all nine timing symbols are visible from the shared link surface,
+    and the focused ACC/TF, diagnostics, line-budget, manifest, resource,
+    install, and uniqueness slice passes 21/21 in 20.54 seconds. Value-change
+    callbacks, Release, sanitizers, hosted monitoring, commit, and push remain
+    deferred.
+12. **Complete.** Implement value-change-link callback registration. A required
+    append-only v3 registration callback now receives a stable link identity,
+    exact VPI object and ACC generic/full type, and standard logic-or-strength
+    selection. The ACC side publishes its bounded generation-qualified link
+    record before registration dispatch, allowing a simulator to deliver a
+    synchronous event without losing callback, user-data, width, or object
+    identity; failed registration removes that unpublished link. A separate
+    checked dispatch surface validates the exact active context, hierarchy
+    generation, live object type, simulation time, reason-specific scalar,
+    strength, real, or wide four-state shape, and callback pointer before
+    constructing the standard value-change record. Vector-like records retain
+    the exact ACC object handle for full-value access. Registration, simulator,
+    and consumer exceptions are contained. The actual VPI registry witness
+    covers logic, strength, wide vector, and real events; high/low time words;
+    exact user data; unsupported objects and modes; malformed records; rejected
+    registration; inactive contexts; and both callback boundaries. Explicit
+    cancellation and re-entry ordering remain Change 13. The ledger advances
+    to 7 active/11 preserved at normalized SHA-256
+    `386aa77a6007a7ecb91ad188898691d5a7354f1e5418bed3c076eb5441407e62`;
+    two new paths advance the source manifest to 1,763 entries at SHA-256
+    `650219911a89478842f9df79dc28f5647d77d3ba6e3fb35395d17102beec799b`.
+    The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+    workers, VCL registration and dispatch exports are visible from the shared
+    link surface, and the focused ACC/TF, diagnostics, line-budget, manifest,
+    resource, install, and uniqueness slice passes 22/22 in 16.60 seconds.
+    Cancellation, Release, sanitizers, hosted monitoring, commit, and push
+    remain deferred.
+13. **Complete.** Implement callback cancellation, ordering, and re-entry
+    containment. `acc_vcl_delete` now selects the exact active object, consumer,
+    user-data, and flag tuple and marks it canceling before the simulator
+    unregister callback can re-enter. Successful cancellation waits for any
+    active consumer and then retires the link; rejected or exceptional
+    unregister restores it. Self-cancellation detects the current thread-local
+    dispatch identity and defers erasure until callback return rather than
+    waiting on itself. Each event carries a stable nonzero sequence identity;
+    a link accepts only increasing sequences and at most one active consumer,
+    containing duplicate, reversed, concurrent, and same-link re-entrant
+    dispatch. Duplicate registration tuples are rejected before simulator
+    publication. The focused actual-registry witness covers ordered dispatch,
+    reversed sequence rejection, rejected-cancellation restoration, simulator
+    dispatch during cancellation, late-event rejection, same-link recursion,
+    self-cancellation without deadlock, and absent tuple deletion. The ledger
+    advances to 6 active/12 preserved at normalized SHA-256
+    `c74739a6a3d17a18bbb50636366aebffb82ad4736a3116586a4ee579e750c81e`;
+    two new paths advance the source manifest to 1,765 entries at SHA-256
+    `4120f9baf7a78b3673d0d715e3b79c4158d1c277352e0ae0c0233fb126727e54`.
+    The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+    workers, registration/cancellation/dispatch exports are visible from the
+    shared link surface, and the focused ACC/TF, diagnostics, line-budget,
+    manifest, resource, install, and uniqueness slice passes 23/23 in 19.15
+    seconds. Safe-point lifetime, Release, sanitizers, hosted monitoring,
+    commit, and push remain deferred.
+14. **Complete.** Preserve handle and callback validity across simulation safe
+    points. A checked direct-v3 safe-point record now advances a nonzero,
+    strictly increasing identity per simulation and hierarchy generation.
+    Successful advancement closes all native iterator cursors in that
+    generation, tombstones their exact prior-object continuation keys, and
+    clears borrowed read and returned-write string storage. A traversal begun
+    at the new safe point removes the matching tombstone and proceeds normally;
+    explicit `acc_reset_buffer` uses the same storage invalidation. Stable ACC
+    handles and registered callback links remain usable across the advance,
+    while a hierarchy-generation change still invalidates both. Safe-point
+    publication is rolled back if iterator invalidation cannot reserve its
+    bounded tombstone state. The focused actual-registry witness covers open
+    cursor retirement, forbidden cross-point continuation, fresh traversal,
+    handle and callback survival, borrowed-storage reacquisition, explicit
+    reset, monotonic and structural rejection, and next-generation handle/link
+    rejection. The ledger advances to 5 active/13 preserved at normalized
+    SHA-256
+    `b5d376fcc6eb45354399c30fea89a148841b6b38b92ec55ce376f0073de554f5`;
+    two new paths advance the source manifest to 1,767 entries at SHA-256
+    `b3110c1e217a4203a7d4870fb1d2b8b811e6dfcaffd49b86962f3b1ef88cc8b0`.
+    The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+    workers, the safe-point export is visible from the shared link surface, and
+    the focused ACC/TF, diagnostics, line-budget, manifest, resource, install,
+    and uniqueness slice passes 24/24 in 18.50 seconds. TF/ACC coherence,
+    Release, sanitizers, hosted monitoring, commit, and push remain deferred.
+15. **Complete.** Share values, scopes, and work areas coherently between TF
+    and ACC. The direct v3 ACC context now optionally binds the exact active TF
+    call context, its generation-qualified hierarchy identity, one VPI object
+    identity per task/function argument, and bounded process arguments. Entry
+    rejects a stale or different TF context, design/generation mismatch,
+    argument-count mismatch, zero object identity, malformed argv storage, or
+    an over-limit inventory before ACC state is published. The eleven
+    standardized ACC task/function routines read the live TF value storage,
+    accept only the current explicit instance handle or opaque TF token, and
+    map instance/argument identities through the existing VPI-to-ACC handle
+    bridge. Work-area reads and writes remain on the same mutable TF context and
+    therefore retain the frozen TF commit/rollback and per-instance lifetime.
+    The focused actual-registry witness covers integer, real, string, implicit
+    and explicit argument access, argv, exact handle identity, wrong tokens and
+    handles, malformed binding rejection, live TF-to-ACC value updates,
+    work-area persistence, and post-callback rejection. The ledger advances to
+    4 active/14 preserved at
+    normalized SHA-256
+    `0175158b4a9c1cc8f7576bdd4b38f9a9721d3228f934edfa76ae6f41bba92930`;
+    two new paths advance the source manifest to 1,769 entries at SHA-256
+    `8817eaeff57d598f9c7bbcac25f0b5d3889d25d0bf16f10fb722924ad8c21e28`.
+    The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+    workers, all twelve coherence/link routines are visible from the shared
+    surface, and the focused ACC/TF, diagnostics, line-budget, manifest,
+    resource, install, and uniqueness slice passes 25/25 in 17.03 seconds.
+    ACC/VPI object equivalence, Release, sanitizers, hosted monitoring, commit,
+    and push remain deferred.
+16. **Complete.** Prove ACC/VPI views refer to the same simulation objects.
+    Four previously unrepresented VPI expression kinds now have explicit
+    registry identities for constants, concatenations, operations, and
+    minimum/typical/maximum expressions. The v3 ACC bridge compares an ACC
+    handle with the exact generation-qualified VPI identity it wraps; it does
+    not infer equivalence from names or duplicate object records. The focused
+    actual-registry witness proves shared value storage, parent and full-name
+    hierarchy, condition connectivity, path-delay records, type identity, and
+    released-generation rejection through both views. The ledger advances to
+    3 active/15 preserved at normalized SHA-256
+    `6efd69113229bb69bf950288feb34e7d35a04198870e26b20f60fd1dc28558bf`;
+    two new paths advance the source manifest to 1,771 entries at SHA-256
+    `d88d360f92f87be8c400fee76f776db7816ba5d67d6cc2e8ce9963c68050e9b4`.
+    The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+    workers, the equality bridge is exported from the shared TF/ACC surface,
+    and the focused accumulated ACC/TF, diagnostics, line-budget, manifest,
+    resource, install, and uniqueness slice passes 26/26 in 8.03 seconds.
+    Parallel coordination, Release, sanitizers, hosted monitoring, commit, and
+    push remain deferred.
+17. **Complete.** Define deterministic PLI behavior under future parallel
+    execution. Parallel workers now stage bounded ACC observations, mutations,
+    traversals, and callbacks with an immutable epoch, scheduler phase, stable
+    order, and source-order identity. The coordinator alone drains those
+    requests while the named scheduler phase is active, using ordered storage
+    so worker arrival cannot affect execution or publication. Duplicate
+    identities, late requests, skipped earlier epochs, direct execution outside
+    the scheduler, and re-entry are rejected; foreign and publication
+    exceptions are contained without leaving executed requests pending. The
+    threaded witness compares reverse and shuffled arrival orders, covers all
+    four operation families, scheduler identity publication, epoch monotonicity,
+    and failure containment. The ledger advances to 2 active/16 preserved at
+    normalized SHA-256
+    `622bdc76903f3a962b8c42985a952eed117c5b7d6b4451a076891a2fc8b9c7eb`;
+    three new paths advance the source manifest to 1,774 entries at SHA-256
+    `b53a780a2d33692dc5ea50335cb62bf90bd0c0209b2ec9dc496e78ac467b47c0`.
+    The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+    workers and the focused accumulated ACC/TF, diagnostics, line-budget,
+    manifest, resource, install, and uniqueness slice passes 27/27 in 8.19
+    seconds. Vendor-name rejection, Release, sanitizers, hosted monitoring,
+    commit, and push remain deferred.
+18. **Complete.** Reject unsupported vendor names with stable diagnostics. A
+    bounded direct-v3 host query now validates the complete frozen set of 102
+    routine spellings, every canonical object-type value, and the standardized
+    configuration, edge, delay-mode, update, value-format, VCL-reason,
+    time-type, and product-type selectors. Queries require the v3 ABI and exact
+    layout, bounded lowercase routine syntax, readable terminated storage,
+    zero reserved fields, and an executable dispatch address. Unsupported
+    routines, objects, and behaviors receive distinct cataloged
+    `FSIM-ACC-NAME-002` through `004` diagnostics before dispatch; malformed
+    input, host rejection, and contained exceptions use `001`, `005`, and
+    `006`. A v2 query is rejected directly. The machine checker proves that all
+    102 ledger routines occur in the sorted runtime table and all 115 canonical
+    object tokens occur in the exhaustive witness. The ledger advances to 1
+    active/17 preserved at normalized SHA-256
+    `cf597d162ad3ad362f91bba92dfc765ae0a956487e44aa23ef02b002f007e27b`;
+    two new paths advance the source manifest to 1,776 entries at SHA-256
+    `6ff4f37af1ff96a346b82e8e1ed452f3eafd5a5b6e542e32ca498f929133df9c`.
+    The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+    workers, the validation/dispatch symbol is visible from the shared TF/ACC
+    surface, and the focused accumulated ACC/TF, diagnostics, line-budget,
+    manifest, resource, install, and uniqueness slice passes 28/28 in 9.05
+    seconds. Full corpus work, Release, sanitizers, hosted monitoring, commit,
+    and push remain deferred.
+19. **Complete.** Run the full TF/ACC engine, artifact, cache, and platform corpus.
+    Independent C11 and C++20 shared-library consumers now include only
+    the public ACC header and link through the common `fsim_tf` shared/import
+    surface. Their exported probes exercise lifecycle, product identity,
+    configuration, buffer, lookup-failure, error recovery, and shutdown
+    behavior through the dynamically loaded ABI. A platform-neutral host
+    checks all 102 standardized routine exports plus `acc_error_flag`, rejects
+    representative vendor symbols, proves both native images load, execute,
+    and unload, then stages byte-identical cache artifacts and repeats the same
+    ownership and execution checks. CMake target-file expressions and the
+    project dynamic-library wrapper give Linux and Windows the same path and
+    symbol contract. The ledger reaches zero active/18 preserved rows at
+    normalized SHA-256
+    `1fa0db768c78515e6596639dc3da43b323c1e7f8c2b209d668c02f35071bb1a7`;
+    three new paths advance the source manifest to 1,779 entries at SHA-256
+    `be6a91b5d3310f26659ad6f805b29c37486cfe55a3feb28740d56d2b2c931bf6`.
+    The exact LLVM 22.1.8 Clang warnings-as-errors Debug target builds with
+    eight workers. The complete TF/ACC slice passes 38/38 in 0.11 seconds, the
+    focused LLVM engine plus object/design/library/application artifact and
+    cache corpus passes 7/7 in 22.58 seconds, and the diagnostics, line-budget,
+    manifest, install, Windows-toolchain, resource, and CTest-uniqueness policy
+    slice passes 9/9 in 8.36 seconds. Release, sanitizers, hosted monitoring,
+    commit, and push remain deferred to their governed boundaries.
+20. **Complete.** Run standard batch closure and declare legacy IEEE PLI complete.
+    The exact LLVM 22.1.8 Clang warnings-as-errors Debug and Release
+    trees each completed a clean eight-worker rebuild. After refreshing the
+    frozen release-audit totals for the completed ACC surface and correcting a
+    Release-only SimIR shadow warning, the complete Debug suite passes 403/403
+    in 147.89 seconds and the complete Release suite passes 403/403 in 266.48
+    seconds. The frozen repository totals are 2,599 production diagnostics,
+    1,417 bounded authored sources, 1,714 SPDX-owned files, 533 conformance
+    test/control files, and 742 release-audit test/control files. The legacy
+    ACC ledger remains closed at zero active/18 preserved rows with normalized
+    SHA-256
+    `1fa0db768c78515e6596639dc3da43b323c1e7f8c2b209d668c02f35071bb1a7`,
+    and the source-package manifest remains frozen at 1,779 ordered payload
+    paths with SHA-256
+    `be6a91b5d3310f26659ad6f805b29c37486cfe55a3feb28740d56d2b2c931bf6`.
+    Direct inventory, portability, manifest, and whitespace checks are clean.
+    In accordance with the ten-batch cadence, Batch 182 ran no sanitizers and
+    no hosted-CI monitoring. One implementation commit and push close the
+    batch.
 
 ### Batch 183 - VHDL-2019 syntax, types, interfaces, and expressions
 

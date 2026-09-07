@@ -4734,20 +4734,790 @@ history in their existing plan and resume documents.
    `a3bff1ef32fbf3fd412556c63c39e69a45f4efdd5cb599d07b3ac47136b531e0`.
    The source-package manifest remains 1,736 paths at SHA-256
    `e5f344dd3811d355d90252f583dc8dcc0f2f9a530155149e444b4934b718d58a`.
-4. The clean exact-LLVM Clang 22 Debug sanitizer build completes 2,097 actions
-   with eight workers in 15 minutes 25.17 seconds and 4,494,384 KiB peak RSS.
-   The complete ASan/UBSan suite passes 380/380 in 562.04 seconds with local
-   leak detection disabled only because the execution supervisor uses ptrace.
-   Per the user instruction, this sanitizer result carries the local Debug and
-   Release test qualification without redundant rebuilds or retests.
+4. Local Clang qualification is green. An unnecessary ASan/UBSan run also
+   passed 380/380 and, per the user instruction, carries the local Debug and
+   Release test qualification without redundant rebuilds or retests. Do not
+   repeat or monitor sanitizer/hosted qualification before Batch 190 or an
+   earlier release-closing Change 20; Batch 181 does not change that cadence.
 5. Closure updates the exact bounded-source, SPDX-owned, and FST test/control
    inventories to 1,376, 1,671, and 719. The Windows audit expects 371 tests
    without LLVM and 375 with LLVM, plus exactly 1,252 archive entries in both
-   Release package variants. The complete hosted Clang Linux, LLVM-MinGW
-   Windows Debug/Release, package/install, and frontend-fuzz matrix runs under
-   the retained 120-minute timeouts at the exact pushed Change 20 commit.
+   Release package variants. The normal push may trigger hosted jobs, but they
+   are deliberately not monitored or claimed as Batch 181 closure evidence.
 6. Proceed only to Batch 182 Change 1: register the complete IEEE ACC routine
    and object inventory with independent wording and exact ownership. Do not
    implement `acc_user.h`, ACC runtime behavior, or any later Batch 182 change
    in that slice. Preserve all existing HDL profiles and the direct-v3,
    no-v2-compatibility contract; do not access or publish private LRM content.
+
+## Batch 182 active checkpoint - after Change 1
+
+1. Resume on `codex/v3` from pushed Batch 181 commit
+   `3322ff5d557af8ae22a2378f62af91282ec5b1bc`. Batch 182 Change 1 is complete
+   and uncommitted. Preserve the cadence clarification in the Batch 181
+   closure documentation and every current Batch 182 file; Changes 1-19
+   accumulate until Change 20 owns the single implementation commit and push.
+2. `tests/feature_matrix/legacy_acc_inventory.tsv` has eighteen active rows
+   assigning Changes 2-19 one-to-one. It inventories 102 unique standardized
+   ACC routines and 115 unique canonical ACC object kinds across `V1995`,
+   `V2001`, `V2001NoConfig`, `V2005`, `SV2005`, `SV2009`, `SV2012`, and
+   `SV2017`. Every row has explicit implementation, positive, negative,
+   coherence, scheduler, diagnostic, and resource ownership.
+3. `cmake/CheckLegacyAccInventory.cmake` freezes the exact 20-batch and
+   20-change plan shape, ledger schema and row identities, routine/object
+   uniqueness and family coverage, safe relative ownership, all retained HDL
+   profiles, independent bounded prose, and the
+   `ieee-only-no-vendor-extensions` policy. Vendor names, private-reference
+   traces, absolute paths, and v2 compatibility readers or migrations are
+   rejected. The normalized ledger SHA-256 is
+   `0e1991b462856cb75b85704af3b399420509221ebcb66f55abd98888c9cb147b`.
+4. The inventory is registered as `fsim.legacy-acc-inventory`, documented in
+   the feature-matrix guide, composed into the resource-portability contract,
+   and included with its checker in the deterministic source-package
+   manifest. The manifest now contains 1,738 ordered paths at SHA-256
+   `09460f22807cb933cec82f4f4c95fc2fe067f112870048f4943b1c558846ffb3`.
+5. The existing exact LLVM 22.1.8 Clang warnings-as-errors Debug target is
+   current under an eight-worker build. The focused ACC/TF inventory,
+   diagnostics, line-budget, source-manifest, resource-portability, and CTest
+   uniqueness slice passes 7/7 in 9.45 seconds; direct inventory, resource,
+   and source-manifest checks also pass, and `git diff --check` is clean.
+6. Proceed only to Batch 182 Change 2: provide the standard-compatible public
+   `acc_user.h` C ABI and independently authored C/C++ ABI tests. Do not begin
+   ACC lifecycle behavior or later changes in that slice. Do not run Release,
+   sanitizers, or hosted-CI monitoring, and do not commit or push before Batch
+   182 Change 20.
+
+## Batch 182 active checkpoint - after Change 2
+
+1. Resume on `codex/v3` from pushed Batch 181 commit
+   `3322ff5d557af8ae22a2378f62af91282ec5b1bc`. Batch 182 Changes 1-2 are
+   complete and uncommitted. Preserve the cadence clarification and all
+   accumulated ACC files; Change 20 owns the single implementation commit and
+   push.
+2. `include/fsim/runtime/acc_user.h` is the independently authored public C
+   surface. It provides all 115 inventoried object-kind identities, standard
+   aliases and selectors, eight standard record families, all 102 routine
+   declarations, `acc_error_flag`, and `acc_handle_calling_mod_m`. It shares
+   the existing PLI fixed-width types and visibility macros, is C++ linkage
+   safe, and includes no vendor bootstrap or v2 descriptor surface.
+3. `tests/runtime/acc_user_abi_c_test.c` and `acc_user_abi_test.cpp` independently
+   freeze the C11/C++20 record layouts, scalar widths, aliases, representative
+   constants, declarations, and C++ keyword hygiene. The warnings-as-errors
+   `fsim.runtime.acc_user_abi` target passes and the public header is included
+   in installation, installed-copy digest, and binary-ownership contracts.
+4. The ledger has 17 active/1 preserved rows at normalized SHA-256
+   `e78b7fee44af319ff367743306e89f4413f31792faa1df09ec73b6e4482c8b70`.
+   Three new paths advance the source-package manifest to 1,741 ordered paths
+   at SHA-256
+   `a74651fc76ca9aeaf52b2995df18debf5bea4f4e1cecaa36488ab8136f938d13`.
+5. The exact LLVM 22.1.8 Clang warnings-as-errors Debug target builds cleanly
+   with eight workers. The focused ACC/TF ABI and inventory, diagnostics,
+   line-budget, source-manifest, resource-portability, and CTest-uniqueness
+   checks are green; direct inventory/resource/manifest checks and
+   `git diff --check` are clean.
+6. Proceed only to Batch 182 Change 3: implement ACC initialization, shutdown,
+   configuration, product identity, buffer reset, and error reporting behind
+   the declared C ABI with transactional lifecycle state. Do not begin handle
+   mapping or later work in that slice. Do not run Release, sanitizers, or
+   hosted-CI monitoring, and do not commit or push before Change 20.
+
+## Batch 182 active checkpoint - after Change 3
+
+1. Resume on `codex/v3` from pushed Batch 181 commit
+   `3322ff5d557af8ae22a2378f62af91282ec5b1bc`. Batch 182 Changes 1-3 are
+   complete and uncommitted. Preserve all accumulated ACC and cadence files;
+   Change 20 owns the batch's single implementation commit and push.
+2. `src/runtime/acc_lifecycle.cpp` is compiled directly into `fsim_tf` and
+   exports `acc_initialize`, `acc_close`, `acc_configure`, `acc_product_type`,
+   `acc_product_version`, `acc_reset_buffer`, `acc_version`, and
+   `acc_error_flag`. Project version text is supplied from CMake so later
+   release identity updates cannot leave the ACC product string stale.
+3. The process-wide state is mutex serialized. Initialization and close are
+   idempotent; generation counters cannot wrap; configuration is cleared
+   without allocating. All ten standardized configuration selectors are
+   accepted only inside an active lifecycle. Values are native-pointer checked
+   in bounded windows, capped at 4 KiB, and rejected for null, missing
+   termination, or control bytes; a copied candidate is swapped only after
+   validation. Each public operation deterministically updates the standard
+   error flag.
+4. `tests/runtime/acc_lifecycle_test.cpp` proves both lifecycle directions,
+   every selector, unassigned/null/oversize/control/inactive rejection,
+   recovery without poisoned state, active-only buffer reset, stable product
+   and interface identities, and four-thread serialization. The seven function
+   symbols and error variable are visible from the built shared library.
+5. The ledger has 16 active/2 preserved rows at normalized SHA-256
+   `8fd3ba3e49f5948c6dad3cd44773b791eb74be82fcfa127250c779f320a13a69`.
+   Two new paths advance the source-package manifest to 1,743 ordered paths at
+   SHA-256
+   `6a6e41fdb7dc9d81e1f54a48efc7fc0dcab053be955b608ea3f6483e6143b9cd`.
+6. The exact LLVM 22.1.8 Clang warnings-as-errors Debug targets build with
+   eight workers. The focused ACC lifecycle/header, adjacent TF link and
+   plug-in, inventory, diagnostics, source, manifest, resource, and CTest
+   uniqueness checks are green; direct contract checks and `git diff --check`
+   are clean.
+7. Proceed only to Batch 182 Change 4: map ACC handles onto
+   generation-qualified hierarchy/VPI handles. Do not begin name lookup or
+   later work in that slice. Do not run Release, sanitizers, or hosted-CI
+   monitoring, and do not commit or push before Change 20.
+
+## Batch 182 active checkpoint - after Change 4
+
+1. Resume on `codex/v3` from pushed Batch 181 commit
+   `3322ff5d557af8ae22a2378f62af91282ec5b1bc`. Batch 182 Changes 1-4 are
+   complete and uncommitted. Preserve all accumulated ACC and cadence files;
+   Change 20 owns the batch's single implementation commit and push.
+2. `include/fsim/runtime/acc_handle_bridge.h` defines a direct-v3,
+   callback-driven context that maps existing 64-bit VPI object identities
+   into opaque ACC wrappers without making `fsim_tf` depend back on
+   `fsim_runtime`. The context freezes nonzero simulation and hierarchy
+   generations, a maximum handle count capped at 1,048,576, and a
+   native-pointer-checked resolver callback.
+3. `src/runtime/acc_handle.cpp` keys each wrapper by simulation identity,
+   hierarchy generation, and VPI handle. Publication has strong rollback for
+   every allocating container operation. Stable live mappings are reused;
+   released wrappers remain tombstones, underlying VPI objects are not
+   released, and remapping creates a distinct wrapper. Every observation
+   revalidates the underlying generation through the resolver. Null,
+   malformed, stale, released, cross-simulation, cross-generation, callback,
+   unterminated-type-list, and capacity failures set `acc_error_flag` without
+   dereferencing unvalidated caller storage.
+4. The shared link surface exports the four bridge entry points plus
+   `acc_compare_handles`, `acc_object_of_type`, bounded
+   `acc_object_in_typelist`, and `acc_release_object`. The test uses the real
+   `SystemVerilogVpiObjectRegistry` to prove exact identity/type mapping,
+   containment, stable reuse, release/remap behavior, and limits.
+5. The ledger has 15 active/3 preserved rows at normalized SHA-256
+   `59aa7f7b057bda2208df2a30e52562a71a4a44823d01be2662553f0cee56df90`.
+   Three new paths advance the source-package manifest to 1,746 ordered paths
+   at SHA-256
+   `f29ace63a40eb17f6f2c2c621ee8ea82bf3768ea1d18fd3ca5a1505c890b01c5`.
+6. The exact LLVM 22.1.8 Clang warnings-as-errors Debug target builds with
+   eight workers. All eight handle symbols are visible in `libfsim_tf`; the
+   focused ACC/TF, diagnostics, line-budget, source-manifest,
+   resource-portability, and CTest-uniqueness slice passes 14/14 in 9.76
+   seconds. Direct inventory/resource/manifest checks and `git diff --check`
+   are clean.
+7. Proceed only to Batch 182 Change 5: implement absolute and relative name
+   lookup with exact hierarchy ownership. Do not begin traversal or later work
+   in that slice. Do not run Release, sanitizers, or hosted-CI monitoring, and
+   do not commit or push before Change 20.
+
+## Batch 182 active checkpoint - after Change 5
+
+1. Resume on `codex/v3` from pushed Batch 181 commit
+   `3322ff5d557af8ae22a2378f62af91282ec5b1bc`. Batch 182 Changes 1-5 are
+   complete and uncommitted. Preserve all accumulated ACC and cadence files;
+   Change 20 owns the batch's single implementation commit and push.
+2. The direct-v3 ACC context now carries calling, default-top, and interactive
+   scope identities plus bounded lookup, relation, and name callbacks.
+   `src/runtime/acc_internal.hpp` shares only active-context and lifecycle
+   configuration queries between the ACC translation units; `fsim_tf` still
+   has no reverse dependency on `fsim_runtime`.
+3. `src/runtime/acc_lookup.cpp` implements `acc_handle_by_name`,
+   `acc_handle_object`, `acc_handle_parent`, `acc_handle_scope`,
+   `acc_handle_simulated_net`, `acc_handle_interactive_scope`,
+   `acc_set_interactive_scope`, and `acc_set_scope`. Absolute lookup uses a
+   null scope, relative lookup requires a validated scope, and object lookup
+   uses generation-keyed PLI scope initialized from the calling scope.
+   Null set-scope selects the default top unless `accEnableArgs` explicitly
+   selects the optional `acc_set_scope` module-name argument. Scope updates
+   publish only after object type and returned full name are valid.
+4. Input names are copied from native storage in validated windows, have a
+   4-KiB ceiling, and reject null, unreadable, empty, unterminated, or control
+   data before callback dispatch. Parent absence is a successful null result;
+   unsupported object kinds, nonscope bases, invalid interactive callback
+   flags, and callback failures set `acc_error_flag`. An uncollapsed net maps
+   to itself, while a nonnet is rejected.
+5. `tests/runtime/acc_lookup_test.cpp` uses the actual VPI registry with two
+   branches that share a leaf name. It proves absolute, relative, and current
+   PLI-scope lookup, optional-argument configuration, atomic rejected scope
+   updates, parent and containing scope, interactive scope, simulated-net
+   identity, and malformed-pointer containment.
+6. The ledger has 14 active/4 preserved rows at normalized SHA-256
+   `41226756b7d37a18efba1297c6bb092ae209450c1e2347b741b8165bf3447511`.
+   Three new paths advance the source-package manifest to 1,749 ordered paths
+   at SHA-256
+   `3fcc03a34e772ab803ebbed112c60f267b8a5caeef404ca1bb3dc2bdbb066853`.
+7. The exact LLVM 22.1.8 Clang warnings-as-errors Debug target builds with
+   eight workers. All eight lookup/scope symbols are visible in `libfsim_tf`;
+   the focused ACC/TF, diagnostics, line-budget, source-manifest,
+   resource-portability, and CTest-uniqueness slice passes 15/15 in 9.84
+   seconds. Direct inventory/resource/manifest checks and `git diff --check`
+   are clean.
+8. Proceed only to Batch 182 Change 6: implement canonical top, scope, module,
+   instance, and child traversal. Do not begin complete object-model work or
+   later changes in that slice. Do not run Release, sanitizers, or hosted-CI
+   monitoring, and do not commit or push before Change 20.
+
+## Batch 182 active checkpoint - after Change 6
+
+1. Resume on `codex/v3` from pushed Batch 181 commit
+   `3322ff5d557af8ae22a2378f62af91282ec5b1bc`. Batch 182 Changes 1-6 are
+   complete and uncommitted. Preserve all accumulated ACC and cadence files;
+   Change 20 owns the batch's single implementation commit and push.
+2. `include/fsim/runtime/acc_handle_bridge.h` extends the direct-v3 context
+   with begin/next/end traversal operations and nine canonical families. The
+   callback remains owned by the simulator integration; `fsim_tf` does not
+   acquire a reverse dependency on `fsim_runtime`.
+3. `src/runtime/acc_traversal.cpp` implements the nine standardized
+   `acc_next_*` entry points plus `acc_collect`, `acc_count`, and `acc_free`.
+   Sessions bind callback cursors to simulation identity, hierarchy
+   generation, family, and owner. A valid prior object can be repositioned
+   canonically when no session survives; family/owner mismatch, invalid type,
+   callback failure, exhaustion, and failed handle publication close cursors.
+4. Collection dispatch accepts only exact standardized iterator entry points.
+   Arrays are capped at 1,048,576 objects, null-terminated, published only
+   after complete traversal, tracked by exact allocation address, and freed
+   once. Invalid count storage and stale/foreign arrays fail without partial
+   publication.
+5. `tests/runtime/acc_traversal_test.cpp` uses the actual VPI registry to prove
+   filtered creation order, independent top modules, nested scopes, every
+   traversal family, prior-object recovery, cross-family cursor rejection,
+   collector/count equivalence, malformed input containment, and complete
+   native-cursor cleanup.
+6. The ledger has 13 active/5 preserved rows at normalized SHA-256
+   `a3982146cd3fc3ef3b619322e9ff435f60047e3a9206a1870bdaf88cdde8da4a`.
+   Two new paths advance the source-package manifest to 1,751 ordered paths
+   at SHA-256
+   `43b9a99f43c036415de8269346b15eb98bc4d71b47edcd22ec85cca2057db07f`.
+7. The exact LLVM 22.1.8 Clang warnings-as-errors Debug traversal target builds
+   with eight workers, and all twelve traversal/collection symbols are visible
+   in `libfsim_tf`. The focused ACC/TF, diagnostics, line-budget,
+   source-manifest, resource-portability, and CTest-uniqueness slice passes
+   16/16 in 9.77 seconds. Direct inventory/resource/manifest checks are also
+   clean. No Release, sanitizer, hosted-CI inspection, commit, or push has run.
+8. Proceed only to Batch 182 Change 7: implement the complete ACC object model
+   for ports, nets, variables, parameters, primitives, paths, and timing
+   objects. Do not begin value-read or later work in that slice. Do not run
+   Release, sanitizers, or hosted-CI monitoring, and do not commit or push
+   before Change 20.
+
+## Batch 182 active checkpoint - after Change 7
+
+1. Resume on `codex/v3` from pushed Batch 181 commit
+   `3322ff5d557af8ae22a2378f62af91282ec5b1bc`. Batch 182 Changes 1-7 are
+   complete and uncommitted. Preserve all accumulated ACC and cadence files;
+   Change 20 owns the batch's single implementation commit and push.
+2. `include/fsim/runtime/acc_handle_bridge.h` adds a versioned, bounded object
+   query record and callback with fifteen operations. It carries exact owner
+   and endpoint VPI identities, index/type/edge selectors, and synchronously
+   borrowed copied names. Context validation requires executable callback
+   storage before publication.
+3. `src/runtime/acc_object.cpp` implements all fifteen Change 7 handle
+   routines. Unary relations, indexed ports/terminals, module and intermodule
+   paths, and timing checks validate their source/result families before
+   publishing an ACC wrapper. Module-path and timing-check variadic handles
+   are consumed only when `accEnableArgs` enables that exact routine; names
+   remain bounded and pointer-checked.
+4. `src/runtime/acc_handle.cpp` now preserves generic type membership for full
+   module/scope, net, register, port, terminal, primitive, parameter, and
+   timing-check types in both `acc_object_of_type` and bounded type lists.
+5. `tests/runtime/acc_object_test.cpp` uses the actual VPI registry and an
+   independently authored query integration. It covers every object subtype
+   assigned to Change 7, all fifteen operations, named and handle-selected
+   paths/checks, generic membership, successful absence, pre-dispatch input
+   rejection, missing callback rejection, and exception containment.
+6. The ledger has 12 active/6 preserved rows at normalized SHA-256
+   `aab280fd9d5aa9645179e4218f57f7b2116b1297cb2c24ab93894fff7e5b1438`.
+   Two new paths advance the source-package manifest to 1,753 ordered paths
+   at SHA-256
+   `e200e19c57903a150c3c999e227189739bbde76bdc59ef912e0dba9976b5a077`.
+7. The exact LLVM 22.1.8 Clang warnings-as-errors Debug object target builds
+   with eight workers, and all fifteen new object/connectivity symbols are
+   visible in `libfsim_tf`. The focused ACC/TF, diagnostics, line-budget,
+   source-manifest, resource-portability, and CTest-uniqueness slice passes
+   17/17 in 9.96 seconds. Direct inventory/resource/manifest checks are also
+   clean. No Release, sanitizer, hosted-CI inspection, commit, or push has
+   run.
+8. Proceed only to Batch 182 Change 8: implement scalar, vector, real, string,
+   strength, delay, property, location, range, and timescale reads. Do not
+   begin value updates or later work in that slice. Do not run Release,
+   sanitizers, or hosted-CI monitoring, and do not commit or push before
+   Change 20.
+
+## Batch 182 active checkpoint - after Change 8
+
+1. Resume on `codex/v3` from pushed Batch 181 commit
+   `3322ff5d557af8ae22a2378f62af91282ec5b1bc`. Batch 182 Changes 1-8 are
+   complete and uncommitted. Preserve all accumulated ACC and cadence files;
+   Change 20 owns the batch's single implementation commit and push.
+2. `include/fsim/runtime/acc_handle_bridge.h` adds a bounded version-3 read
+   query/result callback. It carries exact object/property metadata,
+   four-state words, real and parameter values, and synchronously borrowed
+   bounded strings. Context entry now requires that callback.
+3. `src/runtime/acc_read.cpp` implements all twenty Change 8 routines. It
+   supports direct binary/octal/decimal/hexadecimal/strength strings and
+   structured scalar, integer, real, string, and arbitrary-width vector
+   values. Names and values use thread-local copied storage; destination and
+   callback pointers, widths, lengths, ABI records, live full types, range,
+   timescale, and precision are validated before output publication.
+4. Attribute reads distinguish present, missing, and callback failure. Missing
+   values return the caller default, while `accDefaultAttr0` returns the exact
+   zero form without reading an omitted variadic argument. Callback and VPI
+   resolver exceptions cannot cross the C boundary.
+5. `tests/runtime/acc_read_test.cpp` uses the actual VPI registry and covers
+   metadata, location/range/time, parameters, attributes/defaults, all value
+   format families, wide and unknown four-state values, real/string values,
+   checked destinations, malformed callback storage, missing callbacks, and
+   exception containment. The inventory checker requires all 115 frozen ACC
+   types in the type-string table.
+6. The ledger has 11 active/7 preserved rows at normalized SHA-256
+   `86b78b3383fa3b7f9142d65b89653d2e6184cae034c1a9c7bf28f4818aa9bff9`.
+   Two new paths advance the source-package manifest to 1,755 ordered paths
+   at SHA-256
+   `4f12fd9f4e15e133b80840c6efb0c05a1412e1f304d51fbcbd302ac27ad87d19`.
+7. The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+   workers, all twenty new read/property symbols are visible in `libfsim_tf`,
+   and the focused ACC/TF, diagnostics, line-budget, source-manifest, resource,
+   install, and CTest-uniqueness slice passes 18/18 in 15.88 seconds. Direct
+   inventory/resource/manifest checks are also clean. No Release, sanitizer,
+   hosted-CI inspection, commit, or push has run.
+8. Proceed only to Batch 182 Change 9: implement deposit, force, release,
+   assign, deassign, and scheduled value updates. Do not begin indexed
+   iterator or later work in that slice. Do not run Release, sanitizers, or
+   hosted-CI monitoring, and do not commit or push before Change 20.
+
+## Batch 182 active checkpoint - after Change 9
+
+1. Resume on `codex/v3` from pushed Batch 181 commit
+   `3322ff5d557af8ae22a2378f62af91282ec5b1bc`. Batch 182 Changes 1-9 are
+   complete and uncommitted. Preserve all accumulated ACC and cadence files;
+   Change 20 owns the batch's single implementation commit and push.
+2. `include/fsim/runtime/acc_handle_bridge.h` extends the direct-v3 context
+   with a synchronous write callback. Bounded query/result records carry the
+   exact VPI object/full type, target width, update model, normalized integer
+   or real time, copied value data, and an atomic post-operation value.
+   Elaboration metadata supplies separate deposit, force, release, assign, and
+   deassign capability bits.
+3. `src/runtime/acc_write.cpp` implements `acc_set_value`. It validates the
+   live generation/type, object family, capability, model, delay, format,
+   width, and every input/output pointer before dispatch. Scalar, integer,
+   real, empty/nonempty string, all radix-string, and arbitrary-width vector
+   inputs are copied before the callback; vector words retain both `aval` and
+   `bval`.
+4. No-delay, inertial, modified-transport, and pure-transport deposits remain
+   distinct. Force/release and procedural assign/deassign use independent
+   capabilities. Release and deassign validate their destination before the
+   transaction and return the post-operation value through that same callback,
+   avoiding a second simulator boundary crossing.
+5. `tests/runtime/acc_write_test.cpp` uses the actual VPI registry and covers
+   all models, time encodings, input forms, Change 9 object subtypes, atomic
+   returned forms, incompatible targets, malformed pointers/results, callback
+   rejection, missing callbacks, and exception containment.
+6. The ledger has 10 active/8 preserved rows at normalized SHA-256
+   `7f9bf91e584bda7bd61c9561c9198524613454868a67b6ba254b64d55496a44a`.
+   Two new paths advance the source-package manifest to 1,757 ordered paths
+   at SHA-256
+   `e03310154a6fe4cdd9f927639e00f5a9b2a3d9c14c3dd0499428ba4f42fd6e79`.
+7. The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+   workers, `acc_set_value` is visible in `libfsim_tf`, and the focused ACC/TF,
+   diagnostics, line-budget, source-manifest, resource, install, and CTest-
+   uniqueness slice passes 19/19 in 15.83 seconds. Direct inventory/resource/
+   manifest checks are also clean. No Release, sanitizer, hosted-CI inspection,
+   commit, or push has run.
+8. Proceed only to Batch 182 Change 10: implement generic and specialized
+   indexed `acc_next_*` traversal. Do not begin path-delay/timing-check or later
+   work in that slice. Do not run Release, sanitizers, or hosted-CI monitoring,
+   and do not commit or push before Change 20.
+
+## Batch 182 active checkpoint - after Change 10
+
+1. Resume on `codex/v3` from pushed Batch 181 commit
+   `3322ff5d557af8ae22a2378f62af91282ec5b1bc`. Batch 182 Changes 1-10 are
+   complete and uncommitted. Preserve all accumulated ACC and cadence files;
+   Change 20 owns the batch's single implementation commit and push.
+2. `include/fsim/runtime/acc_handle_bridge.h` adds a bounded direct-v3
+   relation-iterator query/result callback with thirteen begin/next/end
+   families and at most 256 generic filter types. Context entry requires the
+   callback before any handle can be published.
+3. `src/runtime/acc_iterator.cpp` implements generic `acc_next` and all twelve
+   specialized Change 10 routines. Sessions are keyed by simulation,
+   hierarchy generation, prior handle, family, owner, and exact copied type
+   list, so identical result handles in distinct relation families do not
+   collide. Generic/full-type matching is shared with the existing handle
+   membership implementation.
+4. Generic filter lists are pointer-checked, bounded, nonempty, unique, and
+   restricted to the frozen ACC type inventory. Owners and results are checked
+   against their standardized families. A missing session recovers only by
+   finding the exact valid prior object in canonical order; mutation or an
+   unrelated prior fails. Exhaustion and every post-begin failure close the
+   native cursor.
+5. `tests/runtime/acc_iterator_test.cpp` uses the actual VPI registry and covers
+   generic filtering, all specialized families, order, recovery, same-result
+   cross-family sessions, malformed lists/owners/prior objects/results,
+   callback exceptions, and cursor cleanup.
+6. The ledger has 9 active/9 preserved rows at normalized SHA-256
+   `2c0ab781f4da5a6a6cd0f33d821bfa03b79fad0afac2ee2a90e962bb5b9c8990`.
+   Two new paths advance the source-package manifest to 1,759 ordered paths
+   at SHA-256
+   `4f7142fb1b9c393c47fd250775983f94e04bbc523459bc9d8794cd669c9dcff5`.
+7. The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+   workers, all thirteen indexed-iterator symbols are visible in `libfsim_tf`,
+   and the focused ACC/TF, diagnostics, line-budget, source-manifest, resource,
+   install, and CTest-uniqueness slice passes 20/20 in 16.08 seconds. Direct
+   inventory/resource/manifest checks are also clean. No Release, sanitizer,
+   hosted-CI inspection, commit, or push has run.
+8. Proceed only to Batch 182 Change 11: implement path-delay and timing-check
+   access. Do not begin value-change callback or later work in that slice. Do
+   not run Release, sanitizers, or hosted-CI monitoring, and do not commit or
+   push before Change 20.
+
+## Batch 182 active checkpoint - after Change 11
+
+1. Resume on `codex/v3` from pushed Batch 181 commit
+   `3322ff5d557af8ae22a2378f62af91282ec5b1bc`. Batch 182 Changes 1-11 are
+   complete and uncommitted. Preserve all accumulated ACC and cadence files;
+   Change 20 owns the batch's single implementation commit and push.
+2. `include/fsim/runtime/acc_handle_bridge.h` appends a required bounded v3
+   timing callback. Read metadata carries timing capabilities and a maximum or
+   fixed delay count; timing queries carry exact object identity, configured
+   arity, min/typ/max mode, high-impedance policy, and copied values.
+3. `src/runtime/acc_timing.cpp` implements the nine path-delay and timing-check
+   routines. Paths use initialized `accPathDelayCount` configuration; primitive,
+   timing-check, and input-port operations use exact object metadata. Scalar
+   arguments and min/typ/max arrays are validated before callback dispatch.
+4. Pulse pairs must contain finite nonnegative ordered reject/error values;
+   percentage pulse selection is also limited to one hundred. Every fetch
+   validates all destinations and the complete simulator result before any
+   caller-visible update. Exceptions and malformed results retain neutral
+   returns and the ACC error flag without partial publication.
+5. `tests/runtime/acc_timing_test.cpp` uses the actual VPI registry and covers
+   all nine routines, paths, primitives, timing checks, input ports, rejected
+   nets, default and overridden configuration, scalar and min/typ/max forms,
+   pulse ordering, transactional output, malformed results, rejection, and
+   callback exceptions.
+6. The ledger has 8 active/10 preserved rows at normalized SHA-256
+   `4bc92f4dfa61a154820f9e9441ec6bde7a7b7cabf078bc5b171216b1fd802bf7`.
+   Two new paths advance the source-package manifest to 1,761 ordered paths at
+   SHA-256
+   `eae8992afe529f43540db075c3e483effc4b3bd7cb3abb962256b751476e99e8`.
+7. The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+   workers, all nine timing symbols are visible in `libfsim_tf`, and the
+   focused accumulated ACC/TF, diagnostics, line-budget, source-manifest,
+   resource, install, and CTest-uniqueness slice passes 21/21 in 20.54 seconds.
+   Direct inventory/resource/manifest checks and `git diff --check` are clean.
+   No Release, sanitizer, hosted-CI inspection, commit, or push has run.
+8. Proceed only to Batch 182 Change 12: implement value-change-link callback
+   registration. Do not begin cancellation/order or later work in that slice.
+   Do not run Release, sanitizers, or hosted-CI monitoring, and do not commit or
+   push before Change 20.
+
+## Batch 182 active checkpoint - after Change 12
+
+1. Resume on `codex/v3` from pushed Batch 181 commit
+   `3322ff5d557af8ae22a2378f62af91282ec5b1bc`. Batch 182 Changes 1-12 are
+   complete and uncommitted. Preserve all accumulated ACC and cadence files;
+   Change 20 owns the batch's single implementation commit and push.
+2. `include/fsim/runtime/acc_handle_bridge.h` appends a required v3 VCL control
+   callback plus a checked host-to-ACC event record and dispatch entry point.
+   Registration conveys a stable link identity, exact VPI/ACC object identity,
+   and the standardized logic-or-strength view.
+3. `src/runtime/acc_vcl.cpp` implements `acc_vcl_add`. It records the exact
+   context generation, object handle and width, consumer, user data, and flags
+   before simulator registration, then rolls back the unpublished record if
+   registration rejects or throws.
+4. Dispatch revalidates the active context and current VPI type, then validates
+   time and scalar, strength, real, or wide four-state event shape before
+   invoking the consumer outside the link lock. Vector-like records retain the
+   exact ACC handle. Simulator and consumer exceptions are contained.
+5. `tests/runtime/acc_vcl_test.cpp` uses the actual VPI registry and covers
+   logic, strength, vector, and real callbacks, high/low simulation time, exact
+   user data, rejected objects and flags, malformed event payloads, registration
+   rejection/exceptions, consumer exceptions, and inactive-context dispatch.
+   Cancellation and re-entry ordering remain explicitly Change 13.
+6. The ledger has 7 active/11 preserved rows at normalized SHA-256
+   `386aa77a6007a7ecb91ad188898691d5a7354f1e5418bed3c076eb5441407e62`.
+   Two new paths advance the source-package manifest to 1,763 ordered paths at
+   SHA-256
+   `650219911a89478842f9df79dc28f5647d77d3ba6e3fb35395d17102beec799b`.
+7. The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+   workers, the VCL registration and dispatch exports are visible in
+   `libfsim_tf`, and the focused accumulated ACC/TF, diagnostics, line-budget,
+   source-manifest, resource, install, and CTest-uniqueness slice passes 22/22
+   in 16.60 seconds. Direct inventory/resource/manifest checks and `git diff
+   --check` are clean. No Release, sanitizer, hosted-CI inspection, commit, or
+   push has run.
+8. Proceed only to Batch 182 Change 13: implement callback cancellation,
+   ordering, and re-entry containment. Do not run Release, sanitizers, or
+   hosted-CI monitoring, and do not commit or push before Change 20.
+
+## Batch 182 active checkpoint - after Change 13
+
+1. Resume on `codex/v3` from pushed Batch 181 commit
+   `3322ff5d557af8ae22a2378f62af91282ec5b1bc`. Batch 182 Changes 1-13 are
+   complete and uncommitted. Preserve all accumulated ACC and cadence files;
+   Change 20 owns the batch's single implementation commit and push.
+2. VCL event records now carry stable sequence identities. Each link permits
+   only strictly increasing sequence values and one active consumer; duplicate,
+   reversed, concurrent, and same-link re-entrant dispatch fails before entry.
+3. `src/runtime/acc_callback.cpp` implements `acc_vcl_delete` over the shared
+   VCL registry. Cancellation marks a link unavailable before synchronous host
+   unregister. A rejected unregister restores it; successful unregister waits
+   for an active consumer and then retires the record.
+4. A thread-local dispatch identity makes self-cancellation nonblocking. The
+   record remains canceling during the consumer and is erased immediately when
+   that dispatch returns, preventing any later callback without deadlock.
+5. `tests/runtime/acc_callback_test.cpp` uses the actual VPI registry and covers
+   unique registrations, monotonic ordering, rejected-cancellation recovery,
+   host re-entry while canceling, late dispatch, consumer recursion,
+   self-cancellation, and absent exact tuple deletion.
+6. The ledger has 6 active/12 preserved rows at normalized SHA-256
+   `c74739a6a3d17a18bbb50636366aebffb82ad4736a3116586a4ee579e750c81e`.
+   Two new paths advance the source-package manifest to 1,765 ordered paths at
+   SHA-256
+   `4120f9baf7a78b3673d0d715e3b79c4158d1c277352e0ae0c0233fb126727e54`.
+7. The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+   workers, registration/cancellation/dispatch exports are visible in
+   `libfsim_tf`, and the focused accumulated ACC/TF, diagnostics, line-budget,
+   source-manifest, resource, install, and CTest-uniqueness slice passes 23/23
+   in 19.15 seconds. Direct inventory/resource/manifest checks and `git diff
+   --check` are clean. No Release, sanitizer, hosted-CI inspection, commit, or
+   push has run.
+8. Proceed only to Batch 182 Change 14: preserve handles, iterators, callback
+   links, and borrowed value storage across documented safe points. Do not run
+   Release, sanitizers, or hosted-CI monitoring, and do not commit or push
+   before Change 20.
+
+## Batch 182 active checkpoint - after Change 14
+
+1. Resume on `codex/v3` from pushed Batch 181 commit
+   `3322ff5d557af8ae22a2378f62af91282ec5b1bc`. Batch 182 Changes 1-14 are
+   complete and uncommitted. Preserve all accumulated ACC and cadence files;
+   Change 20 owns the batch's single implementation commit and push.
+2. `fsim_acc_safe_point_advance_v3` accepts a bounded record with a nonzero,
+   strictly increasing identity per simulation/hierarchy generation. Failed
+   iterator invalidation rolls its publication back.
+3. A successful advance closes retained native iterator cursors and tombstones
+   exact continuation keys, so an old prior object cannot resume at a later
+   safe point. Starting a fresh traversal at that point remains supported.
+4. Read and returned-write thread-local string storage is invalidated at each
+   safe point and by `acc_reset_buffer`. Generation-qualified handles and VCL
+   links survive safe-point advancement, while a changed hierarchy generation
+   invalidates both.
+5. `tests/runtime/acc_handle_lifetime_test.cpp` uses the actual VPI registry and
+   covers cursor retirement, forbidden continuation, fresh traversal,
+   handle/link survival, borrowed-storage reacquisition and reset, monotonic and
+   malformed point rejection, and changed-generation rejection.
+6. The ledger has 5 active/13 preserved rows at normalized SHA-256
+   `b5d376fcc6eb45354399c30fea89a148841b6b38b92ec55ce376f0073de554f5`.
+   Two new paths advance the source-package manifest to 1,767 ordered paths at
+   SHA-256
+   `b3110c1e217a4203a7d4870fb1d2b8b811e6dfcaffd49b86962f3b1ef88cc8b0`.
+7. The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+   workers, the safe-point export is visible in `libfsim_tf`, and the focused
+   accumulated ACC/TF, diagnostics, line-budget, source-manifest, resource,
+   install, and CTest-uniqueness slice passes 24/24 in 18.50 seconds. Direct
+   inventory/resource/manifest checks and `git diff --check` are clean. No
+   Release, sanitizer, hosted-CI inspection, commit, or push has run.
+8. Proceed only to Batch 182 Change 15: share values, scopes, and work areas
+   coherently between TF and ACC. Do not run Release, sanitizers, or hosted-CI
+   monitoring, and do not commit or push before Change 20.
+
+## Batch 182 active checkpoint - after Change 15
+
+1. Resume on `codex/v3` from pushed Batch 181 commit
+   `3322ff5d557af8ae22a2378f62af91282ec5b1bc`. Batch 182 Changes 1-15 are
+   complete and uncommitted. Preserve all accumulated ACC and cadence files;
+   Change 20 owns the batch's single implementation commit and push.
+2. The optional `fsim_acc_tf_context_v3` binding names the exact active
+   `fsim_tf_call_context_v3`, one VPI identity per TF argument, and bounded
+   process argv storage. ACC context entry validates active-context identity,
+   simulation identity, hierarchy generation, counts, pointers, terminators,
+   limits, and every nonzero argument object before publication.
+3. `src/runtime/acc_tf_coherence.cpp` implements all eleven standardized
+   task/function ACC routines. Numeric and string fetches read the live TF
+   value bridge; explicit fetches accept only the mapped current instance;
+   argument and instance handles use the existing generation-qualified
+   VPI-to-ACC bridge. The opaque `acc_handle_itfarg` token must be the exact
+   current TF instance token.
+4. The shared work-area pointer remains solely in the TF call context. ACC
+   operations observe that same call while TF mutations remain subject to the
+   existing successful-call commit, callback-exception rollback, and
+   per-instance isolation behavior. No duplicate ACC work-area state exists.
+5. `tests/runtime/acc_tf_coherence_test.cpp` uses the actual VPI registry and
+   covers argv, integer/real/string values, implicit and explicit argument
+   access, exact instance and argument handles, wrong handle/token rejection,
+   malformed context/argv binding, a TF write immediately observed through
+   ACC, work-area persistence, and post-callback lifetime rejection.
+6. The ledger has 4 active/14 preserved rows at normalized SHA-256
+   `0175158b4a9c1cc8f7576bdd4b38f9a9721d3228f934edfa76ae6f41bba92930`.
+   Two new paths advance the source-package manifest to 1,769 ordered paths at
+   SHA-256
+   `8817eaeff57d598f9c7bbcac25f0b5d3889d25d0bf16f10fb722924ad8c21e28`.
+7. The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+   workers, all eleven ACC routines plus the current-TF-context export are
+   visible in `libfsim_tf`, and the focused accumulated ACC/TF, diagnostics,
+   line-budget, source-manifest, resource, install, and CTest-uniqueness slice
+   passes 25/25 in 17.03 seconds. Direct inventory/resource/manifest checks and
+   `git diff --check` are clean. No Release, sanitizer, hosted-CI inspection,
+   commit, or push has run.
+8. Proceed only to Batch 182 Change 16: prove ACC and VPI views refer to the
+   same simulation objects. Do not run Release, sanitizers, or hosted-CI
+   monitoring, and do not commit or push before Change 20.
+
+## Batch 182 active checkpoint - after Change 16
+
+1. Resume on `codex/v3` from pushed Batch 181 commit
+   `3322ff5d557af8ae22a2378f62af91282ec5b1bc`. Batch 182 Changes 1-16 are
+   complete and uncommitted. Preserve all accumulated ACC and cadence files;
+   Change 20 owns the batch's single implementation commit and push.
+2. The SystemVerilog VPI object registry now has explicit `Constant`,
+   `Concatenation`, `Operation`, and `MinTypMax` expression kinds, retaining
+   one generation-qualified identity and the existing bounded value storage.
+3. `fsim_acc_vpi_same_object_v3` compares an ACC handle with the exact VPI
+   identity returned by the existing handle bridge. Null identities, distinct
+   live objects, stale ACC handles, and released VPI generations fail through
+   `acc_error_flag`; names or copied values are never used as an equivalence
+   fallback.
+4. `tests/runtime/acc_vpi_coherence_test.cpp` backs the ACC callbacks with one
+   actual VPI registry and proves the same expression types, value storage,
+   parent/full-name hierarchy, condition connectivity, path-delay record, and
+   released-generation rejection through direct VPI and ACC views.
+5. The ledger has 3 active/15 preserved rows at normalized SHA-256
+   `6efd69113229bb69bf950288feb34e7d35a04198870e26b20f60fd1dc28558bf`.
+   Two new paths advance the source-package manifest to 1,771 ordered paths at
+   SHA-256
+   `d88d360f92f87be8c400fee76f776db7816ba5d67d6cc2e8ce9963c68050e9b4`.
+6. The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+   workers, the equality bridge is visible in `libfsim_tf`, and the focused
+   accumulated ACC/TF, diagnostics, line-budget, source-manifest, resource,
+   install, and CTest-uniqueness slice passes 26/26 in 8.03 seconds. Direct
+   inventory/resource/manifest checks and `git diff --check` are clean. No
+   Release, sanitizer, hosted-CI inspection, commit, or push has run.
+7. Proceed only to Batch 182 Change 17: define deterministic PLI behavior under
+   future parallel execution. Do not run Release, sanitizers, or hosted-CI
+   monitoring, and do not commit or push before Change 20.
+
+## Batch 182 active checkpoint - after Change 17
+
+1. Resume on `codex/v3` from pushed Batch 181 commit
+   `3322ff5d557af8ae22a2378f62af91282ec5b1bc`. Batch 182 Changes 1-17 are
+   complete and uncommitted. Preserve all accumulated ACC and cadence files;
+   Change 20 owns the batch's single implementation commit and push.
+2. `AccSchedulerCoordinator` accepts bounded staged observations, mutations,
+   traversals, and callbacks. Every request owns an immutable epoch, scheduler
+   phase, stable order, and source-order identity; ordered storage makes
+   execution independent of worker arrival order.
+3. Only a running scheduler in the named phase can drain an epoch. Duplicate
+   identities, completed epochs, later epochs that would strand earlier work,
+   direct inactive drains, and callback re-entry are rejected. Foreign and
+   publication exceptions are contained while every attempted request is
+   retired exactly once.
+4. `tests/app/acc_scheduler_application_test.cpp` concurrently stages all four
+   operation families in reverse and shuffled orders and proves identical
+   canonical traces. It also covers exact time/delta/phase publication,
+   duplicate and stale identities, monotonic epoch drains, inactive access,
+   exception containment, and re-entry rejection.
+5. The ledger has 2 active/16 preserved rows at normalized SHA-256
+   `622bdc76903f3a962b8c42985a952eed117c5b7d6b4451a076891a2fc8b9c7eb`.
+   Three new paths advance the source-package manifest to 1,774 ordered paths
+   at SHA-256
+   `b53a780a2d33692dc5ea50335cb62bf90bd0c0209b2ec9dc496e78ac467b47c0`.
+6. The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+   workers and the focused accumulated ACC/TF, diagnostics, line-budget,
+   source-manifest, resource, install, and CTest-uniqueness slice passes 27/27
+   in 8.19 seconds. Direct inventory/resource/manifest checks and `git diff
+   --check` are clean. No Release, sanitizer, hosted-CI inspection, commit, or
+   push has run.
+7. Proceed only to Batch 182 Change 18: reject unsupported vendor names with
+   stable diagnostics. Do not run Release, sanitizers, or hosted-CI monitoring,
+   and do not commit or push before Change 20.
+
+## Batch 182 active checkpoint - after Change 18
+
+1. Resume on `codex/v3` from pushed Batch 181 commit
+   `3322ff5d557af8ae22a2378f62af91282ec5b1bc`. Batch 182 Changes 1-18 are
+   complete and uncommitted. Preserve all accumulated ACC and cadence files;
+   Change 20 owns the batch's single implementation commit and push.
+2. `fsim_acc_validate_and_dispatch_standard_v3` accepts only an exact v3
+   query layout. It validates bounded terminated lowercase routine names,
+   numeric object and behavior selectors, reserved fields, and executable
+   dispatch addresses before entering the host callback.
+3. The sorted runtime table contains all 102 standardized routine names. The
+   exhaustive witness submits all 115 canonical object constants plus every
+   behavior family. The checker cross-references every ledger routine against
+   the table and every canonical object token against the witness.
+4. Unsupported routine, object, and behavior requests receive distinct stable
+   `FSIM-ACC-NAME-002`, `003`, and `004` diagnostics without fallback dispatch.
+   Malformed or v2 queries use `001`, host rejection uses `005`, and a caught
+   dispatch exception uses `006`; every code is in the diagnostic catalog.
+5. The ledger has 1 active/17 preserved rows at normalized SHA-256
+   `cf597d162ad3ad362f91bba92dfc765ae0a956487e44aa23ef02b002f007e27b`.
+   Two new paths advance the source-package manifest to 1,776 ordered paths at
+   SHA-256
+   `6ff4f37af1ff96a346b82e8e1ed452f3eafd5a5b6e542e32ca498f929133df9c`.
+6. The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+   workers, the validation/dispatch symbol is visible in `libfsim_tf`, and the
+   focused accumulated ACC/TF, diagnostics, line-budget, source-manifest,
+   resource, install, and CTest-uniqueness slice passes 28/28 in 9.05 seconds.
+   Direct inventory/resource/manifest checks and `git diff --check` are clean.
+   No Release, sanitizer, hosted-CI inspection, commit, or push has run.
+7. Proceed only to Batch 182 Change 19: run the full TF/ACC engine, artifact,
+   cache, and platform corpus. Do not run Release, sanitizers, or hosted-CI
+   monitoring, and do not commit or push before Change 20.
+
+## Batch 182 active checkpoint - after Change 19
+
+1. Resume on `codex/v3` from pushed Batch 181 commit
+   `3322ff5d557af8ae22a2378f62af91282ec5b1bc`. Batch 182 Changes 1-19 are
+   complete and intentionally uncommitted. Preserve all accumulated ACC and
+   cadence files; Change 20 owns the batch's single implementation commit and
+   push.
+2. Change 19 adds independent C11 and C++20 ACC shared-library consumers plus
+   `fsim.runtime.acc_cross_platform_plugins`. Both consumers include the
+   public `acc_user.h` surface and link to `fsim_tf`; the host uses the common
+   platform loader and CMake target-file paths on Linux and Windows.
+3. The host resolves all 102 standardized ACC routine exports and the standard
+   error flag, rejects representative vendor names, proves both original
+   images load/execute/unload, then copies them into cache-artifact paths and
+   repeats the same execution and final-unload checks.
+4. The ledger has zero active and 18 preserved rows at normalized SHA-256
+   `1fa0db768c78515e6596639dc3da43b323c1e7f8c2b209d668c02f35071bb1a7`.
+   Three new paths advance the source-package manifest to 1,779 ordered paths
+   at SHA-256
+   `be6a91b5d3310f26659ad6f805b29c37486cfe55a3feb28740d56d2b2c931bf6`.
+5. The exact LLVM 22.1.8 Clang warnings-as-errors Debug target builds with
+   eight workers. The complete TF/ACC slice passes 38/38 in 0.11 seconds; the
+   LLVM engine and object/design/library/application artifact/cache slice
+   passes 7/7 in 22.58 seconds; and the focused diagnostics, line-budget,
+   source-manifest, install, Windows-toolchain, resource, and uniqueness slice
+   passes 9/9 in 8.36 seconds. Direct legacy-ACC, resource, and source-manifest
+   checks are clean.
+6. No Release build, sanitizer, hosted-CI monitoring, commit, or push ran.
+   Proceed only to Batch 182 Change 20: run the clean local Clang Debug and
+   Release closure, finalize documentation, create the single implementation
+   commit, and push. Batch 182 is not a sanitizer or hosted-CI boundary.
+
+## Batch 182 closure checkpoint
+
+1. Resume on `codex/v3` with Batch 182 complete. The batch implements the
+   standardized IEEE ACC surface over the common v3 TF/ACC plugin library and
+   closes the legacy IEEE PLI inventory at zero active/18 preserved rows. The
+   normalized ledger SHA-256 is
+   `1fa0db768c78515e6596639dc3da43b323c1e7f8c2b209d668c02f35071bb1a7`.
+2. Change 20 completed clean eight-worker warnings-as-errors builds with the
+   exact LLVM 22.1.8 Clang toolchain for both Debug and Release. The clean
+   Debug suite passes 403/403 in 147.89 seconds; the clean Release suite passes
+   403/403 in 266.48 seconds.
+3. The first Release build exposed one pre-existing coverage-control decode
+   parameter shadowing the enclosing SimIR process identity. The inner
+   parameter now has an unambiguous name, and the subsequent clean Release
+   build is warning-free.
+4. The completed ACC sources and tests advance the frozen audit evidence to
+   2,599 production diagnostics, 1,417 bounded authored sources, 1,714
+   SPDX-owned files, 533 conformance test/control files, and 742 release-audit
+   test/control files. All affected composed release gates pass in both full
+   suites.
+5. The source-package manifest remains at 1,779 ordered payload paths with
+   SHA-256
+   `be6a91b5d3310f26659ad6f805b29c37486cfe55a3feb28740d56d2b2c931bf6`.
+   Direct legacy-ACC inventory, resource-portability, source-manifest, and
+   whitespace checks are clean.
+6. Batch 182 is neither a tenth-batch nor release-closing boundary, so no
+   sanitizer lane and no hosted-CI monitoring ran. The next sanitizer and
+   hosted-CI boundaries remain Batch 188 release closure and Batch 190's
+   tenth-batch closure.
+7. After the single Batch 182 implementation commit and push, proceed only to
+   Batch 183 Change 1: build the independently worded VHDL 2008-to-2019 clause
+   inventory. Keep the two private LRMs read-only and do not copy, quote, hash,
+   log, package, or record their paths in repository artifacts.

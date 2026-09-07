@@ -134,6 +134,8 @@ FSIM_TF_BRIDGE_API PLI_INT32 FSIM_NATIVE_PLUGIN_CALL
 fsim_tf_call_context_enter_v3(fsim_tf_call_context_v3* context);
 FSIM_TF_BRIDGE_API void FSIM_NATIVE_PLUGIN_CALL
 fsim_tf_call_context_leave_v3(fsim_tf_call_context_v3* context);
+FSIM_TF_BRIDGE_API const fsim_tf_call_context_v3* FSIM_NATIVE_PLUGIN_CALL
+fsim_tf_current_call_context_v3(void);
 
 #ifdef __cplusplus
 }

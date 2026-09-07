@@ -5,10 +5,31 @@ function(fsim_add_tf_link_surface target)
     ${target} SHARED
     "${PROJECT_SOURCE_DIR}/src/runtime/tf_link.cpp"
     "${PROJECT_SOURCE_DIR}/src/runtime/tf_containment.cpp"
+    "${PROJECT_SOURCE_DIR}/src/runtime/acc_lifecycle.cpp"
+    "${PROJECT_SOURCE_DIR}/src/runtime/acc_handle.cpp"
+    "${PROJECT_SOURCE_DIR}/src/runtime/acc_iterator.cpp"
+    "${PROJECT_SOURCE_DIR}/src/runtime/acc_lookup.cpp"
+    "${PROJECT_SOURCE_DIR}/src/runtime/acc_traversal.cpp"
+    "${PROJECT_SOURCE_DIR}/src/runtime/acc_object.cpp"
+    "${PROJECT_SOURCE_DIR}/src/runtime/acc_read.cpp"
+    "${PROJECT_SOURCE_DIR}/src/runtime/acc_write.cpp"
+    "${PROJECT_SOURCE_DIR}/src/runtime/acc_timing.cpp"
+    "${PROJECT_SOURCE_DIR}/src/runtime/acc_vcl.cpp"
+    "${PROJECT_SOURCE_DIR}/src/runtime/acc_callback.cpp"
+    "${PROJECT_SOURCE_DIR}/src/runtime/acc_handle_lifetime.cpp"
+    "${PROJECT_SOURCE_DIR}/src/runtime/acc_tf_coherence.cpp"
+    "${PROJECT_SOURCE_DIR}/src/runtime/acc_vpi_coherence.cpp"
+    "${PROJECT_SOURCE_DIR}/src/runtime/acc_vendor_rejection.cpp"
   )
   add_library(fsim::tf ALIAS ${target})
   target_compile_features(${target} PRIVATE cxx_std_20)
-  target_compile_definitions(${target} PRIVATE FSIM_TF_LINK_SURFACE_BUILD=1)
+  target_compile_definitions(
+    ${target}
+    PRIVATE
+      FSIM_TF_LINK_SURFACE_BUILD=1
+      FSIM_ACC_LINK_SURFACE_BUILD=1
+      FSIM_PROJECT_VERSION="${PROJECT_VERSION}"
+  )
   target_include_directories(
     ${target}
     PUBLIC

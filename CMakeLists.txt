@@ -1220,6 +1220,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_uvm_command_line.cpp
       src/app/application_time.cpp
   src/app/application_tf.cpp
+  src/app/application_acc_scheduler.cpp
   src/app/application_tf_scheduler.cpp
       src/app/tcl.cpp
   )
@@ -1334,6 +1335,7 @@ install(
     include/fsim/runtime/native_plugin_abi.h
     include/fsim/runtime/tf_plugin_abi.h
     include/fsim/runtime/veriuser.h
+    include/fsim/runtime/acc_user.h
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/fsim/runtime"
 )
 install(

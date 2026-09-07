@@ -1748,6 +1748,18 @@ set_tests_properties(
     LABELS "tf;pli;ieee1364;inventory;documentation;positive;negative;fast"
 )
 add_test(
+  NAME fsim.legacy-acc-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckLegacyAccInventory.cmake"
+)
+set_tests_properties(
+  fsim.legacy-acc-inventory
+  PROPERTIES
+    LABELS "acc;pli;ieee1364;inventory;documentation;positive;negative;fast"
+)
+add_test(
   NAME fsim.sdf-inventory
   COMMAND
     "${CMAKE_COMMAND}"
@@ -4161,6 +4173,24 @@ if(TARGET fsim_application)
     fsim.application.tf-scheduler
     PROPERTIES LABELS
       "fast;application;runtime;tf;scheduler;coordination;ordering;transactional;synchronization;delay;output;control;positive;negative"
+  )
+
+  add_executable(
+    fsim_acc_scheduler_application_tests
+    app/acc_scheduler_application_test.cpp
+  )
+  fsim_configure_test(fsim_acc_scheduler_application_tests)
+  target_link_libraries(
+    fsim_acc_scheduler_application_tests PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.acc-scheduler
+    COMMAND fsim_acc_scheduler_application_tests
+  )
+  set_tests_properties(
+    fsim.application.acc-scheduler
+    PROPERTIES LABELS
+      "fast;application;runtime;acc;pli;scheduler;parallel;coordination;ordering;observation;mutation;traversal;callback;transactional;positive;negative;resource;portability"
   )
 
   add_executable(

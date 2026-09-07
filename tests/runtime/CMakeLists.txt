@@ -207,6 +207,177 @@ set_tests_properties(
     "fast;runtime;tf;veriuser;abi;c;cxx;positive;portability"
 )
 
+add_executable(
+  fsim_acc_user_abi_tests
+  acc_user_abi_test.cpp
+  acc_user_abi_c_test.c
+)
+target_compile_features(fsim_acc_user_abi_tests PRIVATE c_std_11)
+target_link_libraries(fsim_acc_user_abi_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_acc_user_abi_tests)
+add_test(NAME fsim.runtime.acc_user_abi COMMAND fsim_acc_user_abi_tests)
+set_tests_properties(
+  fsim.runtime.acc_user_abi
+  PROPERTIES LABELS
+    "fast;runtime;acc;ieee1364;abi;c;cxx;positive;portability"
+)
+
+add_executable(fsim_acc_lifecycle_tests acc_lifecycle_test.cpp)
+target_link_libraries(fsim_acc_lifecycle_tests PRIVATE fsim_tf)
+fsim_configure_test(fsim_acc_lifecycle_tests)
+add_test(NAME fsim.runtime.acc_lifecycle COMMAND fsim_acc_lifecycle_tests)
+set_tests_properties(
+  fsim.runtime.acc_lifecycle
+  PROPERTIES LABELS
+    "fast;runtime;acc;ieee1364;lifecycle;configuration;error;transactional;positive;negative;resource;portability"
+)
+
+add_executable(fsim_acc_handle_tests acc_handle_test.cpp)
+target_link_libraries(fsim_acc_handle_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_acc_handle_tests)
+add_test(NAME fsim.runtime.acc_handle COMMAND fsim_acc_handle_tests)
+set_tests_properties(
+  fsim.runtime.acc_handle
+  PROPERTIES LABELS
+    "fast;runtime;acc;vpi;handle;generation;hierarchy;transactional;positive;negative;resource;portability"
+)
+
+add_executable(fsim_acc_lookup_tests acc_lookup_test.cpp)
+target_link_libraries(fsim_acc_lookup_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_acc_lookup_tests)
+add_test(NAME fsim.runtime.acc_lookup COMMAND fsim_acc_lookup_tests)
+set_tests_properties(
+  fsim.runtime.acc_lookup
+  PROPERTIES LABELS
+    "fast;runtime;acc;vpi;lookup;hierarchy;scope;transactional;positive;negative;resource;portability"
+)
+
+add_executable(fsim_acc_traversal_tests acc_traversal_test.cpp)
+target_link_libraries(fsim_acc_traversal_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_acc_traversal_tests)
+add_test(NAME fsim.runtime.acc_traversal COMMAND fsim_acc_traversal_tests)
+set_tests_properties(
+  fsim.runtime.acc_traversal
+  PROPERTIES LABELS
+    "fast;runtime;acc;vpi;traversal;hierarchy;iterator;transactional;positive;negative;resource;portability"
+)
+
+add_executable(fsim_acc_object_tests acc_object_test.cpp)
+target_link_libraries(fsim_acc_object_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_acc_object_tests)
+add_test(NAME fsim.runtime.acc_object COMMAND fsim_acc_object_tests)
+set_tests_properties(
+  fsim.runtime.acc_object
+  PROPERTIES LABELS
+    "fast;runtime;acc;vpi;object;connectivity;timing;transactional;positive;negative;resource;portability"
+)
+
+add_executable(fsim_acc_read_tests acc_read_test.cpp)
+target_link_libraries(fsim_acc_read_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_acc_read_tests)
+add_test(NAME fsim.runtime.acc_read COMMAND fsim_acc_read_tests)
+set_tests_properties(
+  fsim.runtime.acc_read
+  PROPERTIES LABELS
+    "fast;runtime;acc;vpi;read;value;four-state;property;transactional;positive;negative;resource;portability"
+)
+
+add_executable(fsim_acc_write_tests acc_write_test.cpp)
+target_link_libraries(fsim_acc_write_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_acc_write_tests)
+add_test(NAME fsim.runtime.acc_write COMMAND fsim_acc_write_tests)
+set_tests_properties(
+  fsim.runtime.acc_write
+  PROPERTIES LABELS
+    "fast;runtime;acc;vpi;write;value;four-state;delay;transactional;positive;negative;resource;portability"
+)
+
+add_executable(fsim_acc_iterator_tests acc_iterator_test.cpp)
+target_link_libraries(fsim_acc_iterator_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_acc_iterator_tests)
+add_test(NAME fsim.runtime.acc_iterator COMMAND fsim_acc_iterator_tests)
+set_tests_properties(
+  fsim.runtime.acc_iterator
+  PROPERTIES LABELS
+    "fast;runtime;acc;vpi;iterator;relation;hierarchy;transactional;positive;negative;resource;portability"
+)
+
+add_executable(fsim_acc_timing_tests acc_timing_test.cpp)
+target_link_libraries(fsim_acc_timing_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_acc_timing_tests)
+add_test(NAME fsim.runtime.acc_timing COMMAND fsim_acc_timing_tests)
+set_tests_properties(
+  fsim.runtime.acc_timing
+  PROPERTIES LABELS
+    "fast;runtime;acc;vpi;timing;delay;pulse;transactional;positive;negative;resource;portability"
+)
+
+add_executable(fsim_acc_vcl_tests acc_vcl_test.cpp)
+target_link_libraries(fsim_acc_vcl_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_acc_vcl_tests)
+add_test(NAME fsim.runtime.acc_vcl COMMAND fsim_acc_vcl_tests)
+set_tests_properties(
+  fsim.runtime.acc_vcl
+  PROPERTIES LABELS
+    "fast;runtime;acc;vpi;callback;value-change;time;four-state;strength;transactional;positive;negative;resource;portability"
+)
+
+add_executable(fsim_acc_callback_tests acc_callback_test.cpp)
+target_link_libraries(fsim_acc_callback_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_acc_callback_tests)
+add_test(NAME fsim.runtime.acc_callback COMMAND fsim_acc_callback_tests)
+set_tests_properties(
+  fsim.runtime.acc_callback
+  PROPERTIES LABELS
+    "fast;runtime;acc;vpi;callback;cancellation;ordering;reentry;transactional;positive;negative;resource;portability"
+)
+
+add_executable(fsim_acc_handle_lifetime_tests acc_handle_lifetime_test.cpp)
+target_link_libraries(fsim_acc_handle_lifetime_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_acc_handle_lifetime_tests)
+add_test(
+  NAME fsim.runtime.acc_handle_lifetime
+  COMMAND fsim_acc_handle_lifetime_tests
+)
+set_tests_properties(
+  fsim.runtime.acc_handle_lifetime
+  PROPERTIES LABELS
+    "fast;runtime;acc;vpi;handle;iterator;callback;safe-point;lifetime;generation;transactional;positive;negative;resource;portability"
+)
+
+add_executable(fsim_acc_tf_coherence_tests acc_tf_coherence_test.cpp)
+target_link_libraries(fsim_acc_tf_coherence_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_acc_tf_coherence_tests)
+add_test(NAME fsim.runtime.acc_tf_coherence COMMAND fsim_acc_tf_coherence_tests)
+set_tests_properties(
+  fsim.runtime.acc_tf_coherence
+  PROPERTIES LABELS
+    "fast;runtime;acc;tf;vpi;coherence;argument;scope;work-area;transactional;positive;negative;resource;portability"
+)
+
+add_executable(fsim_acc_vpi_coherence_tests acc_vpi_coherence_test.cpp)
+target_link_libraries(fsim_acc_vpi_coherence_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_acc_vpi_coherence_tests)
+add_test(NAME fsim.runtime.acc_vpi_coherence COMMAND fsim_acc_vpi_coherence_tests)
+set_tests_properties(
+  fsim.runtime.acc_vpi_coherence
+  PROPERTIES LABELS
+    "fast;runtime;acc;vpi;coherence;object;generation;value;hierarchy;connectivity;timing;transactional;positive;negative;resource;portability"
+)
+
+add_executable(fsim_acc_vendor_rejection_tests acc_vendor_rejection_test.cpp)
+target_link_libraries(fsim_acc_vendor_rejection_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_acc_vendor_rejection_tests)
+add_test(
+  NAME fsim.runtime.acc_vendor_rejection
+  COMMAND fsim_acc_vendor_rejection_tests
+)
+set_tests_properties(
+  fsim.runtime.acc_vendor_rejection
+  PROPERTIES LABELS
+    "fast;runtime;acc;vendor;name;routine;object;behavior;diagnostic;dispatch;containment;transactional;positive;negative;resource;portability"
+)
+
 add_library(fsim_tf_link_probe_plugin SHARED tf_link_probe_plugin.c)
 target_compile_features(fsim_tf_link_probe_plugin PRIVATE c_std_11)
 target_include_directories(
@@ -235,6 +406,36 @@ add_custom_command(
   COMMAND
     "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:fsim_tf>"
     "$<TARGET_FILE_DIR:fsim_tf_cpp_probe_plugin>"
+)
+
+add_library(fsim_acc_link_probe_plugin SHARED acc_link_probe_plugin.c)
+target_compile_features(fsim_acc_link_probe_plugin PRIVATE c_std_11)
+target_include_directories(
+  fsim_acc_link_probe_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+target_link_libraries(fsim_acc_link_probe_plugin PRIVATE fsim_tf)
+fsim_enable_warnings(fsim_acc_link_probe_plugin)
+fsim_configure_debug_footprint(fsim_acc_link_probe_plugin)
+add_custom_command(
+  TARGET fsim_acc_link_probe_plugin
+  POST_BUILD
+  COMMAND
+    "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:fsim_tf>"
+    "$<TARGET_FILE_DIR:fsim_acc_link_probe_plugin>"
+)
+
+add_library(fsim_acc_cpp_probe_plugin SHARED acc_cpp_probe_plugin.cpp)
+target_compile_features(fsim_acc_cpp_probe_plugin PRIVATE cxx_std_20)
+target_include_directories(
+  fsim_acc_cpp_probe_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+target_link_libraries(fsim_acc_cpp_probe_plugin PRIVATE fsim_tf)
+fsim_enable_warnings(fsim_acc_cpp_probe_plugin)
+fsim_configure_debug_footprint(fsim_acc_cpp_probe_plugin)
+add_custom_command(
+  TARGET fsim_acc_cpp_probe_plugin
+  POST_BUILD
+  COMMAND
+    "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:fsim_tf>"
+    "$<TARGET_FILE_DIR:fsim_acc_cpp_probe_plugin>"
 )
 
 add_executable(fsim_tf_plugin_link_tests tf_plugin_link_test.cpp)
@@ -425,6 +626,31 @@ set_tests_properties(
   fsim.runtime.tf_cross_platform_plugins
   PROPERTIES LABELS
     "fast;runtime;tf;native-plugin;c;cxx;linux;windows;load;execute;unload;equivalence;positive;resource;portability"
+)
+
+add_executable(
+  fsim_acc_cross_platform_plugins_tests
+  acc_cross_platform_plugins_test.cpp)
+target_compile_definitions(
+  fsim_acc_cross_platform_plugins_tests
+  PRIVATE
+    FSIM_ACC_LINK_LIBRARY_PATH="$<TARGET_FILE:fsim_tf>"
+    FSIM_ACC_C_PLUGIN_PATH="$<TARGET_FILE:fsim_acc_link_probe_plugin>"
+    FSIM_ACC_CPP_PLUGIN_PATH="$<TARGET_FILE:fsim_acc_cpp_probe_plugin>"
+)
+target_link_libraries(
+  fsim_acc_cross_platform_plugins_tests PRIVATE fsim_platform)
+add_dependencies(
+  fsim_acc_cross_platform_plugins_tests
+  fsim_acc_link_probe_plugin fsim_acc_cpp_probe_plugin)
+fsim_configure_test(fsim_acc_cross_platform_plugins_tests)
+add_test(
+  NAME fsim.runtime.acc_cross_platform_plugins
+  COMMAND fsim_acc_cross_platform_plugins_tests)
+set_tests_properties(
+  fsim.runtime.acc_cross_platform_plugins
+  PROPERTIES LABELS
+    "fast;runtime;acc;tf;native-plugin;c;cxx;linux;windows;engine;artifact;cache;load;execute;unload;equivalence;positive;negative;resource;portability"
 )
 
 add_executable(fsim_trace_model_tests trace_model_tests.cpp)

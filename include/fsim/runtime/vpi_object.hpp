@@ -39,6 +39,14 @@ enum class SystemVerilogVpiObjectKind {
     Assertion,
     /// Read-only stored contribution, distinct from a signal's effective value.
     Driver,
+    /// Literal or parameter-folded expression value.
+    Constant,
+    /// Concatenation expression with stable occurrence identity.
+    Concatenation,
+    /// Unary, binary, or conditional operator occurrence.
+    Operation,
+    /// Minimum/typical/maximum expression occurrence.
+    MinTypMax,
 };
 
 enum class SystemVerilogVpiObjectError {

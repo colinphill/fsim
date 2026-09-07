@@ -647,6 +647,11 @@ void FSIM_NATIVE_PLUGIN_CALL fsim_tf_call_context_leave_v3(
   }
 }
 
+const fsim_tf_call_context_v3* FSIM_NATIVE_PLUGIN_CALL
+fsim_tf_current_call_context_v3(void) {
+  return current_call_context;
+}
+
 #define FSIM_TF_INT(name, parameters) \
   PLI_INT32 name parameters { return 0; }
 #define FSIM_TF_DOUBLE(name, parameters) \

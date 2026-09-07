@@ -165,6 +165,25 @@ by the machine-checked
 for a v2 plug-in ABI is permitted. The registered normalized SHA-256 identity
 is `a3bff1ef32fbf3fd412556c63c39e69a45f4efdd5cb599d07b3ac47136b531e0`.
 
+Batch 182 starts with the IEEE-only 18-row `legacy_acc_inventory.tsv`
+ledger. Changes 2-19 own, one-to-one, the public header, lifecycle, handle,
+lookup, hierarchy, object, value, iterator, timing, callback, TF-coherence,
+VPI-coherence, scheduler, diagnostic-rejection, and closure-corpus domains.
+The ledger accounts for 102 standardized ACC routines and
+115 canonical ACC object kinds across all eight retained Verilog and
+SystemVerilog profiles.
+Its machine-checked `ieee-only-no-vendor-extensions` policy excludes vendor
+additions and does not permit a v2 compatibility reader or migration. The
+public-header, lifecycle, generation-qualified-handle, name-lookup,
+hierarchy-traversal, complete-object-model, value/property-read, value-update,
+indexed-iterator, path-delay/timing-check, value-change-link, callback-
+cancellation, safe-point-lifetime, TF/ACC-coherence, ACC/VPI-object-
+equivalence, parallel-coordination, vendor-name-rejection, and complete
+TF/ACC closure-corpus rows are preserved and zero rows remain active
+at normalized
+SHA-256
+`1fa0db768c78515e6596639dc3da43b323c1e7f8c2b209d668c02f35071bb1a7`.
+
 ## Intended atomic layout
 
 New tests should use the stable feature ID from the matrix and keep one

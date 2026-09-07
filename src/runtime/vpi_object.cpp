@@ -50,10 +50,17 @@ namespace {
             type.width = 1;
             break;
         case SystemVerilogVpiObjectKind::Parameter:
+        case SystemVerilogVpiObjectKind::Constant:
             type.category = SystemVerilogVpiValueCategory::Integer4;
             type.width = 32;
             type.is_signed = true;
             type.is_constant = true;
+            break;
+        case SystemVerilogVpiObjectKind::Concatenation:
+        case SystemVerilogVpiObjectKind::Operation:
+        case SystemVerilogVpiObjectKind::MinTypMax:
+            type.category = SystemVerilogVpiValueCategory::Logic4;
+            type.width = 1;
             break;
         case SystemVerilogVpiObjectKind::NamedEvent:
             type.category = SystemVerilogVpiValueCategory::Event;
@@ -333,7 +340,8 @@ namespace {
         }
         if (type.is_constant
             != (kind == SystemVerilogVpiObjectKind::Parameter
-                || kind == SystemVerilogVpiObjectKind::Driver)) {
+                || kind == SystemVerilogVpiObjectKind::Driver
+                || kind == SystemVerilogVpiObjectKind::Constant)) {
             return false;
         }
         if (type.driver_range) {
@@ -607,7 +615,7 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
     }
     if (static_cast<unsigned>(descriptor.kind)
         > static_cast<unsigned>(
-            SystemVerilogVpiObjectKind::Driver)) {
+            SystemVerilogVpiObjectKind::MinTypMax)) {
         return { { }, SystemVerilogVpiObjectError::InvalidKind };
     }
 

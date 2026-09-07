@@ -1621,9 +1621,9 @@ void Interpreter::Impl::execute(ProcessId id)
                     ++process.pc;
                 } else if constexpr (
                     std::is_same_v<OperationType, CoverageControl>) {
-                    const auto decode = [&](const RegisterId id)
+                    const auto decode = [&](const RegisterId register_id)
                         -> std::optional<std::int32_t> {
-                        const auto& value = get_register(process, id);
+                        const auto& value = get_register(process, register_id);
                         if (value.width() != 32U || value.is_logic9()) {
                             return std::nullopt;
                         }

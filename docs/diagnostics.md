@@ -67,6 +67,17 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-API-RUN-0001` | error | Simulation invoked through the C API failed at runtime. |
 | `FSIM-API-VALUE-0001` | error | A C API deposit or force value is invalid for the selected signal. |
 
+## Legacy ACC host boundary
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `FSIM-ACC-NAME-001` | error | An ACC standard-surface query has an invalid ABI, layout, reserved field, name, selector shape, or dispatch address. |
+| `FSIM-ACC-NAME-002` | error | A requested ACC routine name is not one of the 102 standardized routines. |
+| `FSIM-ACC-NAME-003` | error | A requested ACC object-type selector is not one of the 115 canonical standardized object kinds. |
+| `FSIM-ACC-NAME-004` | error | An ACC configuration, edge, delay-mode, update, value-format, VCL-reason, time-type, or product-type behavior selector is outside the standardized set. |
+| `FSIM-ACC-NAME-005` | error | The host rejected dispatch of a validated standardized ACC request. |
+| `FSIM-ACC-NAME-006` | error | An exception escaped the host dispatch callback and was contained at the ACC boundary. |
+
 ## Code coverage model
 
 | Code | Severity | Meaning |
@@ -2845,6 +2856,169 @@ The inventory gate also requires each row's positive, execution,
 arbitrary-width, include/profile-provenance and artifact-mismatch anchors; a
 matching code or coordinate without the remaining evidence cannot satisfy the
 corpus.
+
+Batch 182 ACC lifecycle failures use the standardized `acc_error_flag` rather
+than introducing a command-line diagnostic code. A successful lifecycle call
+clears the flag; an unsupported selector, invalid or unbounded configuration
+value, inactive configuration or buffer-reset request, or exhausted generation
+sets it. Configuration is copied and validated before publication, so a failed
+call cannot partially replace the preceding value. Product and interface
+identity queries return bounded simulator-owned storage and clear stale error
+state.
+
+ACC handle-bridge failures use the same flag. Null, malformed, released,
+stale-generation, cross-simulation, and cross-hierarchy handles are rejected
+before dereference; callback rejection and the per-context or process-wide
+handle ceiling also set the flag. A successful VPI-to-ACC mapping, type query,
+comparison, or release clears it. Releasing an ACC wrapper does not release the
+underlying VPI object, and later remapping cannot make the old wrapper valid.
+
+ACC lookup also reports failures through `acc_error_flag`. Unreadable, empty,
+control-bearing, or over-4-KiB names; nonscope bases; unsupported object kinds;
+invalid interactive callback flags; and failed resolver callbacks set the
+flag without changing PLI or interactive scope. A valid search with no match
+returns null and clears the flag. Absolute, relative, current-PLI-scope,
+parent, containing-scope, and simulated-net queries all revalidate the active
+simulation and hierarchy generation before returning a wrapper.
+
+ACC hierarchy traversal uses the same error flag and generation-qualified
+handles. A null or nonscope owner, an unsupported collector routine, a prior
+object from another family or owner, an invalid callback result, an unreadable
+collection-count pointer, or a stale collection passed to `acc_free` sets the
+flag. Normal iterator exhaustion and an empty collection return null with the
+flag clear. Open native traversal cursors are closed on exhaustion, callback
+failure, type rejection, family mismatch, or failed ACC-handle publication;
+collection arrays are bounded and must be released exactly once with
+`acc_free`.
+
+ACC object and connectivity queries also use `acc_error_flag`. The runtime
+rejects a source handle outside the routine's standardized object family, a
+negative index, an unsupported timing-check selector or edge mask, malformed
+or unbounded endpoint names, missing enabled optional handles, an invalid
+result subtype, and callback failure before publishing a result. A valid
+query with no matching connection, path, notifier, timing check, terminal, or
+condition returns null with the flag clear. Optional module-path and
+timing-check handle arguments are read only when `accEnableArgs` enables that
+exact routine. Full object types retain membership in their generic module,
+scope, net, register, port, terminal, primitive, parameter, and timing-check
+families.
+
+ACC value and property reads use the same error flag and exact active object
+generation. The runtime rejects an unreadable format or destination, a result
+whose type disagrees with the current VPI resolver, invalid width/range/time
+metadata, malformed four-state word storage, callback exceptions, and strings
+above their bounded limits before publishing caller-visible output. Binary,
+octal, decimal, hexadecimal, strength, scalar, vector, real, and string forms
+retain separate representations; vector words preserve both `aval` and `bval`.
+Names, source locations, attributes, and formatted values are copied into
+thread-local ACC storage, so callback-owned pointers do not escape the call.
+Missing attributes return the supplied default, or the configured zero default,
+with the flag clear. Empty or absent optional metadata is not reported as a
+fabricated value.
+
+ACC value updates report invalid storage, formats, widths, time encodings,
+models, targets, capabilities, callback results, and callback exceptions with
+`acc_error_flag` and a nonzero `acc_set_value` result. The runtime first copies
+the complete input value and delay into bounded host-owned storage, then invokes
+one synchronous simulator transaction. Deposits require an elaborated deposit
+capability; force/release and assign/deassign use their distinct capabilities,
+so a generic object classification cannot authorize an unsupported mutation.
+Integer and real delays preserve their declared scaling kind. Release and
+deassign validate their return destination before dispatch and receive the
+post-operation value in the same transaction; malformed returned storage cannot
+partially update the caller's value. A successful update clears stale error
+state and returns zero.
+
+ACC indexed relation iterators report malformed or duplicate type lists,
+unsupported type identities, invalid owners or prior objects, callback
+failures, result-family mismatches, cursor drift, and failed handle publication
+through `acc_error_flag`. Normal exhaustion returns null with the flag clear.
+Every cursor is qualified by simulation, hierarchy generation, relation family,
+owner, and the copied generic type list, allowing the same result object to be
+visited concurrently by distinct iterator families. A call without retained
+cursor state may recover only by finding the exact valid prior object in the
+canonical relation sequence; a removed or unrelated prior object is a failure.
+Exhaustion and every post-begin failure synchronously close the native cursor.
+
+ACC path-delay and timing-check access reports invalid or stale objects,
+unsupported timing capabilities, inconsistent delay arity, invalid
+`accPathDelayCount`, `accMinTypMaxDelays`, or `accToHiZDelay` configuration,
+unreadable variadic storage, non-finite or negative delays, unordered pulse
+reject/error pairs, malformed callback results, and callback exceptions through
+`acc_error_flag`. Path arity is selected from the initialized ACC configuration;
+primitive, timing-check, and input-port arity is supplied by the exact VPI
+object metadata. Single-delay arguments are copied individually, while
+minimum/typical/maximum arguments use one checked bounded array. Fetch routines
+validate and copy the complete simulator snapshot before publishing any caller
+destination. Pulse percentages are restricted to ordered values from zero
+through one hundred. Delay-mode and polarity failures return their standardized
+neutral values while retaining the error flag.
+
+ACC value-change registration reports null or unreadable consumers,
+unsupported objects or strength modes, stale object generations, exhausted
+link capacity, simulator registration rejection, malformed event payloads,
+and simulator or consumer exceptions through `acc_error_flag`. Registration
+copies the exact object identity, value width, callback, user-data pointer, and
+requested logic-or-strength view into a generation-qualified link before the
+simulator can publish an event. Dispatch validates the active context, link,
+object type, simulation time, reason-specific scalar/strength/real/vector
+shape, and every wide four-state word before invoking the consumer. Scalar,
+strength, and real values are placed directly in the standard value-change
+record; vector-like events retain the exact ACC object handle so the consumer
+can query the current full value. Callback cancellation and re-entry ordering
+are owned by the following change.
+
+ACC value-change cancellation reports invalid callback tuples, absent links,
+simulator unregister rejection, and unregister exceptions through
+`acc_error_flag`. Registration rejects duplicate object, consumer, user-data,
+and flag tuples. Every event carries a nonzero monotonically increasing sequence
+identity; repeated, reversed, concurrent, or same-link re-entrant delivery is
+rejected before consumer entry. Cancellation marks the link unavailable before
+calling the simulator unregister hook, so a late host dispatch cannot enter the
+consumer. Rejected unregister restores the active link. Successful cancellation
+waits for an already-running consumer before retirement, except when that
+consumer cancels itself; self-cancellation is deferred until its dispatch
+returns, avoiding deadlock while still preventing further observations.
+
+ACC safe-point advancement reports null or malformed records, inactive or
+foreign contexts, zero or non-increasing identities, and iterator-retirement
+resource failures through `acc_error_flag`. A successful monotonic advance
+closes every retained iterator cursor for the current simulation and hierarchy
+generation and prevents continuation from its prior object. A new traversal
+may start at the new safe point. Generation-qualified handles and explicitly
+registered callback links remain valid across safe points, while borrowed read
+and returned-write string storage is invalidated and must be reacquired. The
+same invalidation also occurs for `acc_reset_buffer`. A hierarchy-generation
+change invalidates old handles and callback links regardless of safe-point
+identity.
+
+TF/ACC coherence failures also use `acc_error_flag`. A TF-bound ACC context is
+accepted only while it names the exact active TF call context and matching
+simulation and hierarchy generation. Argument-count mismatches, zero or
+unreadable VPI identities, over-limit or malformed process arguments, invalid
+argument indices, and foreign explicit instance handles or opaque TF tokens
+fail before a value or handle is returned. Successful integer, real, string,
+argv, and VPI-handle access clears the flag. Returned strings and argv entries
+are borrowed for the active callback lifetime. The work-area pointer remains
+owned by the shared TF context, including its existing successful-call commit,
+exception rollback, and per-instance isolation rules.
+
+ACC/VPI identity checks use `acc_error_flag` as well. A successful comparison
+requires the ACC handle to resolve to the exact live generation-qualified VPI
+identity supplied by the host. Null identities, different live objects, stale
+ACC handles, and released VPI generations fail without falling back to names,
+types, hierarchy position, or copied values. Consequently ACC value,
+connectivity, hierarchy, and timing views remain projections of the same VPI
+registry object rather than independently owned records.
+
+The ACC parallel coordinator rejects malformed or duplicate canonical request
+identities, late work for a completed epoch, and attempts to drain a later
+epoch while earlier work for that scheduler phase remains staged. Runtime ACC
+operations cannot drain outside the active scheduler boundary or in a
+different phase. Re-entry from a foreign callback is rejected, and exceptions
+from an ACC operation or publication observer are contained and reported in
+the drain result. These failures do not reorder later canonical requests or
+leave an already executed request pending.
 
 ## Release-status boundary
 
