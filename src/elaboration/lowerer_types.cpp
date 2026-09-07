@@ -304,7 +304,12 @@ std::optional<std::size_t> Lowerer::infer_width(const Expression& expression) co
         return std::size_t { 64 };
     }
     if (expression.kind == ExpressionKind::Call
-        && expression.text == "$stime") {
+        && (expression.text == "$stime"
+            || expression.text == "$coverage_control"
+            || expression.text == "$coverage_get"
+            || expression.text == "$coverage_get_max"
+            || expression.text == "$coverage_merge"
+            || expression.text == "$coverage_save")) {
         return std::size_t { 32 };
     }
     if (expression.kind == ExpressionKind::Call

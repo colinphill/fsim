@@ -2,12 +2,14 @@
 #pragma once
 
 #include "fsim/frontend/coverage_point_identity.hpp"
+#include "fsim/frontend/coverage_source_control.hpp"
 #include "fsim/frontend/design.hpp"
 
 #include <cstddef>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace fsim::elaboration {
@@ -20,6 +22,19 @@ inline constexpr std::string_view kVerilogCoveragePointDiagnostic
 struct VerilogCoverageSource {
     std::string source_name;
     frontend::CodeCoverageSourceIdentity identity;
+    // Optional authenticated source bytes used to apply source controls during
+    // this immediate discovery call. The caller retains ownership.
+    std::string_view source_text;
+
+    VerilogCoverageSource(
+        std::string name,
+        frontend::CodeCoverageSourceIdentity source_identity,
+        const std::string_view text = { })
+        : source_name(std::move(name))
+        , identity(std::move(source_identity))
+        , source_text(text)
+    {
+    }
 };
 
 struct VerilogStatementCoveragePoint {
@@ -39,6 +54,15 @@ struct VerilogStatementCoveragePoint {
         = default;
 };
 
+struct VerilogStatementCoverageExclusion {
+    VerilogStatementCoveragePoint point;
+    std::string reason;
+
+    friend bool operator==(const VerilogStatementCoverageExclusion&,
+        const VerilogStatementCoverageExclusion&)
+        = default;
+};
+
 struct VerilogCoveragePointLimits {
     std::size_t maximum_sources { 1U << 16U };
     std::size_t maximum_statements { 1U << 20U };
@@ -55,10 +79,14 @@ enum class VerilogCoveragePointError {
     UnknownStatementSource,
     InvalidStatementSpan,
     DuplicatePoint,
+    InvalidSourceControl,
 };
 
 struct VerilogCoveragePointResult {
     std::vector<VerilogStatementCoveragePoint> points;
+    // Excluded executable points retain the same stable identity and source
+    // coordinates as scored points, but never receive runtime counters.
+    std::vector<VerilogStatementCoverageExclusion> exclusions;
     VerilogCoveragePointError error { VerilogCoveragePointError::None };
     std::size_t statement_index { };
 

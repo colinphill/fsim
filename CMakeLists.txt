@@ -468,6 +468,7 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/class_inheritance.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/class_specialization.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_execution.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/coverage_database_systemverilog.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_limits.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_observation.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_persistence.cpp"
@@ -476,6 +477,7 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_point_identity.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_report.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_sampling.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/coverage_source_control.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_source_identity.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/lexer.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/sdf_lexer.cpp"
@@ -621,6 +623,7 @@ add_library(
     src/runtime/vpi_checkpoint.cpp
     src/runtime/vpi_type_descriptor.cpp
     src/runtime/vpi_control.cpp
+    src/runtime/vpi_coverage.cpp
     src/runtime/vpi_io.cpp
     src/runtime/vpi_system.cpp
     src/runtime/vpi_value.cpp
@@ -675,6 +678,8 @@ fsim_configure_library(fsim_runtime)
     STATIC
       src/elaboration/coverage_conditions.cpp
       src/elaboration/coverage_branches.cpp
+      src/elaboration/coverage_exclusion_persistence.cpp
+      src/elaboration/coverage_external_exclusions.cpp
       src/elaboration/coverage_fsm_inference.cpp
       src/elaboration/coverage_fsm_hints.cpp
       src/elaboration/coverage_fsm_validation.cpp
@@ -812,6 +817,18 @@ fsim_configure_library(fsim_support)
 
 add_library(
   fsim_library STATIC
+  src/artifact/coverage_database.cpp
+  src/artifact/coverage_database_codec.cpp
+  src/artifact/coverage_exclusion_report.cpp
+  src/artifact/coverage_report_model.cpp
+  src/artifact/coverage_report_projection.cpp
+  src/artifact/coverage_report_render.cpp
+  src/artifact/coverage_report_render_html.cpp
+  src/artifact/coverage_report_render_json.cpp
+  src/artifact/coverage_report_render_text.cpp
+  src/artifact/coverage_database_merge.cpp
+  src/artifact/coverage_database_model.cpp
+  src/artifact/coverage_database_partial_merge.cpp
   src/artifact/coverage_identity.cpp
   src/artifact/design.cpp
   src/artifact/object.cpp
@@ -1119,6 +1136,8 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
   src/app/application_sdf_portable_archive.cpp
   src/app/application_sdf_phase_persistence.cpp
       src/app/application_build.cpp
+      src/app/application_coverage_command.cpp
+      src/app/application_coverage_database_psl.cpp
       src/app/application_coverage_control.cpp
       src/app/application_check.cpp
       src/app/application_standard_library.cpp

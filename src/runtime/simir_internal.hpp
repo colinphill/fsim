@@ -735,6 +735,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
     ReportHook report_hook;
     CoverageSampleHook coverage_sample_hook;
     CoverageQueryHook coverage_query_hook;
+    CoverageControlHook coverage_control_hook;
+    CoverageAccessHook coverage_access_hook;
     CodeCoverageCounters code_coverage_counters;
     CodeCoverageOverflowHook code_coverage_overflow_hook;
     SystemCommandHook system_command_hook;
@@ -1012,6 +1014,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const PackedLogic4& value);
 
     void install_deferred_executor(ProcessState& process);
+
+    [[nodiscard]] std::int32_t control_coverage(
+        const CoverageControlEvent& event) noexcept;
+    [[nodiscard]] std::int32_t access_coverage(
+        const CoverageAccessEvent& event) noexcept;
 
     void execute_sampled_read(
         ProcessState& process,

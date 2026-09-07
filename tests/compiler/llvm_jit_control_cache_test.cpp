@@ -13,6 +13,124 @@ void test_process_control_cache_identity()
     std::error_code error;
     std::filesystem::remove_all(root, error);
     assert(!error);
+    const auto test_coverage_control_cache_identity =
+        [&](const std::filesystem::path& cache_directory) {
+            constexpr std::string_view symbol = "cached_coverage_control";
+            const std::array<std::uint32_t, 0> no_signals { };
+            const auto options = LlvmJitOptions {
+                JitOptimizationLevel::o2, cache_directory
+            };
+            const auto materialize = [&](const RegisterId command,
+                                         const RegisterId coverage_type,
+                                         const RegisterId scope,
+                                         const StringRegisterId selector,
+                                         const std::string_view context,
+                                         const bool selector_is_instance,
+                                         const std::uint64_t hits,
+                                         const std::uint64_t misses) {
+                Process process;
+                process.id = 132;
+                process.name = symbol;
+                process.register_count = 6;
+                process.string_register_count = 2;
+                process.operations = {
+                    LoadConstant {
+                        0, PackedLogic4::from_aval_bval(32, 0, 0) },
+                    LoadConstant {
+                        1, PackedLogic4::from_aval_bval(32, 22, 0) },
+                    LoadConstant {
+                        2, PackedLogic4::from_aval_bval(32, 10, 0) },
+                    LoadConstant {
+                        3, PackedLogic4::from_aval_bval(32, 11, 0) },
+                    LoadStringConstant { 0, "top" },
+                    LoadStringConstant { 1, "other" },
+                    CoverageControl { 5, command, coverage_type, scope,
+                        selector, std::string { context },
+                        selector_is_instance },
+                    Halt { },
+                };
+                LlvmJit jit { options };
+                jit.add_process(symbol, process, no_signals);
+                assert(jit.lookup(symbol));
+                const auto statistics = jit.cache_statistics();
+                assert(statistics.hits == hits);
+                assert(statistics.misses == misses);
+                assert(statistics.stores == misses);
+            };
+            materialize(0, 1, 2, 0, "top", true, 0, 1);
+            materialize(0, 1, 2, 0, "top", true, 1, 0);
+            materialize(3, 1, 2, 0, "top", true, 0, 1);
+            materialize(0, 2, 2, 0, "top", true, 0, 1);
+            materialize(0, 1, 3, 0, "top", true, 0, 1);
+            materialize(0, 1, 2, 1, "top", true, 0, 1);
+            materialize(0, 1, 2, 0, "other", true, 0, 1);
+            materialize(0, 1, 2, 0, "top", false, 0, 1);
+        };
+    test_coverage_control_cache_identity(root / "coverage-control");
+    const auto test_coverage_access_cache_identity =
+        [&](const std::filesystem::path& cache_directory) {
+            constexpr std::string_view symbol = "cached_coverage_access";
+            const std::array<std::uint32_t, 0> no_signals { };
+            const auto options = LlvmJitOptions {
+                JitOptimizationLevel::o2, cache_directory };
+            const auto materialize = [&](
+                                         const SystemVerilogCoverageAccessKind kind,
+                                         const std::optional<StringRegisterId> filename,
+                                         const StringRegisterId selector,
+                                         const std::string_view context,
+                                         const bool selector_is_instance,
+                                         const std::uint64_t hits,
+                                         const std::uint64_t misses) {
+                Process process;
+                process.id = 139;
+                process.name = symbol;
+                process.register_count = 3;
+                process.string_register_count = 2;
+                const auto selected = kind
+                        == SystemVerilogCoverageAccessKind::get
+                    || kind == SystemVerilogCoverageAccessKind::get_max;
+                process.operations = {
+                    LoadConstant {
+                        0, PackedLogic4::from_aval_bval(32, 22, 0) },
+                    LoadConstant {
+                        1, PackedLogic4::from_aval_bval(32, 10, 0) },
+                    LoadStringConstant { 0, "coverage.fsimcov" },
+                    LoadStringConstant { 1, "top" },
+                    CoverageAccess { 2, kind, 0,
+                        selected ? std::optional<RegisterId> { 1 }
+                                 : std::nullopt,
+                        selected ? std::optional<StringRegisterId> { selector }
+                                 : std::nullopt,
+                        selected ? std::string { context } : std::string { },
+                        selected && selector_is_instance, filename },
+                    Halt { },
+                };
+                LlvmJit jit { options };
+                jit.add_process(symbol, process, no_signals);
+                assert(jit.lookup(symbol));
+                const auto statistics = jit.cache_statistics();
+                assert(statistics.hits == hits);
+                assert(statistics.misses == misses);
+                assert(statistics.stores == misses);
+            };
+            materialize(SystemVerilogCoverageAccessKind::save, 0, 1,
+                "top", true, 0, 1);
+            materialize(SystemVerilogCoverageAccessKind::save, 0, 1,
+                "top", true, 1, 0);
+            materialize(SystemVerilogCoverageAccessKind::merge, 0, 1,
+                "top", true, 0, 1);
+            materialize(SystemVerilogCoverageAccessKind::get, std::nullopt,
+                1, "top", true, 0, 1);
+            materialize(SystemVerilogCoverageAccessKind::get, std::nullopt,
+                1, "top", true, 1, 0);
+            materialize(SystemVerilogCoverageAccessKind::get, std::nullopt,
+                0, "top", true, 0, 1);
+            materialize(SystemVerilogCoverageAccessKind::get, std::nullopt,
+                1, "other", true, 0, 1);
+            materialize(SystemVerilogCoverageAccessKind::get, std::nullopt,
+                1, "top", false, 0, 1);
+        };
+    test_coverage_access_cache_identity(root / "coverage-access");
     const std::array<std::uint32_t, 2> widths { 1, 1 };
     const std::array<std::uint32_t, 1> sampled_widths { 1 };
     const auto make_process = [](const InstructionIndex equal_target) {

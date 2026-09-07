@@ -22,6 +22,68 @@ set(FSIM_CODE_COVERAGE_SOURCE_IMPLEMENTATION
   "${FSIM_SOURCE_DIR}/src/frontend/coverage_source_identity.cpp")
 set(FSIM_CODE_COVERAGE_SOURCE_TEST
   "${FSIM_SOURCE_DIR}/tests/frontend/coverage_source_identity_test.cpp")
+set(FSIM_COVERAGE_SOURCE_CONTROL
+  "${FSIM_SOURCE_DIR}/include/fsim/frontend/coverage_source_control.hpp")
+set(FSIM_COVERAGE_SOURCE_CONTROL_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/frontend/coverage_source_control.cpp")
+set(FSIM_COVERAGE_SOURCE_CONTROL_TEST
+  "${FSIM_SOURCE_DIR}/tests/elaboration/coverage_source_control_test.cpp")
+set(FSIM_COVERAGE_EXTERNAL_EXCLUSIONS
+  "${FSIM_SOURCE_DIR}/include/fsim/elaboration/coverage_external_exclusions.hpp")
+set(FSIM_COVERAGE_EXTERNAL_EXCLUSIONS_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/elaboration/coverage_external_exclusions.cpp")
+set(FSIM_COVERAGE_EXTERNAL_EXCLUSIONS_TEST
+  "${FSIM_SOURCE_DIR}/tests/elaboration/coverage_external_exclusions_test.cpp")
+set(FSIM_COVERAGE_EXTERNAL_EXCLUSIONS_APPLICATION
+  "${FSIM_SOURCE_DIR}/src/app/application_build.cpp")
+set(FSIM_COVERAGE_EXCLUSION_PERSISTENCE
+  "${FSIM_SOURCE_DIR}/include/fsim/elaboration/coverage_exclusion_persistence.hpp")
+set(FSIM_COVERAGE_EXCLUSION_PERSISTENCE_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/elaboration/coverage_exclusion_persistence.cpp")
+set(FSIM_COVERAGE_EXCLUSION_PERSISTENCE_TEST
+  "${FSIM_SOURCE_DIR}/tests/elaboration/coverage_exclusion_persistence_test.cpp")
+set(FSIM_COVERAGE_EXCLUSION_REPORT
+  "${FSIM_SOURCE_DIR}/include/fsim/artifact/coverage_exclusion_report.hpp")
+set(FSIM_COVERAGE_EXCLUSION_REPORT_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/artifact/coverage_exclusion_report.cpp")
+set(FSIM_COVERAGE_EXCLUSION_REPORT_TEST
+  "${FSIM_SOURCE_DIR}/tests/artifact/coverage_exclusion_report_test.cpp")
+set(FSIM_COVERAGE_REPORT_MODEL
+  "${FSIM_SOURCE_DIR}/include/fsim/artifact/coverage_report_model.hpp")
+set(FSIM_COVERAGE_REPORT_MODEL_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/artifact/coverage_report_model.cpp")
+set(FSIM_COVERAGE_REPORT_MODEL_TEST
+  "${FSIM_SOURCE_DIR}/tests/artifact/coverage_report_model_test.cpp")
+set(FSIM_COVERAGE_REPORT_RENDER
+  "${FSIM_SOURCE_DIR}/include/fsim/artifact/coverage_report_render.hpp")
+set(FSIM_COVERAGE_REPORT_RENDER_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/artifact/coverage_report_render.cpp")
+set(FSIM_COVERAGE_REPORT_RENDER_INTERNAL
+  "${FSIM_SOURCE_DIR}/src/artifact/coverage_report_render_internal.hpp")
+set(FSIM_COVERAGE_REPORT_RENDER_HTML
+  "${FSIM_SOURCE_DIR}/src/artifact/coverage_report_render_html.cpp")
+set(FSIM_COVERAGE_REPORT_RENDER_JSON
+  "${FSIM_SOURCE_DIR}/src/artifact/coverage_report_render_json.cpp")
+set(FSIM_COVERAGE_REPORT_RENDER_TEXT
+  "${FSIM_SOURCE_DIR}/src/artifact/coverage_report_render_text.cpp")
+set(FSIM_COVERAGE_REPORT_RENDER_TEST
+  "${FSIM_SOURCE_DIR}/tests/artifact/coverage_report_render_test.cpp")
+set(FSIM_COVERAGE_REPORT_PROJECTION
+  "${FSIM_SOURCE_DIR}/include/fsim/artifact/coverage_report_projection.hpp")
+set(FSIM_COVERAGE_REPORT_PROJECTION_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/artifact/coverage_report_projection.cpp")
+set(FSIM_COVERAGE_REPORT_PROJECTION_TEST
+  "${FSIM_SOURCE_DIR}/tests/artifact/coverage_report_projection_test.cpp")
+set(FSIM_COVERAGE_COMMAND
+  "${FSIM_SOURCE_DIR}/src/app/application_coverage_command.cpp")
+set(FSIM_COVERAGE_COMMAND_CLI
+  "${FSIM_SOURCE_DIR}/include/fsim/cli/driver.hpp")
+set(FSIM_COVERAGE_COMMAND_CLI_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/cli/driver.cpp")
+set(FSIM_COVERAGE_COMMAND_TEST
+  "${FSIM_SOURCE_DIR}/tests/app/coverage_command_test.cpp")
+set(FSIM_COVERAGE_DATABASE_ROBUSTNESS_TEST
+  "${FSIM_SOURCE_DIR}/tests/artifact/coverage_database_robustness_test.cpp")
 set(FSIM_CODE_COVERAGE_POINT
   "${FSIM_SOURCE_DIR}/include/fsim/frontend/coverage_point_identity.hpp")
 set(FSIM_CODE_COVERAGE_POINT_IMPLEMENTATION
@@ -194,6 +256,42 @@ set(FSIM_CODE_COVERAGE_CONTROL_IMPLEMENTATION
   "${FSIM_SOURCE_DIR}/src/app/application_coverage_control.cpp")
 set(FSIM_CODE_COVERAGE_CONTROL_TEST
   "${FSIM_SOURCE_DIR}/tests/app/code_coverage_control_test.cpp")
+set(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_PREPROCESSOR
+  "${FSIM_SOURCE_DIR}/src/frontend/verilog_preprocessor.cpp")
+set(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_PARSER
+  "${FSIM_SOURCE_DIR}/src/frontend/verilog_parser_expressions.cpp")
+set(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_LOWERING
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_expression_system.cpp")
+set(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_OPERATIONS
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/simir_operations_extended.hpp")
+set(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_RUNTIME
+  "${FSIM_SOURCE_DIR}/src/runtime/simir_coverage.cpp")
+set(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_INTERPRETER
+  "${FSIM_SOURCE_DIR}/src/runtime/simir_execution_interpreter.tpp")
+set(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_BOUNDARIES
+  "${FSIM_SOURCE_DIR}/src/runtime/simir_execution_boundaries.tpp")
+set(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_LLVM
+  "${FSIM_SOURCE_DIR}/src/compiler/llvm_jit_lowering_operations_suffix.tpp")
+set(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_CACHE
+  "${FSIM_SOURCE_DIR}/src/compiler/llvm_jit_cache_key_operations.tpp")
+set(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_APPLICATION
+  "${FSIM_SOURCE_DIR}/src/app/application_simulation_setup.tpp")
+set(FSIM_SYSTEMVERILOG_COVERAGE_ACCESS_APPLICATION
+  "${FSIM_SOURCE_DIR}/src/app/application_simulation_coverage.tpp")
+set(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_CACHE_TEST
+  "${FSIM_SOURCE_DIR}/tests/compiler/llvm_jit_control_cache_test.cpp")
+set(FSIM_SYSTEMVERILOG_VPI_COVERAGE_ABI
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/vpi_abi.h")
+set(FSIM_SYSTEMVERILOG_VPI_COVERAGE
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/vpi_coverage.hpp")
+set(FSIM_SYSTEMVERILOG_VPI_COVERAGE_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/vpi_coverage.cpp")
+set(FSIM_SYSTEMVERILOG_VPI_COVERAGE_OBJECT_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/vpi_object.cpp")
+set(FSIM_SYSTEMVERILOG_VPI_COVERAGE_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/vpi_coverage_test.cpp")
+set(FSIM_SYSTEMVERILOG_VPI_COVERAGE_ABI_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/runtime_vpi_abi_c_test.c")
 set(FSIM_CODE_COVERAGE_ARTIFACT_IDENTITY
   "${FSIM_SOURCE_DIR}/include/fsim/artifact/coverage_identity.hpp")
 set(FSIM_CODE_COVERAGE_ARTIFACT_IDENTITY_IMPLEMENTATION
@@ -212,6 +310,48 @@ set(FSIM_CODE_COVERAGE_METRICS_INVENTORY
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/code_coverage_metrics_inventory.tsv")
 set(FSIM_CODE_COVERAGE_METRICS_CHECKER
   "${FSIM_SOURCE_DIR}/cmake/CheckCodeCoverageMetricsInventory.cmake")
+set(FSIM_COVERAGE_DATABASE_SCHEMA
+  "${FSIM_SOURCE_DIR}/include/fsim/artifact/coverage_database.hpp")
+set(FSIM_COVERAGE_DATABASE_SCHEMA_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/artifact/coverage_database.cpp")
+set(FSIM_COVERAGE_DATABASE_SCHEMA_TEST
+  "${FSIM_SOURCE_DIR}/tests/artifact/coverage_database_schema_test.cpp")
+set(FSIM_COVERAGE_DATABASE_CODEC
+  "${FSIM_SOURCE_DIR}/include/fsim/artifact/coverage_database_codec.hpp")
+set(FSIM_COVERAGE_DATABASE_CODEC_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/artifact/coverage_database_codec.cpp")
+set(FSIM_COVERAGE_DATABASE_CODEC_TEST
+  "${FSIM_SOURCE_DIR}/tests/artifact/coverage_database_codec_test.cpp")
+set(FSIM_COVERAGE_DATABASE_MERGE
+  "${FSIM_SOURCE_DIR}/include/fsim/artifact/coverage_database_merge.hpp")
+set(FSIM_COVERAGE_DATABASE_MERGE_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/artifact/coverage_database_merge.cpp")
+set(FSIM_COVERAGE_DATABASE_MERGE_TEST
+  "${FSIM_SOURCE_DIR}/tests/artifact/coverage_database_merge_test.cpp")
+set(FSIM_COVERAGE_DATABASE_MODEL
+  "${FSIM_SOURCE_DIR}/include/fsim/artifact/coverage_database_model.hpp")
+set(FSIM_COVERAGE_DATABASE_MODEL_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/artifact/coverage_database_model.cpp")
+set(FSIM_COVERAGE_DATABASE_MODEL_TEST
+  "${FSIM_SOURCE_DIR}/tests/artifact/coverage_database_model_test.cpp")
+set(FSIM_COVERAGE_DATABASE_PARTIAL_MERGE
+  "${FSIM_SOURCE_DIR}/include/fsim/artifact/coverage_database_partial_merge.hpp")
+set(FSIM_COVERAGE_DATABASE_PARTIAL_MERGE_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/artifact/coverage_database_partial_merge.cpp")
+set(FSIM_COVERAGE_DATABASE_PARTIAL_MERGE_TEST
+  "${FSIM_SOURCE_DIR}/tests/artifact/coverage_database_partial_merge_test.cpp")
+set(FSIM_COVERAGE_DATABASE_SYSTEMVERILOG
+  "${FSIM_SOURCE_DIR}/include/fsim/frontend/coverage_database_systemverilog.hpp")
+set(FSIM_COVERAGE_DATABASE_SYSTEMVERILOG_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/frontend/coverage_database_systemverilog.cpp")
+set(FSIM_COVERAGE_DATABASE_SYSTEMVERILOG_TEST
+  "${FSIM_SOURCE_DIR}/tests/frontend/coverage_database_systemverilog_test.cpp")
+set(FSIM_COVERAGE_DATABASE_PSL
+  "${FSIM_SOURCE_DIR}/include/fsim/app/coverage_database_psl.hpp")
+set(FSIM_COVERAGE_DATABASE_PSL_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/app/application_coverage_database_psl.cpp")
+set(FSIM_COVERAGE_DATABASE_PSL_TEST
+  "${FSIM_SOURCE_DIR}/tests/app/coverage_database_psl_test.cpp")
 set(FSIM_JIT_RUNTIME
   "${FSIM_SOURCE_DIR}/include/fsim/compiler/jit_runtime.h")
 set(FSIM_FST_WRITER "${FSIM_SOURCE_DIR}/include/fsim/runtime/fst_writer.hpp")
@@ -257,6 +397,24 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_CODE_COVERAGE_SOURCE}"
     "${FSIM_CODE_COVERAGE_SOURCE_IMPLEMENTATION}"
     "${FSIM_CODE_COVERAGE_SOURCE_TEST}"
+    "${FSIM_COVERAGE_SOURCE_CONTROL}"
+    "${FSIM_COVERAGE_SOURCE_CONTROL_IMPLEMENTATION}"
+    "${FSIM_COVERAGE_SOURCE_CONTROL_TEST}"
+    "${FSIM_COVERAGE_EXTERNAL_EXCLUSIONS}"
+    "${FSIM_COVERAGE_EXTERNAL_EXCLUSIONS_IMPLEMENTATION}"
+    "${FSIM_COVERAGE_EXTERNAL_EXCLUSIONS_TEST}"
+    "${FSIM_COVERAGE_EXTERNAL_EXCLUSIONS_APPLICATION}"
+    "${FSIM_COVERAGE_REPORT_RENDER}"
+    "${FSIM_COVERAGE_REPORT_RENDER_IMPLEMENTATION}"
+    "${FSIM_COVERAGE_REPORT_RENDER_INTERNAL}"
+    "${FSIM_COVERAGE_REPORT_RENDER_HTML}"
+    "${FSIM_COVERAGE_REPORT_RENDER_JSON}"
+    "${FSIM_COVERAGE_REPORT_RENDER_TEXT}"
+    "${FSIM_COVERAGE_REPORT_RENDER_TEST}"
+    "${FSIM_COVERAGE_REPORT_PROJECTION}"
+    "${FSIM_COVERAGE_REPORT_PROJECTION_IMPLEMENTATION}"
+    "${FSIM_COVERAGE_REPORT_PROJECTION_TEST}"
+    "${FSIM_COVERAGE_DATABASE_ROBUSTNESS_TEST}"
     "${FSIM_CODE_COVERAGE_POINT}"
     "${FSIM_CODE_COVERAGE_POINT_IMPLEMENTATION}"
     "${FSIM_CODE_COVERAGE_POINT_TEST}"
@@ -310,6 +468,24 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_CODE_COVERAGE_CONTROL_APPLICATION}"
     "${FSIM_CODE_COVERAGE_CONTROL_IMPLEMENTATION}"
     "${FSIM_CODE_COVERAGE_CONTROL_TEST}"
+    "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_PREPROCESSOR}"
+    "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_PARSER}"
+    "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_LOWERING}"
+    "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_OPERATIONS}"
+    "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_RUNTIME}"
+    "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_INTERPRETER}"
+    "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_BOUNDARIES}"
+    "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_LLVM}"
+    "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_CACHE}"
+    "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_APPLICATION}"
+    "${FSIM_SYSTEMVERILOG_COVERAGE_ACCESS_APPLICATION}"
+    "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_CACHE_TEST}"
+    "${FSIM_SYSTEMVERILOG_VPI_COVERAGE_ABI}"
+    "${FSIM_SYSTEMVERILOG_VPI_COVERAGE}"
+    "${FSIM_SYSTEMVERILOG_VPI_COVERAGE_IMPLEMENTATION}"
+    "${FSIM_SYSTEMVERILOG_VPI_COVERAGE_OBJECT_IMPLEMENTATION}"
+    "${FSIM_SYSTEMVERILOG_VPI_COVERAGE_TEST}"
+    "${FSIM_SYSTEMVERILOG_VPI_COVERAGE_ABI_TEST}"
     "${FSIM_CODE_COVERAGE_ARTIFACT_IDENTITY}"
     "${FSIM_CODE_COVERAGE_ARTIFACT_IDENTITY_IMPLEMENTATION}"
     "${FSIM_CODE_COVERAGE_ARTIFACT_IDENTITY_TEST}"
@@ -319,6 +495,21 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_CODE_COVERAGE_METRICS_IDENTITY_TEST}"
     "${FSIM_CODE_COVERAGE_METRICS_INVENTORY}"
     "${FSIM_CODE_COVERAGE_METRICS_CHECKER}"
+    "${FSIM_COVERAGE_DATABASE_SCHEMA}"
+    "${FSIM_COVERAGE_DATABASE_SCHEMA_IMPLEMENTATION}"
+    "${FSIM_COVERAGE_DATABASE_SCHEMA_TEST}"
+    "${FSIM_COVERAGE_DATABASE_CODEC}"
+    "${FSIM_COVERAGE_DATABASE_CODEC_IMPLEMENTATION}"
+    "${FSIM_COVERAGE_DATABASE_CODEC_TEST}"
+    "${FSIM_COVERAGE_DATABASE_MODEL}"
+    "${FSIM_COVERAGE_DATABASE_MODEL_IMPLEMENTATION}"
+    "${FSIM_COVERAGE_DATABASE_MODEL_TEST}"
+    "${FSIM_COVERAGE_DATABASE_SYSTEMVERILOG}"
+    "${FSIM_COVERAGE_DATABASE_SYSTEMVERILOG_IMPLEMENTATION}"
+    "${FSIM_COVERAGE_DATABASE_SYSTEMVERILOG_TEST}"
+    "${FSIM_COVERAGE_DATABASE_PSL}"
+    "${FSIM_COVERAGE_DATABASE_PSL_IMPLEMENTATION}"
+    "${FSIM_COVERAGE_DATABASE_PSL_TEST}"
     "${FSIM_JIT_RUNTIME}"
     "${FSIM_FST_WRITER}"
     "${FSIM_FST_WRITER_IMPLEMENTATION}"
@@ -358,6 +549,42 @@ file(READ "${FSIM_CODE_COVERAGE_CONTROL_IMPLEMENTATION}"
   FSIM_CODE_COVERAGE_CONTROL_IMPLEMENTATION_CONTENTS)
 file(READ "${FSIM_CODE_COVERAGE_CONTROL_TEST}"
   FSIM_CODE_COVERAGE_CONTROL_TEST_CONTENTS)
+file(READ "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_PREPROCESSOR}"
+  FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_PREPROCESSOR_CONTENTS)
+file(READ "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_PARSER}"
+  FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_PARSER_CONTENTS)
+file(READ "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_LOWERING}"
+  FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_LOWERING_CONTENTS)
+file(READ "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_OPERATIONS}"
+  FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_OPERATIONS_CONTENTS)
+file(READ "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_RUNTIME}"
+  FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_RUNTIME_CONTENTS)
+file(READ "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_INTERPRETER}"
+  FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_INTERPRETER_CONTENTS)
+file(READ "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_BOUNDARIES}"
+  FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_BOUNDARIES_CONTENTS)
+file(READ "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_LLVM}"
+  FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_LLVM_CONTENTS)
+file(READ "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_CACHE}"
+  FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_CACHE_CONTENTS)
+file(READ "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_APPLICATION}"
+  FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_APPLICATION_CONTENTS)
+file(READ "${FSIM_SYSTEMVERILOG_COVERAGE_ACCESS_APPLICATION}"
+  FSIM_SYSTEMVERILOG_COVERAGE_ACCESS_APPLICATION_CONTENTS)
+file(READ "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_CACHE_TEST}"
+  FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_CACHE_TEST_CONTENTS)
+file(READ "${FSIM_SYSTEMVERILOG_VPI_COVERAGE_ABI}"
+  FSIM_SYSTEMVERILOG_VPI_COVERAGE_ABI_CONTENTS)
+file(READ "${FSIM_SYSTEMVERILOG_VPI_COVERAGE}"
+  FSIM_SYSTEMVERILOG_VPI_COVERAGE_CONTENTS)
+file(READ "${FSIM_SYSTEMVERILOG_VPI_COVERAGE_IMPLEMENTATION}"
+  FSIM_SYSTEMVERILOG_VPI_COVERAGE_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_SYSTEMVERILOG_VPI_COVERAGE_OBJECT_IMPLEMENTATION}"
+  FSIM_SYSTEMVERILOG_VPI_COVERAGE_OBJECT_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_SYSTEMVERILOG_VPI_COVERAGE_TEST}"
+  FSIM_SYSTEMVERILOG_VPI_COVERAGE_TEST_CONTENTS)
+file(READ "${FSIM_SYSTEMVERILOG_VPI_COVERAGE_ABI_TEST}"
+  FSIM_SYSTEMVERILOG_VPI_COVERAGE_ABI_TEST_CONTENTS)
 file(READ "${FSIM_CODE_COVERAGE_ARTIFACT_IDENTITY}"
   FSIM_CODE_COVERAGE_ARTIFACT_IDENTITY_CONTENTS)
 file(READ "${FSIM_CODE_COVERAGE_ARTIFACT_IDENTITY_IMPLEMENTATION}"
@@ -376,6 +603,48 @@ file(READ "${FSIM_CODE_COVERAGE_METRICS_INVENTORY}"
   FSIM_CODE_COVERAGE_METRICS_INVENTORY_CONTENTS)
 file(READ "${FSIM_CODE_COVERAGE_METRICS_CHECKER}"
   FSIM_CODE_COVERAGE_METRICS_CHECKER_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_SCHEMA}"
+  FSIM_COVERAGE_DATABASE_SCHEMA_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_SCHEMA_IMPLEMENTATION}"
+  FSIM_COVERAGE_DATABASE_SCHEMA_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_SCHEMA_TEST}"
+  FSIM_COVERAGE_DATABASE_SCHEMA_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_CODEC}"
+  FSIM_COVERAGE_DATABASE_CODEC_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_CODEC_IMPLEMENTATION}"
+  FSIM_COVERAGE_DATABASE_CODEC_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_CODEC_TEST}"
+  FSIM_COVERAGE_DATABASE_CODEC_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_MERGE}"
+  FSIM_COVERAGE_DATABASE_MERGE_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_MERGE_IMPLEMENTATION}"
+  FSIM_COVERAGE_DATABASE_MERGE_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_MERGE_TEST}"
+  FSIM_COVERAGE_DATABASE_MERGE_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_MODEL}"
+  FSIM_COVERAGE_DATABASE_MODEL_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_MODEL_IMPLEMENTATION}"
+  FSIM_COVERAGE_DATABASE_MODEL_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_MODEL_TEST}"
+  FSIM_COVERAGE_DATABASE_MODEL_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_PARTIAL_MERGE}"
+  FSIM_COVERAGE_DATABASE_PARTIAL_MERGE_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_PARTIAL_MERGE_IMPLEMENTATION}"
+  FSIM_COVERAGE_DATABASE_PARTIAL_MERGE_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_PARTIAL_MERGE_TEST}"
+  FSIM_COVERAGE_DATABASE_PARTIAL_MERGE_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_SYSTEMVERILOG}"
+  FSIM_COVERAGE_DATABASE_SYSTEMVERILOG_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_SYSTEMVERILOG_IMPLEMENTATION}"
+  FSIM_COVERAGE_DATABASE_SYSTEMVERILOG_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_SYSTEMVERILOG_TEST}"
+  FSIM_COVERAGE_DATABASE_SYSTEMVERILOG_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_PSL}"
+  FSIM_COVERAGE_DATABASE_PSL_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_PSL_IMPLEMENTATION}"
+  FSIM_COVERAGE_DATABASE_PSL_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_PSL_TEST}"
+  FSIM_COVERAGE_DATABASE_PSL_TEST_CONTENTS)
 
 foreach(FSIM_RUNNER_TEMP_POLICY IN ITEMS
     "llvm_installer=\"\${RUNNER_TEMP}/llvm-22-installer.sh\""
@@ -401,6 +670,68 @@ file(READ "${FSIM_CODE_COVERAGE_SOURCE_IMPLEMENTATION}"
   FSIM_CODE_COVERAGE_SOURCE_IMPLEMENTATION_CONTENTS)
 file(READ "${FSIM_CODE_COVERAGE_SOURCE_TEST}"
   FSIM_CODE_COVERAGE_SOURCE_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_SOURCE_CONTROL}"
+  FSIM_COVERAGE_SOURCE_CONTROL_CONTENTS)
+file(READ "${FSIM_COVERAGE_SOURCE_CONTROL_IMPLEMENTATION}"
+  FSIM_COVERAGE_SOURCE_CONTROL_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_SOURCE_CONTROL_TEST}"
+  FSIM_COVERAGE_SOURCE_CONTROL_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_EXTERNAL_EXCLUSIONS}"
+  FSIM_COVERAGE_EXTERNAL_EXCLUSIONS_CONTENTS)
+file(READ "${FSIM_COVERAGE_EXTERNAL_EXCLUSIONS_IMPLEMENTATION}"
+  FSIM_COVERAGE_EXTERNAL_EXCLUSIONS_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_EXTERNAL_EXCLUSIONS_TEST}"
+  FSIM_COVERAGE_EXTERNAL_EXCLUSIONS_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_EXTERNAL_EXCLUSIONS_APPLICATION}"
+  FSIM_COVERAGE_EXTERNAL_EXCLUSIONS_APPLICATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_EXCLUSION_PERSISTENCE}"
+  FSIM_COVERAGE_EXCLUSION_PERSISTENCE_CONTENTS)
+file(READ "${FSIM_COVERAGE_EXCLUSION_PERSISTENCE_IMPLEMENTATION}"
+  FSIM_COVERAGE_EXCLUSION_PERSISTENCE_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_EXCLUSION_PERSISTENCE_TEST}"
+  FSIM_COVERAGE_EXCLUSION_PERSISTENCE_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_EXCLUSION_REPORT}"
+  FSIM_COVERAGE_EXCLUSION_REPORT_CONTENTS)
+file(READ "${FSIM_COVERAGE_EXCLUSION_REPORT_IMPLEMENTATION}"
+  FSIM_COVERAGE_EXCLUSION_REPORT_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_EXCLUSION_REPORT_TEST}"
+  FSIM_COVERAGE_EXCLUSION_REPORT_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_REPORT_MODEL}"
+  FSIM_COVERAGE_REPORT_MODEL_CONTENTS)
+file(READ "${FSIM_COVERAGE_REPORT_MODEL_IMPLEMENTATION}"
+  FSIM_COVERAGE_REPORT_MODEL_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_REPORT_MODEL_TEST}"
+  FSIM_COVERAGE_REPORT_MODEL_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_REPORT_RENDER}"
+  FSIM_COVERAGE_REPORT_RENDER_CONTENTS)
+file(READ "${FSIM_COVERAGE_REPORT_RENDER_IMPLEMENTATION}"
+  FSIM_COVERAGE_REPORT_RENDER_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_REPORT_RENDER_INTERNAL}"
+  FSIM_COVERAGE_REPORT_RENDER_INTERNAL_CONTENTS)
+file(READ "${FSIM_COVERAGE_REPORT_RENDER_HTML}"
+  FSIM_COVERAGE_REPORT_RENDER_HTML_CONTENTS)
+file(READ "${FSIM_COVERAGE_REPORT_RENDER_JSON}"
+  FSIM_COVERAGE_REPORT_RENDER_JSON_CONTENTS)
+file(READ "${FSIM_COVERAGE_REPORT_RENDER_TEXT}"
+  FSIM_COVERAGE_REPORT_RENDER_TEXT_CONTENTS)
+file(READ "${FSIM_COVERAGE_REPORT_RENDER_TEST}"
+  FSIM_COVERAGE_REPORT_RENDER_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_REPORT_PROJECTION}"
+  FSIM_COVERAGE_REPORT_PROJECTION_CONTENTS)
+file(READ "${FSIM_COVERAGE_REPORT_PROJECTION_IMPLEMENTATION}"
+  FSIM_COVERAGE_REPORT_PROJECTION_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_REPORT_PROJECTION_TEST}"
+  FSIM_COVERAGE_REPORT_PROJECTION_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_COMMAND}"
+  FSIM_COVERAGE_COMMAND_CONTENTS)
+file(READ "${FSIM_COVERAGE_COMMAND_CLI}"
+  FSIM_COVERAGE_COMMAND_CLI_CONTENTS)
+file(READ "${FSIM_COVERAGE_COMMAND_CLI_IMPLEMENTATION}"
+  FSIM_COVERAGE_COMMAND_CLI_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_COVERAGE_COMMAND_TEST}"
+  FSIM_COVERAGE_COMMAND_TEST_CONTENTS)
+file(READ "${FSIM_COVERAGE_DATABASE_ROBUSTNESS_TEST}"
+  FSIM_COVERAGE_DATABASE_ROBUSTNESS_TEST_CONTENTS)
 file(READ "${FSIM_CODE_COVERAGE_POINT}"
   FSIM_CODE_COVERAGE_POINT_CONTENTS)
 file(READ "${FSIM_CODE_COVERAGE_POINT_IMPLEMENTATION}"
@@ -960,6 +1291,78 @@ foreach(FSIM_CODE_COVERAGE_CONTROL_POLICY IN ITEMS
   endif()
 endforeach()
 
+foreach(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_POLICY IN ITEMS
+    "SV_COV_START"
+    "SV_COV_OVERFLOW"
+    "FSIM-COV-038"
+    "enum class SystemVerilogCoverageScope"
+    "struct CoverageControl"
+    "SystemVerilogCoverageStatus"
+    "control_coverage"
+    "CodeCoverageCounterUpdate::Ignored"
+    "direct_values"
+    "CoverageControl>"
+    "code_coverage_counter("
+    "sources.standard = \"2005\""
+    "test_counter_control_semantics"
+    "test_coverage_control_cache_identity"
+    "fsim.application.code-coverage-control")
+  string(FIND
+    "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_PREPROCESSOR_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_PARSER_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_LOWERING_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_OPERATIONS_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_RUNTIME_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_INTERPRETER_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_BOUNDARIES_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_LLVM_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_CACHE_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_APPLICATION_CONTENTS}${FSIM_CODE_COVERAGE_CONTROL_TEST_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_CACHE_TEST_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}"
+    "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "SystemVerilog coverage control lost standard, engine, or cache policy: ${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_SYSTEMVERILOG_COVERAGE_ACCESS_POLICY IN ITEMS
+    "FSIM-COV-039"
+    "enum class SystemVerilogCoverageAccessKind"
+    "struct CoverageAccess"
+    "access_coverage"
+    "$coverage_get"
+    "$coverage_get_max"
+    "$coverage_merge"
+    "$coverage_save"
+    "write_coverage_database_atomically"
+    "merge_coverage_databases"
+    "coverage_database_file(event.filename)"
+    "test_coverage_access_semantics"
+    "test_coverage_access_cache_identity")
+  string(FIND
+    "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_PARSER_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_LOWERING_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_OPERATIONS_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_RUNTIME_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_INTERPRETER_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_BOUNDARIES_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_LLVM_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_CACHE_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_ACCESS_APPLICATION_CONTENTS}${FSIM_CODE_COVERAGE_CONTROL_TEST_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_CACHE_TEST_CONTENTS}${FSIM_DIAGNOSTICS_CONTENTS}"
+    "${FSIM_SYSTEMVERILOG_COVERAGE_ACCESS_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "SystemVerilog coverage access lost query, persistence, engine, or cache policy: ${FSIM_SYSTEMVERILOG_COVERAGE_ACCESS_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_SYSTEMVERILOG_COVERAGE_SELECTION_POLICY IN ITEMS
+    "selector_is_instance"
+    "instance_context"
+    "builder.add(\"instance-context\""
+    "select_standard_coverage("
+    "standard_module_name_matches("
+    "selector == \"$root\""
+    "scope == Scope::hierarchy"
+    "set_code_coverage_collection_enabled("
+    "test_standard_coverage_selection"
+    "leaf_maximum == 2U"
+    "hierarchy_maximum == 3U")
+  string(FIND
+    "${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_LOWERING_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_OPERATIONS_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_RUNTIME_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_INTERPRETER_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_BOUNDARIES_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_LLVM_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_CACHE_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_ACCESS_APPLICATION_CONTENTS}${FSIM_CODE_COVERAGE_CONTROL_TEST_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_CACHE_TEST_CONTENTS}"
+    "${FSIM_SYSTEMVERILOG_COVERAGE_SELECTION_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "SystemVerilog coverage selection lost scope, instance, engine, or cache policy: ${FSIM_SYSTEMVERILOG_COVERAGE_SELECTION_POLICY}")
+  endif()
+endforeach()
+
 foreach(FSIM_COVERAGE_INVENTORY_POLICY IN ITEMS
     "maximum_sources { 1U << 16U }"
     "maximum_instances { 1U << 20U }"
@@ -1279,6 +1682,212 @@ foreach(FSIM_CODE_COVERAGE_METRICS_POLICY IN ITEMS
   endif()
 endforeach()
 
+foreach(FSIM_COVERAGE_DATABASE_SCHEMA_POLICY IN ITEMS
+    "kCoverageDatabaseMagic"
+    "kCoverageDatabaseSchema = 3U"
+    "kCoverageDatabaseNamespaceSchema = 3U"
+    "kCoverageDatabaseByteOrderMarker = 0x01020304U"
+    "kCoverageDatabaseHeaderBytes = 64U"
+    "kCoverageDatabaseNamespaceDescriptorBytes = 64U"
+    "kCoverageDatabaseNamespaceCount = 3U"
+    "CoverageDatabaseNamespace::Code"
+    "CoverageDatabaseNamespace::SystemVerilogFunctional"
+    "CoverageDatabaseNamespace::Psl"
+    "maximum_container_bytes { 1ULL << 30U }"
+    "maximum_namespace_bytes { 512ULL << 20U }"
+    "CoverageDatabaseSchemaError::ArithmeticOverflow"
+    "invalid.header.schema = 2U"
+    "fsim.artifact.coverage-database-schema")
+  string(FIND
+    "${FSIM_COVERAGE_DATABASE_SCHEMA_CONTENTS}${FSIM_COVERAGE_DATABASE_SCHEMA_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_DATABASE_SCHEMA_TEST_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}"
+    "${FSIM_COVERAGE_DATABASE_SCHEMA_POLICY}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      ".fsimcov v3 container schema lost bounded policy: ${FSIM_COVERAGE_DATABASE_SCHEMA_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_SYSTEMVERILOG_VPI_COVERAGE_POLICY IN ITEMS
+    "FSIM-COV-040"
+    "fsim-systemverilog-vpi-coverage-v3"
+    "vpiCoverageStart 750"
+    "vpiFsm 758"
+    "vpiCovered 765"
+    "vpiFsmStateExpression 776"
+    "SystemVerilogVpiCoverageService"
+    "maximum_states { 1U << 22U }"
+    "publish_target"
+    "publish_fsm"
+    "DuplicateState"
+    "CrossSimulation"
+    "release_iterator"
+    "Bit 62 is reserved for v3 coverage objects"
+    "configure_standard_vpi_coverage"
+    "test_fsm_relations_values_and_iterators")
+  string(FIND
+    "${FSIM_SYSTEMVERILOG_VPI_COVERAGE_ABI_CONTENTS}${FSIM_SYSTEMVERILOG_VPI_COVERAGE_CONTENTS}${FSIM_SYSTEMVERILOG_VPI_COVERAGE_IMPLEMENTATION_CONTENTS}${FSIM_SYSTEMVERILOG_VPI_COVERAGE_OBJECT_IMPLEMENTATION_CONTENTS}${FSIM_SYSTEMVERILOG_VPI_COVERAGE_TEST_CONTENTS}${FSIM_SYSTEMVERILOG_VPI_COVERAGE_ABI_TEST_CONTENTS}${FSIM_SYSTEMVERILOG_COVERAGE_ACCESS_APPLICATION_CONTENTS}${FSIM_DIAGNOSTICS_CONTENTS}"
+    "${FSIM_SYSTEMVERILOG_VPI_COVERAGE_POLICY}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "SystemVerilog VPI coverage lost ABI, ownership, traversal, or resource policy: ${FSIM_SYSTEMVERILOG_VPI_COVERAGE_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_DATABASE_MODEL_POLICY IN ITEMS
+    "fsim-unified-coverage-database-v3"
+    "CoverageDatabaseModelFingerprint"
+    "std::vector<CoverageDatabaseSourceRecord> sources"
+    "std::vector<CoverageDatabaseRunRecord> runs"
+    "std::vector<CoverageDatabaseMetricRecord> metrics"
+    "std::vector<CoverageDatabaseExclusionRecord> exclusions"
+    "maximum_sources { 1U << 20U }"
+    "maximum_runs { 1U << 16U }"
+    "maximum_metrics { 1U << 24U }"
+    "maximum_exclusions { 1U << 24U }"
+    "maximum_text_bytes { 1U << 30U }"
+    "CoverageDatabaseNamespace::SystemVerilogFunctional"
+    "CoverageDatabaseNamespace::Psl"
+    "metric.overflow"
+    "std::ranges::sort(contents.metrics"
+    "invalid.fingerprint.schema = 2U"
+    "fsim.artifact.coverage-database-model")
+  string(FIND
+    "${FSIM_COVERAGE_DATABASE_MODEL_CONTENTS}${FSIM_COVERAGE_DATABASE_MODEL_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_DATABASE_MODEL_TEST_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}"
+    "${FSIM_COVERAGE_DATABASE_MODEL_POLICY}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      ".fsimcov v3 content model lost bounded policy: ${FSIM_COVERAGE_DATABASE_MODEL_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_DATABASE_SYSTEMVERILOG_POLICY IN ITEMS
+    "FSIM-COV-033"
+    "CoverageDatabaseNamespace::SystemVerilogFunctional"
+    "CoverageDatabaseMetricFamily::SystemVerilogCoverpoint"
+    "CoverageDatabaseMetricFamily::SystemVerilogCross"
+    "maximum_source_bindings { 1U << 20U }"
+    "maximum_declarations { 1U << 20U }"
+    "maximum_instances { 1U << 20U }"
+    "maximum_bins { 1U << 24U }"
+    "fsim-systemverilog-coverage-instance-v3"
+    "fsim-systemverilog-coverpoint-bin-v3"
+    "fsim-systemverilog-cross-bin-v3"
+    "SystemVerilog functional coverage bin excluded"
+    "cross.exclusion_count"
+    "SystemVerilogCoverageDatabaseError::NamespaceNotEmpty"
+    "SystemVerilogCoverageDatabaseError::InvalidDatabaseModel"
+    "fsim.frontend.coverage-database-systemverilog")
+  string(FIND
+    "${FSIM_COVERAGE_DATABASE_MODEL_CONTENTS}${FSIM_COVERAGE_DATABASE_SYSTEMVERILOG_CONTENTS}${FSIM_COVERAGE_DATABASE_SYSTEMVERILOG_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_DATABASE_SYSTEMVERILOG_TEST_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}"
+    "${FSIM_COVERAGE_DATABASE_SYSTEMVERILOG_POLICY}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      ".fsimcov SystemVerilog namespace lost bounded policy: ${FSIM_COVERAGE_DATABASE_SYSTEMVERILOG_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_DATABASE_PSL_POLICY IN ITEMS
+    "FSIM-COV-034"
+    "CoverageDatabaseNamespace::Psl"
+    "CoverageDatabaseMetricFamily::PslDirective"
+    "CoverageDatabaseMetricFamily::PslProperty"
+    "maximum_source_bindings { 1U << 20U }"
+    "maximum_directives { 1U << 20U }"
+    "maximum_identity_bytes { 1U << 20U }"
+    "fsim-psl-coverage-instance-v3"
+    "fsim-psl-coverage-bin-v3"
+    "std::string_view { \"pass\" }"
+    "std::string_view { \"failure\" }"
+    "std::string_view { \"vacuous\" }"
+    "std::string_view { \"aborted\" }"
+    "completed != item.attempts"
+    "PslCoverageDatabaseError::NamespaceNotEmpty"
+    "PslCoverageDatabaseError::InvalidDatabaseModel"
+    "fsim.application.coverage-database-psl")
+  string(FIND
+    "${FSIM_COVERAGE_DATABASE_MODEL_CONTENTS}${FSIM_COVERAGE_DATABASE_PSL_CONTENTS}${FSIM_COVERAGE_DATABASE_PSL_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_DATABASE_PSL_TEST_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}"
+    "${FSIM_COVERAGE_DATABASE_PSL_POLICY}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      ".fsimcov PSL namespace lost bounded policy: ${FSIM_COVERAGE_DATABASE_PSL_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_DATABASE_CODEC_POLICY IN ITEMS
+    "FSIM-COV-035"
+    "serialize_coverage_database"
+    "deserialize_coverage_database"
+    "write_coverage_database_atomically"
+    "read_coverage_database"
+    "kNamespaceMagic"
+    "writer.patch_u64(16U"
+    "digest_bytes(payload) != descriptor.payload_digest"
+    "add_product(minimum_bytes"
+    "CoverageDatabaseCodecError::ResourceLimit"
+    "CoverageDatabaseSchemaError::SchemaMismatch"
+    "CoverageDatabaseSchemaError::NamespaceSchemaMismatch"
+    ".fsim-tmp"
+    ".fsim-old"
+    "!destination_exists && backup_exists"
+    "fsim.artifact.coverage-database-codec")
+  string(FIND
+    "${FSIM_COVERAGE_DATABASE_CODEC_CONTENTS}${FSIM_COVERAGE_DATABASE_CODEC_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_DATABASE_CODEC_TEST_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}"
+    "${FSIM_COVERAGE_DATABASE_CODEC_POLICY}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      ".fsimcov codec lost deterministic, bounded, or atomic policy: ${FSIM_COVERAGE_DATABASE_CODEC_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_DATABASE_MERGE_POLICY IN ITEMS
+    "FSIM-COV-036"
+    "merge_coverage_databases"
+    "CoverageDatabaseMergeError::FingerprintMismatch"
+    "CoverageDatabaseMergeError::SourceInventoryMismatch"
+    "CoverageDatabaseMergeError::ExclusionInventoryMismatch"
+    "CoverageDatabaseMergeError::DuplicateRun"
+    "checked_accumulate"
+    "std::set<CoverageDatabaseIdentity> run_identities"
+    "maximum_inputs { 1U << 16U }"
+    "make_coverage_database_contents(inputs[input_index], limits.model)"
+    "limits.model.maximum_runs"
+    "limits.model.maximum_metrics"
+    "fingerprint.schema = 2U"
+    "fsim.artifact.coverage-database-merge")
+  string(FIND
+    "${FSIM_COVERAGE_DATABASE_MERGE_CONTENTS}${FSIM_COVERAGE_DATABASE_MERGE_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_DATABASE_MERGE_TEST_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}"
+    "${FSIM_COVERAGE_DATABASE_MERGE_POLICY}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      ".fsimcov strict merge lost identity, transaction, or resource policy: ${FSIM_COVERAGE_DATABASE_MERGE_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_DATABASE_PARTIAL_MERGE_POLICY IN ITEMS
+    "FSIM-COV-037"
+    "merge_coverage_databases_partially"
+    "CoverageDatabasePartialMergeStatistics"
+    "maximum_historical_sources { 1U << 22U }"
+    "maximum_historical_runs { 1U << 20U }"
+    "maximum_historical_metrics { 1U << 26U }"
+    "maximum_historical_exclusions { 1U << 24U }"
+    "history.size() > limits.merge.maximum_inputs - 1U"
+    "target_metric_count"
+    "std::ranges::binary_search(target_metrics"
+    "unchanged_sources"
+    "statistics.omitted_metrics"
+    "statistics.omitted_exclusions"
+    "fingerprint.schema = 2U"
+    "fsim.artifact.coverage-database-partial-merge")
+  string(FIND
+    "${FSIM_COVERAGE_DATABASE_PARTIAL_MERGE_CONTENTS}${FSIM_COVERAGE_DATABASE_PARTIAL_MERGE_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_DATABASE_PARTIAL_MERGE_TEST_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}"
+    "${FSIM_COVERAGE_DATABASE_PARTIAL_MERGE_POLICY}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      ".fsimcov partial merge lost target, point-identity, omission, or resource policy: ${FSIM_COVERAGE_DATABASE_PARTIAL_MERGE_POLICY}")
+  endif()
+endforeach()
+
 foreach(FSIM_CODE_COVERAGE_SOURCE_POLICY IN ITEMS
     "maximum_logical_path_bytes { 1U << 20U }"
     "maximum_content_bytes { 1U << 30U }"
@@ -1295,6 +1904,208 @@ foreach(FSIM_CODE_COVERAGE_SOURCE_POLICY IN ITEMS
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR
       "code coverage source identity lost resource policy: ${FSIM_CODE_COVERAGE_SOURCE_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_SOURCE_CONTROL_POLICY IN ITEMS
+    "FSIM-COV-041"
+    "maximum_source_bytes { 1U << 30U }"
+    "maximum_line_bytes { 1U << 20U }"
+    "maximum_directives { 1U << 16U }"
+    "maximum_reason_bytes { 1U << 12U }"
+    "maximum_total_reason_bytes { 1U << 20U }"
+    "// fsim coverage off metric=statement reason=\"generated glue\""
+    "corresponding VHDL `--` spelling"
+    "CoverageSourceControlError::ConflictingAllMetric"
+    "source.source_text.size()"
+    "support::Sha256::digest(source.source_text)"
+    "coverage_source_exclusion_at("
+    "CoverageSourceMetric::Statement"
+    "VerilogCoveragePointError::InvalidSourceControl"
+    "VhdlCoveragePointError::InvalidSourceControl"
+    "fsim.elaboration.coverage_source_control")
+  string(FIND
+    "${FSIM_COVERAGE_SOURCE_CONTROL_CONTENTS}${FSIM_COVERAGE_SOURCE_CONTROL_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_SOURCE_CONTROL_TEST_CONTENTS}${FSIM_VERILOG_COVERAGE_POINTS_CONTENTS}${FSIM_VERILOG_COVERAGE_POINTS_IMPLEMENTATION_CONTENTS}${FSIM_VHDL_COVERAGE_POINTS_CONTENTS}${FSIM_VHDL_COVERAGE_POINTS_IMPLEMENTATION_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}"
+    "${FSIM_COVERAGE_SOURCE_CONTROL_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "coverage source control lost syntax, reason, metric, language, or resource policy: ${FSIM_COVERAGE_SOURCE_CONTROL_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_EXTERNAL_EXCLUSION_POLICY IN ITEMS
+    "FSIM-COV-042"
+    "fsim-coverage-external-exclusion-v1"
+    "CoverageExclusionEntry"
+    "coverage.exclude"
+    "maximum_rules { 1U << 16U }"
+    "maximum_pattern_bytes { 1U << 12U }"
+    "maximum_reason_bytes { 1U << 12U }"
+    "maximum_total_bytes { 1U << 24U }"
+    "maximum_targets { 1U << 20U }"
+    "maximum_match_operations { 1U << 28U }"
+    "CoverageExternalExclusionError::InvalidPlan"
+    "config.coverage.exclusions"
+    "must fail before elaboration"
+    "match_coverage_external_exclusions("
+    "fsim.elaboration.coverage_external_exclusions")
+  string(FIND
+    "${FSIM_COVERAGE_EXTERNAL_EXCLUSIONS_CONTENTS}${FSIM_COVERAGE_EXTERNAL_EXCLUSIONS_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_EXTERNAL_EXCLUSIONS_TEST_CONTENTS}${FSIM_COVERAGE_EXTERNAL_EXCLUSIONS_APPLICATION_CONTENTS}${FSIM_CODE_COVERAGE_CONTROL_PROJECT_CONTENTS}${FSIM_CODE_COVERAGE_CONTROL_TEST_CONTENTS}${FSIM_COVERAGE_FSM_HINTS_PROJECT_IMPLEMENTATION_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}"
+    "${FSIM_COVERAGE_EXTERNAL_EXCLUSION_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "external coverage exclusions lost manifest, selector, identity, or resource policy: ${FSIM_COVERAGE_EXTERNAL_EXCLUSION_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_EXCLUSION_PERSISTENCE_POLICY IN ITEMS
+    "FSIM-COV-043"
+    "CoverageExclusionCandidate"
+    "maximum_candidates { 1U << 20U }"
+    "maximum_source_reasons { 1U << 24U }"
+    "maximum_records { 1U << 24U }"
+    "maximum_total_reason_bytes { 1U << 30U }"
+    "CoverageDatabaseMetricScope::Source"
+    "CoverageDatabaseMetricScope::Instance"
+    "match_coverage_external_exclusions("
+    "record.point_identity, record.reason"
+    "VerilogStatementCoverageExclusion"
+    "VhdlStatementCoverageExclusion"
+    "CoverageExclusionReportPoint"
+    "validate_coverage_database_contents("
+    "total_reasons"
+    "fsim.elaboration.coverage_exclusion_persistence"
+    "fsim.artifact.coverage-exclusion-report")
+  string(FIND
+    "${FSIM_COVERAGE_EXCLUSION_PERSISTENCE_CONTENTS}${FSIM_COVERAGE_EXCLUSION_PERSISTENCE_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_EXCLUSION_PERSISTENCE_TEST_CONTENTS}${FSIM_COVERAGE_EXCLUSION_REPORT_CONTENTS}${FSIM_COVERAGE_EXCLUSION_REPORT_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_EXCLUSION_REPORT_TEST_CONTENTS}${FSIM_COVERAGE_DATABASE_MODEL_IMPLEMENTATION_CONTENTS}${FSIM_VERILOG_COVERAGE_POINTS_CONTENTS}${FSIM_VHDL_COVERAGE_POINTS_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}"
+    "${FSIM_COVERAGE_EXCLUSION_PERSISTENCE_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "coverage exclusion persistence lost point, reason, database, report, or resource policy: ${FSIM_COVERAGE_EXCLUSION_PERSISTENCE_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_REPORT_MODEL_POLICY IN ITEMS
+    "FSIM-COV-044"
+    "CoverageSourceReport"
+    "CoverageInstanceReport"
+    "CoverageCombinedReport"
+    "Deliberately no overall"
+    "maximum_exact_points { 1U << 24U }"
+    "maximum_source_points { 1U << 24U }"
+    "maximum_instance_points { 1U << 24U }"
+    "maximum_instances { 1U << 20U }"
+    "make_coverage_exclusion_report("
+    "source_occurrence"
+    "combined.metrics"
+    "hits_saturated"
+    "fsim.artifact.coverage-report-model")
+  string(FIND
+    "${FSIM_COVERAGE_REPORT_MODEL_CONTENTS}${FSIM_COVERAGE_REPORT_MODEL_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_REPORT_MODEL_TEST_CONTENTS}${FSIM_COVERAGE_EXCLUSION_REPORT_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}"
+    "${FSIM_COVERAGE_REPORT_MODEL_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "coverage report model lost source, instance, combined, exclusion, saturation, or resource policy: ${FSIM_COVERAGE_REPORT_MODEL_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_REPORT_RENDER_POLICY IN ITEMS
+    "FSIM-COV-045"
+    "fsim-coverage-report-v3"
+    "CoverageReportFormat::Text"
+    "CoverageReportFormat::Html"
+    "CoverageReportFormat::Json"
+    "maximum_output_bytes { 1U << 30U }"
+    "escaped_text"
+    "escaped_html"
+    "escaped_json"
+    "hits_saturated"
+    "total_reasons"
+    "grand_score"
+    "fsim.artifact.coverage-report-render")
+  string(FIND
+    "${FSIM_COVERAGE_REPORT_RENDER_CONTENTS}${FSIM_COVERAGE_REPORT_RENDER_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_REPORT_RENDER_INTERNAL_CONTENTS}${FSIM_COVERAGE_REPORT_RENDER_HTML_CONTENTS}${FSIM_COVERAGE_REPORT_RENDER_JSON_CONTENTS}${FSIM_COVERAGE_REPORT_RENDER_TEXT_CONTENTS}${FSIM_COVERAGE_REPORT_RENDER_TEST_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}"
+    "${FSIM_COVERAGE_REPORT_RENDER_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "coverage report rendering lost deterministic text, HTML, JSON, fidelity, escaping, or resource policy: ${FSIM_COVERAGE_REPORT_RENDER_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_REPORT_PROJECTION_POLICY IN ITEMS
+    "FSIM-COV-046"
+    "CoverageReportProjectionFormat::Lcov"
+    "CoverageReportProjectionFormat::Cobertura"
+    "maximum_lines { 1U << 24U }"
+    "maximum_branches { 1U << 24U }"
+    "MissingSourceLine"
+    "BRDA:"
+    "condition-coverage"
+    "point.status == CoverageReportPointStatus::Excluded"
+    "fsim.artifact.coverage-report-projection")
+  string(FIND
+    "${FSIM_COVERAGE_REPORT_PROJECTION_CONTENTS}${FSIM_COVERAGE_REPORT_PROJECTION_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_REPORT_PROJECTION_TEST_CONTENTS}${FSIM_COVERAGE_REPORT_MODEL_CONTENTS}${FSIM_COVERAGE_DATABASE_MODEL_CONTENTS}${FSIM_COVERAGE_DATABASE_CODEC_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}"
+    "${FSIM_COVERAGE_REPORT_PROJECTION_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "coverage projection lost LCOV, Cobertura, source-line, exclusion, or resource policy: ${FSIM_COVERAGE_REPORT_PROJECTION_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_COMMAND_POLICY IN ITEMS
+    "FSIM-COV-047"
+    "coverage merge"
+    "coverage report"
+    "--partial"
+    "--threshold METRIC=PERCENT"
+    "kThresholdFailure = 4"
+    "merge_coverage_databases("
+    "merge_coverage_databases_partially("
+    "write_coverage_database_atomically("
+    "write_text_atomically("
+    "project_coverage_report("
+    "minimum_covered("
+    "statement=100"
+    "fsim.application.coverage-command")
+  string(FIND
+    "${FSIM_COVERAGE_COMMAND_CONTENTS}${FSIM_COVERAGE_COMMAND_CLI_CONTENTS}${FSIM_COVERAGE_COMMAND_CLI_IMPLEMENTATION_CONTENTS}${FSIM_COVERAGE_COMMAND_TEST_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}${FSIM_ROOT_CONTENTS}"
+    "${FSIM_COVERAGE_COMMAND_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "coverage command lost merge, report, threshold, CI-exit, atomic-output, or test policy: ${FSIM_COVERAGE_COMMAND_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_COVERAGE_DATABASE_ROBUSTNESS_POLICY IN ITEMS
+    "C:/checkout/rtl/top.sv"
+    "rtl/top.sv"
+    "rtl/leaf.vhd"
+    "rtl/properties.psl"
+    "CoverageDatabaseNamespace::SystemVerilogFunctional"
+    "CoverageDatabaseNamespace::Psl"
+    "CoverageDatabaseSchemaError::ResourceLimit"
+    "CoverageDatabaseMergeError::FingerprintMismatch"
+    "CoverageDatabaseMergeError::SourceInventoryMismatch"
+    "CoverageDatabaseMergeError::ExclusionInventoryMismatch"
+    "CoverageDatabaseMergeError::DuplicateRun"
+    "unchanged_source_matches == 2U"
+    "CoverageReportFormat::Json"
+    "CoverageReportProjectionFormat::Lcov"
+    "CoverageReportProjectionFormat::Cobertura"
+    "fsim.artifact.coverage-database-robustness")
+  string(FIND
+    "${FSIM_COVERAGE_DATABASE_ROBUSTNESS_TEST_CONTENTS}${FSIM_COVERAGE_DATABASE_MODEL_IMPLEMENTATION_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}"
+    "${FSIM_COVERAGE_DATABASE_ROBUSTNESS_POLICY}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "coverage robustness lost corruption, ceiling, path, conflict, or mixed-language policy: ${FSIM_COVERAGE_DATABASE_ROBUSTNESS_POLICY}")
   endif()
 endforeach()
 
@@ -1601,7 +2412,7 @@ message(STATUS
   "resource portability contract: five four-worker build/test steps, "
   "120-minute hosted jobs, "
   "eight-link pool, compact Debug objects, 128 MiB Windows stacks, bounded "
-  "large-test, code-coverage model/source/point/statement/branch discovery, opt-in control, v3 artifact identity, and mixed-language engine/aggregation equivalence "
+  "large-test, code-coverage model/source/point/statement/branch discovery, opt-in and standard SystemVerilog control/query/merge/save, v3 artifact identity, bounded .fsimcov schema, and mixed-language engine/aggregation equivalence "
   "line-state derivation and instance inventory attachment, FST value/change/hierarchy storage, pinned "
   "Boost headers, "
   "broad coverage-metric generate/mixed-engine equivalence, and scoped/SystemC phase traces are present")

@@ -11,8 +11,11 @@
 #include <cstdlib>
 #include <fstream>
 #include <limits>
+#include <mutex>
+#include <new>
 #include <sstream>
 #include <thread>
+#include <unordered_set>
 
 #if defined(_WIN32)
 #  if !defined(NOMINMAX)
@@ -129,6 +132,36 @@ namespace {
 
 constexpr std::string_view kLockMagic = "FSIM-CACHE-LOCK-V1";
 constexpr std::chrono::milliseconds kLockPoll{5};
+
+struct ActiveLocks {
+    std::mutex mutex;
+    std::unordered_set<std::string> tokens;
+};
+
+[[nodiscard]] ActiveLocks& active_locks() {
+    // Construct on first lock acquisition so this registry also outlives any
+    // static-duration CacheDirectoryLock whose constructor registered in it.
+    static ActiveLocks locks;
+    return locks;
+}
+
+void register_active_lock(const std::string& token) {
+    auto& locks = active_locks();
+    const std::scoped_lock lock{locks.mutex};
+    locks.tokens.insert(token);
+}
+
+void unregister_active_lock(const std::string& token) noexcept {
+    auto& locks = active_locks();
+    const std::scoped_lock lock{locks.mutex};
+    locks.tokens.erase(token);
+}
+
+[[nodiscard]] bool active_lock(const std::string& token) noexcept {
+    auto& locks = active_locks();
+    const std::scoped_lock lock{locks.mutex};
+    return locks.tokens.contains(token);
+}
 
 [[nodiscard]] std::uint64_t current_process_id() noexcept {
 #if defined(_WIN32)
@@ -257,6 +290,9 @@ struct LockOwner {
     std::error_code& error) {
     error.clear();
     if (const auto owner = read_owner(path)) {
+        if (owner->process_id == current_process_id()) {
+            return !active_lock(owner->token);
+        }
         return !process_is_alive(owner->process_id);
     }
     return old_enough(path, stale_after, error);
@@ -322,6 +358,17 @@ CacheDirectoryLock::CacheDirectoryLock(
         error.clear();
         if (std::filesystem::create_directory(path_, error)) {
             const LockOwner owner{current_process_id(), token_};
+            // Register before publishing the owner record. A same-process
+            // contender that observes the record must never reclaim a lock
+            // that is still active in this process.
+            try {
+                register_active_lock(token_);
+            } catch (const std::bad_alloc&) {
+                error = std::make_error_code(std::errc::not_enough_memory);
+                std::error_code ignored;
+                std::filesystem::remove_all(path_, ignored);
+                return;
+            }
             if (write_owner_exclusive(path_, owner, error)) {
                 held_ = true;
                 return;
@@ -332,6 +379,7 @@ CacheDirectoryLock::CacheDirectoryLock(
                 std::error_code ignored;
                 std::filesystem::remove_all(path_, ignored);
             }
+            unregister_active_lock(token_);
             return;
         }
         if (error && error != std::errc::file_exists) {
@@ -356,11 +404,17 @@ CacheDirectoryLock::~CacheDirectoryLock() {
     const auto owner = read_owner(path_);
     if (!owner || owner->token != token_
         || owner->process_id != current_process_id()) {
+        unregister_active_lock(token_);
         return;
     }
     std::error_code ignored;
     std::filesystem::remove(path_ / "owner", ignored);
     std::filesystem::remove(path_, ignored);
+    // Windows virus scanners and indexers can transiently prevent either
+    // removal. Once this destructor has stopped touching the canonical path,
+    // make its token reclaimable so a later operation in the same process
+    // cannot wait forever on an owner record that no longer owns anything.
+    unregister_active_lock(token_);
 }
 
 bool CacheDirectoryLock::held() const noexcept {
@@ -373,7 +427,10 @@ bool atomic_replace_file(
     std::error_code& error) noexcept {
     error.clear();
 #if defined(_WIN32)
-    constexpr DWORD maximum_attempts = 101;
+    // Endpoint scanners on hosted Windows runners have held newly replaced
+    // cache files for longer than the former 505 ms window. Keep the retry
+    // bounded, but allow five seconds for a transient sharing lock to clear.
+    constexpr DWORD maximum_attempts = 1001;
     for (DWORD attempt = 0; attempt < maximum_attempts; ++attempt) {
         if (MoveFileExW(
                 source.c_str(), destination.c_str(),

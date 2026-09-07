@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 
+#include "fsim/elaboration/coverage_external_exclusions.hpp"
+
 
 namespace fsim::app {
 using namespace application_detail;
@@ -82,6 +84,21 @@ std::optional<BuiltProject> build_checked_project(
     diagnostic::Engine& diagnostics)
 {
     if (!checked) {
+        return std::nullopt;
+    }
+    const auto coverage_exclusions
+        = elaboration::make_coverage_external_exclusion_plan(
+            config.coverage.exclusions);
+    if (!coverage_exclusions.ok()) {
+        diagnostics.error(
+            std::string {
+                elaboration::kCoverageExternalExclusionDiagnostic },
+            "external coverage exclusion #"
+                + std::to_string(coverage_exclusions.index + 1U)
+                + " is invalid: "
+                + std::string {
+                    elaboration::coverage_external_exclusion_error_name(
+                        coverage_exclusions.error) });
         return std::nullopt;
     }
     const auto coverage_identity = artifact::make_code_coverage_artifact_identity(

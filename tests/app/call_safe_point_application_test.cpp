@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/support/path.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -125,7 +126,7 @@ void test_call_safe_points(
     assert(calls.size() == 2);
     for (const auto* call : calls) {
       assert(
-          std::filesystem::path{call->source.path}.filename()
+          fsim::support::path_from_utf8(call->source.path.str()).filename()
           == source.filename());
       assert(call->source.line == 7);
     }

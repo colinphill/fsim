@@ -441,8 +441,10 @@ void ApplicationTestFixture::test_non_project_cli()
         systemc_object_text.c_str(),
         "--library",
         "vendor",
+#if !defined(FSIM_TEST_ASAN_ENABLED)
         "--link-option",
         "-Wl,--no-undefined",
+#endif
 #if defined(FSIM_TEST_ASAN_ENABLED)
         "--link-option",
         "-fsanitize=address,undefined",
@@ -903,7 +905,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     assert(unit && !unit_diagnostics.has_error());
     assert(unit->name == indexed_unit.name);
     assert(!unit->span.source_name.empty());
-    assert(!std::filesystem::path(unit->span.source_name).is_absolute());
+    assert(!support::path_from_utf8(unit->span.source_name.str()).is_absolute());
     std::cerr << "non-project cli: portable unit validated\n";
 
     output.str({ });

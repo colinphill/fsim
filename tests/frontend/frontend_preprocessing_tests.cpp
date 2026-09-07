@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/frontend.hpp"
+#include "fsim/support/path.hpp"
 
 #include <algorithm>
 #include <array>
@@ -829,7 +830,7 @@ void test_systemverilog_line_directive()
     const auto* macro_token = token_named("remapped_token");
     const auto* file_token = token_named("\"C:\\\\rtl\\\\logical\\\"name.sv\"");
     const auto* line_token = token_named("202");
-    require(macro_token != nullptr && macro_token->span.source_name == R"(C:\rtl\logical"name.sv)" && std::filesystem::path { physical_source(macro_token->span) }.filename() == "physical.sv" && macro_token->span.begin.line == 200,
+    require(macro_token != nullptr && macro_token->span.source_name == R"(C:\rtl\logical"name.sv)" && fsim::support::path_from_utf8(physical_source(macro_token->span)).filename() == "physical.sv" && macro_token->span.begin.line == 200,
         "macro invocations use the active logical source and line");
     require(
         !macro_token->expansion_stack.empty() && macro_token->expansion_stack.front().find(R"(defined at C:\rtl\logical.sv:100)") != std::string::npos && macro_token->expansion_stack.front().find(R"(expanded at C:\rtl\logical"name.sv:200)") != std::string::npos,

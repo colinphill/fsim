@@ -38,6 +38,7 @@
 #include "fsim/runtime/vhpi_object.hpp"
 #include "fsim/runtime/vpi_callback.hpp"
 #include "fsim/runtime/vpi_control.hpp"
+#include "fsim/runtime/vpi_coverage.hpp"
 #include "fsim/runtime/vpi_object.hpp"
 #include "fsim/runtime/vpi_system.hpp"
 #include "fsim/runtime/vpi_time.hpp"
@@ -792,6 +793,10 @@ public:
     systemverilog_vpi_control() noexcept;
     [[nodiscard]] const runtime::SystemVerilogVpiControlService&
     systemverilog_vpi_control() const noexcept;
+    [[nodiscard]] runtime::SystemVerilogVpiCoverageService&
+    systemverilog_vpi_coverage() noexcept;
+    [[nodiscard]] const runtime::SystemVerilogVpiCoverageService&
+    systemverilog_vpi_coverage() const noexcept;
     [[nodiscard]] runtime::SystemVerilogVpiSystemRegistry&
     systemverilog_vpi_systems() noexcept;
     [[nodiscard]] const runtime::SystemVerilogVpiSystemRegistry&

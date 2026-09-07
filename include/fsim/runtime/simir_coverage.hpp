@@ -48,6 +48,7 @@ struct CodeCoverageHitValidationResult {
 enum class CodeCoverageCounterUpdate : std::uint8_t {
     Unavailable,
     OutOfRange,
+    Ignored,
     Incremented,
     FirstOverflow,
     Saturated,
@@ -64,17 +65,32 @@ public:
     [[nodiscard]] CodeCoverageCounterUpdate record(
         ::fsim::runtime::CodeCoverageCounterId counter) noexcept;
     [[nodiscard]] bool configured() const noexcept;
+    [[nodiscard]] bool enabled() const noexcept;
+    void set_enabled(bool enabled) noexcept;
+    [[nodiscard]] bool set_enabled(
+        std::span<const ::fsim::runtime::CodeCoverageCounterId> counters,
+        bool enabled) noexcept;
+    void clear() noexcept;
+    [[nodiscard]] bool clear(
+        std::span<const ::fsim::runtime::CodeCoverageCounterId> counters)
+        noexcept;
     [[nodiscard]] std::span<const std::uint64_t> values() const noexcept;
     [[nodiscard]] std::span<std::uint64_t> mutable_values() noexcept;
+    [[nodiscard]] std::span<std::uint64_t> direct_values() noexcept;
     [[nodiscard]] bool overflowed(
         ::fsim::runtime::CodeCoverageCounterId counter) const noexcept;
     [[nodiscard]] std::size_t overflow_count() const noexcept;
+    [[nodiscard]] std::optional<std::size_t> overflow_count(
+        std::span<const ::fsim::runtime::CodeCoverageCounterId> counters)
+        const noexcept;
 
 private:
     std::vector<std::uint64_t> values_;
     std::vector<std::uint8_t> overflowed_;
+    std::vector<std::uint8_t> enabled_counters_;
     std::size_t overflow_count_ { };
     bool configured_ { };
+    bool enabled_ { true };
 };
 
 /// Validate one typed hit against its exact elaborated point owner.

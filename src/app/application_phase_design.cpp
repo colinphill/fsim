@@ -1311,11 +1311,11 @@ std::optional<ArtifactInspection> inspect_artifact(
 namespace fsim::app::application_detail {
 namespace {
 
+#if defined(FSIM_HAS_LLVM)
 constexpr std::string_view kAotReceiptSchema = "fsim-aot-receipt-v1";
 constexpr std::string_view kAotSelectionPolicy = "fsim-native-selection-v1";
 constexpr std::uintmax_t kMaximumAotReceiptBytes = 8192U;
 
-#if defined(FSIM_HAS_LLVM)
 struct AotReceiptContext {
     std::string key;
     std::string design;

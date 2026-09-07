@@ -23,6 +23,84 @@ extern "C" {
 
 typedef uint64_t fsim_vpi_handle_v1;
 
+/* IEEE 1800 VPI coverage enumeration identities. */
+#ifndef vpiCoverageStart
+#define vpiCoverageStart 750
+#endif
+#ifndef vpiCoverageStop
+#define vpiCoverageStop 751
+#endif
+/* Some historical sv_vpi_user.h releases used this spelling. */
+#ifndef vpiCoverageStOp
+#define vpiCoverageStOp vpiCoverageStop
+#endif
+#ifndef vpiCoverageReset
+#define vpiCoverageReset 752
+#endif
+#ifndef vpiCoverageCheck
+#define vpiCoverageCheck 753
+#endif
+#ifndef vpiCoverageMerge
+#define vpiCoverageMerge 754
+#endif
+#ifndef vpiCoverageSave
+#define vpiCoverageSave 755
+#endif
+#ifndef vpiFsm
+#define vpiFsm 758
+#endif
+#ifndef vpiFsmHandle
+#define vpiFsmHandle 759
+#endif
+#ifndef vpiAssertCoverage
+#define vpiAssertCoverage 760
+#endif
+#ifndef vpiFsmStateCoverage
+#define vpiFsmStateCoverage 761
+#endif
+#ifndef vpiStatementCoverage
+#define vpiStatementCoverage 762
+#endif
+#ifndef vpiToggleCoverage
+#define vpiToggleCoverage 763
+#endif
+#ifndef vpiCovered
+#define vpiCovered 765
+#endif
+#ifndef vpiCoveredMax
+#define vpiCoveredMax 766
+#endif
+#ifndef vpiCoverMax
+#define vpiCoverMax vpiCoveredMax
+#endif
+#ifndef vpiCoveredCount
+#define vpiCoveredCount 767
+#endif
+#ifndef vpiAssertAttemptCovered
+#define vpiAssertAttemptCovered 770
+#endif
+#ifndef vpiAssertSuccessCovered
+#define vpiAssertSuccessCovered 771
+#endif
+#ifndef vpiAssertFailureCovered
+#define vpiAssertFailureCovered 772
+#endif
+#ifndef vpiAssertVacuousSuccessCovered
+#define vpiAssertVacuousSuccessCovered 773
+#endif
+#ifndef vpiAssertDisableCovered
+#define vpiAssertDisableCovered 774
+#endif
+#ifndef vpiFsmStates
+#define vpiFsmStates 775
+#endif
+#ifndef vpiFsmStateExpression
+#define vpiFsmStateExpression 776
+#endif
+#ifndef vpiAssertKillCovered
+#define vpiAssertKillCovered 777
+#endif
+
 typedef enum fsim_vpi_status_v1 {
   FSIM_VPI_STATUS_OK = 0,
   FSIM_VPI_STATUS_INVALID_ARGUMENT = 1,

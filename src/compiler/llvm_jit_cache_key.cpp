@@ -41,6 +41,8 @@ using runtime::simir::CountOnes;
 using runtime::simir::CoverageDatabaseControl;
 using runtime::simir::CoverageDatabaseControlKind;
 using runtime::simir::CodeCoverageHit;
+using runtime::simir::CoverageControl;
+using runtime::simir::CoverageAccess;
 using runtime::simir::CoverageQuery;
 using runtime::simir::CoverageSample;
 using runtime::simir::CoverageSampleTrigger;

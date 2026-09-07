@@ -1721,6 +1721,10 @@ public:
         std::span<const std::uint8_t>,
         CoverageSampleTrigger)>;
     using CoverageQueryHook = std::function<PackedLogic4(CoverageQueryKind)>;
+    using CoverageControlHook
+        = std::function<std::int32_t(const CoverageControlEvent&)>;
+    using CoverageAccessHook
+        = std::function<std::int32_t(const CoverageAccessEvent&)>;
     using CodeCoverageOverflowHook
         = std::function<void(::fsim::runtime::CodeCoverageCounterId)>;
     using SystemCommandHook = std::function<std::int32_t(
@@ -1947,6 +1951,8 @@ public:
     void set_report_hook(ReportHook hook);
     void set_coverage_sample_hook(CoverageSampleHook hook);
     void set_coverage_query_hook(CoverageQueryHook hook);
+    void set_coverage_control_hook(CoverageControlHook hook);
+    void set_coverage_access_hook(CoverageAccessHook hook);
     /// Install or restore the dense simulation-owned code counters before
     /// start. An empty vector deliberately configures an empty table.
     void set_code_coverage_counters(std::vector<std::uint64_t> counters);
@@ -1955,6 +1961,20 @@ public:
     [[nodiscard]] bool code_coverage_counter_overflowed(
         ::fsim::runtime::CodeCoverageCounterId counter) const noexcept;
     [[nodiscard]] std::size_t code_coverage_overflow_count() const noexcept;
+    [[nodiscard]] bool code_coverage_counters_configured() const noexcept;
+    [[nodiscard]] bool code_coverage_collection_enabled() const noexcept;
+    void set_code_coverage_collection_enabled(bool enabled) noexcept;
+    [[nodiscard]] bool set_code_coverage_collection_enabled(
+        std::span<const ::fsim::runtime::CodeCoverageCounterId> counters,
+        bool enabled) noexcept;
+    void reset_code_coverage_counters() noexcept;
+    [[nodiscard]] bool reset_code_coverage_counters(
+        std::span<const ::fsim::runtime::CodeCoverageCounterId> counters)
+        noexcept;
+    [[nodiscard]] std::optional<std::size_t>
+    code_coverage_overflow_count(
+        std::span<const ::fsim::runtime::CodeCoverageCounterId> counters)
+        const noexcept;
     void set_code_coverage_overflow_hook(CodeCoverageOverflowHook hook);
     void set_system_command_hook(SystemCommandHook hook);
     void set_vcd_control_hook(VcdControlHook hook);

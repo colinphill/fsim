@@ -12,6 +12,8 @@ namespace {
         || operation_holds<ClassStaticMethodCall>(operation)
         || operation_holds<CoverageSample>(operation)
         || operation_holds<CoverageQuery>(operation)
+        || operation_holds<CoverageControl>(operation)
+        || operation_holds<CoverageAccess>(operation)
         || operation_holds<PlusArgSelect>(operation);
 }
 
@@ -166,6 +168,95 @@ void Interpreter::Impl::handle_boundary(
             fail(process, "coverage query service returned an invalid real payload");
         }
         process.executor->write_register(query->destination, value);
+        return;
+    }
+    if (const auto* control
+        = fsim::runtime::simir::operation_get_if<CoverageControl>(
+            &operation)) {
+        if (!process.executor) {
+            process.pc = instruction;
+            fail(process, "coverage control boundary requires an executor");
+        }
+        const auto decode = [&](const RegisterId id)
+            -> std::optional<std::int32_t> {
+            const auto value = process.executor->read_register(id, 32U);
+            if (value.width() != 32U || value.is_logic9()) {
+                return std::nullopt;
+            }
+            const auto word = value.low_word();
+            if (word.bval != 0U) {
+                return std::nullopt;
+            }
+            return static_cast<std::int32_t>(
+                static_cast<std::uint32_t>(word.aval));
+        };
+        const auto command = decode(control->command);
+        const auto coverage_type = decode(control->coverage_type);
+        const auto scope = decode(control->scope);
+        auto status = static_cast<std::int32_t>(
+            SystemVerilogCoverageStatus::error);
+        if (command && coverage_type && scope) {
+            CoverageControlEvent event;
+            event.command = *command;
+            event.coverage_type = *coverage_type;
+            event.scope = *scope;
+            event.selector = process.executor->read_string_register(
+                control->selector);
+            event.instance_context = control->instance_context;
+            event.selector_is_instance = control->selector_is_instance;
+            status = control_coverage(event);
+        }
+        process.executor->write_register(
+            control->destination,
+            PackedLogic4::from_aval_bval(
+                32U, static_cast<std::uint32_t>(status), 0U));
+        return;
+    }
+    if (const auto* access
+        = fsim::runtime::simir::operation_get_if<CoverageAccess>(
+            &operation)) {
+        if (!process.executor) {
+            process.pc = instruction;
+            fail(process, "coverage access boundary requires an executor");
+        }
+        const auto value = process.executor->read_register(
+            access->coverage_type, 32U);
+        auto status = static_cast<std::int32_t>(
+            SystemVerilogCoverageStatus::error);
+        if (value.width() == 32U && !value.is_logic9()
+            && value.low_word().bval == 0U) {
+            CoverageAccessEvent event;
+            event.kind = access->kind;
+            event.coverage_type = static_cast<std::int32_t>(
+                static_cast<std::uint32_t>(value.low_word().aval));
+            if (access->scope && access->selector) {
+                const auto scope_value = process.executor->read_register(
+                    *access->scope, 32U);
+                if (scope_value.width() == 32U
+                    && !scope_value.is_logic9()
+                    && scope_value.low_word().bval == 0U) {
+                    event.scope = static_cast<std::int32_t>(
+                        static_cast<std::uint32_t>(
+                            scope_value.low_word().aval));
+                }
+                event.selector = process.executor->read_string_register(
+                    *access->selector);
+                event.instance_context = access->instance_context;
+                event.selector_is_instance = access->selector_is_instance;
+            }
+            if (access->filename) {
+                event.filename = process.executor->read_string_register(
+                    *access->filename);
+            }
+            if ((!access->scope && !access->selector)
+                || (event.scope && !event.selector.empty())) {
+                status = access_coverage(event);
+            }
+        }
+        process.executor->write_register(
+            access->destination,
+            PackedLogic4::from_aval_bval(
+                32U, static_cast<std::uint32_t>(status), 0U));
         return;
     }
     if (const auto* query

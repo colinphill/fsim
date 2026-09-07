@@ -18,6 +18,33 @@ _Static_assert(sizeof(fsim_vpi_status_v1) == 4u, "VPI status enum width");
 _Static_assert(
     sizeof(fsim_vpi_error_severity_v1) == 4u,
     "VPI severity enum width");
+_Static_assert(vpiCoverageStart == 750, "VPI coverage start identity");
+_Static_assert(vpiCoverageStop == 751, "VPI coverage stop identity");
+_Static_assert(vpiCoverageStOp == 751, "legacy VPI stop spelling identity");
+_Static_assert(vpiCoverageReset == 752, "VPI coverage reset identity");
+_Static_assert(vpiCoverageCheck == 753, "VPI coverage check identity");
+_Static_assert(vpiCoverageMerge == 754, "VPI coverage merge identity");
+_Static_assert(vpiCoverageSave == 755, "VPI coverage save identity");
+_Static_assert(vpiFsm == 758, "VPI FSM traversal identity");
+_Static_assert(vpiFsmHandle == 759, "VPI FSM handle relation identity");
+_Static_assert(vpiAssertCoverage == 760, "VPI assertion coverage identity");
+_Static_assert(vpiFsmStateCoverage == 761, "VPI FSM coverage identity");
+_Static_assert(vpiStatementCoverage == 762, "VPI statement coverage identity");
+_Static_assert(vpiToggleCoverage == 763, "VPI toggle coverage identity");
+_Static_assert(vpiCovered == 765, "VPI covered property identity");
+_Static_assert(vpiCoveredMax == 766, "VPI covered maximum identity");
+_Static_assert(vpiCoverMax == vpiCoveredMax, "legacy VPI maximum alias");
+_Static_assert(vpiCoveredCount == 767, "VPI covered count identity");
+_Static_assert(vpiAssertAttemptCovered == 770, "VPI assertion attempts");
+_Static_assert(vpiAssertSuccessCovered == 771, "VPI assertion successes");
+_Static_assert(vpiAssertFailureCovered == 772, "VPI assertion failures");
+_Static_assert(vpiAssertVacuousSuccessCovered == 773,
+    "VPI assertion vacuous successes");
+_Static_assert(vpiAssertDisableCovered == 774, "VPI assertion disables");
+_Static_assert(vpiFsmStates == 775, "VPI FSM state iteration identity");
+_Static_assert(vpiFsmStateExpression == 776,
+    "VPI FSM state expression identity");
+_Static_assert(vpiAssertKillCovered == 777, "VPI assertion kills");
 
 FSIM_VPI_LAYOUT(fsim_vpi_error_view_v1, 32u, 8u);
 FSIM_VPI_OFFSET(fsim_vpi_error_view_v1, severity, 0u);

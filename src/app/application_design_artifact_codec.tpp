@@ -131,6 +131,13 @@ namespace codec_detail {
                 && value
                 <= runtime::simir::CoverageDatabaseControlKind::load;
         } else if constexpr (
+            std::same_as<T,
+                runtime::simir::SystemVerilogCoverageAccessKind>) {
+            return value
+                >= runtime::simir::SystemVerilogCoverageAccessKind::get
+                && value
+                <= runtime::simir::SystemVerilogCoverageAccessKind::save;
+        } else if constexpr (
             std::same_as<T, runtime::SystemVerilogConstraintDomainKind>) {
             return value >= runtime::SystemVerilogConstraintDomainKind::BitVector
                 && value

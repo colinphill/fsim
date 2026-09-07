@@ -380,7 +380,7 @@ private:
     {
         if (!storage_) {
             storage_ = std::make_shared<Storage>();
-        } else if (!storage_.unique()) {
+        } else if (storage_.use_count() != 1) {
             storage_ = std::make_shared<Storage>(*storage_);
         }
         return *storage_;
@@ -700,6 +700,88 @@ enum class CoverageQueryKind : std::uint8_t {
 struct CoverageQuery {
     RegisterId destination { };
     CoverageQueryKind kind { CoverageQueryKind::overall_type };
+};
+
+enum class SystemVerilogCoverageCommand : std::int32_t {
+    start = 0,
+    stop = 1,
+    reset = 2,
+    check = 3,
+};
+
+enum class SystemVerilogCoverageScope : std::int32_t {
+    module = 10,
+    hierarchy = 11,
+};
+
+enum class SystemVerilogCoverageType : std::int32_t {
+    assertion = 20,
+    fsm_state = 21,
+    statement = 22,
+    toggle = 23,
+};
+
+enum class SystemVerilogCoverageStatus : std::int32_t {
+    overflow = -2,
+    error = -1,
+    no_coverage = 0,
+    ok = 1,
+    partial = 2,
+};
+
+struct CoverageControlEvent {
+    std::int32_t command { };
+    std::int32_t coverage_type { };
+    std::int32_t scope { };
+    std::string selector;
+    std::string instance_context;
+    bool selector_is_instance { };
+};
+
+/// Execute the standardized SystemVerilog coverage control for one module
+/// definition name or one elaborated instance path.
+struct CoverageControl {
+    RegisterId destination { };
+    RegisterId command { };
+    RegisterId coverage_type { };
+    RegisterId scope { };
+    StringRegisterId selector { };
+    std::string instance_context;
+    bool selector_is_instance { };
+};
+
+enum class SystemVerilogCoverageAccessKind : std::uint8_t {
+    get,
+    get_max,
+    merge,
+    save,
+};
+
+struct CoverageAccessEvent {
+    SystemVerilogCoverageAccessKind kind {
+        SystemVerilogCoverageAccessKind::get
+    };
+    std::int32_t coverage_type { };
+    std::optional<std::int32_t> scope;
+    std::string selector;
+    std::string instance_context;
+    bool selector_is_instance { };
+    std::string filename;
+};
+
+/// Query one selected standardized coverage view, or persist the aggregate
+/// database for one coverage family.
+struct CoverageAccess {
+    RegisterId destination { };
+    SystemVerilogCoverageAccessKind kind {
+        SystemVerilogCoverageAccessKind::get
+    };
+    RegisterId coverage_type { };
+    std::optional<RegisterId> scope;
+    std::optional<StringRegisterId> selector;
+    std::string instance_context;
+    bool selector_is_instance { };
+    std::optional<StringRegisterId> filename;
 };
 
 /// Record one hit against the exact code-coverage point and dense counter

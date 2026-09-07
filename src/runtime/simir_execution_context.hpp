@@ -44,7 +44,7 @@ struct Interpreter::Impl::ExecutionContext final
     [[nodiscard]] std::span<std::uint64_t>
     direct_code_coverage_counters() noexcept override
     {
-        return owner.code_coverage_counters.mutable_values();
+        return owner.code_coverage_counters.direct_values();
     }
     [[nodiscard]] CodeCoverageCounterRuntimeStatus record_code_coverage_counter(
         const ::fsim::runtime::CodeCoverageCounterId counter) override
@@ -55,6 +55,9 @@ struct Interpreter::Impl::ExecutionContext final
         }
         if (update == CodeCoverageCounterUpdate::OutOfRange) {
             return CodeCoverageCounterRuntimeStatus::OutOfRange;
+        }
+        if (update == CodeCoverageCounterUpdate::Ignored) {
+            return CodeCoverageCounterRuntimeStatus::Recorded;
         }
         if (update == CodeCoverageCounterUpdate::FirstOverflow
             && owner.code_coverage_overflow_hook) {

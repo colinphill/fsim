@@ -2,6 +2,7 @@
 #include "fsim/app/application.hpp"
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
+#include "fsim/support/path.hpp"
 
 #include <array>
 #include <cassert>
@@ -54,8 +55,10 @@ bool equivalent_artifact_reports(
                     && lhs.delta == rhs.delta
                     && lhs.source.line == rhs.source.line
                     && lhs.source.column == rhs.source.column
-                    && std::filesystem::path { lhs.source.path }.filename()
-                    == std::filesystem::path { rhs.source.path }.filename();
+                    && fsim::support::path_from_utf8(lhs.source.path.str())
+                               .filename()
+                    == fsim::support::path_from_utf8(rhs.source.path.str())
+                           .filename();
             });
 }
 
@@ -264,9 +267,9 @@ void test_assertion_actions(
             reference.reports[index].severity
             == expected_severities[index]);
         assert(
-            std::filesystem::path {
-                reference.reports[index].source.path }
-                .filename()
+            fsim::support::path_from_utf8(
+                reference.reports[index].source.path.str())
+                    .filename()
             == "assertion_actions.sv");
         assert(reference.reports[index].source.line > 0);
         assert(reference.reports[index].time == 0);
@@ -501,7 +504,8 @@ endmodule
             return report.message == "assert failure"
                 && report.severity
                 == fsim::runtime::simir::AssertionSeverity::warning
-                && std::filesystem::path { report.source.path }.filename()
+                && fsim::support::path_from_utf8(report.source.path.str())
+                       .filename()
                 == "concurrent_assertions.sv"
                 && report.time == 9;
         }));

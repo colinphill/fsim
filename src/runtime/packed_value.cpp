@@ -317,7 +317,7 @@ void PackedLogic4::ensure_unique_wide()
         wide_storage() = std::make_shared<WideStorage>(word_count(width()));
         return;
     }
-    if (wide_storage().unique()) {
+    if (wide_storage().use_count() == 1) {
         return;
     }
     wide_storage() = std::make_shared<WideStorage>(*wide_storage());

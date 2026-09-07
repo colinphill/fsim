@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_internal.hpp"
+#include "fsim/support/path.hpp"
 
 #include <fstream>
 
@@ -187,11 +188,13 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_vital_memory_expression(
       && actuals.load_file->kind == ExpressionKind::StringLiteral
       && actuals.load_file->decoded_string
       && !actuals.load_file->decoded_string->empty()) {
-    auto path = std::filesystem::path{*actuals.load_file->decoded_string};
+    auto path = fsim::support::path_from_utf8(
+        *actuals.load_file->decoded_string);
     if (path.is_relative()) {
-      path = std::filesystem::path{
-          frontend::physical_source(actuals.load_file->span)}
-          .parent_path() / path;
+      path = fsim::support::path_from_utf8(
+                 frontend::physical_source(actuals.load_file->span))
+                 .parent_path()
+          / path;
     }
     std::ifstream input(path, std::ios::binary);
     if (!input) {

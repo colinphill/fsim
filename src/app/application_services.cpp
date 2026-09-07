@@ -134,7 +134,9 @@ cli::Services make_cli_services(std::istream& input) {
       handle_elaborate,
       handle_simulate,
       handle_systemc_compile,
-      handle_systemc_link};
+      handle_systemc_link,
+      handle_coverage_merge,
+      handle_coverage_report};
 }
 
 cli::Services make_cli_services() {

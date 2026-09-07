@@ -701,6 +701,11 @@ void Interpreter::set_coverage_query_hook(CoverageQueryHook hook)
     impl_->coverage_query_hook = std::move(hook);
 }
 
+void Interpreter::set_coverage_control_hook(CoverageControlHook hook)
+{
+    impl_->coverage_control_hook = std::move(hook);
+}
+
 void Interpreter::set_system_command_hook(SystemCommandHook hook)
 {
     impl_->system_command_hook = std::move(hook);

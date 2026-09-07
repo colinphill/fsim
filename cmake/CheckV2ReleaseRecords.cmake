@@ -265,15 +265,36 @@ endif()
 foreach(FSIM_HOSTED_INDEX RANGE 0 8)
   list(GET FSIM_HOSTED_ARTIFACTS ${FSIM_HOSTED_INDEX} FSIM_ARTIFACT)
   list(GET FSIM_HOSTED_LOGS ${FSIM_HOSTED_INDEX} FSIM_LOG)
-  fsim_require_workflow_occurrences("${FSIM_ARTIFACT}" 1)
-  fsim_require_workflow_occurrences("${FSIM_LOG}" 1)
-  string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_ARTIFACT}"
+  set(FSIM_CURRENT_ARTIFACT "${FSIM_ARTIFACT}")
+  set(FSIM_CURRENT_LOG "${FSIM_LOG}")
+  if(FSIM_ARTIFACT STREQUAL "github-linux-gcc-debug")
+    set(FSIM_CURRENT_ARTIFACT "github-linux-clang22-debug")
+    set(FSIM_CURRENT_LOG
+      "build/qualification/batch180-change20-hosted-linux-clang22-debug.log")
+  elseif(FSIM_ARTIFACT STREQUAL "github-linux-gcc-release")
+    set(FSIM_CURRENT_ARTIFACT "github-linux-clang22-release")
+    set(FSIM_CURRENT_LOG
+      "build/qualification/batch180-change20-hosted-linux-clang22-release.log")
+  elseif(FSIM_ARTIFACT STREQUAL "github-linux-llvm22-debug")
+    set(FSIM_CURRENT_ARTIFACT "github-linux-clang22-llvm22-debug")
+    set(FSIM_CURRENT_LOG
+      "build/qualification/batch180-change20-hosted-linux-clang22-llvm22-debug.log")
+  elseif(FSIM_ARTIFACT STREQUAL "github-linux-llvm22-release")
+    set(FSIM_CURRENT_ARTIFACT "github-linux-clang22-llvm22-release")
+    set(FSIM_CURRENT_LOG
+      "build/qualification/batch180-change20-hosted-linux-clang22-llvm22-release.log")
+  endif()
+  fsim_require_workflow_occurrences("${FSIM_CURRENT_ARTIFACT}" 1)
+  fsim_require_workflow_occurrences("${FSIM_CURRENT_LOG}" 1)
+  string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_CURRENT_ARTIFACT}"
     FSIM_ARTIFACT_INDEX)
-  string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_LOG}" FSIM_LOG_INDEX)
+  string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_CURRENT_LOG}"
+    FSIM_LOG_INDEX)
   math(EXPR FSIM_MAPPING_DISTANCE "${FSIM_LOG_INDEX} - ${FSIM_ARTIFACT_INDEX}")
   if(FSIM_MAPPING_DISTANCE LESS 0 OR FSIM_MAPPING_DISTANCE GREATER 200)
     message(FATAL_ERROR
-      "hosted artifact/log mapping is not adjacent: ${FSIM_ARTIFACT}/${FSIM_LOG}")
+      "hosted artifact/log mapping is not adjacent: "
+      "${FSIM_CURRENT_ARTIFACT}/${FSIM_CURRENT_LOG}")
   endif()
 endforeach()
 
@@ -313,10 +334,10 @@ foreach(FSIM_WINDOWS_INSTALL_LOG IN LISTS FSIM_WINDOWS_INSTALL_LOGS)
 endforeach()
 
 foreach(FSIM_HOSTED_FRAGMENT IN ITEMS
-    "configuration: Debug\n            preset: ci-linux\n            artifact: github-linux-gcc-debug"
-    "configuration: Release\n            preset: ci-linux-release\n            artifact: github-linux-gcc-release"
-    "configuration: Debug\n            build_dir: build/ci-linux-llvm22-debug\n            artifact: github-linux-llvm22-debug"
-    "configuration: Release\n            build_dir: build/ci-linux-llvm22-release\n            artifact: github-linux-llvm22-release"
+    "configuration: Debug\n            preset: ci-linux\n            artifact: github-linux-clang22-debug"
+    "configuration: Release\n            preset: ci-linux-release\n            artifact: github-linux-clang22-release"
+    "configuration: Debug\n            build_dir: build/ci-linux-llvm22-debug\n            artifact: github-linux-clang22-llvm22-debug"
+    "configuration: Release\n            build_dir: build/ci-linux-llvm22-release\n            artifact: github-linux-clang22-llvm22-release"
     "FSIM_ARTIFACT: github-linux-fuzz\n      FSIM_RETAINED_LOG: build/qualification/batch177-change20-hosted-linux-fuzz.log"
     "configuration: Debug\n            llvm_mode: 'OFF'\n            build_dir: build/ci-windows-llvm-mingw-Debug-llvm-OFF\n            artifact: github-windows-debug-llvm-off"
     "configuration: Debug\n            llvm_mode: 'ON'\n            build_dir: build/ci-windows-llvm-mingw-Debug-llvm-ON\n            artifact: github-windows-debug-llvm-on"
@@ -629,6 +650,7 @@ if(FSIM_CHANGE12_LANE)
       FSIM_CHANGE12_BINARY_DIR FSIM_CHANGE12_ARCHIVE
       FSIM_CHANGE12_ARCHIVE_ROOT FSIM_CHANGE12_REGRESSION_LOG
       FSIM_CHANGE12_WORK_DIR FSIM_CHANGE12_EXPECTED_TESTS
+      FSIM_CHANGE12_EXPECTED_ARCHIVE_ENTRIES
       FSIM_CHANGE12_TOOLCHAIN)
     if(NOT DEFINED ${FSIM_REQUIRED} OR "${${FSIM_REQUIRED}}" STREQUAL "")
       message(FATAL_ERROR "${FSIM_REQUIRED} is required for a Change 12 lane")
@@ -641,6 +663,13 @@ if(FSIM_CHANGE12_LANE)
   if(NOT FSIM_CHANGE12_EXPECTED_TESTS MATCHES "^[0-9]+$")
     message(FATAL_ERROR "Change 12 expected-test count is not numeric")
   endif()
+  if(NOT FSIM_CHANGE12_EXPECTED_ARCHIVE_ENTRIES MATCHES "^[0-9]+$")
+    message(FATAL_ERROR "Change 12 expected archive-entry count is not numeric")
+  endif()
+  cmake_path(
+    ABSOLUTE_PATH FSIM_CHANGE12_WORK_DIR
+    BASE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+    NORMALIZE)
 
   file(READ "${FSIM_CHANGE12_REGRESSION_LOG}" FSIM_CHANGE12_LOG)
   string(FIND "${FSIM_CHANGE12_LOG}"
@@ -742,9 +771,11 @@ if(FSIM_CHANGE12_LANE)
   string(REPLACE "\n" ";" FSIM_CHANGE12_ENTRIES
     "${FSIM_CHANGE12_LIST_OUTPUT}")
   list(LENGTH FSIM_CHANGE12_ENTRIES FSIM_CHANGE12_ENTRY_COUNT)
-  if(NOT FSIM_CHANGE12_ENTRY_COUNT EQUAL 542)
+  if(NOT FSIM_CHANGE12_ENTRY_COUNT EQUAL
+     FSIM_CHANGE12_EXPECTED_ARCHIVE_ENTRIES)
     message(FATAL_ERROR
-      "Change 12 archive requires 542 entries, found ${FSIM_CHANGE12_ENTRY_COUNT}")
+      "Change 12 archive requires ${FSIM_CHANGE12_EXPECTED_ARCHIVE_ENTRIES} "
+      "entries, found ${FSIM_CHANGE12_ENTRY_COUNT}")
   endif()
   string(REPLACE "." "\\." FSIM_CHANGE12_ROOT_REGEX
     "${FSIM_CHANGE12_ARCHIVE_ROOT}")

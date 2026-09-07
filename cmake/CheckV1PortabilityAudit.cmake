@@ -69,7 +69,7 @@ if(FSIM_FUZZ_CMAKE_CONTENTS MATCHES
 endif()
 
 set(FSIM_WORKFLOW_JOBS
-  linux-gcc
+  linux-clang
   linux-llvm22
   linux-fuzz
   windows-llvm-mingw

@@ -70,6 +70,42 @@ namespace {
         }
     }
 
+    [[nodiscard]] std::optional<std::int32_t>
+    systemverilog_coverage_constant(const std::string_view name) noexcept
+    {
+        if (name == "SV_COV_START")
+            return 0;
+        if (name == "SV_COV_STOP")
+            return 1;
+        if (name == "SV_COV_RESET")
+            return 2;
+        if (name == "SV_COV_CHECK")
+            return 3;
+        if (name == "SV_COV_MODULE")
+            return 10;
+        if (name == "SV_COV_HIER")
+            return 11;
+        if (name == "SV_COV_ASSERTION")
+            return 20;
+        if (name == "SV_COV_FSM_STATE")
+            return 21;
+        if (name == "SV_COV_STATEMENT")
+            return 22;
+        if (name == "SV_COV_TOGGLE")
+            return 23;
+        if (name == "SV_COV_OVERFLOW")
+            return -2;
+        if (name == "SV_COV_ERROR")
+            return -1;
+        if (name == "SV_COV_NOCOV")
+            return 0;
+        if (name == "SV_COV_OK")
+            return 1;
+        if (name == "SV_COV_PARTIAL")
+            return 2;
+        return std::nullopt;
+    }
+
     // Preserve the published diagnostic identities after adopting true textual
     // include semantics. They must not be reused for a different failure class.
     [[maybe_unused]] constexpr std::string_view
@@ -1828,6 +1864,28 @@ namespace {
             }
             const auto name_token = tokens[index++];
             const auto invocation_span = cover(tick.span, name_token.span);
+
+            if (const auto value
+                = systemverilog_coverage_constant(name_token.text)) {
+                if (!require_standard(
+                        "`" + name_token.text,
+                        StandardRevision::SystemVerilog2005,
+                        name_token)) {
+                    return { };
+                }
+                if (*value < 0) {
+                    return {
+                        Token { TokenKind::Minus, "-", invocation_span,
+                            inherited_stack },
+                        Token { TokenKind::Number,
+                            std::to_string(-*value), invocation_span,
+                            inherited_stack }
+                    };
+                }
+                return { Token { TokenKind::Number,
+                    std::to_string(*value), invocation_span,
+                    inherited_stack } };
+            }
 
             if (name_token.text == "__FILE__") {
                 if (!require_standard(

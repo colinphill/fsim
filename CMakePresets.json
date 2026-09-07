@@ -28,6 +28,8 @@
       "binaryDir": "${sourceDir}/build/release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "clang-22",
+        "CMAKE_CXX_COMPILER": "clang++-22",
         "FSIM_BUILD_TESTS": "ON",
         "FSIM_LLVM_MODE": "AUTO"
       }
@@ -50,13 +52,13 @@
     },
     {
       "name": "ci-linux",
-      "displayName": "CI Linux GCC",
+      "displayName": "CI Linux Clang 22",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/ci-linux",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_C_COMPILER": "gcc",
-        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_C_COMPILER": "clang-22",
+        "CMAKE_CXX_COMPILER": "clang++-22",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "FSIM_BUILD_TESTS": "ON",
         "FSIM_LLVM_MODE": "OFF",
@@ -65,7 +67,7 @@
     },
     {
       "name": "ci-linux-release",
-      "displayName": "CI Linux GCC Release",
+      "displayName": "CI Linux Clang 22 Release",
       "inherits": "ci-linux",
       "binaryDir": "${sourceDir}/build/ci-linux-release",
       "cacheVariables": {

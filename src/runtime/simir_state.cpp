@@ -226,7 +226,7 @@ Interpreter::Impl::get_container_register(
             process.program.id, process.pc,
             "uninitialized container register storage");
     }
-    if (!storage.unique()) {
+    if (storage.use_count() != 1) {
         storage = std::make_shared<ContainerValue>(*storage);
     }
     return *storage;

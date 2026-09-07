@@ -2,7 +2,10 @@
 #include "application_internal.hpp"
 #include "application_uvm_registry.hpp"
 #include "fsim/app/design_artifact.hpp"
+#include "fsim/artifact/coverage_database_codec.hpp"
+#include "fsim/artifact/coverage_database_merge.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/support/sha256.hpp"
 
 #include <chrono>
 #include <charconv>
@@ -219,6 +222,8 @@ struct Simulation::Impl {
             "unknown coverage database control kind"
         };
     }
+
+#include "application_simulation_coverage.tpp"
 
 #include "application_simulation_setup.tpp"
 
@@ -1824,9 +1829,15 @@ struct Simulation::Impl {
     std::unique_ptr<runtime::SystemVerilogVpiCallbackManager> vpi_callbacks;
     std::unique_ptr<runtime::SystemVerilogVpiValueControl> vpi_values;
     std::unique_ptr<runtime::SystemVerilogVpiControlService> vpi_control;
+    std::unique_ptr<runtime::SystemVerilogVpiCoverageService> vpi_coverage;
     std::unique_ptr<runtime::SystemVerilogVpiSystemRegistry> vpi_systems;
     std::map<SignalId, std::vector<fsim_vpi_handle_v1>> vpi_signal_handles;
     std::map<fsim_vpi_handle_v1, SignalId> vpi_handle_signals;
+    std::map<fsim_vpi_handle_v1,
+        std::vector<runtime::CodeCoverageCounterId>>
+        vpi_statement_counters;
+    std::map<fsim_vpi_handle_v1, std::vector<std::string>>
+        vpi_assertion_coverage_keys;
     std::map<SignalId, std::vector<SystemVerilogVpiDriverBinding>>
         vpi_driver_bindings;
     std::map<SignalId, std::vector<fsim_vpi_handle_v1>> vpi_event_handles;
@@ -1879,6 +1890,10 @@ struct Simulation::Impl {
     std::unordered_set<std::string> stopped_covergroups;
     std::vector<frontend::Diagnostic> coverage_diagnostics;
     std::optional<std::filesystem::path> coverage_database_path;
+    std::optional<artifact::CoverageDatabaseContents>
+        standard_coverage_history;
+    std::optional<artifact::CoverageDatabaseIdentity>
+        standard_coverage_run_identity;
     ConcurrentAssertionHook concurrent_assertion_hook;
     VhdlPslAttemptHook vhdl_psl_attempt_hook;
     std::map<std::uint32_t, std::size_t>
@@ -2232,6 +2247,8 @@ NativeCacheStatistics Simulation::native_cache_statistics(
             statistics.prune_failures,
         };
     }
+#else
+    static_cast<void>(synchronize);
 #endif
     return { };
 }
@@ -2368,18 +2385,6 @@ const runtime::SystemVerilogVpiControlService&
 Simulation::systemverilog_vpi_control() const noexcept
 {
     return *impl_->vpi_control;
-}
-
-runtime::SystemVerilogVpiSystemRegistry&
-Simulation::systemverilog_vpi_systems() noexcept
-{
-    return *impl_->vpi_systems;
-}
-
-const runtime::SystemVerilogVpiSystemRegistry&
-Simulation::systemverilog_vpi_systems() const noexcept
-{
-    return *impl_->vpi_systems;
 }
 
 #include "application_simulation_scalar.tpp"

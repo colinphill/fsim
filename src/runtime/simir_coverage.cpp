@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -37,10 +38,13 @@ void CodeCoverageCounters::reset(
         };
     }
     std::vector<std::uint8_t> overflowed(values.size(), 0U);
+    std::vector<std::uint8_t> enabled(values.size(), 1U);
     values_ = std::move(values);
     overflowed_ = std::move(overflowed);
+    enabled_counters_ = std::move(enabled);
     overflow_count_ = 0U;
     configured_ = true;
+    enabled_ = true;
 }
 
 CodeCoverageCounterUpdate CodeCoverageCounters::record(
@@ -51,6 +55,9 @@ CodeCoverageCounterUpdate CodeCoverageCounters::record(
     }
     if (counter.value >= values_.size()) {
         return CodeCoverageCounterUpdate::OutOfRange;
+    }
+    if (!enabled_ && enabled_counters_[counter.value] == 0U) {
+        return CodeCoverageCounterUpdate::Ignored;
     }
     auto& value = values_[counter.value];
     if (value != std::numeric_limits<std::uint64_t>::max()) {
@@ -71,6 +78,60 @@ bool CodeCoverageCounters::configured() const noexcept
     return configured_;
 }
 
+bool CodeCoverageCounters::enabled() const noexcept
+{
+    return enabled_;
+}
+
+void CodeCoverageCounters::set_enabled(const bool enabled) noexcept
+{
+    enabled_ = enabled;
+    std::ranges::fill(enabled_counters_, enabled ? 1U : 0U);
+}
+
+bool CodeCoverageCounters::set_enabled(
+    const std::span<const ::fsim::runtime::CodeCoverageCounterId> counters,
+    const bool enabled) noexcept
+{
+    for (const auto counter : counters) {
+        if (counter.value >= enabled_counters_.size()) {
+            return false;
+        }
+    }
+    for (const auto counter : counters) {
+        enabled_counters_[counter.value] = enabled ? 1U : 0U;
+    }
+    enabled_ = std::ranges::all_of(
+        enabled_counters_, [](const auto value) { return value != 0U; });
+    return true;
+}
+
+void CodeCoverageCounters::clear() noexcept
+{
+    std::ranges::fill(values_, 0U);
+    std::ranges::fill(overflowed_, 0U);
+    overflow_count_ = 0U;
+}
+
+bool CodeCoverageCounters::clear(
+    const std::span<const ::fsim::runtime::CodeCoverageCounterId> counters)
+    noexcept
+{
+    for (const auto counter : counters) {
+        if (counter.value >= values_.size()) {
+            return false;
+        }
+    }
+    for (const auto counter : counters) {
+        if (overflowed_[counter.value] != 0U) {
+            overflowed_[counter.value] = 0U;
+            --overflow_count_;
+        }
+        values_[counter.value] = 0U;
+    }
+    return true;
+}
+
 std::span<const std::uint64_t> CodeCoverageCounters::values() const noexcept
 {
     return values_;
@@ -79,6 +140,12 @@ std::span<const std::uint64_t> CodeCoverageCounters::values() const noexcept
 std::span<std::uint64_t> CodeCoverageCounters::mutable_values() noexcept
 {
     return values_;
+}
+
+std::span<std::uint64_t> CodeCoverageCounters::direct_values() noexcept
+{
+    return enabled_ ? std::span<std::uint64_t> { values_ }
+                    : std::span<std::uint64_t> { };
 }
 
 bool CodeCoverageCounters::overflowed(
@@ -91,6 +158,20 @@ bool CodeCoverageCounters::overflowed(
 std::size_t CodeCoverageCounters::overflow_count() const noexcept
 {
     return overflow_count_;
+}
+
+std::optional<std::size_t> CodeCoverageCounters::overflow_count(
+    const std::span<const ::fsim::runtime::CodeCoverageCounterId> counters)
+    const noexcept
+{
+    std::size_t result { };
+    for (const auto counter : counters) {
+        if (counter.value >= overflowed_.size()) {
+            return std::nullopt;
+        }
+        result += overflowed_[counter.value] != 0U ? 1U : 0U;
+    }
+    return result;
 }
 
 // Keep the public interpreter bridge with its coverage-owned storage rather
@@ -123,10 +204,138 @@ std::size_t Interpreter::code_coverage_overflow_count() const noexcept
     return impl_->code_coverage_counters.overflow_count();
 }
 
+bool Interpreter::code_coverage_counters_configured() const noexcept
+{
+    return impl_->code_coverage_counters.configured();
+}
+
+bool Interpreter::code_coverage_collection_enabled() const noexcept
+{
+    return impl_->code_coverage_counters.enabled();
+}
+
+void Interpreter::set_code_coverage_collection_enabled(
+    const bool enabled) noexcept
+{
+    impl_->code_coverage_counters.set_enabled(enabled);
+}
+
+bool Interpreter::set_code_coverage_collection_enabled(
+    const std::span<const ::fsim::runtime::CodeCoverageCounterId> counters,
+    const bool enabled) noexcept
+{
+    return impl_->code_coverage_counters.set_enabled(counters, enabled);
+}
+
+void Interpreter::reset_code_coverage_counters() noexcept
+{
+    impl_->code_coverage_counters.clear();
+}
+
+bool Interpreter::reset_code_coverage_counters(
+    const std::span<const ::fsim::runtime::CodeCoverageCounterId> counters)
+    noexcept
+{
+    return impl_->code_coverage_counters.clear(counters);
+}
+
+std::optional<std::size_t> Interpreter::code_coverage_overflow_count(
+    const std::span<const ::fsim::runtime::CodeCoverageCounterId> counters)
+    const noexcept
+{
+    return impl_->code_coverage_counters.overflow_count(counters);
+}
+
 void Interpreter::set_code_coverage_overflow_hook(
     CodeCoverageOverflowHook hook)
 {
     impl_->code_coverage_overflow_hook = std::move(hook);
+}
+
+void Interpreter::set_coverage_access_hook(CoverageAccessHook hook)
+{
+    impl_->coverage_access_hook = std::move(hook);
+}
+
+std::int32_t Interpreter::Impl::control_coverage(
+    const CoverageControlEvent& event) noexcept
+{
+    using Command = SystemVerilogCoverageCommand;
+    using Status = SystemVerilogCoverageStatus;
+    using Scope = SystemVerilogCoverageScope;
+    using Type = SystemVerilogCoverageType;
+    const auto status = [](const Status value) {
+        return static_cast<std::int32_t>(value);
+    };
+    const auto command = static_cast<Command>(event.command);
+    if (command != Command::start && command != Command::stop
+        && command != Command::reset && command != Command::check) {
+        return status(Status::error);
+    }
+    const auto scope = static_cast<Scope>(event.scope);
+    if ((scope != Scope::module && scope != Scope::hierarchy)
+        || event.selector.empty()) {
+        return status(Status::error);
+    }
+    const auto type = static_cast<Type>(event.coverage_type);
+    if (type != Type::assertion && type != Type::fsm_state
+        && type != Type::statement && type != Type::toggle) {
+        return status(Status::error);
+    }
+    return coverage_control_hook
+        ? coverage_control_hook(event)
+        : status(Status::no_coverage);
+}
+
+std::int32_t Interpreter::Impl::access_coverage(
+    const CoverageAccessEvent& event) noexcept
+{
+    using Access = SystemVerilogCoverageAccessKind;
+    using Status = SystemVerilogCoverageStatus;
+    using Scope = SystemVerilogCoverageScope;
+    using Type = SystemVerilogCoverageType;
+    const auto status = [](const Status value) {
+        return static_cast<std::int32_t>(value);
+    };
+    if (event.kind != Access::get && event.kind != Access::get_max
+        && event.kind != Access::merge && event.kind != Access::save) {
+        return status(Status::error);
+    }
+    const auto selection_call = event.kind == Access::get
+        || event.kind == Access::get_max;
+    if (selection_call) {
+        if (!event.scope || event.selector.empty()) {
+            return status(Status::error);
+        }
+        const auto scope = static_cast<Scope>(*event.scope);
+        if (scope != Scope::module && scope != Scope::hierarchy) {
+            return status(Status::error);
+        }
+    } else if (event.scope || !event.selector.empty()) {
+        return status(Status::error);
+    }
+    const auto type = static_cast<Type>(event.coverage_type);
+    if (type != Type::assertion && type != Type::fsm_state
+        && type != Type::statement && type != Type::toggle) {
+        return status(Status::error);
+    }
+    if (coverage_access_hook) {
+        return coverage_access_hook(event);
+    }
+    if (type != Type::statement
+        || !code_coverage_counters.configured()
+        || event.kind == Access::merge || event.kind == Access::save) {
+        return status(Status::no_coverage);
+    }
+    const auto values = code_coverage_counters.values();
+    const auto count = event.kind == Access::get_max
+        ? values.size()
+        : static_cast<std::size_t>(std::ranges::count_if(
+              values, [](const auto value) { return value != 0U; }));
+    return count > static_cast<std::size_t>(
+                       std::numeric_limits<std::int32_t>::max())
+        ? status(Status::overflow)
+        : static_cast<std::int32_t>(count);
 }
 
 CodeCoverageHitValidationResult validate_code_coverage_hit(

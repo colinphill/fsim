@@ -1620,6 +1620,87 @@ void Interpreter::Impl::execute(ProcessId id)
                     get_register(process, op.destination) = std::move(value);
                     ++process.pc;
                 } else if constexpr (
+                    std::is_same_v<OperationType, CoverageControl>) {
+                    const auto decode = [&](const RegisterId id)
+                        -> std::optional<std::int32_t> {
+                        const auto& value = get_register(process, id);
+                        if (value.width() != 32U || value.is_logic9()) {
+                            return std::nullopt;
+                        }
+                        const auto word = value.low_word();
+                        if (word.bval != 0U) {
+                            return std::nullopt;
+                        }
+                        return static_cast<std::int32_t>(
+                            static_cast<std::uint32_t>(word.aval));
+                    };
+                    const auto command = decode(op.command);
+                    const auto coverage_type = decode(op.coverage_type);
+                    const auto scope = decode(op.scope);
+                    auto status = static_cast<std::int32_t>(
+                        SystemVerilogCoverageStatus::error);
+                    if (command && coverage_type && scope) {
+                        CoverageControlEvent event;
+                        event.command = *command;
+                        event.coverage_type = *coverage_type;
+                        event.scope = *scope;
+                        event.selector = get_string_register(
+                            process, op.selector);
+                        event.instance_context = op.instance_context;
+                        event.selector_is_instance
+                            = op.selector_is_instance;
+                        status = control_coverage(event);
+                    }
+                    get_register(process, op.destination)
+                        = PackedLogic4::from_aval_bval(
+                            32U, static_cast<std::uint32_t>(status), 0U);
+                    ++process.pc;
+                } else if constexpr (
+                    std::is_same_v<OperationType, CoverageAccess>) {
+                    const auto& value = get_register(process, op.coverage_type);
+                    auto status = static_cast<std::int32_t>(
+                        SystemVerilogCoverageStatus::error);
+                    if (value.width() == 32U && !value.is_logic9()
+                        && value.low_word().bval == 0U) {
+                        CoverageAccessEvent event;
+                        event.kind = op.kind;
+                        event.coverage_type = static_cast<std::int32_t>(
+                            static_cast<std::uint32_t>(value.low_word().aval));
+                        if (op.scope && op.selector) {
+                            const auto selected_scope = [&]()
+                                -> std::optional<std::int32_t> {
+                                const auto& scope_value
+                                    = get_register(process, *op.scope);
+                                if (scope_value.width() != 32U
+                                    || scope_value.is_logic9()
+                                    || scope_value.low_word().bval != 0U) {
+                                    return std::nullopt;
+                                }
+                                return static_cast<std::int32_t>(
+                                    static_cast<std::uint32_t>(
+                                        scope_value.low_word().aval));
+                            }();
+                            event.scope = selected_scope;
+                            event.selector = get_string_register(
+                                process, *op.selector);
+                            event.instance_context = op.instance_context;
+                            event.selector_is_instance
+                                = op.selector_is_instance;
+                        }
+                        if (op.filename) {
+                            event.filename = get_string_register(
+                                process, *op.filename);
+                        }
+                        if ((!op.scope && !op.selector)
+                            || (event.scope && !event.selector.empty())) {
+                            status = access_coverage(event);
+                        }
+                    }
+                    get_register(process, op.destination)
+                        = PackedLogic4::from_aval_bval(
+                            32U, static_cast<std::uint32_t>(status), 0U);
+                    ++process.pc;
+                } else if constexpr (
                     std::is_same_v<OperationType, CodeCoverageHit>) {
                     const auto counter
                         = process.program.operations.code_coverage_counter(

@@ -468,6 +468,77 @@ using namespace runtime::simir;
                     record_definition(operation.destination, index);
                     constrain_width(operation.destination, 64U, index);
                 } else if constexpr (
+                    std::is_same_v<OperationType, CoverageControl>) {
+                    record_use(operation.command, index);
+                    record_use(operation.coverage_type, index);
+                    record_use(operation.scope, index);
+                    constrain_width(operation.command, 32U, index);
+                    constrain_width(operation.coverage_type, 32U, index);
+                    constrain_width(operation.scope, 32U, index);
+                    result.uses_strings = true;
+                    validate_string_register(
+                        operation.selector, index, "selector");
+                    if (operation.instance_context.empty()) {
+                        reject(process, index,
+                            "CoverageControl selector context is empty");
+                    }
+                    record_definition(operation.destination, index);
+                    constrain_width(operation.destination, 32U, index);
+                } else if constexpr (
+                    std::is_same_v<OperationType, CoverageAccess>) {
+                    if (operation.kind
+                            != SystemVerilogCoverageAccessKind::get
+                        && operation.kind
+                            != SystemVerilogCoverageAccessKind::get_max
+                        && operation.kind
+                            != SystemVerilogCoverageAccessKind::merge
+                        && operation.kind
+                            != SystemVerilogCoverageAccessKind::save) {
+                        reject(process, index,
+                            "CoverageAccess kind is invalid");
+                    }
+                    const auto file_kind = operation.kind
+                            == SystemVerilogCoverageAccessKind::merge
+                        || operation.kind
+                            == SystemVerilogCoverageAccessKind::save;
+                    if (file_kind != operation.filename.has_value()) {
+                        reject(process, index,
+                            "CoverageAccess filename ownership is invalid");
+                    }
+                    if ((file_kind
+                            && (operation.scope || operation.selector))
+                        || (!file_kind
+                            && (!operation.scope || !operation.selector))) {
+                        reject(process, index,
+                            "CoverageAccess selector ownership is invalid");
+                    }
+                    if ((file_kind
+                            && (!operation.instance_context.empty()
+                                || operation.selector_is_instance))
+                        || (!file_kind
+                            && operation.instance_context.empty())) {
+                        reject(process, index,
+                            "CoverageAccess selector metadata is invalid");
+                    }
+                    if (operation.scope) {
+                        record_use(*operation.scope, index);
+                        constrain_width(*operation.scope, 32U, index);
+                    }
+                    if (operation.selector) {
+                        result.uses_strings = true;
+                        validate_string_register(
+                            *operation.selector, index, "selector");
+                    }
+                    record_use(operation.coverage_type, index);
+                    constrain_width(operation.coverage_type, 32U, index);
+                    if (operation.filename) {
+                        result.uses_strings = true;
+                        validate_string_register(
+                            *operation.filename, index, "filename");
+                    }
+                    record_definition(operation.destination, index);
+                    constrain_width(operation.destination, 32U, index);
+                } else if constexpr (
                     std::is_same_v<OperationType, CodeCoverageHit>) {
                     result.uses_code_coverage = true;
                     if (!runtime::is_code_coverage_identity_valid(

@@ -1590,6 +1590,20 @@ int handle_systemc_link(
     std::ostream& output,
     std::ostream& error);
 
+int handle_coverage_merge(
+    const cli::Invocation& invocation,
+    const project::Config& config,
+    diagnostic::Engine& diagnostics,
+    std::ostream& output,
+    std::ostream& error);
+
+int handle_coverage_report(
+    const cli::Invocation& invocation,
+    const project::Config& config,
+    diagnostic::Engine& diagnostics,
+    std::ostream& output,
+    std::ostream& error);
+
 void print_debug_help(std::ostream& output);
 
 std::vector<std::string> words(const std::string& line);

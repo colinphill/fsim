@@ -97,6 +97,8 @@ bool supports_wide_register_operation(
                 || std::is_same_v<OperationType, CallableFramePop>
                 || std::is_same_v<OperationType, CoverageSample>
                 || std::is_same_v<OperationType, CoverageQuery>
+                || std::is_same_v<OperationType, CoverageControl>
+                || std::is_same_v<OperationType, CoverageAccess>
                 || std::is_same_v<OperationType, CodeCoverageHit>
                 || std::is_same_v<OperationType, ReadSignal>
                 || std::is_same_v<OperationType, WriteBlocking>
@@ -195,6 +197,8 @@ void validate_fork_operation(
     return fsim::runtime::simir::operation_holds<WaitFor>(operation)
         || fsim::runtime::simir::operation_holds<CoverageSample>(operation)
         || fsim::runtime::simir::operation_holds<CoverageQuery>(operation)
+        || fsim::runtime::simir::operation_holds<CoverageControl>(operation)
+        || fsim::runtime::simir::operation_holds<CoverageAccess>(operation)
         || fsim::runtime::simir::operation_holds<SystemCommand>(operation)
         || fsim::runtime::simir::operation_holds<VcdControl>(operation)
         || fsim::runtime::simir::operation_holds<StochasticQueueOperation>(

@@ -109,6 +109,54 @@ set_tests_properties(
 )
 
 add_executable(
+  fsim_coverage_source_control_tests
+  elaboration/coverage_source_control_test.cpp
+)
+fsim_configure_test(fsim_coverage_source_control_tests)
+target_link_libraries(
+  fsim_coverage_source_control_tests PRIVATE fsim_elaboration)
+add_test(
+  NAME fsim.elaboration.coverage_source_control
+  COMMAND fsim_coverage_source_control_tests
+)
+set_tests_properties(
+  fsim.elaboration.coverage_source_control
+  PROPERTIES LABELS "fast;frontend;elaboration;coverage;exclusion;verilog;systemverilog;vhdl;positive;negative;resource;determinism"
+)
+
+add_executable(
+  fsim_coverage_external_exclusions_tests
+  elaboration/coverage_external_exclusions_test.cpp
+)
+fsim_configure_test(fsim_coverage_external_exclusions_tests)
+target_link_libraries(
+  fsim_coverage_external_exclusions_tests PRIVATE fsim_elaboration fsim_project)
+add_test(
+  NAME fsim.elaboration.coverage_external_exclusions
+  COMMAND fsim_coverage_external_exclusions_tests
+)
+set_tests_properties(
+  fsim.elaboration.coverage_external_exclusions
+  PROPERTIES LABELS "fast;project;elaboration;coverage;exclusion;source;hierarchy;object;metrics;positive;negative;resource;determinism"
+)
+
+add_executable(
+  fsim_coverage_exclusion_persistence_tests
+  elaboration/coverage_exclusion_persistence_test.cpp
+)
+fsim_configure_test(fsim_coverage_exclusion_persistence_tests)
+target_link_libraries(
+  fsim_coverage_exclusion_persistence_tests PRIVATE fsim_elaboration fsim_project)
+add_test(
+  NAME fsim.elaboration.coverage_exclusion_persistence
+  COMMAND fsim_coverage_exclusion_persistence_tests
+)
+set_tests_properties(
+  fsim.elaboration.coverage_exclusion_persistence
+  PROPERTIES LABELS "fast;elaboration;artifact;coverage;exclusion;source;hierarchy;instance;metrics;positive;negative;resource;determinism"
+)
+
+add_executable(
   fsim_verilog_coverage_points_tests
   elaboration/verilog_coverage_points_test.cpp
 )
@@ -1174,6 +1222,211 @@ add_test(
 set_tests_properties(
   fsim.artifact.code-coverage-metrics-identity
   PROPERTIES LABELS "fast;artifact;coverage;metrics;identity;schema;positive;negative"
+)
+
+add_executable(
+  fsim_coverage_database_schema_tests
+  artifact/coverage_database_schema_test.cpp
+)
+fsim_configure_test(fsim_coverage_database_schema_tests)
+target_link_libraries(fsim_coverage_database_schema_tests PRIVATE fsim_library)
+add_test(
+  NAME fsim.artifact.coverage-database-schema
+  COMMAND fsim_coverage_database_schema_tests
+)
+set_tests_properties(
+  fsim.artifact.coverage-database-schema
+  PROPERTIES LABELS "fast;artifact;coverage;database;schema;namespace;resources;positive;negative"
+)
+
+add_executable(
+  fsim_coverage_database_model_tests
+  artifact/coverage_database_model_test.cpp
+)
+fsim_configure_test(fsim_coverage_database_model_tests)
+target_link_libraries(fsim_coverage_database_model_tests PRIVATE fsim_library)
+add_test(
+  NAME fsim.artifact.coverage-database-model
+  COMMAND fsim_coverage_database_model_tests
+)
+set_tests_properties(
+  fsim.artifact.coverage-database-model
+  PROPERTIES LABELS "fast;artifact;coverage;database;model;source;run;metrics;exclusion;resources;positive;negative"
+)
+
+add_executable(
+  fsim_coverage_exclusion_report_tests
+  artifact/coverage_exclusion_report_test.cpp
+)
+fsim_configure_test(fsim_coverage_exclusion_report_tests)
+target_link_libraries(fsim_coverage_exclusion_report_tests PRIVATE fsim_library)
+add_test(
+  NAME fsim.artifact.coverage-exclusion-report
+  COMMAND fsim_coverage_exclusion_report_tests
+)
+set_tests_properties(
+  fsim.artifact.coverage-exclusion-report
+  PROPERTIES LABELS "fast;artifact;coverage;database;report;exclusion;reason;positive;negative;resource;determinism"
+)
+
+add_executable(
+  fsim_coverage_report_model_tests
+  artifact/coverage_report_model_test.cpp
+)
+fsim_configure_test(fsim_coverage_report_model_tests)
+target_link_libraries(fsim_coverage_report_model_tests PRIVATE fsim_library)
+add_test(
+  NAME fsim.artifact.coverage-report-model
+  COMMAND fsim_coverage_report_model_tests
+)
+set_tests_properties(
+  fsim.artifact.coverage-report-model
+  PROPERTIES LABELS "fast;artifact;coverage;database;report;source;instance;combined;metrics;exclusion;reason;positive;negative;resource;determinism"
+)
+
+add_executable(
+  fsim_coverage_report_render_tests
+  artifact/coverage_report_render_test.cpp
+)
+fsim_configure_test(fsim_coverage_report_render_tests)
+target_link_libraries(fsim_coverage_report_render_tests PRIVATE fsim_library)
+add_test(
+  NAME fsim.artifact.coverage-report-render
+  COMMAND fsim_coverage_report_render_tests
+)
+set_tests_properties(
+  fsim.artifact.coverage-report-render
+  PROPERTIES LABELS "fast;artifact;coverage;database;report;text;html;json;escaping;source;instance;combined;metrics;exclusion;reason;positive;negative;resource;determinism"
+)
+
+add_executable(
+  fsim_coverage_report_projection_tests
+  artifact/coverage_report_projection_test.cpp
+)
+fsim_configure_test(fsim_coverage_report_projection_tests)
+target_link_libraries(fsim_coverage_report_projection_tests PRIVATE fsim_library)
+add_test(
+  NAME fsim.artifact.coverage-report-projection
+  COMMAND fsim_coverage_report_projection_tests
+)
+set_tests_properties(
+  fsim.artifact.coverage-report-projection
+  PROPERTIES LABELS "fast;artifact;coverage;database;report;lcov;cobertura;xml;line;branch;source;exclusion;positive;negative;resource;determinism"
+)
+
+add_executable(
+  fsim_coverage_database_codec_tests
+  artifact/coverage_database_codec_test.cpp
+)
+fsim_configure_test(fsim_coverage_database_codec_tests)
+target_link_libraries(fsim_coverage_database_codec_tests PRIVATE fsim_library)
+add_test(
+  NAME fsim.artifact.coverage-database-codec
+  COMMAND fsim_coverage_database_codec_tests
+)
+set_tests_properties(
+  fsim.artifact.coverage-database-codec
+  PROPERTIES LABELS "fast;artifact;coverage;database;codec;serialization;atomic;source;run;metrics;exclusion;resources;positive;negative"
+)
+
+add_executable(
+  fsim_coverage_database_merge_tests
+  artifact/coverage_database_merge_test.cpp
+)
+fsim_configure_test(fsim_coverage_database_merge_tests)
+target_link_libraries(fsim_coverage_database_merge_tests PRIVATE fsim_library)
+add_test(
+  NAME fsim.artifact.coverage-database-merge
+  COMMAND fsim_coverage_database_merge_tests
+)
+set_tests_properties(
+  fsim.artifact.coverage-database-merge
+  PROPERTIES LABELS "fast;artifact;coverage;database;merge;strict;run;metrics;exclusion;resources;positive;negative"
+)
+
+add_executable(
+  fsim_coverage_database_partial_merge_tests
+  artifact/coverage_database_partial_merge_test.cpp
+)
+fsim_configure_test(fsim_coverage_database_partial_merge_tests)
+target_link_libraries(
+  fsim_coverage_database_partial_merge_tests PRIVATE fsim_library
+)
+add_test(
+  NAME fsim.artifact.coverage-database-partial-merge
+  COMMAND fsim_coverage_database_partial_merge_tests
+)
+set_tests_properties(
+  fsim.artifact.coverage-database-partial-merge
+  PROPERTIES LABELS "fast;artifact;coverage;database;merge;partial;run;metrics;exclusion;resources;positive;negative"
+)
+
+add_executable(
+  fsim_coverage_database_robustness_tests
+  artifact/coverage_database_robustness_test.cpp
+)
+fsim_configure_test(fsim_coverage_database_robustness_tests)
+target_link_libraries(
+  fsim_coverage_database_robustness_tests PRIVATE fsim_library
+)
+add_test(
+  NAME fsim.artifact.coverage-database-robustness
+  COMMAND fsim_coverage_database_robustness_tests
+)
+set_tests_properties(
+  fsim.artifact.coverage-database-robustness
+  PROPERTIES LABELS "fast;artifact;coverage;database;corruption;resource;path;merge;strict;partial;conflict;mixed-language;systemverilog;vhdl;psl;report;json;lcov;cobertura;atomic;positive;negative;determinism"
+)
+
+add_executable(
+  fsim_coverage_database_systemverilog_tests
+  frontend/coverage_database_systemverilog_test.cpp
+)
+fsim_configure_test(fsim_coverage_database_systemverilog_tests)
+target_link_libraries(
+  fsim_coverage_database_systemverilog_tests PRIVATE fsim_frontend fsim_library
+)
+add_test(
+  NAME fsim.frontend.coverage-database-systemverilog
+  COMMAND fsim_coverage_database_systemverilog_tests
+)
+set_tests_properties(
+  fsim.frontend.coverage-database-systemverilog
+  PROPERTIES LABELS "fast;frontend;systemverilog;coverage;database;namespace;source;run;metrics;exclusion;resources;positive;negative"
+)
+
+add_executable(
+  fsim_coverage_database_psl_tests
+  app/coverage_database_psl_test.cpp
+)
+fsim_configure_test(fsim_coverage_database_psl_tests)
+target_link_libraries(
+  fsim_coverage_database_psl_tests PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.coverage-database-psl
+  COMMAND fsim_coverage_database_psl_tests
+)
+set_tests_properties(
+  fsim.application.coverage-database-psl
+  PROPERTIES LABELS "fast;application;vhdl;psl;coverage;database;namespace;source;run;metrics;resources;positive;negative"
+)
+
+add_executable(
+  fsim_coverage_command_tests
+  app/coverage_command_test.cpp
+)
+fsim_configure_test(fsim_coverage_command_tests)
+target_link_libraries(
+  fsim_coverage_command_tests PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.coverage-command
+  COMMAND fsim_coverage_command_tests
+)
+set_tests_properties(
+  fsim.application.coverage-command
+  PROPERTIES LABELS "fast;application;cli;coverage;database;merge;partial;report;text;lcov;threshold;ci;atomic;positive;negative"
 )
 
 add_executable(fsim_object_artifact_tests artifact/object_artifact_test.cpp)
@@ -3763,53 +4016,55 @@ if(TARGET fsim_application)
     PROPERTIES LABELS "fast;application;coverage;project;cli;schema;resource"
   )
 
-  add_executable(
-    fsim_code_coverage_application_tests
-    app/code_coverage_application_test.cpp
-  )
-  fsim_configure_test(fsim_code_coverage_application_tests)
-  target_link_libraries(
-    fsim_code_coverage_application_tests PRIVATE fsim_application)
-  add_test(
-    NAME fsim.application.code-coverage
-    COMMAND fsim_code_coverage_application_tests
-  )
-  set_tests_properties(
-    fsim.application.code-coverage
-    PROPERTIES LABELS "fast;application;coverage;debug;interpreter;llvm;o0;o1;o2;o3;saturation;instance"
-  )
+  if(TARGET fsim_llvm)
+    add_executable(
+      fsim_code_coverage_application_tests
+      app/code_coverage_application_test.cpp
+    )
+    fsim_configure_test(fsim_code_coverage_application_tests)
+    target_link_libraries(
+      fsim_code_coverage_application_tests PRIVATE fsim_application)
+    add_test(
+      NAME fsim.application.code-coverage
+      COMMAND fsim_code_coverage_application_tests
+    )
+    set_tests_properties(
+      fsim.application.code-coverage
+      PROPERTIES LABELS "fast;application;coverage;debug;interpreter;llvm;o0;o1;o2;o3;saturation;instance"
+    )
 
-  add_executable(
-    fsim_code_coverage_equivalence_tests
-    app/code_coverage_equivalence_test.cpp
-  )
-  fsim_configure_test(fsim_code_coverage_equivalence_tests)
-  target_link_libraries(
-    fsim_code_coverage_equivalence_tests PRIVATE fsim_application)
-  add_test(
-    NAME fsim.application.code-coverage-equivalence
-    COMMAND fsim_code_coverage_equivalence_tests
-  )
-  set_tests_properties(
-    fsim.application.code-coverage-equivalence
-    PROPERTIES LABELS "fast;application;coverage;equivalence;verilog;systemverilog;vhdl;interpreter;llvm;o0;o1;o2;o3;debug;instance;aggregation"
-  )
+    add_executable(
+      fsim_code_coverage_equivalence_tests
+      app/code_coverage_equivalence_test.cpp
+    )
+    fsim_configure_test(fsim_code_coverage_equivalence_tests)
+    target_link_libraries(
+      fsim_code_coverage_equivalence_tests PRIVATE fsim_application)
+    add_test(
+      NAME fsim.application.code-coverage-equivalence
+      COMMAND fsim_code_coverage_equivalence_tests
+    )
+    set_tests_properties(
+      fsim.application.code-coverage-equivalence
+      PROPERTIES LABELS "fast;application;coverage;equivalence;verilog;systemverilog;vhdl;interpreter;llvm;o0;o1;o2;o3;debug;instance;aggregation"
+    )
 
-  add_executable(
-    fsim_code_coverage_metrics_equivalence_tests
-    app/code_coverage_metrics_equivalence_test.cpp
-  )
-  fsim_configure_test(fsim_code_coverage_metrics_equivalence_tests)
-  target_link_libraries(
-    fsim_code_coverage_metrics_equivalence_tests PRIVATE fsim_application)
-  add_test(
-    NAME fsim.application.code-coverage-metrics-equivalence
-    COMMAND fsim_code_coverage_metrics_equivalence_tests
-  )
-  set_tests_properties(
-    fsim.application.code-coverage-metrics-equivalence
-    PROPERTIES LABELS "fast;application;coverage;condition;expression;toggle;fsm;equivalence;verilog;systemverilog;vhdl;interpreter;llvm;o0;o1;o2;o3;debug;generate;instance;aggregation"
-  )
+    add_executable(
+      fsim_code_coverage_metrics_equivalence_tests
+      app/code_coverage_metrics_equivalence_test.cpp
+    )
+    fsim_configure_test(fsim_code_coverage_metrics_equivalence_tests)
+    target_link_libraries(
+      fsim_code_coverage_metrics_equivalence_tests PRIVATE fsim_application)
+    add_test(
+      NAME fsim.application.code-coverage-metrics-equivalence
+      COMMAND fsim_code_coverage_metrics_equivalence_tests
+    )
+    set_tests_properties(
+      fsim.application.code-coverage-metrics-equivalence
+      PROPERTIES LABELS "fast;application;coverage;condition;expression;toggle;fsm;equivalence;verilog;systemverilog;vhdl;interpreter;llvm;o0;o1;o2;o3;debug;generate;instance;aggregation"
+    )
+  endif()
 
   add_executable(
     fsim_code_coverage_metrics_application_tests

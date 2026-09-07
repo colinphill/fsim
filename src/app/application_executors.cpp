@@ -857,6 +857,10 @@ private:
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::CoverageQuery>(operation)
             || fsim::runtime::simir::operation_holds<
+                runtime::simir::CoverageControl>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::CoverageAccess>(operation)
+            || fsim::runtime::simir::operation_holds<
                 runtime::simir::RandomDistribution>(operation)
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::PlusArgSelect>(operation)

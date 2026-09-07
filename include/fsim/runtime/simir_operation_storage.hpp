@@ -52,7 +52,7 @@ using StringOperationGroup = OperationGroup<LoadStringConstant, CopyStringRegist
     WriteStringObject, ConcatenateStrings, CompareStrings,
     StringLength, StringIndex, StringReplaceCodePoint,
     StringMethod, PlusArgSelect, SystemCommand, VcdControl,
-    CoverageDatabaseControl>;
+    CoverageDatabaseControl, CoverageAccess>;
 
 using ContainerOperationGroup = OperationGroup<SystemVerilogScalarBinary, SystemVerilogMath, ResizeContainer,
     CopyContainerRegister,
@@ -88,7 +88,7 @@ using ControlOperationGroup = OperationGroup<Jump, Call, Return,
 
 using OutputOperationGroup = OperationGroup<Display, FormatDisplay, StringDisplay, StringReport,
     TimeDisplay, MonitorInstall, MonitorControl, TimeFormatControl,
-    CoverageSample, CoverageQuery, CodeCoverageHit>;
+    CoverageSample, CoverageQuery, CodeCoverageHit, CoverageControl>;
 
 using ClassOperationGroup = OperationGroup<
     ClassAllocate, ClassPropertyRead, ClassPropertyWrite, ClassMethodCall,
@@ -325,7 +325,7 @@ static_assert(
         + std::variant_size_v<ControlOperationGroup::Storage>
         + std::variant_size_v<OutputOperationGroup::Storage>
         + std::variant_size_v<ClassOperationGroup::Storage>
-    == 179);
+    == 181);
 
 template <typename Alternative>
 [[nodiscard]] Alternative* operation_get_if(Operation* operation) noexcept

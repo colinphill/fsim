@@ -14,8 +14,8 @@ permissions:
   contents: read
 
 jobs:
-  linux-gcc:
-    name: Ubuntu / GCC / ${{ matrix.configuration }}
+  linux-clang:
+    name: Ubuntu / Clang 22 / ${{ matrix.configuration }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
@@ -24,12 +24,12 @@ jobs:
         include:
           - configuration: Debug
             preset: ci-linux
-            artifact: github-linux-gcc-debug
-            retained_log: build/qualification/batch177-change20-hosted-linux-gcc-debug.log
+            artifact: github-linux-clang22-debug
+            retained_log: build/qualification/batch180-change20-hosted-linux-clang22-debug.log
           - configuration: Release
             preset: ci-linux-release
-            artifact: github-linux-gcc-release
-            retained_log: build/qualification/batch177-change20-hosted-linux-gcc-release.log
+            artifact: github-linux-clang22-release
+            retained_log: build/qualification/batch180-change20-hosted-linux-clang22-release.log
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
@@ -42,6 +42,20 @@ jobs:
           printf 'artifact=%s\nconfiguration=%s\n' \
             "${{ matrix.artifact }}" \
             "${{ matrix.configuration }}" > "${{ matrix.retained_log }}"
+
+      - name: Install Clang 22
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            llvm_installer="${RUNNER_TEMP}/llvm-22-installer.sh"
+            wget --quiet --output-document="${llvm_installer}" \
+              https://apt.llvm.org/llvm.sh
+            chmod +x "${llvm_installer}"
+            sudo "${llvm_installer}" 22
+            clang-22 --version
+            clang++-22 --version
+          } 2>&1 | tee -a "${{ matrix.retained_log }}"
 
       - name: Configure
         shell: bash
@@ -81,7 +95,7 @@ jobs:
           if-no-files-found: error
 
   linux-llvm22:
-    name: Ubuntu / GCC / LLVM 22.1.8 / ${{ matrix.configuration }}
+    name: Ubuntu / Clang 22 / LLVM 22.1.8 / ${{ matrix.configuration }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     strategy:
@@ -90,12 +104,12 @@ jobs:
         include:
           - configuration: Debug
             build_dir: build/ci-linux-llvm22-debug
-            artifact: github-linux-llvm22-debug
-            retained_log: build/qualification/batch177-change20-hosted-linux-llvm22-debug.log
+            artifact: github-linux-clang22-llvm22-debug
+            retained_log: build/qualification/batch180-change20-hosted-linux-clang22-llvm22-debug.log
           - configuration: Release
             build_dir: build/ci-linux-llvm22-release
-            artifact: github-linux-llvm22-release
-            retained_log: build/qualification/batch177-change20-hosted-linux-llvm22-release.log
+            artifact: github-linux-clang22-llvm22-release
+            retained_log: build/qualification/batch180-change20-hosted-linux-clang22-llvm22-release.log
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
@@ -109,7 +123,7 @@ jobs:
             "${{ matrix.artifact }}" \
             "${{ matrix.configuration }}" > "${{ matrix.retained_log }}"
 
-      - name: Install LLVM 22.1.8 development package
+      - name: Install Clang and LLVM 22.1.8 development packages
         shell: bash
         run: |
           set -euo pipefail
@@ -119,13 +133,17 @@ jobs:
               https://apt.llvm.org/llvm.sh
             chmod +x "${llvm_installer}"
             sudo "${llvm_installer}" 22
-            sudo apt-get install --yes --no-install-recommends llvm-22-dev
+            sudo apt-get install --yes --no-install-recommends \
+              clang-22 \
+              llvm-22-dev
 
             installed_version=$(/usr/lib/llvm-22/bin/llvm-config --version)
             if [[ "${installed_version}" != "22.1.8" ]]; then
               echo "Expected LLVM 22.1.8, found ${installed_version}" >&2
               exit 1
             fi
+            clang-22 --version
+            clang++-22 --version
           } 2>&1 | tee -a "${{ matrix.retained_log }}"
 
       - name: Configure with required LLVM backend
@@ -134,8 +152,8 @@ jobs:
           set -euo pipefail
           cmake -S . -B "${{ matrix.build_dir }}" -G Ninja \
             -DCMAKE_BUILD_TYPE="${{ matrix.configuration }}" \
-            -DCMAKE_C_COMPILER=gcc \
-            -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_C_COMPILER=clang-22 \
+            -DCMAKE_CXX_COMPILER=clang++-22 \
             -DFSIM_BUILD_TESTS=ON \
             -DFSIM_LLVM_MODE=ON \
             -DFSIM_WARNINGS_AS_ERRORS=ON \
@@ -257,7 +275,8 @@ jobs:
             binary_archive: fsim-v2.0.0-windows-x86_64-llvm-mingw-no-llvm.zip
             binary_log: build/qualification/batch177-change20-windows-no-llvm-archive.log
             install_log: build/qualification/batch177-change20-windows-no-llvm-install.log
-            expected_tests: '302'
+            expected_tests: '352'
+            expected_archive_entries: '1247'
           - configuration: Release
             llvm_mode: 'ON'
             build_dir: build/ci-windows-llvm-mingw-Release-llvm-ON
@@ -267,7 +286,8 @@ jobs:
             binary_archive: fsim-v2.0.0-windows-x86_64-llvm-mingw-llvm22.zip
             binary_log: build/qualification/batch177-change20-windows-llvm22-archive.log
             install_log: build/qualification/batch177-change20-windows-llvm22-install.log
-            expected_tests: '303'
+            expected_tests: '356'
+            expected_archive_entries: '1247'
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
@@ -308,10 +328,21 @@ jobs:
         run: |
           set -euo pipefail
           {
-            pacman -U --noconfirm --needed \
-              https://mirror.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-llvm-libs-22.1.8-2-any.pkg.tar.zst \
-              https://mirror.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-llvm-tools-22.1.8-2-any.pkg.tar.zst \
-              https://mirror.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-llvm-22.1.8-2-any.pkg.tar.zst
+            installed=false
+            for attempt in 1 2 3; do
+              if pacman -U --noconfirm --needed \
+                https://mirror.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-llvm-libs-22.1.8-2-any.pkg.tar.zst \
+                https://mirror.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-llvm-tools-22.1.8-2-any.pkg.tar.zst \
+                https://mirror.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-llvm-22.1.8-2-any.pkg.tar.zst; then
+                installed=true
+                break
+              fi
+              if [ "${attempt}" -lt 3 ]; then
+                echo "LLVM package installation attempt ${attempt} failed; retrying"
+                sleep $((attempt * 10))
+              fi
+            done
+            test "${installed}" = true
             test "$(/clang64/bin/llvm-config.exe --version)" = "22.1.8"
             /clang64/bin/lli.exe --version
           } 2>&1 | tee -a "${{ matrix.retained_log }}"
@@ -409,6 +440,7 @@ jobs:
             "-DFSIM_CHANGE12_REGRESSION_LOG=$env:GITHUB_WORKSPACE/${{ matrix.retained_log }}",
             "-DFSIM_CHANGE12_WORK_DIR=${{ matrix.build_dir }}/change12-install-audit",
             "-DFSIM_CHANGE12_EXPECTED_TESTS=${{ matrix.expected_tests }}",
+            "-DFSIM_CHANGE12_EXPECTED_ARCHIVE_ENTRIES=${{ matrix.expected_archive_entries }}",
             "-DFSIM_CHANGE12_TOOLCHAIN=LLVM-MinGW-20260616-LLVM-${{ matrix.llvm_mode }}",
             "-DFSIM_CHANGE12_EXECUTABLE_SUFFIX=.exe",
             "-P", "cmake/CheckV2ReleaseRecords.cmake"

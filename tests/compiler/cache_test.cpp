@@ -14,6 +14,13 @@
 #include <string>
 #include <vector>
 
+#if defined(_WIN32)
+#  if !defined(NOMINMAX)
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#endif
+
 int main() {
     using fsim::compiler::CacheKeyBuilder;
     using fsim::compiler::ObjectCache;
@@ -125,6 +132,37 @@ int main() {
         assert(contender_error == std::errc::timed_out);
     }
     assert(!std::filesystem::exists(live_lock_path));
+
+#if defined(_WIN32)
+    // A Windows scanner can retain a non-delete-sharing handle after the lock
+    // owner has finished. The stale owner record must not make a later cache
+    // operation in this same process wait forever.
+    const auto stranded_lock_path = root / "stranded.lock";
+    HANDLE retained_owner = INVALID_HANDLE_VALUE;
+    {
+        std::error_code owner_error;
+        fsim::compiler::detail::CacheDirectoryLock owner{
+            stranded_lock_path, owner_error, std::chrono::milliseconds{20}};
+        assert(owner.held());
+        assert(!owner_error);
+        retained_owner = CreateFileW(
+            (stranded_lock_path / "owner").c_str(), GENERIC_READ,
+            FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL, nullptr);
+        assert(retained_owner != INVALID_HANDLE_VALUE);
+    }
+    assert(std::filesystem::exists(stranded_lock_path / "owner"));
+    assert(CloseHandle(retained_owner));
+    {
+        std::error_code contender_error;
+        fsim::compiler::detail::CacheDirectoryLock contender{
+            stranded_lock_path, contender_error,
+            std::chrono::milliseconds{200}};
+        assert(contender.held());
+        assert(!contender_error);
+    }
+    assert(!std::filesystem::exists(stranded_lock_path));
+#endif
 
     const auto loaded = cache.load(key, error);
     assert(loaded);

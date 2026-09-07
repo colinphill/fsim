@@ -169,9 +169,23 @@ struct CoverageFsmHintEntry {
       const CoverageFsmHintEntry&) = default;
 };
 
+// One language-neutral external coverage exclusion. Optional selectors are
+// conjunctive; an omitted selector matches every value in that dimension.
+struct CoverageExclusionEntry {
+  std::optional<std::string> source;
+  std::optional<std::string> hierarchy;
+  std::optional<std::string> object;
+  std::string metric;
+  std::string reason;
+
+  friend bool operator==(const CoverageExclusionEntry&,
+      const CoverageExclusionEntry&) = default;
+};
+
 struct CoverageSection {
   bool enabled{false};
   std::vector<CoverageFsmHintEntry> fsm_hints;
+  std::vector<CoverageExclusionEntry> exclusions;
 };
 
 struct RunSection {

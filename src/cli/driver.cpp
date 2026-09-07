@@ -65,6 +65,10 @@ namespace {
             return "systemc compile";
         case Command::systemc_link:
             return "systemc link";
+        case Command::coverage_merge:
+            return "coverage merge";
+        case Command::coverage_report:
+            return "coverage report";
         }
         return "check";
     }
@@ -105,6 +109,24 @@ namespace {
         }
         const auto [end, error] = std::from_chars(spelling.data(), spelling.data() + spelling.size(), result);
         return error == std::errc { } && end == spelling.data() + spelling.size();
+    }
+
+    std::optional<CoverageThreshold> parse_coverage_threshold(
+        const std::string_view spelling)
+    {
+        const auto separator = spelling.find('=');
+        if (separator == 0U || separator == std::string_view::npos
+            || separator + 1U == spelling.size()
+            || spelling.find('=', separator + 1U) != std::string_view::npos) {
+            return std::nullopt;
+        }
+        std::uint64_t percent { };
+        if (!parse_unsigned(spelling.substr(separator + 1U), percent)
+            || percent > 100U) {
+            return std::nullopt;
+        }
+        return CoverageThreshold { lowercase(spelling.substr(0U, separator)),
+            static_cast<std::uint32_t>(percent) };
     }
 
     void argument_error(
@@ -520,7 +542,7 @@ namespace {
     {
         output
             << "Usage: " << program
-            << " <check|build|run|debug|tcl|compile|elaborate|simulate>"
+            << " <check|build|run|debug|tcl|compile|elaborate|simulate|coverage>"
                " [options] [files...]\n"
             << "\n"
             << "Commands:\n"
@@ -534,6 +556,8 @@ namespace {
             << "  simulate Simulate an explicit .fsimdesign artifact\n"
             << "  systemc compile Compile one SystemC C++ translation unit into .fsimscobj\n"
             << "  systemc link Link .fsimscobj inputs into one .fsimscplugin\n"
+            << "  coverage merge Merge .fsimcov databases (strict by default)\n"
+            << "  coverage report Render or enforce a .fsimcov report\n"
             << "\n"
             << "Project and source options:\n"
             << "  -p, --project PATH       Project manifest (default: fsim.toml)\n"
@@ -600,6 +624,13 @@ namespace {
             << "      --seed COUNT|random\n"
             << "      --diagnostics text|json\n"
             << "\n"
+            << "Coverage options:\n"
+            << "      --partial            Merge unchanged point identities explicitly\n"
+            << "      --format FORMAT      text, html, json, lcov, or cobertura\n"
+            << "      --threshold METRIC=PERCENT\n"
+            << "                           Require a per-family combined score; repeatable\n"
+            << "                           Unmet thresholds return CI exit status 4\n"
+            << "\n"
             << "Tcl options:\n"
             << "  -c, --command SCRIPT    Evaluate Tcl text (repeatable)\n"
             << "  SCRIPT [ARG...]         Evaluate a Tcl file with argv/argc set\n"
@@ -643,6 +674,10 @@ namespace {
             return &services.systemc_compile;
         case Command::systemc_link:
             return &services.systemc_link;
+        case Command::coverage_merge:
+            return &services.coverage_merge;
+        case Command::coverage_report:
+            return &services.coverage_report;
         }
         return nullptr;
     }
@@ -1038,6 +1073,39 @@ std::optional<Invocation> parse_arguments(
                 invocation.jobs = static_cast<std::uint32_t>(number);
             } else if (argument == "--code-coverage") {
                 invocation.code_coverage = true;
+            } else if (argument == "--partial") {
+                invocation.coverage_partial_merge = true;
+            } else if (is_option(argument, "", "--format")) {
+                const auto value = take_value(
+                    index, argc, argv, argument, "--format", diagnostics);
+                if (!value.has_value()
+                    || (*value != "text" && *value != "html"
+                        && *value != "json" && *value != "lcov"
+                        && *value != "cobertura")) {
+                    argument_error(diagnostics,
+                        "--format must be text, html, json, lcov, or cobertura");
+                    return std::nullopt;
+                }
+                invocation.coverage_report_format = std::string { *value };
+            } else if (is_option(argument, "", "--threshold")) {
+                const auto value = take_value(
+                    index, argc, argv, argument, "--threshold", diagnostics);
+                const auto threshold = value.has_value()
+                    ? parse_coverage_threshold(*value)
+                    : std::nullopt;
+                if (!threshold.has_value()) {
+                    argument_error(diagnostics,
+                        "--threshold requires METRIC=PERCENT with an integer from 0 to 100");
+                    return std::nullopt;
+                }
+                if (std::ranges::find(invocation.coverage_thresholds,
+                        threshold->metric, &CoverageThreshold::metric)
+                    != invocation.coverage_thresholds.end()) {
+                    argument_error(diagnostics,
+                        "coverage thresholds must name each metric once");
+                    return std::nullopt;
+                }
+                invocation.coverage_thresholds.push_back(*threshold);
             } else if (is_option(argument, "", "--duration")) {
                 const auto value = take_value(index, argc, argv, argument, "--duration", diagnostics);
                 if (!value.has_value()) {
@@ -1234,6 +1302,27 @@ std::optional<Invocation> parse_arguments(
         }
 
         if (!command_selected) {
+            if (argument == "coverage") {
+                if (index + 1 >= argc || argv[index + 1] == nullptr) {
+                    argument_error(
+                        diagnostics, "coverage requires a merge or report subcommand");
+                    return std::nullopt;
+                }
+                const std::string_view subcommand { argv[++index] };
+                if (subcommand == "merge") {
+                    invocation.command = Command::coverage_merge;
+                } else if (subcommand == "report") {
+                    invocation.command = Command::coverage_report;
+                } else {
+                    argument_error(diagnostics,
+                        "unknown coverage subcommand '"
+                            + std::string { subcommand }
+                            + "'; expected merge or report");
+                    return std::nullopt;
+                }
+                command_selected = true;
+                continue;
+            }
             if (argument == "systemc") {
                 if (index + 1 >= argc || argv[index + 1] == nullptr) {
                     argument_error(
@@ -1260,7 +1349,7 @@ std::optional<Invocation> parse_arguments(
                 argument_error(
                     diagnostics,
                     "unknown command '" + std::string(argument) + "'; expected check, build, run, debug, tcl, compile, "
-                                                                  "elaborate, or simulate");
+                                                                  "elaborate, simulate, or coverage");
                 return std::nullopt;
             }
             invocation.command = *command;
@@ -1280,7 +1369,7 @@ std::optional<Invocation> parse_arguments(
         argument_error(
             diagnostics,
             "missing command; expected check, build, run, debug, tcl, compile, "
-            "elaborate, or simulate");
+            "elaborate, simulate, or coverage");
         return std::nullopt;
     }
     if (!invocation.tops.empty()) {
@@ -1368,6 +1457,17 @@ std::optional<Invocation> parse_arguments(
             "a Tcl script file cannot be combined with --command");
         return std::nullopt;
     }
+    const bool coverage_utility
+        = invocation.command == Command::coverage_merge
+        || invocation.command == Command::coverage_report;
+    if (!coverage_utility
+        && (invocation.coverage_partial_merge
+            || invocation.coverage_report_format.has_value()
+            || !invocation.coverage_thresholds.empty())) {
+        argument_error(diagnostics,
+            "--partial, --format, and --threshold require coverage merge or coverage report");
+        return std::nullopt;
+    }
     if (invocation.manifest_explicit && !invocation.files.empty()) {
         argument_error(diagnostics, "--project cannot be combined with direct source files");
         return std::nullopt;
@@ -1376,7 +1476,7 @@ std::optional<Invocation> parse_arguments(
         || invocation.command == Command::elaborate
         || invocation.command == Command::simulate
         || invocation.command == Command::systemc_compile
-        || invocation.command == Command::systemc_link;
+        || invocation.command == Command::systemc_link || coverage_utility;
     if (non_project_command && invocation.manifest_explicit) {
         argument_error(
             diagnostics,
@@ -1465,6 +1565,81 @@ std::optional<Invocation> parse_arguments(
             argument_error(diagnostics,
                 "trace selections must be unique within one invocation");
             return std::nullopt;
+        }
+    }
+    if (!invocation.help && !invocation.version && coverage_utility) {
+        const bool has_unrelated_option = !invocation.tops.empty()
+            || invocation.language.has_value() || invocation.standard.has_value()
+            || !invocation.compatibility_switches.empty()
+            || invocation.compilation_unit.has_value()
+            || invocation.uvm_release.has_value()
+            || !invocation.search_libraries.empty()
+            || !invocation.library_mappings.empty()
+            || !invocation.library_exports.empty()
+            || !invocation.include_directories.empty()
+            || !invocation.defines.empty() || !invocation.objects.empty()
+            || !invocation.systemc_plugins.empty()
+            || invocation.systemc_compiler.has_value()
+            || !invocation.systemc_compile_options.empty()
+            || !invocation.systemc_link_options.empty()
+            || !invocation.systemc_libraries.empty()
+            || invocation.design.has_value()
+            || invocation.cache_directory.has_value()
+            || invocation.file_root.has_value() || invocation.engine.has_value()
+            || invocation.aot.has_value() || invocation.aot_scope.has_value()
+            || invocation.compiled_processes.has_value()
+            || !invocation.plusargs.empty() || !invocation.trace_filters.empty()
+            || invocation.duration.has_value()
+            || invocation.max_deltas.has_value()
+            || invocation.delay_mode.has_value() || !invocation.sdf_files.empty()
+            || invocation.sdf_root.has_value() || invocation.sdf_cell != "*"
+            || invocation.sdf_report_limit.has_value()
+            || invocation.trace_file.has_value()
+            || invocation.trace_format.has_value()
+            || invocation.trace_compression.has_value()
+            || invocation.trace_report_limit.has_value()
+            || invocation.trace_enabled.has_value() || invocation.seed.has_value()
+            || invocation.random_seed || invocation.jobs.has_value()
+            || invocation.optimization.has_value()
+            || invocation.code_coverage.has_value()
+            || invocation.tcl_script.has_value()
+            || !invocation.tcl_arguments.empty()
+            || !invocation.tcl_commands.empty();
+        if (has_unrelated_option) {
+            argument_error(diagnostics,
+                "coverage commands received an HDL, simulation, tracing, or native-build option");
+            return std::nullopt;
+        }
+        if (invocation.command == Command::coverage_merge) {
+            if (invocation.files.empty()
+                || !invocation.artifact_output.has_value()) {
+                argument_error(diagnostics,
+                    "coverage merge requires input databases and --output");
+                return std::nullopt;
+            }
+            if (invocation.coverage_report_format.has_value()
+                || !invocation.coverage_thresholds.empty()) {
+                argument_error(diagnostics,
+                    "--format and --threshold are available only with coverage report");
+                return std::nullopt;
+            }
+            if (invocation.coverage_partial_merge
+                && invocation.files.size() < 2U) {
+                argument_error(diagnostics,
+                    "coverage merge --partial requires a target and history database");
+                return std::nullopt;
+            }
+        } else {
+            if (invocation.files.size() != 1U) {
+                argument_error(diagnostics,
+                    "coverage report requires exactly one input database");
+                return std::nullopt;
+            }
+            if (invocation.coverage_partial_merge) {
+                argument_error(diagnostics,
+                    "--partial is available only with coverage merge");
+                return std::nullopt;
+            }
         }
     }
     if (!invocation.help && !invocation.version
@@ -1720,7 +1895,9 @@ int run(
         } else if (invocation->command == Command::elaborate
             || invocation->command == Command::simulate
             || invocation->command == Command::systemc_compile
-            || invocation->command == Command::systemc_link) {
+            || invocation->command == Command::systemc_link
+            || invocation->command == Command::coverage_merge
+            || invocation->command == Command::coverage_report) {
             project::Config phase_config;
             phase_config.manifest_path = "<non-project>";
             std::error_code current_error;

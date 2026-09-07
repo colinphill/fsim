@@ -630,3 +630,26 @@ runtime::SystemVerilogClassHandle Simulation::allocate_uvm_component(
     }
     return handle;
 }
+runtime::SystemVerilogVpiCoverageService&
+Simulation::systemverilog_vpi_coverage() noexcept
+{
+    return *impl_->vpi_coverage;
+}
+
+runtime::SystemVerilogVpiSystemRegistry&
+Simulation::systemverilog_vpi_systems() noexcept
+{
+    return *impl_->vpi_systems;
+}
+
+const runtime::SystemVerilogVpiSystemRegistry&
+Simulation::systemverilog_vpi_systems() const noexcept
+{
+    return *impl_->vpi_systems;
+}
+
+const runtime::SystemVerilogVpiCoverageService&
+Simulation::systemverilog_vpi_coverage() const noexcept
+{
+    return *impl_->vpi_coverage;
+}

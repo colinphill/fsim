@@ -108,6 +108,34 @@ Impl(
             return static_cast<std::int32_t>(
                 std::system(owned.c_str()));
         });
+    if (built.code_coverage_enabled) {
+        const auto& inventory = built.design.code_coverage_inventory();
+        std::size_t counter_count
+            = inventory ? inventory->total_points : 0U;
+        if (!inventory) {
+            for (const auto& process_info : built.design_ir.processes()) {
+                const auto& process = interpreter->process_program(
+                    process_info.runtime_index);
+                for (std::size_t instruction = 0U;
+                    instruction < process.operations.size(); ++instruction) {
+                    const auto* hit = runtime::simir::operation_get_if<
+                        runtime::simir::CodeCoverageHit>(
+                        &process.operations[instruction]);
+                    if (hit == nullptr) {
+                        continue;
+                    }
+                    const auto counter
+                        = process.operations.code_coverage_counter(
+                            instruction, hit->counter);
+                    counter_count = std::max(
+                        counter_count,
+                        static_cast<std::size_t>(counter.value) + 1U);
+                }
+            }
+        }
+        interpreter->set_code_coverage_counters(
+            std::vector<std::uint64_t>(counter_count));
+    }
     coverage_execution_mode = engine == SimulationEngine::interpreter
         ? frontend::SystemVerilogCoverageExecutionMode::Interpreter
         : built.optimization == fsim::project::Optimization::o0
@@ -434,6 +462,14 @@ Impl(
         [this](const auto& event) {
             control_coverage_database(event);
         });
+    interpreter->set_coverage_access_hook(
+        [this](const auto& event) {
+            return access_standard_coverage(event);
+        });
+    interpreter->set_coverage_control_hook(
+        [this](const auto& event) {
+            return control_standard_coverage(event);
+        });
     std::map<std::string, std::size_t> declaration_counts;
     for (const auto& specialization :
         built.systemverilog_class_specializations) {
@@ -505,6 +541,7 @@ Impl(
             vpi_control_order,
             false,
             false);
+    configure_standard_vpi_coverage();
     vpi_systems
         = std::make_unique<runtime::SystemVerilogVpiSystemRegistry>(
             *vpi_registry);

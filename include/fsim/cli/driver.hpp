@@ -26,6 +26,8 @@ enum class Command {
   simulate,
   systemc_compile,
   systemc_link,
+  coverage_merge,
+  coverage_report,
 };
 
 enum class DiagnosticFormat {
@@ -42,6 +44,14 @@ enum class CompiledProcessPolicy {
   automatic,
   selected,
   all,
+};
+
+struct CoverageThreshold {
+  std::string metric;
+  std::uint32_t percent{};
+
+  friend bool operator==(
+      const CoverageThreshold&, const CoverageThreshold&) = default;
 };
 
 struct Invocation {
@@ -99,6 +109,9 @@ struct Invocation {
   std::optional<std::uint32_t> jobs;
   std::optional<project::Optimization> optimization;
   std::optional<bool> code_coverage;
+  bool coverage_partial_merge{false};
+  std::optional<std::string> coverage_report_format;
+  std::vector<CoverageThreshold> coverage_thresholds;
   std::optional<std::filesystem::path> tcl_script;
   std::vector<std::string> tcl_arguments;
   std::vector<std::string> tcl_commands;
@@ -125,6 +138,8 @@ struct Services {
   Handler simulate;
   Handler systemc_compile;
   Handler systemc_link;
+  Handler coverage_merge;
+  Handler coverage_report;
 };
 
 [[nodiscard]] std::optional<Invocation> parse_arguments(

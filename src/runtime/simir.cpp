@@ -188,7 +188,7 @@ OperationList::Storage& OperationList::mutable_storage()
     if (!storage_) {
         storage_ = std::make_shared<Storage>();
     }
-    if (!storage_.unique() || !signal_remap_.empty()
+    if (storage_.use_count() != 1 || !signal_remap_.empty()
         || !debug_overrides_.empty() || !assert_overrides_.empty()
         || !container_object_overrides_.empty()
         || !operation_overrides_.empty()
@@ -658,6 +658,27 @@ bool share_process_operations(
                             { static_cast<InstructionIndex>(index),
                                 right_counter });
                     }
+                } else if constexpr (
+                    std::is_same_v<Type, CoverageControl>) {
+                    compatible = left.destination == right->destination
+                        && left.command == right->command
+                        && left.coverage_type == right->coverage_type
+                        && left.scope == right->scope
+                        && left.selector == right->selector
+                        && left.instance_context == right->instance_context
+                        && left.selector_is_instance
+                            == right->selector_is_instance;
+                } else if constexpr (
+                    std::is_same_v<Type, CoverageAccess>) {
+                    compatible = left.destination == right->destination
+                        && left.kind == right->kind
+                        && left.coverage_type == right->coverage_type
+                        && left.scope == right->scope
+                        && left.selector == right->selector
+                        && left.instance_context == right->instance_context
+                        && left.selector_is_instance
+                            == right->selector_is_instance
+                        && left.filename == right->filename;
                 } else {
                     // Never share an operation whose instance-dependent
                     // fields have not been audited explicitly.
@@ -672,7 +693,7 @@ bool share_process_operations(
 
     if (recycled_operations != nullptr
         && candidate.operations.storage_
-        && candidate.operations.storage_.unique()) {
+        && candidate.operations.storage_.use_count() == 1) {
         *recycled_operations
             = std::move(*candidate.operations.storage_);
     }
@@ -747,7 +768,9 @@ bool process_operations_shareable(const Process& process)
                         || std::is_same_v<Type, Insert>
                         || std::is_same_v<Type, Return>
                         || std::is_same_v<Type, Extract>
-                        || std::is_same_v<Type, CodeCoverageHit>;
+                        || std::is_same_v<Type, CodeCoverageHit>
+                        || std::is_same_v<Type, CoverageControl>
+                        || std::is_same_v<Type, CoverageAccess>;
                 },
                 operation);
             return shareable;

@@ -1294,26 +1294,709 @@ starts on branch codex/v3 from clean v2 checkpoint
 
 ### Batch 180 - unified coverage database, standard API, and reports
 
-1. Define the bounded, versioned .fsimcov container schema.
-2. Store model fingerprint, source inventory, run metadata, metrics, and exclusions.
-3. Move SystemVerilog functional coverage into its database namespace.
-4. Move PSL coverage into its database namespace.
-5. Implement deterministic serialization and atomic replacement.
-6. Implement strict same-design merging as the default.
-7. Implement explicit partial merging of unchanged point identities.
-8. Implement SystemVerilog coverage constants and $coverage_control.
-9. Implement $coverage_get, $coverage_get_max, $coverage_merge, and $coverage_save.
-10. Implement the corresponding VPI coverage controls, properties, and traversal.
-11. Support module, hierarchy, instance, and coverage-type selection.
-12. Add source fsim coverage off/on controls with metric and reason.
-13. Add external source, hierarchy, object, and metric exclusion rules.
-14. Preserve every excluded point and reason in database and reports.
-15. Implement source, instance, and combined report models without a synthetic grand score.
-16. Implement deterministic text, HTML, and full-fidelity JSON reports.
-17. Implement LCOV and Cobertura projections for supported metric families.
-18. Implement coverage merge/report, per-metric thresholds, and CI exit status.
-19. Test corruption, size ceilings, path safety, merge conflicts, and mixed-language regressions.
-20. Run clean Debug/Release, sanitizer, and hosted monitoring closure for coverage.
+1. **Complete.** Define the bounded, versioned .fsimcov container schema.
+   The new artifact-level contract fixes the eight-byte `FSIMCOV` magic with
+   its terminating zero, direct v3 container and namespace schemas, canonical
+   big-endian marker, zero flags, a 64-byte header, and an exact three-entry
+   64-byte directory. Code, SystemVerilog functional, and PSL namespaces are
+   always present in that order, use raw payload encoding, retain independent
+   SHA-256 slots, and occupy gap-free packed extents beginning at byte 256.
+   Construction and validation reject v2 or unknown schemas, reordered or
+   unknown namespaces, unsupported byte order/flags/encoding, directory or
+   container-size disagreement, gaps, overlaps, uint64 arithmetic overflow,
+   and resource excess under `FSIM-COV-031`. Default ceilings bound the whole
+   container to 1 GiB, each namespace to 512 MiB, the directory to 1 MiB, and
+   namespace count to the exact three. The independently authored corpus proves
+   canonical deterministic construction, empty and populated layouts, exact
+   namespace identity/digests, every header/directory/namespace rejection,
+   every ceiling, and overflow. Typed model/source/run/metric/exclusion
+   contents remain Change 2; byte serialization remains Change 5. The focused
+   exact-LLVM warnings-as-errors Debug target rebuilds eight steps with eight
+   workers in 0.38 wall seconds at 117,024 KiB peak RSS with zero swaps. The
+   thirteen-gate schema, diagnostic, manifest, resource, and retained-audit set
+   passes 13/13 in 7.48 wall seconds at 27,724 KiB peak RSS with zero swaps.
+   Its post-documentation rerun passes the same 13/13 in 7.29 wall seconds at
+   27,832 KiB peak RSS with zero swaps.
+   The source manifest contains 1,624 ordered paths at SHA-256
+   `eefee94662f873b1d00da92e6c2b46bae66aa1d1474499664c370654e1a11205`.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+2. **Complete.** Store model fingerprint, source inventory, run metadata,
+   metrics, and exclusions. The artifact-level owning model uses the direct v3
+   schema plus `fsim-unified-coverage-database-v3` fingerprint and one required
+   nonzero digest. It retains canonical source identities, checkout-independent
+   logical paths, content sizes and digests; run identity, label, producer,
+   seed, final tick/delta, and completion state; and separately namespaced
+   code, SystemVerilog-functional, and PSL metric bins. Code metrics cover
+   statement, branch, line, condition, expression, toggle, FSM state, and FSM
+   transition families; functional coverage and PSL retain their own families
+   and cannot cross namespace boundaries. Source- and instance-scoped bins are
+   distinct, every metric refers to an owned source and run, and saturated
+   counters require the exact maximum count. Exclusions retain namespace,
+   family, source/instance ownership, stable point identity, and a required
+   reason without manufacturing an aggregate score. Construction sorts all
+   collections into deterministic identity order and publishes no partial
+   model after duplicate, invalid reference, unsafe path/text, pairing,
+   saturation, allocation, arithmetic, or resource failure under
+   `FSIM-COV-032`; direct v2 fingerprints are rejected. Default limits bound
+   sources to 1,048,576, runs to 65,536, metrics and exclusions independently
+   to 16,777,216, individual paths/reasons to 1 MiB, labels/producers to 64
+   KiB, and combined text to 1 GiB. The independently authored corpus proves
+   canonical construction and repeatability, all three namespace/family
+   groups, both scopes, source/run ownership, exclusions and reasons, v2/model
+   drift, every invalid identity/order/duplicate/pairing/saturation case, and
+   every count/text ceiling. Byte serialization remains Change 5; moving the
+   existing SystemVerilog and PSL producers remains Changes 3 and 4. The exact
+   warnings-as-errors Debug target rebuilds eight steps with eight workers in
+   1.93 wall seconds at 202,836 KiB peak RSS with zero swaps. The focused
+   schema/model, diagnostic, manifest, resource, and retained-audit set passes
+   13/13 in 7.57 wall seconds at 27,748 KiB peak RSS with zero swaps. The
+   post-documentation rerun passes the same 13/13 in 7.32 wall seconds at
+   27,772 KiB peak RSS with zero swaps. The
+   source manifest contains 1,627 ordered paths at SHA-256
+   `31d2f517ffe6e6b0524abce624c79d90ea62d15dc860513f44b64090f87baf78`.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+3. **Complete.** Move SystemVerilog functional coverage into its database
+   namespace. The frontend-to-artifact projection consumes the existing owning
+   `SystemVerilogCoverageState` directly and transactionally appends only
+   scored persistent state to a validated unified v3 model. Stable,
+   domain-separated identities bind every live covergroup instance,
+   coverpoint bin, and cross bin to an owned source and run. Coverpoints and
+   crosses use separate metric families inside the SystemVerilog-functional
+   namespace; identical bin definitions under sibling instances remain
+   separate instance-scoped results. Cross hit and excluded-hit counts retain
+   independent saturation flags, and sticky excluded crosses retain an
+   explicit point/instance/source exclusion record. Derived reports,
+   callbacks, traces, aliases, transition progress, prior samples, and illegal
+   sample history do not become result-database state. The adapter validates
+   live declaration/instance/bin ownership, regular scored-bin kind,
+   thresholds and covered state, source bindings, run ownership, the empty
+   destination namespace, and the complete underlying v3 model before
+   publication under `FSIM-COV-033`. It bounds source bindings, declarations,
+   and instances independently to 1,048,576, bins to 16,777,216, and source
+   names/identities to 1 MiB. The independently authored corpus proves stable
+   output from unordered input, source/header ownership, sibling instances,
+   coverpoint/cross separation, maximum hit and excluded-hit counts, sticky
+   exclusions, v2/model rejection, duplicate and missing ownership, malformed
+   coverage state, namespace replacement refusal, and every limit. Actual
+   `.fsimcov` byte encoding and file replacement remain Change 5. The focused
+   warnings-as-errors Debug impact rebuild completes 17 steps with eight
+   workers in 4.02 wall seconds at 299,428 KiB peak RSS with zero swaps. The
+   sixteen-gate frontend, schema/model/namespace, diagnostic, manifest,
+   resource, and retained-audit set passes 16/16 in 7.40 wall seconds at
+   75,076 KiB peak RSS with zero swaps. The post-documentation rerun passes
+   16/16 in 7.34 wall seconds at 74,872 KiB peak RSS with zero swaps.
+   Repository freezes own 2,579
+   diagnostics, 1,274 bounded sources, 1,565 SPDX-owned files, 474 conformance
+   test/control files, and 678 FST test/control files. The source manifest has
+   1,630 ordered paths at SHA-256
+   `0e516c1178d321cd96eda8ee5dab7762fe9dd197b17c7bf5d75e2fdb819ec9e2`.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+4. **Complete.** Move PSL coverage into its database namespace. The
+   application-to-artifact projection consumes the existing
+   `ConcurrentAssertionCoverage` results directly and transactionally appends
+   them to a validated, initially empty PSL namespace. Each assert, assume,
+   cover, or restrict directive produces one instance-scoped directive-attempt
+   metric and four property-outcome metrics for pass, failure, vacuous, and
+   aborted completion. This preserves every existing counter without a
+   synthetic combined score. Stable length-delimited, domain-separated
+   identities incorporate the directive name, process, kind, slot, source,
+   instance, and outcome role; caller-supplied semantic-source bindings map
+   each result onto the unified source inventory and run. Maximum-valued
+   counters carry saturation state. The projection rejects missing or
+   duplicate source ownership, invalid or duplicate directives, unknown kinds,
+   empty/excessive identities, counter-sum mismatch or overflow, run drift,
+   nonempty PSL replacement, and underlying v2/model failure transactionally
+   under `FSIM-COV-034`. Default limits bound source bindings and directives
+   independently to 1,048,576 and each identity component to 1 MiB; the final
+   shared-model metric ceiling remains authoritative. The independently
+   authored corpus proves all four directive kinds, five counter roles,
+   sibling source/instance ownership, deterministic unordered input, maximum
+   counters, malformed sums and arithmetic overflow, duplicates, v2/model
+   rejection, namespace replacement refusal, and every limit. Serialization
+   remains Change 5. The exact warnings-as-errors Debug impact build completes
+   nine steps with eight workers in 12.12 wall seconds at 1,577,984 KiB peak
+   RSS with zero swaps, including the retained VHDL/PSL application host. The
+   focused frontend, both namespace projections, live VHDL/PSL application,
+   schema/model, diagnostic, manifest, resource, and retained-audit set passes
+   18/18 in 10.29 wall seconds at 249,352 KiB peak RSS with zero swaps. The
+   post-documentation rerun passes 18/18 in 10.30 wall seconds at 249,560 KiB
+   peak RSS with zero swaps.
+   Repository freezes own 2,580 diagnostics, 1,277 bounded sources, 1,568
+   SPDX-owned files, 475 conformance test/control files, and 679 FST
+   test/control files. The source manifest has 1,633 ordered paths at SHA-256
+   `b5aa7ef253369c58ca269463a9e0d5b4a695aa91f570bce34cd5f92d1e3691b5`.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+5. **Complete.** Implement deterministic serialization and atomic replacement.
+   The direct v3 codec writes the fixed 64-byte big-endian container header,
+   three canonical 64-byte directory entries, and gap-free code,
+   SystemVerilog-functional, and PSL payloads. Each payload has its own direct
+   schema/kind/count header and SHA-256 directory digest. The code payload owns
+   the model fingerprint plus canonical source and run inventories; every
+   namespace owns only its metric and exclusion records. Strings are
+   length-prefixed, numeric fields and 128-bit identities are big-endian, flags
+   and reserved bytes are exact, and encoding first canonicalizes the complete
+   typed model. Decoding validates the outer schema, exact file/extents,
+   namespace headers and ownership, payload digests, count ceilings and
+   minimum possible byte sizes before reserve/allocation, string ceilings,
+   flags, reserved bytes, record order, references, saturation, and absence of
+   trailing bytes before publishing a model. Direct container/namespace v2
+   schemas are rejected. `write_coverage_database_atomically` encodes fully
+   before touching the destination, removes only governed sibling temporary
+   state, recovers an interrupted `.fsim-old` destination, writes a complete
+   `.fsim-tmp`, preserves the prior destination across rename, restores it on
+   publication failure, and cleans the backup after success under
+   `FSIM-COV-035`. The independently authored corpus proves byte-for-byte
+   repeatability from unordered input, exact round trip of all namespaces and
+   record families, outer and namespace v2 rejection, digest corruption,
+   truncation, encode/decode resource ceilings, initial publish, replacement,
+   interrupted-write recovery, cleanup, and I/O failures. The exact
+   warnings-as-errors Debug codec target rebuilds eight steps with eight
+   workers in 1.78 wall seconds at 224,316 KiB peak RSS with zero swaps. The
+   focused frontend, schema/model/codec and namespace projections, live
+   VHDL/PSL application, diagnostic, manifest, resource, and retained-audit
+   set passes 19/19 in 10.44 wall seconds at 249,560 KiB peak RSS with zero
+   swaps. Repository freezes own 2,581 diagnostics, 1,280 bounded sources,
+   1,571 SPDX-owned files, 476 conformance test/control files, and 680 FST
+   test/control files. The source manifest has 1,636 ordered paths at SHA-256
+   `1288709b1190b253db31eda0e98a55f8535d9ab8270754475a34e670b8eab935`.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+6. **Complete.** Implement strict same-design merging as the default. The
+   language-neutral `merge_coverage_databases` API canonicalizes and validates
+   every direct-v3 input transactionally, requires an exact model fingerprint,
+   exact canonical source inventory, and exact design-level exclusion policy,
+   then unions distinct run records and their code, SystemVerilog-functional,
+   and PSL metrics. Repeated run identities are rejected rather than counted
+   twice. Empty input, malformed or v2 models, fingerprint/source/exclusion
+   mismatch, duplicate runs, allocation failure, and aggregate input/run/
+   metric/text ceilings have stable result categories under `FSIM-COV-036`;
+   no partial result is published. Aggregate sizes are checked before reserve,
+   candidates are canonicalized one at a time, and an ordered identity set
+   avoids quadratic duplicate detection. The independently authored corpus
+   proves canonical and operand-order determinism, all three namespaces,
+   saturation preservation, exact inventory ownership, every mismatch class,
+   duplicate-run refusal, malformed references, v2 rejection, transactional
+   inputs, and resource ceilings. The exact warnings-as-errors Debug merge
+   target rebuilds eight steps with eight workers in 0.83 wall seconds at
+   142,336 KiB peak RSS with zero swaps. The focused database, live coverage,
+   artifact/cache, diagnostic, manifest, resource, and retained-audit set
+   passes 21/21 in 7.21 wall seconds at 92,504 KiB peak RSS with zero swaps.
+   The post-documentation rerun passes the same 21/21 in 7.30 wall seconds at
+   92,196 KiB peak RSS with zero swaps.
+   Repository freezes own 2,582 diagnostics, 1,283 bounded sources, 1,574
+   SPDX-owned files, 477 conformance test/control files, and 681 FST
+   test/control files. The source manifest has 1,639 ordered paths at SHA-256
+   `1097a8b881d26374bf2c126a83ad27d46632dcd75beaa55877765a30f096b69c`.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+7. **Complete.** Implement explicit partial merging of unchanged point
+   identities. `merge_coverage_databases_partially` takes an explicit target
+   plus historical databases, preserves the target's direct-v3 fingerprint,
+   canonical source inventory, point inventory, and exclusion policy, and
+   retains historical metrics only when the complete language-neutral point
+   key (namespace, family, scope, source, instance, and bin identity) exists in
+   the target and the canonical source record is byte-for-byte unchanged.
+   Changed/removed sources, points, hierarchy instances, and all historical
+   exclusion policies are omitted with exact statistics. Only runs referenced
+   by retained metrics survive; duplicate retained run identities are rejected
+   rather than replayed. Candidate lookup uses binary search over the target's
+   canonical metric prefix and compact unchanged-source identities, avoiding a
+   second whole point inventory. The explicit path bounds total historical
+   sources, runs, metrics, and exclusions in addition to input and output
+   ceilings, validates one database at a time, accepts no v2 model, and never
+   publishes a partial result under `FSIM-COV-037`. The independently authored
+   corpus proves target authority, all three namespaces, saturation,
+   changed-source/point/instance omission, exclusion-policy isolation,
+   unused-run omission, duplicate retained-run refusal, history-order
+   determinism, malformed/v2 rejection, input preservation, and every
+   examined/output ceiling. The exact warnings-as-errors Debug target rebuilds
+   eight steps with eight workers in 1.14 wall seconds at 175,092 KiB peak RSS
+   with zero swaps. The focused database, live coverage, artifact/cache,
+   diagnostic, manifest, resource, and retained-audit set passes 22/22 in 7.35
+   wall seconds at 92,480 KiB peak RSS with zero swaps. The
+   post-documentation rerun passes the same 22/22 in 7.57 wall seconds at
+   92,976 KiB peak RSS with zero swaps. Repository freezes own
+   2,583 diagnostics, 1,286 bounded sources, 1,577 SPDX-owned files, 478
+   conformance test/control files, and 682 FST test/control files. The source
+   manifest has 1,642 ordered paths at SHA-256
+   `43a97caa9606b186109e3b3d35c3f1741dd42964d081f258f63a10b981beff02`.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+8. **Complete.** Implement SystemVerilog coverage constants and
+   `$coverage_control`. Every SystemVerilog profile from 2005 onward now owns
+   the standardized command, scope, metric-type, and result macros, including
+   exact signed negative result values; Verilog profiles reject them. The
+   parser and elaborator require the bounded two-argument command/type form,
+   preserve signed 32-bit operands and result, and emit `FSIM-COV-038` for an
+   invalid call shape. Scope and metric-type identities are deliberately
+   distinct in SimIR, while module, hierarchy, and instance selection remains
+   Change 11. The new `CoverageControl` operation is validated, serialized,
+   shared only when structurally identical, hashed into the native cache key,
+   interpreted directly, and lowered to the same checked LLVM boundary at O0
+   through O3. Unknown operands and invalid commands return the standardized
+   error result rather than escaping the runtime. Statement start/stop/reset/
+   check operates on the simulation-owned saturating code-counter table;
+   stopped counters avoid direct compiled storage and suppress hits, reset
+   clears values and overflow state without reallocating, check distinguishes
+   unavailable, healthy, and overflowed tables, and an explicit hook reserves
+   assertion/FSM/toggle ownership for their existing subsystems. Coverage-
+   enabled application setup sizes the table from the attached inventory or a
+   canonical scan of effective shared counters, while the default-disabled
+   path retains no counter table or execution overhead. The independently
+   authored corpus proves every macro value, profile/arity rejection,
+   interpreter/O0/O2 equivalence, start/stop/reset/check, unavailable/invalid/
+   unknown results, artifact round trip, operation sharing, exact counter
+   behavior, and cache invalidation for command and metric register identity.
+   The public SimIR impact rebuild completes 542 warning-as-errors Debug steps
+   with eight workers in 8:20.29 at 2,791,856 KiB peak RSS with zero swaps; the
+   source-budget correction rebuilds six LLVM-test steps in 13.93 seconds at
+   660,204 KiB. The focused database, live coverage, engine/cache, diagnostic,
+   source, resource, and retained-audit set passes 31/31 in 25.14 seconds at
+   190,040 KiB peak RSS with zero swaps. Its post-documentation rerun passes
+   the same 31/31 in 24.02 seconds at 189,708 KiB peak RSS with zero swaps.
+   Repository freezes own 2,584
+   diagnostics, 1,286 bounded sources, 1,577 SPDX-owned files, 478 conformance
+   test/control files, and 682 FST test/control files. No new path was needed,
+   so the source manifest remains at 1,642 ordered paths and SHA-256
+   `43a97caa9606b186109e3b3d35c3f1741dd42964d081f258f63a10b981beff02`.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+9. **Complete.** Implement `$coverage_get`, `$coverage_get_max`,
+   `$coverage_merge`, and `$coverage_save`. Every SystemVerilog profile from
+   2005 onward now recognizes the aggregate type-only forms: the query calls
+   take one positional coverage type, while merge/save take a coverage type
+   and bounded string filename. Named, wrong-arity, non-string, wrong-profile,
+   and lowering failures are owned by `FSIM-COV-039`; module, hierarchy,
+   instance, and extended selector forms remain Change 11. One typed
+   `CoverageAccess` SimIR operation carries an exact access kind, signed
+   32-bit type/result registers, and a filename only for file operations. It
+   is validated, artifact-serialized, structurally shared, included in native
+   cache identity, interpreted directly, and lowered to the same checked LLVM
+   boundary at O0 through O3. Without an application service, statement
+   queries count covered or maximum configured counters and persistence
+   returns NOCOV; invalid/unknown operands return ERROR. The application
+   service builds the direct-v3 code namespace from immutable instance/source/
+   point inventory and saturating counters, retains stable model and bin
+   identities, creates a distinct run identity, unions covered bins across
+   prior runs, and never manufactures a grand score. Strict merge validates a
+   decoded `.fsimcov` transactionally against both accumulated history and the
+   current design before publication. Save uses the atomic v3 codec, and both
+   file functions reuse the project-root sandbox so absolute, parent, invalid
+   UTF-8, corrupt, v2, conflicting, duplicate-run, and resource failures
+   return ERROR without partial state. Unsupported assertion/FSM/toggle live
+   stores return NOCOV until their standard selectors/services are connected;
+   a design without executable points likewise returns NOCOV. The
+   independently authored corpus proves parser/profile/type rejection,
+   interpreter/O0/O2 calls, exact non-empty get/get-max counter values,
+   filename event transport, unavailable families, artifact round trip, and
+   access-kind/filename cache invalidation. The warnings-as-errors Debug
+   impact build completes cleanly with eight workers. The focused database,
+   live coverage, interpreter/LLVM/cache, diagnostic, source, resource, and
+   retained-audit set passes 53/53 in 24.39 wall seconds at 189,724 KiB peak
+   RSS with zero swaps; the final post-documentation and endian-stability
+   rerun passes the same 53/53 in 24.66 wall seconds. Repository freezes own 2,585 diagnostics, 1,287
+   bounded sources, 1,578 SPDX-owned files, 478 conformance test/control
+   files, and 682 FST test/control files. One new application implementation
+   fragment advances the source manifest to 1,646 ordered paths at SHA-256
+   `c043563bc4e5d30109d342bd040dfcb73534f7e20fd5ebea7929fd7432510141`.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+10. **Complete.** Implement the corresponding VPI coverage controls,
+    properties, and traversal. The v3 C ABI now publishes the exact standard
+    coverage control, FSM relation, metric, aggregate-property, assertion-
+    counter, and FSM-state relation identities from 750 through 777, retaining
+    the established alternate spellings only as equal-value aliases. A typed
+    `SystemVerilogVpiCoverageService` owns start/stop/reset/check and bounded
+    filename-only merge/save requests; assertion, FSM-state, statement, and
+    toggle presence properties; all-covered, maximum-bin, total-hit, and six
+    independent assertion counters; FSM/state objects; bidirectional state-
+    expression relations; exact legal-state values; and creation-ordered FSM
+    and state iterators. Coverage records and iterators use simulation-owned,
+    generation-qualified opaque handles in a bit-62 domain that the ordinary
+    VPI registry explicitly reserves and rejects, while bit 63 remains the
+    iterator discriminator. Publication validates the owning VPI object,
+    permitted metric/object pairing, state-expression type, exact state value,
+    unique name and encoding, cumulative FSM/state/target/iterator ceilings,
+    and every allocation before publishing a complete machine. Callback
+    exceptions, integer-property overflow, cross-simulation, stale, released,
+    malformed, duplicate, and unavailable objects remain typed failures under
+    `FSIM-COV-040`; callbacks execute outside service locks and relation lookup
+    preserves one lock order. Application setup exposes the service beside the
+    existing VPI object/control/system services, projects attached statement
+    counters and concurrent-assertion counters onto their exact VPI handles,
+    delegates persistence to the direct-v3 Change 9 path, and does not publish
+    a phantom statement target when an enabled design has zero executable
+    counters. Module/hierarchy/instance and coverage-type selector semantics
+    beyond an already published exact handle remain Change 11. The independent
+    runtime corpus proves ABI identities, control/filename transport, type and
+    aggregate properties, assertion counter separation, FSM relations,
+    state-value fidelity, ordinary/coverage handle-domain separation,
+    traversal order, iterator release/generation behavior, duplicate and
+    cross-simulation rejection, overflow, exception containment, and
+    cumulative transactional resource limits. The warnings-as-errors Debug
+    impact targets build cleanly with eight workers. The 48-test coverage lane
+    and 12-test ABI/governance lane pass 60/60 in the post-documentation rerun
+    in 19.13 aggregate wall seconds at 91,332 KiB peak RSS with zero swaps.
+    Repository freezes own 2,586
+    diagnostics, 1,290 bounded authored sources, 1,581 SPDX-owned files, 479
+    conformance test/control files, and 683 FST test/control files. Three new
+    paths advance the source manifest to 1,649 ordered paths at SHA-256
+    `0465c883805df9c6dc75a6dc5487e6204f6e1c2e6e7ee5abc9078f98b01e6a24`.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+11. **Complete.** Support module, hierarchy, instance, and coverage-type
+    selection. The standardized SystemVerilog surface now uses the exact
+    four-argument `$coverage_control(command, type, scope, selector)` and
+    three-argument `$coverage_get[_max](type, scope, selector)` query forms;
+    merge/save retain their type-and-filename forms. String-valued selectors
+    name a module definition and select every matching occurrence, while
+    hierarchical expressions name one instance; `$root`, absolute paths, and
+    call-site-relative instance paths are normalized without treating an
+    arbitrary string as an instance handle. Module scope selects only each
+    seed occurrence and hierarchy scope includes descendants on an exact path
+    boundary. The typed SimIR control/access events preserve the signed scope,
+    selector string, selector kind, and originating instance context through
+    validation, structural sharing, portable design serialization, native
+    cache identity, direct interpretation, and the checked LLVM O0-O3
+    boundary. Runtime validation rejects unknown commands, types, scopes,
+    malformed selector ownership, and four-state unknown values without
+    throwing across HDL execution. The application service maps selections
+    onto attached per-instance statement inventories, with a direct SimIR-hit
+    fallback, and applies start, stop, reset, check, get, and get-max only to
+    the selected counter set. Per-counter enable masks preserve unselected
+    collection and force compiled execution through the checked counter
+    callback whenever a partial mask makes direct counter storage unsafe.
+    Missing/invalid selectors return ERROR, valid unavailable coverage
+    families or point-free selections return NOCOV, partial inventories return
+    PARTIAL, and no synthetic aggregate score is introduced. The independent
+    application corpus proves root hierarchy, module-definition fanout,
+    exact-instance selection, interpreter/compiled equivalence, exact 3/2/1
+    maximum counts, selective counter control, invalid type/scope/selector
+    containment, and updated diagnostic arities. Native-cache tests prove
+    scope register, selector register, instance context, selector kind, and
+    access selection all invalidate identity independently. The
+    warnings-as-errors Debug impact build completes cleanly with eight workers;
+    the post-documentation 48-test coverage lane and 12-test focused ABI,
+    artifact, LLVM, runtime, diagnostic, source, and governance lane pass
+    60/60 in 42.98 aggregate wall seconds at 189,588 KiB peak RSS with zero
+    swaps. No new path was added, so repository
+    freeze counts and the source manifest remain at the Change 10 checkpoint:
+    2,586 diagnostics, 1,290 bounded authored sources, 1,581 SPDX-owned files,
+    479 conformance test/control files, 683 FST test/control files, and 1,649
+    ordered manifest paths at SHA-256
+    `0465c883805df9c6dc75a6dc5487e6204f6e1c2e6e7ee5abc9078f98b01e6a24`.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+12. **Complete.** Add source `fsim coverage off/on` controls with metric and
+    reason. A bounded language-neutral parser recognizes only real Verilog,
+    SystemVerilog, and VHDL line comments, so comment-like text in strings,
+    Verilog block comments, and look-alike prose cannot alter coverage. `off`
+    requires an exact metric and a nonempty quoted reason; `on` requires the
+    matching metric and forbids a reason. The metric vocabulary covers the
+    wildcard plus statement, branch, line, condition, expression, toggle, FSM
+    state/transition, SystemVerilog coverpoint/cross, and PSL
+    directive/property namespaces. Independently active metric regions may
+    overlap, while duplicate opens, unmatched closes, and overlapping
+    wildcard/specific regions fail transactionally under `FSIM-COV-041`.
+    Directive, source, line, individual-reason, and cumulative-reason sizes
+    are bounded, and an open region may deliberately extend to EOF. Statement
+    discovery consumes the shared exclusion plan for both Verilog-family and
+    VHDL sources and verifies the supplied raw bytes against the stable source
+    identity before any exclusion can affect point discovery. The shared
+    metric-aware lookup is available to the remaining coverage-family owners;
+    Change 13 composes external rules and Change 14 retains excluded points
+    and reasons in persisted/report models. The independent corpus proves
+    deterministic parsing, every metric spelling, overlapping distinct
+    metrics, escaped reasons, EOF regions, comment/string decoys, malformed
+    and conflicting directives, every resource ceiling, authenticated-source
+    rejection, statement suppression in both language families, and that a
+    branch-only region does not suppress statement points. Warnings-as-errors
+    Debug impact targets build cleanly with eight workers. The pre-document
+    coverage lane passes 49/49 in 10.92 wall seconds at 90,528 KiB peak RSS
+    with zero swaps; the post-documentation result is recorded in the active
+    resume checkpoint. Repository freezes advance to 2,587 diagnostics, 1,293
+    bounded authored sources, 1,584 SPDX-owned files, 480 conformance
+    test/control files, and 684 FST test/control files. Three new paths advance
+    the source manifest to 1,652 ordered paths at SHA-256
+    `e76c60e5de9decc10af09cae88d69f2212a1320269463b54c58b7bf47a57177a`.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+13. **Complete.** Add external source, hierarchy, object, and metric exclusion
+    rules. The v3 manifest accepts repeatable `[[coverage.exclude]]` entries
+    with optional source, hierarchy, and object glob selectors, an exact metric
+    selector, and a mandatory nonempty reason. Omitted selectors match every
+    target in that dimension and all supplied selectors are conjunctive, so a
+    metric-only waiver is explicit rather than encoded as a synthetic path.
+    The language-neutral metric vocabulary is shared exactly with Change 12,
+    including `all`. Source selectors use canonical checkout-independent
+    forward-slash logical paths and reject absolute, parent-relative,
+    backslash, drive-qualified, empty-component, and dot-component forms;
+    hierarchy and object selectors reject their corresponding malformed path
+    forms. Globs deliberately support only `*` and `?`; repeated stars are
+    canonicalized and matching is bounded without recursion. The builder
+    validates complete rule, pattern, reason, and aggregate byte ceilings,
+    canonicalizes declaration order, rejects duplicate selector tuples and
+    conflicting reasons, and emits stable per-rule and whole-plan SHA-256
+    identities under `FSIM-COV-042`. Batched matching validates the plan once,
+    bounds target count, target bytes, and aggregate matching work, returns one
+    aligned result per target, and preserves every matching canonical rule
+    index for Change 14 rather than selecting an arbitrary winner. The
+    application validates the plan before elaboration, so malformed rules
+    cannot remain inert in a successfully built project. The independent
+    corpus proves source, hierarchy, object, metric-only, wildcard, overlapping
+    multi-reason, declaration-order, tamper, malformed-selector,
+    duplicate/conflict, target, and every resource-limit behavior; the
+    application corpus proves `FSIM-COV-042` failure before elaboration. A
+    193-step, eight-worker warnings-as-errors Debug impact build completes
+    cleanly. The pre-document coverage lane passes 50/50 in 10.91 wall seconds
+    at 90,916 KiB peak RSS with zero swaps; the post-documentation result is
+    recorded in the active resume checkpoint. Repository freezes advance to
+    2,588 diagnostics, 1,296 bounded authored sources, 1,587 SPDX-owned files,
+    481 conformance test/control files, and 685 FST test/control files. Three
+    new paths advance the source manifest to 1,655 ordered paths at SHA-256
+    `7c71bfec2a1fedcfc163d5ae53e4458dd36b24dd41ce976c6004a23ec163984e`.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+14. **Complete.** Preserve every excluded point and reason in database and
+    reports. Verilog/SystemVerilog and VHDL statement discovery no longer
+    discards source-controlled executable points without a trace: each omitted
+    point retains the same stable point identity, construct, authenticated
+    source coordinates, line, and exact source-control reason as its scored
+    counterpart, but receives no runtime counter. The new bounded persistence
+    projection consumes elaborated point/source/instance identities plus
+    source, hierarchy, and object target names, maps all twelve metric families
+    to the shared Change 12 vocabulary, and composes Change 12 source reasons
+    with every Change 13 external-rule match. Source controls persist at source
+    scope; external selectors persist at instance scope. Candidate identity,
+    namespace/family pairing, path, reason, candidate/reason/record count,
+    reason bytes, total text, and external matching work are validated
+    transactionally under `FSIM-COV-043`. Canonical database exclusion identity
+    now includes the reason, allowing one excluded point to retain multiple
+    distinct reasons while still rejecting an exact duplicate. The existing
+    `.fsimcov` codec, strict merge comparison, and partial-merge policy carry
+    the resulting records without a side channel. A database-backed report
+    projection validates the complete canonical model, groups each
+    namespace/family/scope/source/instance/point tuple once, preserves its full
+    lexically ordered reason set, publishes the exact total reason count, and
+    independently bounds points, reasons, individual reason bytes, and total
+    reason bytes. The independent corpus proves source plus overlapping
+    external reasons, code/SystemVerilog-functional/PSL namespaces, empty
+    matches, corrupt external plans, invalid and duplicate candidates, invalid
+    reasons, every persistence/report ceiling, database corruption and order,
+    exact-duplicate rejection, multiple-reason grouping, and deterministic
+    `.fsimcov` round trips. Focused exact-LLVM warnings-as-errors Debug targets
+    build cleanly with eight workers. The pre-documentation coverage lane
+    passes 52/52 in 11.74 wall seconds at 90,308 KiB peak RSS with zero swaps;
+    the final post-documentation result is recorded in the active resume
+    checkpoint. Repository freezes advance to 2,589 diagnostics, 1,302 bounded
+    authored sources, 1,593 SPDX-owned files, 483 conformance test/control
+    files, and 687 FST test/control files. Six new paths advance the source
+    manifest to 1,661 ordered paths at SHA-256
+    `3a753b9129e0141c37f11be3b16a0f67c7278fe34f9070680b0150ea84c9256d`.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+15. **Complete.** Implement source, instance, and combined report models
+    without a synthetic grand score. The new database-backed report model
+    validates the complete canonical `.fsimcov` contents and owns three
+    deliberately distinct views. Source reports preserve every source-inventory
+    entry, including empty sources, and union instance occurrences by stable
+    source/point identity: any covered nonexcluded occurrence covers the source
+    point, an uncovered occurrence wins only when none is covered, and a point
+    is excluded only when no scored occurrence remains. A source-scoped metric
+    or exclusion is authoritative and is never double-counted with instance
+    occurrences. Instance reports retain each stable instance identity and its
+    exact source-qualified points independently. The combined view is derived
+    only from source-union points, preventing hierarchy replication from
+    inflating totals. Every view publishes separate namespace/family summaries
+    with total, covered, uncovered, excluded, hit, excluded-hit, and sticky
+    saturation state; there is intentionally no aggregate percentage or grand-
+    score field. Metrics across runs combine with saturating arithmetic, while
+    permanent exclusions create reportable points even when no runtime counter
+    exists. The Change 14 exclusion projection remains the single lossless
+    owner of exact reason text instead of copying reasons into every view.
+    Construction uses one canonical exact-point map and directly populates
+    source and instance outputs without whole-view point snapshots. Independent
+    ceilings bound exact points, source-union points, instance points,
+    instances, the database, and the exclusion projection under
+    `FSIM-COV-044`. The independent corpus proves empty-source retention,
+    source-union precedence, source- and instance-scoped exclusions, all three
+    namespaces, multi-run saturation, per-instance independence, combined
+    per-family conservation, deterministic reconstruction, corrupt database
+    rejection, exclusion-report propagation, and every report ceiling. The
+    exact-LLVM warnings-as-errors Debug target builds with eight workers. The
+    pre-documentation coverage lane passes 53/53 in 11.74 wall seconds at
+    90,516 KiB peak RSS with zero swaps; the final post-documentation result is
+    recorded in the active resume checkpoint. Repository freezes advance to
+    2,590 diagnostics, 1,305 bounded authored sources, 1,596 SPDX-owned files,
+    484 conformance test/control files, and 688 FST test/control files. Three
+    new paths advance the source manifest to 1,664 ordered paths at SHA-256
+    `88dd72df66ce79e3e8f576937e9c96643289780d17d8b5da433c05f7f34d417c`.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+16. **Complete.** Implement deterministic text, HTML, and full-fidelity JSON
+    reports. One bounded database-to-report entry point accepts only canonical
+    v3 coverage contents, constructs the Change 15 model transactionally, and
+    rejects unknown formats before allocating report state. Text, standalone
+    HTML, and JSON backends share fixed lower-case namespace, family, scope,
+    status, boolean, decimal-counter, and 128-bit hexadecimal identity
+    spellings. Each backend traverses the already canonical source, instance,
+    combined, point, metric, and exact exclusion-reason vectors without sorting
+    or creating a second report snapshot. Text escapes quotes, backslashes, and
+    control bytes so one database string cannot create a false report record.
+    HTML entity-escapes markup-sensitive and control bytes while retaining a
+    fixed UTF-8 document shell. JSON carries every Change 15 model field,
+    including empty sources, per-point source/instance identities, hit and
+    excluded-hit counters, both sticky saturation flags, status, every per-
+    family summary, exact exclusion scope, reasons, and reason count under the
+    `fsim-coverage-report-v3` schema; it deliberately adds no percentage,
+    overall score, or grand score. A checked writer enforces one configurable
+    output-byte ceiling and publishes no partial string on limit, allocation,
+    model, or format failure under `FSIM-COV-045`. The implementation is split
+    by output format behind one private writer/escaping contract so individual
+    translation units remain comfortably within the source-line budget.
+    Independently authored tests prove byte-for-byte repeated rendering, all
+    three namespaces, covered/uncovered/excluded states, exact UINT64_MAX
+    saturation, empty-source retention, complete identities and reasons,
+    format-specific hostile-text escaping, standalone HTML framing, JSON field
+    fidelity, absence of synthetic scores, invalid-format precedence, corrupt
+    database propagation, nested model ceilings, and transactional output
+    ceilings. Exact-LLVM warnings-as-errors Debug targets build with eight
+    workers. The pre-documentation coverage lane passes 54/54 in 11.58 wall
+    seconds at 91,664 KiB peak RSS with zero swaps; the final post-documentation
+    result is recorded in the active resume checkpoint. Repository freezes
+    advance to 2,591 diagnostics, 1,312 bounded authored sources, 1,603 SPDX-
+    owned files, 485 conformance test/control files, and 689 FST test/control
+    files. Seven new paths advance the source manifest to 1,671 ordered paths
+    at SHA-256
+    `e31d5089272e15f6929516ed4ae9b3f354a7481ab0b3efdcd6b1b14d9536dc4d`.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+17. **Complete.** Implement LCOV and Cobertura projections for supported
+    metric families. The unified database metric and exclusion records now
+    retain a bounded one-based physical source line through deterministic
+    serialization, exact report construction, partial-merge point matching,
+    exclusion persistence, SystemVerilog functional-coverage publication, and
+    the Change 16 text, HTML, and JSON renderers. Records for metric families
+    without an available physical location may retain line zero, but a
+    nonexcluded projectable point without a line is rejected instead of being
+    silently omitted. Conflicting locations for one point across runs,
+    exclusions, or runtime and exclusion evidence are likewise rejected.
+    `project_coverage_report` emits only Code statement, explicit line, and
+    branch families: SystemVerilog functional, PSL, condition, expression,
+    toggle, and FSM families remain in the full-fidelity reports and are
+    intentionally absent from the lossy interchange projections. Explicit
+    line metrics take precedence over statement-derived aggregation at the same
+    physical line, excluded points do not inflate projected totals, and source
+    order follows the canonical database model. LCOV output uses deterministic
+    `TN`, `SF`, `DA`, numeric `BRDA`, `LF`, `LH`, `BRF`, and `BRH` records,
+    including empty source records. Cobertura output is deterministic,
+    well-formed UTF-8 XML with exact global, package, class, line, and branch
+    summaries, fixed six-decimal rates, escaped paths, and a zero timestamp.
+    Both paths reject unsafe grammar-specific source text and enforce global
+    line, branch, nested-model, and output-byte ceilings transactionally under
+    `FSIM-COV-046`. Projection uses one source-local ordered line map at a time;
+    the Cobertura total pass repeats bounded projection rather than retaining a
+    second whole-project snapshot. Independently authored tests prove exact
+    LCOV bytes, Cobertura structure and rates, stable branch ordinals,
+    statement aggregation with explicit-line precedence, excluded and
+    unsupported-family omission, empty sources, XML escaping, deterministic
+    repetition, codec line round trips, relocated-point partial-merge
+    rejection, producer and exclusion line propagation, mismatched-line
+    rejection, missing lines, corrupt models, unsafe paths, invalid formats,
+    and every projection ceiling. Exact-LLVM warnings-as-errors Debug targets
+    build with eight workers. The pre-documentation coverage lane passes 55/55
+    in 11.77 wall seconds at 88,796 KiB peak RSS with zero swaps; the final
+    post-documentation result is recorded in the active resume checkpoint.
+    Repository freezes advance to 2,592 diagnostics, 1,315 bounded authored
+    sources, 1,606 SPDX-owned files, 486 conformance test/control files, and
+    690 FST test/control files. Three new paths advance the source manifest to
+    1,674 ordered paths at SHA-256
+    `778fb7e040bb2617dd1d63faff4ae83363224eb473a3e17767c9b34ab54d55c5`.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+18. **Complete.** Implement coverage merge/report, per-metric thresholds, and
+    CI exit status. `fsim coverage merge` now consumes one or more bounded v3
+    `.fsimcov` inputs, performs the Change 6 strict same-design merge by
+    default, and atomically publishes one output selected with `--output`.
+    `--partial` explicitly selects the Change 7 target-plus-history merge and
+    remains invalid for reports. `fsim coverage report` accepts exactly one
+    database and dispatches deterministic text, HTML, JSON, LCOV, or Cobertura
+    output through the Change 16-17 model and renderer contracts; output goes
+    to standard output by default or through an atomic replacement when
+    `--output` is present. Repeated `--threshold FAMILY=PERCENT` controls are
+    normalized, unique, and bounded to integer percentages from zero through
+    100. Each threshold evaluates only its combined per-family scored
+    denominator (`total - excluded`), never invents a cross-family score, and
+    uses overflow-safe ceiling arithmetic. A missing or wholly excluded
+    family satisfies only a zero-percent threshold. Reports are fully emitted
+    before threshold evaluation; an unmet threshold returns dedicated CI exit
+    status 4, while malformed commands and operational failures retain usage
+    status 2 and failure status 1 respectively. HDL, simulation, trace, and
+    native-build controls cannot leak into either manifest-free coverage
+    command. Merge, database, model, renderer, projection, and filesystem
+    failures publish no partial merge or report under `FSIM-COV-047`.
+    Independently authored end-to-end CLI tests prove strict merge, explicit
+    partial merge, merge conflict rollback, corrupt-input rejection, default
+    text output, atomic LCOV output, 50-percent pass, 100-percent failure,
+    empty-family zero/nonzero behavior, unknown families, report-before-exit,
+    stable exit codes, duplicate and malformed thresholds, invalid formats,
+    arity failures, and unrelated-option rejection. The existing application
+    and code-coverage control hosts rebuild cleanly against the extended CLI
+    service aggregate with exact-LLVM warnings as errors and eight workers.
+    The pre-documentation coverage lane passes 56/56 in 10.98 wall seconds at
+    89,940 KiB peak RSS with zero swaps; the final post-documentation result is
+    recorded in the active resume checkpoint. Repository freezes advance to
+    2,593 diagnostics, 1,317 bounded authored sources, 1,608 SPDX-owned files,
+    487 conformance test/control files, and 691 FST test/control files. Two new
+    paths advance the source manifest to 1,676 ordered paths at SHA-256
+    `338187727d8bbc4187cb62e9224d560d895a466fdf5c05067d81f528a6768dcd`.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+19. **Complete.** Test corruption, size ceilings, path safety, merge conflicts,
+    and mixed-language regressions. The canonical v3 logical-path validator now
+    rejects Windows drive-absolute and drive-relative spellings in addition to
+    empty, POSIX-absolute, backslash/UNC, repeated-separator, trailing-slash,
+    dot, parent, and embedded-NUL paths. That prevents checkout-local Windows
+    paths from entering otherwise portable databases, reports, or projections.
+    A new cross-layer robustness host composes Code coverage from independently
+    named SystemVerilog and VHDL sources with SystemVerilog functional and PSL
+    namespaces, then proves deterministic strict merge in both input orders,
+    codec round trip, source/instance/combined reporting, full-fidelity JSON,
+    and intentionally Code-only LCOV and Cobertura projection. An explicit
+    partial merge changes the VHDL content and point identity and proves that
+    only unchanged SystemVerilog and PSL history survives. Strict fingerprint,
+    source-inventory, exclusion-inventory, and duplicate-run conflicts return
+    their exact errors, publish no result, and leave every input unchanged.
+    The corruption sweep rejects every strict prefix, every single-byte bit
+    flip, appended data, corrupt on-disk payloads, and hostile declared
+    container/namespace sizes. Model, codec, strict/partial merge, report,
+    render, projection, and filesystem ceilings fail without partial output;
+    atomic replacement preserves an existing valid database when a later
+    invalid model is supplied. Existing schema, producer, report, merge, and
+    Verilog/SystemVerilog/VHDL interpreter/LLVM equivalence hosts remain green.
+    Exact-LLVM warnings-as-errors Debug targets build with eight workers. The
+    focused cross-layer lane passes 14/14 and the resource portability contract
+    passes independently. The pre-documentation coverage lane passes 57/57 in
+    11.59 wall seconds at 91,220 KiB peak RSS with zero swaps; the final
+    post-documentation result is recorded in the active resume checkpoint.
+    Repository freezes remain at 2,593 diagnostics and advance to 1,318 bounded
+    authored sources, 1,609 SPDX-owned files, 488 conformance test/control
+    files, and 692 FST test/control files. One new path advances the source
+    manifest to 1,677 ordered paths at SHA-256
+    `048b8b8ef71122a3cb54489126c5ef507482f0dcf8a657b839909140296fbdbc`.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+20. **Complete.** Run clean Debug/Release, sanitizer, and hosted monitoring
+    closure for coverage. The complete no-LLVM Clang 22 ASan/UBSan tree builds
+    1,074/1,074 actions with eight workers and its uninterrupted suite passes
+    361/361 in 9:16.06 at 2,315,144 KiB peak RSS with zero swaps. Local leak
+    detection alone is disabled for the documented ptrace-supervisor
+    constraint; hosted policy continues to require it. Per the user's closure
+    direction, this clean sanitizer result carries the already completed Clang
+    Debug and Release qualifications without redundant rebuilds. The focused
+    source-line, release-record, Windows-package, Windows-LLVM, and
+    resource-portability gates pass 5/5, and the retained local transcripts
+    contain no compiler-warning, failed-build, ASan, UBSan, runtime-error,
+    segmentation, or failed-CTest markers. Hosted qualification exposed and
+    closed libc++ C++20 smart-pointer portability, native Windows UTF-8 path
+    conversion, current v3 test/archive inventory, relative install-audit work
+    directory, pinned LLVM package retry, and Windows cache-lock cleanup
+    defects. GitHub Actions run `34117679982` at exact development SHA
+    `b8455692c69c7aeb71545e4e9684d2b5112e43e1` is green across all nine lanes:
+    Linux Clang 22 Debug/Release with LLVM 22.1.8 ON/OFF, four matching Windows
+    LLVM-MinGW configurations, and frontend fuzz. Windows Release passes
+    356/356 with LLVM and 352/352 without it, both Debug lanes pass the same
+    inventories, deterministic Release archives contain 1,247 entries, and
+    both native install audits pass. The formerly failing Release/LLVM-ON cache
+    and VPI hosts complete in 0.61 and 0.76 seconds. All retained hosted logs
+    are clean under the same warning/error/sanitizer audit, and fuzz completes
+    20,000 runs. Batch 180's database, API, report, robustness, sanitizer, and
+    hosted-platform obligations are therefore closed.
 
 ### Batch 181 - IEEE legacy TF PLI
 

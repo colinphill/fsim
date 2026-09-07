@@ -366,6 +366,146 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
         return destination;
     }
     if (expression.kind == ExpressionKind::Call
+        && expression.text == "$coverage_control") {
+        const bool named = std::ranges::any_of(
+            expression.call_argument_names,
+            [](const std::string& name) { return !name.empty(); });
+        if (language_ != frontend::Language::SystemVerilog2017
+            || named || expression.operands.size() != 4U) {
+            report(
+                "FSIM-COV-038",
+                "$coverage_control requires SystemVerilog and positional control, coverage type, scope, and module or instance selector arguments",
+                expression.span);
+            return std::nullopt;
+        }
+        auto command = lower_expression(expression.operands[0], 32U);
+        auto coverage_type = lower_expression(expression.operands[1], 32U);
+        auto scope = lower_expression(expression.operands[2], 32U);
+        if (!command || !coverage_type || !scope) {
+            return std::nullopt;
+        }
+        if (register_width(*command) != 32U) {
+            *command = resize_register(
+                *command, 32U,
+                is_signed_expression(expression.operands[0]));
+        }
+        if (register_width(*coverage_type) != 32U) {
+            *coverage_type = resize_register(
+                *coverage_type, 32U,
+                is_signed_expression(expression.operands[1]));
+        }
+        if (register_width(*scope) != 32U) {
+            *scope = resize_register(*scope, 32U,
+                is_signed_expression(expression.operands[2]));
+        }
+        const auto& selector_expression = expression.operands[3];
+        const bool selector_is_instance
+            = !is_string_expression(selector_expression);
+        std::optional<StringRegisterId> selector;
+        if (!selector_is_instance) {
+            selector = lower_string_expression(selector_expression);
+        } else if (selector_expression.kind == ExpressionKind::Identifier
+            && !selector_expression.text.empty()) {
+            selector = allocate_string_register();
+            process_.operations.emplace_back(LoadStringConstant {
+                *selector, selector_expression.text });
+        }
+        if (!selector) {
+            report("FSIM-COV-038",
+                "$coverage_control selector must be a string-valued module name or hierarchical instance name",
+                selector_expression.span);
+            return std::nullopt;
+        }
+        const auto destination = allocate_register(
+            32U, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(CoverageControl {
+            destination, *command, *coverage_type, *scope, *selector,
+            hierarchy_, selector_is_instance });
+        return destination;
+    }
+    if (expression.kind == ExpressionKind::Call
+        && (expression.text == "$coverage_get"
+            || expression.text == "$coverage_get_max"
+            || expression.text == "$coverage_merge"
+            || expression.text == "$coverage_save")) {
+        const bool named = std::ranges::any_of(
+            expression.call_argument_names,
+            [](const std::string& name) { return !name.empty(); });
+        const auto file_call = expression.text == "$coverage_merge"
+            || expression.text == "$coverage_save";
+        if (language_ != frontend::Language::SystemVerilog2017
+            || named
+            || expression.operands.size() != (file_call ? 2U : 3U)
+            || (file_call
+                && !is_string_expression(expression.operands[1]))) {
+            report("FSIM-COV-039",
+                expression.text
+                    + (file_call
+                        ? " requires SystemVerilog, a positional integer coverage type, and a positional string filename"
+                        : " requires SystemVerilog and positional coverage type, scope, and module or instance selector arguments"),
+                expression.span);
+            return std::nullopt;
+        }
+        auto coverage_type = lower_expression(expression.operands[0], 32U);
+        if (!coverage_type) {
+            return std::nullopt;
+        }
+        if (register_width(*coverage_type) != 32U) {
+            *coverage_type = resize_register(*coverage_type, 32U,
+                is_signed_expression(expression.operands[0]));
+        }
+        auto filename = file_call
+            ? lower_string_expression(expression.operands[1])
+            : std::optional<StringRegisterId> { };
+        if (file_call && !filename) {
+            return std::nullopt;
+        }
+        std::optional<RegisterId> scope;
+        std::optional<StringRegisterId> selector;
+        bool selector_is_instance { };
+        if (!file_call) {
+            scope = lower_expression(expression.operands[1], 32U);
+            if (!scope) {
+                return std::nullopt;
+            }
+            if (register_width(*scope) != 32U) {
+                *scope = resize_register(*scope, 32U,
+                    is_signed_expression(expression.operands[1]));
+            }
+            const auto& selector_expression = expression.operands[2];
+            selector_is_instance = !is_string_expression(selector_expression);
+            if (!selector_is_instance) {
+                selector = lower_string_expression(selector_expression);
+            } else if (selector_expression.kind == ExpressionKind::Identifier
+                && !selector_expression.text.empty()) {
+                selector = allocate_string_register();
+                process_.operations.emplace_back(LoadStringConstant {
+                    *selector, selector_expression.text });
+            }
+            if (!selector) {
+                report("FSIM-COV-039",
+                    expression.text
+                        + " selector must be a string-valued module name or hierarchical instance name",
+                    selector_expression.span);
+                return std::nullopt;
+            }
+        }
+        const auto kind = expression.text == "$coverage_get"
+            ? SystemVerilogCoverageAccessKind::get
+            : expression.text == "$coverage_get_max"
+            ? SystemVerilogCoverageAccessKind::get_max
+            : expression.text == "$coverage_merge"
+            ? SystemVerilogCoverageAccessKind::merge
+            : SystemVerilogCoverageAccessKind::save;
+        const auto destination = allocate_register(
+            32U, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(CoverageAccess {
+            destination, kind, *coverage_type, scope, selector,
+            file_call ? std::string { } : hierarchy_, selector_is_instance,
+            filename });
+        return destination;
+    }
+    if (expression.kind == ExpressionKind::Call
         && expression.text == "$system") {
         if (language_ != frontend::Language::SystemVerilog2017
             || expression.operands.size() > 1U

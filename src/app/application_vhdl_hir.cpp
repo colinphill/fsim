@@ -532,8 +532,10 @@ namespace {
             definition.base = *output.subtype;
             definition.source = output.source;
             definition.origin = output.origin;
-            add_type_payload(input, definition, scope, output.origin);
-            add_protected_payload(input.type, definition, id, scope, output.origin);
+            const auto declaration_origin = output.origin;
+            add_type_payload(input, definition, scope, declaration_origin);
+            add_protected_payload(
+                input.type, definition, id, scope, declaration_origin);
             add_predefined_attributes(input.type, definition);
             hir_.mutable_types().push_back(std::move(definition));
             return id;

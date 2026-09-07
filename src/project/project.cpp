@@ -302,6 +302,7 @@ enum class Context {
   build,
   coverage,
   coverage_fsm,
+  coverage_exclusion,
   run,
   systemc,
   unknown,
@@ -492,6 +493,12 @@ class Parser {
         coverage_fsm_has_current_state_.push_back(false);
         context_ = Context::coverage_fsm;
         context_index_ = config_.coverage.fsm_hints.size() - 1;
+      } else if (normalized == "coverage.exclude") {
+        config_.coverage.exclusions.emplace_back();
+        coverage_exclusion_has_metric_.push_back(false);
+        coverage_exclusion_has_reason_.push_back(false);
+        context_ = Context::coverage_exclusion;
+        context_index_ = config_.coverage.exclusions.size() - 1;
       } else {
         diagnostics_.error(
             std::string(kUnknownCode),
@@ -643,6 +650,8 @@ class Parser {
         return "coverage";
       case Context::coverage_fsm:
         return "coverage.fsm#" + std::to_string(context_index_);
+      case Context::coverage_exclusion:
+        return "coverage.exclude#" + std::to_string(context_index_);
       case Context::run:
         return "run";
       case Context::systemc:
@@ -749,6 +758,9 @@ class Parser {
         break;
       case Context::coverage_fsm:
         assign_coverage_fsm(key, value, key_span);
+        break;
+      case Context::coverage_exclusion:
+        assign_coverage_exclusion(key, value, key_span);
         break;
       case Context::run:
         assign_run(key, value, key_span);
@@ -1176,6 +1188,34 @@ class Parser {
     }
   }
 
+  void assign_coverage_exclusion(
+      const std::string& key,
+      const Value& value,
+      const diagnostic::SourceSpan& span) {
+    if (key != "source" && key != "hierarchy" && key != "object"
+        && key != "metric" && key != "reason") {
+      unknown_key(key, span);
+      return;
+    }
+    if (!require_kind(value, Value::Kind::string, key, "a string")) {
+      return;
+    }
+    auto& exclusion = config_.coverage.exclusions[context_index_];
+    if (key == "source") {
+      exclusion.source = value.text;
+    } else if (key == "hierarchy") {
+      exclusion.hierarchy = value.text;
+    } else if (key == "object") {
+      exclusion.object = value.text;
+    } else if (key == "metric") {
+      exclusion.metric = value.text;
+      coverage_exclusion_has_metric_[context_index_] = true;
+    } else {
+      exclusion.reason = value.text;
+      coverage_exclusion_has_reason_[context_index_] = true;
+    }
+  }
+
   void assign_systemc(
       const std::string& key,
       const Value& value,
@@ -1503,6 +1543,40 @@ class Parser {
             document_span);
       }
     }
+
+    for (std::size_t index = 0;
+         index < config_.coverage.exclusions.size(); ++index) {
+      const auto& exclusion = config_.coverage.exclusions[index];
+      const auto number = std::to_string(index + 1);
+      if (!coverage_exclusion_has_metric_[index]
+          || exclusion.metric.empty()) {
+        diagnostics_.error(
+            std::string(kRequiredCode),
+            "[[coverage.exclude]] #" + number
+                + " is missing a non-empty 'metric'",
+            document_span);
+      }
+      if (!coverage_exclusion_has_reason_[index]
+          || exclusion.reason.empty()) {
+        diagnostics_.error(
+            std::string(kRequiredCode),
+            "[[coverage.exclude]] #" + number
+                + " is missing a non-empty 'reason'",
+            document_span);
+      }
+      for (const auto& selector : {
+               std::pair { "source", exclusion.source },
+               std::pair { "hierarchy", exclusion.hierarchy },
+               std::pair { "object", exclusion.object } }) {
+        if (selector.second && selector.second->empty()) {
+          diagnostics_.error(
+              std::string(kValueCode),
+              "[[coverage.exclude]] #" + number + " has an empty '"
+                  + selector.first + "' selector",
+              document_span);
+        }
+      }
+    }
   }
 
   static bool valid_time_value(const std::string_view value, const bool allow_auto) {
@@ -1593,6 +1667,8 @@ class Parser {
   std::vector<bool> binding_has_instance_;
   std::vector<bool> coverage_fsm_has_instance_;
   std::vector<bool> coverage_fsm_has_current_state_;
+  std::vector<bool> coverage_exclusion_has_metric_;
+  std::vector<bool> coverage_exclusion_has_reason_;
   std::vector<bool> library_map_has_library_;
   std::vector<bool> library_map_has_path_;
   std::vector<bool> top_has_target_;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "api_internal.hpp"
+#include "fsim/support/path.hpp"
 
 namespace fsim::api::detail {
 
@@ -948,8 +949,11 @@ void invoke_safe_point(
         const auto source_owner = std::ranges::find_if(
             candidates, [&](const auto& candidate) {
               return candidate.source_path == point->source.path.str()
-                  || std::filesystem::path(candidate.source_path).filename()
-                      == std::filesystem::path(point->source.path).filename();
+                  || fsim::support::path_from_utf8(candidate.source_path)
+                          .filename()
+                      == fsim::support::path_from_utf8(
+                             point->source.path.str())
+                             .filename();
             });
         if (source_owner != candidates.end()) {
           provenance = *source_owner;

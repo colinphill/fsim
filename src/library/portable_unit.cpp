@@ -439,8 +439,9 @@ bool has_absolute_span(
     std::unordered_set<const void*>& visited) {
   using Value = std::remove_cv_t<T>;
   if constexpr (std::same_as<Value, frontend::SourceSpan>) {
-    return std::filesystem::path(value.source_name).is_absolute()
-        || std::filesystem::path(value.physical_source_name).is_absolute();
+    return fsim::support::path_from_utf8(value.source_name.str()).is_absolute()
+        || fsim::support::path_from_utf8(value.physical_source_name.str())
+               .is_absolute();
   } else if constexpr (
       std::is_arithmetic_v<Value> || std::is_enum_v<Value>
       || std::same_as<Value, std::string>) {

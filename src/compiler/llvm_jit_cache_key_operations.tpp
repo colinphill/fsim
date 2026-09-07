@@ -1494,6 +1494,44 @@ for (const auto& operation : process.operations) {
                     builder, "kind",
                     static_cast<std::uint64_t>(value.kind));
             } else if constexpr (
+                std::is_same_v<OperationType, CoverageControl>) {
+                builder.add("operation", "CoverageControl");
+                add_key_u64(builder, "destination", value.destination);
+                add_key_u64(builder, "command", value.command);
+                add_key_u64(
+                    builder, "coverage-type", value.coverage_type);
+                add_key_u64(builder, "scope", value.scope);
+                add_key_u64(builder, "selector", value.selector);
+                builder.add("instance-context", value.instance_context);
+                add_key_u64(builder, "selector-is-instance",
+                    value.selector_is_instance ? 1U : 0U);
+            } else if constexpr (
+                std::is_same_v<OperationType, CoverageAccess>) {
+                builder.add("operation", "CoverageAccess");
+                add_key_u64(builder, "destination", value.destination);
+                add_key_u64(builder, "kind",
+                    static_cast<std::uint64_t>(value.kind));
+                add_key_u64(
+                    builder, "coverage-type", value.coverage_type);
+                add_key_u64(builder, "has-scope",
+                    value.scope.has_value() ? 1U : 0U);
+                if (value.scope) {
+                    add_key_u64(builder, "scope", *value.scope);
+                }
+                add_key_u64(builder, "has-selector",
+                    value.selector.has_value() ? 1U : 0U);
+                if (value.selector) {
+                    add_key_u64(builder, "selector", *value.selector);
+                }
+                builder.add("instance-context", value.instance_context);
+                add_key_u64(builder, "selector-is-instance",
+                    value.selector_is_instance ? 1U : 0U);
+                add_key_u64(builder, "has-filename",
+                    value.filename.has_value() ? 1U : 0U);
+                if (value.filename) {
+                    add_key_u64(builder, "filename", *value.filename);
+                }
+            } else if constexpr (
                 std::is_same_v<OperationType, CodeCoverageHit>) {
                 builder.add("operation", "CodeCoverageHit");
                 add_key_u64(builder, "point-high", value.point.high);

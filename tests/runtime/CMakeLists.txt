@@ -162,6 +162,18 @@ set_tests_properties(
     "fsim_compatibility_smoke_closure_witnesses;fsim_verilog_systemverilog_standard_mode_closure_witnesses;fsim_systemverilog_closure_witnesses;fsim_verilog_closure_witnesses"
 )
 
+add_executable(
+  fsim_vpi_coverage_tests
+  vpi_coverage_test.cpp
+)
+target_link_libraries(fsim_vpi_coverage_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_vpi_coverage_tests)
+add_test(NAME fsim.runtime.vpi_coverage COMMAND fsim_vpi_coverage_tests)
+set_tests_properties(
+  fsim.runtime.vpi_coverage
+  PROPERTIES LABELS "fast;runtime;vpi;coverage;control;property;fsm;traversal;positive;negative;resource"
+)
+
 add_executable(fsim_trace_model_tests trace_model_tests.cpp)
 target_link_libraries(fsim_trace_model_tests PRIVATE fsim_runtime)
 fsim_configure_test(fsim_trace_model_tests)

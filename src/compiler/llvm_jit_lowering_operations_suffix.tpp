@@ -819,6 +819,22 @@
                         FSIM_JIT_FRAME_STATE_READY,
                         next_instruction);
                 } else if constexpr (
+                    std::is_same_v<OperationType, CoverageControl>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
+                } else if constexpr (
+                    std::is_same_v<OperationType, CoverageAccess>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
+                } else if constexpr (
                     std::is_same_v<OperationType, CodeCoverageHit>) {
                     lower_code_coverage_hit({
                         builder,

@@ -214,6 +214,7 @@ examples/vertical_slice/tb.sv
 include/fsim/api.h
 include/fsim/app/application.hpp
 include/fsim/app/artifact_phase.hpp
+include/fsim/app/coverage_database_psl.hpp
 include/fsim/app/design_artifact.hpp
 include/fsim/app/sdf_annotation_scope.hpp
 include/fsim/app/sdf_artifact_identity.hpp
@@ -256,7 +257,16 @@ include/fsim/app/sdf_vital_target_plan.hpp
 include/fsim/app/sdf_vital_timing_checks.hpp
 include/fsim/app/trace_api.hpp
 include/fsim/app/trace_archive.hpp
+include/fsim/artifact/coverage_database.hpp
+include/fsim/artifact/coverage_database_codec.hpp
+include/fsim/artifact/coverage_database_merge.hpp
+include/fsim/artifact/coverage_database_model.hpp
+include/fsim/artifact/coverage_database_partial_merge.hpp
+include/fsim/artifact/coverage_exclusion_report.hpp
 include/fsim/artifact/coverage_identity.hpp
+include/fsim/artifact/coverage_report_model.hpp
+include/fsim/artifact/coverage_report_projection.hpp
+include/fsim/artifact/coverage_report_render.hpp
 include/fsim/artifact/design.hpp
 include/fsim/artifact/object.hpp
 include/fsim/cli/driver.hpp
@@ -267,6 +277,8 @@ include/fsim/compiler/object_cache.hpp
 include/fsim/diagnostic/diagnostic.hpp
 include/fsim/elaboration/coverage_branches.hpp
 include/fsim/elaboration/coverage_conditions.hpp
+include/fsim/elaboration/coverage_exclusion_persistence.hpp
+include/fsim/elaboration/coverage_external_exclusions.hpp
 include/fsim/elaboration/coverage_fsm_hints.hpp
 include/fsim/elaboration/coverage_fsm_inference.hpp
 include/fsim/elaboration/coverage_fsm_validation.hpp
@@ -285,6 +297,7 @@ include/fsim/elaboration/vhdl_toggle_inventory.hpp
 include/fsim/frontend/class_inheritance.hpp
 include/fsim/frontend/class_resolution.hpp
 include/fsim/frontend/class_specialization.hpp
+include/fsim/frontend/coverage_database_systemverilog.hpp
 include/fsim/frontend/coverage_execution.hpp
 include/fsim/frontend/coverage_limits.hpp
 include/fsim/frontend/coverage_observation.hpp
@@ -294,6 +307,7 @@ include/fsim/frontend/coverage_point_identity.hpp
 include/fsim/frontend/coverage_report.hpp
 include/fsim/frontend/coverage_resolution.hpp
 include/fsim/frontend/coverage_sampling.hpp
+include/fsim/frontend/coverage_source_control.hpp
 include/fsim/frontend/coverage_source_identity.hpp
 include/fsim/frontend/design.hpp
 include/fsim/frontend/design_core.hpp
@@ -407,6 +421,7 @@ include/fsim/runtime/vpi_abi.h
 include/fsim/runtime/vpi_callback.hpp
 include/fsim/runtime/vpi_checkpoint.hpp
 include/fsim/runtime/vpi_control.hpp
+include/fsim/runtime/vpi_coverage.hpp
 include/fsim/runtime/vpi_error.hpp
 include/fsim/runtime/vpi_io.hpp
 include/fsim/runtime/vpi_object.hpp
@@ -483,7 +498,9 @@ src/app/application_class_inspection.cpp
 src/app/application_class_randomization.cpp
 src/app/application_constraint_lowering.cpp
 src/app/application_container_profile.hpp
+src/app/application_coverage_command.cpp
 src/app/application_coverage_control.cpp
+src/app/application_coverage_database_psl.cpp
 src/app/application_debug_control.cpp
 src/app/application_debug_coverage.cpp
 src/app/application_debugger.cpp
@@ -563,6 +580,7 @@ src/app/application_semantic.cpp
 src/app/application_services.cpp
 src/app/application_simulation.cpp
 src/app/application_simulation_accessors.tpp
+src/app/application_simulation_coverage.tpp
 src/app/application_simulation_scalar.tpp
 src/app/application_simulation_setup.tpp
 src/app/application_simulation_setup_execution.tpp
@@ -595,7 +613,20 @@ src/app/application_vhdl_psl.cpp
 src/app/application_vpi.cpp
 src/app/tcl.cpp
 src/app/tcl.hpp
+src/artifact/coverage_database.cpp
+src/artifact/coverage_database_codec.cpp
+src/artifact/coverage_database_merge.cpp
+src/artifact/coverage_database_model.cpp
+src/artifact/coverage_database_partial_merge.cpp
+src/artifact/coverage_exclusion_report.cpp
 src/artifact/coverage_identity.cpp
+src/artifact/coverage_report_model.cpp
+src/artifact/coverage_report_projection.cpp
+src/artifact/coverage_report_render.cpp
+src/artifact/coverage_report_render_html.cpp
+src/artifact/coverage_report_render_internal.hpp
+src/artifact/coverage_report_render_json.cpp
+src/artifact/coverage_report_render_text.cpp
 src/artifact/design.cpp
 src/artifact/object.cpp
 src/cli/driver.cpp
@@ -633,6 +664,8 @@ src/diagnostic/artifact_identity.hpp
 src/diagnostic/diagnostic.cpp
 src/elaboration/coverage_branches.cpp
 src/elaboration/coverage_conditions.cpp
+src/elaboration/coverage_exclusion_persistence.cpp
+src/elaboration/coverage_external_exclusions.cpp
 src/elaboration/coverage_fsm_hints.cpp
 src/elaboration/coverage_fsm_inference.cpp
 src/elaboration/coverage_fsm_validation.cpp
@@ -767,6 +800,7 @@ src/frontend/class_inheritance.cpp
 src/frontend/class_resolution.cpp
 src/frontend/class_specialization.cpp
 src/frontend/common.cpp
+src/frontend/coverage_database_systemverilog.cpp
 src/frontend/coverage_execution.cpp
 src/frontend/coverage_limits.cpp
 src/frontend/coverage_observation.cpp
@@ -776,6 +810,7 @@ src/frontend/coverage_point_identity.cpp
 src/frontend/coverage_report.cpp
 src/frontend/coverage_resolution.cpp
 src/frontend/coverage_sampling.cpp
+src/frontend/coverage_source_control.cpp
 src/frontend/coverage_source_identity.cpp
 src/frontend/lexer.cpp
 src/frontend/parser.cpp
@@ -967,6 +1002,7 @@ src/runtime/vhpi_write.cpp
 src/runtime/vpi_callback.cpp
 src/runtime/vpi_checkpoint.cpp
 src/runtime/vpi_control.cpp
+src/runtime/vpi_coverage.cpp
 src/runtime/vpi_error.cpp
 src/runtime/vpi_io.cpp
 src/runtime/vpi_object.cpp
@@ -1063,6 +1099,8 @@ tests/app/code_coverage_equivalence_test.cpp
 tests/app/code_coverage_metrics_application_test.cpp
 tests/app/code_coverage_metrics_equivalence_test.cpp
 tests/app/coverage_application_test.cpp
+tests/app/coverage_command_test.cpp
+tests/app/coverage_database_psl_test.cpp
 tests/app/delay_mode_application_test.cpp
 tests/app/display_application_test.cpp
 tests/app/expression_application_test.cpp
@@ -1197,8 +1235,18 @@ tests/app/vhdl_subtype_application_test.cpp
 tests/app/vhdl_type_generic_application_test.cpp
 tests/app/vhdl_vital_delay_application_test.cpp
 tests/app/vpi_application_test.cpp
+tests/artifact/coverage_database_codec_test.cpp
+tests/artifact/coverage_database_merge_test.cpp
+tests/artifact/coverage_database_model_test.cpp
+tests/artifact/coverage_database_partial_merge_test.cpp
+tests/artifact/coverage_database_robustness_test.cpp
+tests/artifact/coverage_database_schema_test.cpp
+tests/artifact/coverage_exclusion_report_test.cpp
 tests/artifact/coverage_identity_test.cpp
 tests/artifact/coverage_metrics_identity_test.cpp
+tests/artifact/coverage_report_model_test.cpp
+tests/artifact/coverage_report_projection_test.cpp
+tests/artifact/coverage_report_render_test.cpp
 tests/artifact/design_artifact_test.cpp
 tests/artifact/object_artifact_test.cpp
 tests/compiler/cache_test.cpp
@@ -1216,6 +1264,8 @@ tests/compiler/llvm_jit_test_support.hpp
 tests/compiler/llvm_jit_value_test.cpp
 tests/compiler/llvm_jit_vhdl_profile_cache_test.cpp
 tests/elaboration/coverage_branches_test.cpp
+tests/elaboration/coverage_exclusion_persistence_test.cpp
+tests/elaboration/coverage_external_exclusions_test.cpp
 tests/elaboration/coverage_fsm_hints_test.cpp
 tests/elaboration/coverage_fsm_inference_test.cpp
 tests/elaboration/coverage_fsm_validation_test.cpp
@@ -1223,6 +1273,7 @@ tests/elaboration/coverage_instance_identity_test.cpp
 tests/elaboration/coverage_inventory_test.cpp
 tests/elaboration/coverage_memory_toggle_test.cpp
 tests/elaboration/coverage_points_test.cpp
+tests/elaboration/coverage_source_control_test.cpp
 tests/elaboration/coverage_toggle_selection_test.cpp
 tests/elaboration/elaborator_case_match_test.cpp
 tests/elaboration/elaborator_case_qualifier_test.cpp
@@ -1359,6 +1410,7 @@ tests/fixtures/sdf/vital/wrapper.vhd
 tests/fixtures/systemverilog/uvm_core_smoke_probe.sv
 tests/fixtures/systemverilog/uvm_legacy_macro_probe.sv
 tests/fixtures/systemverilog/uvm_phase_tlm_example.sv
+tests/frontend/coverage_database_systemverilog_test.cpp
 tests/frontend/coverage_point_identity_test.cpp
 tests/frontend/coverage_source_identity_test.cpp
 tests/frontend/frontend_callable_tests.cpp
@@ -1520,6 +1572,7 @@ tests/runtime/transaction_record_test.cpp
 tests/runtime/vhpi_reference_plugin_c.c
 tests/runtime/vhpi_reference_plugin_cpp.cpp
 tests/runtime/vhpi_test_plugin.cpp
+tests/runtime/vpi_coverage_test.cpp
 tests/runtime/vpi_reference_plugin_c.c
 tests/runtime/vpi_reference_plugin_cpp.cpp
 tests/runtime/vpi_test_plugin.cpp

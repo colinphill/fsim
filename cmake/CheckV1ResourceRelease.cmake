@@ -72,8 +72,8 @@ if(NOT FSIM_HOSTED_TIMEOUT_COUNT EQUAL 4
     "expected all four hosted job timeouts to be 120 minutes")
 endif()
 foreach(FSIM_COMPILER IN ITEMS
-    "-DCMAKE_C_COMPILER=gcc"
-    "-DCMAKE_CXX_COMPILER=g++"
+    "-DCMAKE_C_COMPILER=clang-22"
+    "-DCMAKE_CXX_COMPILER=clang++-22"
     "LLVM_MINGW_ROOT/bin/clang.exe"
     "LLVM_MINGW_ROOT/bin/clang++.exe")
   string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_COMPILER}" FSIM_COMPILER_INDEX)

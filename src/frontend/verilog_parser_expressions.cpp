@@ -990,6 +990,31 @@ Expression VerilogParser::parse_primary()
                 expression.call_result_width = 32;
                 expression.call_result_domain = ValueDomain::Integer;
                 expression.call_result_signed = true;
+            } else if (canonical == "$coverage_control") {
+                if (expression.operands.size() != 4U) {
+                    error(
+                        name,
+                        "FSIM-COV-038",
+                        "$coverage_control requires a control command, coverage type, scope, and module or instance selector");
+                }
+                expression.call_result_width = 32;
+                expression.call_result_domain = ValueDomain::Integer;
+                expression.call_result_signed = true;
+            } else if (canonical == "$coverage_get"
+                || canonical == "$coverage_get_max"
+                || canonical == "$coverage_merge"
+                || canonical == "$coverage_save") {
+                const auto file_call = canonical == "$coverage_merge"
+                    || canonical == "$coverage_save";
+                if (expression.operands.size() != (file_call ? 2U : 3U)) {
+                    error(name, "FSIM-COV-039",
+                        canonical + (file_call
+                            ? " requires a coverage type and filename"
+                            : " requires a coverage type, scope, and module or instance selector"));
+                }
+                expression.call_result_width = 32;
+                expression.call_result_domain = ValueDomain::Integer;
+                expression.call_result_signed = true;
             } else if (canonical == "$q_full") {
                 require_file_call(2, "a queue ID and writable status");
                 expression.call_result_width = 32;

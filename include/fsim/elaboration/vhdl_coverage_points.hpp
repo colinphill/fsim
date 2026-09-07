@@ -2,12 +2,14 @@
 #pragma once
 
 #include "fsim/frontend/coverage_point_identity.hpp"
+#include "fsim/frontend/coverage_source_control.hpp"
 #include "fsim/frontend/design.hpp"
 
 #include <cstddef>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace fsim::elaboration {
@@ -18,6 +20,17 @@ inline constexpr std::string_view kVhdlCoveragePointDiagnostic
 struct VhdlCoverageSource {
     std::string source_name;
     frontend::CodeCoverageSourceIdentity identity;
+    std::string_view source_text;
+
+    VhdlCoverageSource(
+        std::string name,
+        frontend::CodeCoverageSourceIdentity source_identity,
+        const std::string_view text = { })
+        : source_name(std::move(name))
+        , identity(std::move(source_identity))
+        , source_text(text)
+    {
+    }
 };
 
 struct VhdlStatementCoveragePoint {
@@ -31,6 +44,15 @@ struct VhdlStatementCoveragePoint {
 
     friend bool operator==(const VhdlStatementCoveragePoint&,
         const VhdlStatementCoveragePoint&)
+        = default;
+};
+
+struct VhdlStatementCoverageExclusion {
+    VhdlStatementCoveragePoint point;
+    std::string reason;
+
+    friend bool operator==(const VhdlStatementCoverageExclusion&,
+        const VhdlStatementCoverageExclusion&)
         = default;
 };
 
@@ -51,10 +73,12 @@ enum class VhdlCoveragePointError {
     UnknownStatementSource,
     InvalidStatementSpan,
     DuplicatePoint,
+    InvalidSourceControl,
 };
 
 struct VhdlCoveragePointResult {
     std::vector<VhdlStatementCoveragePoint> points;
+    std::vector<VhdlStatementCoverageExclusion> exclusions;
     VhdlCoveragePointError error { VhdlCoveragePointError::None };
     std::size_t statement_index { };
 

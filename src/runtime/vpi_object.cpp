@@ -17,8 +17,11 @@ namespace {
     constexpr std::uint64_t slot_mask = (1ULL << 24U) - 1U;
     constexpr std::uint64_t epoch_mask = (1ULL << 16U) - 1U;
     constexpr std::uint64_t iterator_bit = 1ULL << 63U;
-    constexpr std::uint64_t registry_mask = (1ULL << 23U) - 1U;
-    constexpr std::uint32_t maximum_registry_identity = (1U << 23U) - 1U;
+    constexpr std::uint64_t coverage_bit = 1ULL << 62U;
+    // Bit 62 is reserved for v3 coverage objects. Ordinary VPI object handles
+    // therefore use only bits 40..61 for their registry identity.
+    constexpr std::uint64_t registry_mask = (1ULL << 22U) - 1U;
+    constexpr std::uint32_t maximum_registry_identity = (1U << 22U) - 1U;
     constexpr std::size_t maximum_name_size = 4096;
     constexpr std::size_t maximum_source_size = 1U << 20U;
     constexpr std::size_t maximum_iterator_objects = 1U << 20U;
@@ -477,6 +480,7 @@ SystemVerilogVpiObjectError SystemVerilogVpiObjectRegistry::resolve_object(
     const fsim_vpi_handle_v1 handle, std::uint32_t& slot) const noexcept
 {
     if (handle == 0U || (handle & iterator_bit) != 0U
+        || (handle & coverage_bit) != 0U
         || (handle & slot_mask) == 0U) {
         return SystemVerilogVpiObjectError::InvalidHandle;
     }
@@ -504,6 +508,7 @@ SystemVerilogVpiIteratorError SystemVerilogVpiObjectRegistry::resolve_iterator(
     const fsim_vpi_handle_v1 handle, std::uint32_t& slot) const noexcept
 {
     if (handle == 0U || (handle & iterator_bit) == 0U
+        || (handle & coverage_bit) != 0U
         || (handle & slot_mask) == 0U) {
         return SystemVerilogVpiIteratorError::InvalidHandle;
     }
