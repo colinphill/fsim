@@ -3784,3 +3784,970 @@ history in their existing plan and resume documents.
     Together with the complete local 361/361 ASan/UBSan result recorded above,
     the user-directed sanitizer carry-forward for Debug/Release, and the clean
     five-gate policy audit, the exact nine-lane run closes Batch 180 Change 20.
+
+## Batch 181 active checkpoint - after Change 1
+
+1. Resume in the fsim repository on `codex/v3`. Batch 180 is integrated and
+   pushed at `eace83d8a9dbe7bf6db85daf6889beb1f527c8e4`; its exact GitHub Actions
+   run `34124043615` is green across all nine Linux, Windows, and fuzz lanes.
+   Batch 181 Change 1 is complete and intentionally uncommitted. Preserve its
+   accumulated worktree without reset, commit, or push.
+2. Change 1 adds `tests/feature_matrix/legacy_tf_inventory.tsv` and
+   `cmake/CheckLegacyTfInventory.cmake`, registers
+   `fsim.legacy-tf-inventory`, documents the ledger in the feature-matrix
+   README, extends the resource-portability contract, and advances the source
+   package manifest. It changes no product implementation, public ABI/header,
+   plugin loader, manifest schema, object, design, checkpoint, or cache format.
+3. The independently authored ledger has eighteen unique active IEEE 1364-2005
+   rows assigned one-to-one to Changes 2-19. It covers the v3 native-plugin ABI,
+   standard header and platform link surfaces, registration and descriptor
+   validation, task/function and `misctf` callbacks, argument/value/parameter/
+   time/scope access, output and synchronization controls, HDL registration,
+   scheduler coordination, failure containment, and Linux/Windows plugin proof.
+4. Every row applies to `V1995`, `V2001`, `V2001NoConfig`, `V2005`, `SV2005`,
+   `SV2009`, `SV2012`, and `SV2017`, and carries the exact
+   `ieee-only-no-vendor-extensions` policy. The v3 surface directly rejects v2
+   plugin ABI inputs and admits no compatibility reader, migration, vendor
+   extension, or private-reference material. The normalized ledger SHA-256 is
+   `2d730b840eb80307e6a025317c4447ad682335e9fc6145ffcd8a5842cdc4f39b`.
+5. The validator freezes the twenty-batch roadmap and exact twenty-change Batch
+   181 allocation; all row IDs, domains, assigned changes, standard/profile
+   sets, safe relative owners, shared diagnostic/resource owners, active state,
+   and extension policy; and forbidden private paths and named vendor/tool
+   spellings. The source-package manifest now contains 1,676 ordered paths at
+   SHA-256
+   `4057a4fff165a11f363543342891c34f4f294ff02bd3e0076b1b6109f4399985`.
+6. The exact LLVM 22.1.8 Clang 22 warnings-as-errors Debug tree reconfigures and
+   builds 1,328/1,328 actions with eight workers without a warning or error.
+   The legacy-TF inventory, diagnostic catalog, source-line budget,
+   source-package manifest, resource-portability contract, and CTest command
+   uniqueness gates pass 6/6 in 15.93 seconds. No clean-first, Release,
+   sanitizer, hosted-CI trigger, commit, or push action ran for this change.
+7. At the user's request, the newest failed Windows log was inspected before
+   any next commit. GitHub Actions `34111302404` failed only in Windows
+   Release/LLVM-ON: `fsim.cache` aborted after a `MoveFileExW` sharing-lock
+   retry and `fsim.application.vpi` then reached its 1,500-second timeout while
+   reusing the same-process O2 cache. The current integrated tip contains the
+   active-lock-token recovery, five-second bounded replacement retry, and a
+   Windows retained-owner-handle regression. Exact subsequent runs
+   `34117679982` and `34124043615` pass all four Windows configurations; the
+   latest four retained logs contain no compiler, linker, runtime, assertion,
+   timeout, or test error. The only failed spelling is CMake's expected Windows
+   pthread capability probe. Twenty paired local Debug repetitions of
+   `fsim.cache` and `fsim.application.vpi` also pass in 2.85 seconds.
+8. Proceed only to Batch 181 Change 2: define the direct v3 native-plugin ABI
+   and common loader metadata. Reuse the existing VPI, DPI, and VHPI loader
+   seams where appropriate, but do not expose or accept a v2 ABI. Preserve the
+   dirty Change 1 paths and focused warnings-as-errors Debug validation; do not
+   begin Change 3, run Release/sanitizer/hosted qualification, commit, or push.
+
+## Batch 181 active checkpoint - after Change 2
+
+1. Resume on `codex/v3` at the intentionally dirty Batch 181 worktree. The
+   integrated and pushed base remains
+   `eace83d8a9dbe7bf6db85daf6889beb1f527c8e4`. Changes 1 and 2 are complete
+   and uncommitted. The temporary `codex/v3-batch180-development` branch was
+   deleted locally and from `origin` at the user's direction; do not recreate
+   or use it.
+2. Change 2 adds the direct C ABI in
+   `include/fsim/runtime/native_plugin_abi.h`, the owned C++ metadata model in
+   `include/fsim/runtime/native_plugin.hpp`, validation and identity logic in
+   `src/runtime/native_plugin.cpp`, and independent C/C++ evidence in
+   `tests/runtime/native_plugin_abi_c_test.c` and
+   `tests/runtime/native_plugin_abi_test.cpp`. The focused test is registered
+   as `fsim.runtime.native_plugin_abi` and the resource contract owns all five
+   paths.
+3. The only discovery symbol is
+   `fsim_native_plugin_descriptor_v3_get`. The append-only descriptor requires
+   ABI version 3, at least the exact v3 prefix size, native pointer width, zero
+   reserved flags, and a nonempty known capability mask. Current known bits are
+   IEEE TF and ACC so the shared metadata boundary can serve both legacy PLI
+   batches without silently admitting an unrelated extension family.
+4. Required name, version, and producer strings and optional build identity
+   are byte-counted and bounded. Embedded NUL/control bytes, inconsistent
+   null/size pairs, and oversize values are invalid. They are metadata, never
+   filesystem paths. A successful copy owns all storage independently of the
+   image and derives a stable SHA-256 identity from a format marker, the exact
+   capability mask, explicit little-endian lengths, and field bytes.
+5. Exact version 2 and unknown future versions are rejected before a result is
+   published. Truncated descriptors, foreign pointer width, reserved flags,
+   zero/unknown capabilities, malformed required text, and ambiguous optional
+   build identity likewise return their exact error with no partial metadata.
+   Registration-table discovery, descriptor callbacks, dynamic-library open,
+   and lifecycle execution deliberately remain Changes 5-8 and were not
+   pulled into this ABI-model slice.
+6. The legacy-TF ledger now has seventeen active and one preserved row. Its
+   normalized SHA-256 is
+   `95f1b626bf0aa3b1cebc96b11fe54486dc0943e250bb14d0aef79db5c94e3ec4`.
+   Five new paths advance the source-package manifest to 1,681 ordered entries
+   at SHA-256
+   `06a28905682e69c37bde451855a436097232329ba8862911b6f85aaa2a091217`.
+7. The exact LLVM 22.1.8 Clang 22 warnings-as-errors Debug target builds 9/9
+   actions with eight workers. `fsim.runtime.native_plugin_abi` passes, and the
+   ABI test plus legacy inventory, diagnostic catalog, source-line budget,
+   source-package manifest, resource-portability, and CTest-uniqueness slice
+   passes 7/7 in 6.58 seconds. `git diff --check` is clean. The prior requested
+   Windows failure audit and its two later all-green exact-SHA runs remain
+   recorded in the Change 1 checkpoint above.
+8. Proceed only to Batch 181 Change 3: provide the standard-compatible
+   `veriuser.h` declarations and constants. Preserve the v3-only common ABI and
+   dirty Changes 1-2; do not implement platform import libraries, registration
+   discovery, callbacks, Release/sanitizer/hosted qualification, commit, or
+   push.
+
+## Batch 181 active checkpoint - after Change 3
+
+1. Resume on `codex/v3` at the intentionally dirty Batch 181 worktree. The
+   integrated and pushed base remains
+   `eace83d8a9dbe7bf6db85daf6889beb1f527c8e4`. Changes 1-3 are complete and
+   uncommitted. Preserve all current Batch 181 files and do not recreate the
+   deleted `codex/v3-batch180-development` branch.
+2. Change 3 adds the independently authored public TF header at
+   `include/fsim/runtime/veriuser.h`. It exposes the standardized PLI scalar
+   aliases; error, reason, argument, and node constants; vector, strength,
+   expression, and node records; simulator service declarations; and the
+   legacy version/end-of-compile globals. The declarations have C linkage in
+   C++ and retain the source-level Windows import/export annotations that
+   Change 4 will turn into actual shared/import-library surfaces.
+3. The historical `bool`, `true`, and `false` aliases remain defined for C
+   unless `PLI_EXTRAS` is predeclared, but are suppressed in C++ so the header
+   is warning-clean under Clang 22 warnings-as-errors. Uppercase `TRUE` and
+   `FALSE` plus `null` remain available in both languages. This is the only
+   intentional modernization of the source compatibility layer.
+4. Change 3 does not define a registration record or discovery global. No
+   vendor task/function kinds, aliases, or registration tables were admitted;
+   the exact governed discovery surface remains Change 5 after Change 4
+   provides the platform link boundary.
+5. `tests/runtime/veriuser_abi_c_test.c` and
+   `tests/runtime/veriuser_abi_test.cpp` independently prove C11/C++ inclusion,
+   scalar widths, representative layout offsets, constant aliases, C linkage,
+   implicit-instance and explicit-instance routine signatures, and the C++
+   keyword shield. The focused test is `fsim.runtime.veriuser_abi`.
+6. The legacy-TF ledger now has sixteen active and two preserved rows. Its
+   normalized SHA-256 is
+   `2aedbbd128ecc5cd3d2dace00665a792db1d9f4a6eb95a79fc07dde6b9ee8e7b`.
+   Three new paths advance the source-package manifest to 1,684 ordered entries
+   at SHA-256
+   `800e014211c8f59e08c3b262a8fc0e25f8c86472a3295c3bbb592e15f53e9af2`.
+7. The exact LLVM 22.1.8 Clang 22 warnings-as-errors Debug target builds 5/5
+   actions with eight workers. The veriuser ABI, native plug-in ABI, legacy-TF
+   inventory, diagnostic catalog, source-line budget, source-package manifest,
+   resource-portability, and CTest-uniqueness slice passes 8/8 in 8.51 seconds.
+   Direct inventory/resource checks and `git diff --check` must remain clean.
+8. Proceed only to Batch 181 Change 4: provide Linux shared-library and Windows
+   import-library link surfaces for the standardized TF declarations and direct
+   v3 native plug-in metadata boundary. Do not begin registration discovery,
+   callback execution, Release/sanitizer/hosted qualification, commit, or push.
+
+## Batch 181 active checkpoint - after Change 4
+
+1. Resume on `codex/v3` at the intentionally dirty Batch 181 worktree. The
+   integrated and pushed base remains
+   `eace83d8a9dbe7bf6db85daf6889beb1f527c8e4`. Changes 1-4 are complete and
+   uncommitted. Preserve all current Batch 181 files; do not commit, push, or
+   recreate the deleted Batch 180 development branch before Change 20.
+2. Change 4 adds `fsim_tf` with alias `fsim::tf`, configured by
+   `cmake/FsimNativePlugin.cmake` and implemented by
+   `src/runtime/tf_link.cpp`. It is a C-linkage ABI shim with ABI-major soname 3,
+   explicit default Linux visibility, and Windows export annotations so the
+   shared target creates the import library consumed by LLVM-MinGW plug-ins.
+3. The link library exposes all 107 simulator-owned TF routine names. It does
+   not expose `err_intercept`, `veriuser_version_str`, or
+   `endofcompile_routines`, because those are plug-in-owned definitions, and it
+   does not expose vendor names such as `vpi_printf`. Current entry points are
+   neutral outside a registered call context; Changes 7-15 replace each service
+   group with governed simulator behavior without changing symbol addresses.
+4. `fsim_tf` is explicitly excluded from the SystemC process-runtime target
+   inventory because it contains no simulator state and must not preload a
+   SystemC runtime in a native plug-in process. Simulation executables and
+   runtime libraries retain the existing one-runtime rule. This keeps the TF
+   link/import surface dependency-minimal and independently relocatable.
+5. `tests/runtime/tf_link_probe_plugin.c` is a real C shared plug-in linked to
+   `fsim_tf`; it publishes only the direct v3 TF metadata descriptor and calls
+   representative implicit/explicit-instance, expression/node, time, and
+   synchronization symbols. `tests/runtime/tf_plugin_link_test.cpp` loads both
+   images, verifies all 107 standard exports and the forbidden-symbol boundary,
+   validates descriptor identity, and executes the plug-in probe. The target is
+   `fsim.runtime.tf_plugin_link`; the build copies the host DLL beside the test
+   plug-in on Windows so safe loader search does not depend on `PATH`.
+6. Installation owns `fsim_tf`, its Windows import library, `veriuser.h`, and
+   `native_plugin_abi.h`. `fsimConfig.cmake` publishes the relocatable imported
+   target `fsim::tf`; the installed-public and binary-ownership contracts now
+   require the new artifacts, compare both header digests, and build/run the
+   offline C consumer in `tests/runtime/installed_tf_consumer`.
+7. The legacy-TF ledger now has fifteen active and three preserved rows. Its
+   normalized SHA-256 is
+   `253c2adfa50844078a5fc6a7f6bba29724f37a4bece6ab856c73dfef6962196a`.
+   Six new paths advance the source-package manifest to 1,690 ordered entries
+   at SHA-256
+   `08619c4452ddd5b642a0476b6f34001a564c55413a6e8f0e75ac98bd1e4ded95`.
+8. The exact LLVM 22.1.8 Clang 22 warnings-as-errors Debug targets build cleanly
+   with eight workers. The three ABI/runtime tests, six inventory/policy gates,
+   and three install/consumer gates pass 12/12 in 15.39 seconds. Direct
+   inventory/resource/source-manifest/source-line checks and `git diff --check`
+   must remain clean.
+9. Proceed only to Batch 181 Change 5: discover and validate the standardized TF
+   registration-table surface transactionally. Preserve the direct v3 metadata
+   boundary and the dependency-minimal link shim; do not begin callback
+   execution semantics, Release/sanitizer/hosted qualification, commit, or push.
+
+## Batch 181 active checkpoint - after Change 5
+
+1. Resume on `codex/v3` at the intentionally dirty Batch 181 worktree. The
+   integrated and pushed base remains
+   `eace83d8a9dbe7bf6db85daf6889beb1f527c8e4`. Changes 1-5 are complete and
+   uncommitted. Preserve all current Batch 181 files; do not commit, push, or
+   recreate the deleted Batch 180 development branch before Change 20.
+2. Change 5 extends `fsim_native_plugin_descriptor_v3` after its frozen base
+   prefix with a bounded array of capability-interface records. The common
+   Change 2 validator accepts the base prefix and never reads the extension;
+   the TF-specific loader requires the full extension, one through eight
+   aligned records, and exactly one version-3 TF interface. This is append-only
+   evolution of the direct v3 ABI, not a v2 reader or migration.
+3. `include/fsim/runtime/tf_plugin_abi.h` defines the portable C registration
+   record and table header. The table must contain 1-4,096 records, use a stride
+   between the record size and 4,096 bytes, keep all reserved fields zero, and
+   carry exact ABI version 3. Entry contents intentionally remain unvalidated
+   until Change 6. Obsolete registration structures, vendor startup arrays,
+   and alternate bootstrap symbols are excluded.
+4. `src/runtime/tf_plugin.cpp` opens the artifact through the existing safe
+   platform abstraction, resolves only
+   `fsim_native_plugin_descriptor_v3_get`, contains descriptor exceptions,
+   validates the common descriptor plus the entire TF discovery graph, copies
+   common metadata, and retains the library in `TfLoadedPlugin`. Every failure
+   returns a typed error and no partially published object.
+5. `tests/runtime/tf_link_probe_plugin.c` now publishes one real direct-v3 TF
+   table. `tests/runtime/tf_plugin_test.cpp` covers successful discovery and
+   ownership plus absent artifacts/symbols, old or malformed table headers,
+   missing/truncated/oversized/null interface arrays, malformed interface
+   records, absent or duplicate TF interfaces, incompatible interface versions,
+   malformed registration tables, and absent declared capability. It does not
+   execute callbacks.
+6. The SDK install now owns and byte-compares `tf_plugin_abi.h`; the offline C
+   consumer includes and instantiates its table type. The legacy-TF ledger has
+   fourteen active and four preserved rows at normalized SHA-256
+   `b77028d80b9a1a2c18c81a953ae410005699f330455bfe2067ece8ab71d92f0a`.
+   Four new paths advance the source-package manifest to 1,694 entries at
+   SHA-256
+   `0dd0259569a866a76678bfb67f311936d9aa6dc47e96c7aa413e6af19c2958d0`.
+7. The exact LLVM 22.1.8 Clang 22 warnings-as-errors Debug targets build cleanly
+   with eight workers. The four ABI/runtime tests, six inventory/policy gates,
+   and three install/consumer gates pass 13/13 in 15.34 seconds. Direct
+   inventory/resource/source-manifest/source-line checks and `git diff --check`
+   must remain clean.
+8. Proceed only to Batch 181 Change 6: validate every task/function registration
+   descriptor transactionally before publishing any callable registration.
+   Preserve the exact discovery boundary and loaded-library ownership; do not
+   begin callback execution semantics, Release/sanitizer/hosted qualification,
+   commit, or push.
+
+## Batch 181 active checkpoint - after Change 6
+
+1. Resume on `codex/v3` at the intentionally dirty Batch 181 worktree. The
+   integrated and pushed base remains
+   `eace83d8a9dbe7bf6db85daf6889beb1f527c8e4`. Changes 1-6 are complete and
+   uncommitted. Preserve all current Batch 181 files; do not commit, push, or
+   recreate the deleted Batch 180 development branch before Change 20.
+2. Change 6 adds `include/fsim/runtime/tf_registration.hpp` and
+   `src/runtime/tf_registration.cpp`. `validate_and_copy_tf_registrations`
+   validates the table header again, reserves bounded temporary storage, walks
+   entries only by the validated stride, and returns either the full host-owned
+   vector or an empty result with an exact error and failing index.
+3. Each entry must fit inside its stride, select task, integral-function, or
+   real-function kind, keep flags/reserved fields zero, and use a unique
+   2-255-byte `$identifier` with an alphabetic/underscore first identifier
+   character. `calltf` is mandatory; `sizetf` is mandatory only for integral
+   functions and forbidden for tasks and real functions. `checktf` and `misctf`
+   are optional. User data and callback addresses are copied but never invoked.
+4. `TfLoadedPlugin` retains the loaded image and now exposes the immutable
+   copied registration vector separately from its table summary. The loader
+   constructs this vector before allocating or publishing the final loaded
+   object, so a bad later descriptor, duplicate name, or allocation failure
+   cannot leave a partial callable set.
+5. `tests/runtime/tf_registration_test.cpp` proves all three profiles, stable
+   source ordering, copied names/metadata, header rejection, low/high kinds,
+   flags and reserved state, required/forbidden callbacks, null/short/long/
+   malformed names, duplicate names, exact failing indexes, empty rollback,
+   and zero callback execution. The real plug-in loader test also verifies its
+   one copied registration.
+6. The legacy-TF ledger has thirteen active and five preserved rows at
+   normalized SHA-256
+   `060dbc67968336a8a08b4dd2453ee067ec62fd70861c8856c106a4e718aaf731`.
+   Three new paths advance the source-package manifest to 1,697 entries at
+   SHA-256
+   `dd1c2f01e6144977404831eb20973397fcf6bdf835ed67c1c2ce9ad2e16e8981`.
+7. The exact LLVM 22.1.8 Clang 22 warnings-as-errors Debug targets build cleanly
+   with eight workers. The five ABI/runtime tests, six inventory/policy gates,
+   and three install/consumer gates pass 14/14 in 15.25 seconds. Direct
+   inventory/resource/source-manifest/source-line checks and `git diff --check`
+   remain clean.
+8. Proceed only to Batch 181 Change 7: implement `checktf`, `sizetf`, and
+   `calltf` invocation plus task/function result ownership and failure
+   containment. Preserve transactional registration and library lifetime; do
+   not begin `misctf` lifecycle scheduling, Release/sanitizer/hosted
+   qualification, commit, or push.
+
+## Batch 181 active checkpoint - after Change 7
+
+1. Resume on `codex/v3` at the intentionally dirty Batch 181 worktree. The
+   integrated and pushed base remains
+   `eace83d8a9dbe7bf6db85daf6889beb1f527c8e4`. Changes 1-7 are complete and
+   uncommitted. Preserve all current Batch 181 files; do not commit, push, or
+   recreate the deleted Batch 180 development branch before Change 20.
+2. Change 7 corrects the direct-v3 registration ABI to use typed two-argument
+   `fsim_tf_routine_v3` callbacks for `checktf`, `sizetf`, and `calltf`, and the
+   distinct three-argument `fsim_tf_misc_routine_v3` only for `misctf`. This
+   removes ambiguous lifecycle parameters before callback execution is exposed.
+3. `include/fsim/runtime/tf_call.hpp` and `src/runtime/tf_call.cpp` implement
+   binding and invocation. Binding calls optional `checktf`, calls `sizetf`
+   exactly once for integral functions, bounds results to 1-1,048,576 bits,
+   copies the registration, and retains the owning loaded-plugin implementation.
+   Tasks use width zero and real functions use width 64.
+4. Every invocation creates fresh result storage before entering plug-in code.
+   Integral results own `aval`/`bval` arrays sized to the declared width; real
+   results own a double slot; tasks own no slot. The result-only bridge in
+   `tf_call_bridge.h` and `fsim_tf` permits parameter zero writes through
+   `tf_putp`, `tf_putlongp`, and `tf_putrealp`, clears the slot before use,
+   masks unused high bits, rejects wrong kinds/indexes, and leaves all general
+   argument/value access for Change 10.
+5. Only `sizetf` has a semantic return value. `checktf` and `calltf` return
+   values are retained diagnostically but are not treated as status codes.
+   Invalid sizes, missing function results, callback exceptions, allocation
+   failures, bad registration indexes, and a nested attempt to replace the
+   active call context return typed failures. Every exception path leaves the
+   bridge before returning. `misctf` is neither invoked nor scheduled here.
+6. The C probe now publishes one task and one 17-bit integral function. The
+   call test proves exact check/size/call reasons, task/integral/65-bit/real
+   result ownership, fresh per-call storage, callback-return handling,
+   exception containment, invalid or missing result writes, nested-call
+   rejection, index bounds, and plug-in lifetime retention after the loader
+   handle is released.
+7. The legacy-TF ledger has twelve active and six preserved rows at normalized
+   SHA-256
+   `fd13fb893711202a53d4eecd9bebe56ce2eab7699bb9cd9b835bede1b49f90a1`.
+   Four new paths advance the source-package manifest to 1,701 entries at
+   SHA-256
+   `7f714b53952211b9482fadf49fd262113451e743664a4347d2bcc3cc1f7b0bcf`.
+8. The exact LLVM 22.1.8 Clang 22 warnings-as-errors Debug targets build cleanly
+   with eight workers. The six ABI/runtime tests, six inventory/policy gates,
+   and three install/consumer gates pass 15/15 in 15.19 seconds. The
+   dependency audit confirms `fsim_tf` still has no SystemC runtime dependency;
+   direct inventory/resource/source-manifest/source-line checks and
+   `git diff --check` remain clean.
+9. Proceed only to Batch 181 Change 8: implement `misctf` lifecycle and
+   synchronization reasons with deterministic ordering. Preserve result-slot
+   containment and do not begin general argument/value services,
+   Release/sanitizer/hosted qualification, commit, or push.
+
+## Batch 181 active checkpoint - after Change 8
+
+1. Resume on `codex/v3` at the intentionally dirty Batch 181 worktree. The
+   integrated and pushed base remains
+   `eace83d8a9dbe7bf6db85daf6889beb1f527c8e4`. Changes 1-8 are complete and
+   uncommitted. Preserve all current Batch 181 files; do not commit, push, or
+   recreate the deleted Batch 180 development branch before Change 20.
+2. Change 8 adds `include/fsim/runtime/tf_misc.hpp` and
+   `src/runtime/tf_misc.cpp`. `TfMiscDispatcher` copies only registrations with
+   a `misctf` callback, preserves source-table indexes/order, and shares its
+   loaded-plugin owner so callback addresses remain live after the originating
+   loader handle is released.
+3. The typed `TfMiscReason` covers all eighteen lifecycle reasons: save,
+   restart, disable, parameter value/driver changes, read-write/read-only
+   synchronization, finish, reactivate, end-of-compile, scope, interactive,
+   reset/end-of-reset, force/release, and start-of-save/start-of-restart.
+   `checktf`, `sizetf`, `calltf`, gaps, and unknown integers are rejected.
+4. The third callback parameter is positive only for parameter value/driver
+   changes and zero for all other reasons. Callback returns have no control
+   meaning and are ignored, though the last is retained diagnostically.
+   Exceptions return the exact failing registration and completed prefix;
+   recursive dispatch is rejected before entering a nested callback.
+5. This is a lifecycle dispatcher, not yet a scheduler registration service.
+   In particular it distinguishes `reason_synch` from `reason_rosynch`, but
+   `tf_synchronize`/`tf_rosynchronize` do not enqueue them until Change 15.
+6. `tests/runtime/tf_misc_test.cpp` exercises every reason, parameter class,
+   exact user-data and source order, ignored nonzero returns, exception prefix,
+   recursive rejection, invalid reasons/parameters, an empty callback set, and
+   retained-image dispatch through both C plug-in registrations.
+7. The legacy-TF ledger has eleven active and seven preserved rows at normalized
+   SHA-256
+   `966d73a71f0b9748cf4900c467c982e66f194fafdc5e0b73fe6c0aa96e48696a`.
+   Three new paths advance the source-package manifest to 1,704 entries at
+   SHA-256
+   `b55af8a4da9d3db069f87615a7aa5c4b0bde530ab6bed748910758176cd5fb2d`.
+8. The exact LLVM 22.1.8 Clang 22 warnings-as-errors Debug targets build cleanly
+   with eight workers. The seven ABI/runtime tests, six inventory/policy gates,
+   and three install/consumer gates pass 16/16 in 15.00 seconds. Direct
+   inventory/resource/source-manifest/source-line checks and `git diff --check`
+   remain clean.
+9. Proceed only to Batch 181 Change 9: implement argument count, type,
+   direction, expression, and width inspection against an active call context.
+   Preserve callback return semantics and do not begin general value mutation,
+   Release/sanitizer/hosted qualification, commit, or push.
+
+## Batch 181 active checkpoint - after Change 9
+
+1. Resume on `codex/v3` at the intentionally dirty Batch 181 worktree. The
+   integrated and pushed base remains
+   `eace83d8a9dbe7bf6db85daf6889beb1f527c8e4`. Changes 1-9 are complete and
+   uncommitted. Preserve all current Batch 181 files; do not commit, push, or
+   recreate the deleted Batch 180 development branch before Change 20.
+2. Change 9 adds `include/fsim/runtime/tf_argument.hpp` and
+   `src/runtime/tf_argument.cpp`. The language-neutral argument model owns its
+   expression text and records kind, direction, width, signedness, and select
+   bounds. Validation is transactional and bounded to 4,096 arguments,
+   1,048,576 bits, and 4,096 expression bytes; kind-specific inconsistencies,
+   invalid selections, empty/control-bearing expressions, and oversized input
+   return an exact argument index with no callbacks run.
+3. `TfBoundCall` now copies the validated argument inventory at binding and
+   presents the same immutable metadata during `checktf`, `sizetf`, and
+   `calltf`. The internal call-context bridge was renamed from a result-only
+   bridge and now carries both the existing simulator-owned function result and
+   immutable argument records without exporting C++ ownership across the ABI.
+4. `fsim_tf` implements current-context `tf_nump`, `tf_typep`, `tf_sizep`, and
+   `tf_exprinfo`. All return neutral values outside a callback or for invalid
+   indexes. `tf_exprinfo` exposes only structural metadata in this change;
+   expression values remain Change 10, and explicit-instance variants remain
+   deliberate stubs until Change 11.
+5. `tests/runtime/tf_argument_test.cpp` proves every argument profile, exact
+   count/type/width/expression/select/sign/direction metadata across all three
+   callback phases, neutral out-of-context and explicit-instance behavior, all
+   validation bounds and kind errors, rollback, and zero callback execution on
+   invalid binding.
+6. The legacy-TF ledger has ten active and eight preserved rows at normalized
+   SHA-256
+   `f89e27fd48e8e86d87c8831bf41ea6e6e70f41391355877f496a0566ae8c3ea8`.
+   Three new paths advance the source-package manifest to 1,707 entries at
+   SHA-256
+   `1e7b471739bbbef4b8a318a8f2070d64b3e7a395f63550932b60d794b394df01`.
+7. The exact LLVM 22.1.8 Clang 22 warnings-as-errors Debug targets build cleanly
+   with eight workers. The eight ABI/runtime tests, six inventory/policy gates,
+   and three install/consumer gates pass 17/17 in 15.25 seconds. Direct
+   inventory/resource/source-manifest/source-line checks and `git diff --check`
+   remain clean.
+8. Proceed only to Batch 181 Change 10: implement integer, real, string, vector,
+   and expression value access with fresh per-invocation value ownership.
+   Preserve immutable argument metadata and function-result containment; do not
+   begin explicit-instance access, Release/sanitizer/hosted qualification,
+   commit, or push.
+
+## Batch 181 active checkpoint - after Change 10
+
+1. Resume on `codex/v3` at the intentionally dirty Batch 181 worktree. The
+   integrated and pushed base remains
+   `eace83d8a9dbe7bf6db85daf6889beb1f527c8e4`. Changes 1-10 are complete and
+   uncommitted. Preserve all current Batch 181 files; do not commit, push, or
+   recreate the deleted Batch 180 development branch before Change 20.
+2. Change 10 adds `include/fsim/runtime/tf_value.hpp` and
+   `src/runtime/tf_value.cpp`. `TfArgumentValue` is separate from immutable
+   `TfArgument` metadata and owns null, exact-width interleaved `aval`/`bval`,
+   real, or string storage. Validation requires exact argument count and kind,
+   exact vector group count, clear unused high bits, bounded NUL-free strings,
+   and no more than 16 MiB aggregate storage per call.
+3. `TfBoundCall::invoke(values)` validates and copies input values before
+   entering plug-in code. The legacy no-argument overload builds bounded zero
+   values without a second whole-container snapshot. Callback execution uses a
+   private working copy and returns only a source-ordered list of explicitly
+   assigned read-write parameters; function results and parameter updates are
+   discarded together on callback failure, missing function assignment, or
+   allocation failure.
+4. The internal C bridge now carries per-invocation value views. `fsim_tf`
+   implements `tf_getp`, `tf_getlongp`, `tf_getrealp`, `tf_getcstringp`, and
+   `tf_strgetp`; `tf_exprinfo` exposes full vector words, real values, or string
+   contents during `calltf`. `tf_putp`, `tf_putlongp`, `tf_putrealp`, and
+   `tf_propagatep` accept only read-write arguments, retain X/Z pairs, and mask
+   unused high bits before an update is published. All value APIs are neutral
+   outside an active call. Delayed writes and explicit-instance variants remain
+   later changes.
+5. `tests/runtime/tf_value_test.cpp` proves supplied and default values,
+   32/64-bit scalar reads, 65-bit vector access, binary/hex projections,
+   distinct unknown/high-impedance bits, string and real reads, expression
+   propagation, integral and real write-back order, read-only rejection,
+   count/kind/group/high-bit/string failures, callback non-entry, atomic result
+   publication, and the aggregate resource ceiling.
+6. The legacy-TF ledger has nine active and nine preserved rows at normalized
+   SHA-256
+   `de6827fe470bf619055174387bafcd357db4d550608a1b35abf64d92a8977e47`.
+   Three new paths advance the source-package manifest to 1,710 entries at
+   SHA-256
+   `adf8ce8ac8e73a1ee11188ccb8a901fd0e611cbb1fade8dbadd680f2f686caa4`.
+7. The exact LLVM 22.1.8 Clang 22 warnings-as-errors Debug targets build cleanly
+   with eight workers. The nine ABI/runtime tests, six inventory/policy gates,
+   and three install/consumer gates pass 18/18 in 15.16 seconds. Direct
+   inventory/resource/source-manifest/source-line checks and `git diff --check`
+   remain clean.
+8. Proceed only to Batch 181 Change 11: implement parameter and
+   instance-specific access with generation-qualified instance identity.
+   Preserve transactional value updates and do not begin time/delay services,
+   Release/sanitizer/hosted qualification, commit, or push.
+
+## Batch 181 active checkpoint - after Change 11
+
+1. Resume on `codex/v3` at the intentionally dirty Batch 181 worktree. The
+   integrated and pushed base remains
+   `eace83d8a9dbe7bf6db85daf6889beb1f527c8e4`. Changes 1-11 are complete and
+   uncommitted. Preserve all current Batch 181 files; do not commit or push
+   before Change 20.
+2. Change 11 adds `include/fsim/runtime/tf_instance.hpp` and
+   `src/runtime/tf_instance.cpp`. `TfInstanceIdentity` requires nonzero design,
+   hierarchy, and generation components. `TfBoundCall` owns that identity and
+   a direct-v3 bridge token stable across check, size, and call callbacks;
+   `TfLoadedPlugin::bind` accepts the same optional identity.
+3. `tf_getinstance` exposes the token only while its call is active. Explicit
+   `tf_i*` count, type, size, scalar/long/real/string value, expression,
+   node-info, evaluation, propagation, and immediate-write routines first
+   compare the supplied opaque pointer with the active token. Null, stale, and
+   other-generation tokens are rejected without dereference. Time, delay,
+   synchronization, scope-name, and work-area variants remain later changes.
+4. Current and explicit `tf_nodeinfo` derive a bounded node profile from the
+   validated argument kind, width, signedness, selection, and expression, and
+   expose the same invocation-owned vector or real value storage. No hierarchy
+   handle or scope lifetime is invented in this change.
+5. `tests/runtime/tf_instance_test.cpp` binds two generations of one hierarchy,
+   observes distinct stable tokens in `checktf` and `calltf`, proves exact-token
+   explicit reads, expression/node access and write-back, rejects the other
+   generation, verifies neutral out-of-context behavior, and proves invalid
+   zero identity fields prevent all callbacks.
+6. The legacy-TF ledger has eight active and ten preserved rows at normalized
+   SHA-256
+   `a324e8194e24d48fb4004699c0de43bd5a8cf56de25535d34cded212b69bc234`.
+   Three new paths advance the source-package manifest to 1,713 entries at
+   SHA-256
+   `0b201c95438067e6acbdb16a586a91c7e0c67ae29aaf8ff99524d1986c2d82c9`.
+7. The exact LLVM 22.1.8 Clang 22 warnings-as-errors Debug targets build cleanly
+   with eight workers. The ten ABI/runtime tests, six inventory/policy gates,
+   and three install/consumer gates pass 19/19 in 15.17 seconds. Direct
+   inventory/resource/source-manifest/source-line checks and `git diff --check`
+   remain clean.
+8. Proceed only to Batch 181 Change 12: implement simulation time, delay, and
+   timescale access with exact bounded conversions tied to the active instance.
+   Preserve generation isolation and do not begin scope/work-area lifetimes,
+   Release/sanitizer/hosted qualification, commit, or push.
+
+## Batch 181 active checkpoint - after Change 12
+
+1. Resume on `codex/v3` at the intentionally dirty Batch 181 worktree. The
+   integrated and pushed base remains
+   `eace83d8a9dbe7bf6db85daf6889beb1f527c8e4`. Changes 1-12 are complete and
+   uncommitted. Preserve all current Batch 181 files; do not commit or push
+   before Change 20.
+2. Change 12 adds `include/fsim/runtime/tf_time.hpp` and
+   `src/runtime/tf_time.cpp`. `TfTimeProfile` validates unit/precision
+   exponents in the common `10^0` through `10^-15` range, precision no coarser
+   than the instance unit, and a nonzero scheduler-tick multiplier. Integer
+   conversion is overflow checked and half-up rounded; real delay conversion
+   additionally rejects negative and non-finite inputs.
+3. `TfBoundCall` owns the profile and accepts a per-invocation `TfTimeState`
+   snapshot. The internal direct-v3 bridge exposes current time, optional next
+   event time, and a fixed 256-entry delay-request buffer only during
+   `calltf`. Successful calls return source-ordered `TfDelayRequest`s together
+   with function and argument effects; exceptions or result failures publish
+   none. The scheduler coordinator remains the sole owner of later queue
+   insertion.
+4. `fsim_tf` implements current and explicit-instance integer, split-word,
+   real, unit, and precision queries; next-event and string queries; integer
+   and real scale/unscale services; and integer, long, real, clear-all delay
+   requests. Lifecycle calls are neutral, explicit calls require the exact
+   active generation token, and conversion failure never appends a request.
+5. `tests/runtime/tf_time_test.cpp` proves current/next queries, local-unit
+   conversion, half-up rounding, scale/unscale round trips, exact-token
+   rejection, absent-next-event behavior, negative/non-finite/overflow
+   rejection, invalid-profile callback non-entry, the 256-request ceiling, and
+   atomic rollback after a throwing callback.
+6. The legacy-TF ledger has seven active and eleven preserved rows at
+   normalized SHA-256
+   `389d15d1736e57f24b023f4682f4e86b406fd3566614d45360a25afa845c61d5`.
+   Three new paths advance the source-package manifest to 1,716 entries at
+   SHA-256
+   `8b7734c4e1c1e8bee0a093321eea50652a0e4e61be36591af9eb42216b00efa2`.
+7. The exact LLVM 22.1.8 Clang 22 warnings-as-errors Debug targets build cleanly
+   with eight workers. The eleven ABI/runtime tests, six inventory/policy
+   gates, and three install/consumer gates pass 20/20 in 8.27 seconds. Direct
+   inventory/resource/source-manifest/source-line checks and `git diff --check`
+   remain clean.
+8. Proceed only to Batch 181 Change 13: implement scope, instance, work-area,
+   and user-data lifetimes. Preserve time/delay transaction ownership and do
+   not begin output/control or synchronization services,
+   Release/sanitizer/hosted qualification, commit, or push.
+
+## Batch 181 active checkpoint - after Change 13
+
+1. Resume on `codex/v3` at the intentionally dirty Batch 181 worktree. The
+   integrated and pushed base remains
+   `eace83d8a9dbe7bf6db85daf6889beb1f527c8e4`. Changes 1-13 are complete and
+   uncommitted. Preserve all current Batch 181 files; do not commit or push
+   before Change 20.
+2. Change 13 adds `include/fsim/runtime/tf_context.hpp` and
+   `src/runtime/tf_context.cpp`. `TfContextProfile` owns bounded canonical
+   module-instance and active-scope names. Empty names, names above 4,096 bytes,
+   control characters, and scopes outside the module instance are rejected
+   before any callback. Binding copies both the context and registration, so
+   later caller mutation cannot change names, routine identity, or user data.
+3. The direct-v3 call bridge carries module, scope, routine, user-data, and
+   opaque work-area state through `checktf`, `sizetf`, and `calltf`.
+   `tf_mipname`, `tf_spname`, `tf_getroutine`, and their explicit-instance
+   forms return thread-local copies, preventing writable legacy return types
+   from aliasing simulator-owned strings. Explicit calls still require the
+   exact active generation token.
+4. Each `TfBoundCall` retains one opaque plug-in-owned work-area pointer.
+   Current and explicit get/set APIs can carry it across lifecycle phases and
+   repeated invocations; fsim never dereferences or frees it. A per-bound
+   recursive mutex serializes concurrent instance access without deadlocking
+   same-thread re-entry, which still fails at the existing context guard. A
+   changed pointer commits only with all other callback effects, so exception,
+   result, or allocation failure preserves the previous value.
+5. `tests/runtime/tf_context_test.cpp` proves copied name and registration
+   state, check/size/call continuity, current and explicit name/work-area APIs,
+   mutation containment, null clearing, wrong-token neutrality, two-instance
+   isolation, callback rollback, and all validation failures.
+6. The legacy-TF ledger has six active and twelve preserved rows at normalized
+   SHA-256
+   `65c2bef49298399d0b9638dd8a1c6ce191c9e246d1d313856513e82d104eca48`.
+   Three new paths advance the source-package manifest to 1,719 entries at
+   SHA-256
+   `1df9fb7d050d85e9180926a8e6a991ea69e679cbbf4daa36c8ee9395f3b26db1`.
+7. The exact LLVM 22.1.8 Clang 22 warnings-as-errors Debug targets build cleanly
+   with eight workers. The twelve ABI/runtime tests, six inventory/policy
+   gates, and three install/consumer gates pass 21/21 in 8.56 seconds. Direct
+   inventory/resource/source-manifest/source-line checks and `git diff --check`
+   remain clean.
+8. Proceed only to Batch 181 Change 14: implement TF output, warning, error,
+   finish, and stop controls. Preserve context and work-area transaction
+   ownership and do not begin synchronization services,
+   Release/sanitizer/hosted qualification, commit, or push.
+
+## Batch 181 active checkpoint - after Change 14
+
+1. Resume on `codex/v3` at the intentionally dirty Batch 181 worktree. The
+   integrated and pushed base remains
+   `eace83d8a9dbe7bf6db85daf6889beb1f527c8e4`. Changes 1-14 are complete and
+   uncommitted. Preserve all current Batch 181 files; do not commit or push
+   before Change 20.
+2. Change 14 adds `include/fsim/runtime/tf_control.hpp`,
+   `src/runtime/tf_control.cpp`, and `tests/runtime/tf_control_test.cpp`.
+   `TfControlEffect` owns output/control kind, channel, severity, facility,
+   message number, and text. Capture accepts at most 256 effects, 64 KiB per
+   formatted record, 255 bytes per metadata field, and 1 MiB total text; the
+   first validation, capacity, formatting, or allocation failure is sticky.
+3. The direct-v3 bridge carries a simulator-owned capture callback.
+   `io_printf`, `io_mcdprintf`, `tf_text`, `tf_warning`, `tf_error`,
+   `tf_message`, `tf_dostop`, and `tf_dofinish` append ordered effects only
+   while a valid callback context is active. They never write a host stream or
+   mutate scheduler control directly.
+4. Successful `checktf` and `sizetf` output is returned in
+   `TfBindResult::control_effects`; successful `calltf` output is returned in
+   `TfInvokeResult::control_effects`. Callback exceptions, unassigned function
+   results, invalid message levels, formatter failures, resource-limit
+   failures, and allocation failures publish no effects or other callback
+   transaction state. Change 17 remains the sole owner of ordered output
+   publication and stop/finish execution through the scheduler coordinator.
+5. `tests/runtime/tf_control_test.cpp` proves lifecycle capture, all output and
+   control APIs, channel/severity/structured-metadata preservation, distinct
+   stop and finish effects, stable order, neutral out-of-context calls,
+   malformed capture rejection, all resource ceilings, and complete rollback.
+6. The legacy-TF ledger has five active and thirteen preserved rows at
+   normalized SHA-256
+   `82b33d1ee62580e8ad6df4f2681b22f8d34206c7e90a18140fabc1b3b8d2976b`.
+   Three new paths advance the source-package manifest to 1,722 entries at
+   SHA-256
+   `bbbd28e3a2c56d819a58809724744e17992a536cc6f81c1d9d5a33175f49d517`.
+7. The exact LLVM 22.1.8 Clang 22 warnings-as-errors Debug targets build cleanly
+   with eight workers. The thirteen ABI/runtime tests, six inventory/policy
+   gates, and three install/consumer gates pass 22/22 in 8.32 seconds. Direct
+   inventory/resource/source-manifest/source-line checks and `git diff
+   --check` remain clean.
+8. Proceed only to Batch 181 Change 15: implement read-only and read-write
+   synchronization callbacks. Preserve transactional control capture and
+   defer its publication to Change 17. Do not begin HDL registration,
+   Release/sanitizer/hosted qualification, commit, or push.
+
+## Batch 181 active checkpoint - after Change 15
+
+1. Resume on `codex/v3` at the intentionally dirty Batch 181 worktree. The
+   integrated and pushed base remains
+   `eace83d8a9dbe7bf6db85daf6889beb1f527c8e4`. Changes 1-15 are complete and
+   uncommitted. Preserve all current Batch 181 files; do not commit or push
+   before Change 20.
+2. Change 15 adds `include/fsim/runtime/tf_synchronization.hpp`,
+   `src/runtime/tf_synchronization.cpp`, and
+   `tests/runtime/tf_synchronization_test.cpp`. The model distinguishes
+   read-write and read-only requests, maps them exactly to `reason_synch` and
+   `reason_rosynch`, retains the requesting `TfInstanceIdentity`, and bounds
+   every callback to 256 source-ordered requests.
+3. The direct-v3 bridge adds read-write and read-only synchronization phases
+   plus a fixed request buffer. `tf_synchronize`, `tf_rosynchronize`,
+   `tf_isynchronize`, and `tf_irosynchronize` append requests during `calltf`
+   or a read-write synchronization callback. They fail neutrally during
+   lifecycle entry, outside a callback, for the wrong generation token, from
+   a read-only callback, or after the fixed capacity is reached.
+4. `TfBoundCall::synchronize` invokes the bound registration's `misctf` with
+   the exact synchronization reason and a current argument, time, context,
+   work-area, and effect transaction. Read-write callbacks may stage argument
+   updates, delay requests, output/control records, and follow-up
+   synchronization requests. Read-only callbacks see values and time but all
+   bridge values are non-writable, and delay or synchronization requests are
+   rejected. Change 17 remains the only owner of scheduler-region insertion
+   and returned-effect publication.
+5. Invalid synchronization kinds and missing `misctf` callbacks are rejected
+   before callback entry. Exceptions discard argument, delay, control, work
+   area, and synchronization effects. The existing recursive instance lock
+   serializes concurrent use, while attempted callback re-entry receives
+   `TfCallError::ContextBusy` and cannot replace the active bridge context.
+6. The link-probe and installed C consumer now require synchronization calls
+   outside an active callback to report neutral failure rather than the former
+   placeholder success. `tests/runtime/tf_synchronization_test.cpp` proves
+   model mapping, all four request APIs, request order and instance identity,
+   both callback phases, read-only mutation rejection, capacity, rollback,
+   missing-callback/invalid-kind failures, and re-entry containment.
+7. The legacy-TF ledger has four active and fourteen preserved rows at
+   normalized SHA-256
+   `f3e64ce5ec13450770ec26d1bb70c89a23a2491a2de1061785eb6e6a0c6ae27a`.
+   Three new paths advance the source-package manifest to 1,725 entries at
+   SHA-256
+   `c15889fef398c224eb72b00fbe5eb9182e2180068e5944d0124931520ffbbdcf`.
+8. The exact LLVM 22.1.8 Clang 22 warnings-as-errors Debug targets build cleanly
+   with eight workers. The fourteen ABI/runtime tests, six inventory/policy
+   gates, and three install/consumer gates pass 23/23 in 8.46 seconds. Direct
+   inventory/resource/source-manifest/source-line checks and `git diff
+   --check` remain clean.
+9. Proceed only to Batch 181 Change 16: register TF system tasks/functions in
+   every retained Verilog and SystemVerilog profile. Preserve the direct-v3
+   callback/effect contract and do not begin scheduler coordinator wiring,
+   Release/sanitizer/hosted qualification, commit, or push.
+
+## Batch 181 active checkpoint - after Change 16
+
+1. Resume on `codex/v3` at the intentionally dirty Batch 181 worktree. The
+   integrated and pushed base remains
+   `eace83d8a9dbe7bf6db85daf6889beb1f527c8e4`. Changes 1-16 are complete and
+   uncommitted. Preserve all current Batch 181 files; do not commit or push
+   before Change 20.
+2. Change 16 adds `include/fsim/app/application_tf.hpp`,
+   `src/app/application_tf.cpp`, and
+   `tests/app/tf_plugin_application_test.cpp`. `TfApplicationRegistry` owns
+   every loaded `TfLoadedPlugin` so its direct-v3 image and callback pointers
+   remain valid, and publishes copied name/kind/index metadata only after the
+   complete load transaction succeeds.
+3. The registry exposes every validated TF task and integer/real function to
+   Verilog 1995, 2001, 2001-no-configurations, and 2005 plus SystemVerilog
+   2005, 2009, 2012, and 2017. VHDL 1987 through 2008 are rejected explicitly.
+   Resolution uses exact source spelling and optional callable-kind checking;
+   binding delegates to the existing instance/time/context-aware plug-in bind
+   transaction.
+4. One application is bounded to 256 loaded plug-ins and 65,536 registrations.
+   Missing artifacts, invalid plug-ins, cross-plug-in name collisions,
+   unsupported profiles, missing names, wrong callable kinds, and allocation
+   failures leave the published registry unchanged. A second load of the real
+   probe plug-in proves collision rollback without changing either count.
+5. `tests/app/tf_plugin_application_test.cpp` loads the independently authored
+   C probe plug-in, resolves its task and 17-bit function across all eight
+   retained profiles, rejects all five VHDL profiles, binds and invokes both
+   callable kinds, verifies the function result, and proves exact-name,
+   wrong-kind, duplicate, and missing-artifact behavior. Change 17 retains
+   ownership of HDL-call lowering, scheduler serialization, and effect
+   publication.
+6. The legacy-TF ledger has three active and fifteen preserved rows at
+   normalized SHA-256
+   `b9cef58642320c9ced4e9a77d4ee0972a8934c88cb15e2b687d8200b1b3e023f`.
+   Three new paths advance the source-package manifest to 1,728 entries at
+   SHA-256
+   `98f558dcdea64231714564ad7aaed86d24ee90bc8049a700e75a99885999ebf9`.
+7. The exact LLVM 22.1.8 Clang 22 warnings-as-errors Debug targets build cleanly
+   with eight workers. The application test, fourteen ABI/runtime tests, six
+   inventory/policy gates, and three install/consumer gates pass 24/24 in 8.42
+   seconds. Direct inventory/resource/source-manifest/source-line checks and
+   `git diff --check` remain clean.
+8. Proceed only to Batch 181 Change 17: serialize TF calls through the
+   scheduler coordinator, lower registered HDL task/function calls into that
+   path, execute read-write/read-only synchronization requests in their exact
+   regions, and publish transactional argument, delay, output/control, and
+   follow-up effects in canonical order. Do not begin failure-containment or
+   cross-platform closure, Release/sanitizer/hosted qualification, commit, or
+   push.
+
+## Batch 181 active checkpoint - after Change 17
+
+1. Resume on `codex/v3` at the intentionally dirty Batch 181 worktree. The
+   integrated and pushed base remains
+   `eace83d8a9dbe7bf6db85daf6889beb1f527c8e4`. Changes 1-17 are complete and
+   uncommitted. Preserve all current Batch 181 files; do not commit or push
+   before Change 20.
+2. Change 17 adds `include/fsim/app/application_tf_scheduler.hpp`,
+   `src/app/application_tf_scheduler.cpp`, and
+   `tests/app/tf_scheduler_application_test.cpp`. Each registered or directly
+   bound HDL call becomes an owner-qualified `TfSchedulerCallHandle`; the
+   coordinator refuses direct execution outside a running scheduler phase and
+   serializes initial calls, functions, synchronization callbacks, and delayed
+   reactivation behind one guarded boundary.
+3. One successful callback produces a single `TfSchedulerPublication` holding
+   its ordered argument, control, delay, and synchronization effects. The
+   coordinator stages value state and cancelable scheduler entries first,
+   invokes the publication hook once, and commits only on acceptance. A
+   rejected or throwing hook cancels every new entry and retains the prior
+   value snapshot.
+4. Read-write synchronization uses the scheduler reactive region, read-only
+   synchronization uses postponed, and delay requests return through active
+   with exact `reason_reactivate` dispatch. Stable orders are assigned
+   monotonically from the coordinator's caller-selected base. Accepted
+   read-write values are visible to later read-only callbacks; finish and stop
+   effects request scheduler termination only after the publication succeeds.
+5. The coordinator bounds live HDL call sites and pending callbacks to 65,536
+   each, retains typed function results and per-call values, records callback
+   and failure counts, rejects foreign/stale handles, and cancels retained
+   pending entries on destruction. `TfBoundCall::reactivate` uses the same
+   argument/time/context/work-area transaction as call and synchronization
+   dispatch.
+6. `tests/app/tf_scheduler_application_test.cpp` proves exact active/reactive/
+   postponed placement, two delayed reactivations at exact times, follow-up
+   read-only scheduling, state commit order, output/control batching, typed
+   function return, finish behavior, inactive-scheduler rejection, publication
+   rollback, and registry-to-coordinator execution through the independently
+   authored C probe plug-in.
+7. The legacy-TF ledger has two active and sixteen preserved rows at normalized
+   SHA-256
+   `448af37355d6f1743c98ef979f0dc747eb1e9dc7b48df45d7e24f92d2c775ec0`.
+   Three new paths advance the source-package manifest to 1,731 entries at
+   SHA-256
+   `4ec76874ea6c6e7f23f9cb62e5dfc54fefa4d1d7c94e4c9430e0ed357cd22fba`.
+8. The exact LLVM 22.1.8 Clang 22 warnings-as-errors Debug target builds cleanly
+   with eight workers. The two application tests, fourteen ABI/runtime tests,
+   six inventory/policy gates, and three install/consumer gates pass 25/25 in
+   8.47 seconds. Direct inventory/resource/source-manifest/source-line checks
+   and `git diff --check` remain clean.
+9. Proceed only to Batch 181 Change 18: contain plug-in exceptions, invalid
+   pointers, unload, and re-entry across the complete loader, call, and
+   coordinator path without publishing partial state. Do not begin
+   cross-platform closure, Release/sanitizer/hosted qualification, commit, or
+   push.
+
+## Batch 181 active checkpoint - after Change 18
+
+1. Resume on `codex/v3` at the intentionally dirty Batch 181 worktree. The
+   integrated and pushed base remains
+   `eace83d8a9dbe7bf6db85daf6889beb1f527c8e4`. Changes 1-18 are complete and
+   uncommitted. Preserve all current Batch 181 files; do not commit or push
+   before Change 20.
+2. Change 18 adds `include/fsim/runtime/tf_containment.hpp`,
+   `src/runtime/tf_containment.cpp`, and
+   `tests/runtime/tf_containment_test.cpp`. `validate_tf_native_pointer`
+   validates complete nonempty ranges for read, write, or execute permission
+   and reports null, empty, arithmetic overflow, unmapped, access, and
+   inspection failures without dereferencing the candidate range.
+3. Linux containment parses bounded `/proc/self/maps` entries and requires
+   contiguous permission-compatible mappings. Windows containment walks
+   `VirtualQuery` regions and requires committed, non-guarded pages with the
+   requested protection. Callback validation uses the same execute-range
+   contract.
+4. Native metadata, descriptor entries and extents, interface tables, nested
+   descriptors, TF registration arrays, names, and callback functions are
+   validated before host inspection or invocation. Invalid ranges fail the
+   existing load, validation, or bind transaction without publishing a
+   plug-in or callable.
+5. The TF bridge validates its context, instance, argument/value arrays,
+   result storage, names, control callback, time/delay storage,
+   synchronization storage, expressions, strings, and vector backing before
+   entry. Public TF output-parameter and text APIs reject unmapped caller
+   pointers rather than dereferencing them.
+6. C++ exceptions from descriptor, `checktf`, `sizetf`, `calltf`, and `misctf`
+   boundaries become stable failure results. Staged callback state is
+   discarded, recursive entry returns `TfCallError::ContextBusy`, and a bound
+   call retains its shared dynamic-library owner after the public loaded
+   plug-in object is released.
+7. `tests/runtime/tf_containment_test.cpp` proves valid permissions,
+   null/overflow/unmapped rejection, malformed nested ABI pointers,
+   non-executable callbacks, invalid public API pointers, lifecycle and call
+   exceptions, recursive entry, transactional rollback, and retained-image C
+   plug-in execution.
+8. The legacy-TF ledger has one active and seventeen preserved rows at
+   normalized SHA-256
+   `a92791af4d45b840741bc6df20fa2c6ac581c102346cb8535a782a3ae399e83f`.
+   Three new paths advance the source-package manifest to 1,734 entries at
+   SHA-256
+   `eb9ea05f62f95f6e83b282eeee413b3115e07c84805489e5558a62695d1e236b`.
+9. The exact LLVM 22.1.8 Clang 22 warnings-as-errors Debug target builds cleanly
+   with eight workers. The two application tests, fifteen ABI/runtime tests,
+   six inventory/policy gates, and three install/consumer gates pass 26/26 in
+   8.65 seconds. Direct inventory/resource/source-manifest/source-line checks
+   and `git diff --check` remain clean. Proceed only to Batch 181 Change 19:
+   prove independently authored C and C++ TF plug-ins on governed Linux and
+   Windows toolchains. Do not begin Release/sanitizer/hosted qualification,
+   commit, or push before Change 20.
+
+## Batch 181 active checkpoint - after Change 19
+
+1. Resume on `codex/v3` at the intentionally dirty Batch 181 worktree. The
+   integrated and pushed base remains
+   `eace83d8a9dbe7bf6db85daf6889beb1f527c8e4`. Changes 1-19 are complete and
+   uncommitted. Preserve all current Batch 181 files; Change 20 exclusively
+   owns full qualification, documentation closure, commit, and push.
+2. Change 19 adds `tests/runtime/tf_cpp_probe_plugin.cpp` and
+   `tests/runtime/tf_cross_platform_plugins_test.cpp`. The C++20 probe is an
+   independently authored direct-v3 consumer with a read-write task and a
+   12-bit integer function. The existing C11 probe remains the independent C
+   consumer with its task and 17-bit function.
+3. `fsim_tf` now uses `LINKER_LANGUAGE CXX`, matching the implementation in
+   `tf_link.cpp` and ensuring the Windows DLL receives the required C++ runtime
+   linkage. Both C and C++ plug-ins link only through the same public
+   `fsim_tf` shared/import target and use `FSIM_NATIVE_PLUGIN_CALL` plus the
+   exact descriptor symbol.
+4. `tf_plugin_artifact_loaded` exposes the platform layer's no-reference-count
+   module query for qualification. The cross-platform test proves both images
+   start unloaded, load with distinct copied metadata and two registrations,
+   remain loaded after their public loader objects are released while bound
+   calls retain them, execute exact task/function value semantics, and unload
+   after the final bound calls are destroyed.
+5. The targets use CMake target-file paths, carry C11/C++20 warnings-as-errors,
+   and register one unexcluded `fsim.runtime.tf_cross_platform_plugins` test
+   labeled for Linux and Windows. Local Linux Clang 22 execution is green; the
+   existing Windows LLVM-MinGW full-test lane executes the same target at
+   Change 20, because hosted monitoring is forbidden before that boundary.
+6. The legacy-TF ledger has zero active and eighteen preserved rows at
+   normalized SHA-256
+   `a3bff1ef32fbf3fd412556c63c39e69a45f4efdd5cb599d07b3ac47136b531e0`.
+   Two new paths advance the source-package manifest to 1,736 entries at
+   SHA-256
+   `e5f344dd3811d355d90252f583dc8dcc0f2f9a530155149e444b4934b718d58a`.
+7. The exact LLVM 22.1.8 Clang 22 warnings-as-errors Debug targets build cleanly
+   with eight workers. The two application tests, sixteen ABI/runtime tests,
+   six inventory/policy gates, and three install/consumer gates pass 27/27 in
+   8.69 seconds. Direct inventory/resource/source-manifest/source-line checks
+   and `git diff --check` remain clean.
+8. Proceed only to Batch 181 Change 20. Run the clean local Debug and Release
+   closure, sanitizers, then hosted Linux and Windows qualification with the
+   retained 120-minute timeouts. Fix every failure, finalize the Batch 181
+   documentation, make exactly one implementation commit, push it, and only
+   then begin Batch 182. Do not publish a release tag for this non-release
+   batch.
+
+## Batch 181 complete checkpoint - after Change 20
+
+1. Resume on `codex/v3` from the pushed Batch 181 implementation commit that
+   contains this checkpoint. Batch 181 Changes 1-20 are complete; the IEEE TF
+   surface is frozen, and no release tag belongs to this non-release batch.
+2. The direct-v3 native ABI, standard-compatible `veriuser.h`, Linux shared
+   library and Windows import-library surfaces, transactional registration and
+   callback lifecycle, argument/value/time/scope/control APIs, scheduler
+   coordination, failure containment, and independently authored C11/C++20
+   plug-in proofs are integrated. Versioned v2 plug-ins remain rejected
+   without a compatibility reader or migration.
+3. The legacy-TF ledger is fully preserved with zero active and eighteen
+   preserved rows at normalized SHA-256
+   `a3bff1ef32fbf3fd412556c63c39e69a45f4efdd5cb599d07b3ac47136b531e0`.
+   The source-package manifest remains 1,736 paths at SHA-256
+   `e5f344dd3811d355d90252f583dc8dcc0f2f9a530155149e444b4934b718d58a`.
+4. The clean exact-LLVM Clang 22 Debug sanitizer build completes 2,097 actions
+   with eight workers in 15 minutes 25.17 seconds and 4,494,384 KiB peak RSS.
+   The complete ASan/UBSan suite passes 380/380 in 562.04 seconds with local
+   leak detection disabled only because the execution supervisor uses ptrace.
+   Per the user instruction, this sanitizer result carries the local Debug and
+   Release test qualification without redundant rebuilds or retests.
+5. Closure updates the exact bounded-source, SPDX-owned, and FST test/control
+   inventories to 1,376, 1,671, and 719. The Windows audit expects 371 tests
+   without LLVM and 375 with LLVM, plus exactly 1,252 archive entries in both
+   Release package variants. The complete hosted Clang Linux, LLVM-MinGW
+   Windows Debug/Release, package/install, and frontend-fuzz matrix runs under
+   the retained 120-minute timeouts at the exact pushed Change 20 commit.
+6. Proceed only to Batch 182 Change 1: register the complete IEEE ACC routine
+   and object inventory with independent wording and exact ownership. Do not
+   implement `acc_user.h`, ACC runtime behavior, or any later Batch 182 change
+   in that slice. Preserve all existing HDL profiles and the direct-v3,
+   no-v2-compatibility contract; do not access or publish private LRM content.

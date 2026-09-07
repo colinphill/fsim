@@ -1515,6 +1515,7 @@ add_test(
     "-DFSIM_DATADIR=${CMAKE_INSTALL_DATADIR}"
     "-DFSIM_EXECUTABLE_NAME=$<TARGET_FILE_NAME:fsim>"
     "-DFSIM_API_LIBRARY_NAME=$<TARGET_FILE_NAME:fsim_api>"
+    "-DFSIM_TF_LIBRARY_NAME=$<TARGET_FILE_NAME:fsim_tf>"
     "-DFSIM_API_LIBRARY_DIR=${FSIM_BINARY_INSTALL_API_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckBinaryInstallOwnership.cmake"
 )
@@ -1733,6 +1734,18 @@ set_tests_properties(
   fsim.code-coverage-metrics-inventory
   PROPERTIES
     LABELS "coverage;condition;expression;toggle;fsm;inventory;documentation;positive;negative;fast"
+)
+add_test(
+  NAME fsim.legacy-tf-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckLegacyTfInventory.cmake"
+)
+set_tests_properties(
+  fsim.legacy-tf-inventory
+  PROPERTIES
+    LABELS "tf;pli;ieee1364;inventory;documentation;positive;negative;fast"
 )
 add_test(
   NAME fsim.sdf-inventory
@@ -2501,6 +2514,7 @@ add_test(
     "-DFSIM_ELAB_EXECUTABLE_NAME=$<TARGET_FILE_NAME:fsim-elab>"
     "-DFSIM_RUN_EXECUTABLE_NAME=$<TARGET_FILE_NAME:fsim-run>"
     "-DFSIM_API_LIBRARY_NAME=$<TARGET_FILE_NAME:fsim_api>"
+    "-DFSIM_TF_LIBRARY_NAME=$<TARGET_FILE_NAME:fsim_tf>"
     "-DFSIM_SYSTEMC_PLUGIN_EXPORT_LIBRARY_NAME=$<TARGET_FILE_NAME:fsim_systemc_plugin_exports>"
     "-DFSIM_SYSTEMC_ACCELERA_LIBRARY_NAME=$<TARGET_FILE_NAME:fsim_systemc_accellera_runtime>"
     "-DFSIM_SYSTEMC_UPSTREAM_LIBRARY_NAME=$<TARGET_FILE_NAME:${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}>"
@@ -4097,6 +4111,56 @@ if(TARGET fsim_application)
     fsim.application.vpi
     PROPERTIES
       LABELS "fast;application;verilog;vpi;hierarchy;value;callback;control;llvm"
+  )
+
+  add_executable(
+    fsim_tf_plugin_application_tests
+    app/tf_plugin_application_test.cpp
+  )
+  fsim_configure_test(fsim_tf_plugin_application_tests)
+  target_compile_definitions(
+    fsim_tf_plugin_application_tests
+    PRIVATE
+      FSIM_TF_LINK_PROBE_PLUGIN_PATH="$<TARGET_FILE:fsim_tf_link_probe_plugin>"
+  )
+  target_link_libraries(
+    fsim_tf_plugin_application_tests PRIVATE fsim_application)
+  add_dependencies(
+    fsim_tf_plugin_application_tests fsim_tf_link_probe_plugin)
+  add_test(
+    NAME fsim.application.tf-plugin
+    COMMAND fsim_tf_plugin_application_tests
+  )
+  set_tests_properties(
+    fsim.application.tf-plugin
+    PROPERTIES LABELS
+      "fast;application;tf;pli;plugin;registration;task;function;verilog;systemverilog;profile;positive;negative;resource;portability"
+  )
+
+  add_executable(
+    fsim_tf_scheduler_application_tests
+    app/tf_scheduler_application_test.cpp
+  )
+  fsim_configure_test(fsim_tf_scheduler_application_tests)
+  target_compile_definitions(
+    fsim_tf_scheduler_application_tests
+    PRIVATE
+      FSIM_TF_LINK_PROBE_PLUGIN_PATH="$<TARGET_FILE:fsim_tf_link_probe_plugin>"
+  )
+  target_link_libraries(
+    fsim_tf_scheduler_application_tests PRIVATE fsim_application fsim_tf
+  )
+  add_dependencies(
+    fsim_tf_scheduler_application_tests fsim_tf_link_probe_plugin
+  )
+  add_test(
+    NAME fsim.application.tf-scheduler
+    COMMAND fsim_tf_scheduler_application_tests
+  )
+  set_tests_properties(
+    fsim.application.tf-scheduler
+    PROPERTIES LABELS
+      "fast;application;runtime;tf;scheduler;coordination;ordering;transactional;synchronization;delay;output;control;positive;negative"
   )
 
   add_executable(

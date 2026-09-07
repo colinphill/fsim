@@ -2000,26 +2000,523 @@ starts on branch codex/v3 from clean v2 checkpoint
 
 ### Batch 181 - IEEE legacy TF PLI
 
-1. Register IEEE TF requirements and explicitly exclude vendor extensions.
-2. Define the v3 native-plugin ABI and common loader metadata.
-3. Provide standard-compatible veriuser.h declarations and constants.
-4. Provide Linux shared-library and Windows import-library link surfaces.
-5. Discover and validate standard TF registration tables.
-6. Validate every registered task/function descriptor transactionally.
-7. Implement checktf, sizetf, calltf, and their failure containment.
-8. Implement misctf lifecycle and synchronization reasons.
-9. Implement argument count, type, direction, and expression inspection.
-10. Implement integer, real, string, vector, and expression value access.
-11. Implement parameter and instance-specific access.
-12. Implement simulation time, delay, and timescale access.
-13. Implement scope, instance, work-area, and user-data lifetimes.
-14. Implement TF output, warning, error, and finish/stop controls.
-15. Implement read-only and read-write synchronization callbacks.
-16. Register TF system tasks/functions in Verilog and SystemVerilog profiles.
-17. Serialize TF calls through the scheduler coordinator.
-18. Contain plugin exceptions, invalid pointers, unload, and re-entry.
-19. Prove independently authored C/C++ plugins on Linux and Windows.
-20. Run standard batch closure and freeze the TF surface.
+1. **Complete.** Register IEEE TF requirements and explicitly exclude vendor extensions.
+   The independently authored legacy-TF inventory registers eighteen
+   active IEEE 1364-2005 obligation domains, assigned one-to-one to Changes 2-19,
+   across every retained Verilog and SystemVerilog profile. Each row has a stable
+   identity, bounded requirement summary, planned implementation/test/diagnostic/
+   resource owners, and the exact `ieee-only-no-vendor-extensions` policy; no v2
+   plugin ABI compatibility, vendor extension, or private-reference path is
+   admitted. Its machine validator freezes the twenty-batch roadmap, the exact
+   Batch 181 change allocation, row/domain/profile uniqueness, safe repository
+   owners, existing shared diagnostic/resource owners, and forbidden private or
+   vendor spellings. The normalized inventory SHA-256 is
+   `2d730b840eb80307e6a025317c4447ad682335e9fc6145ffcd8a5842cdc4f39b`.
+   The source-package manifest contains 1,676 ordered paths at SHA-256
+   `4057a4fff165a11f363543342891c34f4f294ff02bd3e0076b1b6109f4399985`.
+   The exact LLVM 22.1.8 Clang 22 warnings-as-errors Debug tree builds
+   1,328/1,328 actions with eight workers; the inventory, diagnostic,
+   source-budget, source-manifest, resource-portability, and CTest-uniqueness
+   gates pass 6/6. A requested Windows-CI audit also traced the most recent
+   failing Release/LLVM-ON run to the already repaired stale cache-owner lock,
+   verified its Windows-specific retained-handle regression at the integrated
+   v3 tip, and confirmed all four Windows lanes in subsequent exact-SHA runs;
+   twenty paired local repetitions of `fsim.cache` and `fsim.application.vpi`
+   pass. No Release, sanitizer, new hosted run, commit, or push action ran.
+2. **Complete.** Define the v3 native-plugin ABI and common loader metadata.
+   The new C-compatible descriptor exposes only the versioned
+   `fsim_native_plugin_descriptor_v3_get` entry point and requires exact ABI
+   version 3, an append-only minimum struct size, the native pointer width,
+   zero reserved flags, and at least one known IEEE TF/ACC capability. Name,
+   version, producer, and optional build identity are byte-counted, bounded,
+   control-free metadata rather than paths; the host validates every field,
+   copies image-owned storage before publication or unload, and derives a
+   canonical SHA-256 identity over explicit lengths and capabilities. Version
+   2, future versions, truncated or foreign-layout descriptors, unknown
+   capabilities, ambiguous optional fields, embedded terminators, and
+   oversized metadata are rejected without a partial result. Independent C and
+   C++ translation units prove layout, symbol, capability, owned-copy,
+   deterministic-identity, and negative behavior. The preserved inventory row
+   advances the ledger to 17 active/1 preserved at SHA-256
+   `95f1b626bf0aa3b1cebc96b11fe54486dc0943e250bb14d0aef79db5c94e3ec4`;
+   five new paths advance the source manifest to 1,681 entries at SHA-256
+   `06a28905682e69c37bde451855a436097232329ba8862911b6f85aaa2a091217`.
+   The exact-LLVM warnings-as-errors Debug target builds 9/9 actions with eight
+   workers, and the ABI plus six policy/resource gates pass 7/7 in 6.58
+   seconds. No TF registration, callback, loader-open behavior, Release,
+   sanitizer, hosted-CI trigger, commit, or push action ran.
+3. **Complete.** Provide standard-compatible veriuser.h declarations and constants.
+   The new public C header defines the standardized fixed-width PLI scalar
+   aliases, error levels, lifecycle and synchronization reasons, argument and
+   node categories, vector/strength/expression/node records, simulator routine
+   declarations, and legacy globals with portable C linkage. Windows import
+   and plug-in export annotations are source-compatible placeholders for the
+   Change 4 link surfaces; Linux leaves those annotations empty. Historical
+   Boolean aliases remain available to C while the header deliberately avoids
+   hiding C++ keywords. Independent C11 and C++ translation units freeze scalar
+   sizes, record offsets, constant aliases, representative current-instance and
+   implicit-instance signatures, and cross-language inclusion. Registration
+   tables and vendor-only names remain outside this header and are deferred to
+   the governed Change 5 discovery surface. The preserved inventory row
+   advances the ledger to 16 active/2 preserved at SHA-256
+   `2aedbbd128ecc5cd3d2dace00665a792db1d9f4a6eb95a79fc07dde6b9ee8e7b`;
+   three new paths advance the source manifest to 1,684 entries at SHA-256
+   `800e014211c8f59e08c3b262a8fc0e25f8c86472a3295c3bbb592e15f53e9af2`.
+   The exact-LLVM warnings-as-errors Debug target builds 5/5 actions with eight
+   workers, and the header test plus native ABI and six policy/resource gates
+   pass 8/8 in 8.51 seconds. No runtime TF implementation, platform import
+   library, registration discovery, Release, sanitizer, hosted-CI trigger,
+   commit, or push action ran.
+4. **Complete.** Provide Linux shared-library and Windows import-library link surfaces.
+   The new `fsim::tf`/`fsim_tf` shared target exports all 107 simulator-owned
+   standardized TF routines with C linkage, ABI-major soname 3, default Linux
+   visibility, and Windows `dllexport` annotations that produce the matching
+   LLVM-MinGW import library. Plug-in-owned interception/version/compile-end
+   globals and vendor names are intentionally absent. The ABI-only shim has no
+   SystemC runtime dependency; neutral no-call-context entry points reserve the
+   exact symbol addresses for the governed service implementations in Changes
+   7-15. A C plug-in links the shim, publishes the direct v3 TF descriptor, is
+   loaded through the platform abstraction, and calls representative implicit-
+   instance, explicit-instance, value, hierarchy, time, and synchronization
+   entries. The install owns the library/import library and both public headers,
+   publishes the relocatable `fsim::tf` package target, and builds and runs an
+   offline installed C consumer. The preserved inventory row advances the
+   ledger to 15 active/3 preserved at SHA-256
+   `253c2adfa50844078a5fc6a7f6bba29724f37a4bece6ab856c73dfef6962196a`;
+   six new paths advance the source manifest to 1,690 entries at SHA-256
+   `08619c4452ddd5b642a0476b6f34001a564c55413a6e8f0e75ac98bd1e4ded95`.
+   The exact-LLVM warnings-as-errors Debug library and plug-in targets build
+   cleanly with eight workers, all 107 exports are found, and the runtime,
+   install, ABI, inventory, and policy/resource slice passes 12/12 in 15.39
+   seconds. No registration discovery, functional TF callback behavior,
+   Release, sanitizer, hosted-CI trigger, commit, or push action ran.
+5. **Complete.** Discover and validate standard TF registration tables.
+   The direct v3 native descriptor now has an append-only, bounded capability-
+   interface extension while its common metadata validator continues to accept
+   the frozen base prefix without reading absent fields. A TF-capable image must
+   publish exactly one aligned version-3 TF interface and one nonempty,
+   bounded, stride-qualified registration table; the dedicated loader resolves
+   only `fsim_native_plugin_descriptor_v3_get`, validates the complete discovery
+   graph before publication, copies common metadata, and retains the platform
+   library for the lifetime of the loaded plug-in. Missing images or symbols,
+   invalid common metadata, undeclared or missing TF capability, truncated,
+   oversized, null, misaligned, duplicate, or incompatible interface tables,
+   and malformed registration-table headers produce typed failures with no
+   partial loaded object. The public C ABI deliberately excludes obsolete
+   registration records and simulator-specific startup aliases; validation of
+   each task/function entry remains Change 6. A real C plug-in publishes one
+   direct-v3 table, while the C++ suite covers the positive load and every
+   bounded structural failure. The installed SDK now owns and byte-compares
+   `tf_plugin_abi.h`, and its offline C consumer compiles the table types. The
+   preserved inventory row advances the ledger to 14 active/4 preserved at
+   SHA-256
+   `b77028d80b9a1a2c18c81a953ae410005699f330455bfe2067ece8ab71d92f0a`;
+   four new paths advance the source manifest to 1,694 entries at SHA-256
+   `0dd0259569a866a76678bfb67f311936d9aa6dc47e96c7aa413e6af19c2958d0`.
+   The exact-LLVM Clang warnings-as-errors Debug targets build cleanly with
+   eight workers, and the discovery, ABI, inventory, install, and policy/
+   resource slice passes 13/13 in 15.34 seconds. No registration-entry
+   validation, callback execution, Release, sanitizer, hosted-CI trigger,
+   commit, or push action ran.
+6. **Complete.** Validate every registered task/function descriptor transactionally.
+   A dedicated host-owned registration model now validates the complete table
+   into a temporary vector before it can be attached to a loaded plug-in.
+   Every record must fit its declared stride, use one of the task, integral-
+   function, or real-function kinds, keep flags and reserved fields zero, and
+   provide a bounded `$identifier` unique within the table. `calltf` is required;
+   task and real-function records reject `sizetf`, integral functions require
+   it, and `checktf`/`misctf` remain optional. Names, kinds, user data, and
+   callback addresses are copied in source order while the image remains
+   retained; no callback is invoked during validation. Any malformed table or
+   entry, duplicate name, or allocation failure destroys the temporary vector
+   and publishes no registration. The loader now exposes only the complete
+   immutable set after both common discovery and record validation succeed.
+   Focused tests cover all three kinds, ordering and copied ownership, every
+   structural/name/profile failure, a failure in a later entry, duplicate
+   names, empty-result rollback, and zero callback calls. The preserved ledger
+   advances to 13 active/5 preserved at SHA-256
+   `060dbc67968336a8a08b4dd2453ee067ec62fd70861c8856c106a4e718aaf731`;
+   three new paths advance the source manifest to 1,697 entries at SHA-256
+   `dd1c2f01e6144977404831eb20973397fcf6bdf835ed67c1c2ce9ad2e16e8981`.
+   The exact-LLVM Clang warnings-as-errors Debug targets build cleanly with
+   eight workers, and the accumulated ABI/runtime, inventory, install, and
+   policy/resource slice passes 14/14 in 15.25 seconds. No callback execution,
+   HDL registration, Release, sanitizer, hosted-CI trigger, commit, or push
+   action ran.
+7. **Complete.** Implement checktf, sizetf, calltf, and their failure containment.
+   Binding now invokes optional `checktf` once and integral-function `sizetf`
+   once with the exact lifecycle reasons, consumes only the `sizetf` return,
+   rejects widths outside 1-1,048,576 bits, and retains the plug-in image behind every bound
+   callable. Runtime invocation gives each call fresh simulator-owned result
+   storage: tasks have none, integral functions receive width-qualified
+   four-state word arrays, and real functions receive a 64-bit real slot.
+   Narrow bridge entry points in dependency-minimal `fsim_tf` expose only the
+   active result slot to `tf_putp`, result-form `tf_putlongp`, and
+   `tf_putrealp`; wrong indexes or result kinds fail without mutation, and
+   unused high bits are masked. As required by the TF callback contract,
+   `checktf` and `calltf` return values are preserved diagnostically but do not
+   signal failure; functions must assign their result slot. Every callback is caught at its host boundary, a nested
+   call cannot replace the thread-local active context, and all exits release
+   it. This is result-only value access; general argument/value services remain
+   Change 10. Tests cover task, integral, 65-bit, and real results, independent
+   per-call storage, exact reasons/return handling, check/size/call exceptions,
+   invalid widths, missing/wrong-kind results, nested calls, absent indexes,
+   and a real C plug-in whose bound function remains callable after its loader
+   handle is released. The preserved ledger advances to 12 active/6 preserved
+   at SHA-256
+   `fd13fb893711202a53d4eecd9bebe56ce2eab7699bb9cd9b835bede1b49f90a1`;
+   four new paths advance the source manifest to 1,701 entries at SHA-256
+   `7f714b53952211b9482fadf49fd262113451e743664a4347d2bcc3cc1f7b0bcf`.
+   The exact-LLVM Clang warnings-as-errors Debug targets build cleanly with
+   eight workers, and the accumulated runtime/ABI, inventory, install, and
+   policy/resource slice passes 15/15 in 15.19 seconds. The link shim still has
+   no SystemC dependency. No `misctf` scheduling, general argument/value
+   service, Release, sanitizer, hosted-CI trigger, commit, or push action ran.
+8. **Complete.** Implement misctf lifecycle and synchronization reasons.
+   A retained-image dispatcher now recognizes all eighteen standardized
+   `misctf` reasons, including the distinct read-write and read-only
+   synchronization reasons, and calls every registered `misctf` in source-table
+   order while skipping absent callbacks. The third argument is required to be
+   a positive argument index only for parameter-value and parameter-driver
+   changes and zero for every other lifecycle event. Ordinary callback return
+   values are ignored, with the last value retained only for diagnostics;
+   callback exceptions stop at a deterministic registration prefix and cannot
+   cross the host, while recursive dispatch is rejected before any nested
+   callback runs. Empty callback sets remain valid, and a dispatcher shares
+   loaded-image ownership so it cannot retain dangling function pointers.
+   This change supplies exact lifecycle dispatch semantics only; scheduling
+   `tf_synchronize`/`tf_rosynchronize` into simulator phases remains Change 15.
+   Tests exercise every reason and parameter rule, exact order and user data,
+   ignored returns, exception prefixes, re-entry, empty sets, invalid reasons,
+   and dispatch through the real C plug-in after releasing its loader handle.
+   The preserved ledger advances to 11 active/7 preserved at SHA-256
+   `966d73a71f0b9748cf4900c467c982e66f194fafdc5e0b73fe6c0aa96e48696a`;
+   three new paths advance the source manifest to 1,704 entries at SHA-256
+   `b55af8a4da9d3db069f87615a7aa5c4b0bde530ab6bed748910758176cd5fb2d`.
+   The exact-LLVM Clang warnings-as-errors Debug targets build cleanly with
+   eight workers, and the accumulated runtime/ABI, inventory, install, and
+   policy/resource slice passes 16/16 in 15.00 seconds. No argument inspection,
+   scheduler-phase registration, Release, sanitizer, hosted-CI trigger, commit,
+   or push action ran.
+9. **Complete.** Implement argument count, type, direction, and expression
+   inspection. A language-neutral, bounded argument model now distinguishes
+   null, string, special, read-only, read-write, scalar/part/bit-select, and
+   real arguments, with exact direction, width, select-index, signedness, and
+   independently owned expression text. Transactional validation rejects more
+   than 4,096 arguments, widths above 1,048,576 bits, malformed kind-specific
+   state, invalid selections, empty or control-bearing expressions, and any
+   partial result before a plug-in callback can run. Binding copies one
+   immutable inventory and exposes the same metadata to `checktf`, `sizetf`,
+   and `calltf`; `tf_nump`, `tf_typep`, `tf_sizep`, and `tf_exprinfo` return
+   neutral values outside that current callback context or for invalid indexes.
+   Explicit-instance lookup remains Change 11, while expression/value contents
+   and mutation remain Change 10. Focused tests prove all argument profiles,
+   cross-phase identity, direction/selection/sign metadata, neutral contexts,
+   invalid-model rollback, and zero callback execution on validation failure.
+   The preserved ledger advances to 10 active/8 preserved at SHA-256
+   `f89e27fd48e8e86d87c8831bf41ea6e6e70f41391355877f496a0566ae8c3ea8`;
+   three new paths advance the source manifest to 1,707 entries at SHA-256
+   `1e7b471739bbbef4b8a318a8f2070d64b3e7a395f63550932b60d794b394df01`.
+   The exact-LLVM Clang warnings-as-errors Debug targets build cleanly with
+   eight workers, and the accumulated runtime/ABI, inventory, install, and
+   policy/resource slice passes 17/17 in 15.25 seconds. No value mutation,
+   explicit-instance access, Release, sanitizer, hosted-CI trigger, commit, or
+   push action ran.
+10. **Complete.** Implement integer, real, string, vector, and expression
+    value access. Runtime values now use a model distinct from immutable
+    argument metadata, with exact-width interleaved `aval`/`bval` vector words,
+    real and bounded string alternatives, unused-high-bit validation, and a
+    16 MiB aggregate per-call storage ceiling. Each invocation owns one private
+    working copy; callbacks can read through `tf_getp`, `tf_getlongp`,
+    `tf_getrealp`, `tf_getcstringp`, `tf_strgetp`, and value-populated
+    `tf_exprinfo`, while `tf_putp`, `tf_putlongp`, `tf_putrealp`, and
+    `tf_propagatep` can update only read-write arguments. Function results and
+    parameter updates are published together only after callback success and
+    required result assignment; read-only or unpropagated mutations never
+    become scheduler updates. Binary, octal, hexadecimal, and bounded decimal
+    text projections preserve four-state diagnostics, and full-width vector
+    access retains distinct unknown and high-impedance bits. Invalid value
+    counts, kinds, word counts, high bits, strings, or aggregate storage fail
+    before callback entry. Tests prove default and supplied values, scalar and
+    65-bit access, X/Z retention, expression propagation, ordered integral and
+    real write-back, read-only rejection, invalid-value rollback, and the
+    aggregate ceiling. The preserved ledger advances to 9 active/9 preserved
+    at SHA-256
+    `de6827fe470bf619055174387bafcd357db4d550608a1b35abf64d92a8977e47`;
+    three new paths advance the source manifest to 1,710 entries at SHA-256
+    `adf8ce8ac8e73a1ee11188ccb8a901fd0e611cbb1fade8dbadd680f2f686caa4`.
+    The exact-LLVM Clang warnings-as-errors Debug targets build cleanly with
+    eight workers, and the accumulated runtime/ABI, inventory, install, and
+    policy/resource slice passes 18/18 in 15.16 seconds. No explicit-instance
+    service, delayed write, Release, sanitizer, hosted-CI trigger, commit, or
+    push action ran.
+11. **Complete.** Implement parameter and instance-specific access. Every
+    bound call now owns a validated design, hierarchy, and nonzero generation
+    identity plus one direct-v3 instance token that remains stable across
+    `checktf`, `sizetf`, and `calltf`. `tf_getinstance` exposes only that opaque
+    token, and the standardized `tf_i*` count/type/size/value/expression/node/
+    propagation routines delegate only when the supplied token exactly matches
+    the active call. A token from another hierarchy generation, a null token,
+    or use outside a callback returns neutral failure without dereferencing the
+    caller's address. Current and explicit `tf_nodeinfo` provide bounded
+    expression-derived node identity and the same simulator-owned vector/real
+    value view. Invalid zero identity components fail before `checktf`, and
+    loaded-plugin binding accepts the same identity without weakening image
+    ownership. Tests bind two generations of one hierarchy, prove distinct
+    stable tokens and cross-generation rejection, exercise current and
+    explicit parameter reads/writes and node/expression views, verify ordered
+    write-back, and prove invalid identities run no callbacks. The preserved
+    ledger advances to 8 active/10 preserved at SHA-256
+    `a324e8194e24d48fb4004699c0de43bd5a8cf56de25535d34cded212b69bc234`;
+    three new paths advance the source manifest to 1,713 entries at SHA-256
+    `0b201c95438067e6acbdb16a586a91c7e0c67ae29aaf8ff99524d1986c2d82c9`.
+    The exact-LLVM Clang warnings-as-errors Debug targets build cleanly with
+    eight workers, and the accumulated runtime/ABI, inventory, install, and
+    policy/resource slice passes 19/19 in 15.17 seconds. Time, delays, named
+    scope/work-area state, Release, sanitizer, hosted-CI trigger, commit, and
+    push remain deferred.
+12. **Complete.** Implement simulation time, delay, and timescale access. Each
+    bound TF call now owns a validated instance time profile with unit and
+    precision exponents in the common `10^0` through `10^-15` range and a
+    nonzero scheduler-tick multiplier. Every `calltf` invocation receives one
+    immutable current/next scheduler-time snapshot. Integer conversions use
+    overflow-checked half-up rounding; real conversions reject negative,
+    non-finite, and overflowing delays. The standard current-time, split-word,
+    next-event, real-time, unit, precision, string, explicit-instance,
+    scale/unscale, set-delay, and clear-delay routines share that profile.
+    Reactivation requests use a fixed 256-entry call-local buffer and are
+    published in source order only with a successful callback; callback
+    exceptions discard the complete delay transaction. Scheduler insertion
+    remains owned by the coordinator in Change 17 rather than exposing runtime
+    queues to plug-ins. Tests prove precision conversion and rounding,
+    current/next observation, exact-token isolation, neutral lifecycle access,
+    invalid-profile pre-entry rejection, the resource ceiling, and callback
+    rollback. The preserved ledger advances to 7 active/11 preserved at
+    SHA-256
+    `389d15d1736e57f24b023f4682f4e86b406fd3566614d45360a25afa845c61d5`;
+    three new paths advance the source manifest to 1,716 entries at SHA-256
+    `8b7734c4e1c1e8bee0a093321eea50652a0e4e61be36591af9eb42216b00efa2`.
+    The exact-LLVM Clang warnings-as-errors Debug targets build cleanly with
+    eight workers, and the accumulated runtime/ABI, inventory, install, and
+    policy/resource slice passes 20/20 in 8.27 seconds. Scope/work-area state,
+    Release, sanitizer, hosted-CI trigger, commit, and push remain deferred.
+13. **Complete.** Implement scope, instance, work-area, and user-data
+    lifetimes. A bounded `TfContextProfile` now owns canonical module-instance
+    and active-scope names; it rejects empty, oversized, control-bearing, or
+    non-descendant scope pairs before any callback. Binding copies this profile
+    and the complete registration so caller mutation cannot change scope,
+    routine name, or callback user data. `tf_mipname`, `tf_spname`,
+    `tf_getroutine`, their explicit-instance variants, and current/explicit
+    work-area access share the generation-qualified call context across
+    `checktf`, `sizetf`, and repeated `calltf` invocations. Name APIs return
+    thread-local projections rather than writable aliases into simulator
+    ownership. Each bound instance has one opaque plug-in-owned work-area
+    pointer; same-instance calls are recursively serialized so attempted
+    re-entry receives the existing context-busy result, and a new pointer is
+    committed only after the entire callback transaction succeeds. Bound-call
+    destruction and retained plug-in-image ownership define the lifetime; fsim
+    never dereferences or frees the opaque pointer. Tests prove copied names and
+    user data, all lifecycle phases, per-instance work-area isolation, writable
+    name-copy containment, null clearing, exact-token rejection, callback
+    rollback, and every context validation class. The preserved ledger advances
+    to 6 active/12 preserved at SHA-256
+    `65c2bef49298399d0b9638dd8a1c6ce191c9e246d1d313856513e82d104eca48`;
+    three new paths advance the source manifest to 1,719 entries at SHA-256
+    `1df9fb7d050d85e9180926a8e6a991ea69e679cbbf4daa36c8ee9395f3b26db1`.
+    The exact-LLVM Clang warnings-as-errors Debug targets build cleanly with
+    eight workers, and the accumulated runtime/ABI, inventory, install, and
+    policy/resource slice passes 21/21 in 8.56 seconds. Output/control,
+    synchronization, Release, sanitizer, hosted-CI trigger, commit, and push
+    remain deferred.
+14. **Complete.** Implement TF output, warning, error, and finish/stop
+    controls. The direct-v3 call bridge now captures simulator-owned
+    `TfControlEffect` records for `io_printf`, `io_mcdprintf`, `tf_text`,
+    `tf_warning`, `tf_error`, `tf_message`, `tf_dostop`, and `tf_dofinish`.
+    Output channel, severity, facility, message number, formatted text, and
+    source order survive as owned values without granting a plug-in direct
+    access to host streams or scheduler state. Binding returns successful
+    `checktf` and `sizetf` output as lifecycle effects, while each invocation
+    returns its effects beside value, delay, and work-area changes. Every
+    effect remains transactional: callback exceptions, missing function
+    results, formatter failures, malformed metadata, invalid message levels,
+    resource ceilings, and allocation failures discard the complete set. A
+    call is bounded to 256 records, 64 KiB per formatted record, 255 bytes per
+    metadata field, and 1 MiB total captured text. Tests prove lifecycle and
+    call capture, channel/severity/metadata preservation, stop/finish
+    distinction, stable ordering, neutral out-of-context calls, every ceiling,
+    malformed host capture, and rollback. The scheduler coordinator still
+    exclusively owns publication and simulation-control execution in Change
+    17. The preserved ledger advances to 5 active/13 preserved at SHA-256
+    `82b33d1ee62580e8ad6df4f2681b22f8d34206c7e90a18140fabc1b3b8d2976b`;
+    three new paths advance the source manifest to 1,722 entries at SHA-256
+    `bbbd28e3a2c56d819a58809724744e17992a536cc6f81c1d9d5a33175f49d517`.
+    The exact-LLVM Clang warnings-as-errors Debug targets build cleanly with
+    eight workers, and the accumulated runtime/ABI, inventory, install, and
+    policy/resource slice passes 22/22 in 8.32 seconds. Synchronization,
+    Release, sanitizer, hosted-CI trigger, commit, and push remain deferred.
+15. **Complete.** Implement read-only and read-write synchronization callbacks.
+    The direct-v3 call context now carries a fixed 256-entry synchronization
+    request buffer. `tf_synchronize`, `tf_rosynchronize`, and their
+    explicit-instance forms append generation-qualified, source-ordered
+    read-write or read-only requests during `calltf` and read-write
+    synchronization callbacks; lifecycle, out-of-context, wrong-instance,
+    read-only, and over-capacity requests fail without corrupting retained
+    entries. `TfBoundCall::synchronize` invokes the instance registration's
+    `misctf` with exactly `reason_synch` or `reason_rosynch`, the current
+    argument/time/context snapshot, retained work area, and the same
+    transactional effect capture used by `calltf`. Read-write callbacks may
+    stage argument updates, delays, output/control, and follow-up
+    synchronization. Read-only callbacks retain observation, time, context,
+    and output access while every argument update, delay, and further
+    synchronization request is rejected. Missing callbacks, invalid kinds,
+    exceptions, and recursive entry have stable failures and publish no
+    partial effects. Tests prove kind/reason mapping, current and explicit
+    request APIs, ordering and instance identity, both callback phases,
+    mutation boundaries, resource ceilings, exception rollback, and re-entry
+    containment. Change 17 remains responsible for placing requests into exact
+    scheduler regions and publishing returned effects. The preserved ledger
+    advances to 4 active/14 preserved at SHA-256
+    `f3e64ce5ec13450770ec26d1bb70c89a23a2491a2de1061785eb6e6a0c6ae27a`;
+    three new paths advance the source manifest to 1,725 entries at SHA-256
+    `c15889fef398c224eb72b00fbe5eb9182e2180068e5944d0124931520ffbbdcf`.
+    The exact-LLVM Clang warnings-as-errors Debug targets build cleanly with
+    eight workers, and the accumulated runtime/ABI, inventory, install, and
+    policy/resource slice passes 23/23 in 8.46 seconds. HDL registration,
+    coordinator integration, Release, sanitizer, hosted-CI trigger, commit,
+    and push remain deferred.
+16. **Complete.** Register TF system tasks/functions in Verilog and
+    SystemVerilog profiles. The application-owned `TfApplicationRegistry`
+    loads direct-v3 TF plug-ins transactionally, retains their images, and
+    publishes owned task/function identities only after every registration has
+    passed plug-in validation and cross-plug-in collision checks. Exact name
+    and callable-kind resolution is shared without semantic drift by Verilog
+    1995, 2001, 2001-no-configurations, and 2005 plus SystemVerilog 2005, 2009,
+    2012, and 2017. All VHDL profiles reject the TF namespace rather than
+    inheriting Verilog foreign-call behavior. Resolution returns stable plug-in
+    and registration indices, and binding delegates to the existing
+    generation-qualified `TfLoadedPlugin::bind` transaction, preserving
+    `checktf`, `sizetf`, argument, context, time, work-area, and image-lifetime
+    ownership. The registry bounds one application to 256 plug-ins and 65,536
+    registrations; duplicate, missing, wrong-kind, unsupported-profile,
+    artifact, and allocation failures publish no partial state. A real C
+    plug-in proves task/function discovery, exact profile behavior, task
+    invocation, 17-bit function sizing and results, duplicate rollback, and
+    artifact failure containment. Change 17 remains responsible for lowering
+    resolved HDL calls into scheduler-coordinated execution. The preserved
+    ledger advances to 3 active/15 preserved at SHA-256
+    `b9cef58642320c9ced4e9a77d4ee0972a8934c88cb15e2b687d8200b1b3e023f`;
+    three new paths advance the source manifest to 1,728 entries at SHA-256
+    `98f558dcdea64231714564ad7aaed86d24ee90bc8049a700e75a99885999ebf9`.
+    The exact-LLVM Clang warnings-as-errors Debug targets build cleanly with
+    eight workers, and the accumulated application/runtime/ABI, inventory,
+    install, and policy/resource slice passes 24/24 in 8.42 seconds. Scheduler
+    coordination, Release, sanitizer, hosted-CI trigger, commit, and push
+    remain deferred.
+17. **Complete.** Serialize TF calls through the scheduler coordinator. A
+    bounded `TfSchedulerCoordinator` now converts each application-resolved or
+    directly bound HDL call site into an owner-qualified handle and refuses to
+    invoke it outside an executing scheduler phase. Calls, functions, delayed
+    reactivations, and both synchronization kinds cross the same recursively
+    guarded coordinator; typed function results return to the invoking HDL
+    process while argument, output/control, delay, and follow-up
+    synchronization effects are exposed as one publication transaction.
+    Publication rejection cancels every newly queued callback and retains the
+    prior argument state. Accepted callbacks receive monotonically assigned
+    stable orders: `reason_synch` executes in the reactive region,
+    `reason_rosynch` in postponed, and each delay invokes
+    `reason_reactivate` in active at the exact requested time. Read-write
+    updates commit before later read-only observation, and finish/stop requests
+    reach the scheduler only after successful publication. One coordinator is
+    bounded to 65,536 call sites and 65,536 pending callbacks, owns pending
+    cancellation through destruction, and retains per-call values, invocation
+    counts, failures, terminal state, and callback counts for deterministic
+    inspection. Tests prove exact time/phase ordering, follow-up scheduling,
+    delayed state updates, read-only observation, typed function results,
+    terminal control, inactive-scheduler rejection, publication rollback, and
+    registry-to-coordinator execution of the independently authored C plug-in.
+    The preserved ledger advances to 2 active/16 preserved at SHA-256
+    `448af37355d6f1743c98ef979f0dc747eb1e9dc7b48df45d7e24f92d2c775ec0`;
+    three new paths advance the source manifest to 1,731 entries at SHA-256
+    `4ec76874ea6c6e7f23f9cb62e5dfc54fefa4d1d7c94e4c9430e0ed357cd22fba`.
+    The exact-LLVM Clang warnings-as-errors Debug target builds cleanly with
+    eight workers, and the accumulated application/runtime/ABI, inventory,
+    install, and policy/resource slice passes 25/25 in 8.47 seconds. General
+    invalid-address/unload containment, Release, sanitizer, hosted-CI trigger,
+    commit, and push remain deferred.
+18. **Complete.** Contain plugin exceptions, invalid pointers, unload, and re-entry.
+    A shared `TfNativePointerAccess` validator now checks complete
+    read, write, and execute ranges before the host dereferences native
+    plug-in metadata, interface tables, TF registration arrays, names, callback
+    entries, call-context buffers, values, results, timing queues,
+    synchronization queues, API output records, or control text. Linux uses
+    bounded `/proc/self/maps` inspection and Windows uses `VirtualQuery`, with
+    explicit null, empty, overflow, unmapped, permission, and inspection
+    outcomes. The loader verifies its descriptor entry is executable before
+    calling it and verifies the returned descriptor extent before inspecting
+    it; registration publication and direct binding reject non-executable
+    callbacks transactionally. Callback exceptions become stable errors and
+    discard staged argument, delay, synchronization, output/control, result,
+    and work-area changes. Recursive callback entry remains rejected by the
+    active bridge context, while every bound call retains shared ownership of
+    its dynamic-library image after the public loader object is released.
+    Tests cover mapped permissions, null/overflow/unmapped ranges, malformed
+    nested descriptors and registration tables, invalid names/callbacks/API
+    pointers, check/call exceptions, recursive entry, effect rollback, and
+    retained-image execution through the independently authored C plug-in.
+    The preserved ledger advances to 1 active/17 preserved at SHA-256
+    `a92791af4d45b840741bc6df20fa2c6ac581c102346cb8535a782a3ae399e83f`;
+    three new paths advance the source manifest to 1,734 entries at SHA-256
+    `eb9ea05f62f95f6e83b282eeee413b3115e07c84805489e5558a62695d1e236b`.
+    The exact-LLVM Clang warnings-as-errors Debug target builds cleanly with
+    eight workers, and the accumulated application/runtime/ABI, inventory,
+    install, and policy/resource slice passes 26/26 in 8.65 seconds.
+    Cross-platform plug-in qualification, Release, sanitizer, hosted-CI
+    trigger, commit, and push remain deferred.
+19. **Complete.** Prove independently authored C/C++ plugins on Linux and Windows.
+    The existing C probe and a new C++20 probe each export independently
+    authored direct-v3 metadata, a task, and a sized integer function while
+    linking through the same public `fsim_tf` shared/import library. The TF
+    support library now selects the C++ linker driver required by its C++
+    implementation; the C plug-in remains a strict C11 consumer and the C++
+    plug-in remains a strict C++20 consumer. A single portable runtime test
+    loads both images, verifies distinct copied identities and registration
+    tables, binds task/function call sites, releases the public loader handles,
+    executes retained calls with exact argument and result observations, then
+    proves each image unloads after its final bound-call lease. The test and
+    both plug-in targets use only CMake target paths and the v3 calling-convention
+    macros, are labeled for Linux and Windows, and are included without an
+    exclusion in both hosted toolchain lanes; actual hosted Windows execution
+    remains owned by Change 20 as required by the batch boundary. Linux Clang
+    22 local execution is green. The preserved ledger reaches 0 active/18
+    preserved at SHA-256
+    `a3bff1ef32fbf3fd412556c63c39e69a45f4efdd5cb599d07b3ac47136b531e0`;
+    two new paths advance the source manifest to 1,736 entries at SHA-256
+    `e5f344dd3811d355d90252f583dc8dcc0f2f9a530155149e444b4934b718d58a`.
+    The accumulated warnings-as-errors Debug, application/runtime/ABI,
+    inventory, install, and resource slice passes 27/27 in 8.69 seconds.
+    Release, sanitizer, hosted-CI execution, commit, and push remain deferred
+    to Change 20.
+20. **Complete.** Run standard batch closure and freeze the TF surface.
+    The direct-v3 IEEE TF surface is frozen with all eighteen independently
+    worded inventory rows preserved and none active at normalized SHA-256
+    `a3bff1ef32fbf3fd412556c63c39e69a45f4efdd5cb599d07b3ac47136b531e0`.
+    The source-package manifest remains 1,736 ordered paths at SHA-256
+    `e5f344dd3811d355d90252f583dc8dcc0f2f9a530155149e444b4934b718d58a`.
+    The clean Clang 22 Debug ASan/UBSan build completes 2,097 actions with
+    eight workers in 15 minutes 25.17 seconds and 4,494,384 KiB peak RSS; all
+    380 tests pass in 562.04 seconds with the documented local ptrace-only
+    leak-detection exception. Per the user-directed qualification policy this
+    sanitizer pass also carries the clean local Debug and Release result
+    without duplicate rebuilds or retests. Closure refreshes the bounded
+    source/license/control inventories to 1,376, 1,671, and 719 entries and
+    keeps every composed historical release audit green. Windows hosted audit
+    expectations advance by the nineteen unconditional TF tests to 371
+    without LLVM and 375 with LLVM, while the three installed headers, DLL,
+    and import library advance each deterministic archive to 1,252 entries.
+    The Change 20 push qualifies the complete hosted Clang Linux,
+    LLVM-MinGW Windows Debug/Release, packaging/install, and frontend-fuzz
+    matrix under the retained 120-minute timeouts. Batch 181 publishes one
+    implementation commit and no release tag.
 
 ### Batch 182 - IEEE ACC and complete legacy PLI closure
 

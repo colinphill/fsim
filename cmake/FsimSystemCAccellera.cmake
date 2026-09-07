@@ -706,6 +706,12 @@ function(fsim_systemc_write_runtime_target_manifest output_path)
        target STREQUAL "fsim_systemc_accellera_runtime")
       continue()
     endif()
+    # The TF library is a C ABI/import shim with no simulator state. Keeping it
+    # independent lets native plug-ins link without pulling a SystemC runtime
+    # into the plug-in process before the simulator establishes ownership.
+    if(target STREQUAL "fsim_tf")
+      continue()
+    endif()
     get_target_property(imported "${target}" IMPORTED)
     if(imported)
       continue()

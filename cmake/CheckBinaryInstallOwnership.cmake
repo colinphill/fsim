@@ -13,6 +13,7 @@ foreach(FSIM_REQUIRED IN ITEMS
     FSIM_DATADIR
     FSIM_EXECUTABLE_NAME
     FSIM_API_LIBRARY_NAME
+    FSIM_TF_LIBRARY_NAME
     FSIM_API_LIBRARY_DIR)
   if(NOT DEFINED ${FSIM_REQUIRED} OR "${${FSIM_REQUIRED}}" STREQUAL "")
     message(FATAL_ERROR "${FSIM_REQUIRED} is required")
@@ -100,7 +101,11 @@ endforeach()
 set(FSIM_REQUIRED_PATHS
     "${FSIM_BINDIR}/${FSIM_EXECUTABLE_NAME}"
     "${FSIM_API_LIBRARY_DIR}/${FSIM_API_LIBRARY_NAME}"
+    "${FSIM_API_LIBRARY_DIR}/${FSIM_TF_LIBRARY_NAME}"
     "${FSIM_INCLUDEDIR}/fsim/api.h"
+    "${FSIM_INCLUDEDIR}/fsim/runtime/native_plugin_abi.h"
+    "${FSIM_INCLUDEDIR}/fsim/runtime/tf_plugin_abi.h"
+    "${FSIM_INCLUDEDIR}/fsim/runtime/veriuser.h"
     "${FSIM_INCLUDEDIR}/fsim/systemc.hpp"
     "${FSIM_LIBDIR}/cmake/fsim/fsimConfig.cmake"
     "${FSIM_LIBDIR}/cmake/fsim/fsimConfigVersion.cmake"

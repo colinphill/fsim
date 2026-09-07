@@ -31,4 +31,31 @@ if(NOT TARGET fsim::api)
   endif()
 endif()
 
+if(NOT TARGET fsim::tf)
+  add_library(fsim::tf SHARED IMPORTED)
+  set_target_properties(
+    fsim::tf
+    PROPERTIES
+      INTERFACE_INCLUDE_DIRECTORIES
+        "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_INCLUDEDIR@"
+  )
+  if(WIN32)
+    set_target_properties(
+      fsim::tf
+      PROPERTIES
+        IMPORTED_LOCATION
+          "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_BINDIR@/@CMAKE_SHARED_LIBRARY_PREFIX@fsim_tf@CMAKE_SHARED_LIBRARY_SUFFIX@"
+        IMPORTED_IMPLIB
+          "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/@CMAKE_IMPORT_LIBRARY_PREFIX@fsim_tf@CMAKE_IMPORT_LIBRARY_SUFFIX@"
+    )
+  else()
+    set_target_properties(
+      fsim::tf
+      PROPERTIES
+        IMPORTED_LOCATION
+          "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/@CMAKE_SHARED_LIBRARY_PREFIX@fsim_tf@CMAKE_SHARED_LIBRARY_SUFFIX@"
+    )
+  endif()
+endif()
+
 check_required_components(fsim)

@@ -33,6 +33,7 @@ include(CMakePackageConfigHelpers)
 include(CTest)
 include(cmake/FsimWarnings.cmake)
 include(cmake/FsimDebugFootprint.cmake)
+include(cmake/FsimNativePlugin.cmake)
 include(cmake/FsimDependencies.cmake)
 include(cmake/FsimTcl.cmake)
 include(cmake/FsimUvmSources.cmake)
@@ -195,6 +196,8 @@ if(NOT WIN32)
 endif()
 fsim_enable_warnings(fsim_systemc_accellera_runtime)
 fsim_configure_debug_footprint(fsim_systemc_accellera_runtime)
+
+fsim_add_tf_link_surface(fsim_tf)
 
 # Targets created below all carry the same process-wide Accellera runtime
 # dependency. Upstream itself was created first, so the dependency cannot form
@@ -548,6 +551,19 @@ add_library(
     src/runtime/coverage_fsm.cpp
     src/runtime/coverage_line_state.cpp
     src/runtime/coverage_toggle.cpp
+  src/runtime/native_plugin.cpp
+  src/runtime/tf_argument.cpp
+  src/runtime/tf_call.cpp
+  src/runtime/tf_context.cpp
+  src/runtime/tf_control.cpp
+  src/runtime/tf_containment.cpp
+  src/runtime/tf_instance.cpp
+  src/runtime/tf_misc.cpp
+  src/runtime/tf_plugin.cpp
+  src/runtime/tf_registration.cpp
+  src/runtime/tf_synchronization.cpp
+  src/runtime/tf_time.cpp
+  src/runtime/tf_value.cpp
   src/runtime/uvm_object.cpp
   src/runtime/uvm_object_copy.cpp
   src/runtime/uvm_object_policy.cpp
@@ -672,6 +688,7 @@ add_library(
 )
 add_library(fsim::runtime ALIAS fsim_runtime)
 fsim_configure_library(fsim_runtime)
+target_link_libraries(fsim_runtime PRIVATE fsim_tf)
 
   add_library(
     fsim_elaboration
@@ -1202,6 +1219,8 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_uvm_registry.cpp
       src/app/application_uvm_command_line.cpp
       src/app/application_time.cpp
+  src/app/application_tf.cpp
+  src/app/application_tf_scheduler.cpp
       src/app/tcl.cpp
   )
   add_library(fsim::application ALIAS fsim_application)
@@ -1311,6 +1330,13 @@ install(
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/fsim"
 )
 install(
+  FILES
+    include/fsim/runtime/native_plugin_abi.h
+    include/fsim/runtime/tf_plugin_abi.h
+    include/fsim/runtime/veriuser.h
+  DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/fsim/runtime"
+)
+install(
   DIRECTORY include/fsim/systemc/
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/fsim/systemc"
   PATTERN "scv.hpp" EXCLUDE
@@ -1350,6 +1376,12 @@ if(FSIM_WITH_BUNDLED_TCL)
     RENAME "tcl-license.terms"
   )
 endif()
+install(
+  TARGETS fsim_tf
+  ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+  LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+)
 install(
   TARGETS fsim_api
   ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"

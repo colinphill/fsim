@@ -7,6 +7,8 @@ endif()
 set(FSIM_ROOT "${FSIM_SOURCE_DIR}/CMakeLists.txt")
 set(FSIM_FOOTPRINT "${FSIM_SOURCE_DIR}/cmake/FsimDebugFootprint.cmake")
 set(FSIM_TEST_CMAKE "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
+set(FSIM_RUNTIME_TEST_CMAKE
+  "${FSIM_SOURCE_DIR}/tests/runtime/CMakeLists.txt")
 set(FSIM_FUZZ_CMAKE "${FSIM_SOURCE_DIR}/tests/fuzz/CMakeLists.txt")
 set(FSIM_WORKFLOW "${FSIM_SOURCE_DIR}/.github/workflows/ci.yml")
 set(FSIM_SCOPED "${FSIM_SOURCE_DIR}/tests/app/scoped_local_application_test.cpp")
@@ -310,6 +312,138 @@ set(FSIM_CODE_COVERAGE_METRICS_INVENTORY
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/code_coverage_metrics_inventory.tsv")
 set(FSIM_CODE_COVERAGE_METRICS_CHECKER
   "${FSIM_SOURCE_DIR}/cmake/CheckCodeCoverageMetricsInventory.cmake")
+set(FSIM_LEGACY_TF_INVENTORY
+  "${FSIM_SOURCE_DIR}/tests/feature_matrix/legacy_tf_inventory.tsv")
+set(FSIM_LEGACY_TF_CHECKER
+  "${FSIM_SOURCE_DIR}/cmake/CheckLegacyTfInventory.cmake")
+set(FSIM_NATIVE_PLUGIN_ABI
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/native_plugin_abi.h")
+set(FSIM_NATIVE_PLUGIN_MODEL
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/native_plugin.hpp")
+set(FSIM_NATIVE_PLUGIN_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/native_plugin.cpp")
+set(FSIM_NATIVE_PLUGIN_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/native_plugin_abi_test.cpp")
+set(FSIM_NATIVE_PLUGIN_C_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/native_plugin_abi_c_test.c")
+set(FSIM_VERIUSER_HEADER
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/veriuser.h")
+set(FSIM_VERIUSER_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/veriuser_abi_test.cpp")
+set(FSIM_VERIUSER_C_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/veriuser_abi_c_test.c")
+set(FSIM_TF_LINK_CMAKE
+  "${FSIM_SOURCE_DIR}/cmake/FsimNativePlugin.cmake")
+set(FSIM_TF_LINK_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/tf_link.cpp")
+set(FSIM_TF_LINK_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/tf_plugin_link_test.cpp")
+set(FSIM_TF_LINK_PLUGIN
+  "${FSIM_SOURCE_DIR}/tests/runtime/tf_link_probe_plugin.c")
+set(FSIM_TF_PLUGIN_ABI
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/tf_plugin_abi.h")
+set(FSIM_TF_PLUGIN_MODEL
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/tf_plugin.hpp")
+set(FSIM_TF_PLUGIN_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/tf_plugin.cpp")
+set(FSIM_TF_PLUGIN_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/tf_plugin_test.cpp")
+set(FSIM_TF_REGISTRATION_MODEL
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/tf_registration.hpp")
+set(FSIM_TF_REGISTRATION_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/tf_registration.cpp")
+set(FSIM_TF_REGISTRATION_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/tf_registration_test.cpp")
+set(FSIM_TF_CALL_BRIDGE
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/tf_call_bridge.h")
+set(FSIM_TF_CALL_MODEL
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/tf_call.hpp")
+set(FSIM_TF_CALL_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/tf_call.cpp")
+set(FSIM_TF_CALL_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/tf_call_test.cpp")
+set(FSIM_TF_MISC_MODEL
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/tf_misc.hpp")
+set(FSIM_TF_MISC_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/tf_misc.cpp")
+set(FSIM_TF_MISC_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/tf_misc_test.cpp")
+set(FSIM_TF_ARGUMENT_MODEL
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/tf_argument.hpp")
+set(FSIM_TF_ARGUMENT_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/tf_argument.cpp")
+set(FSIM_TF_ARGUMENT_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/tf_argument_test.cpp")
+set(FSIM_TF_VALUE_MODEL
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/tf_value.hpp")
+set(FSIM_TF_VALUE_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/tf_value.cpp")
+set(FSIM_TF_VALUE_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/tf_value_test.cpp")
+set(FSIM_TF_INSTANCE_MODEL
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/tf_instance.hpp")
+set(FSIM_TF_INSTANCE_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/tf_instance.cpp")
+set(FSIM_TF_INSTANCE_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/tf_instance_test.cpp")
+set(FSIM_TF_TIME_MODEL
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/tf_time.hpp")
+set(FSIM_TF_TIME_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/tf_time.cpp")
+set(FSIM_TF_TIME_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/tf_time_test.cpp")
+set(FSIM_TF_CONTEXT_MODEL
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/tf_context.hpp")
+set(FSIM_TF_CONTEXT_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/tf_context.cpp")
+set(FSIM_TF_CONTEXT_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/tf_context_test.cpp")
+set(FSIM_TF_CONTROL_MODEL
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/tf_control.hpp")
+set(FSIM_TF_CONTROL_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/tf_control.cpp")
+set(FSIM_TF_CONTROL_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/tf_control_test.cpp")
+set(FSIM_TF_SYNCHRONIZATION_MODEL
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/tf_synchronization.hpp")
+set(FSIM_TF_SYNCHRONIZATION_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/tf_synchronization.cpp")
+set(FSIM_TF_SYNCHRONIZATION_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/tf_synchronization_test.cpp")
+set(FSIM_TF_APPLICATION_MODEL
+  "${FSIM_SOURCE_DIR}/include/fsim/app/application_tf.hpp")
+set(FSIM_TF_APPLICATION_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/app/application_tf.cpp")
+set(FSIM_TF_APPLICATION_TEST
+  "${FSIM_SOURCE_DIR}/tests/app/tf_plugin_application_test.cpp")
+set(FSIM_TF_SCHEDULER_MODEL
+  "${FSIM_SOURCE_DIR}/include/fsim/app/application_tf_scheduler.hpp")
+set(FSIM_TF_SCHEDULER_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/app/application_tf_scheduler.cpp")
+set(FSIM_TF_SCHEDULER_TEST
+  "${FSIM_SOURCE_DIR}/tests/app/tf_scheduler_application_test.cpp")
+set(FSIM_TF_CONTAINMENT_MODEL
+  "${FSIM_SOURCE_DIR}/include/fsim/runtime/tf_containment.hpp")
+set(FSIM_TF_CONTAINMENT_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/tf_containment.cpp")
+set(FSIM_TF_CONTAINMENT_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/tf_containment_test.cpp")
+set(FSIM_TF_CPP_PLUGIN
+  "${FSIM_SOURCE_DIR}/tests/runtime/tf_cpp_probe_plugin.cpp")
+set(FSIM_TF_CROSS_PLATFORM_TEST
+  "${FSIM_SOURCE_DIR}/tests/runtime/tf_cross_platform_plugins_test.cpp")
+set(FSIM_TF_PACKAGE_CONFIG
+  "${FSIM_SOURCE_DIR}/cmake/fsimConfig.cmake.in")
+set(FSIM_TF_INSTALLED_CONTRACT
+  "${FSIM_SOURCE_DIR}/cmake/CheckInstalledPublicContract.cmake")
+set(FSIM_TF_INSTALL_OWNERSHIP
+  "${FSIM_SOURCE_DIR}/cmake/CheckBinaryInstallOwnership.cmake")
+set(FSIM_TF_INSTALLED_CONSUMER_CMAKE
+  "${FSIM_SOURCE_DIR}/tests/runtime/installed_tf_consumer/CMakeLists.txt")
+set(FSIM_TF_INSTALLED_CONSUMER
+  "${FSIM_SOURCE_DIR}/tests/runtime/installed_tf_consumer/consumer.c")
+set(FSIM_TF_SYSTEMC_BOUNDARY
+  "${FSIM_SOURCE_DIR}/cmake/FsimSystemCAccellera.cmake")
 set(FSIM_COVERAGE_DATABASE_SCHEMA
   "${FSIM_SOURCE_DIR}/include/fsim/artifact/coverage_database.hpp")
 set(FSIM_COVERAGE_DATABASE_SCHEMA_IMPLEMENTATION
@@ -495,6 +629,72 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_CODE_COVERAGE_METRICS_IDENTITY_TEST}"
     "${FSIM_CODE_COVERAGE_METRICS_INVENTORY}"
     "${FSIM_CODE_COVERAGE_METRICS_CHECKER}"
+    "${FSIM_LEGACY_TF_INVENTORY}"
+    "${FSIM_LEGACY_TF_CHECKER}"
+    "${FSIM_NATIVE_PLUGIN_ABI}"
+    "${FSIM_NATIVE_PLUGIN_MODEL}"
+    "${FSIM_NATIVE_PLUGIN_IMPLEMENTATION}"
+    "${FSIM_NATIVE_PLUGIN_TEST}"
+    "${FSIM_NATIVE_PLUGIN_C_TEST}"
+    "${FSIM_VERIUSER_HEADER}"
+    "${FSIM_VERIUSER_TEST}"
+    "${FSIM_VERIUSER_C_TEST}"
+    "${FSIM_TF_LINK_CMAKE}"
+    "${FSIM_TF_LINK_IMPLEMENTATION}"
+    "${FSIM_TF_LINK_TEST}"
+    "${FSIM_TF_LINK_PLUGIN}"
+    "${FSIM_TF_PLUGIN_ABI}"
+    "${FSIM_TF_PLUGIN_MODEL}"
+    "${FSIM_TF_PLUGIN_IMPLEMENTATION}"
+    "${FSIM_TF_PLUGIN_TEST}"
+    "${FSIM_TF_REGISTRATION_MODEL}"
+    "${FSIM_TF_REGISTRATION_IMPLEMENTATION}"
+    "${FSIM_TF_REGISTRATION_TEST}"
+    "${FSIM_TF_CALL_BRIDGE}"
+    "${FSIM_TF_CALL_MODEL}"
+    "${FSIM_TF_CALL_IMPLEMENTATION}"
+    "${FSIM_TF_CALL_TEST}"
+    "${FSIM_TF_MISC_MODEL}"
+    "${FSIM_TF_MISC_IMPLEMENTATION}"
+    "${FSIM_TF_MISC_TEST}"
+    "${FSIM_TF_ARGUMENT_MODEL}"
+    "${FSIM_TF_ARGUMENT_IMPLEMENTATION}"
+    "${FSIM_TF_ARGUMENT_TEST}"
+    "${FSIM_TF_VALUE_MODEL}"
+    "${FSIM_TF_VALUE_IMPLEMENTATION}"
+    "${FSIM_TF_VALUE_TEST}"
+    "${FSIM_TF_INSTANCE_MODEL}"
+    "${FSIM_TF_INSTANCE_IMPLEMENTATION}"
+    "${FSIM_TF_INSTANCE_TEST}"
+    "${FSIM_TF_TIME_MODEL}"
+    "${FSIM_TF_TIME_IMPLEMENTATION}"
+    "${FSIM_TF_TIME_TEST}"
+    "${FSIM_TF_CONTEXT_MODEL}"
+    "${FSIM_TF_CONTEXT_IMPLEMENTATION}"
+    "${FSIM_TF_CONTEXT_TEST}"
+    "${FSIM_TF_CONTROL_MODEL}"
+    "${FSIM_TF_CONTROL_IMPLEMENTATION}"
+    "${FSIM_TF_CONTROL_TEST}"
+    "${FSIM_TF_SYNCHRONIZATION_MODEL}"
+    "${FSIM_TF_SYNCHRONIZATION_IMPLEMENTATION}"
+    "${FSIM_TF_SYNCHRONIZATION_TEST}"
+    "${FSIM_TF_APPLICATION_MODEL}"
+    "${FSIM_TF_APPLICATION_IMPLEMENTATION}"
+    "${FSIM_TF_APPLICATION_TEST}"
+    "${FSIM_TF_SCHEDULER_MODEL}"
+    "${FSIM_TF_SCHEDULER_IMPLEMENTATION}"
+    "${FSIM_TF_SCHEDULER_TEST}"
+    "${FSIM_TF_CONTAINMENT_MODEL}"
+    "${FSIM_TF_CONTAINMENT_IMPLEMENTATION}"
+    "${FSIM_TF_CONTAINMENT_TEST}"
+    "${FSIM_TF_CPP_PLUGIN}"
+    "${FSIM_TF_CROSS_PLATFORM_TEST}"
+    "${FSIM_TF_PACKAGE_CONFIG}"
+    "${FSIM_TF_INSTALLED_CONTRACT}"
+    "${FSIM_TF_INSTALL_OWNERSHIP}"
+    "${FSIM_TF_INSTALLED_CONSUMER_CMAKE}"
+    "${FSIM_TF_INSTALLED_CONSUMER}"
+    "${FSIM_TF_SYSTEMC_BOUNDARY}"
     "${FSIM_COVERAGE_DATABASE_SCHEMA}"
     "${FSIM_COVERAGE_DATABASE_SCHEMA_IMPLEMENTATION}"
     "${FSIM_COVERAGE_DATABASE_SCHEMA_TEST}"
@@ -535,6 +735,7 @@ endforeach()
 file(READ "${FSIM_ROOT}" FSIM_ROOT_CONTENTS)
 file(READ "${FSIM_FOOTPRINT}" FSIM_FOOTPRINT_CONTENTS)
 file(READ "${FSIM_TEST_CMAKE}" FSIM_TEST_CMAKE_CONTENTS)
+file(READ "${FSIM_RUNTIME_TEST_CMAKE}" FSIM_RUNTIME_TEST_CMAKE_CONTENTS)
 file(READ "${FSIM_FUZZ_CMAKE}" FSIM_FUZZ_CMAKE_CONTENTS)
 file(READ "${FSIM_WORKFLOW}" FSIM_WORKFLOW_CONTENTS)
 file(READ "${FSIM_CODE_COVERAGE_CONTROL_PROJECT}"
@@ -603,6 +804,101 @@ file(READ "${FSIM_CODE_COVERAGE_METRICS_INVENTORY}"
   FSIM_CODE_COVERAGE_METRICS_INVENTORY_CONTENTS)
 file(READ "${FSIM_CODE_COVERAGE_METRICS_CHECKER}"
   FSIM_CODE_COVERAGE_METRICS_CHECKER_CONTENTS)
+file(READ "${FSIM_LEGACY_TF_INVENTORY}"
+  FSIM_LEGACY_TF_INVENTORY_CONTENTS)
+file(READ "${FSIM_LEGACY_TF_CHECKER}"
+  FSIM_LEGACY_TF_CHECKER_CONTENTS)
+file(READ "${FSIM_NATIVE_PLUGIN_ABI}" FSIM_NATIVE_PLUGIN_ABI_CONTENTS)
+file(READ "${FSIM_NATIVE_PLUGIN_MODEL}" FSIM_NATIVE_PLUGIN_MODEL_CONTENTS)
+file(READ "${FSIM_NATIVE_PLUGIN_IMPLEMENTATION}"
+  FSIM_NATIVE_PLUGIN_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_NATIVE_PLUGIN_TEST}" FSIM_NATIVE_PLUGIN_TEST_CONTENTS)
+file(READ "${FSIM_NATIVE_PLUGIN_C_TEST}" FSIM_NATIVE_PLUGIN_C_TEST_CONTENTS)
+file(READ "${FSIM_VERIUSER_HEADER}" FSIM_VERIUSER_HEADER_CONTENTS)
+file(READ "${FSIM_VERIUSER_TEST}" FSIM_VERIUSER_TEST_CONTENTS)
+file(READ "${FSIM_VERIUSER_C_TEST}" FSIM_VERIUSER_C_TEST_CONTENTS)
+file(READ "${FSIM_TF_LINK_CMAKE}" FSIM_TF_LINK_CMAKE_CONTENTS)
+file(READ "${FSIM_TF_LINK_IMPLEMENTATION}"
+  FSIM_TF_LINK_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_TF_LINK_TEST}" FSIM_TF_LINK_TEST_CONTENTS)
+file(READ "${FSIM_TF_LINK_PLUGIN}" FSIM_TF_LINK_PLUGIN_CONTENTS)
+file(READ "${FSIM_TF_PLUGIN_ABI}" FSIM_TF_PLUGIN_ABI_CONTENTS)
+file(READ "${FSIM_TF_PLUGIN_MODEL}" FSIM_TF_PLUGIN_MODEL_CONTENTS)
+file(READ "${FSIM_TF_PLUGIN_IMPLEMENTATION}"
+  FSIM_TF_PLUGIN_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_TF_PLUGIN_TEST}" FSIM_TF_PLUGIN_TEST_CONTENTS)
+file(READ "${FSIM_TF_REGISTRATION_MODEL}"
+  FSIM_TF_REGISTRATION_MODEL_CONTENTS)
+file(READ "${FSIM_TF_REGISTRATION_IMPLEMENTATION}"
+  FSIM_TF_REGISTRATION_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_TF_REGISTRATION_TEST}"
+  FSIM_TF_REGISTRATION_TEST_CONTENTS)
+file(READ "${FSIM_TF_CALL_BRIDGE}" FSIM_TF_CALL_BRIDGE_CONTENTS)
+file(READ "${FSIM_TF_CALL_MODEL}" FSIM_TF_CALL_MODEL_CONTENTS)
+file(READ "${FSIM_TF_CALL_IMPLEMENTATION}"
+  FSIM_TF_CALL_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_TF_CALL_TEST}" FSIM_TF_CALL_TEST_CONTENTS)
+file(READ "${FSIM_TF_MISC_MODEL}" FSIM_TF_MISC_MODEL_CONTENTS)
+file(READ "${FSIM_TF_MISC_IMPLEMENTATION}"
+  FSIM_TF_MISC_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_TF_MISC_TEST}" FSIM_TF_MISC_TEST_CONTENTS)
+file(READ "${FSIM_TF_ARGUMENT_MODEL}" FSIM_TF_ARGUMENT_MODEL_CONTENTS)
+file(READ "${FSIM_TF_ARGUMENT_IMPLEMENTATION}"
+  FSIM_TF_ARGUMENT_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_TF_ARGUMENT_TEST}" FSIM_TF_ARGUMENT_TEST_CONTENTS)
+file(READ "${FSIM_TF_VALUE_MODEL}" FSIM_TF_VALUE_MODEL_CONTENTS)
+file(READ "${FSIM_TF_VALUE_IMPLEMENTATION}"
+  FSIM_TF_VALUE_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_TF_VALUE_TEST}" FSIM_TF_VALUE_TEST_CONTENTS)
+file(READ "${FSIM_TF_INSTANCE_MODEL}" FSIM_TF_INSTANCE_MODEL_CONTENTS)
+file(READ "${FSIM_TF_INSTANCE_IMPLEMENTATION}"
+  FSIM_TF_INSTANCE_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_TF_INSTANCE_TEST}" FSIM_TF_INSTANCE_TEST_CONTENTS)
+file(READ "${FSIM_TF_TIME_MODEL}" FSIM_TF_TIME_MODEL_CONTENTS)
+file(READ "${FSIM_TF_TIME_IMPLEMENTATION}"
+  FSIM_TF_TIME_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_TF_TIME_TEST}" FSIM_TF_TIME_TEST_CONTENTS)
+file(READ "${FSIM_TF_CONTEXT_MODEL}" FSIM_TF_CONTEXT_MODEL_CONTENTS)
+file(READ "${FSIM_TF_CONTEXT_IMPLEMENTATION}"
+  FSIM_TF_CONTEXT_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_TF_CONTEXT_TEST}" FSIM_TF_CONTEXT_TEST_CONTENTS)
+file(READ "${FSIM_TF_CONTROL_MODEL}" FSIM_TF_CONTROL_MODEL_CONTENTS)
+file(READ "${FSIM_TF_CONTROL_IMPLEMENTATION}"
+  FSIM_TF_CONTROL_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_TF_CONTROL_TEST}" FSIM_TF_CONTROL_TEST_CONTENTS)
+file(READ "${FSIM_TF_SYNCHRONIZATION_MODEL}"
+  FSIM_TF_SYNCHRONIZATION_MODEL_CONTENTS)
+file(READ "${FSIM_TF_SYNCHRONIZATION_IMPLEMENTATION}"
+  FSIM_TF_SYNCHRONIZATION_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_TF_SYNCHRONIZATION_TEST}"
+  FSIM_TF_SYNCHRONIZATION_TEST_CONTENTS)
+file(READ "${FSIM_TF_APPLICATION_MODEL}" FSIM_TF_APPLICATION_MODEL_CONTENTS)
+file(READ "${FSIM_TF_APPLICATION_IMPLEMENTATION}"
+  FSIM_TF_APPLICATION_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_TF_APPLICATION_TEST}" FSIM_TF_APPLICATION_TEST_CONTENTS)
+file(READ "${FSIM_TF_SCHEDULER_MODEL}" FSIM_TF_SCHEDULER_MODEL_CONTENTS)
+file(READ "${FSIM_TF_SCHEDULER_IMPLEMENTATION}"
+  FSIM_TF_SCHEDULER_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_TF_SCHEDULER_TEST}" FSIM_TF_SCHEDULER_TEST_CONTENTS)
+file(READ "${FSIM_TF_CONTAINMENT_MODEL}"
+  FSIM_TF_CONTAINMENT_MODEL_CONTENTS)
+file(READ "${FSIM_TF_CONTAINMENT_IMPLEMENTATION}"
+  FSIM_TF_CONTAINMENT_IMPLEMENTATION_CONTENTS)
+file(READ "${FSIM_TF_CONTAINMENT_TEST}"
+  FSIM_TF_CONTAINMENT_TEST_CONTENTS)
+file(READ "${FSIM_TF_CPP_PLUGIN}" FSIM_TF_CPP_PLUGIN_CONTENTS)
+file(READ "${FSIM_TF_CROSS_PLATFORM_TEST}"
+  FSIM_TF_CROSS_PLATFORM_TEST_CONTENTS)
+file(READ "${FSIM_TF_PACKAGE_CONFIG}" FSIM_TF_PACKAGE_CONFIG_CONTENTS)
+file(READ "${FSIM_TF_INSTALLED_CONTRACT}"
+  FSIM_TF_INSTALLED_CONTRACT_CONTENTS)
+file(READ "${FSIM_TF_INSTALL_OWNERSHIP}"
+  FSIM_TF_INSTALL_OWNERSHIP_CONTENTS)
+file(READ "${FSIM_TF_INSTALLED_CONSUMER_CMAKE}"
+  FSIM_TF_INSTALLED_CONSUMER_CMAKE_CONTENTS)
+file(READ "${FSIM_TF_INSTALLED_CONSUMER}"
+  FSIM_TF_INSTALLED_CONSUMER_CONTENTS)
+file(READ "${FSIM_TF_SYSTEMC_BOUNDARY}" FSIM_TF_SYSTEMC_BOUNDARY_CONTENTS)
 file(READ "${FSIM_COVERAGE_DATABASE_SCHEMA}"
   FSIM_COVERAGE_DATABASE_SCHEMA_CONTENTS)
 file(READ "${FSIM_COVERAGE_DATABASE_SCHEMA_IMPLEMENTATION}"
@@ -1679,6 +1975,605 @@ foreach(FSIM_CODE_COVERAGE_METRICS_POLICY IN ITEMS
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR
       "code coverage metrics inventory lost resource policy: ${FSIM_CODE_COVERAGE_METRICS_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_LEGACY_TF_POLICY IN ITEMS
+    "LEGTF-C02"
+    "LEGTF-C19"
+    "native-plugin-abi"
+    "veriuser-header"
+    "platform-link-surfaces"
+    "registration-table-discovery"
+    "descriptor-validation"
+    "task-function-callbacks"
+    "misctf-lifecycle"
+    "argument-inspection"
+    "value-access"
+    "parameter-instance-access"
+    "time-delay-timescale"
+    "scope-workarea-userdata"
+    "output-control"
+    "synchronization-callbacks"
+    "hdl-system-registration"
+    "scheduler-coordination"
+    "failure-containment"
+    "cross-platform-plugins"
+    "ieee-only-no-vendor-extensions"
+    "set(FSIM_COMPLETED_CHANGE 19)"
+    "fsim.legacy-tf-inventory")
+  string(TOLOWER
+    "${FSIM_LEGACY_TF_INVENTORY_CONTENTS}${FSIM_LEGACY_TF_CHECKER_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}"
+    FSIM_LEGACY_TF_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_LEGACY_TF_POLICY}" FSIM_LEGACY_TF_POLICY_LOWER)
+  string(FIND "${FSIM_LEGACY_TF_CONTENTS_LOWER}"
+    "${FSIM_LEGACY_TF_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "legacy TF inventory lost resource policy: ${FSIM_LEGACY_TF_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_TF_SCHEDULER_POLICY IN ITEMS
+    "kMaxTfSchedulerCalls"
+    "kMaxTfSchedulerCallbacks"
+    "TfSchedulerCoordinator"
+    "TfSchedulerPublication"
+    "TfSchedulerCallbackKind::Reactivate"
+    "TfSchedulerCallbackKind::ReadWriteSynchronize"
+    "TfSchedulerCallbackKind::ReadOnlySynchronize"
+    "SchedulerPhase::reactive"
+    "SchedulerPhase::postponed"
+    "schedule_after_cancelable"
+    "stable_order_base"
+    "TfSchedulerError::InactiveScheduler"
+    "TfSchedulerError::Publication"
+    "request_stop"
+    "reason_reactivate"
+    "plugin_coordinator.bind"
+    "FSIM_TF_LINK_PROBE_PLUGIN_PATH"
+    "fsim.application.tf-scheduler")
+  string(TOLOWER
+    "${FSIM_TF_SCHEDULER_MODEL_CONTENTS}${FSIM_TF_SCHEDULER_IMPLEMENTATION_CONTENTS}${FSIM_TF_SCHEDULER_TEST_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}"
+    FSIM_TF_SCHEDULER_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_TF_SCHEDULER_POLICY}"
+    FSIM_TF_SCHEDULER_POLICY_LOWER)
+  string(FIND "${FSIM_TF_SCHEDULER_CONTENTS_LOWER}"
+    "${FSIM_TF_SCHEDULER_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "TF scheduler coordinator lost resource policy: ${FSIM_TF_SCHEDULER_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_TF_CONTAINMENT_POLICY IN ITEMS
+    "TfNativePointerAccess"
+    "TfContainmentError"
+    "validate_tf_native_pointer"
+    "validate_tf_callback_pointer"
+    "VirtualQuery"
+    "/proc/self/maps"
+    "TfPluginError::InvalidPointer"
+    "TfRegistrationError::Pointer"
+    "TfCallError::InvalidPointer"
+    "TfCallError::CallbackException"
+    "TfCallError::ContextBusy"
+    "fsim_tf_call_context_enter_v3"
+    "FSIM_TF_LINK_PROBE_PLUGIN_PATH"
+    "loaded.value.reset()"
+    "fsim.runtime.tf_containment")
+  string(TOLOWER
+    "${FSIM_TF_CONTAINMENT_MODEL_CONTENTS}${FSIM_TF_CONTAINMENT_IMPLEMENTATION_CONTENTS}${FSIM_TF_CONTAINMENT_TEST_CONTENTS}${FSIM_TF_PLUGIN_IMPLEMENTATION_CONTENTS}${FSIM_TF_REGISTRATION_IMPLEMENTATION_CONTENTS}${FSIM_TF_CALL_IMPLEMENTATION_CONTENTS}${FSIM_TF_LINK_IMPLEMENTATION_CONTENTS}${FSIM_RUNTIME_TEST_CMAKE_CONTENTS}"
+    FSIM_TF_CONTAINMENT_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_TF_CONTAINMENT_POLICY}"
+    FSIM_TF_CONTAINMENT_POLICY_LOWER)
+  string(FIND "${FSIM_TF_CONTAINMENT_CONTENTS_LOWER}"
+    "${FSIM_TF_CONTAINMENT_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "TF failure containment lost resource policy: ${FSIM_TF_CONTAINMENT_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_TF_CROSS_PLATFORM_POLICY IN ITEMS
+    "LINKER_LANGUAGE CXX"
+    "c_std_11"
+    "cxx_std_20"
+    "fsim_tf_link_probe_plugin"
+    "fsim_tf_cpp_probe_plugin"
+    "fsim_native_plugin_descriptor_v3_get"
+    "FSIM_TF_C_PLUGIN_PATH"
+    "FSIM_TF_CPP_PLUGIN_PATH"
+    "tf_plugin_artifact_loaded"
+    "bound calls retain both native images"
+    "both native images unload"
+    "windows-llvm-mingw"
+    "fsim.runtime.tf_cross_platform_plugins")
+  string(TOLOWER
+    "${FSIM_TF_LINK_CMAKE_CONTENTS}${FSIM_TF_LINK_PLUGIN_CONTENTS}${FSIM_TF_CPP_PLUGIN_CONTENTS}${FSIM_TF_CROSS_PLATFORM_TEST_CONTENTS}${FSIM_TF_PLUGIN_MODEL_CONTENTS}${FSIM_TF_PLUGIN_IMPLEMENTATION_CONTENTS}${FSIM_RUNTIME_TEST_CMAKE_CONTENTS}${FSIM_WORKFLOW_CONTENTS}"
+    FSIM_TF_CROSS_PLATFORM_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_TF_CROSS_PLATFORM_POLICY}"
+    FSIM_TF_CROSS_PLATFORM_POLICY_LOWER)
+  string(FIND "${FSIM_TF_CROSS_PLATFORM_CONTENTS_LOWER}"
+    "${FSIM_TF_CROSS_PLATFORM_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "TF cross-platform plug-in proof lost resource policy: ${FSIM_TF_CROSS_PLATFORM_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_TF_TIME_POLICY IN ITEMS
+    "kMaxTfDelayRequests"
+    "TfTimeProfile"
+    "TfTimeState"
+    "TfTimeError"
+    "validate_tf_time_profile"
+    "tf_time_to_local_integer"
+    "tf_local_integer_to_ticks"
+    "tf_local_real_to_ticks"
+    "fsim_tf_time_bridge_v3"
+    "TfCallError::InvalidTime"
+    "time_profile"
+    "delay_requests"
+    "tf_getlongtime"
+    "tf_getnextlongtime"
+    "tf_getrealtime"
+    "tf_gettimeprecision"
+    "tf_gettimeunit"
+    "tf_setdelay"
+    "tf_setlongdelay"
+    "tf_setrealdelay"
+    "tf_scale_longdelay"
+    "tf_unscale_longdelay"
+    "thrown.delay_requests.empty()"
+    "fsim.runtime.tf_time")
+  string(TOLOWER
+    "${FSIM_VERIUSER_HEADER_CONTENTS}${FSIM_TF_CALL_BRIDGE_CONTENTS}${FSIM_TF_CALL_MODEL_CONTENTS}${FSIM_TF_CALL_IMPLEMENTATION_CONTENTS}${FSIM_TF_LINK_IMPLEMENTATION_CONTENTS}${FSIM_TF_TIME_MODEL_CONTENTS}${FSIM_TF_TIME_IMPLEMENTATION_CONTENTS}${FSIM_TF_TIME_TEST_CONTENTS}${FSIM_RUNTIME_TEST_CMAKE_CONTENTS}"
+    FSIM_TF_TIME_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_TF_TIME_POLICY}" FSIM_TF_TIME_POLICY_LOWER)
+  string(FIND "${FSIM_TF_TIME_CONTENTS_LOWER}"
+    "${FSIM_TF_TIME_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "TF time, delay, or timescale access lost resource policy: ${FSIM_TF_TIME_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_TF_CONTEXT_POLICY IN ITEMS
+    "kMaxTfContextNameSize"
+    "TfContextProfile"
+    "TfContextError"
+    "validate_and_copy_tf_context"
+    "scope_belongs_to_module"
+    "TfCallError::InvalidContext"
+    "context_profile"
+    "std::recursive_mutex"
+    "module_instance_name"
+    "scope_name"
+    "routine_name"
+    "work_area"
+    "registration.user_data"
+    "tf_mipname"
+    "tf_spname"
+    "tf_getroutine"
+    "tf_getworkarea"
+    "tf_setworkarea"
+    "tf_imipname"
+    "tf_ispname"
+    "tf_igetroutine"
+    "tf_igetworkarea"
+    "tf_isetworkarea"
+    "instance_calls[0] == 2"
+    "TfCallError::CallbackException"
+    "fsim.runtime.tf_context")
+  string(TOLOWER
+    "${FSIM_VERIUSER_HEADER_CONTENTS}${FSIM_TF_CALL_BRIDGE_CONTENTS}${FSIM_TF_CALL_MODEL_CONTENTS}${FSIM_TF_CALL_IMPLEMENTATION_CONTENTS}${FSIM_TF_LINK_IMPLEMENTATION_CONTENTS}${FSIM_TF_PLUGIN_MODEL_CONTENTS}${FSIM_TF_PLUGIN_IMPLEMENTATION_CONTENTS}${FSIM_TF_CONTEXT_MODEL_CONTENTS}${FSIM_TF_CONTEXT_IMPLEMENTATION_CONTENTS}${FSIM_TF_CONTEXT_TEST_CONTENTS}${FSIM_RUNTIME_TEST_CMAKE_CONTENTS}"
+    FSIM_TF_CONTEXT_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_TF_CONTEXT_POLICY}" FSIM_TF_CONTEXT_POLICY_LOWER)
+  string(FIND "${FSIM_TF_CONTEXT_CONTENTS_LOWER}"
+    "${FSIM_TF_CONTEXT_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "TF context or lifetime access lost resource policy: ${FSIM_TF_CONTEXT_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_TF_CONTROL_POLICY IN ITEMS
+    "kMaxTfControlEffects"
+    "kMaxTfControlTextSize"
+    "kMaxTfControlBytes"
+    "TfControlEffectKind"
+    "TfControlEffect"
+    "TfControlCapture"
+    "capture_tf_control_effect_v3"
+    "FSIM_TF_CONTROL_OUTPUT"
+    "TfCallError::ControlLimit"
+    "control_effects"
+    "control_emit"
+    "control_failed"
+    "format_control"
+    "io_printf"
+    "io_mcdprintf"
+    "tf_text"
+    "tf_warning"
+    "tf_error"
+    "tf_message"
+    "tf_dofinish"
+    "tf_dostop"
+    "missing_result.control_effects.empty()"
+    "fsim.runtime.tf_control")
+  string(TOLOWER
+    "${FSIM_VERIUSER_HEADER_CONTENTS}${FSIM_TF_CALL_BRIDGE_CONTENTS}${FSIM_TF_CALL_MODEL_CONTENTS}${FSIM_TF_CALL_IMPLEMENTATION_CONTENTS}${FSIM_TF_LINK_IMPLEMENTATION_CONTENTS}${FSIM_TF_CONTROL_MODEL_CONTENTS}${FSIM_TF_CONTROL_IMPLEMENTATION_CONTENTS}${FSIM_TF_CONTROL_TEST_CONTENTS}${FSIM_RUNTIME_TEST_CMAKE_CONTENTS}"
+    FSIM_TF_CONTROL_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_TF_CONTROL_POLICY}" FSIM_TF_CONTROL_POLICY_LOWER)
+  string(FIND "${FSIM_TF_CONTROL_CONTENTS_LOWER}"
+    "${FSIM_TF_CONTROL_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "TF output or control access lost resource policy: ${FSIM_TF_CONTROL_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_TF_SYNCHRONIZATION_POLICY IN ITEMS
+    "kMaxTfSynchronizationRequests"
+    "TfSynchronizationKind"
+    "TfSynchronizationRequest"
+    "valid_tf_synchronization_kind"
+    "tf_synchronization_reason"
+    "FSIM_TF_CALL_PHASE_SYNCHRONIZE"
+    "FSIM_TF_CALL_PHASE_READ_ONLY_SYNCHRONIZE"
+    "FSIM_TF_SYNCHRONIZATION_READ_WRITE"
+    "FSIM_TF_SYNCHRONIZATION_READ_ONLY"
+    "synchronization_requests"
+    "TfCallError::InvalidSynchronization"
+    "TfCallError::MissingMiscCallback"
+    "synchronization_count"
+    "append_synchronization"
+    "tf_synchronize"
+    "tf_rosynchronize"
+    "tf_isynchronize"
+    "tf_irosynchronize"
+    "reason_synch"
+    "reason_rosynch"
+    "read_write.argument_updates.size() == 1"
+    "read_only.argument_updates.empty()"
+    "TfCallError::ContextBusy"
+    "fsim.runtime.tf_synchronization")
+  string(TOLOWER
+    "${FSIM_VERIUSER_HEADER_CONTENTS}${FSIM_TF_CALL_BRIDGE_CONTENTS}${FSIM_TF_CALL_MODEL_CONTENTS}${FSIM_TF_CALL_IMPLEMENTATION_CONTENTS}${FSIM_TF_LINK_IMPLEMENTATION_CONTENTS}${FSIM_TF_SYNCHRONIZATION_MODEL_CONTENTS}${FSIM_TF_SYNCHRONIZATION_IMPLEMENTATION_CONTENTS}${FSIM_TF_SYNCHRONIZATION_TEST_CONTENTS}${FSIM_RUNTIME_TEST_CMAKE_CONTENTS}"
+    FSIM_TF_SYNCHRONIZATION_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_TF_SYNCHRONIZATION_POLICY}"
+    FSIM_TF_SYNCHRONIZATION_POLICY_LOWER)
+  string(FIND "${FSIM_TF_SYNCHRONIZATION_CONTENTS_LOWER}"
+    "${FSIM_TF_SYNCHRONIZATION_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "TF synchronization access lost resource policy: ${FSIM_TF_SYNCHRONIZATION_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_TF_APPLICATION_POLICY IN ITEMS
+    "kMaxTfApplicationPlugins"
+    "kMaxTfApplicationRegistrations"
+    "TfApplicationRegistry"
+    "TfApplicationRegistration"
+    "tf_application_profile_supported"
+    "StandardRevision::Verilog1995"
+    "StandardRevision::Verilog2001"
+    "StandardRevision::Verilog2001NoConfig"
+    "StandardRevision::Verilog2005"
+    "StandardRevision::SystemVerilog2005"
+    "StandardRevision::SystemVerilog2009"
+    "StandardRevision::SystemVerilog2012"
+    "StandardRevision::SystemVerilog2017"
+    "StandardRevision::Vhdl2008"
+    "TfApplicationError::DuplicateRegistration"
+    "TfApplicationError::UnsupportedProfile"
+    "TfApplicationError::MissingRegistration"
+    "TfApplicationError::KindMismatch"
+    "runtime::load_tf_plugin"
+    "registry.resolve"
+    "registry.bind"
+    "result_width() == 17"
+    "registry.plugin_count() == 1"
+    "fsim.application.tf-plugin")
+  string(TOLOWER
+    "${FSIM_TF_APPLICATION_MODEL_CONTENTS}${FSIM_TF_APPLICATION_IMPLEMENTATION_CONTENTS}${FSIM_TF_APPLICATION_TEST_CONTENTS}${FSIM_TEST_CMAKE_CONTENTS}"
+    FSIM_TF_APPLICATION_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_TF_APPLICATION_POLICY}"
+    FSIM_TF_APPLICATION_POLICY_LOWER)
+  string(FIND "${FSIM_TF_APPLICATION_CONTENTS_LOWER}"
+    "${FSIM_TF_APPLICATION_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "TF HDL system registration lost resource policy: ${FSIM_TF_APPLICATION_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_TF_DISCOVERY_POLICY IN ITEMS
+    "FSIM_NATIVE_PLUGIN_DESCRIPTOR_SYMBOL"
+    "FSIM_NATIVE_PLUGIN_MAX_INTERFACES 8u"
+    "fsim_native_plugin_interface_v3"
+    "FSIM_TF_INTERFACE_ABI_VERSION 3u"
+    "FSIM_TF_REGISTRATION_TABLE_ABI_VERSION 3u"
+    "FSIM_TF_MAX_REGISTRATIONS 4096u"
+    "fsim_tf_registration_v3"
+    "fsim_tf_registration_table_v3"
+    "validate_tf_registration_table"
+    "validate_tf_plugin_descriptor"
+    "InterfaceDuplicate"
+    "RegistrationTable"
+    "fsim.runtime.tf_plugin")
+  string(TOLOWER
+    "${FSIM_NATIVE_PLUGIN_ABI_CONTENTS}${FSIM_TF_PLUGIN_ABI_CONTENTS}${FSIM_TF_PLUGIN_MODEL_CONTENTS}${FSIM_TF_PLUGIN_IMPLEMENTATION_CONTENTS}${FSIM_TF_PLUGIN_TEST_CONTENTS}${FSIM_TF_LINK_PLUGIN_CONTENTS}${FSIM_RUNTIME_TEST_CMAKE_CONTENTS}"
+    FSIM_TF_DISCOVERY_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_TF_DISCOVERY_POLICY}"
+    FSIM_TF_DISCOVERY_POLICY_LOWER)
+  string(FIND "${FSIM_TF_DISCOVERY_CONTENTS_LOWER}"
+    "${FSIM_TF_DISCOVERY_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "TF registration discovery lost resource policy: ${FSIM_TF_DISCOVERY_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_TF_REGISTRATION_POLICY IN ITEMS
+    "FSIM_TF_MAX_REGISTRATION_NAME_SIZE 255u"
+    "TfRegistrationKind"
+    "TfRegistrationError"
+    "DuplicateName"
+    "validate_and_copy_tf_registrations"
+    "registration.struct_size > table.entry_stride"
+    "registration.calltf == nullptr"
+    "registration.sizetf == nullptr"
+    "registration.sizetf != nullptr"
+    "valid_registration_name"
+    "result.value.empty()"
+    "callback_calls == 0"
+    "fsim.runtime.tf_registration")
+  string(TOLOWER
+    "${FSIM_TF_PLUGIN_ABI_CONTENTS}${FSIM_TF_PLUGIN_MODEL_CONTENTS}${FSIM_TF_PLUGIN_IMPLEMENTATION_CONTENTS}${FSIM_TF_REGISTRATION_MODEL_CONTENTS}${FSIM_TF_REGISTRATION_IMPLEMENTATION_CONTENTS}${FSIM_TF_REGISTRATION_TEST_CONTENTS}${FSIM_RUNTIME_TEST_CMAKE_CONTENTS}"
+    FSIM_TF_REGISTRATION_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_TF_REGISTRATION_POLICY}"
+    FSIM_TF_REGISTRATION_POLICY_LOWER)
+  string(FIND "${FSIM_TF_REGISTRATION_CONTENTS_LOWER}"
+    "${FSIM_TF_REGISTRATION_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "TF descriptor validation lost resource policy: ${FSIM_TF_REGISTRATION_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_TF_CALL_POLICY IN ITEMS
+    "fsim_tf_routine_v3"
+    "fsim_tf_misc_routine_v3"
+    "kMaxTfFunctionWidth"
+    "TfFunctionResult"
+    "TfBoundCall"
+    "bind_tf_call_with_owner"
+    "reason_checktf"
+    "reason_sizetf"
+    "reason_calltf"
+    "TfCallError::CallbackException"
+    "TfCallError::ContextBusy"
+    "TfCallError::UnassignedResult"
+    "fsim_tf_call_context_enter_v3"
+    "fsim_tf_call_context_leave_v3"
+    "assign_integral_result"
+    "tf_putlongp"
+    "tf_putrealp"
+    "loaded.value.reset()"
+    "fsim.runtime.tf_call")
+  string(TOLOWER
+    "${FSIM_TF_PLUGIN_ABI_CONTENTS}${FSIM_TF_PLUGIN_MODEL_CONTENTS}${FSIM_TF_PLUGIN_IMPLEMENTATION_CONTENTS}${FSIM_TF_CALL_BRIDGE_CONTENTS}${FSIM_TF_CALL_MODEL_CONTENTS}${FSIM_TF_CALL_IMPLEMENTATION_CONTENTS}${FSIM_TF_CALL_TEST_CONTENTS}${FSIM_TF_LINK_IMPLEMENTATION_CONTENTS}${FSIM_TF_LINK_PLUGIN_CONTENTS}${FSIM_RUNTIME_TEST_CMAKE_CONTENTS}${FSIM_ROOT_CONTENTS}"
+    FSIM_TF_CALL_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_TF_CALL_POLICY}" FSIM_TF_CALL_POLICY_LOWER)
+  string(FIND "${FSIM_TF_CALL_CONTENTS_LOWER}"
+    "${FSIM_TF_CALL_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "TF task/function callback lost resource policy: ${FSIM_TF_CALL_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_TF_MISC_POLICY IN ITEMS
+    "TfMiscReason"
+    "ParameterValueChange = reason_paramvc"
+    "Synchronize = reason_synch"
+    "ReadOnlySynchronize = reason_rosynch"
+    "StartOfSave = reason_startofsave"
+    "StartOfRestart = reason_startofrestart"
+    "TfMiscDispatcher"
+    "valid_parameter"
+    "parameter > 0"
+    "parameter == 0"
+    "TfMiscError::CallbackException"
+    "TfMiscError::Reentrant"
+    "last_callback_value == 31"
+    "loaded.value.reset()"
+    "fsim.runtime.tf_misc")
+  string(TOLOWER
+    "${FSIM_TF_PLUGIN_MODEL_CONTENTS}${FSIM_TF_PLUGIN_IMPLEMENTATION_CONTENTS}${FSIM_TF_MISC_MODEL_CONTENTS}${FSIM_TF_MISC_IMPLEMENTATION_CONTENTS}${FSIM_TF_MISC_TEST_CONTENTS}${FSIM_TF_LINK_PLUGIN_CONTENTS}${FSIM_RUNTIME_TEST_CMAKE_CONTENTS}"
+    FSIM_TF_MISC_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_TF_MISC_POLICY}" FSIM_TF_MISC_POLICY_LOWER)
+  string(FIND "${FSIM_TF_MISC_CONTENTS_LOWER}"
+    "${FSIM_TF_MISC_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "TF misctf lifecycle lost resource policy: ${FSIM_TF_MISC_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_TF_ARGUMENT_POLICY IN ITEMS
+    "kMaxTfArguments"
+    "kMaxTfArgumentWidth"
+    "kMaxTfExpressionTextSize"
+    "TfArgumentKind"
+    "TfArgumentDirection"
+    "validate_and_copy_tf_arguments"
+    "FSIM_TF_CALL_PHASE_CHECK"
+    "FSIM_TF_CALL_PHASE_SIZE"
+    "FSIM_TF_CALL_PHASE_CALL"
+    "fsim_tf_argument_bridge_v3"
+    "tf_nump(void)"
+    "tf_typep"
+    "tf_sizep"
+    "tf_exprinfo"
+    "TfCallError::InvalidArguments"
+    "phase_calls[reason_checktf] == 1"
+    "phase_calls[reason_sizetf] == 1"
+    "phase_calls[reason_calltf] == 1"
+    "fsim.runtime.tf_argument")
+  string(TOLOWER
+    "${FSIM_TF_CALL_BRIDGE_CONTENTS}${FSIM_TF_CALL_MODEL_CONTENTS}${FSIM_TF_CALL_IMPLEMENTATION_CONTENTS}${FSIM_TF_LINK_IMPLEMENTATION_CONTENTS}${FSIM_TF_ARGUMENT_MODEL_CONTENTS}${FSIM_TF_ARGUMENT_IMPLEMENTATION_CONTENTS}${FSIM_TF_ARGUMENT_TEST_CONTENTS}${FSIM_RUNTIME_TEST_CMAKE_CONTENTS}"
+    FSIM_TF_ARGUMENT_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_TF_ARGUMENT_POLICY}" FSIM_TF_ARGUMENT_POLICY_LOWER)
+  string(FIND "${FSIM_TF_ARGUMENT_CONTENTS_LOWER}"
+    "${FSIM_TF_ARGUMENT_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "TF argument inspection lost resource policy: ${FSIM_TF_ARGUMENT_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_TF_VALUE_POLICY IN ITEMS
+    "kMaxTfCallValueBytes"
+    "TfValueKind"
+    "TfValueError"
+    "validate_and_copy_tf_values"
+    "make_default_tf_values"
+    "FSIM_TF_VALUE_INTEGRAL"
+    "TfArgumentUpdate"
+    "TfCallError::InvalidValues"
+    "tf_getcstringp"
+    "tf_getlongp"
+    "tf_getrealp"
+    "tf_strgetp"
+    "tf_evaluatep"
+    "tf_propagatep"
+    "value.vector_words.back().bvalbits"
+    "invoked.argument_updates.size() == 4"
+    "fsim.runtime.tf_value")
+  string(TOLOWER
+    "${FSIM_TF_CALL_BRIDGE_CONTENTS}${FSIM_TF_CALL_MODEL_CONTENTS}${FSIM_TF_CALL_IMPLEMENTATION_CONTENTS}${FSIM_TF_LINK_IMPLEMENTATION_CONTENTS}${FSIM_TF_VALUE_MODEL_CONTENTS}${FSIM_TF_VALUE_IMPLEMENTATION_CONTENTS}${FSIM_TF_VALUE_TEST_CONTENTS}${FSIM_RUNTIME_TEST_CMAKE_CONTENTS}"
+    FSIM_TF_VALUE_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_TF_VALUE_POLICY}" FSIM_TF_VALUE_POLICY_LOWER)
+  string(FIND "${FSIM_TF_VALUE_CONTENTS_LOWER}"
+    "${FSIM_TF_VALUE_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "TF value access lost resource policy: ${FSIM_TF_VALUE_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_TF_INSTANCE_POLICY IN ITEMS
+    "TfInstanceIdentity"
+    "TfInstanceError"
+    "validate_tf_instance_identity"
+    "FSIM_TF_INSTANCE_ABI_VERSION 3u"
+    "fsim_tf_instance_bridge_v3"
+    "TfCallError::InvalidInstance"
+    "instance_identity"
+    "tf_getinstance(void)"
+    "current_instance_matches"
+    "tf_iexprinfo"
+    "tf_inodeinfo"
+    "tf_igetp"
+    "tf_iputp"
+    "tf_istrgetp"
+    "instance_tokens[1] != instance_tokens[2]"
+    "fsim.runtime.tf_instance")
+  string(TOLOWER
+    "${FSIM_TF_CALL_BRIDGE_CONTENTS}${FSIM_TF_CALL_MODEL_CONTENTS}${FSIM_TF_CALL_IMPLEMENTATION_CONTENTS}${FSIM_TF_LINK_IMPLEMENTATION_CONTENTS}${FSIM_TF_PLUGIN_MODEL_CONTENTS}${FSIM_TF_PLUGIN_IMPLEMENTATION_CONTENTS}${FSIM_TF_INSTANCE_MODEL_CONTENTS}${FSIM_TF_INSTANCE_IMPLEMENTATION_CONTENTS}${FSIM_TF_INSTANCE_TEST_CONTENTS}${FSIM_RUNTIME_TEST_CMAKE_CONTENTS}"
+    FSIM_TF_INSTANCE_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_TF_INSTANCE_POLICY}" FSIM_TF_INSTANCE_POLICY_LOWER)
+  string(FIND "${FSIM_TF_INSTANCE_CONTENTS_LOWER}"
+    "${FSIM_TF_INSTANCE_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "TF parameter/instance access lost resource policy: ${FSIM_TF_INSTANCE_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_VERIUSER_POLICY IN ITEMS
+    "typedef int PLI_INT32"
+    "reason_checktf 1"
+    "reason_rosynch 11"
+    "reason_startofrestart 28"
+    "tf_readwritereal 16"
+    "tf_real_node 107"
+    "typedef struct t_tfexprinfo"
+    "typedef struct t_tfnodeinfo"
+    "tf_getinstance"
+    "tf_igetp"
+    "tf_rosynchronize"
+    "tf_synchronize"
+    "veriuser_version_str"
+    "endofcompile_routines"
+    "must not hide C++ keywords"
+    "fsim.runtime.veriuser_abi")
+  string(TOLOWER
+    "${FSIM_VERIUSER_HEADER_CONTENTS}${FSIM_VERIUSER_TEST_CONTENTS}${FSIM_VERIUSER_C_TEST_CONTENTS}${FSIM_RUNTIME_TEST_CMAKE_CONTENTS}"
+    FSIM_VERIUSER_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_VERIUSER_POLICY}" FSIM_VERIUSER_POLICY_LOWER)
+  string(FIND "${FSIM_VERIUSER_CONTENTS_LOWER}"
+    "${FSIM_VERIUSER_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "standard veriuser header lost resource policy: ${FSIM_VERIUSER_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_TF_LINK_POLICY IN ITEMS
+    "fsim_add_tf_link_surface"
+    "add_library(fsim::tf ALIAS"
+    "FSIM_TF_LINK_SURFACE_BUILD=1"
+    "OUTPUT_NAME fsim_tf"
+    "SOVERSION 3"
+    "FSIM_NATIVE_PLUGIN_CAPABILITY_TF"
+    "standard_tf_symbols"
+    "standard_tf_symbols[0])"
+    "add_library(fsim::tf SHARED IMPORTED)"
+    "target_link_libraries(fsim_installed_tf_consumer PRIVATE fsim::tf)"
+    "installed TF consumer"
+    "fsim/runtime/veriuser.h"
+    "target STREQUAL \"fsim_tf\""
+    "err_intercept"
+    "veriuser_version_str"
+    "vpi_printf"
+    "fsim.runtime.tf_plugin_link")
+  string(TOLOWER
+    "${FSIM_TF_LINK_CMAKE_CONTENTS}${FSIM_TF_LINK_IMPLEMENTATION_CONTENTS}${FSIM_TF_LINK_TEST_CONTENTS}${FSIM_TF_LINK_PLUGIN_CONTENTS}${FSIM_TF_PACKAGE_CONFIG_CONTENTS}${FSIM_TF_INSTALLED_CONTRACT_CONTENTS}${FSIM_TF_INSTALL_OWNERSHIP_CONTENTS}${FSIM_TF_INSTALLED_CONSUMER_CMAKE_CONTENTS}${FSIM_TF_INSTALLED_CONSUMER_CONTENTS}${FSIM_TF_SYSTEMC_BOUNDARY_CONTENTS}${FSIM_RUNTIME_TEST_CMAKE_CONTENTS}${FSIM_ROOT_CONTENTS}"
+    FSIM_TF_LINK_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_TF_LINK_POLICY}" FSIM_TF_LINK_POLICY_LOWER)
+  string(FIND "${FSIM_TF_LINK_CONTENTS_LOWER}"
+    "${FSIM_TF_LINK_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "TF platform link surface lost resource policy: ${FSIM_TF_LINK_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_NATIVE_PLUGIN_POLICY IN ITEMS
+    "FSIM_NATIVE_PLUGIN_ABI_VERSION 3u"
+    "fsim_native_plugin_descriptor_v3_get"
+    "FSIM_NATIVE_PLUGIN_CAPABILITY_TF"
+    "FSIM_NATIVE_PLUGIN_CAPABILITY_ACC"
+    "FSIM_NATIVE_PLUGIN_KNOWN_CAPABILITIES"
+    "validate_native_plugin_descriptor"
+    "copy_native_plugin_metadata"
+    "value.abi_version = 2"
+    "fsim.runtime.native_plugin_abi")
+  string(TOLOWER
+    "${FSIM_NATIVE_PLUGIN_ABI_CONTENTS}${FSIM_NATIVE_PLUGIN_MODEL_CONTENTS}${FSIM_NATIVE_PLUGIN_IMPLEMENTATION_CONTENTS}${FSIM_NATIVE_PLUGIN_TEST_CONTENTS}${FSIM_NATIVE_PLUGIN_C_TEST_CONTENTS}${FSIM_RUNTIME_TEST_CMAKE_CONTENTS}"
+    FSIM_NATIVE_PLUGIN_CONTENTS_LOWER)
+  string(TOLOWER "${FSIM_NATIVE_PLUGIN_POLICY}"
+    FSIM_NATIVE_PLUGIN_POLICY_LOWER)
+  string(FIND "${FSIM_NATIVE_PLUGIN_CONTENTS_LOWER}"
+    "${FSIM_NATIVE_PLUGIN_POLICY_LOWER}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "v3 native plug-in ABI lost resource policy: ${FSIM_NATIVE_PLUGIN_POLICY}")
   endif()
 endforeach()
 

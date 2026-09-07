@@ -146,6 +146,25 @@ MC/DC still excluded. The registered normalized
 SHA-256 identity is
 `e145b9139cf58989ddbd683ff5b478c966d473944684ea11b60cde661dba7443`.
 
+Batch 181 starts with the IEEE-only 18-row `legacy_tf_inventory.tsv` ledger.
+Its stable rows assign Changes 2-19 one-to-one across the direct v3 native
+plug-in ABI, public `veriuser.h`, Linux and Windows link surfaces, registration
+and callback lifecycles, argument/value/time/context services, synchronization,
+HDL registration, scheduler coordination, failure containment, and
+cross-platform C/C++ plug-in evidence. The direct v3 ABI, public TF header, and
+platform-link, registration-discovery, descriptor-validation, callback,
+miscellaneous-lifecycle, argument-inspection, value-access, and
+parameter-instance, time-delay-timescale, and scope-work-area-user-data rows
+plus the output-control, synchronization-callback, HDL-system-registration,
+scheduler-coordination, failure-containment, and cross-platform plug-in rows
+are preserved; zero rows remain active.
+All bind IEEE 1364-2005 TF
+ownership to all eight retained Verilog and SystemVerilog profiles. Vendor extensions are excluded
+by the machine-checked
+`ieee-only-no-vendor-extensions` policy; no compatibility reader or migration
+for a v2 plug-in ABI is permitted. The registered normalized SHA-256 identity
+is `a3bff1ef32fbf3fd412556c63c39e69a45f4efdd5cb599d07b3ac47136b531e0`.
+
 ## Intended atomic layout
 
 New tests should use the stable feature ID from the matrix and keep one

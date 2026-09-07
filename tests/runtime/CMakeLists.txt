@@ -174,6 +174,259 @@ set_tests_properties(
   PROPERTIES LABELS "fast;runtime;vpi;coverage;control;property;fsm;traversal;positive;negative;resource"
 )
 
+add_executable(
+  fsim_native_plugin_abi_tests
+  native_plugin_abi_test.cpp
+  native_plugin_abi_c_test.c
+)
+target_compile_features(fsim_native_plugin_abi_tests PRIVATE c_std_11)
+target_link_libraries(fsim_native_plugin_abi_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_native_plugin_abi_tests)
+add_test(
+  NAME fsim.runtime.native_plugin_abi
+  COMMAND fsim_native_plugin_abi_tests
+)
+set_tests_properties(
+  fsim.runtime.native_plugin_abi
+  PROPERTIES LABELS
+    "fast;runtime;native-plugin;abi;tf;acc;positive;negative;portability"
+)
+
+add_executable(
+  fsim_veriuser_abi_tests
+  veriuser_abi_test.cpp
+  veriuser_abi_c_test.c
+)
+target_compile_features(fsim_veriuser_abi_tests PRIVATE c_std_11)
+target_link_libraries(fsim_veriuser_abi_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_veriuser_abi_tests)
+add_test(NAME fsim.runtime.veriuser_abi COMMAND fsim_veriuser_abi_tests)
+set_tests_properties(
+  fsim.runtime.veriuser_abi
+  PROPERTIES LABELS
+    "fast;runtime;tf;veriuser;abi;c;cxx;positive;portability"
+)
+
+add_library(fsim_tf_link_probe_plugin SHARED tf_link_probe_plugin.c)
+target_compile_features(fsim_tf_link_probe_plugin PRIVATE c_std_11)
+target_include_directories(
+  fsim_tf_link_probe_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+target_link_libraries(fsim_tf_link_probe_plugin PRIVATE fsim_tf)
+fsim_enable_warnings(fsim_tf_link_probe_plugin)
+fsim_configure_debug_footprint(fsim_tf_link_probe_plugin)
+add_custom_command(
+  TARGET fsim_tf_link_probe_plugin
+  POST_BUILD
+  COMMAND
+    "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:fsim_tf>"
+    "$<TARGET_FILE_DIR:fsim_tf_link_probe_plugin>"
+)
+
+add_library(fsim_tf_cpp_probe_plugin SHARED tf_cpp_probe_plugin.cpp)
+target_compile_features(fsim_tf_cpp_probe_plugin PRIVATE cxx_std_20)
+target_include_directories(
+  fsim_tf_cpp_probe_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+target_link_libraries(fsim_tf_cpp_probe_plugin PRIVATE fsim_tf)
+fsim_enable_warnings(fsim_tf_cpp_probe_plugin)
+fsim_configure_debug_footprint(fsim_tf_cpp_probe_plugin)
+add_custom_command(
+  TARGET fsim_tf_cpp_probe_plugin
+  POST_BUILD
+  COMMAND
+    "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:fsim_tf>"
+    "$<TARGET_FILE_DIR:fsim_tf_cpp_probe_plugin>"
+)
+
+add_executable(fsim_tf_plugin_link_tests tf_plugin_link_test.cpp)
+target_compile_definitions(
+  fsim_tf_plugin_link_tests
+  PRIVATE
+    FSIM_TF_LINK_PROBE_PLUGIN_PATH="$<TARGET_FILE:fsim_tf_link_probe_plugin>"
+    FSIM_TF_LINK_LIBRARY_PATH="$<TARGET_FILE:fsim_tf>"
+)
+target_link_libraries(fsim_tf_plugin_link_tests PRIVATE fsim_platform)
+add_dependencies(fsim_tf_plugin_link_tests fsim_tf_link_probe_plugin)
+fsim_configure_test(fsim_tf_plugin_link_tests)
+add_test(NAME fsim.runtime.tf_plugin_link COMMAND fsim_tf_plugin_link_tests)
+set_tests_properties(
+  fsim.runtime.tf_plugin_link
+  PROPERTIES LABELS
+    "fast;runtime;tf;native-plugin;link;shared-library;import-library;linux;windows;positive;portability"
+)
+
+add_executable(fsim_tf_plugin_tests tf_plugin_test.cpp)
+target_compile_definitions(
+  fsim_tf_plugin_tests
+  PRIVATE
+    FSIM_TF_LINK_PROBE_PLUGIN_PATH="$<TARGET_FILE:fsim_tf_link_probe_plugin>"
+    FSIM_TF_LINK_LIBRARY_PATH="$<TARGET_FILE:fsim_tf>"
+)
+target_link_libraries(fsim_tf_plugin_tests PRIVATE fsim_runtime)
+add_dependencies(fsim_tf_plugin_tests fsim_tf_link_probe_plugin)
+fsim_configure_test(fsim_tf_plugin_tests)
+add_test(NAME fsim.runtime.tf_plugin COMMAND fsim_tf_plugin_tests)
+set_tests_properties(
+  fsim.runtime.tf_plugin
+  PROPERTIES LABELS
+    "fast;runtime;tf;native-plugin;registration;discovery;abi;positive;negative;resource;portability"
+)
+
+add_executable(fsim_tf_registration_tests tf_registration_test.cpp)
+target_link_libraries(fsim_tf_registration_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_tf_registration_tests)
+add_test(
+  NAME fsim.runtime.tf_registration
+  COMMAND fsim_tf_registration_tests)
+set_tests_properties(
+  fsim.runtime.tf_registration
+  PROPERTIES LABELS
+    "fast;runtime;tf;native-plugin;registration;descriptor;transaction;positive;negative;resource;portability"
+)
+
+add_executable(fsim_tf_call_tests tf_call_test.cpp)
+target_compile_definitions(
+  fsim_tf_call_tests
+  PRIVATE
+    FSIM_TF_LINK_PROBE_PLUGIN_PATH="$<TARGET_FILE:fsim_tf_link_probe_plugin>"
+)
+target_link_libraries(fsim_tf_call_tests PRIVATE fsim_runtime)
+add_dependencies(fsim_tf_call_tests fsim_tf_link_probe_plugin)
+fsim_configure_test(fsim_tf_call_tests)
+add_test(NAME fsim.runtime.tf_call COMMAND fsim_tf_call_tests)
+set_tests_properties(
+  fsim.runtime.tf_call
+  PROPERTIES LABELS
+    "fast;runtime;tf;native-plugin;checktf;sizetf;calltf;result;containment;positive;negative;resource;portability"
+)
+
+add_executable(fsim_tf_misc_tests tf_misc_test.cpp)
+target_compile_definitions(
+  fsim_tf_misc_tests
+  PRIVATE
+    FSIM_TF_LINK_PROBE_PLUGIN_PATH="$<TARGET_FILE:fsim_tf_link_probe_plugin>"
+)
+target_link_libraries(fsim_tf_misc_tests PRIVATE fsim_runtime)
+add_dependencies(fsim_tf_misc_tests fsim_tf_link_probe_plugin)
+fsim_configure_test(fsim_tf_misc_tests)
+add_test(NAME fsim.runtime.tf_misc COMMAND fsim_tf_misc_tests)
+set_tests_properties(
+  fsim.runtime.tf_misc
+  PROPERTIES LABELS
+    "fast;runtime;tf;native-plugin;misctf;lifecycle;synchronization;ordering;containment;positive;negative;resource;portability"
+)
+
+add_executable(fsim_tf_argument_tests tf_argument_test.cpp)
+target_link_libraries(fsim_tf_argument_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_tf_argument_tests)
+add_test(NAME fsim.runtime.tf_argument COMMAND fsim_tf_argument_tests)
+set_tests_properties(
+  fsim.runtime.tf_argument
+  PROPERTIES LABELS
+    "fast;runtime;tf;argument;count;type;direction;expression;width;context;positive;negative;resource;portability"
+)
+
+add_executable(fsim_tf_value_tests tf_value_test.cpp)
+target_link_libraries(fsim_tf_value_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_tf_value_tests)
+add_test(NAME fsim.runtime.tf_value COMMAND fsim_tf_value_tests)
+set_tests_properties(
+  fsim.runtime.tf_value
+  PROPERTIES LABELS
+    "fast;runtime;tf;value;integer;real;string;vector;expression;xz;transactional;positive;negative;resource;portability"
+)
+
+add_executable(fsim_tf_instance_tests tf_instance_test.cpp)
+target_link_libraries(fsim_tf_instance_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_tf_instance_tests)
+add_test(NAME fsim.runtime.tf_instance COMMAND fsim_tf_instance_tests)
+set_tests_properties(
+  fsim.runtime.tf_instance
+  PROPERTIES LABELS
+    "fast;runtime;tf;parameter;instance;generation;identity;explicit;transactional;positive;negative;resource;portability"
+)
+
+add_executable(fsim_tf_time_tests tf_time_test.cpp)
+target_link_libraries(fsim_tf_time_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_tf_time_tests)
+add_test(NAME fsim.runtime.tf_time COMMAND fsim_tf_time_tests)
+set_tests_properties(
+  fsim.runtime.tf_time
+  PROPERTIES LABELS
+    "fast;runtime;tf;time;delay;timescale;rounding;instance;transactional;positive;negative;resource;portability"
+)
+
+add_executable(fsim_tf_context_tests tf_context_test.cpp)
+target_link_libraries(fsim_tf_context_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_tf_context_tests)
+add_test(NAME fsim.runtime.tf_context COMMAND fsim_tf_context_tests)
+set_tests_properties(
+  fsim.runtime.tf_context
+  PROPERTIES LABELS
+    "fast;runtime;tf;scope;instance;work-area;user-data;lifetime;transactional;positive;negative;resource;portability"
+)
+
+add_executable(fsim_tf_control_tests tf_control_test.cpp)
+target_link_libraries(fsim_tf_control_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_tf_control_tests)
+add_test(NAME fsim.runtime.tf_control COMMAND fsim_tf_control_tests)
+set_tests_properties(
+  fsim.runtime.tf_control
+  PROPERTIES LABELS
+    "fast;runtime;tf;output;warning;error;message;finish;stop;format;transactional;positive;negative;resource;portability"
+)
+
+add_executable(fsim_tf_synchronization_tests tf_synchronization_test.cpp)
+target_link_libraries(fsim_tf_synchronization_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_tf_synchronization_tests)
+add_test(
+  NAME fsim.runtime.tf_synchronization
+  COMMAND fsim_tf_synchronization_tests
+)
+set_tests_properties(
+  fsim.runtime.tf_synchronization
+  PROPERTIES LABELS
+    "fast;runtime;tf;synchronization;read-only;read-write;misctf;instance;ordering;transactional;positive;negative;resource;portability"
+)
+
+add_executable(fsim_tf_containment_tests tf_containment_test.cpp)
+target_compile_definitions(
+  fsim_tf_containment_tests
+  PRIVATE
+    FSIM_TF_LINK_PROBE_PLUGIN_PATH="$<TARGET_FILE:fsim_tf_link_probe_plugin>"
+)
+target_link_libraries(fsim_tf_containment_tests PRIVATE fsim_runtime)
+add_dependencies(fsim_tf_containment_tests fsim_tf_link_probe_plugin)
+fsim_configure_test(fsim_tf_containment_tests)
+add_test(NAME fsim.runtime.tf_containment COMMAND fsim_tf_containment_tests)
+set_tests_properties(
+  fsim.runtime.tf_containment
+  PROPERTIES LABELS
+    "fast;runtime;tf;native-plugin;containment;pointer;exception;unload;reentry;transactional;positive;negative;resource;portability"
+)
+
+add_executable(
+  fsim_tf_cross_platform_plugins_tests
+  tf_cross_platform_plugins_test.cpp)
+target_compile_definitions(
+  fsim_tf_cross_platform_plugins_tests
+  PRIVATE
+    FSIM_TF_C_PLUGIN_PATH="$<TARGET_FILE:fsim_tf_link_probe_plugin>"
+    FSIM_TF_CPP_PLUGIN_PATH="$<TARGET_FILE:fsim_tf_cpp_probe_plugin>"
+)
+target_link_libraries(fsim_tf_cross_platform_plugins_tests PRIVATE fsim_runtime)
+add_dependencies(
+  fsim_tf_cross_platform_plugins_tests
+  fsim_tf_link_probe_plugin fsim_tf_cpp_probe_plugin)
+fsim_configure_test(fsim_tf_cross_platform_plugins_tests)
+add_test(
+  NAME fsim.runtime.tf_cross_platform_plugins
+  COMMAND fsim_tf_cross_platform_plugins_tests)
+set_tests_properties(
+  fsim.runtime.tf_cross_platform_plugins
+  PROPERTIES LABELS
+    "fast;runtime;tf;native-plugin;c;cxx;linux;windows;load;execute;unload;equivalence;positive;resource;portability"
+)
+
 add_executable(fsim_trace_model_tests trace_model_tests.cpp)
 target_link_libraries(fsim_trace_model_tests PRIVATE fsim_runtime)
 fsim_configure_test(fsim_trace_model_tests)
