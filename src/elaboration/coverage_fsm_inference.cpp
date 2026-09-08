@@ -152,6 +152,7 @@ namespace {
         case frontend::VhdlStandard::Vhdl2000:
         case frontend::VhdlStandard::Vhdl2002:
         case frontend::VhdlStandard::Vhdl2008:
+        case frontend::VhdlStandard::Vhdl2019:
             return true;
         }
         return false;
@@ -171,6 +172,7 @@ namespace {
         case frontend::StandardRevision::Vhdl2000:
         case frontend::StandardRevision::Vhdl2002:
         case frontend::StandardRevision::Vhdl2008:
+        case frontend::StandardRevision::Vhdl2019:
         case frontend::StandardRevision::Verilog1995:
         case frontend::StandardRevision::Verilog2001:
         case frontend::StandardRevision::Verilog2001NoConfig:
@@ -340,6 +342,7 @@ namespace {
         case frontend::ExpressionKind::Concatenation:
         case frontend::ExpressionKind::Replication:
         case frontend::ExpressionKind::DefaultChoice:
+        case frontend::ExpressionKind::Conditional:
             return std::nullopt;
         }
         return std::nullopt;

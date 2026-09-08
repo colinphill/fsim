@@ -1037,6 +1037,13 @@
             child_specialized.unit.verilog_defparams.end(),
             std::make_move_iterator(descendant_defparams.begin()),
             std::make_move_iterator(descendant_defparams.end()));
+        adapt_vhdl_unspecified_port_types(
+            child_specialized.unit,
+            *selected_instance,
+            local,
+            design_.signals(),
+            child_specialized.identity_values,
+            diagnostics_);
         adapt_vhdl_array_port_shapes(
             child_specialized.unit,
             *selected_instance,

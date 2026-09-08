@@ -81,6 +81,14 @@ ElaborationResult elaborate(
     SystemCFactoryProvider* systemc_provider,
     const std::span<const std::string> search_libraries) {
     ElaborationResult result;
+    if (!parsed.vhdl_profile_compatible) {
+        result.diagnostics.push_back({
+            "FSIM-ELAB-VHPROFILE-001",
+            "elaboration rejected a recovered VHDL construct that is "
+            "unavailable in its selected language revision",
+            {}});
+        return result;
+    }
     if (roots.empty()) {
         result.diagnostics.push_back({
             "FSIM-ELAB-ROOT-002",

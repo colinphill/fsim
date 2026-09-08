@@ -311,16 +311,19 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
             std::string error;
             const auto value = evaluate_constant_expression(
                 expression, { }, error);
-            if (value
-                && *value
-                    >= std::numeric_limits<std::int32_t>::min()
-                && *value
-                    <= std::numeric_limits<std::int32_t>::max()) {
+            const auto integer_width = static_cast<std::size_t>(
+                frontend::vhdl_predefined_integer_storage_width(
+                    vhdl_standard_));
+            const auto integer_range =
+                frontend::vhdl_predefined_integer_range(
+                    vhdl_standard_, "integer");
+            if (value && *value >= integer_range.left
+                && *value <= integer_range.right) {
                 const auto destination = allocate_register(
-                    32, frontend::ValueDomain::Integer);
+                    integer_width, frontend::ValueDomain::Integer);
                 process_.operations.emplace_back(
                     LoadConstant {
-                        destination, integer_value(*value) });
+                        destination, integer_value(*value, integer_width) });
                 return destination;
             }
         }
@@ -349,7 +352,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
             && register_domain(*source)
                 == frontend::ValueDomain::Integer) {
             const auto destination = allocate_register(
-                32, frontend::ValueDomain::Integer);
+                register_width(*source), frontend::ValueDomain::Integer);
             process_.operations.emplace_back(IntegerUnary {
                 IntegerUnaryOperator::negate,
                 destination,
@@ -395,7 +398,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
         if (register_domain(*source)
             == frontend::ValueDomain::Integer) {
             const auto destination = allocate_register(
-                32, frontend::ValueDomain::Integer);
+                register_width(*source), frontend::ValueDomain::Integer);
             process_.operations.emplace_back(IntegerUnary {
                 IntegerUnaryOperator::absolute,
                 destination,
@@ -900,36 +903,40 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
                     <= type->vhdl_array->dimensions.size()
                 && type->vhdl_array->dimensions[static_cast<std::size_t>(dimension - 1)].null;
             const auto width = null_array ? std::uint64_t { 0 } : range->width();
-            if (width
-                > static_cast<std::uint64_t>(
-                    std::numeric_limits<std::int32_t>::max())) {
+            const auto integer_range =
+                frontend::vhdl_predefined_integer_range(
+                    vhdl_standard_, "integer");
+            if (width > static_cast<std::uint64_t>(integer_range.right)) {
                 report(
                     "FSIM-ELAB-VHARRAYATTR-004",
                     expression.text
-                        + " result is outside the bounded 32-bit "
+                        + " result is outside the predefined "
                           "integer range",
                     expression.span);
                 return std::nullopt;
             }
             result = static_cast<std::int64_t>(width);
         }
-        if (result < std::numeric_limits<std::int32_t>::min()
-            || result
-                > std::numeric_limits<std::int32_t>::max()) {
+        const auto integer_range =
+            frontend::vhdl_predefined_integer_range(
+                vhdl_standard_, "integer");
+        if (result < integer_range.left || result > integer_range.right) {
             report(
                 "FSIM-ELAB-VHARRAYATTR-004",
                 expression.text
-                    + " result is outside the bounded 32-bit "
+                    + " result is outside the predefined "
                       "integer range",
                 expression.span);
             return std::nullopt;
         }
+        const auto integer_width = static_cast<std::size_t>(
+            frontend::vhdl_predefined_integer_storage_width(
+                vhdl_standard_));
         const auto destination = allocate_register(
-            32, frontend::ValueDomain::Integer);
+            integer_width, frontend::ValueDomain::Integer);
         process_.operations.emplace_back(LoadConstant {
             destination,
-            integer_value(
-                static_cast<std::int32_t>(result)) });
+            integer_value(result, integer_width) });
         return destination;
     }
     if (expression.kind == ExpressionKind::Call

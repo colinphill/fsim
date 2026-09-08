@@ -403,6 +403,33 @@ bool component_actual_profile_matches(
     return true;
 }
 
+bool mode_view_profile_matches(
+    const std::optional<frontend::VhdlModeViewIndication>& component_view,
+    const std::optional<frontend::VhdlModeViewIndication>& entity_view) {
+    if (component_view.has_value() != entity_view.has_value()) {
+        return false;
+    }
+    if (!component_view) {
+        return true;
+    }
+    if (component_view->kind != entity_view->kind
+        || component_view->view != entity_view->view
+        || component_view->elements.size()
+            != entity_view->elements.size()) {
+        return false;
+    }
+    for (std::size_t index = 0;
+         index < component_view->elements.size(); ++index) {
+        const auto& component_element = component_view->elements[index];
+        const auto& entity_element = entity_view->elements[index];
+        if (component_element.path != entity_element.path
+            || component_element.direction != entity_element.direction) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool component_declaration_matches_entity(
     const frontend::VhdlComponentDeclaration& declaration,
     const DesignUnit& entity) {
@@ -434,6 +461,9 @@ bool component_declaration_matches_entity(
          ++index) {
         if (declaration.ports[index].direction
                 != entity.ports[index].direction
+            || !mode_view_profile_matches(
+                declaration.ports[index].vhdl_mode_view,
+                entity.ports[index].vhdl_mode_view)
             || type_profile(
                    declaration.ports[index].type,
                    component_names)
@@ -813,6 +843,10 @@ HierarchyBuilder::resolved_vhdl_entity_interface(
     resolved.primary_name = entity.primary_name;
     resolved.parameters = entity.parameters;
     resolved.ports = entity.ports;
+    // Mode views are declarations, not entries in the named-type
+    // environment. Preserve the imported declarations alongside the copied
+    // entity interface so its view-based ports can be resolved here.
+    resolved.type_aliases = std::move(visibility.type_aliases);
     resolved.span = entity.span;
     resolved.source_dependencies =
         std::move(visibility.source_dependencies);
@@ -905,6 +939,8 @@ HierarchyBuilder::bind_vhdl_component_instance(
                       port.direction,
                       true,
                       port.span});
+              profile.ports.back().vhdl_mode_view =
+                  port.vhdl_mode_view;
           }
 
           PackageEnvironment interface_packages;
@@ -1429,6 +1465,9 @@ HierarchyBuilder::bind_vhdl_component_instance(
         const auto& component_port = component.ports[index];
         const auto& entity_port = entity->ports[target_index];
         if (component_port.direction != entity_port.direction
+            || !mode_view_profile_matches(
+                component_port.vhdl_mode_view,
+                entity_port.vhdl_mode_view)
             || type_profile(component_port.type, component_names)
                 != type_profile(entity_port.type, entity_names)) {
             report(

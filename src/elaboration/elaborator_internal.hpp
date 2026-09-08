@@ -946,9 +946,9 @@ private:
         const frontend::Type* target_type,
         const Expression& value);
 
-    [[nodiscard]] static std::pair<std::int32_t, std::int32_t>
+    [[nodiscard]] std::pair<std::int64_t, std::int64_t>
     integer_bounds(
-        const std::optional<frontend::IntegerRange>& range);
+        const std::optional<frontend::IntegerRange>& range) const;
 
     void emit_integer_check(
         const RegisterId source,
@@ -978,8 +978,8 @@ private:
     void initialize_variables(
         const std::vector<frontend::VariableDeclaration>& variables);
 
-    [[nodiscard]] static std::string declaration_key(
-        const frontend::VariableDeclaration& variable);
+    [[nodiscard]] std::string declaration_key(
+        const frontend::VariableDeclaration& variable) const;
 
     [[nodiscard]] std::string scoped_local_name(
         const std::string_view name) const;
@@ -1031,6 +1031,10 @@ private:
         const Expression& expression,
         std::string diagnostic_code,
         std::string_view construct);
+    std::optional<RegisterId> lower_vhdl_conditional_expression(
+        const Expression& expression,
+        std::size_t expected_width,
+        const frontend::Type* expected_type);
     void lower_assert(const Statement& statement);
     [[nodiscard]] const frontend::Type*
     vhdl_array_attribute_prefix_type(
@@ -1782,9 +1786,13 @@ private:
         bool lowered { };
         bool invocation_layout_finalized { };
     };
+    std::deque<frontend::ProcedureDeclaration>
+        vhdl_procedure_specializations_;
     std::vector<ProcedureFrame> procedure_frames_;
     std::unordered_map<std::string, std::vector<std::size_t>>
         procedure_indices_;
+    std::unordered_map<std::string, std::size_t>
+        vhdl_procedure_specialization_indices_;
     std::deque<std::size_t> pending_procedures_;
     std::vector<std::unordered_set<std::size_t>>
         procedure_dependencies_;

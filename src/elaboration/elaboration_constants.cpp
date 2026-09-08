@@ -153,11 +153,9 @@ PackedLogic4 unsigned_value(const std::uint64_t value, const std::size_t width)
     return result;
 }
 
-PackedLogic4 integer_value(const std::int64_t value)
+PackedLogic4 integer_value(const std::int64_t value, const std::size_t width)
 {
-    const auto bits = static_cast<std::uint32_t>(
-        static_cast<std::int32_t>(value));
-    return unsigned_value(bits, 32);
+    return unsigned_value(static_cast<std::uint64_t>(value), width);
 }
 
 std::optional<std::int64_t> vhdl_enumeration_ordinal(
@@ -572,7 +570,8 @@ std::optional<std::int64_t> vhdl_based_integer(
         saw_digit = true;
         if (value
             > (static_cast<std::uint64_t>(
-                   std::numeric_limits<std::int64_t>::max()) - digit)
+                   std::numeric_limits<std::int64_t>::max())
+                  - digit)
                 / *base_value) {
             error = "VHDL based integer literal is outside fsim's signed "
                     "64-bit constant range";
@@ -817,6 +816,16 @@ std::optional<std::int64_t> evaluate_constant_expression(
     }
     if (expression.kind == ExpressionKind::Unary
         && expression.operands.size() == 1) {
+        if (expression.text == "-"
+            && expression.operands.front().kind
+                == ExpressionKind::IntegerLiteral) {
+            const auto magnitude = unsigned_decimal(
+                expression.operands.front().text);
+            if (magnitude
+                && *magnitude == (std::uint64_t { 1 } << 63U)) {
+                return std::numeric_limits<std::int64_t>::min();
+            }
+        }
         const auto operand = evaluate_constant_expression(
             expression.operands.front(), environment, error);
         if (!operand) {
@@ -894,8 +903,9 @@ std::optional<std::int64_t> evaluate_constant_expression(
         }
         return 0;
     }
-    if (expression.kind == ExpressionKind::Call
-        && expression.text == "?:"
+    if ((expression.kind == ExpressionKind::Conditional
+         || (expression.kind == ExpressionKind::Call
+             && expression.text == "?:"))
         && expression.operands.size() == 3) {
         const auto condition = evaluate_constant_expression(
             expression.operands[0], environment, error);
@@ -1201,8 +1211,7 @@ void substitute_parameters(
             std::string_view { "@sv-cast:" }.size());
         if (const auto size = environment.find(std::string { size_name });
             size != environment.end() && size->second > 0) {
-            expression.call_result_width =
-                static_cast<std::uint64_t>(size->second);
+            expression.call_result_width = static_cast<std::uint64_t>(size->second);
             expression.call_result_domain = frontend::ValueDomain::Logic4;
         }
     }
@@ -1339,10 +1348,33 @@ void substitute_parameters(
                 designated, environment, domains, diagnostics, language);
         }
     }
+    if (type.vhdl_unspecified) {
+        type.vhdl_unspecified =
+            std::make_shared<frontend::VhdlUnspecifiedTypeInfo>(
+                *type.vhdl_unspecified);
+        for (auto& component :
+             type.vhdl_unspecified->component_types) {
+            substitute_parameters(
+                component, environment, domains, diagnostics, language);
+        }
+    }
     if (type.vhdl_protected) {
         type.vhdl_protected = std::make_shared<frontend::VhdlProtectedInfo>(
             *type.vhdl_protected);
         auto& protected_info = *type.vhdl_protected;
+        for (auto& generic : protected_info.generic_parameters) {
+            substitute_parameters(
+                generic.type, environment, domains, diagnostics, language);
+            if (generic.default_type) {
+                substitute_parameters(
+                    *generic.default_type, environment, domains, diagnostics,
+                    language);
+            }
+            if (generic.default_value.valid()) {
+                substitute_parameters(
+                    generic.default_value, environment, domains, language);
+            }
+        }
         for (auto& variable : protected_info.variables) {
             substitute_parameters(
                 variable.type, environment, domains, diagnostics, language);
@@ -1426,12 +1458,20 @@ void substitute_parameters(
     if (type.domain == frontend::ValueDomain::Integer
         && type.integer_range) {
         const bool builtin_time = type.nominal_type == "@builtin:time";
+        const bool wide_integer =
+            type.vhdl_integer_storage_width == 64U;
         const auto minimum = builtin_time
             ? std::int64_t { 0 }
-            : std::int64_t { std::numeric_limits<std::int32_t>::min() };
+            : wide_integer
+            ? std::numeric_limits<std::int64_t>::min()
+            : static_cast<std::int64_t>(
+                  std::numeric_limits<std::int32_t>::min());
         const auto maximum = builtin_time
             ? std::numeric_limits<std::int64_t>::max()
-            : std::int64_t { std::numeric_limits<std::int32_t>::max() };
+            : wide_integer
+            ? std::numeric_limits<std::int64_t>::max()
+            : static_cast<std::int64_t>(
+                  std::numeric_limits<std::int32_t>::max());
         const auto& range = *type.integer_range;
         const bool null = range.descending ? range.left < range.right
                                            : range.left > range.right;
@@ -1446,7 +1486,7 @@ void substitute_parameters(
                     ? "VHDL time constraint lies outside the "
                       "nonnegative signed 64-bit representation"
                     : "VHDL integer subtype constraint lies outside the "
-                      "portable signed 32-bit representation",
+                      "profile-selected signed representation",
                 integer_range_span });
             type.integer_range.reset();
         } else {

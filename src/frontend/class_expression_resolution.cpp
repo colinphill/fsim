@@ -357,7 +357,10 @@ class Resolver final {
                 parameter.span,
                 { },
                 TypeDeclarationKind::SystemVerilogTypedef,
-                { } });
+                { },
+                { },
+                { },
+                false });
         }
       }
       statement.type_aliases.insert(
@@ -1347,7 +1350,10 @@ class Resolver final {
             actual.span,
             { },
             TypeDeclarationKind::SystemVerilogTypedef,
-            { } });
+            { },
+            { },
+            { },
+            false });
       }
     }
     statement.declarations.clear();

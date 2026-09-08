@@ -529,7 +529,7 @@ void test_rejections()
                 narrow_integer_operation,
                 no_signals);
         },
-        "width constraints are inconsistent");
+        "IntegerBinary requires 32- or 64-bit operands");
 
     const auto dynamic_part_process =
         [](const DynamicPartSelect selection) {

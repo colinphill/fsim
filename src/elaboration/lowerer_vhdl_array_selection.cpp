@@ -250,6 +250,24 @@ std::optional<frontend::Type> Lowerer::vhdl_expression_type(
         ? std::optional<frontend::Type>{*type}
         : std::nullopt;
   }
+  if (expression.kind == ExpressionKind::Conditional
+      && expression.operands.size() == 3U) {
+    auto when_true = vhdl_expression_type(expression.operands[1]);
+    auto when_false = vhdl_expression_type(expression.operands[2]);
+    if (when_true && when_false
+        && vhdl_callable_type_matches(*when_true, *when_false)) {
+      return when_true;
+    }
+    if (when_true
+        && expression.operands[2].kind == ExpressionKind::Aggregate) {
+      return when_true;
+    }
+    if (when_false
+        && expression.operands[1].kind == ExpressionKind::Aggregate) {
+      return when_false;
+    }
+    return std::nullopt;
+  }
   if (expression.kind == ExpressionKind::Call) {
     if (expression.text == "@vhdl-external"
         && expression.operands.size() == 2) {
@@ -562,50 +580,65 @@ Lowerer::lower_vhdl_array_selection_expression(
               index.span);
           return std::nullopt;
         }
-        const auto value = lower_expression(index, 32);
+        const auto index_width =
+            infer_width(index).value_or(std::size_t { 32 });
+        const auto value = lower_expression(index, index_width);
         const auto low = std::min(
             dimension.range->left, dimension.range->right);
         const auto high = std::max(
             dimension.range->left, dimension.range->right);
-        if (!value || register_width(*value) != 32
-            || low < std::numeric_limits<std::int32_t>::min()
-            || high > std::numeric_limits<std::int32_t>::max()) {
+        const auto maximum_ordinal = index_distance(
+            dimension.range->left, dimension.range->right);
+        const auto maximum_offset = static_cast<std::uint64_t>(
+            std::numeric_limits<std::int32_t>::max());
+        if (!value
+            || (register_width(*value) != 32
+                && register_width(*value) != 64)
+            || maximum_ordinal > maximum_offset
+            || (maximum_ordinal != 0U
+                && dimension.stride
+                    > maximum_offset / maximum_ordinal)) {
           report(
               "FSIM-ELAB-VHARRAYSEL-002",
-              "a runtime VHDL array index and its bounds must fit the "
-              "signed 32-bit execution representation",
+              "runtime VHDL array selection must fit the signed 32-bit "
+              "normalized-offset representation",
               index.span);
           return std::nullopt;
         }
         process_.operations.emplace_back(IntegerCheck{
-            *value, static_cast<std::int32_t>(low),
-            static_cast<std::int32_t>(high)});
+            *value, low, high});
+        const auto width = register_width(*value);
         const auto right = allocate_register(
-            32, frontend::ValueDomain::Integer);
+            width, frontend::ValueDomain::Integer);
         process_.operations.emplace_back(LoadConstant{
-            right, integer_value(dimension.range->right)});
+            right, integer_value(dimension.range->right, width)});
         const auto ordinal = allocate_register(
-            32, frontend::ValueDomain::Integer);
+            width, frontend::ValueDomain::Integer);
         process_.operations.emplace_back(IntegerBinary{
             IntegerBinaryOperator::subtract,
             ordinal,
             dimension.range->descending ? *value : right,
             dimension.range->descending ? right : *value});
-        if (dimension.stride == 1U) {
-          return ordinal;
+        auto offset = ordinal;
+        if (dimension.stride != 1U && maximum_ordinal != 0U) {
+          const auto stride = allocate_register(
+              width, frontend::ValueDomain::Integer);
+          process_.operations.emplace_back(LoadConstant{
+              stride,
+              integer_value(
+                  static_cast<std::int64_t>(dimension.stride), width)});
+          offset = allocate_register(
+              width, frontend::ValueDomain::Integer);
+          process_.operations.emplace_back(IntegerBinary{
+              IntegerBinaryOperator::multiply,
+              offset, ordinal, stride});
         }
-        const auto stride = allocate_register(
-            32, frontend::ValueDomain::Integer);
-        process_.operations.emplace_back(LoadConstant{
-            stride,
-            integer_value(
-                static_cast<std::int64_t>(dimension.stride))});
-        const auto scaled = allocate_register(
-            32, frontend::ValueDomain::Integer);
-        process_.operations.emplace_back(IntegerBinary{
-            IntegerBinaryOperator::multiply,
-            scaled, ordinal, stride});
-        return scaled;
+        process_.operations.emplace_back(IntegerCheck{
+            offset,
+            0,
+            static_cast<std::int64_t>(
+                maximum_ordinal * dimension.stride)});
+        return resize_register(offset, 32, true);
       };
 
   std::size_t selected_width = 0;
@@ -836,50 +869,65 @@ bool Lowerer::lower_assignment_selections(
                   index.span);
               return std::nullopt;
             }
-            const auto value = lower_expression(index, 32);
+            const auto index_width =
+                infer_width(index).value_or(std::size_t { 32 });
+            const auto value = lower_expression(index, index_width);
             const auto low = std::min(
                 dimension.range->left, dimension.range->right);
             const auto high = std::max(
                 dimension.range->left, dimension.range->right);
-            if (!value || register_width(*value) != 32
-                || low < std::numeric_limits<std::int32_t>::min()
-                || high > std::numeric_limits<std::int32_t>::max()) {
+            const auto maximum_ordinal = index_distance(
+                dimension.range->left, dimension.range->right);
+            const auto maximum_offset = static_cast<std::uint64_t>(
+                std::numeric_limits<std::int32_t>::max());
+            if (!value
+                || (register_width(*value) != 32
+                    && register_width(*value) != 64)
+                || maximum_ordinal > maximum_offset
+                || (maximum_ordinal != 0U
+                    && dimension.stride
+                        > maximum_offset / maximum_ordinal)) {
               report(
                   "FSIM-ELAB-VHARRAYSEL-002",
-                  "a runtime VHDL array target index and bounds must fit "
-                  "signed 32-bit execution",
+                  "runtime VHDL array target selection must fit the signed "
+                  "32-bit normalized-offset representation",
                   index.span);
               return std::nullopt;
             }
             process_.operations.emplace_back(IntegerCheck{
-                *value, static_cast<std::int32_t>(low),
-                static_cast<std::int32_t>(high)});
+                *value, low, high});
+            const auto width = register_width(*value);
             const auto right = allocate_register(
-                32, frontend::ValueDomain::Integer);
+                width, frontend::ValueDomain::Integer);
             process_.operations.emplace_back(LoadConstant{
-                right, integer_value(dimension.range->right)});
+                right, integer_value(dimension.range->right, width)});
             const auto ordinal = allocate_register(
-                32, frontend::ValueDomain::Integer);
+                width, frontend::ValueDomain::Integer);
             process_.operations.emplace_back(IntegerBinary{
                 IntegerBinaryOperator::subtract,
                 ordinal,
                 dimension.range->descending ? *value : right,
                 dimension.range->descending ? right : *value});
-            if (dimension.stride == 1U) {
-              return ordinal;
+            auto offset = ordinal;
+            if (dimension.stride != 1U && maximum_ordinal != 0U) {
+              const auto stride = allocate_register(
+                  width, frontend::ValueDomain::Integer);
+              process_.operations.emplace_back(LoadConstant{
+                  stride,
+                  integer_value(
+                      static_cast<std::int64_t>(dimension.stride), width)});
+              offset = allocate_register(
+                  width, frontend::ValueDomain::Integer);
+              process_.operations.emplace_back(IntegerBinary{
+                  IntegerBinaryOperator::multiply,
+                  offset, ordinal, stride});
             }
-            const auto stride = allocate_register(
-                32, frontend::ValueDomain::Integer);
-            process_.operations.emplace_back(LoadConstant{
-                stride,
-                integer_value(static_cast<std::int64_t>(
-                    dimension.stride))});
-            const auto scaled = allocate_register(
-                32, frontend::ValueDomain::Integer);
-            process_.operations.emplace_back(IntegerBinary{
-                IntegerBinaryOperator::multiply,
-                scaled, ordinal, stride});
-            return scaled;
+            process_.operations.emplace_back(IntegerCheck{
+                offset,
+                0,
+                static_cast<std::int64_t>(
+                    maximum_ordinal * dimension.stride)});
+            return resize_register(offset, 32, true);
           };
       if (selection_expression.kind == ExpressionKind::Index) {
         const auto index = static_integer_value(

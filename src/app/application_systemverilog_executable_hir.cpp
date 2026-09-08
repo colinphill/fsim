@@ -148,6 +148,8 @@ namespace {
                 return sv::ExpressionKind::replication;
             case frontend::ExpressionKind::DefaultChoice:
                 return sv::ExpressionKind::default_choice;
+            case frontend::ExpressionKind::Conditional:
+                return sv::ExpressionKind::invalid;
             }
             return sv::ExpressionKind::invalid;
         }

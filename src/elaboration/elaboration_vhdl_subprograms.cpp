@@ -8,15 +8,6 @@ using namespace elaboration_detail;
 
 namespace {
 
-bool conforming_type(
-    const frontend::Type& left,
-    const frontend::Type& right) {
-    return left.spelling == right.spelling
-        && left.named_type == right.named_type
-        && left.domain == right.domain
-        && left.is_signed == right.is_signed;
-}
-
 bool conforming_generic_parameters(
     const std::vector<frontend::ParameterDeclaration>& left,
     const std::vector<frontend::ParameterDeclaration>& right) {
@@ -30,7 +21,8 @@ bool conforming_generic_parameters(
             return false;
         }
         if (lhs.kind == frontend::ParameterKind::Value
-            && !conforming_type(lhs.type, rhs.type)) {
+            && !frontend::vhdl_subtype_indications_conform(
+                lhs.type, rhs.type)) {
             return false;
         }
         if (lhs.kind == frontend::ParameterKind::Function) {
@@ -40,7 +32,7 @@ bool conforming_generic_parameters(
             }
             const auto& lprofile = *lhs.function_profile;
             const auto& rprofile = *rhs.function_profile;
-            if (!conforming_type(
+            if (!frontend::vhdl_base_type_profiles_match(
                     lprofile.return_type,
                     rprofile.return_type)
                 || lprofile.arguments.size()
@@ -50,7 +42,7 @@ bool conforming_generic_parameters(
             for (std::size_t argument = 0;
                  argument < lprofile.arguments.size();
                  ++argument) {
-                if (!conforming_type(
+                if (!frontend::vhdl_parameter_type_profiles_match(
                         lprofile.arguments[argument].type,
                         rprofile.arguments[argument].type)) {
                     return false;
@@ -78,7 +70,7 @@ bool conforming_generic_parameters(
                 if (larg.direction != rarg.direction
                     || larg.object_class
                         != rarg.object_class
-                    || !conforming_type(
+                    || !frontend::vhdl_parameter_type_profiles_match(
                         larg.type, rarg.type)) {
                     return false;
                 }
@@ -93,7 +85,7 @@ bool conforming_function(
     const frontend::FunctionDeclaration& right) {
     if (left.name != right.name
         || left.pure != right.pure
-        || !conforming_type(
+        || !frontend::vhdl_base_type_profiles_match(
             left.return_type, right.return_type)
         || left.arguments.size() != right.arguments.size()) {
         return false;
@@ -102,7 +94,9 @@ bool conforming_function(
          index < left.arguments.size(); ++index) {
         if (left.arguments[index].direction
                 != right.arguments[index].direction
-            || !conforming_type(
+            || left.arguments[index].vhdl_file
+                != right.arguments[index].vhdl_file
+            || !frontend::vhdl_parameter_type_profiles_match(
                 left.arguments[index].type,
                 right.arguments[index].type)) {
             return false;
@@ -124,7 +118,8 @@ bool conforming_procedure(
         const auto& rhs = right.arguments[index];
         if (lhs.direction != rhs.direction
             || lhs.object_class != rhs.object_class
-            || !conforming_type(lhs.type, rhs.type)) {
+            || !frontend::vhdl_parameter_type_profiles_match(
+                lhs.type, rhs.type)) {
             return false;
         }
     }

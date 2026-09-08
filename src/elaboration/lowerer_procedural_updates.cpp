@@ -13,24 +13,26 @@ std::optional<DynamicIndex> Lowerer::lower_dynamic_index(
     const frontend::SourceSpan& span)
 {
     const auto range = expression_range(source, source_width);
-    if (!range
-        || range->left < std::numeric_limits<std::int32_t>::min()
-        || range->left > std::numeric_limits<std::int32_t>::max()
-        || range->right < std::numeric_limits<std::int32_t>::min()
-        || range->right > std::numeric_limits<std::int32_t>::max()
-        || range->width()
+    const auto range_width = range ? range->width() : 0U;
+    const auto vhdl = language_ == frontend::Language::Vhdl2008;
+    if (!range || range_width == 0U
+        || (!vhdl
+            && (range->left < std::numeric_limits<std::int32_t>::min()
+                || range->left > std::numeric_limits<std::int32_t>::max()
+                || range->right < std::numeric_limits<std::int32_t>::min()
+                || range->right > std::numeric_limits<std::int32_t>::max()))
+        || range_width
             > static_cast<std::uint64_t>(
                   std::numeric_limits<std::uint32_t>::max() - base_offset)
                 + 1U) {
         report(
             "FSIM-ELAB-DYNINDEX-001",
-            "dynamic packed selection requires a concrete one-dimensional range "
-            "representable by signed 32-bit indices and normalized offsets",
+            "dynamic packed selection requires a concrete one-dimensional "
+            "range with representable normalized offsets",
             span);
         return std::nullopt;
     }
-    if (language_ == frontend::Language::Vhdl2008
-        && !is_integer_expression(index)) {
+    if (vhdl && !is_integer_expression(index)) {
         report(
             "FSIM-ELAB-DYNINDEX-002",
             "a dynamic VHDL array index requires an integer-family expression",
@@ -42,9 +44,8 @@ std::optional<DynamicIndex> Lowerer::lower_dynamic_index(
     // the runtime's signed 32-bit index representation.  Passing the runtime
     // width down as expression context widens operations such as a 2-bit
     // `slot + 1'b1`, preventing the required modulo-4 wrap at the select.
-    const auto index_width = language_ == frontend::Language::SystemVerilog2017
-        ? infer_width(index).value_or(std::size_t { 32 })
-        : std::size_t { 32 };
+    const auto index_width =
+        infer_width(index).value_or(std::size_t { 32 });
     const auto lowered = lower_expression(index, index_width);
     if (!lowered) {
         report(
@@ -54,6 +55,68 @@ std::optional<DynamicIndex> Lowerer::lower_dynamic_index(
             index.span);
         return std::nullopt;
     }
+    if (vhdl) {
+        const auto maximum_offset = range_width - 1U;
+        if (maximum_offset
+            > static_cast<std::uint64_t>(
+                std::numeric_limits<std::int32_t>::max())) {
+            report(
+                "FSIM-ELAB-DYNINDEX-001",
+                "dynamic VHDL array selection exceeds the signed 32-bit "
+                "normalized-offset representation",
+                span);
+            return std::nullopt;
+        }
+        const auto width = register_width(*lowered);
+        if (width != 32U && width != 64U) {
+            report(
+                "FSIM-ELAB-DYNINDEX-002",
+                "a dynamic VHDL array index must lower to a 32- or 64-bit "
+                "integer value",
+                index.span);
+            return std::nullopt;
+        }
+        const bool direct_index = width == 32U
+            && range->left >= std::numeric_limits<std::int32_t>::min()
+            && range->left <= std::numeric_limits<std::int32_t>::max()
+            && range->right >= std::numeric_limits<std::int32_t>::min()
+            && range->right <= std::numeric_limits<std::int32_t>::max();
+        if (direct_index) {
+            return DynamicIndex {
+                *lowered,
+                range->left,
+                range->right,
+                base_offset,
+                true
+            };
+        }
+        process_.operations.emplace_back(IntegerCheck {
+            *lowered,
+            std::min(range->left, range->right),
+            std::max(range->left, range->right)
+        });
+        const auto right = allocate_register(
+            width, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(LoadConstant {
+            right, integer_value(range->right, width) });
+        const auto ordinal = allocate_register(
+            width, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(IntegerBinary {
+            IntegerBinaryOperator::subtract,
+            ordinal,
+            range->descending ? *lowered : right,
+            range->descending ? right : *lowered });
+        process_.operations.emplace_back(IntegerCheck {
+            ordinal, 0, static_cast<std::int64_t>(maximum_offset) });
+        const auto normalized = resize_register(ordinal, 32, true);
+        return DynamicIndex {
+            normalized,
+            static_cast<std::int64_t>(maximum_offset),
+            0,
+            base_offset,
+            true
+        };
+    }
     const auto normalized = resize_register(
         *lowered, 32, is_signed_expression(index));
     return DynamicIndex {
@@ -61,7 +124,7 @@ std::optional<DynamicIndex> Lowerer::lower_dynamic_index(
         range->left,
         range->right,
         base_offset,
-        language_ == frontend::Language::Vhdl2008
+        false
     };
 }
 
@@ -80,12 +143,12 @@ std::optional<DynamicPartIndex> Lowerer::lower_vhdl_dynamic_slice(
     const auto range = expression_range(
         expression.operands.front(), source_width);
     const bool descending = expression.text == "downto";
-    if (!range
-        || range->left < std::numeric_limits<std::int32_t>::min()
-        || range->left > std::numeric_limits<std::int32_t>::max()
-        || range->right < std::numeric_limits<std::int32_t>::min()
-        || range->right > std::numeric_limits<std::int32_t>::max()
+    const auto range_width = range ? range->width() : 0U;
+    if (!range || range_width == 0U
         || range->descending != descending
+        || range_width - 1U
+            > static_cast<std::uint64_t>(
+                std::numeric_limits<std::int32_t>::max())
         || selected_width == 0
         || selected_width - 1U
             > static_cast<std::size_t>(
@@ -93,7 +156,7 @@ std::optional<DynamicPartIndex> Lowerer::lower_vhdl_dynamic_slice(
         report(
             "FSIM-ELAB-VHSLICE-001",
             "a dynamic VHDL slice requires a nonempty width representable by "
-            "its signed 32-bit distance, a concrete signed 32-bit source "
+            "its signed 32-bit normalized distance, a concrete source "
             "range, and matching direction",
             expression.span);
         return std::nullopt;
@@ -108,41 +171,63 @@ std::optional<DynamicPartIndex> Lowerer::lower_vhdl_dynamic_slice(
             expression.span);
         return std::nullopt;
     }
-    const auto left = lower_expression(left_expression, 32);
-    const auto right = lower_expression(right_expression, 32);
-    if (!left || !right || register_width(*left) != 32
-        || register_width(*right) != 32) {
+    const auto left = lower_expression(
+        left_expression,
+        infer_width(left_expression).value_or(std::size_t { 32 }));
+    const auto right = lower_expression(
+        right_expression,
+        infer_width(right_expression).value_or(std::size_t { 32 }));
+    if (!left || !right
+        || (register_width(*left) != 32 && register_width(*left) != 64)
+        || register_width(*left) != register_width(*right)) {
         report(
             "FSIM-ELAB-VHSLICE-002",
             "dynamic VHDL slice bounds must lower to signed 32-bit values",
             expression.span);
         return std::nullopt;
     }
-    const auto lower = static_cast<std::int32_t>(
-        std::min(range->left, range->right));
-    const auto upper = static_cast<std::int32_t>(
-        std::max(range->left, range->right));
+    const auto lower = std::min(range->left, range->right);
+    const auto upper = std::max(range->left, range->right);
     process_.operations.emplace_back(IntegerCheck { *left, lower, upper });
     process_.operations.emplace_back(IntegerCheck { *right, lower, upper });
+    const auto width = register_width(*left);
+    const auto right_bound = allocate_register(
+        width, frontend::ValueDomain::Integer);
+    process_.operations.emplace_back(LoadConstant {
+        right_bound, integer_value(range->right, width) });
+    const auto normalize = [&](const RegisterId value) {
+        const auto ordinal = allocate_register(
+            width, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(IntegerBinary {
+            IntegerBinaryOperator::subtract,
+            ordinal,
+            range->descending ? value : right_bound,
+            range->descending ? right_bound : value });
+        process_.operations.emplace_back(IntegerCheck {
+            ordinal, 0, static_cast<std::int64_t>(range_width - 1U) });
+        return resize_register(ordinal, 32, true);
+    };
+    const auto normalized_left = normalize(*left);
+    const auto normalized_right = normalize(*right);
     const auto distance = allocate_register(
         32, frontend::ValueDomain::Integer);
     process_.operations.emplace_back(IntegerBinary {
         IntegerBinaryOperator::subtract,
         distance,
-        descending ? *left : *right,
-        descending ? *right : *left });
+        normalized_left,
+        normalized_right });
     const auto required_distance = static_cast<std::int32_t>(
         selected_width - 1U);
     process_.operations.emplace_back(IntegerCheck {
         distance, required_distance, required_distance });
     return DynamicPartIndex {
-        *right,
-        range->left,
-        range->right,
+        normalized_right,
+        static_cast<std::int64_t>(range_width - 1U),
+        0,
         base_offset,
         static_cast<std::uint32_t>(selected_width),
-        descending,
-        range->descending
+        true,
+        true
     };
 }
 

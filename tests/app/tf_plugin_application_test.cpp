@@ -37,6 +37,7 @@ int main() {
       StandardRevision::Vhdl2000,
       StandardRevision::Vhdl2002,
       StandardRevision::Vhdl2008,
+      StandardRevision::Vhdl2019,
   };
   for (const auto profile : retained_profiles) {
     require(tf_application_profile_supported(profile),

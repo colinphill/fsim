@@ -273,7 +273,7 @@ void test_vhdl_shift_rotate(
 
     fsim::project::SourceSet sources;
     sources.language = fsim::project::Language::vhdl;
-    sources.standard = "2008";
+    sources.standard = "2019";
     sources.library = "work";
     sources.files.push_back(source);
     config.source_sets.push_back(std::move(sources));
@@ -351,9 +351,9 @@ void test_vhdl_shift_rotate(
             "00000010",
             "ZZZZ0110",
             "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
-            "00000000000000000000000000000111",
+            "0000000000000000000000000000000000000000000000000000000000000111",
             "00111100",
-            "00000000000000000000000000001011",
+            "0000000000000000000000000000000000000000000000000000000000001011",
             "11111011",
             "10100101",
             "01011010",

@@ -188,6 +188,8 @@ enum class DeclarationKind : std::uint8_t {
     implicit,
     attribute,
     group,
+    // Appended to preserve the durable values of existing declaration kinds.
+    mode_view,
 };
 
 struct TypeReference {

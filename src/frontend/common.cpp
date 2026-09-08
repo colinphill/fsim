@@ -179,6 +179,39 @@ std::optional<std::uint64_t> PackedMember::width() const noexcept
     return std::nullopt;
 }
 
+IntegerRange vhdl_predefined_integer_range(
+    const VhdlStandard standard,
+    const std::string_view subtype)
+{
+    const auto first = standard >= VhdlStandard::Vhdl2019
+        ? std::numeric_limits<std::int64_t>::min()
+        : static_cast<std::int64_t>(
+              std::numeric_limits<std::int32_t>::min());
+    const auto last = standard >= VhdlStandard::Vhdl2019
+        ? std::numeric_limits<std::int64_t>::max()
+        : static_cast<std::int64_t>(
+              std::numeric_limits<std::int32_t>::max());
+    return IntegerRange {
+        subtype == "integer" ? first : subtype == "natural" ? 0 : 1,
+        last,
+        false
+    };
+}
+
+Type vhdl_predefined_integer_type(
+    const VhdlStandard standard,
+    const std::string_view subtype)
+{
+    Type type;
+    type.domain = ValueDomain::Integer;
+    type.spelling = subtype;
+    type.is_signed = true;
+    type.integer_range = vhdl_predefined_integer_range(standard, subtype);
+    type.vhdl_integer_storage_width =
+        vhdl_predefined_integer_storage_width(standard);
+    return type;
+}
+
 std::optional<std::uint64_t> Type::width() const noexcept
 {
     if (systemverilog_scalar == SystemVerilogScalarKind::ShortReal) {
@@ -221,12 +254,199 @@ std::optional<std::uint64_t> Type::width() const noexcept
     case ValueDomain::Boolean:
         return 1;
     case ValueDomain::Integer:
-        return 32;
+        return vhdl_integer_storage_width != 0
+            ? std::optional<std::uint64_t> {
+                  vhdl_integer_storage_width }
+            : std::optional<std::uint64_t> { 32 };
     case ValueDomain::String:
     case ValueDomain::Unknown:
         return std::nullopt;
     }
     return std::nullopt;
+}
+
+namespace {
+
+std::string_view vhdl_simple_type_name(const std::string_view spelling) {
+    const auto separator = spelling.find_last_of('.');
+    return spelling.substr(
+        separator == std::string_view::npos ? 0U : separator + 1U);
+}
+
+bool vhdl_array_type(const Type& type) {
+    const auto name = vhdl_simple_type_name(type.spelling);
+    return type.vhdl_array.has_value()
+        || name == "bit_vector"
+        || name == "std_logic_vector"
+        || name == "std_ulogic_vector"
+        || name == "signed"
+        || name == "unsigned"
+        || name == "string";
+}
+
+bool vhdl_physical_type(const Type& type) {
+    return type.vhdl_physical.has_value()
+        || type.nominal_type == "@builtin:time";
+}
+
+bool vhdl_floating_type(const Type& type) {
+    return vhdl_simple_type_name(type.spelling) == "real";
+}
+
+bool vhdl_discrete_type(const Type& type) {
+    if (vhdl_array_type(type) || vhdl_physical_type(type)
+        || vhdl_floating_type(type) || type.vhdl_access || type.vhdl_file
+        || type.vhdl_protected) {
+        return false;
+    }
+    return type.domain == ValueDomain::Integer
+        || type.domain == ValueDomain::Boolean
+        || type.domain == ValueDomain::Bit2
+        || type.domain == ValueDomain::Logic4
+        || type.domain == ValueDomain::Logic9
+        || !type.enumeration_literals.empty();
+}
+
+bool vhdl_unspecified_component_accepts(
+    const Type& formal, const Type& actual) {
+    if (formal.vhdl_unspecified) {
+        return vhdl_unspecified_type_accepts(formal, actual);
+    }
+    const auto formal_name = vhdl_simple_type_name(formal.spelling);
+    const auto actual_name = vhdl_simple_type_name(actual.spelling);
+    if (!formal.named_type.empty() || !formal.nominal_type.empty()) {
+        return (!formal.nominal_type.empty()
+                   && formal.nominal_type == actual.nominal_type)
+            || formal_name == actual_name;
+    }
+    return formal.domain == actual.domain
+        && (formal_name.empty() || formal_name == actual_name);
+}
+
+} // namespace
+
+bool vhdl_unspecified_type_accepts(const Type& formal, const Type& actual) {
+    if (!formal.vhdl_unspecified || actual.vhdl_unspecified) {
+        return false;
+    }
+    const auto& profile = *formal.vhdl_unspecified;
+    const bool array = vhdl_array_type(actual);
+    const bool physical = vhdl_physical_type(actual);
+    const bool floating = vhdl_floating_type(actual);
+    const bool discrete = vhdl_discrete_type(actual);
+    switch (profile.type_class) {
+    case VhdlUnspecifiedTypeClass::Private:
+        return !actual.vhdl_file && !actual.vhdl_protected;
+    case VhdlUnspecifiedTypeClass::Scalar:
+        return discrete || physical || floating;
+    case VhdlUnspecifiedTypeClass::Discrete:
+        return discrete;
+    case VhdlUnspecifiedTypeClass::Integer:
+        return actual.domain == ValueDomain::Integer && !physical;
+    case VhdlUnspecifiedTypeClass::Physical:
+        return physical;
+    case VhdlUnspecifiedTypeClass::Floating:
+        return floating;
+    case VhdlUnspecifiedTypeClass::Access:
+        if (!actual.vhdl_access) {
+            return false;
+        }
+        return profile.component_types.empty()
+            || (!actual.vhdl_access->designated_types.empty()
+                && vhdl_unspecified_component_accepts(
+                    profile.component_types.front(),
+                    actual.vhdl_access->designated_types.front()));
+    case VhdlUnspecifiedTypeClass::File:
+        if (!actual.vhdl_file) {
+            return false;
+        }
+        return profile.component_types.empty()
+            || (!actual.vhdl_file->element_types.empty()
+                && vhdl_unspecified_component_accepts(
+                    profile.component_types.front(),
+                    actual.vhdl_file->element_types.front()));
+    case VhdlUnspecifiedTypeClass::Array: {
+        if (!array) {
+            return false;
+        }
+        const auto actual_dimensions = actual.vhdl_array
+            ? actual.vhdl_array->dimensions.size() : 1U;
+        if (profile.array_index_count != actual_dimensions
+            || profile.component_types.size()
+                != profile.array_index_count + 1U) {
+            return false;
+        }
+        if (actual.vhdl_array) {
+            for (std::size_t index = 0;
+                 index < profile.array_index_count; ++index) {
+                Type actual_index;
+                actual_index.spelling =
+                    actual.vhdl_array->dimensions[index].index_subtype;
+                if (actual_index.spelling == "integer"
+                    || actual_index.spelling == "natural"
+                    || actual_index.spelling == "positive") {
+                    actual_index.domain = ValueDomain::Integer;
+                }
+                if (!vhdl_unspecified_component_accepts(
+                        profile.component_types[index], actual_index)) {
+                    return false;
+                }
+            }
+        } else if (!vhdl_unspecified_component_accepts(
+                       profile.component_types.front(),
+                       Type{ValueDomain::Integer, "natural", std::nullopt,
+                            true})) {
+            return false;
+        }
+        Type actual_element;
+        if (actual.vhdl_array
+            && !actual.vhdl_array->element_types.empty()) {
+            actual_element = actual.vhdl_array->element_types.front();
+        } else {
+            const auto name = vhdl_simple_type_name(actual.spelling);
+            actual_element.spelling = name == "string" ? "character"
+                : name == "bit_vector" ? "bit" : "std_logic";
+            actual_element.domain = name == "bit_vector"
+                ? ValueDomain::Bit2 : ValueDomain::Logic9;
+        }
+        return vhdl_unspecified_component_accepts(
+            profile.component_types.back(), actual_element);
+    }
+    case VhdlUnspecifiedTypeClass::None:
+        return false;
+    }
+    return false;
+}
+
+std::string vhdl_inferred_type_identity(const Type& type) {
+    if (!type.nominal_type.empty()) {
+        return "nominal:" + type.nominal_type;
+    }
+    std::string result = "structural:" + type.spelling + ":"
+        + std::to_string(static_cast<unsigned>(type.domain)) + ":"
+        + (type.is_signed ? "signed" : "unsigned");
+    if (const auto width = type.width()) {
+        result += ":width=" + std::to_string(*width);
+    } else {
+        result += ":width=?";
+    }
+    if (type.vhdl_array) {
+        result += ":dimensions="
+            + std::to_string(type.vhdl_array->dimensions.size());
+        for (const auto& dimension : type.vhdl_array->dimensions) {
+            result += ":index=" + dimension.index_subtype;
+        }
+    }
+    if (type.vhdl_access) {
+        result += ":access";
+    }
+    if (type.vhdl_file) {
+        result += ":file";
+    }
+    if (type.vhdl_physical) {
+        result += ":physical";
+    }
+    return result;
 }
 
 namespace {
@@ -306,6 +526,48 @@ bool vhdl_subtype_indications_conform(const Type& left, const Type& right)
         }
     }
     return true;
+}
+
+bool vhdl_base_type_profiles_match(const Type& left, const Type& right)
+{
+    if (left.vhdl_unspecified || right.vhdl_unspecified) {
+        return left.vhdl_unspecified && right.vhdl_unspecified
+            && vhdl_inferred_type_identity(left)
+                == vhdl_inferred_type_identity(right);
+    }
+    if (!left.nominal_type.empty() || !right.nominal_type.empty()) {
+        return !left.nominal_type.empty() && !right.nominal_type.empty()
+            && left.nominal_type == right.nominal_type;
+    }
+    if (!left.named_type.empty() || !right.named_type.empty()) {
+        return left.named_type == right.named_type;
+    }
+    if (left.domain != right.domain) {
+        return false;
+    }
+    if (left.domain == ValueDomain::Integer
+        || left.domain == ValueDomain::Boolean
+        || left.domain == ValueDomain::String) {
+        return true;
+    }
+    const auto simple_name = [](const std::string_view spelling) {
+        const auto separator = spelling.find_last_of('.');
+        return spelling.substr(separator == std::string_view::npos
+                ? 0U : separator + 1U);
+    };
+    const auto left_name = simple_name(left.spelling);
+    const auto right_name = simple_name(right.spelling);
+    const bool standard_logic_base =
+        (left_name == "std_logic" || left_name == "std_ulogic")
+        && (right_name == "std_logic" || right_name == "std_ulogic");
+    return standard_logic_base
+        || (left_name == right_name && left.is_signed == right.is_signed);
+}
+
+bool vhdl_parameter_type_profiles_match(const Type& left, const Type& right)
+{
+    return left.vhdl_unspecified || right.vhdl_unspecified
+        || vhdl_base_type_profiles_match(left, right);
 }
 
 const DesignUnit* ParsedDesign::find(UnitKind kind,

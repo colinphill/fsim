@@ -55,6 +55,7 @@ namespace {
         case frontend::StandardRevision::Vhdl2000:
         case frontend::StandardRevision::Vhdl2002:
         case frontend::StandardRevision::Vhdl2008:
+        case frontend::StandardRevision::Vhdl2019:
             break;
         }
         return runtime::SystemVerilogVpiLanguage::SystemVerilog2017;

@@ -13,23 +13,19 @@ const frontend::Type* type_mark(
     if (alias != unit.type_aliases.end()) {
         return &alias->type;
     }
-    const auto builtin_integer = [](const std::int64_t left,
-                                    const std::int64_t right,
-                                    const std::string_view spelling) {
-      frontend::Type type;
-      type.domain = frontend::ValueDomain::Integer;
-      type.spelling = spelling;
-      type.integer_range = frontend::IntegerRange{left, right, false};
-      return type;
-    };
-    static const auto integer = builtin_integer(
-        std::numeric_limits<std::int32_t>::min(),
-        std::numeric_limits<std::int32_t>::max(),
-        "integer");
-    static const auto natural = builtin_integer(
-        0, std::numeric_limits<std::int32_t>::max(), "natural");
-    static const auto positive = builtin_integer(
-        1, std::numeric_limits<std::int32_t>::max(), "positive");
+    static const auto integer_2008 = frontend::vhdl_predefined_integer_type(
+        frontend::VhdlStandard::Vhdl2008, "integer");
+    static const auto natural_2008 = frontend::vhdl_predefined_integer_type(
+        frontend::VhdlStandard::Vhdl2008, "natural");
+    static const auto positive_2008 = frontend::vhdl_predefined_integer_type(
+        frontend::VhdlStandard::Vhdl2008, "positive");
+    static const auto integer_2019 = frontend::vhdl_predefined_integer_type(
+        frontend::VhdlStandard::Vhdl2019, "integer");
+    static const auto natural_2019 = frontend::vhdl_predefined_integer_type(
+        frontend::VhdlStandard::Vhdl2019, "natural");
+    static const auto positive_2019 = frontend::vhdl_predefined_integer_type(
+        frontend::VhdlStandard::Vhdl2019, "positive");
+    const auto vhdl_2019 = unit.vhdl_standard >= frontend::VhdlStandard::Vhdl2019;
     const auto builtin_discrete = [](const frontend::ValueDomain domain,
                                      const std::string_view spelling) {
       frontend::Type type;
@@ -42,13 +38,13 @@ const frontend::Type* type_mark(
     static const auto bit = builtin_discrete(
         frontend::ValueDomain::Bit2, "bit");
     if (name == "integer") {
-        return &integer;
+        return vhdl_2019 ? &integer_2019 : &integer_2008;
     }
     if (name == "natural") {
-        return &natural;
+        return vhdl_2019 ? &natural_2019 : &natural_2008;
     }
     if (name == "positive") {
-        return &positive;
+        return vhdl_2019 ? &positive_2019 : &positive_2008;
     }
     if (name == "boolean") {
         return &boolean;
@@ -291,15 +287,18 @@ bool fold_type_attribute(
         result_domain = frontend::ValueDomain::Boolean;
     } else if (expression.text == "'length") {
         const auto distance = null_range ? std::uint64_t{0}
-            : index_distance(left, right) + 1U;
-        if (distance
-            > static_cast<std::uint64_t>(
-                std::numeric_limits<std::int32_t>::max())) {
+            : index_distance(left, right);
+        const auto integer_maximum = static_cast<std::uint64_t>(
+            frontend::vhdl_predefined_integer_range(
+                unit.vhdl_standard, "integer").right);
+        if (!null_range && distance >= integer_maximum) {
             range_error = true;
             error = "VHDL attribute length is outside the bounded integer range";
             return false;
         }
-        value = static_cast<std::int64_t>(distance);
+        value = null_range
+            ? 0
+            : static_cast<std::int64_t>(distance + 1U);
     } else {
         const auto argument = evaluate_constant_expression(
             expression.operands[1], environment, error);
@@ -320,13 +319,14 @@ bool fold_type_attribute(
             const bool successor = expression.text == "'succ"
                 || (expression.text == "'leftof" && descending)
                 || (expression.text == "'rightof" && !descending);
-            value = *argument + (successor ? 1 : -1);
-            if (value < low || value > high) {
+            if ((successor && *argument >= high)
+                || (!successor && *argument <= low)) {
                 range_error = true;
                 error = expression.text
                     + " argument has no result inside the scalar range";
                 return false;
             }
+            value = *argument + (successor ? 1 : -1);
             result_domain = type->domain;
         }
     }
@@ -476,6 +476,15 @@ void fold_vhdl_static_type_expressions(
         }
       }
       if (type.vhdl_protected) {
+        for (auto& generic : type.vhdl_protected->generic_parameters) {
+          self(self, generic.type);
+          if (generic.default_type) {
+            self(self, *generic.default_type);
+          }
+          if (generic.default_value.valid()) {
+            fold_expression(generic.default_value);
+          }
+        }
         for (auto& variable : type.vhdl_protected->variables) {
           self(self, variable.type);
         }
@@ -489,6 +498,12 @@ void fold_vhdl_static_type_expressions(
           for (auto& argument : procedure.arguments) {
             self(self, argument.type);
           }
+        }
+      }
+      if (type.vhdl_unspecified) {
+        for (auto& component :
+             type.vhdl_unspecified->component_types) {
+          self(self, component);
         }
       }
       for (auto& member : type.packed_members) {

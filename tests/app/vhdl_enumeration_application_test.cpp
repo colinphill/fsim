@@ -341,9 +341,11 @@ package State_Types is
   constant Initial_State : State_T := Load;
   constant Attribute_Default : State_T := State_T'val(1);
   constant Active_Default : Active_T := Load;
-  constant State_Count : integer := State_T'length;
+  constant State_Count : integer :=
+    State_T'pos(State_T'high) - State_T'pos(State_T'low) + 1;
   constant Reverse_Left : Reverse_T := Reverse_T'left;
-  constant Reverse_Length : integer := Reverse_T'length;
+  constant Reverse_Length : integer :=
+    State_T'pos(Reverse_T'left) - State_T'pos(Reverse_T'right) + 1;
   type Symbol_T is ('A', 'B', 'C');
 end package;
 )";
@@ -455,7 +457,8 @@ begin
   right_result <= State_T'right;
   low_result <= State_T'low;
   high_result <= State_T'high;
-  length_result <= State_T'length;
+  length_result <=
+    State_T'pos(State_T'high) - State_T'pos(State_T'low) + 1;
   ascending_result <= State_T'ascending;
   position_result <= State_Alias_T'pos(source);
   value_result <= Top_Default
@@ -469,7 +472,8 @@ begin
     when Reverse_Left = Done else Load;
   constrained_right <= Reverse_T'right;
   constrained_length <=
-    Reverse_T'length + Reverse_Length - 3;
+    (State_T'pos(Reverse_T'left) - State_T'pos(Reverse_T'right) + 1)
+    + Reverse_Length - 3;
   constrained_ascending <= Reverse_T'ascending;
   constrained_leftof <= Reverse_T'leftof(Load);
   constrained_rightof <= Reverse_T'rightof(Done);

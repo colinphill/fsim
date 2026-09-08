@@ -225,7 +225,10 @@ DesignUnit HierarchyBuilder::effective_unit(
                     { },
                     frontend::TypeDeclarationKind::
                         SystemVerilogTypedef,
-                    { } });
+                    { },
+                    { },
+                    { },
+                    false });
         }
         return result;
     }
@@ -398,6 +401,37 @@ DesignUnit HierarchyBuilder::effective_unit(
     // visibility.
     auto effective_interface = *entity;
     effective_interface.type_aliases.clear();
+    // A mode view is a declaration rather than a named type, so it is not
+    // carried by type_environment. Rebuild only the entity interface's own
+    // package visibility and retain those declarations while keeping
+    // entity-local declarations hidden from the preceding port clause.
+    DesignUnit interface_visibility;
+    interface_visibility.language = entity->language;
+    interface_visibility.library = entity->library;
+    interface_visibility.name = entity->name;
+    interface_visibility.span = entity->span;
+    std::vector<frontend::VhdlContextItem> interface_context;
+    std::vector<const DesignUnit*> interface_context_stack;
+    expand_vhdl_context_references(
+        interface_visibility,
+        entity->vhdl_context,
+        interface_context,
+        interface_context_stack,
+        unit_library);
+    std::vector<const DesignUnit*> interface_import_stack;
+    NamedTypeEnvironment interface_imported_types;
+    import_vhdl_package_constants(
+        interface_visibility,
+        interface_context,
+        interface_import_stack,
+        interface_imported_types);
+    for (auto& declaration : interface_visibility.type_aliases) {
+        if (declaration.declaration_kind
+            == frontend::TypeDeclarationKind::VhdlModeView) {
+            effective_interface.type_aliases.push_back(
+                std::move(declaration));
+        }
+    }
     resolve_named_types(
         effective_interface, type_environment, true);
     for (const auto& generic :
@@ -504,7 +538,10 @@ DesignUnit HierarchyBuilder::effective_unit(
                 result.span,
                 { },
                 frontend::TypeDeclarationKind::Alias,
-                { } });
+                { },
+                { },
+                { },
+                false });
     }
     for (auto& component :
         result.vhdl_component_declarations) {
@@ -970,7 +1007,8 @@ std::optional<SignalId> HierarchyBuilder::add_owned_signal(
         declaration.type.enumeration_range,
         declaration.is_port,
         declaration.direction,
-        declaration.span });
+        declaration.span,
+        { } });
     if (!declaration.type.vhdl_resolution_function.empty()) {
         resolver_by_signal_.insert_or_assign(
             id, declaration.type.vhdl_resolution_function);
@@ -1932,12 +1970,56 @@ HierarchyBuilder::PortAliases HierarchyBuilder::connect_ports(
         // append instead of retaining a reference into the vector.
         const auto actual_info = design_.signal_info_.at(actual->second);
         const auto diagnostics_before = diagnostics_.size();
-        validate_boundary_type(
-            port,
-            actual_info,
-            path,
-            connection.span,
-            cross_language);
+        if (!port.vhdl_mode_view) {
+            validate_boundary_type(
+                port,
+                actual_info,
+                path,
+                connection.span,
+                cross_language);
+        }
+        if (port.vhdl_mode_view
+            && diagnostics_.size() == diagnostics_before) {
+            VhdlModeViewBinding view_binding;
+            view_binding.formal = path + "." + port.name;
+            view_binding.view = port.vhdl_mode_view->view;
+            view_binding.kind = port.vhdl_mode_view->kind;
+            view_binding.source = connection.span;
+            view_binding.elements.reserve(
+                port.vhdl_mode_view->elements.size());
+            bool all_input = !port.vhdl_mode_view->elements.empty();
+            bool has_writable_element = false;
+            for (const auto& element : port.vhdl_mode_view->elements) {
+                view_binding.elements.push_back({
+                    view_binding.formal + "." + element.path,
+                    actual_info.name + "." + element.path,
+                    element.direction,
+                    element.span });
+                all_input = all_input
+                    && element.direction
+                        == frontend::PortDirection::Input;
+                has_writable_element = has_writable_element
+                    || element.direction
+                        == frontend::PortDirection::Output
+                    || element.direction
+                        == frontend::PortDirection::Inout
+                    || element.direction
+                        == frontend::PortDirection::Buffer;
+            }
+            design_.signal_info_.at(actual->second)
+                .vhdl_mode_view_bindings.push_back(
+                    std::move(view_binding));
+            if (all_input) {
+                result.read_only_signals.insert(actual->second);
+            }
+            if (has_writable_element) {
+                note_boundary_driver(
+                    actual->second,
+                    binding,
+                    path + "." + port.name,
+                    connection.span);
+            }
+        }
         const auto formal_width = static_cast<std::size_t>(
             port.type.width().value_or(1));
         auto formal_signal = actual->second;

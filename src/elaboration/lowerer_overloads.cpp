@@ -63,6 +63,15 @@ bind_actual_shape(
 bool Lowerer::vhdl_callable_type_matches(
     const frontend::Type& formal,
     const frontend::Type& actual) const {
+  if (formal.vhdl_unspecified || actual.vhdl_unspecified) {
+    if (formal.vhdl_unspecified && actual.vhdl_unspecified) {
+      return frontend::vhdl_inferred_type_identity(formal)
+          == frontend::vhdl_inferred_type_identity(actual);
+    }
+    return formal.vhdl_unspecified
+        ? frontend::vhdl_unspecified_type_accepts(formal, actual)
+        : frontend::vhdl_unspecified_type_accepts(actual, formal);
+  }
   if (formal.domain != actual.domain
       || formal.is_signed != actual.is_signed) {
     return false;
@@ -114,6 +123,11 @@ bool Lowerer::vhdl_callable_type_matches(
 bool Lowerer::vhdl_expression_matches_type(
     const Expression& expression,
     const frontend::Type& formal) const {
+  if (formal.vhdl_unspecified) {
+    const auto actual = vhdl_expression_type(expression);
+    return actual
+        && frontend::vhdl_unspecified_type_accepts(formal, *actual);
+  }
   if (formal.vhdl_access
       && expression.kind == ExpressionKind::Call
       && (expression.text == "@vhdl-null"
@@ -167,6 +181,11 @@ bool Lowerer::vhdl_expression_matches_type(
   if (expression.kind == ExpressionKind::Aggregate) {
     return formal.vhdl_array.has_value()
         || !formal.packed_members.empty();
+  }
+  if (expression.kind == ExpressionKind::Conditional) {
+    return expression.operands.size() == 3U
+        && vhdl_expression_matches_type(expression.operands[1], formal)
+        && vhdl_expression_matches_type(expression.operands[2], formal);
   }
   if (expression.kind == ExpressionKind::Call) {
     if (const auto actual = vhdl_expression_type(expression)) {
@@ -224,11 +243,28 @@ bool Lowerer::vhdl_function_profile_matches(
   if (!actuals) {
     return false;
   }
+  std::unordered_map<std::string, std::string> inferred_types;
   for (std::size_t argument = 0;
        argument < function.arguments.size(); ++argument) {
+    const auto& formal = function.arguments[argument].type;
+    if (formal.vhdl_unspecified) {
+      const auto actual = vhdl_expression_type(*(*actuals)[argument]);
+      if (!actual
+          || !frontend::vhdl_unspecified_type_accepts(formal, *actual)) {
+        return false;
+      }
+      const auto& profile = *formal.vhdl_unspecified;
+      const auto key = profile.inference_identity.empty()
+          ? std::to_string(argument) : profile.inference_identity;
+      const auto identity = frontend::vhdl_inferred_type_identity(*actual);
+      const auto [found, inserted] = inferred_types.emplace(key, identity);
+      if (!inserted && found->second != identity) {
+        return false;
+      }
+    }
     if (!vhdl_expression_matches_type(
             *(*actuals)[argument],
-            function.arguments[argument].type)) {
+            formal)) {
       return false;
     }
   }
@@ -268,11 +304,25 @@ Lowerer::CallableSelection Lowerer::select_function_overload(
   if (matches.size() == 1) {
     return {true, matches.front()};
   }
+  const bool unspecified_candidate = std::ranges::any_of(
+      found->second, [&](const std::size_t index) {
+        return std::ranges::any_of(
+            function_frames_[index].source->arguments,
+            [](const auto& argument) {
+              return argument.type.vhdl_unspecified != nullptr;
+            });
+      });
   report(
-      matches.empty()
+      matches.empty() && unspecified_candidate
+          ? "FSIM-ELAB-VHUNSPEC-001"
+          : matches.empty()
           ? "FSIM-ELAB-VHOVER-002"
           : "FSIM-ELAB-VHOVER-001",
-      matches.empty()
+      matches.empty() && unspecified_candidate
+          ? "VHDL function call '" + expression.text
+                + "' does not determine one unique legal actual type for "
+                  "its unspecified formal"
+          : matches.empty()
           ? "VHDL function call '" + expression.text
                 + "' matches no visible overload"
           : "VHDL function call '" + expression.text
@@ -306,9 +356,31 @@ Lowerer::CallableSelection Lowerer::select_procedure_overload(
       continue;
     }
     bool compatible = true;
+    std::unordered_map<std::string, std::string> inferred_types;
     for (std::size_t argument = 0;
          argument < procedure.arguments.size(); ++argument) {
       const auto& formal = procedure.arguments[argument];
+      if (formal.type.vhdl_unspecified) {
+        const auto actual_type =
+            vhdl_expression_type(*(*actuals)[argument]);
+        if (!actual_type
+            || !frontend::vhdl_unspecified_type_accepts(
+                formal.type, *actual_type)) {
+          compatible = false;
+          break;
+        }
+        const auto& profile = *formal.type.vhdl_unspecified;
+        const auto key = profile.inference_identity.empty()
+            ? std::to_string(argument) : profile.inference_identity;
+        const auto identity =
+            frontend::vhdl_inferred_type_identity(*actual_type);
+        const auto [found_type, inserted] =
+            inferred_types.emplace(key, identity);
+        if (!inserted && found_type->second != identity) {
+          compatible = false;
+          break;
+        }
+      }
       if (!vhdl_expression_matches_type(
               *(*actuals)[argument], formal.type)) {
         compatible = false;
@@ -338,11 +410,25 @@ Lowerer::CallableSelection Lowerer::select_procedure_overload(
   if (matches.size() == 1) {
     return {true, matches.front()};
   }
+  const bool unspecified_candidate = std::ranges::any_of(
+      found->second, [&](const std::size_t index) {
+        return std::ranges::any_of(
+            procedure_frames_[index].source->arguments,
+            [](const auto& argument) {
+              return argument.type.vhdl_unspecified != nullptr;
+            });
+      });
   report(
-      matches.empty()
+      matches.empty() && unspecified_candidate
+          ? "FSIM-ELAB-VHUNSPEC-001"
+          : matches.empty()
           ? "FSIM-ELAB-VHOVER-005"
           : "FSIM-ELAB-VHOVER-004",
-      matches.empty()
+      matches.empty() && unspecified_candidate
+          ? "VHDL procedure call '" + statement.procedure_name
+                + "' does not determine one unique legal actual type for "
+                  "its unspecified formal"
+          : matches.empty()
           ? "VHDL procedure call '" + statement.procedure_name
                 + "' matches no visible overload"
           : "VHDL procedure call '" + statement.procedure_name

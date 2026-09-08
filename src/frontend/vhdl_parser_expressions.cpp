@@ -291,16 +291,16 @@ Expression VhdlParser::parse_expression(
     if (minimum_precedence == 0 && allow_conditional
         && match_keyword("when", true)) {
         require_vhdl_standard(
-            previous(), VhdlStandard::Vhdl2008, "a conditional expression",
-            "select VHDL-2008 or rewrite it as a conditional statement");
+            previous(), VhdlStandard::Vhdl2019, "a conditional expression",
+            "select VHDL-2019 or rewrite it as a conditional statement");
         const auto begin_span = left.span;
         auto condition = parse_expression();
         expect_keyword("else", true, "FSIM-VHDL-PARSE-115");
         auto when_false = parse_expression();
         const auto span = cover(begin_span, when_false.span);
         left = Expression {
-            ExpressionKind::Call,
-            "?:",
+            ExpressionKind::Conditional,
+            "when",
             { std::move(condition),
                 std::move(left),
                 std::move(when_false) },
@@ -728,7 +728,7 @@ Expression VhdlParser::parse_primary()
             }
             const auto attribute = expect_identifier("attribute designator");
             const auto designator = vhdl_name(attribute.text);
-            static constexpr std::array<std::string_view, 32> supported_attributes {
+            static constexpr std::array<std::string_view, 36> supported_attributes {
                 "left", "right", "low", "high",
                 "length", "ascending", "event", "last_value",
                 "last_event", "last_active", "stable", "quiet",
@@ -736,7 +736,8 @@ Expression VhdlParser::parse_primary()
                 "driving_value", "pos", "val", "succ",
                 "pred", "leftof", "rightof", "range",
                 "reverse_range", "image", "value", "simple_name",
-                "instance_name", "path_name", "subtype", "element"
+                "instance_name", "path_name", "subtype", "element",
+                "index", "designated_subtype", "reflect", "converse"
             };
             if (std::ranges::find(supported_attributes, designator) == supported_attributes.end()) {
                 error(attribute, "FSIM-VHDL-SEM-030",
@@ -761,6 +762,19 @@ Expression VhdlParser::parse_primary()
                     "the predefined '" + designator + " attribute",
                     "select VHDL-2008");
             }
+            if (designator == "index" || designator == "designated_subtype"
+                || designator == "reflect" || designator == "converse") {
+                require_vhdl_standard(
+                    attribute, VhdlStandard::Vhdl2019,
+                    "the predefined '" + designator + " attribute",
+                    "select VHDL-2019");
+            }
+            if (designator == "index" || designator == "designated_subtype"
+                || designator == "converse") {
+                error(attribute, "FSIM-VHDL-SEM-113",
+                    "the predefined '" + designator
+                        + " attribute does not denote a value expression");
+            }
             std::vector<Expression> operands {
                 Expression { ExpressionKind::Identifier, canonical, { }, name.span }
             };
@@ -769,11 +783,39 @@ Expression VhdlParser::parse_primary()
                 expect(TokenKind::RightParen, "')' after attribute argument",
                     "FSIM-VHDL-PARSE-120");
             }
-            const bool requires_argument = designator == "pos" || designator == "val" || designator == "succ" || designator == "pred" || designator == "leftof" || designator == "rightof" || designator == "image"
-                || designator == "value";
+            const bool object_shorthand =
+                vhdl_standard_ >= VhdlStandard::Vhdl2019
+                && (designator == "pos" || designator == "succ"
+                    || designator == "pred" || designator == "leftof"
+                    || designator == "rightof" || designator == "image");
+            const bool possible_object_shorthand =
+                operands.size() == 1U && designator != "val"
+                && (designator == "pos" || designator == "succ"
+                    || designator == "pred" || designator == "leftof"
+                    || designator == "rightof" || designator == "image");
+            if (possible_object_shorthand
+                && vhdl_standard_ < VhdlStandard::Vhdl2019) {
+                require_vhdl_standard(
+                    attribute, VhdlStandard::Vhdl2019,
+                    "object-prefix shorthand for the predefined '"
+                        + designator + " attribute",
+                    "select VHDL-2019 or supply the required parenthesized "
+                    "argument to a type-mark attribute");
+            }
+            const bool requires_argument =
+                (designator == "pos" || designator == "val"
+                    || designator == "succ" || designator == "pred"
+                    || designator == "leftof" || designator == "rightof"
+                    || designator == "image" || designator == "value")
+                && !object_shorthand;
             if (requires_argument && operands.size() != 2) {
                 error(attribute, "FSIM-VHDL-PARSE-142",
                     "enumeration attribute '" + attribute.text + "' requires one parenthesized argument");
+            }
+            if (designator == "reflect" && operands.size() != 1) {
+                error(attribute, "FSIM-VHDL-SEM-113",
+                    "the predefined 'reflect attribute does not accept an "
+                    "argument");
             }
             return Expression { ExpressionKind::Call, "'" + designator,
                 std::move(operands), cover(name.span, previous().span) };

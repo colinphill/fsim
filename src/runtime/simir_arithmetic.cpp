@@ -541,49 +541,110 @@ namespace fsim::runtime::simir {
   return result;
 }
 
-[[nodiscard]] std::int32_t checked_integer_operand(
+[[nodiscard]] std::int64_t checked_integer_operand(
     const PackedLogic4& value) {
-  if (value.width() != 32 || has_unknown(value)) {
+  if ((value.width() != 32 && value.width() != 64)
+      || has_unknown(value)) {
     throw std::invalid_argument(
         "VHDL integer operand contains an unknown or "
         "high-impedance value");
   }
-  std::uint32_t bits = 0;
-  for (std::size_t bit = 0; bit < 32; ++bit) {
-    if (value.get(bit) == Logic4::one) {
-      bits |= std::uint32_t{1} << bit;
-    }
+  const auto converted = value.known_signed_value();
+  if (!converted) {
+    throw std::invalid_argument(
+        "VHDL integer operand contains an unknown or "
+        "high-impedance value");
   }
-  const auto signed_value =
-      (bits & UINT32_C(0x80000000)) != 0
-          ? static_cast<std::int64_t>(bits)
-                - (INT64_C(1) << 32)
-          : static_cast<std::int64_t>(bits);
-  return static_cast<std::int32_t>(signed_value);
+  return *converted;
 }
 
-[[nodiscard]] PackedLogic4 packed_integer(const std::int64_t value) {
-  if (value < std::numeric_limits<std::int32_t>::min()
-      || value > std::numeric_limits<std::int32_t>::max()) {
+[[nodiscard]] std::int64_t integer_minimum(const std::size_t width) {
+  return width == 64 ? std::numeric_limits<std::int64_t>::min()
+                     : std::numeric_limits<std::int32_t>::min();
+}
+
+[[nodiscard]] std::int64_t integer_maximum(const std::size_t width) {
+  return width == 64 ? std::numeric_limits<std::int64_t>::max()
+                     : std::numeric_limits<std::int32_t>::max();
+}
+
+[[nodiscard]] bool checked_add_integer(
+    const std::int64_t lhs,
+    const std::int64_t rhs,
+    const std::int64_t minimum,
+    const std::int64_t maximum,
+    std::int64_t& result) {
+  if ((rhs > 0 && lhs > maximum - rhs)
+      || (rhs < 0 && lhs < minimum - rhs)) {
+    return false;
+  }
+  result = lhs + rhs;
+  return true;
+}
+
+[[nodiscard]] bool checked_subtract_integer(
+    const std::int64_t lhs,
+    const std::int64_t rhs,
+    const std::int64_t minimum,
+    const std::int64_t maximum,
+    std::int64_t& result) {
+  if ((rhs < 0 && lhs > maximum + rhs)
+      || (rhs > 0 && lhs < minimum + rhs)) {
+    return false;
+  }
+  result = lhs - rhs;
+  return true;
+}
+
+[[nodiscard]] bool checked_multiply_integer(
+    const std::int64_t lhs,
+    const std::int64_t rhs,
+    const std::int64_t minimum,
+    const std::int64_t maximum,
+    std::int64_t& result) {
+  if (lhs == 0 || rhs == 0) {
+    result = 0;
+    return true;
+  }
+  if ((lhs == -1 && rhs == minimum)
+      || (rhs == -1 && lhs == minimum)) {
+    return false;
+  }
+  const bool overflow = lhs > 0
+      ? (rhs > 0 ? lhs > maximum / rhs : rhs < minimum / lhs)
+      : (rhs > 0 ? lhs < minimum / rhs : lhs < maximum / rhs);
+  if (overflow) {
+    return false;
+  }
+  result = lhs * rhs;
+  return true;
+}
+
+[[nodiscard]] PackedLogic4 packed_integer(
+    const std::int64_t value,
+    const std::size_t width) {
+  if ((width != 32 && width != 64)
+      || value < integer_minimum(width)
+      || value > integer_maximum(width)) {
     throw std::invalid_argument("VHDL integer arithmetic overflow");
   }
   return PackedLogic4::from_aval_bval(
-      32,
-      static_cast<std::uint32_t>(
-          static_cast<std::int32_t>(value)),
-      0);
+      width, static_cast<std::uint64_t>(value), 0);
 }
 
 [[nodiscard]] PackedLogic4 integer_unary_value(
     const IntegerUnaryOperator operation,
     const PackedLogic4& source) {
   const auto value =
-      static_cast<std::int64_t>(checked_integer_operand(source));
+      checked_integer_operand(source);
+  if (value == integer_minimum(source.width())) {
+    throw std::invalid_argument("VHDL integer arithmetic overflow");
+  }
   switch (operation) {
   case IntegerUnaryOperator::negate:
-    return packed_integer(-value);
+    return packed_integer(-value, source.width());
   case IntegerUnaryOperator::absolute:
-    return packed_integer(value < 0 ? -value : value);
+    return packed_integer(value < 0 ? -value : value, source.width());
   }
   throw std::invalid_argument("unknown VHDL integer unary operation");
 }
@@ -592,37 +653,55 @@ namespace fsim::runtime::simir {
     const IntegerBinaryOperator operation,
     const PackedLogic4& lhs_value,
     const PackedLogic4& rhs_value) {
-  const auto lhs =
-      static_cast<std::int64_t>(checked_integer_operand(lhs_value));
-  const auto rhs =
-      static_cast<std::int64_t>(checked_integer_operand(rhs_value));
+  if (lhs_value.width() != rhs_value.width()) {
+    throw std::invalid_argument("VHDL integer operand widths differ");
+  }
+  const auto width = lhs_value.width();
+  const auto minimum = integer_minimum(width);
+  const auto maximum = integer_maximum(width);
+  const auto lhs = checked_integer_operand(lhs_value);
+  const auto rhs = checked_integer_operand(rhs_value);
+  std::int64_t result = 0;
   switch (operation) {
   case IntegerBinaryOperator::add:
-    return packed_integer(lhs + rhs);
+    if (!checked_add_integer(lhs, rhs, minimum, maximum, result)) {
+      throw std::invalid_argument("VHDL integer arithmetic overflow");
+    }
+    return packed_integer(result, width);
   case IntegerBinaryOperator::subtract:
-    return packed_integer(lhs - rhs);
+    if (!checked_subtract_integer(lhs, rhs, minimum, maximum, result)) {
+      throw std::invalid_argument("VHDL integer arithmetic overflow");
+    }
+    return packed_integer(result, width);
   case IntegerBinaryOperator::multiply:
-    return packed_integer(lhs * rhs);
+    if (!checked_multiply_integer(lhs, rhs, minimum, maximum, result)) {
+      throw std::invalid_argument("VHDL integer arithmetic overflow");
+    }
+    return packed_integer(result, width);
   case IntegerBinaryOperator::power: {
     if (rhs < 0) {
       throw std::invalid_argument(
           "VHDL integer exponent must be nonnegative");
     }
-    auto result = std::int64_t{1};
+    result = 1;
     auto factor = lhs;
-    auto exponent = static_cast<std::uint32_t>(rhs);
+    auto exponent = static_cast<std::uint64_t>(rhs);
     while (exponent != 0) {
       if ((exponent & 1U) != 0) {
-        result = checked_integer_operand(
-            packed_integer(result * factor));
+        if (!checked_multiply_integer(
+                result, factor, minimum, maximum, result)) {
+          throw std::invalid_argument("VHDL integer arithmetic overflow");
+        }
       }
       exponent >>= 1U;
       if (exponent != 0) {
-        factor = checked_integer_operand(
-            packed_integer(factor * factor));
+        if (!checked_multiply_integer(
+                factor, factor, minimum, maximum, factor)) {
+          throw std::invalid_argument("VHDL integer arithmetic overflow");
+        }
       }
     }
-    return packed_integer(result);
+    return packed_integer(result, width);
   }
   case IntegerBinaryOperator::divide:
   case IntegerBinaryOperator::remainder:
@@ -630,20 +709,19 @@ namespace fsim::runtime::simir {
     if (rhs == 0) {
       throw std::invalid_argument("VHDL integer division by zero");
     }
-    if (lhs == std::numeric_limits<std::int32_t>::min()
-        && rhs == -1) {
+    if (lhs == minimum && rhs == -1) {
       throw std::invalid_argument("VHDL integer arithmetic overflow");
     }
     if (operation == IntegerBinaryOperator::divide) {
-      return packed_integer(lhs / rhs);
+      return packed_integer(lhs / rhs, width);
     }
     {
-      auto result = lhs % rhs;
+      result = lhs % rhs;
       if (operation == IntegerBinaryOperator::modulo
           && result != 0 && ((result < 0) != (rhs < 0))) {
         result += rhs;
       }
-      return packed_integer(result);
+      return packed_integer(result, width);
     }
   }
   throw std::invalid_argument("unknown VHDL integer binary operation");
@@ -651,8 +729,8 @@ namespace fsim::runtime::simir {
 
 void check_integer_range(
     const PackedLogic4& source,
-    const std::int32_t lower,
-    const std::int32_t upper) {
+    const std::int64_t lower,
+    const std::int64_t upper) {
   const auto value = checked_integer_operand(source);
   if (value < lower || value > upper) {
     throw std::invalid_argument(

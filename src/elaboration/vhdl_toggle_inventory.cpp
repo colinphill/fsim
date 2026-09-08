@@ -84,6 +84,7 @@ namespace {
         case frontend::VhdlStandard::Vhdl2000:
         case frontend::VhdlStandard::Vhdl2002:
         case frontend::VhdlStandard::Vhdl2008:
+        case frontend::VhdlStandard::Vhdl2019:
             return true;
         }
         return false;

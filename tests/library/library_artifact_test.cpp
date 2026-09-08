@@ -83,8 +83,8 @@ bool has_identity_diagnostic(
 int main()
 {
     static_assert(fsim::library::kFormatVersion == 5);
-    static_assert(fsim::library::kOwningUnitSchemaVersion == 26);
-    static_assert(fsim::library::kPortableSchemaVersion == 10);
+    static_assert(fsim::library::kOwningUnitSchemaVersion == 27);
+    static_assert(fsim::library::kPortableSchemaVersion == 11);
     const auto expected = example_metadata();
     const auto serialized = fsim::library::serialize_metadata(expected);
     assert(serialized.starts_with(
@@ -146,8 +146,8 @@ int main()
         stale_publication_diagnostics));
     assert(has_identity_diagnostic(
         stale_publication_diagnostics, ".fsimlib publication",
-        "format 4 and portable-unit schema 10",
-        "format 5 and portable-unit schema 10", ".fsimlib"));
+        "format 4 and portable-unit schema 11",
+        "format 5 and portable-unit schema 11", ".fsimlib"));
     assert(!std::filesystem::exists(stale_publication));
     fsim::diagnostic::Engine publish_diagnostics;
     assert(fsim::library::publish(
@@ -430,6 +430,197 @@ endmodule
         && restored_wide_const->type.width() == 257
         && restored_wide_const->initializer
         && restored_wide_const->initializer->text == portable_wide_literal);
+
+    fsim::frontend::DesignUnit vhdl_2019_unit;
+    vhdl_2019_unit.kind = fsim::frontend::UnitKind::VhdlPackage;
+    vhdl_2019_unit.language = fsim::frontend::Language::Vhdl2008;
+    vhdl_2019_unit.vhdl_standard = fsim::frontend::VhdlStandard::Vhdl2019;
+    vhdl_2019_unit.standard_revision
+        = fsim::frontend::StandardRevision::Vhdl2019;
+    vhdl_2019_unit.library = "work";
+    vhdl_2019_unit.compilation_unit_identity = "vhdl-2019-round-trip";
+    vhdl_2019_unit.name = "vhdl_2019_round_trip";
+
+    auto vhdl_integer = fsim::frontend::vhdl_predefined_integer_type(
+        fsim::frontend::VhdlStandard::Vhdl2019, "integer");
+    fsim::frontend::Type index_subtype = vhdl_integer;
+    index_subtype.named_type = "matrix_t";
+    index_subtype.vhdl_predefined_subtype_attribute
+        = fsim::frontend::VhdlPredefinedSubtypeAttribute::Index;
+    index_subtype.vhdl_predefined_subtype_attribute_dimension
+        = fsim::frontend::Expression {
+            fsim::frontend::ExpressionKind::IntegerLiteral, "2", { }, { } };
+    vhdl_2019_unit.type_aliases.push_back({
+        "matrix_index_t", std::move(index_subtype), { }, { },
+        fsim::frontend::TypeDeclarationKind::VhdlSubtype,
+        { }, { }, { }, false });
+
+    fsim::frontend::Type unspecified = vhdl_integer;
+    unspecified.vhdl_unspecified
+        = std::make_shared<fsim::frontend::VhdlUnspecifiedTypeInfo>();
+    unspecified.vhdl_unspecified->type_class
+        = fsim::frontend::VhdlUnspecifiedTypeClass::Array;
+    unspecified.vhdl_unspecified->component_types = { vhdl_integer };
+    unspecified.vhdl_unspecified->array_index_count = 1U;
+    unspecified.vhdl_unspecified->inference_identity
+        = "vhdl-2019-round-trip:generic:T";
+    vhdl_2019_unit.type_aliases.push_back({
+        "unspecified_t", std::move(unspecified), { }, { },
+        fsim::frontend::TypeDeclarationKind::VhdlIncomplete,
+        { }, { }, { }, false });
+
+    fsim::frontend::Type access_type;
+    access_type.domain = fsim::frontend::ValueDomain::Integer;
+    access_type.spelling = "integer_access";
+    access_type.vhdl_access = fsim::frontend::VhdlAccessInfo { };
+    access_type.vhdl_access->deallocate_releases_storage = false;
+    access_type.vhdl_access->reclaim_when_unreachable = true;
+    access_type.vhdl_access->simulation_lifetime = false;
+    vhdl_2019_unit.type_aliases.push_back({
+        "integer_access", std::move(access_type), { }, { },
+        fsim::frontend::TypeDeclarationKind::VhdlAccess,
+        { }, { }, { }, false });
+
+    fsim::frontend::TypeAliasDeclaration view;
+    view.name = "bus_view";
+    view.type.named_type = "bus_t";
+    view.declaration_kind
+        = fsim::frontend::TypeDeclarationKind::VhdlModeView;
+    view.vhdl_mode_view_elements.push_back({
+        "request", fsim::frontend::VhdlModeViewElementKind::direction,
+        fsim::frontend::PortDirection::Input, { }, { } });
+    view.vhdl_mode_view_elements.push_back({
+        "payload", fsim::frontend::VhdlModeViewElementKind::array_view,
+        fsim::frontend::PortDirection::Unknown, "payload_view", { } });
+    vhdl_2019_unit.type_aliases.push_back(std::move(view));
+    fsim::frontend::TypeAliasDeclaration converse;
+    converse.name = "reverse_bus_view";
+    converse.declaration_kind
+        = fsim::frontend::TypeDeclarationKind::VhdlModeView;
+    converse.vhdl_mode_view_converse_of = "bus_view";
+    converse.vhdl_mode_view_converse_parity = true;
+    vhdl_2019_unit.type_aliases.push_back(std::move(converse));
+
+    fsim::frontend::SignalDeclaration viewed_port;
+    viewed_port.name = "bus";
+    viewed_port.type.named_type = "bus_t";
+    viewed_port.is_port = true;
+    viewed_port.vhdl_mode_view = fsim::frontend::VhdlModeViewIndication { };
+    viewed_port.vhdl_mode_view->kind
+        = fsim::frontend::VhdlModeViewIndicationKind::record;
+    viewed_port.vhdl_mode_view->view = "bus_view";
+    viewed_port.vhdl_mode_view->explicit_subtype = true;
+    viewed_port.vhdl_mode_view->elements.push_back({
+        "request", fsim::frontend::PortDirection::Input, { } });
+    vhdl_2019_unit.ports.push_back(std::move(viewed_port));
+
+    fsim::frontend::Type protected_type;
+    protected_type.spelling = "protected_box";
+    protected_type.vhdl_protected
+        = std::make_shared<fsim::frontend::VhdlProtectedInfo>();
+    fsim::frontend::ParameterDeclaration generic;
+    generic.name = "limit";
+    generic.type = vhdl_integer;
+    protected_type.vhdl_protected->generic_parameters.push_back(
+        std::move(generic));
+    protected_type.vhdl_protected->variables.push_back({
+        "value", vhdl_integer, std::nullopt, { }, false, false,
+        std::nullopt, true });
+    protected_type.vhdl_protected->method_aliases.push_back({
+        "observe", "read_value", { },
+        fsim::frontend::PortDirection::Unknown, { } });
+    vhdl_2019_unit.type_aliases.push_back({
+        "protected_box", std::move(protected_type), { }, { },
+        fsim::frontend::TypeDeclarationKind::VhdlProtected,
+        { }, { }, { }, false });
+
+    fsim::frontend::FunctionDeclaration constrained_function;
+    constrained_function.name = "select_value";
+    constrained_function.return_type.named_type = "vector_t";
+    constrained_function.vhdl_return_identifier = "result";
+    constrained_function.language = fsim::frontend::Language::Vhdl2008;
+    fsim::frontend::Statement return_statement;
+    return_statement.kind = fsim::frontend::StatementKind::Return;
+    return_statement.value.kind
+        = fsim::frontend::ExpressionKind::Conditional;
+    return_statement.value.operands = {
+        { fsim::frontend::ExpressionKind::BooleanLiteral, "true", { }, { } },
+        { fsim::frontend::ExpressionKind::Identifier, "left", { }, { } },
+        { fsim::frontend::ExpressionKind::Identifier, "right", { }, { } }
+    };
+    constrained_function.statements.push_back(std::move(return_statement));
+    vhdl_2019_unit.functions.push_back(std::move(constrained_function));
+
+    fsim::frontend::Process sequential_process;
+    fsim::frontend::Statement sequential_block;
+    sequential_block.kind = fsim::frontend::StatementKind::Block;
+    sequential_block.label = "nested_region";
+    sequential_block.constants.push_back({ });
+    sequential_block.constants.back().name = "local_limit";
+    sequential_block.constants.back().type = vhdl_integer;
+    sequential_block.type_aliases.push_back({
+        "local_integer", vhdl_integer, { }, { },
+        fsim::frontend::TypeDeclarationKind::VhdlSubtype,
+        { }, { }, { }, false });
+    sequential_block.declarations.push_back({
+        "local_value", vhdl_integer, std::nullopt, { } });
+    sequential_process.statements.push_back(std::move(sequential_block));
+    vhdl_2019_unit.processes.push_back(std::move(sequential_process));
+
+    fsim::diagnostic::Engine vhdl_2019_write_diagnostics;
+    const auto vhdl_2019_bytes = fsim::library::serialize_portable_unit(
+        vhdl_2019_unit, vhdl_2019_write_diagnostics);
+    assert(vhdl_2019_bytes && !vhdl_2019_write_diagnostics.has_error());
+    fsim::diagnostic::Engine vhdl_2019_read_diagnostics;
+    const auto restored_vhdl_2019
+        = fsim::library::deserialize_portable_unit(
+            *vhdl_2019_bytes, "units/vhdl-2019.fsimir",
+            vhdl_2019_read_diagnostics);
+    assert(restored_vhdl_2019 && !vhdl_2019_read_diagnostics.has_error());
+    assert(
+        restored_vhdl_2019->standard_revision
+            == fsim::frontend::StandardRevision::Vhdl2019
+        && restored_vhdl_2019->type_aliases[0]
+                .type.vhdl_predefined_subtype_attribute
+            == fsim::frontend::VhdlPredefinedSubtypeAttribute::Index
+        && restored_vhdl_2019->type_aliases[0]
+                .type.vhdl_predefined_subtype_attribute_dimension
+        && restored_vhdl_2019->type_aliases[1].type.vhdl_unspecified
+        && restored_vhdl_2019->type_aliases[2]
+                .type.vhdl_access->reclaim_when_unreachable
+        && restored_vhdl_2019->type_aliases[3]
+                .vhdl_mode_view_elements.size()
+            == 2U
+        && restored_vhdl_2019->type_aliases[4]
+                .vhdl_mode_view_converse_parity
+        && restored_vhdl_2019->ports.front().vhdl_mode_view
+        && restored_vhdl_2019->ports.front()
+                .vhdl_mode_view->elements.front().path
+            == "request"
+        && restored_vhdl_2019->type_aliases[5]
+                .type.vhdl_protected->generic_parameters.size()
+            == 1U
+        && restored_vhdl_2019->type_aliases[5]
+                .type.vhdl_protected->variables.front().vhdl_private
+        && restored_vhdl_2019->functions.front().vhdl_return_identifier
+            == "result"
+        && restored_vhdl_2019->functions.front()
+                .statements.front().value.kind
+            == fsim::frontend::ExpressionKind::Conditional
+        && restored_vhdl_2019->processes.front()
+                .statements.front().constants.front().name
+            == "local_limit");
+    fsim::diagnostic::Engine vhdl_2019_repeat_diagnostics;
+    assert(fsim::library::serialize_portable_unit(
+               *restored_vhdl_2019, vhdl_2019_repeat_diagnostics)
+        == vhdl_2019_bytes);
+
+    auto invalid_vhdl_2019 = *restored_vhdl_2019;
+    invalid_vhdl_2019.ports.front().vhdl_mode_view->kind
+        = static_cast<fsim::frontend::VhdlModeViewIndicationKind>(255);
+    fsim::diagnostic::Engine invalid_vhdl_2019_diagnostics;
+    assert(!fsim::library::serialize_portable_unit(
+        invalid_vhdl_2019, invalid_vhdl_2019_diagnostics));
     const auto& restored_coverage = restored_unit->systemverilog_covergroups.front();
     assert(restored_coverage.name == "portable_coverage");
     assert(restored_coverage.effective_instance_goal == 80);
@@ -926,8 +1117,8 @@ endprimitive
     assert(!fsim::library::deserialize_portable_class_unit(
         stale_class, "stale.fsimclass", stale_class_diagnostics));
     assert(has_identity_diagnostic(
-        stale_class_diagnostics, "portable class unit", "schema 25",
-        "schema 26", ".fsimobj"));
+        stale_class_diagnostics, "portable class unit", "schema 26",
+        "schema 27", ".fsimobj"));
     auto future_class = *class_bytes;
     future_class[8] = static_cast<char>(
         fsim::library::kOwningUnitSchemaVersion + 1U);
@@ -935,8 +1126,8 @@ endprimitive
     assert(!fsim::library::deserialize_portable_class_unit(
         future_class, "future.fsimclass", future_class_diagnostics));
     assert(has_identity_diagnostic(
-        future_class_diagnostics, "portable class unit", "schema 27",
-        "schema 26", ".fsimobj"));
+        future_class_diagnostics, "portable class unit", "schema 28",
+        "schema 27", ".fsimobj"));
     fsim::diagnostic::Engine truncated_class_diagnostics;
     assert(!fsim::library::deserialize_portable_class_unit(
         class_bytes->substr(0, 15), "truncated.fsimclass",
@@ -1047,8 +1238,8 @@ endprimitive
     assert(!fsim::library::deserialize_portable_unit(
         future_unit, "future.fsimir", future_diagnostics));
     assert(has_identity_diagnostic(
-        future_diagnostics, "portable owning unit", "schema 27",
-        "schema 26", ".fsimobj"));
+        future_diagnostics, "portable owning unit", "schema 28",
+        "schema 27", ".fsimobj"));
     auto stale_unit = *unit_bytes;
     stale_unit[8] = static_cast<char>(
         fsim::library::kOwningUnitSchemaVersion - 1U);
@@ -1056,8 +1247,8 @@ endprimitive
     assert(!fsim::library::deserialize_portable_unit(
         stale_unit, "stale.fsimir", stale_diagnostics));
     assert(has_identity_diagnostic(
-        stale_diagnostics, "portable owning unit", "schema 25",
-        "schema 26", ".fsimobj"));
+        stale_diagnostics, "portable owning unit", "schema 26",
+        "schema 27", ".fsimobj"));
     fsim::diagnostic::Engine truncated_unit_diagnostics;
     assert(!fsim::library::deserialize_portable_unit(
         unit_bytes->substr(0, 15), "truncated.fsimir",
@@ -1147,8 +1338,8 @@ endprimitive
         schema < fsim::library::kPortableSchemaVersion; ++schema) {
         auto stale_portable_text = serialized;
         stale_portable_text.replace(
-            stale_portable_text.find("portable_schema = 10"),
-            std::string { "portable_schema = 10" }.size(),
+            stale_portable_text.find("portable_schema = 11"),
+            std::string { "portable_schema = 11" }.size(),
             "portable_schema = " + std::to_string(schema));
         fsim::diagnostic::Engine stale_portable_diagnostics;
         assert(!fsim::library::parse_metadata(
@@ -1157,21 +1348,21 @@ endprimitive
         assert(has_identity_diagnostic(
             stale_portable_diagnostics, ".fsimlib",
             "portable-unit schema " + std::to_string(schema),
-            "portable-unit schema 10", ".fsimlib"));
+            "portable-unit schema 11", ".fsimlib"));
     }
 
     auto future_portable_text = serialized;
     future_portable_text.replace(
-        future_portable_text.find("portable_schema = 10"),
-        std::string { "portable_schema = 10" }.size(),
-        "portable_schema = 11");
+        future_portable_text.find("portable_schema = 11"),
+        std::string { "portable_schema = 11" }.size(),
+        "portable_schema = 12");
     fsim::diagnostic::Engine future_portable_diagnostics;
     assert(!fsim::library::parse_metadata(
         future_portable_text, "future-portable.toml",
         future_portable_diagnostics));
     assert(has_identity_diagnostic(
         future_portable_diagnostics, ".fsimlib",
-        "portable-unit schema 11", "portable-unit schema 10", ".fsimlib"));
+        "portable-unit schema 12", "portable-unit schema 11", ".fsimlib"));
 
     auto systemc_metadata = expected;
     systemc_metadata.native_artifacts = { { "systemc_plugin", "native/systemc/libfixture.so",

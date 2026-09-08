@@ -1020,10 +1020,10 @@ for (const auto& operation : process.operations) {
                 add_key_u64(builder, "source", value.source);
                 add_key_u64(
                     builder, "lower",
-                    static_cast<std::uint32_t>(value.lower));
+                    static_cast<std::uint64_t>(value.lower));
                 add_key_u64(
                     builder, "upper",
-                    static_cast<std::uint32_t>(value.upper));
+                    static_cast<std::uint64_t>(value.upper));
             } else if constexpr (std::is_same_v<OperationType, ConditionalSelect>) {
                 builder.add("operation", "ConditionalSelect");
                 add_key_u64(builder, "destination", value.destination);

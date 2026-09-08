@@ -120,10 +120,8 @@ void Lowerer::lower_loop(const Statement& statement)
                 } else if (candidate->domain
                     == frontend::ValueDomain::Integer) {
                     const auto selected = candidate->integer_range.value_or(
-                        frontend::IntegerRange {
-                            std::numeric_limits<std::int32_t>::min(),
-                            std::numeric_limits<std::int32_t>::max(),
-                            false });
+                        frontend::vhdl_predefined_integer_range(
+                            vhdl_standard_, "integer"));
                     range = frontend::PackedRange {
                         selected.left,
                         selected.right,
@@ -697,26 +695,32 @@ void Lowerer::lower_loop(const Statement& statement)
     [[nodiscard]] RegisterId Lowerer::widen_enumeration_ordinal(
         const RegisterId source) {
         const auto source_width = register_width(source);
+        const auto destination_width =
+            language_ == frontend::Language::Vhdl2008
+            ? static_cast<std::size_t>(
+                  frontend::vhdl_predefined_integer_storage_width(
+                      vhdl_standard_))
+            : std::size_t { 32 };
         const auto destination =
             allocate_register(
-                32, frontend::ValueDomain::Integer);
-        if (source_width == 32) {
+                destination_width, frontend::ValueDomain::Integer);
+        if (source_width == destination_width) {
             process_.operations.emplace_back(
                 CopyRegister{destination, source});
             return destination;
         }
         const auto padding =
             allocate_register(
-                32 - source_width,
+                destination_width - source_width,
                 frontend::ValueDomain::Bit2);
         process_.operations.emplace_back(LoadConstant{
             padding,
             PackedLogic4(
-                32 - source_width, Logic4::zero)});
+                destination_width - source_width, Logic4::zero)});
         process_.operations.emplace_back(Concatenate{
             destination,
             {padding, source},
-            32});
+            static_cast<std::uint32_t>(destination_width)});
         return destination;
     }
 
@@ -1388,6 +1392,7 @@ void Lowerer::lower_if(const Statement& statement)
         case ExpressionKind::Binary:
         case ExpressionKind::Concatenation:
         case ExpressionKind::Replication:
+        case ExpressionKind::Conditional:
             return std::ranges::all_of(
                 expression.operands,
                 [this](const Expression& operand) {

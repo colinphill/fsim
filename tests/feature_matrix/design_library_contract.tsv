@@ -3,7 +3,7 @@ kind	name	contract
 design	directory-suffix	.fsimdesign,read-only-tree,atomic-sibling-stage-and-rename,no-overwrite
 design	metadata-file	fsim-design.bin
 design	metadata-magic	FSIMDES-NUL,8-bytes
-design	format	current-writer=11,little-endian-u32@8
+design	format	current-writer=12,little-endian-u32@8
 design	runtime-abi	version=1,little-endian-u32@12,exact-current-host
 design	root-identity	producer,design-digest,cache-key,trace-archive,uvm-release,uvm-source,seed,entropy
 design	runtime-profile	time-resolution,delay-mode=min-or-typ-or-max,optimization=O0-or-O2
@@ -20,12 +20,12 @@ design	digest	path-independent,all-root-object-unit-sdf-plugin-payload-count-fie
 design	counts	unit,semantic-source,specialization,signal,process,u64
 design	publication	validate-metadata-and-complete-checksummed-payload-set-before-staging
 design	rejection	bad-magic,unsupported,future,runtime-mismatch,truncated,trailing,oversized,inconsistent,duplicate,unsafe
-design	reader-policy	exact-current-only,formats=0-10-and-future-reject-at-header,no-legacy-defaults
+design	reader-policy	exact-current-only,formats=0-11-and-future-reject-at-header,no-legacy-defaults
 design	relocation	no-producer-paths,relative-payloads,selected-canonical-identities
 library	directory-suffix	.fsimlib,read-only-tree,atomic-sibling-stage-and-rename,no-overwrite
 library	metadata-file	fsim-library.toml,canonical-ordered-text
 library	format	current-writer=5,exact-current-reader
-library	portable-schema	current-writer=10,exact-current-reader
+library	portable-schema	current-writer=11,exact-current-reader
 library	identity	logical-library,producer,runtime-schema,trace-archive
 library	dependencies	ordered,unique-safe-logical-library,not-self
 library	standards	ordered,language,revision

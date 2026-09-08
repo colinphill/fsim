@@ -305,7 +305,10 @@ std::optional<RegisterId> Lowerer::lower_expression(
             || expression.text == ">="
             || expression.text == "&&"
             || expression.text == "||");
-    const bool context_determined = language_ != frontend::Language::Vhdl2008
+    const bool context_determined =
+        (language_ == frontend::Language::Vhdl2008
+         && expression.kind == ExpressionKind::Conditional)
+        || (language_ != frontend::Language::Vhdl2008
         && ((expression.kind == ExpressionKind::Binary
                 && !scalar_result)
             || (expression.kind == ExpressionKind::Unary
@@ -314,7 +317,7 @@ std::optional<RegisterId> Lowerer::lower_expression(
                     || expression.text == "~"))
             || expression.kind == ExpressionKind::Update
             || (expression.kind == ExpressionKind::Call
-                && expression.text == "?:"));
+                && expression.text == "?:")));
     const auto domain = register_domain(*attempt.value);
     auto profile_domain = ExpressionValueDomain::four_state;
     if (domain == frontend::ValueDomain::Bit2) {

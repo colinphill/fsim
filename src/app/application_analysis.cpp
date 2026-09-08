@@ -247,6 +247,8 @@ frontend::VhdlStandard frontend_vhdl_standard(
         return frontend::VhdlStandard::Vhdl2002;
     case project::VhdlStandard::vhdl_2008:
         return frontend::VhdlStandard::Vhdl2008;
+    case project::VhdlStandard::vhdl_2019:
+        return frontend::VhdlStandard::Vhdl2019;
     }
     return frontend::VhdlStandard::Vhdl2008;
 }
@@ -268,6 +270,8 @@ frontend::StandardRevision frontend_standard_revision(
             return frontend::StandardRevision::Vhdl2002;
         case project::VhdlStandard::vhdl_2008:
             return frontend::StandardRevision::Vhdl2008;
+        case project::VhdlStandard::vhdl_2019:
+            return frontend::StandardRevision::Vhdl2019;
         }
     }
     if (language == project::Language::verilog) {

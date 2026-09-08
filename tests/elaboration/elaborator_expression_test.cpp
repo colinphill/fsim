@@ -627,6 +627,134 @@ end architecture;
     assert(has_diagnostic(
         rejected_vhdl_conditional, "FSIM-ELAB-092"));
 
+    const auto vhdl_2019_conditional = fsim::frontend::parse_text(
+        "vhdl_2019_conditional.vhd",
+        R"(
+entity vhdl_2019_conditional is
+end entity;
+
+architecture rtl of vhdl_2019_conditional is
+  function selected(value : integer) return integer is
+  begin
+    return value;
+  end function;
+  function selected(value : integer) return boolean is
+  begin
+    return value /= 0;
+  end function;
+  signal choose : std_logic := '1';
+  signal divisor : integer := 0;
+  signal contextual_result : integer := 0;
+  signal lazy_result : integer := 0;
+begin
+  process
+  begin
+    contextual_result <=
+        (selected(7) when choose else selected(9));
+    lazy_result <=
+        (7 when choose else 8 when false else 1 / divisor);
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl2019);
+    if (!vhdl_2019_conditional.ok()) {
+        for (const auto& diagnostic :
+            vhdl_2019_conditional.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(vhdl_2019_conditional.ok());
+    const auto elaborated_vhdl_2019_conditional =
+        fsim::elaboration::elaborate(
+            vhdl_2019_conditional.design,
+            "vhdl:work.vhdl_2019_conditional(rtl)");
+    if (!elaborated_vhdl_2019_conditional.ok()) {
+        for (const auto& diagnostic :
+            elaborated_vhdl_2019_conditional.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated_vhdl_2019_conditional.ok());
+    const auto& conditional_operations =
+        elaborated_vhdl_2019_conditional.design
+            ->processes().front().operations;
+    assert(std::ranges::count_if(
+               conditional_operations,
+               [](const fsim::runtime::simir::Operation& operation) {
+                   return fsim::runtime::simir::operation_get_if<
+                              fsim::runtime::simir::Branch>(&operation)
+                       != nullptr;
+               })
+           >= 3);
+    auto vhdl_2019_conditional_interpreter =
+        elaborated_vhdl_2019_conditional.design->create_interpreter();
+    assert(
+        vhdl_2019_conditional_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    for (const auto name : {
+             std::string_view{"contextual_result"},
+             std::string_view{"lazy_result"}}) {
+        const auto signal = elaborated_vhdl_2019_conditional.design
+                                ->find_signal(name);
+        assert(signal);
+        const auto value = vhdl_2019_conditional_interpreter
+                               ->signal_value(*signal)
+                               .known_signed_value();
+        assert(value && *value == 7);
+    }
+
+    const auto mismatched_vhdl_2019_conditional =
+        fsim::frontend::parse_text(
+            "mismatched_vhdl_2019_conditional.vhd",
+            R"(
+entity mismatched_vhdl_2019_conditional is
+end entity;
+architecture rtl of mismatched_vhdl_2019_conditional is
+  signal result : integer;
+begin
+  result <= (1 when true else false);
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008,
+            fsim::frontend::VhdlStandard::Vhdl2019);
+    assert(mismatched_vhdl_2019_conditional.ok());
+    const auto rejected_mismatched_vhdl_2019_conditional =
+        fsim::elaboration::elaborate(
+            mismatched_vhdl_2019_conditional.design,
+            "vhdl:work.mismatched_vhdl_2019_conditional(rtl)");
+    assert(!rejected_mismatched_vhdl_2019_conditional.ok());
+    assert(has_diagnostic(
+        rejected_mismatched_vhdl_2019_conditional,
+        "FSIM-ELAB-VHCOND-002"));
+
+    const auto invalid_vhdl_2019_condition =
+        fsim::frontend::parse_text(
+            "invalid_vhdl_2019_condition.vhd",
+            R"(
+entity invalid_vhdl_2019_condition is
+end entity;
+architecture rtl of invalid_vhdl_2019_condition is
+  signal result : integer;
+begin
+  result <= (1 when 1 else 2);
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008,
+            fsim::frontend::VhdlStandard::Vhdl2019);
+    assert(invalid_vhdl_2019_condition.ok());
+    const auto rejected_invalid_vhdl_2019_condition =
+        fsim::elaboration::elaborate(
+            invalid_vhdl_2019_condition.design,
+            "vhdl:work.invalid_vhdl_2019_condition(rtl)");
+    assert(!rejected_invalid_vhdl_2019_condition.ok());
+    assert(has_diagnostic(
+        rejected_invalid_vhdl_2019_condition,
+        "FSIM-ELAB-VHCOND-003"));
+
     const auto signedness_casts = fsim::frontend::parse_text(
         "signedness_casts.sv",
         R"(

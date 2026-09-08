@@ -176,10 +176,11 @@ struct SignedDivision {
     const PackedLogic4& lhs,
     const PackedLogic4& rhs);
 
-[[nodiscard]] std::int32_t checked_integer_operand(
+[[nodiscard]] std::int64_t checked_integer_operand(
     const PackedLogic4& value);
 
-[[nodiscard]] PackedLogic4 packed_integer(const std::int64_t value);
+[[nodiscard]] PackedLogic4 packed_integer(
+    std::int64_t value, std::size_t width);
 
 [[nodiscard]] PackedLogic4 integer_unary_value(
     const IntegerUnaryOperator operation,
@@ -192,8 +193,8 @@ struct SignedDivision {
 
 void check_integer_range(
     const PackedLogic4& source,
-    const std::int32_t lower,
-    const std::int32_t upper);
+    std::int64_t lower,
+    std::int64_t upper);
 
 [[nodiscard]] PackedLogic4 conditional_value(
     const PackedLogic4& condition,

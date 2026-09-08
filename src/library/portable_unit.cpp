@@ -54,8 +54,9 @@ constexpr bool valid_archive_enum(const T value) noexcept
         return value >= frontend::UnitKind::VhdlEntity
             && value <= frontend::UnitKind::SystemVerilogBind;
     } else if constexpr (std::same_as<T, frontend::StandardRevision>) {
-        return value >= frontend::StandardRevision::Vhdl1987
-            && value <= frontend::StandardRevision::SystemVerilog2017;
+        return (value >= frontend::StandardRevision::Vhdl1987
+                   && value <= frontend::StandardRevision::SystemVerilog2017)
+            || value == frontend::StandardRevision::Vhdl2019;
     } else if constexpr (
         std::same_as<T, frontend::SystemVerilogConfigurationRuleKind>) {
         return value >= frontend::SystemVerilogConfigurationRuleKind::Instance
@@ -76,6 +77,23 @@ constexpr bool valid_archive_enum(const T value) noexcept
     } else if constexpr (std::same_as<T, frontend::PackedAggregateKind>) {
         return value >= frontend::PackedAggregateKind::None
             && value <= frontend::PackedAggregateKind::TaggedUnion;
+    } else if constexpr (
+        std::same_as<T, frontend::VhdlUnspecifiedTypeClass>) {
+        return value >= frontend::VhdlUnspecifiedTypeClass::None
+            && value <= frontend::VhdlUnspecifiedTypeClass::File;
+    } else if constexpr (
+        std::same_as<T, frontend::VhdlPredefinedSubtypeAttribute>) {
+        return value >= frontend::VhdlPredefinedSubtypeAttribute::None
+            && value
+                <= frontend::VhdlPredefinedSubtypeAttribute::DesignatedSubtype;
+    } else if constexpr (
+        std::same_as<T, frontend::VhdlModeViewElementKind>) {
+        return value >= frontend::VhdlModeViewElementKind::direction
+            && value <= frontend::VhdlModeViewElementKind::array_view;
+    } else if constexpr (
+        std::same_as<T, frontend::VhdlModeViewIndicationKind>) {
+        return value >= frontend::VhdlModeViewIndicationKind::record
+            && value <= frontend::VhdlModeViewIndicationKind::array;
     } else if constexpr (
         std::same_as<T, frontend::SystemVerilogModportMemberKind>) {
         return value >= frontend::SystemVerilogModportMemberKind::Signal
@@ -115,10 +133,14 @@ auto archive_fields(T& value) {
         value.enumeration_range, value.enumeration_range_expression,
         value.enumeration_base_range, value.enumeration_base_range_expression,
         value.packed_members, value.packed_aggregate, value.integer_range,
+        value.vhdl_integer_storage_width,
         value.integer_range_expression, value.integer_base_range,
         value.integer_base_range_expression, value.discrete_range_expression,
         value.vhdl_array, value.vhdl_access, value.vhdl_file,
-        value.vhdl_physical, value.vhdl_protected,
+        value.vhdl_physical,
+        value.vhdl_predefined_subtype_attribute,
+        value.vhdl_predefined_subtype_attribute_dimension,
+        value.vhdl_protected, value.vhdl_unspecified,
         value.vhdl_array_constraints, value.systemverilog_container,
         value.systemverilog_class_name,
         value.systemverilog_class_declaration,
@@ -136,7 +158,7 @@ auto archive_fields(T& value) {
       value.name, value.type, value.direction, value.is_port, value.span,
       value.net_delay, value.drive_strength, value.charge_strength,
       value.charge_decay, value.interface_type, value.modport,
-      value.default_value);
+      value.default_value, value.vhdl_mode_view);
 }
 
 template <typename T>
@@ -146,7 +168,7 @@ auto archive_fields(T& value) {
   return std::tie(
       value.name, value.type, value.initializer, value.span,
       value.vhdl_shared, value.vhdl_file, value.vhdl_file_open_kind,
-      value.systemverilog_const);
+      value.systemverilog_const, value.vhdl_private);
 }
 
 template <typename T>

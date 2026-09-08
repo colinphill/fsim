@@ -20,6 +20,11 @@ frontend::Type signal_type(const SignalInfo& info) {
     type.enumeration_range = info.enumeration_range;
     type.packed_members = info.packed_members;
     type.integer_range = info.integer_range;
+    if (info.source_domain == frontend::ValueDomain::Integer
+        && (info.width == 32U || info.width == 64U)) {
+        type.vhdl_integer_storage_width =
+            static_cast<std::uint8_t>(info.width);
+    }
     if (info.vhdl_array) {
         type.vhdl_array = *info.vhdl_array;
     }

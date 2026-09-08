@@ -27,6 +27,7 @@ enum class VhdlStandard : std::uint8_t {
     vhdl_2000,
     vhdl_2002,
     vhdl_2008,
+    vhdl_2019,
 };
 
 enum class VerilogStandard : std::uint8_t {

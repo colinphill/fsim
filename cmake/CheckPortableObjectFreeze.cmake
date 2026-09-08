@@ -44,7 +44,7 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "ac10fb1be3fc5d7e1baf1d56acf5f1b46a3cc460d9ef39b956dc620444f25d8e")
+  "059915915e53748387bb12c071996b4bd01f76e49846fb7f733c5cecc289980c")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "portable object contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
@@ -86,9 +86,9 @@ fsim_require_portable_object_tokens("${FSIM_OBJECT_HEADER}"
   "Canonical little-endian metadata codec"
   "installed .fsimobj tree is read-only")
 fsim_require_portable_object_tokens("${FSIM_LIBRARY_HEADER}"
-  "kPortableSchemaVersion = 10")
+  "kPortableSchemaVersion = 11")
 fsim_require_portable_object_tokens("${FSIM_PORTABLE_HEADER}"
-  "kOwningUnitSchemaVersion = 26"
+  "kOwningUnitSchemaVersion = 27"
   "kUdpDeclarationSchemaVersion = 1"
   "Unknown schemas, truncation, trailing bytes, and out-of-range values reject")
 
@@ -122,8 +122,8 @@ fsim_require_portable_object_tokens("${FSIM_OBJECT_TEST}"
   "kObjectFormatVersion == 7U"
   "kCodeCoverageArtifactDiagnostic"
   "stale-coverage"
-  "kPortableSchemaVersion == 10U"
-  "kOwningUnitSchemaVersion == 26U"
+  "kPortableSchemaVersion == 11U"
+  "kOwningUnitSchemaVersion == 27U"
   "corrupt-magic"
   "stale-format"
   "future-format"

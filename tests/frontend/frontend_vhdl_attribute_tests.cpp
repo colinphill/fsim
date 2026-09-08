@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -115,6 +116,142 @@ end architecture;
         return diagnostic.code == "FSIM-VHDL-SEM-030";
     }),
         "unsupported VHDL attributes must be targeted");
+}
+
+void test_vhdl_2019_predefined_attributes()
+{
+    const auto parsed = parse_text("vhdl_2019_predefined_attributes.vhd",
+        R"(
+package Attribute_Types is
+  type Payload_T is record
+    Ready : bit;
+    Data  : bit_vector(7 downto 0);
+  end record;
+  type Matrix_T is array (integer range <>, integer range <>) of bit;
+  type Integer_Pointer_T is access integer;
+  type Integer_File_T is file of integer;
+  subtype Column_T is Matrix_T'index(2);
+  subtype Pointee_T is Integer_Pointer_T'designated_subtype;
+  subtype File_Element_T is Integer_File_T'designated_subtype;
+  view Producer_View of Payload_T is
+    Ready : in;
+    Data  : out;
+  end view Producer_View;
+  alias Consumer_View is Producer_View'converse;
+end package;
+
+entity Attribute_User is end entity;
+architecture rtl of Attribute_User is
+  type State_T is (Idle, Busy, Done);
+  signal State : State_T := Idle;
+  signal Count : integer;
+  signal Text  : string(1 to 16);
+  signal Mirror_Handle : integer;
+begin
+  observe : process
+  begin
+    Count <= State_T'length;
+    Count <= State'pos;
+    State <= State'succ;
+    Text <= State'image;
+    Mirror_Handle <= State_T'reflect;
+    for I in State_T'range loop
+      null;
+    end loop;
+    wait;
+  end process;
+end architecture;
+)", Language::Vhdl2008, VhdlStandard::Vhdl2019);
+    if (!parsed.ok()) {
+        for (const auto& diagnostic : parsed.diagnostics) {
+            std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+        }
+    }
+    require(parsed.ok(), "VHDL-2019 predefined attribute delta must parse");
+
+    const auto& package = parsed.design.units.front();
+    const auto declaration = [&](const std::string_view name) {
+        return std::ranges::find_if(
+            package.type_aliases,
+            [&](const TypeAliasDeclaration& candidate) {
+                return candidate.name == name;
+            });
+    };
+    const auto column = declaration("column_t");
+    const auto pointee = declaration("pointee_t");
+    const auto file_element = declaration("file_element_t");
+    const auto consumer = declaration("consumer_view");
+    require(column != package.type_aliases.end()
+            && column->type.vhdl_predefined_subtype_attribute
+                == VhdlPredefinedSubtypeAttribute::Index
+            && column->type.vhdl_predefined_subtype_attribute_dimension
+            && column->type.vhdl_predefined_subtype_attribute_dimension->text
+                == "2",
+        "'index retains its base type and locally-static dimension");
+    require(pointee != package.type_aliases.end()
+            && file_element != package.type_aliases.end()
+            && pointee->type.vhdl_predefined_subtype_attribute
+                == VhdlPredefinedSubtypeAttribute::DesignatedSubtype
+            && file_element->type.vhdl_predefined_subtype_attribute
+                == VhdlPredefinedSubtypeAttribute::DesignatedSubtype,
+        "access and file 'designated_subtype results remain subtype metadata");
+    require(consumer != package.type_aliases.end()
+            && consumer->declaration_kind
+                == TypeDeclarationKind::VhdlModeView
+            && consumer->vhdl_mode_view_converse_of == "producer_view"
+            && consumer->vhdl_mode_view_converse_parity,
+        "'converse remains a mode-view alias rather than an object alias");
+
+    const auto& statements = parsed.design.units.back().processes.front().statements;
+    require(statements.size() == 7
+            && statements[0].value.text == "'length"
+            && statements[1].value.text == "'pos"
+            && statements[1].value.operands.size() == 1
+            && statements[2].value.text == "'succ"
+            && statements[2].value.operands.size() == 1
+            && statements[3].value.text == "'image"
+            && statements[3].value.operands.size() == 1
+            && statements[4].value.text == "'reflect"
+            && statements[5].kind == StatementKind::Loop
+            && statements[5].loop_initial.text == "'range",
+        "scalar range, object shorthand, and reflection calls retain exact HIR");
+
+    const auto old_profile = parse_text("vhdl_2008_new_attributes.vhd",
+        R"(
+architecture rtl of Old_Profile is
+  type Vector_T is array (integer range <>) of bit;
+  type Integer_Pointer_T is access integer;
+  subtype Index_T is Vector_T'index;
+  subtype Pointee_T is Integer_Pointer_T'designated_subtype;
+  alias Consumer_View is Producer_View'converse;
+  signal Value : integer;
+begin
+  Value <= integer'reflect;
+end architecture;
+)", Language::Vhdl2008, VhdlStandard::Vhdl2008);
+    require(!old_profile.ok()
+            && std::ranges::count_if(
+                   old_profile.diagnostics,
+                   [](const Diagnostic& diagnostic) {
+                       return diagnostic.code == "FSIM-FE-VHSTD-003";
+                   }) == 4,
+        "new predefined attributes must remain isolated to VHDL-2019");
+
+    const auto malformed = parse_text("vhdl_2019_bad_attribute_arity.vhd",
+        R"(
+architecture rtl of Bad_Attribute_Arity is
+  signal Value : integer;
+begin
+  Value <= integer'reflect(1);
+end architecture;
+)", Language::Vhdl2008, VhdlStandard::Vhdl2019);
+    require(!malformed.ok()
+            && std::ranges::any_of(
+                malformed.diagnostics,
+                [](const Diagnostic& diagnostic) {
+                    return diagnostic.code == "FSIM-VHDL-SEM-113";
+                }),
+        "new predefined attribute arity requires an exact diagnostic");
 }
 
 void test_vhdl_user_attribute_and_group_declarations()

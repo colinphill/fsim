@@ -4,6 +4,7 @@
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/GlobalVariable.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/Support/ErrorHandling.h>
 
 #include <algorithm>
@@ -867,6 +868,8 @@ void ValueOperationLowerer::lower(
 
 void ValueOperationLowerer::lower(
     const IntegerUnary& operation) {
+              const auto width = registers[operation.source].width;
+              const auto mask = width_mask(width);
               const auto source =
                   load_register(
                       builder, registers, operation.source);
@@ -874,19 +877,20 @@ void ValueOperationLowerer::lower(
                   builder.CreateICmpNE(
                       builder.CreateAnd(
                           source.bval,
-                          constant_i64(
-                              context,
-                              std::numeric_limits<std::uint32_t>::max())),
+                          constant_i64(context, mask)),
                       constant_i64(context, 0)),
                   JitGeneratedRuntimeErrorReason::
                       integer_operand_unknown,
                   "integer.unary.unknown");
-              auto* signed_source = builder.CreateSExt(
-                  builder.CreateTrunc(source.aval, i32),
-                  llvm::Type::getInt64Ty(context));
+              auto* signed_source = width == 64U
+                  ? source.aval
+                  : builder.CreateSExt(
+                        builder.CreateTrunc(source.aval, i32), i64);
               auto* minimum = llvm::ConstantInt::getSigned(
-                  llvm::Type::getInt64Ty(context),
-                  std::numeric_limits<std::int32_t>::min());
+                  i64,
+                  width == 64U
+                      ? std::numeric_limits<std::int64_t>::min()
+                      : std::numeric_limits<std::int32_t>::min());
               runtime_error_if(
                   builder.CreateICmpEQ(signed_source, minimum),
                   JitGeneratedRuntimeErrorReason::integer_overflow,
@@ -908,19 +912,19 @@ void ValueOperationLowerer::lower(
                   registers,
                   operation.destination,
                   EncodedValue{
-                      builder.CreateAnd(
+                          builder.CreateAnd(
                           result,
-                          constant_i64(
-                              context,
-                              std::numeric_limits<std::uint32_t>::max())),
+                          constant_i64(context, mask)),
                       constant_i64(context, 0),
-                      32});
+                      static_cast<std::uint32_t>(width)});
               branch_to_next();
             
 }
 
 void ValueOperationLowerer::lower(
     const IntegerBinary& operation) {
+              const auto width = registers[operation.lhs].width;
+              const auto mask = width_mask(width);
               const auto lhs = load_register(
                   builder, registers, operation.lhs);
               const auto rhs = load_register(
@@ -929,45 +933,85 @@ void ValueOperationLowerer::lower(
                   builder.CreateICmpNE(
                       builder.CreateAnd(
                           builder.CreateOr(lhs.bval, rhs.bval),
-                          constant_i64(
-                              context,
-                              std::numeric_limits<std::uint32_t>::max())),
+                          constant_i64(context, mask)),
                       constant_i64(context, 0)),
                   JitGeneratedRuntimeErrorReason::
                       integer_operand_unknown,
                   "integer.binary.unknown");
-              auto* left = builder.CreateSExt(
-                  builder.CreateTrunc(lhs.aval, i32), i64);
-              auto* right = builder.CreateSExt(
-                  builder.CreateTrunc(rhs.aval, i32), i64);
+              auto* left = width == 64U
+                  ? lhs.aval
+                  : builder.CreateSExt(
+                        builder.CreateTrunc(lhs.aval, i32), i64);
+              auto* right = width == 64U
+                  ? rhs.aval
+                  : builder.CreateSExt(
+                        builder.CreateTrunc(rhs.aval, i32), i64);
               auto* minimum = llvm::ConstantInt::getSigned(
-                  i64, std::numeric_limits<std::int32_t>::min());
+                  i64,
+                  width == 64U
+                      ? std::numeric_limits<std::int64_t>::min()
+                      : std::numeric_limits<std::int32_t>::min());
               auto* maximum = llvm::ConstantInt::getSigned(
-                  i64, std::numeric_limits<std::int32_t>::max());
-              const auto overflow_if =
-                  [&](llvm::Value* value,
-                      const std::string_view label) {
-                    runtime_error_if(
-                        builder.CreateOr(
-                            builder.CreateICmpSLT(value, minimum),
-                            builder.CreateICmpSGT(value, maximum)),
-                        JitGeneratedRuntimeErrorReason::
-                            integer_overflow,
-                        label);
-                  };
+                  i64,
+                  width == 64U
+                      ? std::numeric_limits<std::int64_t>::max()
+                      : std::numeric_limits<std::int32_t>::max());
+              const auto checked_arithmetic = [&] (
+                  const llvm::Intrinsic::ID intrinsic,
+                  llvm::Value* left_value,
+                  llvm::Value* right_value,
+                  llvm::Value* active,
+                  const std::string_view label) {
+                llvm::Value* value = nullptr;
+                llvm::Value* overflow = nullptr;
+                if (width == 64U) {
+                  auto* pair = builder.CreateIntrinsic(
+                      intrinsic, {i64}, {left_value, right_value});
+                  value = builder.CreateExtractValue(pair, 0U);
+                  overflow = builder.CreateExtractValue(pair, 1U);
+                } else {
+                  switch (intrinsic) {
+                  case llvm::Intrinsic::sadd_with_overflow:
+                    value = builder.CreateAdd(left_value, right_value);
+                    break;
+                  case llvm::Intrinsic::ssub_with_overflow:
+                    value = builder.CreateSub(left_value, right_value);
+                    break;
+                  case llvm::Intrinsic::smul_with_overflow:
+                    value = builder.CreateMul(left_value, right_value);
+                    break;
+                  default:
+                    llvm_unreachable("unknown integer arithmetic intrinsic");
+                  }
+                  overflow = builder.CreateOr(
+                      builder.CreateICmpSLT(value, minimum),
+                      builder.CreateICmpSGT(value, maximum));
+                }
+                if (active != nullptr) {
+                  overflow = builder.CreateAnd(active, overflow);
+                }
+                runtime_error_if(
+                    overflow,
+                    JitGeneratedRuntimeErrorReason::integer_overflow,
+                    label);
+                return value;
+              };
               llvm::Value* result = nullptr;
               switch (operation.operation) {
               case IntegerBinaryOperator::add:
-                result = builder.CreateAdd(left, right);
-                overflow_if(result, "integer.add.overflow");
+                result = checked_arithmetic(
+                    llvm::Intrinsic::sadd_with_overflow,
+                    left, right, nullptr, "integer.add.overflow");
                 break;
               case IntegerBinaryOperator::subtract:
-                result = builder.CreateSub(left, right);
-                overflow_if(result, "integer.subtract.overflow");
+                result = checked_arithmetic(
+                    llvm::Intrinsic::ssub_with_overflow,
+                    left, right, nullptr, "integer.subtract.overflow");
                 break;
               case IntegerBinaryOperator::multiply:
-                result = builder.CreateMul(left, right);
-                overflow_if(result, "integer.multiply.overflow");
+                result = checked_arithmetic(
+                    llvm::Intrinsic::smul_with_overflow,
+                    left, right, nullptr, "integer.multiply.overflow");
                 break;
               case IntegerBinaryOperator::power: {
                 runtime_error_if(
@@ -978,45 +1022,28 @@ void ValueOperationLowerer::lower(
                     "integer.power.exponent");
                 llvm::Value* powered = constant_i64(context, 1);
                 llvm::Value* factor = left;
-                for (std::uint32_t bit = 0; bit < 31; ++bit) {
+                const auto exponent_bits = width == 64U ? 63U : 31U;
+                for (std::uint32_t bit = 0; bit < exponent_bits; ++bit) {
                   auto* selected = builder.CreateICmpNE(
                       builder.CreateAnd(
                           builder.CreateLShr(
                               right, constant_i64(context, bit)),
                           constant_i64(context, 1)),
                       constant_i64(context, 0));
-                  auto* product =
-                      builder.CreateMul(powered, factor);
-                  runtime_error_if(
-                      builder.CreateAnd(
-                          selected,
-                          builder.CreateOr(
-                              builder.CreateICmpSLT(
-                                  product, minimum),
-                              builder.CreateICmpSGT(
-                                  product, maximum))),
-                      JitGeneratedRuntimeErrorReason::
-                          integer_overflow,
+                  auto* product = checked_arithmetic(
+                      llvm::Intrinsic::smul_with_overflow,
+                      powered, factor, selected,
                       "integer.power.product");
                   powered = builder.CreateSelect(
                       selected, product, powered);
-                  if (bit + 1U < 31U) {
+                  if (bit + 1U < exponent_bits) {
                     auto* remaining = builder.CreateLShr(
                         right, constant_i64(context, bit + 1U));
                     auto* needed = builder.CreateICmpNE(
                         remaining, constant_i64(context, 0));
-                    auto* squared =
-                        builder.CreateMul(factor, factor);
-                    runtime_error_if(
-                        builder.CreateAnd(
-                            needed,
-                            builder.CreateOr(
-                                builder.CreateICmpSLT(
-                                    squared, minimum),
-                                builder.CreateICmpSGT(
-                                    squared, maximum))),
-                        JitGeneratedRuntimeErrorReason::
-                            integer_overflow,
+                    auto* squared = checked_arithmetic(
+                        llvm::Intrinsic::smul_with_overflow,
+                        factor, factor, needed,
                         "integer.power.factor");
                     factor = builder.CreateSelect(
                         needed, squared, factor);
@@ -1073,35 +1100,32 @@ void ValueOperationLowerer::lower(
                   EncodedValue{
                       builder.CreateAnd(
                           result,
-                          constant_i64(
-                              context,
-                              std::numeric_limits<std::uint32_t>::max())),
+                          constant_i64(context, mask)),
                       constant_i64(context, 0),
-                      32});
+                      static_cast<std::uint32_t>(width)});
               branch_to_next();
             
 }
 
 void ValueOperationLowerer::lower(
     const IntegerCheck& operation) {
+              const auto width = registers[operation.source].width;
+              const auto mask = width_mask(width);
               const auto source = load_register(
                   builder, registers, operation.source);
               runtime_error_if(
                   builder.CreateICmpNE(
                       builder.CreateAnd(
                           source.bval,
-                          constant_i64(
-                              context,
-                              std::numeric_limits<std::uint32_t>::max())),
+                          constant_i64(context, mask)),
                       constant_i64(context, 0)),
                   JitGeneratedRuntimeErrorReason::
                       integer_operand_unknown,
                   "integer.check.unknown");
-              auto* value = builder.CreateSExt(
-                  builder.CreateTrunc(
-                      source.aval,
-                      llvm::Type::getInt32Ty(context)),
-                  llvm::Type::getInt64Ty(context));
+              auto* value = width == 64U
+                  ? source.aval
+                  : builder.CreateSExt(
+                        builder.CreateTrunc(source.aval, i32), i64);
               auto* lower = llvm::ConstantInt::getSigned(
                   llvm::Type::getInt64Ty(context),
                   operation.lower);

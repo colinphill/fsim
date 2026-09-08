@@ -1227,15 +1227,10 @@ end package vital_memory;
     frontend::Type vital_integer_type(
         const std::string_view spelling,
         const frontend::SourceSpan& span,
-        const std::int64_t minimum = std::numeric_limits<std::int32_t>::min(),
-        const std::int64_t maximum = std::numeric_limits<std::int32_t>::max())
+        const frontend::VhdlStandard standard)
     {
-        frontend::Type type;
-        type.spelling = std::string { spelling };
-        type.domain = frontend::ValueDomain::Integer;
-        type.is_signed = true;
-        type.packed_range = frontend::PackedRange { 31, 0, true };
-        type.integer_range = frontend::IntegerRange { minimum, maximum, false };
+        auto type = frontend::vhdl_predefined_integer_type(
+            standard, spelling);
         type.nominal_type = "@builtin:integer";
         type.vhdl_type_declaration = type.nominal_type;
         type.named_type_span = span;
@@ -1388,7 +1383,7 @@ end package vital_memory;
         }
         unit.type_aliases.push_back(frontend::TypeAliasDeclaration {
             std::string { name }, std::move(type), unit.span, std::move(literals), kind,
-            { } });
+            { }, { }, { }, false });
     }
 
     void materialize_vital_types(frontend::DesignUnit& unit)
@@ -1604,9 +1599,10 @@ end package vital_memory;
         if (unit.name == "vital_memory") {
             const auto boolean = vital_scalar_type(
                 "boolean", frontend::ValueDomain::Boolean, unit.span);
-            const auto integer = vital_integer_type("integer", unit.span);
+            const auto integer = vital_integer_type(
+                "integer", unit.span, unit.vhdl_standard);
             const auto positive = vital_integer_type(
-                "positive", unit.span, 1, std::numeric_limits<std::int32_t>::max());
+                "positive", unit.span, unit.vhdl_standard);
             const auto logic_vector = vital_array_type(
                 "std_logic_vector", "natural", std::nullopt, logic, unit.span,
                 natural_base);

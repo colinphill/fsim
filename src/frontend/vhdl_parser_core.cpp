@@ -105,6 +105,7 @@ ParseResult VhdlParser::run()
         }
     }
     analyze_vhdl_psl(design);
+    design.vhdl_profile_compatible = vhdl_profile_compatible_;
     return ParseResult { std::move(design), std::move(diagnostics_) };
 }
 
@@ -253,6 +254,7 @@ bool VhdlParser::require_vhdl_standard(const Token& token,
     if (vhdl_standard_ >= minimum) {
         return true;
     }
+    vhdl_profile_compatible_ = false;
     error(token, "FSIM-FE-VHSTD-003",
         std::string(feature) + " requires VHDL-" + std::string(to_string(minimum)) + " or later, but this source "
                                                                                      "selects VHDL-"
@@ -298,6 +300,7 @@ DesignUnit VhdlParser::parse_context_declaration(const Token& start)
 DesignUnit VhdlParser::parse_package(const Token& start, const bool body)
 {
     vhdl_named_types_.clear();
+    vhdl_named_type_kinds_.clear();
     DesignUnit unit;
     unit.kind = UnitKind::VhdlPackage;
     unit.language = Language::Vhdl2008;
@@ -334,10 +337,16 @@ DesignUnit VhdlParser::parse_package(const Token& start, const bool body)
             parse_vhdl_procedure_item(unit, previous(), true);
         } else if (match_keyword("file", true)) {
             parse_vhdl_file_declaration(unit.variables, previous());
+        } else if (match_keyword("view", true)) {
+            parse_vhdl_mode_view_declaration(
+                unit.type_aliases, previous());
         } else if (match_keyword("type", true)) {
             parse_type_declaration(unit, previous());
         } else if (match_keyword("subtype", true)) {
             parse_subtype_declaration(unit, previous());
+        } else if (match_keyword("alias", true)) {
+            parse_vhdl_object_alias(
+                unit.type_aliases, unit.signal_aliases, previous());
         } else if (!body && match_keyword("component", true)) {
             const auto component_start = previous();
             auto declaration = parse_vhdl_component_declaration(
@@ -429,6 +438,7 @@ void VhdlParser::parse_package_constant(DesignUnit& unit, const Token& start,
 DesignUnit VhdlParser::parse_entity(const Token& start)
 {
     vhdl_named_types_.clear();
+    vhdl_named_type_kinds_.clear();
     DesignUnit unit;
     unit.kind = UnitKind::VhdlEntity;
     unit.language = Language::Vhdl2008;
@@ -473,10 +483,16 @@ DesignUnit VhdlParser::parse_entity(const Token& start)
             } else {
                 unit.package_instances.push_back(std::move(instance));
             }
+        } else if (match_keyword("view", true)) {
+            parse_vhdl_mode_view_declaration(
+                unit.type_aliases, previous());
         } else if (match_keyword("type", true)) {
             parse_type_declaration(unit, previous());
         } else if (match_keyword("subtype", true)) {
             parse_subtype_declaration(unit, previous());
+        } else if (match_keyword("alias", true)) {
+            parse_vhdl_object_alias(
+                unit.type_aliases, unit.signal_aliases, previous());
         } else if (match_keyword("component", true)) {
             const auto component_start = previous();
             auto declaration = parse_vhdl_component_declaration(
@@ -647,16 +663,24 @@ void VhdlParser::parse_vhdl_generics(DesignUnit& unit, const Token& start,
             const auto name = expect_identifier("interface type generic name");
             ParameterDeclaration generic;
             generic.name = vhdl_name(name.text);
-            generic.span = span_from(type_start, name);
             generic.kind = ParameterKind::Type;
-            add_vhdl_generic(unit, std::move(generic), name);
-            if (match_keyword("is", true) || match(TokenKind::ColonEqual)) {
+            if (match_keyword("is", true)) {
+                require_vhdl_standard(
+                    previous(), VhdlStandard::Vhdl2019,
+                    "a classified unspecified interface type",
+                    "select VHDL-2019 or use the unclassified 'type T' form");
+                generic.type = parse_vhdl_unspecified_type(type_start);
+                generic.type.vhdl_unspecified->inference_identity =
+                    type_start.span.source_name + ":" +
+                    std::to_string(type_start.span.begin.offset) + ":" +
+                    generic.name;
+            } else if (match(TokenKind::ColonEqual)) {
                 error(previous(), "FSIM-VHDL-UNSUPPORTED-028",
-                    "VHDL-2019 classified or invalid default-like interface type "
-                    "syntax is not part of the VHDL-2008 unclassified 'type T' "
-                    "form");
-                skip_to_semicolon();
+                    "a VHDL interface type does not use a value-like default");
+                (void)parse_vhdl_type(true);
             }
+            generic.span = span_from(type_start, previous());
+            add_vhdl_generic(unit, std::move(generic), name);
             if (!match(TokenKind::Semicolon) && !at(TokenKind::RightParen)) {
                 error(current(), "FSIM-VHDL-PARSE-052",
                     "expected ';' between generic declarations");
@@ -728,6 +752,8 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit)
         expect(TokenKind::Colon, "':' after port name", "FSIM-VHDL-PARSE-004");
 
         PortDirection direction = PortDirection::Unknown;
+        std::optional<VhdlModeViewIndication> mode_view;
+        Type type;
         if (match_keyword("in", true)) {
             direction = PortDirection::Input;
         } else if (match_keyword("out", true)) {
@@ -736,16 +762,22 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit)
             direction = PortDirection::Inout;
         } else if (match_keyword("buffer", true)) {
             direction = PortDirection::Buffer;
+        } else if (match_keyword("view", true)) {
+            auto parsed = parse_vhdl_mode_view_indication(previous());
+            type = std::move(parsed.type);
+            mode_view = std::move(parsed.indication);
         } else {
             error(current(), "FSIM-VHDL-PARSE-005", "expected VHDL port mode");
         }
 
-        Type type = parse_vhdl_type(true, true);
+        if (!mode_view) {
+            type = parse_vhdl_type(true, true);
+        }
         std::optional<Expression> default_value;
         if (match(TokenKind::ColonEqual)) {
             const auto initializer = previous();
             default_value = parse_expression();
-            if (direction != PortDirection::Input) {
+            if (!mode_view && direction != PortDirection::Input) {
                 error(initializer, "FSIM-VHDL-SEM-075",
                     "a VHDL port default is permitted only on an input formal");
             }
@@ -774,7 +806,8 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit)
                     std::nullopt,
                     { },
                     { },
-                    default_value });
+                    default_value,
+                    mode_view });
             }
         }
 
@@ -789,9 +822,157 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit)
     expect(TokenKind::Semicolon, "';' after port clause", "FSIM-VHDL-PARSE-008");
 }
 
+VhdlParser::ParsedVhdlModeViewIndication
+VhdlParser::parse_vhdl_mode_view_indication(const Token& start)
+{
+    require_vhdl_standard(
+        start,
+        VhdlStandard::Vhdl2019,
+        "a view-based interface declaration",
+        "select VHDL-2019 or declare ordinary scalar interface modes");
+
+    ParsedVhdlModeViewIndication result;
+    if (match(TokenKind::LeftParen)) {
+        result.indication.kind = VhdlModeViewIndicationKind::array;
+        result.indication.view = parse_vhdl_selected_name(
+            "array element mode view name");
+        expect(
+            TokenKind::RightParen,
+            "')' after array mode view name",
+            "FSIM-VHDL-PARSE-288");
+    } else {
+        result.indication.kind = VhdlModeViewIndicationKind::record;
+        result.indication.view = parse_vhdl_selected_name(
+            "record mode view name");
+    }
+    if (match_keyword("of", true)) {
+        result.indication.explicit_subtype = true;
+        result.type = parse_vhdl_type(true, true);
+    }
+    result.indication.span = span_from(start, previous());
+    return result;
+}
+
+Type VhdlParser::parse_vhdl_unspecified_type(const Token &start) {
+    Type type;
+    auto info = std::make_shared<VhdlUnspecifiedTypeInfo>();
+    info->inference_identity = start.span.source_name + ":" +
+        std::to_string(start.span.begin.offset);
+
+    const auto accept_box = [&](const std::string_view description) {
+        expect(TokenKind::Less, "'<' in " + std::string(description),
+            "FSIM-VHDL-PARSE-286");
+        expect(TokenKind::Greater, "'>' in " + std::string(description),
+            "FSIM-VHDL-PARSE-286");
+    };
+    const auto named_incomplete_type = [&]() {
+        const auto first = expect_identifier("incomplete type mark");
+        Type component;
+        component.spelling = vhdl_name(first.text);
+        while (match(TokenKind::Dot)) {
+            const auto selected = expect_identifier("selected incomplete type mark");
+            component.spelling += '.';
+            component.spelling += vhdl_name(selected.text);
+        }
+        component.named_type = component.spelling;
+        component.named_type_span = cover(first.span, previous().span);
+        if (match_keyword("range", true)) {
+            accept_box("incomplete index subtype");
+        }
+        return component;
+    };
+    const auto incomplete_subtype = [&]() {
+        if (keyword("type", 0, true)) {
+            return parse_vhdl_type(true, true);
+        }
+        return named_incomplete_type();
+    };
+
+    if (match_keyword("private", true)) {
+        info->type_class = VhdlUnspecifiedTypeClass::Private;
+        type.spelling = "@vhdl-unspecified:private";
+    } else if (match(TokenKind::Less)) {
+        expect(TokenKind::Greater, "'>' in scalar unspecified type",
+            "FSIM-VHDL-PARSE-286");
+        info->type_class = VhdlUnspecifiedTypeClass::Scalar;
+        type.spelling = "@vhdl-unspecified:scalar";
+    } else if (match(TokenKind::LeftParen)) {
+        accept_box("discrete unspecified type");
+        expect(TokenKind::RightParen, "')' after discrete unspecified type",
+            "FSIM-VHDL-PARSE-286");
+        info->type_class = VhdlUnspecifiedTypeClass::Discrete;
+        type.spelling = "@vhdl-unspecified:discrete";
+    } else if (match_keyword("range", true)) {
+        accept_box("numeric unspecified type");
+        if (match(TokenKind::Dot)) {
+            accept_box("floating unspecified type");
+            info->type_class = VhdlUnspecifiedTypeClass::Floating;
+            type.spelling = "@vhdl-unspecified:floating";
+        } else {
+            info->type_class = VhdlUnspecifiedTypeClass::Integer;
+            type.spelling = "@vhdl-unspecified:integer";
+        }
+    } else if (match_keyword("units", true)) {
+        accept_box("physical unspecified type");
+        info->type_class = VhdlUnspecifiedTypeClass::Physical;
+        type.spelling = "@vhdl-unspecified:physical";
+    } else if (match_keyword("array", true)) {
+        info->type_class = VhdlUnspecifiedTypeClass::Array;
+        type.spelling = "@vhdl-unspecified:array";
+        expect(TokenKind::LeftParen, "'(' after array",
+            "FSIM-VHDL-PARSE-286");
+        do {
+            info->component_types.push_back(incomplete_subtype());
+            ++info->array_index_count;
+        } while (match(TokenKind::Comma));
+        expect(TokenKind::RightParen, "')' after incomplete array indexes",
+            "FSIM-VHDL-PARSE-286");
+        expect_keyword("of", true, "FSIM-VHDL-PARSE-286");
+        info->component_types.push_back(incomplete_subtype());
+    } else if (match_keyword("access", true)) {
+        info->type_class = VhdlUnspecifiedTypeClass::Access;
+        type.spelling = "@vhdl-unspecified:access";
+        info->component_types.push_back(incomplete_subtype());
+    } else if (match_keyword("file", true)) {
+        info->type_class = VhdlUnspecifiedTypeClass::File;
+        type.spelling = "@vhdl-unspecified:file";
+        expect_keyword("of", true, "FSIM-VHDL-PARSE-286");
+        info->component_types.push_back(incomplete_subtype());
+    } else {
+        error(current(), "FSIM-VHDL-PARSE-286",
+            "expected a private, scalar, discrete, integer, physical, "
+            "floating, array, access, or file unspecified type category");
+        if (!at_end()) {
+            advance();
+        }
+    }
+    info->span = span_from(start, previous());
+    type.named_type_span = info->span;
+    type.vhdl_unspecified = std::move(info);
+    return type;
+}
+
 Type VhdlParser::parse_vhdl_type(const bool allow_integer,
     const bool /*runtime_base_integer_only*/)
 {
+    if (match_keyword("type", true)) {
+        const auto start = previous();
+        require_vhdl_standard(
+            start, VhdlStandard::Vhdl2019,
+            "an unspecified interface type",
+            "select VHDL-2019 or name a concrete subtype");
+        std::optional<Token> implicit_name;
+        if (at(TokenKind::Identifier) && keyword("is", 1, true)) {
+            implicit_name = advance();
+        }
+        expect_keyword("is", true, "FSIM-VHDL-PARSE-286");
+        auto type = parse_vhdl_unspecified_type(start);
+        if (implicit_name) {
+            type.vhdl_unspecified->inference_identity += ":"
+                + vhdl_name(implicit_name->text);
+        }
+        return type;
+    }
     const auto first = expect_identifier("subtype indication");
     std::string spelling = vhdl_name(first.text);
     while (match(TokenKind::Dot)) {
@@ -800,8 +981,62 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
         spelling += vhdl_name(selected.text);
     }
 
+    VhdlPredefinedSubtypeAttribute subtype_attribute {
+        VhdlPredefinedSubtypeAttribute::None
+    };
+    std::optional<Expression> subtype_attribute_dimension;
+    if (at(TokenKind::Apostrophe)
+        && at(TokenKind::Identifier, 1)
+        && (keyword("index", 1, true)
+            || keyword("designated_subtype", 1, true))) {
+        advance();
+        const auto attribute = expect_identifier(
+            "subtype-valued attribute designator");
+        const auto designator = vhdl_name(attribute.text);
+        require_vhdl_standard(
+            attribute, VhdlStandard::Vhdl2019,
+            "the predefined '" + designator + " subtype attribute",
+            "select VHDL-2019 or name the resulting subtype explicitly");
+        if (designator == "index") {
+            subtype_attribute = VhdlPredefinedSubtypeAttribute::Index;
+            if (match(TokenKind::LeftParen)) {
+                subtype_attribute_dimension = parse_expression();
+                if (match(TokenKind::Comma)) {
+                    error(previous(), "FSIM-VHDL-SEM-113",
+                        "the predefined 'index attribute accepts at most one "
+                        "dimension");
+                    while (!at_end() && !at(TokenKind::RightParen)) {
+                        advance();
+                    }
+                }
+                expect(TokenKind::RightParen,
+                    "')' after 'index dimension", "FSIM-VHDL-PARSE-294");
+            }
+        } else if (designator == "designated_subtype") {
+            subtype_attribute =
+                VhdlPredefinedSubtypeAttribute::DesignatedSubtype;
+            if (match(TokenKind::LeftParen)) {
+                error(previous(), "FSIM-VHDL-SEM-113",
+                    "the predefined 'designated_subtype attribute does not "
+                    "accept an argument");
+                while (!at_end() && !at(TokenKind::RightParen)) {
+                    advance();
+                }
+                expect(TokenKind::RightParen,
+                    "')' after 'designated_subtype", "FSIM-VHDL-PARSE-294");
+            }
+        } else {
+            error(attribute, "FSIM-VHDL-SEM-113",
+                "predefined attribute '" + attribute.text
+                    + "' does not denote a subtype");
+        }
+    }
+
     Type type;
     type.spelling = spelling;
+    type.vhdl_predefined_subtype_attribute = subtype_attribute;
+    type.vhdl_predefined_subtype_attribute_dimension =
+        std::move(subtype_attribute_dimension);
     const auto simple_name = spelling.substr(spelling.find_last_of('.') == std::string::npos
             ? 0
             : spelling.find_last_of('.') + 1);
@@ -864,14 +1099,7 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
         type.nominal_type = "@builtin:time";
         type.vhdl_type_declaration = type.nominal_type;
     } else if (simple_name == "integer" || simple_name == "natural" || simple_name == "positive") {
-        type.domain = ValueDomain::Integer;
-        type.is_signed = true;
-        constexpr auto integer_first = std::int64_t { std::numeric_limits<std::int32_t>::min() };
-        constexpr auto integer_last = std::int64_t { std::numeric_limits<std::int32_t>::max() };
-        type.integer_range = IntegerRange { simple_name == "integer" ? integer_first
-                : simple_name == "natural"                           ? 0
-                                                                     : 1,
-            integer_last, false };
+        type = vhdl_predefined_integer_type(vhdl_standard_, simple_name);
     }
     if (type.domain == ValueDomain::Unknown) {
         type.named_type = spelling;
@@ -973,6 +1201,7 @@ void VhdlParser::parse_vhdl_end(std::string_view expected_kind)
 DesignUnit VhdlParser::parse_architecture(const Token& start)
 {
     vhdl_named_types_.clear();
+    vhdl_named_type_kinds_.clear();
     DesignUnit unit;
     unit.kind = UnitKind::VhdlArchitecture;
     unit.language = Language::Vhdl2008;
@@ -997,7 +1226,8 @@ DesignUnit VhdlParser::parse_architecture(const Token& start)
         } else if (match_keyword("file", true)) {
             parse_vhdl_file_declaration(unit.variables, previous());
         } else if (match_keyword("alias", true)) {
-            parse_vhdl_object_alias(unit.signal_aliases, previous());
+            parse_vhdl_object_alias(
+                unit.type_aliases, unit.signal_aliases, previous());
         } else if (match_keyword("constant", true)) {
             GenerateBody declarations;
             declarations.constants = std::move(unit.parameters);
@@ -1026,6 +1256,9 @@ DesignUnit VhdlParser::parse_architecture(const Token& start)
             } else {
                 unit.package_instances.push_back(std::move(instance));
             }
+        } else if (match_keyword("view", true)) {
+            parse_vhdl_mode_view_declaration(
+                unit.type_aliases, previous());
         } else if (match_keyword("type", true)) {
             parse_type_declaration(unit, previous());
         } else if (match_keyword("subtype", true)) {

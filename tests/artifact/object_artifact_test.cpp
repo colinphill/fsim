@@ -56,8 +56,8 @@ void make_tree_writable(const std::filesystem::path& root) {
 
 int main() {
     static_assert(fsim::artifact::kObjectFormatVersion == 7U);
-    static_assert(fsim::library::kPortableSchemaVersion == 10U);
-    static_assert(fsim::library::kOwningUnitSchemaVersion == 26U);
+    static_assert(fsim::library::kPortableSchemaVersion == 11U);
+    static_assert(fsim::library::kOwningUnitSchemaVersion == 27U);
     const std::string source_bytes = "module child; endmodule\n";
     const std::string unit_bytes = "portable-unit";
     fsim::artifact::ObjectMetadata metadata;
@@ -119,7 +119,7 @@ int main() {
         assert(!fsim::artifact::deserialize_object_metadata(
             bytes, source, diagnostics));
         const auto expected = "unsupported .fsimobj identity: found " + found
-            + "; required format 7 and portable-unit schema 10; regenerate "
+            + "; required format 7 and portable-unit schema 11; regenerate "
               ".fsimobj with this fsim build";
         assert(std::ranges::any_of(
             diagnostics.diagnostics(), [&](const auto& diagnostic) {
@@ -137,14 +137,14 @@ int main() {
         expect_identity_rejection(
             std::move(noncurrent_header), "stale-format",
             "format " + std::to_string(format)
-                + " and portable-unit schema 10");
+                + " and portable-unit schema 11");
     }
     auto future_format = encoded.substr(0, 16U);
     store_u32(
         future_format, 8U, fsim::artifact::kObjectFormatVersion + 1U);
     expect_identity_rejection(
         std::move(future_format), "future-format",
-        "format 8 and portable-unit schema 10");
+        "format 8 and portable-unit schema 11");
     for (std::uint32_t schema = 0;
         schema < fsim::library::kPortableSchemaVersion; ++schema) {
         auto noncurrent_header = encoded.substr(0, 16U);
@@ -159,7 +159,7 @@ int main() {
         fsim::library::kPortableSchemaVersion + 1U);
     expect_identity_rejection(
         std::move(future_portable_schema), "future-portable-schema",
-        "format 7 and portable-unit schema 11");
+        "format 7 and portable-unit schema 12");
     expect_metadata_rejection(encoded.substr(0, 15U), "truncated-header");
     auto oversized_root = encoded;
     store_u64(oversized_root, 16U, UINT64_MAX);

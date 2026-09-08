@@ -258,6 +258,7 @@ class SystemVerilogHirBuilder final {
       case FrontendKind::Concatenation: return HirKind::concatenation;
       case FrontendKind::Replication: return HirKind::replication;
       case FrontendKind::DefaultChoice: return HirKind::assignment_pattern;
+      case FrontendKind::Conditional: return HirKind::conditional;
       case FrontendKind::Call:
         if (input.text == "?:") return HirKind::conditional;
         if (input.text == "inside") return HirKind::inside_set;

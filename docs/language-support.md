@@ -444,7 +444,7 @@ runtime value, while arbitrary-width `numeric_std`/fixed vectors, file objects,
 protected objects, and physical values keep their normal VHDL semantics and are
 not implicitly coerced into PSL Booleans. Signals produced by existing
 `VitalPathDelay` calls are visible at the same stable sampling boundary. Portable
-schema-17 library units preserve parsed PSL clocks, declarations, formals,
+schema-27 library units preserve parsed PSL clocks, declarations, formals,
 defaults, properties, directives, tokens, and source spans without source
 reparse. SDF parsing/resolution/persistence and VHDL/VITAL mixed timing
 application are complete through Batch 170.
@@ -477,7 +477,7 @@ payload preserves the complete owning VHDL declaration/type/expression/process
 HIR plus analyzed PSL clocks, declarations, operators, directives, and source
 identity. The loader admits it only after schema, checksum, trailing-byte,
 enum, unique-ID, semantic-ID-range, DesignIR, and runtime-projection checks all
-succeed. Owning-unit schema 17 carries the frontend form through `.fsimobj` and
+succeed. Owning-unit schema 27 carries the frontend form through `.fsimobj` and
 relocated `.fsimlib`; relocated `.fsimdesign` restores the semantic HIR without
 the producer source. The IEEE standard-library identity advances to
 `ieee-1076-2019-16a01232-vhdl-psl-wide-v2` and participates in whole-design and
@@ -2126,7 +2126,7 @@ or VPI object. The selected revision remains the upper language boundary.
 Analyzed libraries and portable artifacts retain that boundary per source and
 owning unit rather than inferring it from a language-wide default. Library
 format 3 and portable schema 10 index the exact standard and compatibility
-profile beside each source checksum and unit payload; owning-unit schema 26
+profile beside each source checksum and unit payload; owning-unit schema 27
 retains the same identity inside modules, UDPs, classes, nested classes and
 methods. Object format 5 binds the ordered source/include digests and unit
 profiles into its compilation digest. Design format 8 adds an ordered,

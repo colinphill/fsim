@@ -22,9 +22,10 @@ history in their existing plan and resume documents.
    warnings-as-errors Debug builds and tests as dependencies require. Change 20
    alone owns clean full Debug and Release qualification, documentation, one
    implementation commit, and one push.
-5. Release-closing Change 20s additionally own their sanitizer runs, hosted
-   Linux and Windows qualification, release artifacts, exact release record,
-   annotated tag, and publication after all required lanes are green.
+5. Release-closing Change 20s additionally own release artifacts, the exact
+   release record, annotated tag, and publication after their required local
+   lanes are green. They do not add sanitizer or hosted-CI runs unless the
+   closing batch is also Batch 180 or Batch 190.
 6. Batch 180 and Batch 190 are the scheduled tenth-batch sanitizer and
    non-documentation hosted-CI boundaries. Batch 178 is neither boundary: do
    not configure sanitizers or inspect hosted CI during this batch.
@@ -5513,11 +5514,928 @@ history in their existing plan and resume documents.
    `be6a91b5d3310f26659ad6f805b29c37486cfe55a3feb28740d56d2b2c931bf6`.
    Direct legacy-ACC inventory, resource-portability, source-manifest, and
    whitespace checks are clean.
-6. Batch 182 is neither a tenth-batch nor release-closing boundary, so no
-   sanitizer lane and no hosted-CI monitoring ran. The next sanitizer and
-   hosted-CI boundaries remain Batch 188 release closure and Batch 190's
-   tenth-batch closure.
+6. Batch 182 is not a tenth-batch boundary, so no sanitizer lane and no
+   hosted-CI monitoring ran. Sanitizers and hosted-CI monitoring run only
+   every ten batches; the next and final such boundary in this plan is Batch
+   190. Release closures outside Batch 180 and Batch 190 do not add those
+   lanes.
 7. After the single Batch 182 implementation commit and push, proceed only to
    Batch 183 Change 1: build the independently worded VHDL 2008-to-2019 clause
    inventory. Keep the two private LRMs read-only and do not copy, quote, hash,
    log, package, or record their paths in repository artifacts.
+
+## Batch 183 active checkpoint - after Change 1
+
+1. Resume on `codex/v3` from pushed Batch 182 commit
+   `6258a2a9e608cd80dda96261861cd56874308aae`. Batch 183 Change 1 is complete
+   and intentionally uncommitted; preserve its inventory, checker, package,
+   resource-policy, test-registration, plan, and resume changes through the
+   batch's Change 20 commit boundary.
+2. `tests/feature_matrix/vhdl_2019_inventory.tsv` is the independently worded
+   37-row IEEE 1076-2019 delta ledger. It maps Batch 183 Changes 2-19 and Batch
+   184 Changes 1-19 one-to-one, begins with 37 active/zero preserved rows, and
+   records only standard identities, clause numbers, project-authored feature
+   summaries, closure owners, and repository-owned implementation/evidence
+   paths. Its normalized SHA-256 is
+   `7878624b9dfbe77e91544bca04dfb618aa3436d3d0369231fe41c421bee55fae`.
+3. `cmake/CheckVhdl2019Inventory.cmake` freezes the ledger shape, digest,
+   identities, unique closure allocation, existing repository owners,
+   reference-material exclusion, documentation, CTest registration, and
+   source-package inclusion. `fsim.vhdl-2019-inventory` owns the focused CTest
+   entry, and the resource-portability contract now owns the ledger.
+4. Two new paths advance the source-package manifest to 1,781 ordered payload
+   paths at SHA-256
+   `38cdcc93959786f4eab63f0a9131e6a548f8374dd931ad9ef2d28df6952afd03`.
+   The private reference remained read-only; no reference wording, location,
+   or hash was copied into repository artifacts.
+5. The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree builds with eight
+   workers. The focused VHDL inventories, diagnostics, source line-budget,
+   source-package manifest, resource-portability, and CTest-uniqueness slice
+   passes 8/8 in 8.01 seconds. Direct inventory, resource, manifest, and
+   whitespace checks are clean. No Release, sanitizer, hosted-CI monitoring,
+   commit, or push ran.
+6. Proceed only to Batch 183 Change 2: add the VHDL-2019 enum, manifest, CLI,
+   artifact, and cache identities. Keep the older VHDL profiles unchanged and
+   reject v2 persisted inputs directly. Do not run Release, sanitizers, hosted
+   CI, commit, or push before Batch 183 Change 20.
+
+## Batch 183 active checkpoint - after Change 2
+
+1. Batch 183 Changes 1-2 are complete and intentionally uncommitted on
+   `codex/v3`; preserve the accumulated worktree through Change 20. The latest
+   pushed base remains
+   `6258a2a9e608cd80dda96261861cd56874308aae`.
+2. VHDL-2019 is a distinct project/frontend standard revision inside the
+   existing VHDL language family. Manifests and direct CLI use canonical 2019
+   identity through 19, 2019, vhdl-19, and vhdl-2019 spellings while the
+   default remains 2008. The durable enum value was appended, not inserted, so
+   retained object payload numeric identities do not move.
+3. Equivalent 2008 and 2019 compilation/elaboration cases prove distinct
+   object compilation digests, design digests, design cache keys, and
+   specialization cache keys. The portable-unit enum validator explicitly
+   accepts the appended 2019 value. The 2019 baseline also proves inheritance
+   of the complete retained 2008 lexical surface.
+4. V19-B183-C02 is preserved. The inventory now has 36 active/one preserved
+   rows at normalized SHA-256
+   `d9eb8c7bd35fdd867a03d73d777c2eebe878afa7cb78a7e6cc928dd536aa153d`.
+   No paths were added, so the source-package manifest remains at 1,781 paths
+   and SHA-256
+   `38cdcc93959786f4eab63f0a9131e6a548f8374dd931ad9ef2d28df6952afd03`.
+5. The exact LLVM 22.1.8 Clang warnings-as-errors Debug tree completed a
+   1,491-step impact rebuild with eight workers. The focused identity,
+   profile, artifact/cache, inventory, and governance implementation slice
+   passes 16/16 in 8.33 seconds, and the post-documentation governance slice
+   passes 6/6 in 8.73 seconds. No Release, sanitizer, hosted-CI, commit, or
+   push action ran.
+6. Sanitizers and hosted-CI monitoring run only every ten batches. Batch 180
+   is complete, so the next and final such boundary in this plan is Batch 190;
+   release closures at 188, 191, 193, 195, and 197 do not add those lanes.
+7. Proceed only to Batch 183 Change 3: implement the revised VHDL-2019
+   lexical, grammar, and conditional-analysis behavior while keeping every
+   older profile unchanged. Do not run Release, sanitizers, hosted CI, commit,
+   or push before Batch 183 Change 20.
+
+## Batch 183 active checkpoint - after Change 3
+
+1. Batch 183 Changes 1-3 are complete and intentionally uncommitted on
+   `codex/v3`; preserve the accumulated worktree through Change 20. The latest
+   pushed base remains
+   `6258a2a9e608cd80dda96261861cd56874308aae`.
+2. Change 3 adds a pre-lexer VHDL conditional-analysis stage in
+   `src/frontend/vhdl_conditional_analysis.cpp`. It selects nested `if,
+   `elsif, `else, and `end if branches using deterministic VHDL/tool
+   identifiers, Boolean composition, and case-sensitive string comparisons.
+   Inactive bytes are replaced with spaces while CR/LF bytes are retained, so
+   selected tokens and AST nodes preserve their original offsets, lines, and
+   columns and inactive lexical garbage cannot reach the lexer.
+3. Directive recognition is case-insensitive, respects VHDL block and line
+   comments, and permits trailing line comments. Stable diagnostics
+   `FSIM-VHDL-CA-001` through `FSIM-VHDL-CA-004` cover profile isolation,
+   malformed expressions/directives, invalid group structure, and the
+   128-frame nesting ceiling. Excess groups are consumed with a separate
+   bounded synchronization depth so closing directives still match correctly.
+4. Focused evidence covers selected and inactive branches, nested Boolean
+   conditions, exact physical coordinates, value case sensitivity,
+   comment-context isolation, pre-2019 rejection, malformed/unterminated input,
+   and over-depth synchronization. V19-B183-C03 is preserved. The inventory
+   has 35 active/two preserved rows at normalized SHA-256
+   `dd08da36038185079d1f75d1a2aaa606def7a019e20ebe11045cd002ba933594`.
+5. Two new implementation paths advance the source-package manifest to 1,783
+   ordered payload paths and SHA-256
+   `216487cc9516f15f0e86725fcd6cb7837444995284617a673b1ae39b586f2d26`.
+   The exact LLVM 22.1.8 Clang warnings-as-errors Debug target builds with eight
+   workers, the focused frontend executable passes, and the final focused
+   frontend/diagnostics/line-budget/manifest/inventory/resource/CTest slice is
+   7/7 green in 12.75 seconds.
+6. No Release, sanitizer, hosted-CI, commit, or push action ran. Sanitizers and
+   hosted-CI monitoring remain exclusive to Batch 190 because Batch 180 is
+   already complete.
+7. Proceed only to Batch 183 Change 4: implement the revised VHDL-2019
+   protected-type declaration, body, and method rules with strict older-profile
+   isolation. Do not run Release, sanitizers, hosted CI, commit, or push before
+   Batch 183 Change 20.
+
+## Batch 183 active checkpoint - after Change 4
+
+1. Batch 183 Changes 1-4 are complete and intentionally uncommitted on
+   `codex/v3`; preserve the accumulated worktree through Change 20. The latest
+   pushed base remains
+   `6258a2a9e608cd80dda96261861cd56874308aae`.
+2. VHDL-2019 protected declarations now retain bounded generic interfaces,
+   public variable members, explicitly private members, and aliases to methods.
+   `private` becomes reserved only in the 2019 profile. Legacy protected-body
+   variables remain implicitly private, and declaration/body merging keeps
+   declaration-owned state and aliases while installing conforming bodies.
+3. Protected method parameters may use file class or locally declared access,
+   file, and protected subtypes under 2019. The same forms, protected generics,
+   declaration variables, explicit privacy, and method aliases diagnose under
+   VHDL-2008. Ordinary retained protected methods and bodies are unchanged.
+4. The frontend and semantic models carry protected generics, variable
+   visibility, and alias targets. Type identity and the existing generated,
+   substitution, static-folding, and qualified-name traversals include the new
+   generic interface without introducing a compatibility representation.
+5. V19-B183-C04 is preserved. The inventory has 34 active/three preserved rows
+   at normalized SHA-256
+   `d755311bb5d0b3a624bf4b2a52082e7e58091b9e24f9bdfdec1642510126a075`.
+   No paths were added, so the source-package manifest remains at 1,783 paths
+   and SHA-256
+   `216487cc9516f15f0e86725fcd6cb7837444995284617a673b1ae39b586f2d26`.
+6. The exact LLVM 22.1.8 Clang warnings-as-errors Debug frontend target builds
+   through 170 impact steps and passes directly. The broader fsim target builds
+   through 454 impact steps with eight workers. The focused frontend,
+   portable/design artifact, VHDL type-generic, and protected-runtime slice is
+   5/5 green in 0.63 seconds. The post-documentation diagnostics, line-budget,
+   source-manifest, VHDL inventory, resource-portability, and CTest-uniqueness
+   governance slice is 6/6 green in 12.92 seconds.
+7. No Release, sanitizer, hosted-CI, commit, or push action ran. Sanitizers and
+   hosted-CI monitoring remain exclusive to Batch 190 because Batch 180 is
+   already complete.
+8. Proceed only to Batch 183 Change 5: implement VHDL-2019 unspecified scalar
+   and composite type categories with unique-inference constraints and strict
+   older-profile isolation. Do not run Release, sanitizers, hosted CI, commit,
+   or push before Batch 183 Change 20.
+
+## Batch 183 active checkpoint - after Change 5
+
+1. Batch 183 Changes 1-5 are complete and intentionally uncommitted on
+   `codex/v3`; preserve the accumulated worktree through Change 20. The latest
+   pushed base remains
+   `6258a2a9e608cd80dda96261861cd56874308aae`.
+2. The frontend models all nine VHDL-2019 incomplete type categories: private,
+   scalar, discrete, integer, physical, floating, array, access, and file.
+   Nested array index/element and access/file designated profiles are retained,
+   and an optional implicit type name is accepted on an object interface.
+   Stable source-derived identities bind every name from one interface
+   declaration to one inferred type.
+3. Explicit interface-type generic actuals are checked against their category
+   and nested profile. VHDL function and procedure overload selection requires
+   typed actuals, enforces shared inference identities, and specializes the
+   selected callable frame to concrete argument types before allocation and
+   lowering. The semantic HIR retains classified subtype profiles and records
+   the uniquely selected callable plus its inferred type identities.
+4. Child port associations infer concrete formal types before ordinary array-
+   shape adaptation, connection validation, signal creation, and process
+   lowering. Multiple ports sharing one implicit formal must infer the same
+   concrete subtype. The inferred identity also participates in specialization
+   identity, preventing cache aliasing across distinct actual port types.
+5. Stable diagnostics are `FSIM-VHDL-PARSE-286` for malformed profiles,
+   `FSIM-ELAB-VHUNSPEC-001` for ambiguous, conflicting, or indeterminate
+   callable/port inference, and `FSIM-ELAB-VHUNSPEC-002` for an explicit
+   interface-type actual outside its declared category. Older profiles reject
+   all classified and inline forms through `FSIM-FE-VHSTD-003`.
+6. Independently authored coverage includes every category, nested and named
+   inline profiles, category acceptance, shared identity, malformed input,
+   VHDL-2008 isolation, semantic HIR inference, function/procedure execution,
+   inferred child-port execution, conflicting port actuals, and incompatible
+   explicit generic actuals. V19-B183-C05 is preserved. The inventory has 33
+   active/four preserved rows at normalized SHA-256
+   `c80586a605aa0cb6518a9daff42c934ca5ae3c61566b79bfcc4b261b72e3c8d6`.
+7. No paths were added, so the source-package manifest remains at 1,783 paths
+   and SHA-256
+   `216487cc9516f15f0e86725fcd6cb7837444995284617a673b1ae39b586f2d26`.
+   The exact LLVM 22.1.8 Clang warnings-as-errors Debug fsim target completed a
+   454-step impact rebuild plus a 17-step inferred-port follow-up with eight
+   workers. The final focused frontend, portable/design artifact,
+   type-generic, diagnostics, line-budget, source-manifest, VHDL inventory,
+   resource, and CTest-uniqueness slice passed 10/10 in 13.29 seconds.
+   The final post-documentation governance slice passed 6/6 in 13.66 seconds.
+8. No Release, sanitizer, hosted-CI, commit, or push action ran. Sanitizers and
+   hosted-CI monitoring remain exclusive to Batch 190 because Batch 180 is
+   already complete.
+9. Proceed only to Batch 183 Change 6: enforce the VHDL-2019 predefined
+   `INTEGER` minimum signed 64-bit range while keeping older profiles and every
+   existing executable 32-bit limit explicit. Do not run Release, sanitizers,
+   hosted CI, commit, or push before Batch 183 Change 20.
+
+## Batch 183 active checkpoint - after Change 6
+
+1. Batch 183 Changes 1-6 are complete and intentionally uncommitted on
+   `codex/v3`; preserve the accumulated worktree through Change 20. The latest
+   pushed base remains
+   `6258a2a9e608cd80dda96261861cd56874308aae`.
+2. VHDL-2019 predefined `INTEGER`, `NATURAL`, and `POSITIVE` use a signed
+   64-bit representation. `INTEGER` spans the complete signed 64-bit range;
+   all earlier profiles retain the existing portable signed 32-bit range.
+   The profile-selected width and range survive frontend/semantic types,
+   portable objects, designs, caches, constants, defaults, hierarchy,
+   callable frames, and SimIR without adding a compatibility reader.
+3. Static evaluation accepts the minimum signed literal directly, protects
+   endpoint successor/predecessor operations from host overflow, and computes
+   representable lengths wider than 32 bits. Interpreter and exact LLVM
+   lowering execute checked 32- and 64-bit unary/binary arithmetic and range
+   checks with matching failure behavior.
+4. Dynamic VHDL array selection now performs absolute index arithmetic in the
+   profile-selected 32- or 64-bit domain, validates the declared bounds, and
+   normalizes far absolute indices to bounded packed offsets before narrowing
+   into the retained selection ABI. Independently authored execution covers a
+   small array based above 2^32, including a dynamic element read, dynamic
+   slice, and dynamic target write.
+5. The application witness runs the 2019 design in the interpreter and the
+   compiled engine at O0 and O2. It proves both signed endpoints, wide add and
+   multiply, negative values, a 6,000,000,001-element subtype length, checked
+   maximum-plus-one overflow, far-bound selection, and VHDL-2008 rejection.
+   The focused frontend, runtime, LLVM, elaboration, portable/design artifact,
+   artifact-phase, and application checks are green.
+6. V19-B183-C06 is preserved. The inventory has 32 active/five preserved rows
+   at normalized SHA-256
+   `b637aec2c93a22a504edd7bf5be5c3542970f7a49946e93bde833b98952cf961`.
+   The new application evidence advances the source-package manifest to 1,784
+   ordered payload paths and SHA-256
+   `aa4eaeda53d6df493b27ad5a9c5d38376f59f8c4a982783db67d25ec51532f11`.
+7. The exact LLVM 22.1.8 Clang warnings-as-errors Debug impact build completes
+   with eight workers. Direct inventory, source-manifest, resource-portability,
+   and whitespace checks are clean. The final post-documentation diagnostics,
+   line-budget, source-manifest, VHDL inventory, resource-portability, and
+   CTest-uniqueness slice passes 6/6 in 13.20 seconds. No Release, sanitizer,
+   hosted-CI monitoring, commit, or push ran.
+8. Sanitizers and hosted-CI monitoring run only every ten batches. Batch 180
+   is complete, so the next and final such boundary in this plan is Batch 190;
+   Batch 183 Change 20 receives only clean Clang Debug/Release qualification,
+   documentation, one implementation commit, and one push.
+9. Proceed only to Batch 183 Change 7: parse and model VHDL-2019 interface view
+   declarations while preserving strict older-profile isolation. Do not run
+   Release, sanitizers, hosted CI, commit, or push before Batch 183 Change 20.
+
+## Batch 183 active checkpoint - after Change 7
+
+1. Batch 183 Changes 1-7 are complete and intentionally uncommitted on
+   `codex/v3`; preserve the accumulated worktree through Change 20. The latest
+   pushed base remains
+   `6258a2a9e608cd80dda96261861cd56874308aae`.
+2. VHDL-2019 mode-view declarations parse in package, entity, architecture,
+   generate, process, function, and procedure declarative regions. The
+   frontend retains the unresolved record subtype, expands grouped element
+   names, and distinguishes direct `in`, `out`, `inout`, and `buffer` modes
+   from nested record-view and array-view indications.
+3. The semantic HIR publishes a distinct mode-view declaration with owned
+   subtype, element, direction, referenced-name, and source nodes. Referenced
+   prior views resolve to their declaration identity, and the model remains
+   valid after parsed-unit storage is released. Recursive record-view
+   composition and cycle handling remain Change 8 work.
+4. Mode views are declarations rather than types. Every unit, statement,
+   local-region, and generate-body type-environment path skips them, preventing
+   a view name from being selected as a subtype mark while retaining the view
+   declaration for HIR construction.
+5. Stable diagnostics cover malformed syntax (`FSIM-VHDL-PARSE-287`), duplicate
+   declarations or elements and mismatched ending names (`FSIM-VHDL-SEM-107`),
+   and illegal linkage mode (`FSIM-VHDL-SEM-108`). `view` is reserved only in
+   VHDL-2019, and VHDL-2008 rejects the complete declaration through the
+   standard-profile gate.
+6. V19-B183-C07 is preserved. The inventory has 31 active/six preserved rows
+   at normalized SHA-256
+   `5267fe5d1394f5a5d18f94ebe8d71dd59c953bba3f4559537fb93753bc34a8fd`.
+   No source paths were added, so the source-package manifest remains at 1,784
+   ordered payload paths and SHA-256
+   `aa4eaeda53d6df493b27ad5a9c5d38376f59f8c4a982783db67d25ec51532f11`.
+7. The exact LLVM 22.1.8 Clang warnings-as-errors Debug impact build completes
+   with eight workers. The frontend executable and focused VHDL type-generic
+   HIR/application test pass. The pre-documentation diagnostics, line-budget,
+   source-manifest, VHDL inventory, resource-portability, and CTest-uniqueness
+   slice passes 6/6 in 13.20 seconds; the final post-documentation rerun passes
+   6/6 in 13.16 seconds, and `git diff --check` is clean.
+8. Sanitizers and hosted-CI monitoring run only every ten batches. Batch 180
+   is complete, so the next and final such boundary in this plan is Batch 190;
+   Batch 183 Change 20 receives only clean Clang Debug/Release qualification,
+   documentation, one implementation commit, and one push.
+9. Proceed only to Batch 183 Change 8: compose record views recursively while
+   preserving each element direction and subtype. Do not run Release,
+   sanitizers, hosted CI, commit, or push before Batch 183 Change 20.
+
+## Batch 183 active checkpoint - after Change 8
+
+1. Batch 183 Changes 1-8 are complete and intentionally uncommitted on
+   `codex/v3`; preserve the accumulated worktree through Change 20. The latest
+   pushed base remains
+   `6258a2a9e608cd80dda96261861cd56874308aae`.
+2. `src/app/application_vhdl_mode_view.cpp` owns semantic mode-view
+   composition. It resolves each root record subtype through semantic IDs,
+   follows subtype/alias chains, annotates every element with its immediate
+   subtype, and recursively materializes nested record and array-element view
+   trees without re-parsing source names.
+3. Each composed node retains its element name, source, form, referenced view
+   declaration, immediate subtype, direction, and children. Direct leaves
+   retain their modes; record nodes retain recursively composed record
+   elements; array nodes retain the array subtype and the referenced record
+   element tree.
+4. Profiles publish explicit uncomposed, complete, invalid, and recursive
+   composition states. A three-state traversal terminates self and indirect
+   cycles, never copies an incomplete referenced tree, and lets Change 10 add
+   exact legality diagnostics without reconstructing semantic structure.
+5. VHDL subtype HIR definitions now retain the base type mark written after
+   `is` rather than replacing it with the new subtype's declaration identity.
+   The nested-view witness proves that a record element declared through such
+   a subtype remains visibly typed by that subtype while composition reaches
+   the terminal record structure.
+6. The first inline implementation exceeded the 2,500-line hard limit for the
+   primary HIR builder. The composition pass was extracted rather than
+   weakening the gate; `application_vhdl_hir.cpp` is below the limit and the
+   new focused module is 182 lines.
+7. Independently authored application evidence covers two nested record
+   levels, grouped nested elements, subtype-chain traversal, array-element
+   view composition, leaf directions/subtypes, semantic name identity, owned
+   storage after parsed-unit release, and recursive-state containment.
+8. V19-B183-C08 is preserved. The inventory has 30 active/seven preserved rows
+   at normalized SHA-256
+   `b0c4e392e79b78762fb20e0861b45f0055a0d8b2a257e7c2006abf5524bd8992`.
+   The new implementation path advances the source-package manifest to 1,785
+   ordered payload paths and SHA-256
+   `fbe264e2c835d6400e316ac9ab2cf22b229638213816bfc1687175e41ac0c0ea`.
+9. The exact LLVM 22.1.8 Clang warnings-as-errors Debug impact build completes
+   with eight workers, and the focused VHDL type-generic HIR/application
+   witness passes. The final post-documentation diagnostics, line-budget,
+   source-manifest, VHDL inventory, resource-portability, and CTest-uniqueness
+   slice passes 6/6 in 13.11 seconds, and `git diff --check` is clean.
+10. Sanitizers and hosted-CI monitoring run only every ten batches. Batch 180
+    is complete, so the next and final such boundary in this plan is Batch
+    190; Batch 183 Change 20 receives only clean Clang Debug/Release
+    qualification, documentation, one implementation commit, and one push.
+11. Proceed only to Batch 183 Change 9: implement view-based port declarations
+    and associations using the composed semantic tree. Do not run Release,
+    sanitizers, hosted CI, commit, or push before Batch 183 Change 20.
+
+## Batch 183 active checkpoint - after Change 9
+
+1. Batch 183 Changes 1-9 are complete and intentionally uncommitted on
+   `codex/v3`; preserve the accumulated worktree through Change 20. The latest
+   pushed base remains
+   `6258a2a9e608cd80dda96261861cd56874308aae`.
+2. VHDL-2019 entity and component port lists accept record form `view name`
+   and array form `view (name)`, each with an optional explicit `of` subtype.
+   The frontend retains the indication form and source separately from the
+   scalar port direction, which remains unknown because direction belongs to
+   the composed leaves.
+3. Semantic HIR interface declarations bind their view name through lexical,
+   selected-package, or use-clause visibility. Each owns the canonical view
+   declaration identity, optional inferred record subtype, composition state,
+   and declaration-order leaf direction tree. Unknown or ambiguous references
+   are rejected before elaboration.
+4. Elaboration keeps mode views as declarations rather than named types while
+   preserving them across package import and the isolated entity-interface
+   and component-specialization lifecycles. Imported and selected spellings
+   canonicalize to the resolved declaration name. Component/entity profile
+   conformance compares view form, identity, leaf paths, and leaf directions
+   in addition to the effective subtype.
+5. A whole-record port association records one `VhdlModeViewBinding` on the
+   actual signal. It contains the formal interface path and one formal/actual
+   hierarchy-path pair per composed leaf in declaration order. The existing
+   scalar boundary validator is deliberately bypassed for this composite
+   metadata path. Batch 184 Changes 1-2 still own materializing directional
+   runtime endpoints and enforcing writes at those endpoints.
+6. Stable diagnostics are `FSIM-VHDL-PARSE-288` for a malformed array-view
+   delimiter, `FSIM-VHDL-SEM-109` for an unknown or ambiguous semantic view,
+   and `FSIM-ELAB-VHVIEW-001`/`002` for missing or incomplete elaboration
+   profiles.
+7. Independently authored evidence declares a package record and mixed
+   direction view, uses inferred subtype syntax on the entity and explicit
+   subtype syntax on its component, binds them through a named association,
+   and proves the resulting request/response leaf paths and directions.
+8. V19-B183-C09 is preserved. The inventory has 29 active/eight preserved rows
+   at normalized SHA-256
+   `bb1a7ceac9323d8f82faae9e4c459254c02d854cf0ab16fd914a9b330f878e39`.
+   No source path was added, so the source-package manifest remains at 1,785
+   ordered payload paths and SHA-256
+   `fbe264e2c835d6400e316ac9ab2cf22b229638213816bfc1687175e41ac0c0ea`.
+9. The exact LLVM 22.1.8 Clang warnings-as-errors Debug impact build completes
+   with eight workers. The focused elaboration test passes, and the
+   diagnostics, line-budget, source-manifest, VHDL inventory,
+   resource-portability, and CTest-uniqueness governance slice is green.
+10. Sanitizers and hosted-CI monitoring run only every ten batches. Batch 180
+    is complete, so the next and final such boundary in this plan is Batch
+    190; Batch 183 Change 20 receives only clean Clang Debug/Release
+    qualification, documentation, one implementation commit, and one push.
+11. Proceed only to Batch 183 Change 10: enforce subtype compatibility and
+    nested direction rules within complex view interfaces. Do not run Release,
+    sanitizers, hosted CI, commit, or push before Batch 183 Change 20.
+
+## Batch 183 active checkpoint - after Change 10
+
+1. Batch 183 Changes 1-10 are complete and intentionally uncommitted on
+   `codex/v3`; preserve the accumulated worktree through Change 20. The latest
+   pushed base remains
+   `6258a2a9e608cd80dda96261861cd56874308aae`.
+2. Semantic mode-view composition now accepts only unresolved record roots and
+   requires the declaration to cover every record element. A nested record
+   view must have a root compatible with its member subtype; a nested array
+   view must have a root compatible with the array element subtype. Base-type
+   identity permits legal subtype chains without accepting unrelated records.
+3. A record-form view interface requires its explicit subtype to be compatible
+   with the view root; an array-form interface requires the explicit array's
+   element subtype to be compatible. Record-form subtype omission continues to
+   infer the view root. Invalid declaration or interface composition is
+   retained as invalid HIR and now makes `check_project` fail transactionally.
+4. Elaboration repeats the legality checks over resolved structural types
+   before it publishes a leaf-direction map. Recursive composition uses
+   `FSIM-ELAB-VHVIEW-002`, invalid roots, missing elements, and incompatible
+   nested views use `FSIM-ELAB-VHVIEW-003`, and incompatible record or array
+   interface subtypes use `FSIM-ELAB-VHVIEW-004`.
+5. Semantic diagnostics are `FSIM-VHDL-SEM-110` for an invalid mode-view
+   declaration composition and `FSIM-VHDL-SEM-111` for an invalid interface
+   composition. These checks occur after semantic HIR construction and before
+   otherwise-valid application state can be returned.
+6. Independently authored application evidence covers valid record and array
+   interfaces plus incomplete, nested-record-incompatible,
+   nested-array-incompatible, and explicit-interface-incompatible negatives.
+   Direct elaboration evidence separately proves the invalid-composition and
+   incompatible-interface diagnostics.
+7. V19-B183-C10 is preserved. The inventory has 28 active/nine preserved rows
+   at normalized SHA-256
+   `58c7a6979872bd0877ca7a693f5a00a1f16182b928c1eaadd774be4cfde6be67`.
+   No source path was added, so the source-package manifest remains at 1,785
+   ordered payload paths and SHA-256
+   `fbe264e2c835d6400e316ac9ab2cf22b229638213816bfc1687175e41ac0c0ea`.
+8. The exact LLVM 22.1.8 Clang warnings-as-errors Debug impact targets build
+   cleanly with eight workers. The focused application and elaboration tests
+   pass 2/2. The pre-documentation diagnostics, line-budget, source-manifest,
+   VHDL-inventory, resource-portability, and CTest-uniqueness slice passes 6/6
+   in 13.29 seconds. The final combined post-documentation rerun passes 8/8 in
+   14.64 seconds.
+9. Sanitizers and hosted-CI monitoring run only every ten batches. Batch 180
+   is complete, so the next and final such boundary in this plan is Batch 190;
+   Batch 183 Change 20 receives only clean Clang Debug/Release qualification,
+   documentation, one implementation commit, and one push.
+10. Proceed only to Batch 183 Change 11: implement conditional expressions and
+    their contextual typing. Do not run Release, sanitizers, hosted CI, commit,
+    or push before Batch 183 Change 20.
+
+## Batch 183 active checkpoint - after Change 11
+
+1. Batch 183 Changes 1-11 are complete and intentionally uncommitted on
+   `codex/v3`; preserve the accumulated worktree through Change 20. The latest
+   pushed base remains
+   `6258a2a9e608cd80dda96261861cd56874308aae`.
+2. A VHDL-2019 first-class conditional expression is retained as
+   `frontend::ExpressionKind::Conditional` and
+   `semantic::vhdl::ExpressionKind::conditional`. Legacy VHDL conditional
+   assignments keep their existing synthetic call representation so older
+   profiles and statement rewriting do not change.
+3. The parser requires VHDL-2019 for first-class `when`/`else` expression
+   syntax. Candidate results are retained as condition, selected result, and
+   remaining conditional or final result, which preserves chained first-true
+   evaluation order.
+4. Elaboration propagates the surrounding target or callable result type to
+   both arms. Return-type-overloaded calls therefore resolve from context;
+   mismatched common base types or widths fail as `FSIM-ELAB-VHCOND-002`.
+5. Runtime lowering emits a branch, independently lowered true and false
+   blocks, and a join register. Only the selected arm executes. Boolean
+   conditions are direct; VHDL-2019 scalar bit and standard-logic conditions
+   receive the implicit truth conversion. Malformed/profile failures and
+   invalid conditions use `FSIM-ELAB-VHCOND-001` and
+   `FSIM-ELAB-VHCOND-003`.
+6. Independently authored evidence covers the distinct AST/HIR kind,
+   VHDL-2008 isolation, contextual return-type overloads, incompatible arms,
+   invalid condition types, chained expressions, and a division-by-zero arm
+   that remains unexecuted. The application path passes in interpreter and
+   compiled LLVM engines at O0 and O2.
+7. V19-B183-C11 is preserved. The inventory has 27 active/ten preserved rows
+   at normalized SHA-256
+   `3081b0005ba7a0976f5abfccbdf056b968d6590b77156b48753183ee38f2d907`.
+   No source path was added, so the source-package manifest remains at 1,785
+   ordered payload paths and SHA-256
+   `fbe264e2c835d6400e316ac9ab2cf22b229638213816bfc1687175e41ac0c0ea`.
+8. The exact LLVM 22.1.8 Clang warnings-as-errors Debug impact targets build
+   cleanly with eight workers. The pre-documentation governance slice passes
+   6/6 in 13.14 seconds; the final focused frontend, elaboration, application,
+   and governance rerun passes 9/9 in 14.44 seconds. Release qualification
+   remains deferred to Batch 183 Change 20.
+9. Sanitizers and hosted-CI monitoring run only every ten batches. Batch 180
+   is complete, so the next and final such boundary in this plan is Batch
+   190; Batch 183 Change 20 receives only clean Clang Debug/Release
+   qualification, documentation, one implementation commit, and one push.
+10. Proceed only to Batch 183 Change 12: expose result-array constraints inside
+    functions. Do not run Release, sanitizers, hosted CI, commit, or push
+    before Batch 183 Change 20.
+
+## Batch 183 active checkpoint - after Change 12
+
+1. Batch 183 Changes 1-12 are complete and intentionally uncommitted on
+   `codex/v3`; preserve the accumulated worktree through Change 20. The latest
+   pushed base remains
+   `6258a2a9e608cd80dda96261861cd56874308aae`.
+2. VHDL-2019 function syntax accepts `return result_identifier of type_mark`.
+   The frontend records the identifier and creates its implicit subtype as the
+   first function declaration. Profile or local conflicts use
+   `FSIM-VHDL-SEM-112`; VHDL-2008 and older profiles reject the syntax.
+3. Semantic HIR retains the implicit subtype declaration and connects it to
+   `CallableProfile::return_identifier`. Callable/type HIR builder methods now
+   live in `application_vhdl_hir_callables.tpp` and
+   `application_vhdl_hir_types.tpp`; this coherent split reduces
+   `application_vhdl_hir.cpp` from 2,506 to 1,921 lines.
+4. Elaboration obtains the result subtype from the immediate expected type.
+   It requires a compatible, fully constrained, nonempty array and applies the
+   concrete type to the specialized result, implicit subtype, and dependent
+   local region. Missing or unconstrained context uses
+   `FSIM-ELAB-VHRESULT-001`; lost implicit metadata uses
+   `FSIM-ELAB-VHRESULT-002`.
+5. A focused one-process regression exposed cross-specialization local-register
+   aliasing: 4-bit and 8-bit result contexts shared storage keyed only by
+   source offset/name. Callable-local keys now include the existing VHDL
+   specialization identity, and colliding debug-local names receive the
+   callable invocation identity. Repeated calls and recursion within one
+   specialization retain the existing frame semantics.
+6. Independently authored evidence covers result-subtype locals and
+   `'length`, 4-bit/8-bit contexts lowered from one process, VHDL-2008
+   isolation, unconstrained contexts, local/profile conflicts, and interpreter
+   plus compiled LLVM execution at O0 and O2.
+7. V19-B183-C12 is preserved. The inventory has 26 active/eleven preserved
+   rows at normalized SHA-256
+   `ed5cc47a5ad0d897e7209e38011d78eca66f4b6b196bc1360e9395455649e21d`.
+   Two new HIR implementation fragments advance the source-package manifest
+   to 1,787 ordered payload paths and SHA-256
+   `7b23f1ec49b25dc521e86accd7dad9dd0edd32cb96223cc435a7e2a45edd677b`.
+8. The exact LLVM 22.1.8 Clang warnings-as-errors Debug frontend,
+   elaboration, and application targets build cleanly with eight workers. The
+   focused frontend, elaboration, interpreter/LLVM application, diagnostics,
+   line-budget, source-manifest, VHDL-inventory, resource-portability, and
+   CTest-uniqueness slice is green. No Release qualification ran.
+9. Sanitizers and hosted-CI monitoring run only every ten batches. Batch 180
+   is complete, so the next and final such boundary in this plan is Batch 190;
+   Batch 183 Change 20 receives only clean Clang Debug/Release qualification,
+   documentation, one implementation commit, and one push.
+10. Proceed only to Batch 183 Change 13: implement revised dynamically
+    allocated storage semantics. Preserve all Changes 1-12 work and do not run
+    Release, sanitizers, hosted CI, commit, or push before Batch 183 Change 20.
+
+## Batch 183 active checkpoint - after Change 13
+
+1. Batch 183 Changes 1-13 are complete and intentionally uncommitted on
+   `codex/v3`; preserve the accumulated worktree through Change 20. The latest
+   pushed base remains
+   `6258a2a9e608cd80dda96261861cd56874308aae`.
+2. VHDL access types now carry `deallocate_releases_storage` and
+   `reclaim_when_unreachable` through frontend metadata, semantic HIR, and
+   access-type specialization identities. VHDL-2008 and older defaults remain
+   destructive and simulation-lifetime based.
+3. In the VHDL-2019 profile, `DEALLOCATE` nulls its inout access argument but
+   does not emit `DeleteContainer`; other aliases can continue designating the
+   allocated object. The type is marked for reclamation after the final
+   designating value becomes unreachable. Batch 184 Change 3 retains ownership
+   of executing that reclamation at deterministic runtime safe points.
+4. Independently authored evidence allocates a scalar, copies its access
+   value, deallocates the original twice, proves the original is null, and
+   dereferences the surviving alias. It passes in interpreter and compiled
+   LLVM engines at O0 and O2. Existing VHDL-2008 elaboration evidence now also
+   asserts its destructive/no-reachability-reclamation policy.
+5. V19-B183-C13 is preserved. The inventory has 25 active/twelve preserved
+   rows at normalized SHA-256
+   `f5bde7d8bd5ed850df5a5146553c53b48222b6cfa2b44c27339b7fdb038f674f`.
+   No source path was added, so the source-package manifest remains at 1,787
+   ordered payload paths and SHA-256
+   `7b23f1ec49b25dc521e86accd7dad9dd0edd32cb96223cc435a7e2a45edd677b`.
+6. The exact LLVM 22.1.8 Clang warnings-as-errors Debug impact build completes
+   with eight workers. Focused VHDL-2019 interpreter/LLVM and retained-profile
+   elaboration tests are green; the final frontend, elaboration, application,
+   diagnostics, line-budget, source-manifest, inventory, resource, and
+   CTest-uniqueness slice passes 9/9 in 13.87 seconds. No Release qualification
+   ran.
+7. Sanitizers and hosted-CI monitoring run only every ten batches. Batch 180
+   is complete, so the next and final such boundary in this plan is Batch 190;
+   Batch 183 Change 20 receives only clean Clang Debug/Release qualification,
+   documentation, one implementation commit, and one push.
+8. Proceed only to Batch 183 Change 14: implement sequential block statements
+   and nested declarative regions. Preserve all Changes 1-13 work and do not
+   run Release, sanitizers, hosted CI, commit, or push before Batch 183 Change
+   20.
+
+## Batch 183 active checkpoint - after Change 14
+
+1. Batch 183 Changes 1-14 are complete and intentionally uncommitted on
+   `codex/v3`; preserve the accumulated worktree through Change 20. The latest
+   pushed base remains
+   `6258a2a9e608cd80dda96261861cd56874308aae`.
+2. VHDL-2019 accepts labeled and unlabeled sequential block statements,
+   optional `is`, optional closing `block`, matching ending labels, and nested
+   blocks. VHDL-2008 and older profiles issue the standard-profile diagnostic.
+   Malformed declaration/body delimiters use `FSIM-VHDL-PARSE-289` through
+   `FSIM-VHDL-PARSE-293`; unsupported declarative items use
+   `FSIM-VHDL-UNSUPPORTED-056`.
+3. Each frontend block retains constants, types, aliases, package instances,
+   local functions/procedures, variables/files, attributes, groups, and its
+   source-ordered statement part. These uncommon collections use
+   pointer-dormant storage so ordinary statement nodes do not acquire a vector
+   allocation for the new feature.
+4. Semantic HIR construction predeclares a distinct scope for every block,
+   places the complete declaration set in that scope, and builds nested
+   statements beneath it. Local callable bodies and protected-type members use
+   the same ownership chain. `application_vhdl_hir_statements.tpp` contains the
+   recursive region builder and keeps `application_vhdl_hir.cpp` at 1,924
+   lines.
+5. The existing lexical `Lowerer::lower_block` seam continues to handle basic
+   block variables and scope restoration. Batch 184 Change 4 remains the owner
+   of complete execution across wait, return, and exception boundaries,
+   including runtime handling of the full local declaration surface.
+6. Independently authored frontend evidence covers the complete declaration
+   set, both ending forms, nesting, and profile isolation. Application evidence
+   confirms separate outer/inner HIR scopes and declaration sets.
+7. V19-B183-C14 is preserved. The inventory has 24 active/thirteen preserved
+   rows at normalized SHA-256
+   `733d98a569ed65c206e8bae2c70447abbffaca4b8530bb1a341427be261f4b5a`.
+   One new HIR implementation fragment advances the source-package manifest to
+   1,788 ordered payload paths and SHA-256
+   `419a5f4a1ea6786c9da50d53ba625941c3dd65f631b3b4e110f1f2ad4a0128f9`.
+8. The exact LLVM 22.1.8 Clang warnings-as-errors Debug impact targets build
+   with eight workers. The final frontend, HIR/application, diagnostics,
+   line-budget, source-manifest, inventory, resource-portability, and
+   CTest-uniqueness slice passes 8/8 in 13.61 seconds. No Release qualification
+   ran.
+9. Sanitizers and hosted-CI monitoring run only every ten batches. Batch 180
+   is complete, so the next and final such boundary in this plan is Batch 190;
+   Batch 183 Change 20 receives only clean Clang Debug/Release qualification,
+   documentation, one implementation commit, and one push.
+10. Proceed only to Batch 183 Change 15: add all VHDL-2019 predefined
+    attributes and legality rules. Preserve all Changes 1-14 work and do not
+    run Release, sanitizers, hosted CI, commit, or push before Batch 183 Change
+    20.
+
+## Batch 183 active checkpoint - after Change 15
+
+1. Batch 183 Changes 1-15 are complete and intentionally uncommitted on
+   `codex/v3`; preserve the accumulated worktree through Change 20. The latest
+   pushed base remains
+   `6258a2a9e608cd80dda96261861cd56874308aae`.
+2. VHDL-2019 now retains `INDEX` and `DESIGNATED_SUBTYPE` as subtype-valued
+   metadata, `REFLECT` as a reflection-valued predefined attribute, and
+   `CONVERSE` as a named mode-view alias. These identities are appended to
+   durable enums so existing v3 numeric values remain stable.
+3. `INDEX` accepts zero or one locally static dimension, defaults to the first
+   dimension, reconstructs predefined INTEGER/NATURAL/POSITIVE index subtypes,
+   and preserves a selected constraint. `DESIGNATED_SUBTYPE` resolves the
+   single access designated subtype or file element subtype. Invalid prefix,
+   arity, staticness, and rank use `FSIM-VHDL-SEM-113` and
+   `FSIM-ELAB-VHATTR-009` through `FSIM-ELAB-VHATTR-010`.
+4. Converse aliases resolve visible local or imported package views, compose
+   recursively, reverse every nested leaf direction, and bind as ordinary
+   named views on interfaces. Missing and recursive sources use
+   `FSIM-ELAB-VHVIEW-005`; duplicate aliases use `FSIM-VHDL-SEM-114`.
+5. The semantic type inventory records scalar `LENGTH`, `RANGE`, and
+   `REVERSE_RANGE`, representable-composite `IMAGE` and `VALUE`, and
+   type/object `REFLECT` applicability for the 2019 profile. Scalar object
+   shorthand result inference and execution cover `POS`, `SUCC`, `PRED`,
+   `LEFTOF`, and `RIGHTOF`. Batch 184 Change 12 still owns construction and
+   execution of the reflection mirror API.
+6. Independently authored evidence covers all four new attribute families,
+   HIR applicability inventories, valid and invalid subtype resolution,
+   converse interface binding, scalar/object-shorthand execution, exact
+   diagnostics, and VHDL-2008 isolation.
+7. V19-B183-C15 is preserved. The inventory has 23 active/fourteen preserved
+   rows at normalized SHA-256
+   `b75297f113aba958de05372ac3ab9f96016cfdafc4018864b1390d0e51254765`.
+   No source paths were added, so the source-package manifest remains at 1,788
+   ordered payload paths and SHA-256
+   `419a5f4a1ea6786c9da50d53ba625941c3dd65f631b3b4e110f1f2ad4a0128f9`.
+8. The exact LLVM 22.1.8 Clang warnings-as-errors Debug impact targets build
+   with eight workers. The focused frontend, HIR/application, diagnostics,
+   line-budget, source-manifest, inventory, resource-portability, and
+   CTest-uniqueness slice passes 8/8 in 13.60 seconds. No Release
+   qualification ran.
+9. Sanitizers and hosted-CI monitoring run only every ten batches. Batch 180
+   is complete, so the next and final such boundary in this plan is Batch 190;
+   Batch 183 Change 20 receives only clean Clang Debug/Release qualification,
+   documentation, one implementation commit, and one push.
+10. Proceed only to Batch 183 Change 16: apply revised overload, visibility,
+    and conformance rules. Preserve all Changes 1-15 work and do not run
+    Release, sanitizers, hosted CI, commit, or push before Batch 183 Change 20.
+
+## Batch 183 active checkpoint - after Change 16
+
+1. Batch 183 Changes 1-16 are complete and intentionally uncommitted on
+   `codex/v3`; preserve the accumulated worktree through Change 20. The latest
+   pushed base remains
+   `6258a2a9e608cd80dda96261861cd56874308aae`.
+2. `vhdl_base_type_profiles_match` now owns result/base-type profile equality,
+   while `vhdl_parameter_type_profiles_match` owns parameter-profile equality
+   and the VHDL-2019 rule that either corresponding unspecified formal makes
+   the parameter types match. Homograph checks use parameter types rather than
+   modes, classes, defaults, or subtype constraints.
+3. Function and procedure duplicate-profile detection now preserves distinct
+   imported declarations and generic specializations, diagnoses direct
+   unspecified/concrete homographs with `FSIM-ELAB-VHOVER-003` and
+   `FSIM-ELAB-VHOVER-006`, and stable-sorts each candidate vector by retained
+   owner, specialization, logical source, and source offsets.
+4. Package declaration/body merging, protected-type declaration/body merging,
+   generic subprogram declaration/body matching, and interface subprogram
+   binding use the shared profile rules. Conforming bodies still require the
+   applicable purity, mode, class, and file-object properties. Generic value
+   formal declarations retain strict subtype-indication conformance, including
+   the existing INTEGER-versus-NATURAL negative case.
+5. Generic type specialization assigns deterministic identities to the
+   pre-mapping homograph classes. Originally duplicate declarations share an
+   identity and remain errors; originally distinct overloads that become
+   homographs after type mapping retain different identities, stay in the
+   overload set, and diagnose an ambiguous call rather than a duplicate.
+6. Semantic HIR overload-set declaration identities are explicitly sorted.
+   Application evidence verifies both sorted publication and identical
+   overload-set order across repeated project checks.
+7. Independently authored elaboration evidence covers direct unspecified
+   homographs, unspecified package declarations with concrete conforming
+   bodies, mapped generic-package homographs, ambiguity, and preserved
+   duplicate diagnostics. Scalar `LENGTH` fixtures discovered by the broader
+   elaboration test now select VHDL-2019 explicitly and retain the 64-bit
+   predefined INTEGER result width.
+8. V19-B183-C16 is preserved. The inventory has 22 active/fifteen preserved
+   rows at normalized SHA-256
+   `2e83563517dac3aab7c0e018c4b0afc628d4b0132950de6d081efe8bcbcf3524`.
+   No source paths were added, so the source-package manifest remains at 1,788
+   ordered payload paths and SHA-256
+   `419a5f4a1ea6786c9da50d53ba625941c3dd65f631b3b4e110f1f2ad4a0128f9`.
+9. The exact LLVM 22.1.8 Clang warnings-as-errors Debug impact targets build
+   with eight workers. The focused frontend, elaboration, HIR/application,
+   diagnostics, line-budget, source-manifest, inventory,
+   resource-portability, and CTest-uniqueness slice passes 12/12 in 13.87
+   seconds. No Release qualification ran.
+10. Sanitizers and hosted-CI monitoring run only every ten batches. Batch 180
+    is complete, so the next and final such boundary in this plan is Batch 190;
+    Batch 183 Change 20 receives only clean Clang Debug/Release qualification,
+    documentation, one implementation commit, and one push. Proceed only to
+    Batch 183 Change 17: prevent every VHDL-2019 construct from leaking into
+    older profiles. Preserve all Changes 1-16 work and do not run Release,
+    sanitizers, hosted CI, commit, or push before Batch 183 Change 20.
+
+## Batch 183 active checkpoint - after Change 17
+
+1. Batch 183 Changes 1-17 are complete and intentionally uncommitted on
+   `codex/v3`; preserve the accumulated worktree through Change 20. The latest
+   pushed base remains
+   `6258a2a9e608cd80dda96261861cd56874308aae`.
+2. `ParsedDesign::vhdl_profile_compatible` is transient parse state. Every
+   failed VHDL revision gate clears it, and conditional analysis clears it when
+   an older profile rejects a recognized directive. Project checking stops
+   before standard-library injection or HIR construction when it is false;
+   direct elaboration stops in O(1) with `FSIM-ELAB-VHPROFILE-001`.
+3. No recovery AST containing unavailable VHDL-2019 syntax can be consumed by
+   application HIR or direct elaboration under an older profile. Scalar
+   object-prefix shorthand for `POS`, `SUCC`, `PRED`, `LEFTOF`, `RIGHTOF`, and
+   `IMAGE` now participates in the same revision gate rather than relying only
+   on a later shape diagnostic.
+4. Independently authored frontend evidence runs the protected-generic,
+   unspecified-type, mode-view, view-interface, conditional-expression,
+   named-result-constraint, sequential-block, `INDEX`, `REFLECT`, `CONVERSE`,
+   object-shorthand, and conditional-analysis rejection matrix under every
+   VHDL-1987, 1993, 2000, 2002, and 2008 profile. It also preserves the older
+   32-bit predefined `INTEGER` model and older access-storage policy.
+5. Direct elaboration evidence rejects the VHDL-2019 scalar `LENGTH` addition
+   under all five older profiles and proves that a recovered object-shorthand
+   node is stopped by the preflight guard. The retained VHDL-2008 enumeration
+   application now computes scalar counts with `POS(HIGH)-POS(LOW)+1` rather
+   than depending on scalar `LENGTH`.
+6. Rebuilding the complete VHDL application slice exposed an accumulated
+   Change 6 compatibility regression in ordinary dynamic array indices. Small
+   32-bit VHDL arrays again use the direct `DynamicIndex` runtime path, keeping
+   the established range diagnostic and avoiding normalization instructions;
+   only 64-bit or far-bound indices use the new normalized path. Interpreter
+   and compiled O0/O2 failure evidence passes.
+7. V19-B183-C17 is preserved. The inventory has 21 active/sixteen preserved
+   rows at normalized SHA-256
+   `5163544b89393fee45605ef0683c7f78b146f745aedad23069111c2f2b65f719`.
+   No source paths were added, so the source-package manifest remains at 1,788
+   ordered payload paths and SHA-256
+   `419a5f4a1ea6786c9da50d53ba625941c3dd65f631b3b4e110f1f2ad4a0128f9`.
+8. The exact LLVM 22.1.8 Clang warnings-as-errors Debug impact targets build
+   with eight workers. The complete VHDL application slice passes 29/29 in
+   4.05 seconds. The focused frontend, elaboration, diagnostics, line-budget,
+   source-manifest, VHDL inventory, resource-portability, and CTest-uniqueness
+   slice passes 8/8 in 7.49 seconds. `git diff --check` is clean. No Release
+   qualification ran.
+9. Sanitizers and hosted-CI monitoring run only every ten batches. Batch 180
+   is complete, so the next and final such boundary in this plan is Batch 190;
+   Batch 183 Change 20 receives only clean Clang Debug/Release qualification,
+   documentation, one implementation commit, and one push.
+10. Proceed only to Batch 183 Change 18: round-trip every new semantic form
+    through v3 objects and elaborated designs. Preserve all Changes 1-17 work
+    and do not run Release, sanitizers, hosted CI, commit, or push before Batch
+    183 Change 20.
+
+## Batch 183 active checkpoint - after Change 18
+
+1. Batch 183 Changes 1-18 are complete and intentionally uncommitted on
+   `codex/v3`; preserve the accumulated worktree through Change 20. The latest
+   pushed base remains
+   `6258a2a9e608cd80dda96261861cd56874308aae`.
+2. The explicit portable and standalone-design archives now retain every
+   VHDL-2019 frontend/HIR field added by Changes 2-17. In particular, frontend
+   `Type` archives include predefined-subtype attribute identity and optional
+   dimension, `SignalDeclaration` archives include view indications, and the
+   design codec admits and validates mode-view declarations and composition.
+3. Portable owning-unit/class schema 27, portable-library schema 11,
+   runtime-state schema 51, and VHDL-HIR schema 3 own the changed layouts.
+   Stale and future schemas reject directly; there is no compatibility reader,
+   migration, fallback, or dual writer. The current ABI reference and the
+   portable-object, design/library, nested-portable, and stale-schema contracts
+   all carry the same identities and pinned digests.
+4. Independently authored portable-unit evidence round-trips the 64-bit
+   predefined integer model, subtype-valued `INDEX`, unspecified inference,
+   revised access lifetime, protected generics/private state/aliases, nested
+   and converse views, a view-based port, named function result, conditional
+   expression, and sequential block region with byte-identical
+   reserialization. Design-HIR and runtime-state evidence covers the same
+   semantic forms plus elaborated view bindings and corrupt-enum rejection.
+5. V19-B183-C18 is preserved. The inventory has 20 active/seventeen preserved
+   rows at normalized SHA-256
+   `c8d2afc6b1cc509a62cc82199dd0c2d90dad16f66f5be9b7e0863514fcf38d45`.
+   No source path was added, so the source-package manifest remains at 1,788
+   ordered payload paths and SHA-256
+   `419a5f4a1ea6786c9da50d53ba625941c3dd65f631b3b4e110f1f2ad4a0128f9`.
+6. The exact LLVM 22.1.8 Clang warnings-as-errors Debug impact targets build
+   with eight workers. The focused artifact and governance slice passes 11/11,
+   the complete schema label passes 15/15, and the complete VHDL application
+   slice passes 29/29 in 4.30 seconds. `git diff --check` is clean. No Release
+   qualification ran.
+7. Sanitizers and hosted-CI monitoring run only every ten batches. Batch 180
+   is complete, so the next and final such boundary in this plan is Batch 190;
+   Batch 183 Change 20 receives only clean Clang Debug/Release qualification,
+   documentation, one implementation commit, and one push.
+8. Proceed only to Batch 183 Change 19: add positive, negative, recovery, and
+   profile-differential tests for every new VHDL-2019 frontend form. Preserve
+   all Changes 1-18 work and do not run Release, sanitizers, hosted CI, commit,
+   or push before Batch 183 Change 20.
+
+## Batch 183 active checkpoint - after Change 19
+
+1. Batch 183 Changes 1-19 are complete and intentionally uncommitted on
+   `codex/v3`; preserve the accumulated worktree through Change 20. The latest
+   pushed base remains
+   `6258a2a9e608cd80dda96261861cd56874308aae`.
+2. The independently authored frontend suite has detailed positive and
+   targeted-negative owners for every VHDL-2019 form introduced in Changes
+   2-17. The existing profile matrix rejects twelve distinct 2019-only forms
+   under each of VHDL-1987, 1993, 2000, 2002, and 2008, and separately proves
+   the older 32-bit predefined integer and access-storage policies.
+3. `test_vhdl_2019_frontend_recovery_corpus` adds eleven malformed parser
+   families: protected members, unspecified types, mode views, view
+   interfaces, conditional expressions, result subtype identifiers,
+   sequential blocks, subtype-valued attributes, converse views, reflection,
+   and conditional analysis. Each case requires its targeted diagnostic,
+   retains `vhdl_profile_compatible` for the selected 2019 profile, and proves
+   parsing resumes at a following independent entity.
+4. The resource-portability contract pins the recovery entry point, every
+   family name, the profile-compatible requirement, and the independent-unit
+   synchronization assertion. V19-B183-C19 is preserved. The VHDL-2019
+   inventory has 19 active/eighteen preserved rows at normalized SHA-256
+   `2dfcaeeb274f240014cb12a9ccaf0f7c8889eaae6291dfcfb1c35b5289744a1f`.
+   No source path was added, so the source-package manifest remains at 1,788
+   ordered payload paths and SHA-256
+   `419a5f4a1ea6786c9da50d53ba625941c3dd65f631b3b4e110f1f2ad4a0128f9`.
+5. The exact LLVM 22.1.8 Clang warnings-as-errors Debug frontend target builds
+   with eight workers in 28 steps, and the complete frontend executable and
+   CTest owner pass. `git diff --check` is clean. No Release qualification ran.
+6. Sanitizers and hosted-CI monitoring run only every ten batches. Batch 180
+   is complete, so the next and final such boundary in this plan is Batch 190;
+   Batch 183 Change 20 receives only clean Clang Debug/Release qualification,
+   documentation, one implementation commit, and one push.
+7. Proceed only to Batch 183 Change 20: run the standard clean Clang
+   Debug/Release batch closure, freeze the frontend inventory, document the
+   result, create one implementation commit, and push it. Do not run
+   sanitizers or monitor hosted CI at this batch boundary.
+
+## Batch 183 closure checkpoint
+
+1. Resume on `codex/v3` with Batch 183 complete. The frontend implements the
+   governed VHDL-2019 syntax, type, interface, expression, profile-isolation,
+   artifact, and recovery surface. The inventory retains nineteen preserved
+   Batch 183 rows and nineteen active Batch 184 runtime rows at normalized
+   SHA-256
+   `2dfcaeeb274f240014cb12a9ccaf0f7c8889eaae6291dfcfb1c35b5289744a1f`.
+2. Change 20 completed clean eight-worker warnings-as-errors builds with the
+   exact LLVM 22.1.8 Clang toolchain for both Debug and Release. The complete
+   Debug suite passes 405/405 in 142.75 seconds; the complete Release suite
+   passes 405/405 in 149.89 seconds.
+3. Closure refreshed the frozen repository evidence to 2,638 production
+   diagnostics, 1,424 bounded authored sources, 1,723 SPDX-owned files, 534
+   conformance test/control files, and 745 release-audit test/control files.
+   All composed audit owners pass in both full suites.
+4. A retained expression application used VHDL-2019-only conditional and case
+   expressions while declaring VHDL-2008. It now selects VHDL-2019 explicitly
+   and expects the governed 64-bit predefined `INTEGER` values. A debugger
+   comparison confirmed that interpreter and compiled execution produced the
+   same value vector before the stale expectations were corrected.
+5. The source-package manifest remains at 1,788 ordered payload paths with
+   SHA-256
+   `419a5f4a1ea6786c9da50d53ba625941c3dd65f631b3b4e110f1f2ad4a0128f9`.
+   Direct VHDL-2019 inventory, resource-portability, source-manifest, and
+   whitespace checks are clean.
+6. Batch 183 is not a tenth-batch boundary, so no sanitizer lane and no
+   hosted-CI monitoring ran. Sanitizers and hosted-CI monitoring run only at
+   Batch 180 and Batch 190 in this plan.
+7. After the single Batch 183 implementation commit and push, proceed only to
+   Batch 184 Change 1: elaborate interface views and nested directional
+   connections. Keep the two private LRMs read-only and do not copy, quote,
+   hash, log, package, or record their paths in repository artifacts.

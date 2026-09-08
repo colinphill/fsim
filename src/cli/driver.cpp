@@ -564,7 +564,7 @@ namespace {
             << "      --top [ALIAS=]NAME   Replace design tops; repeatable, aliases required for multiple\n"
             << "      --lang LANGUAGE      Language for every direct source file\n"
             << "      --standard VERSION   Standard for direct source files\n"
-            << "                           VHDL: 87/1987, 93/1993, 00/2000, 02/2002, 08/2008\n"
+            << "                           VHDL: 87/1987, 93/1993, 00/2000, 02/2002, 08/2008, 19/2019\n"
             << "                           Verilog: 95/1995, 01/2001, 2001-noconfig, 05/2005\n"
             << "                           SystemVerilog: 05/2005, 09/2009, 12/2012, 17/2017\n"
             << "      --compatibility NAME Explicit compatibility switch; repeatable\n"

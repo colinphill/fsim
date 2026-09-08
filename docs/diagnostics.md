@@ -177,6 +177,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-FE-VHSTD-005` | error | Sources using different VHDL revisions attempt to share one compiler-supplied IEEE package environment; analyze them into separate logical libraries. |
 | `FSIM-FE-VHSTD-006` | error | A requested compiler-supplied non-standard Synopsys compatibility package is unavailable or incompatible with the selected VHDL revision; select a compatible revision or remove its use clause. |
 | `FSIM-ELAB-VHSTD-001` | error | A compiler-supplied IEEE intrinsic is unavailable in the owning process's selected VHDL revision and no user-defined overload owns the name. |
+| `FSIM-ELAB-VHPROFILE-001` | error | Direct elaboration attempted to consume VHDL recovery nodes containing a construct unavailable in the selected language revision. |
 | `FSIM-ELAB-VHNUM-001` | error | An IEEE or Synopsys numeric function has the wrong arity or value profile. |
 | `FSIM-ELAB-VHNUM-002` | error | A numeric conversion or resize result size is not locally static and representable by SimIR; standard conversions require a positive size while historical Synopsys conversions also permit zero. |
 | `FSIM-ELAB-VHNUM-003` | error | `to_integer` or `conv_integer` lacks a constrained non-null signed or unsigned input profile. |
@@ -205,6 +206,10 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-FE-LEX-007` | error | VHDL-2008 delimited-comment nesting exceeds the bounded 64-level policy. |
 | `FSIM-VHDL-LEX-001` | error | A VHDL lexical form requires a later selected revision; the diagnostic identifies the required revision and exact source span. |
 | `FSIM-VHDL-LEX-002` | error | A word reserved by the selected VHDL revision was used where a user identifier is required; use an extended identifier or an older compatible revision. |
+| `FSIM-VHDL-CA-001` | error | A conditional analysis directive was used under a VHDL revision older than 2019. |
+| `FSIM-VHDL-CA-002` | error | A conditional analysis directive or its expression is malformed. |
+| `FSIM-VHDL-CA-003` | error | Conditional analysis branch or group nesting is structurally invalid. |
+| `FSIM-VHDL-CA-004` | error | Conditional analysis nesting exceeds the bounded 128-level policy. |
 | `FSIM-FE-PARSE-001` | error | A parser expectation using the common fallback code failed. |
 | `FSIM-FE-PP-0001` | error | Include directories or macro definitions were supplied for a VHDL source set; these settings apply only to Verilog/SystemVerilog or SystemC. |
 
@@ -732,6 +737,16 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-PARSE-283` | error | A VHDL disconnection specification is missing the colon after its guarded-signal list. |
 | `FSIM-VHDL-PARSE-284` | error | A VHDL disconnection specification is missing `after` before its time expression. |
 | `FSIM-VHDL-PARSE-285` | error | A VHDL disconnection specification is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-286` | error | A VHDL-2019 unspecified type profile has a malformed category, box, index list, designated subtype, or element subtype. |
+| `FSIM-VHDL-PARSE-287` | error | A VHDL-2019 mode view declaration has malformed subtype, element, nested-view, ending, or delimiter syntax. |
+| `FSIM-VHDL-PARSE-288` | error | A VHDL-2019 array-view interface indication is missing its closing parenthesis. |
+| `FSIM-VHDL-PARSE-289` | error | A variable declaration in a VHDL-2019 sequential block is missing the colon before its subtype indication. |
+| `FSIM-VHDL-PARSE-290` | error | A variable declaration in a VHDL-2019 sequential block is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-291` | error | A VHDL-2019 sequential block is missing `begin` after its declarative part. |
+| `FSIM-VHDL-PARSE-292` | error | A VHDL-2019 sequential block is missing `end` after its statement part. |
+| `FSIM-VHDL-PARSE-293` | error | A VHDL-2019 sequential block is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-294` | error | A VHDL-2019 subtype-valued predefined attribute has a malformed argument list. |
+| `FSIM-VHDL-PARSE-295` | error | A VHDL-2019 converse mode-view alias has a missing attribute delimiter or terminator. |
 
 ### Embedded VHDL PSL parsing and ownership
 
@@ -856,6 +871,14 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-SEM-104` | error | A VHDL `postponed` prefix appears on a concurrent statement other than a process, assertion, or procedure call. |
 | `FSIM-VHDL-SEM-105` | error | A VHDL disconnection specification's type mark does not match an explicitly selected signal. |
 | `FSIM-VHDL-SEM-106` | error | VHDL disconnection specifications overlap or repeat one guarded signal. |
+| `FSIM-VHDL-SEM-107` | error | A VHDL mode view name or element is repeated, or its optional ending name does not match. |
+| `FSIM-VHDL-SEM-108` | error | A VHDL mode view element illegally specifies linkage mode. |
+| `FSIM-VHDL-SEM-109` | error | A VHDL-2019 view-based interface names no unique visible mode-view declaration. |
+| `FSIM-VHDL-SEM-110` | error | A VHDL-2019 mode view has a resolved or non-record root, omits a root element, or applies a nested view to an incompatible element subtype. |
+| `FSIM-VHDL-SEM-111` | error | A VHDL-2019 view-based interface has an explicit record subtype or array element subtype that is incompatible with its mode view. |
+| `FSIM-VHDL-SEM-112` | error | A VHDL-2019 function result subtype identifier conflicts with its function profile or a local declaration. |
+| `FSIM-VHDL-SEM-113` | error | A VHDL-2019 predefined attribute is used with an illegal result context or argument count. |
+| `FSIM-VHDL-SEM-114` | error | A VHDL declarative region repeats a converse mode-view alias name. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -894,6 +917,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-UNSUPPORTED-053` | error | A generated VHDL declarative region contains an item outside the bounded constant, signal, alias, type, subtype, callable, component, and local-package subset. |
 | `FSIM-VHDL-UNSUPPORTED-054` | error | A bounded VHDL object alias omits its explicit subtype indication. |
 | `FSIM-VHDL-UNSUPPORTED-055` | error | A protected type contains a declarative item outside the bounded private-variable, function, and procedure subset. |
+| `FSIM-VHDL-UNSUPPORTED-056` | error | A VHDL-2019 sequential block contains an item outside the supported process-declarative surface. |
 
 ## Verilog and SystemVerilog frontend
 
@@ -1752,6 +1776,9 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-ELAB-VHATTR-006` | error | A VHDL `'transaction` implicit signal has an invalid prefix, supplies an argument, or is invalid in a wait sensitivity. |
 | `FSIM-ELAB-VHATTR-007` | error | A VHDL `'delayed` implicit signal has an invalid prefix or a nonstatic or negative duration. |
 | `FSIM-ELAB-VHATTR-008` | error | An implicit VHDL signal attribute would exceed the supported process-ID space. |
+| `FSIM-ELAB-VHATTR-009` | error | The VHDL-2019 `'designated_subtype` prefix is not an access or file type. |
+| `FSIM-ELAB-VHATTR-010` | error | The VHDL-2019 `'index` prefix is not an array type, or its dimension is nonstatic or outside the array rank. |
+| `FSIM-ELAB-VHATTR-011` | error | A scalar `'length`, `'range`, or `'reverse_range` attribute is used before VHDL-2019. |
 | `FSIM-ELAB-099` | error | A named-event trigger does not contain a simple event name. |
 | `FSIM-ELAB-100` | error | A named-event trigger references an unknown event. |
 | `FSIM-ELAB-101` | error | A named-event trigger targets an object not declared as an event. |
@@ -1893,6 +1920,8 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-ELAB-VHOVER-004` | error | A VHDL procedure call is ambiguous among the visible overloads after actual-profile filtering. |
 | `FSIM-ELAB-VHOVER-005` | error | A VHDL procedure call matches no visible overload after actual-profile filtering. |
 | `FSIM-ELAB-VHOVER-006` | error | Two visible VHDL procedure declarations have the same callable profile. |
+| `FSIM-ELAB-VHUNSPEC-001` | error | A VHDL-2019 function, procedure, or port association cannot infer one unique legal actual type for every unspecified formal type. |
+| `FSIM-ELAB-VHUNSPEC-002` | error | A VHDL-2019 interface type generic actual does not satisfy its declared unspecified type category and nested profile. |
 | `FSIM-ELAB-VHQUAL-001` | error | A VHDL qualified expression names a type mark that is not visible. |
 | `FSIM-ELAB-VHQUAL-002` | error | A VHDL qualification target has no positive SimIR-representable executable width. |
 | `FSIM-ELAB-VHQUAL-003` | error | A VHDL qualified expression operand does not have the target base type, exact bounded shape, width, nominal identity, or state domain. |
@@ -2155,6 +2184,16 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-ELAB-VHENUMRANGE-004` | error | A locally static value assigned to a constrained VHDL enumeration object lies outside the subtype range. |
 | `FSIM-ELAB-VHPORT-001` | error | A VHDL input-port expression is not a supported locally static value for its contextual formal type, or a nonstatic expression requires VHDL-2008 and an explicitly driven intermediate signal under the selected older revision. |
 | `FSIM-ELAB-VHPORT-002` | error | A VHDL output, buffer, or inout port is associated with an expression that is not a writable signal name. |
+| `FSIM-ELAB-VHVIEW-001` | error | A VHDL view-based interface names no unique visible mode-view declaration during elaboration. |
+| `FSIM-ELAB-VHVIEW-002` | error | A VHDL view-based interface has a recursive composed leaf-direction map. |
+| `FSIM-ELAB-VHVIEW-003` | error | A VHDL view root is invalid or incomplete, or a nested view is incompatible with its record member or array element subtype. |
+| `FSIM-ELAB-VHVIEW-004` | error | A VHDL view-based interface has a record subtype or array element subtype that is incompatible with the referenced mode-view root. |
+| `FSIM-ELAB-VHVIEW-005` | error | A VHDL converse mode-view alias has no visible source view or forms a recursive alias chain. |
+| `FSIM-ELAB-VHCOND-001` | error | A VHDL conditional expression is malformed, appears outside VHDL, or uses the first-class expression form before VHDL-2019. |
+| `FSIM-ELAB-VHCOND-002` | error | VHDL conditional-expression results do not resolve to one surrounding common base type and width. |
+| `FSIM-ELAB-VHCOND-003` | error | A VHDL-2019 conditional-expression condition is not Boolean or an implicitly convertible scalar bit or standard-logic value. |
+| `FSIM-ELAB-VHRESULT-001` | error | A VHDL-2019 function result subtype cannot obtain a compatible fully constrained array subtype from its immediate call context. |
+| `FSIM-ELAB-VHRESULT-002` | error | A VHDL-2019 function result subtype lost its implicit declaration metadata before contextual specialization. |
 | `FSIM-ELAB-VITAL-001` | error | A compiler-supplied VITAL constant is used without its exact concrete delay or map context. |
 | `FSIM-ELAB-VITAL-002` | error | A scalar VITAL primitive is used in a nonscalar result context. |
 | `FSIM-ELAB-VITAL-003` | error | A VITAL function call has a missing, excessive, duplicate, unknown, or misplaced actual. |

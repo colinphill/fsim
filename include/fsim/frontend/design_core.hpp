@@ -75,6 +75,9 @@ enum class ExpressionKind {
     // Source-spanned SystemVerilog assignment-pattern `default` choice. This
     // is association metadata, never an ordinary identifier expression.
     DefaultChoice,
+    // VHDL-2019 `expression when condition else expression`. Operands are
+    // condition, selected result, and remaining conditional/final result.
+    Conditional,
 };
 
 // `text` contains the identifier/literal/operator/callee. Operands retain
@@ -271,6 +274,31 @@ struct DiscreteRangeExpression {
 struct Type;
 struct VhdlProtectedInfo;
 
+enum class VhdlUnspecifiedTypeClass : std::uint8_t {
+    None,
+    Private,
+    Scalar,
+    Discrete,
+    Integer,
+    Physical,
+    Floating,
+    Array,
+    Access,
+    File,
+};
+
+/// A VHDL-2019 unspecified type profile. Array profiles retain index types
+/// followed by their element type; access and file profiles retain their one
+/// designated or element type. The source-derived identity ties multiple
+/// names from one interface declaration to one inferred actual type.
+struct VhdlUnspecifiedTypeInfo {
+    VhdlUnspecifiedTypeClass type_class { VhdlUnspecifiedTypeClass::None };
+    std::vector<Type> component_types;
+    std::size_t array_index_count { };
+    std::string inference_identity;
+    SourceSpan span;
+};
+
 struct PackedMember {
     std::string name;
     ValueDomain domain { ValueDomain::Unknown };
@@ -355,8 +383,12 @@ struct VhdlAccessInfo {
     std::uint32_t maximum_objects { std::numeric_limits<std::uint32_t>::max() };
     bool nullable { true };
     bool owns_designated_object { true };
-    // Explicit deallocation is outside the bounded v1 subset, so allocated
-    // objects remain alive through the enclosing simulation lifetime.
+    // Before VHDL-2019, DEALLOCATE releases the designated storage. In the
+    // 2019 profile the legacy operation only nulls its inout access value and
+    // storage becomes reclaimable after the final designating value is lost.
+    bool deallocate_releases_storage { true };
+    bool reclaim_when_unreachable { };
+    // True when the profile has no automatic reachability reclamation.
     bool simulation_lifetime { true };
 };
 
@@ -440,6 +472,17 @@ enum class PackedAggregateKind {
     UnpackedUnion,
 };
 
+/// A VHDL predefined attribute whose result is itself a subtype.
+///
+/// Keeping this distinct from ordinary expression calls lets subtype
+/// indications such as `matrix_t'index(2)` retain both their base type and
+/// locally-static dimension until hierarchy type resolution.
+enum class VhdlPredefinedSubtypeAttribute : std::uint8_t {
+    None,
+    Index,
+    DesignatedSubtype,
+};
+
 struct Type {
     ValueDomain domain { ValueDomain::Unknown };
     std::string spelling;
@@ -498,8 +541,14 @@ struct Type {
     std::vector<PackedMember> packed_members;
     PackedAggregateKind packed_aggregate { PackedAggregateKind::None };
     // Concrete or specialization-dependent VHDL scalar constraint. This never
-    // changes the fixed 32-bit runtime representation returned by width().
+    // determines representation width by itself: integer subtypes retain the
+    // storage width of their base type even when their constraint is narrow.
     std::optional<IntegerRange> integer_range;
+    // Zero for non-VHDL integer-like values. VHDL INTEGER-family types use an
+    // explicit 32- or 64-bit representation selected by their source profile.
+    // Keeping this independent from the constraint prevents a narrow subtype
+    // of VHDL-2019 INTEGER from accidentally reverting to 32-bit storage.
+    std::uint8_t vhdl_integer_storage_width { };
     support::RareOptional<IntegerRangeExpression> integer_range_expression;
     // When a derived VHDL subtype adds an integer range, retain the resolved
     // base subtype's range independently so specialization can prove that the
@@ -523,9 +572,20 @@ struct Type {
     // resolved view of one. Source units and exact scale expressions remain
     // declaration ordered.
     support::RareOptional<VhdlPhysicalInfo> vhdl_physical;
+    // VHDL-2019 subtype-valued predefined attribute applied to named_type.
+    // INDEX optionally carries one locally-static dimension expression;
+    // DESIGNATED_SUBTYPE never does.
+    VhdlPredefinedSubtypeAttribute vhdl_predefined_subtype_attribute {
+        VhdlPredefinedSubtypeAttribute::None
+    };
+    support::RareOptional<Expression>
+        vhdl_predefined_subtype_attribute_dimension;
     // Present on a VHDL protected declaration or body. A shared indirection is
     // required because protected method profiles contain Type values.
     std::shared_ptr<VhdlProtectedInfo> vhdl_protected;
+    // Present on a VHDL-2019 unspecified generic or interface type. Nested
+    // array/access/file categories use vector-backed Type components.
+    std::shared_ptr<VhdlUnspecifiedTypeInfo> vhdl_unspecified;
     // Source-ordered constraints on a named VHDL array subtype indication.
     // One-dimensional executable views also mirror their sole entry through
     // packed_range_expression for compatibility with the existing packed path.
@@ -559,11 +619,42 @@ struct Type {
     [[nodiscard]] std::optional<std::uint64_t> width() const noexcept;
 };
 
+[[nodiscard]] constexpr std::uint8_t vhdl_predefined_integer_storage_width(
+    const VhdlStandard standard) noexcept
+{
+    return standard >= VhdlStandard::Vhdl2019 ? 64U : 32U;
+}
+
+[[nodiscard]] IntegerRange vhdl_predefined_integer_range(
+    VhdlStandard standard,
+    std::string_view subtype);
+
+[[nodiscard]] Type vhdl_predefined_integer_type(
+    VhdlStandard standard,
+    std::string_view subtype);
+
 /// Compare two VHDL subtype indications for declaration/body conformance.
 /// Source locations and resolved cache provenance do not participate; the
 /// selected type mark, scalar domain, direction, and retained constraints do.
 [[nodiscard]] bool vhdl_subtype_indications_conform(const Type& left,
     const Type& right);
+
+/// Compare the base types used by VHDL subprogram result profiles. Scalar
+/// constraints, array bounds, resolution indications, and spelling aliases do
+/// not participate once a nominal base identity is available.
+[[nodiscard]] bool vhdl_base_type_profiles_match(const Type& left,
+    const Type& right);
+
+/// Compare VHDL formal parameter type profiles. VHDL-2019 specifies that an
+/// unspecified subtype indication matches any corresponding parameter base
+/// type for homograph, overload, and conforming-profile decisions.
+[[nodiscard]] bool vhdl_parameter_type_profiles_match(const Type& left,
+    const Type& right);
+
+[[nodiscard]] bool vhdl_unspecified_type_accepts(const Type& formal,
+    const Type& actual);
+
+[[nodiscard]] std::string vhdl_inferred_type_identity(const Type& type);
 
 struct EnumLiteralDeclaration {
     std::string name;
@@ -585,6 +676,47 @@ enum class TypeDeclarationKind {
     SystemVerilogTypedef,
     VhdlIncomplete,
     SystemVerilogNettype,
+    // Appended so retained durable declaration-kind values remain stable.
+    VhdlModeView,
+};
+
+enum class VhdlModeViewElementKind : std::uint8_t {
+    direction,
+    record_view,
+    array_view,
+};
+
+struct VhdlModeViewElement {
+    std::string name;
+    VhdlModeViewElementKind kind { VhdlModeViewElementKind::direction };
+    PortDirection direction { PortDirection::Unknown };
+    std::string referenced_view;
+    SourceSpan span;
+};
+
+enum class VhdlModeViewIndicationKind : std::uint8_t {
+    record,
+    array,
+};
+
+/// A VHDL-2019 mode-view indication retained on an interface object.
+///
+/// `elements` is populated during elaboration in declaration order. Paths are
+/// relative to the interface object; `(<>)` denotes the element selected by an
+/// array-view indication without inventing a source index before subtype
+/// specialization.
+struct VhdlModeViewPortElement {
+    std::string path;
+    PortDirection direction { PortDirection::Unknown };
+    SourceSpan span;
+};
+
+struct VhdlModeViewIndication {
+    VhdlModeViewIndicationKind kind { VhdlModeViewIndicationKind::record };
+    std::string view;
+    bool explicit_subtype { };
+    std::vector<VhdlModeViewPortElement> elements;
+    SourceSpan span;
 };
 
 struct TypeAliasDeclaration {
@@ -598,6 +730,17 @@ struct TypeAliasDeclaration {
     std::vector<EnumLiteralDeclaration> enum_literals;
     TypeDeclarationKind declaration_kind { TypeDeclarationKind::Alias };
     std::string systemverilog_resolution_function;
+    // Present only for VhdlModeView. The declaration's `type` is the
+    // unresolved record subtype named after `of`; grouped element names are
+    // expanded into one explicit directional/reference node per subelement.
+    std::vector<VhdlModeViewElement> vhdl_mode_view_elements;
+    // Present only for a VHDL-2019 alias of M'CONVERSE. The declaration is a
+    // mode view, not an object alias; composition resolves and reverses the
+    // referenced view without duplicating its source element list.
+    std::string vhdl_mode_view_converse_of;
+    // Resolved parity of a possibly chained CONVERSE alias. Ordinary view
+    // declarations are false; each converse alias toggles its source parity.
+    bool vhdl_mode_view_converse_parity { };
 };
 
 struct VhdlAttributeDeclaration {
@@ -639,6 +782,9 @@ struct SignalDeclaration {
     // VHDL input-port defaults and declarative signal initializers. Other
     // languages may also retain declaration defaults for executable HIR.
     std::optional<Expression> default_value;
+    // Present only for a VHDL-2019 view-based interface declaration. The
+    // scalar direction remains Unknown because each leaf owns its direction.
+    std::optional<VhdlModeViewIndication> vhdl_mode_view;
 
     SignalDeclaration() = default;
     SignalDeclaration(
@@ -646,7 +792,8 @@ struct SignalDeclaration {
         bool signal_is_port, SourceSpan signal_span,
         std::optional<Delay> signal_net_delay = std::nullopt,
         std::string signal_interface_type = { }, std::string signal_modport = { },
-        std::optional<Expression> signal_default_value = std::nullopt)
+        std::optional<Expression> signal_default_value = std::nullopt,
+        std::optional<VhdlModeViewIndication> signal_vhdl_mode_view = std::nullopt)
         : name(std::move(signal_name))
         , type(std::move(signal_type))
         , direction(signal_direction)
@@ -656,6 +803,7 @@ struct SignalDeclaration {
         , interface_type(std::move(signal_interface_type))
         , modport(std::move(signal_modport))
         , default_value(std::move(signal_default_value))
+        , vhdl_mode_view(std::move(signal_vhdl_mode_view))
     {
     }
 };
@@ -675,13 +823,18 @@ struct VariableDeclaration {
     // True only for a SystemVerilog const variable declaration. Class const
     // properties retain the same qualifier on SystemVerilogClassProperty.
     bool systemverilog_const { };
+    // True for a VHDL protected-type state object that is not publicly
+    // selectable. Legacy body variables are implicitly private; VHDL-2019
+    // declaration members can carry the explicit `private` qualifier.
+    bool vhdl_private { };
 
     VariableDeclaration() = default;
     VariableDeclaration(
         std::string variable_name, Type variable_type,
         std::optional<Expression> variable_initializer, SourceSpan variable_span,
         bool variable_vhdl_shared = false, bool variable_vhdl_file = false,
-        std::optional<Expression> variable_file_open_kind = std::nullopt)
+        std::optional<Expression> variable_file_open_kind = std::nullopt,
+        bool variable_vhdl_private = false)
         : name(std::move(variable_name))
         , type(std::move(variable_type))
         , initializer(std::move(variable_initializer))
@@ -689,6 +842,7 @@ struct VariableDeclaration {
         , vhdl_shared(variable_vhdl_shared)
         , vhdl_file(variable_vhdl_file)
         , vhdl_file_open_kind(std::move(variable_file_open_kind))
+        , vhdl_private(variable_vhdl_private)
     {
     }
 };
@@ -908,6 +1062,7 @@ struct VhdlComponentPort {
     PortDirection direction { PortDirection::Unknown };
     std::optional<Expression> default_value;
     SourceSpan span;
+    std::optional<VhdlModeViewIndication> vhdl_mode_view;
 };
 
 enum class ParameterKind {
@@ -1228,6 +1383,8 @@ struct Sensitivity {
 };
 
 struct CaseAlternative;
+struct FunctionDeclaration;
+struct ProcedureDeclaration;
 
 enum class SystemVerilogAssertionControlKind {
     None,
@@ -1412,9 +1569,19 @@ struct Statement {
     CaseMatchKind case_match_kind { CaseMatchKind::Exact };
     CaseQualifier case_qualifier { CaseQualifier::None };
     support::RareVector<CaseAlternative> case_alternatives;
-    // Declarations directly owned by a procedural block.
+    // Declarations directly owned by a procedural block. VHDL-2019
+    // sequential blocks admit the complete process-declarative surface;
+    // RareVector keeps the added region pointer-dormant on ordinary
+    // statements.
+    support::RareVector<ParameterDeclaration> constants;
     support::RareVector<TypeAliasDeclaration> type_aliases;
+    support::RareVector<SignalAliasDeclaration> signal_aliases;
+    support::RareVector<PackageInstantiation> package_instances;
+    support::RareVector<FunctionDeclaration> functions;
+    support::RareVector<ProcedureDeclaration> procedures;
     support::RareVector<VariableDeclaration> declarations;
+    support::RareVector<VhdlAttributeDeclaration> vhdl_attributes;
+    support::RareVector<VhdlGroupDeclaration> vhdl_groups;
 };
 
 struct CaseAlternative {
@@ -1433,9 +1600,6 @@ enum class ProcessKind {
     Initial,
     Final,
 };
-
-struct FunctionDeclaration;
-struct ProcedureDeclaration;
 
 struct Process {
     ProcessKind kind { ProcessKind::VhdlProcess };
@@ -1464,6 +1628,11 @@ struct Process {
 struct FunctionDeclaration {
     std::string name;
     Type return_type;
+    // VHDL-2019 permits `return identifier of type_mark`. The identifier
+    // denotes an implicit subtype whose constraint comes from each call
+    // context and is visible throughout the function declarative part/body.
+    std::string vhdl_return_identifier;
+    SourceSpan vhdl_return_identifier_span;
     std::vector<FunctionArgument> arguments;
     std::vector<ParameterDeclaration> constants;
     std::vector<TypeAliasDeclaration> type_aliases;

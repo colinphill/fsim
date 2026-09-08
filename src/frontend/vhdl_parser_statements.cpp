@@ -36,8 +36,125 @@ std::vector<Statement> VhdlParser::parse_statement_list(
   return statements;
 }
 
+void VhdlParser::parse_sequential_block_declarations(
+    Statement& statement) {
+  std::vector<ParameterDeclaration> constants;
+  std::vector<TypeAliasDeclaration> type_aliases;
+  std::vector<SignalAliasDeclaration> signal_aliases;
+  std::vector<VariableDeclaration> variables;
+  std::vector<PackageInstantiation> package_instances;
+  std::vector<FunctionDeclaration> functions;
+  std::vector<ProcedureDeclaration> procedures;
+  std::vector<VhdlAttributeDeclaration> attributes;
+  std::vector<VhdlGroupDeclaration> groups;
+  while (!at_end() && !keyword("begin", 0, true)) {
+    if (match_keyword("file", true)) {
+      parse_vhdl_file_declaration(variables, previous());
+      continue;
+    }
+    if (parse_vhdl_local_nonobject_declaration(
+            constants,
+            type_aliases,
+            signal_aliases,
+            variables,
+            package_instances,
+            functions,
+            procedures,
+            attributes,
+            groups)) {
+      continue;
+    }
+    if (!match_keyword("variable", true)) {
+      const auto declaration = current();
+      error(
+          declaration,
+          "FSIM-VHDL-UNSUPPORTED-056",
+          "unsupported sequential block declarative item");
+      while (!at_end() && !keyword("begin", 0, true)
+             && !at(TokenKind::Semicolon)) {
+        advance();
+      }
+      match(TokenKind::Semicolon);
+      continue;
+    }
+    std::vector<Token> names;
+    names.push_back(expect_identifier("variable name"));
+    while (match(TokenKind::Comma)) {
+      names.push_back(expect_identifier("variable name"));
+    }
+    expect(
+        TokenKind::Colon,
+        "':' after variable names",
+        "FSIM-VHDL-PARSE-289");
+    const auto type = parse_vhdl_type(true, true);
+    std::optional<Expression> initializer;
+    if (match(TokenKind::ColonEqual)) {
+      initializer = parse_expression();
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after variable declaration",
+        "FSIM-VHDL-PARSE-290");
+    for (const auto& name : names) {
+      variables.push_back(VariableDeclaration{
+          vhdl_name(name.text),
+          type,
+          initializer,
+          span_from(name, previous())});
+    }
+  }
+  validate_vhdl_local_declaration_names(
+      constants,
+      type_aliases,
+      signal_aliases,
+      variables,
+      package_instances,
+      functions,
+      procedures);
+  statement.constants = std::move(constants);
+  statement.type_aliases = std::move(type_aliases);
+  statement.signal_aliases = std::move(signal_aliases);
+  statement.package_instances = std::move(package_instances);
+  statement.functions = std::move(functions);
+  statement.procedures = std::move(procedures);
+  statement.declarations = std::move(variables);
+  statement.vhdl_attributes = std::move(attributes);
+  statement.vhdl_groups = std::move(groups);
+}
+
 std::optional<Statement> VhdlParser::parse_sequential_statement(
     const std::optional<Token>& opening_label) {
+  if (match_keyword("block", true)) {
+    const auto start = previous();
+    (void)require_vhdl_standard(
+        start,
+        VhdlStandard::Vhdl2019,
+        "sequential block statements",
+        "move the declarations to the enclosing process or subprogram");
+    Statement statement;
+    statement.kind = StatementKind::Block;
+    const auto outer_named_types = vhdl_named_types_;
+    const auto outer_named_type_kinds = vhdl_named_type_kinds_;
+    match_keyword("is", true);
+    parse_sequential_block_declarations(statement);
+    expect_keyword("begin", true, "FSIM-VHDL-PARSE-291");
+    statement.statements = parse_statement_list({"end"});
+    expect_keyword("end", true, "FSIM-VHDL-PARSE-292");
+    match_keyword("block", true);
+    parse_statement_end_label(
+        opening_label
+            ? vhdl_name(opening_label->text)
+            : std::string_view{},
+        "sequential block");
+    expect(
+        TokenKind::Semicolon,
+        "';' after sequential block statement",
+        "FSIM-VHDL-PARSE-293");
+    statement.span = span_from(start, previous());
+    vhdl_named_types_ = outer_named_types;
+    vhdl_named_type_kinds_ = outer_named_type_kinds;
+    return statement;
+  }
   if (match_keyword("with", true)) {
       (void)require_vhdl_standard(
           previous(),

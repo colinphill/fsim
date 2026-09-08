@@ -394,9 +394,15 @@ struct VhdlProtectedInfo {
     // that executable private state and method bodies are available.
     bool has_body { };
     bool body_conformant { };
+    // VHDL-2019 protected type declarations may own the same bounded generic
+    // interface forms as other generic regions.
+    std::vector<ParameterDeclaration> generic_parameters;
     std::vector<VariableDeclaration> variables;
     std::vector<FunctionDeclaration> functions;
     std::vector<ProcedureDeclaration> procedures;
+    // Method aliases are untyped aliases whose targets and optional overload
+    // signatures are resolved in the protected member scope.
+    std::vector<SignalAliasDeclaration> method_aliases;
     // Source-ordered packed offsets for private variables after resolution.
     // Each member remains independently stored at runtime; this layout is the
     // stable debugger/provenance view and validates the bounded representation.
@@ -1538,6 +1544,13 @@ struct ParsedDesign {
     std::vector<SystemVerilogClassMethod> systemverilog_class_method_definitions;
     std::vector<SystemVerilogCovergroupInstance>
         systemverilog_covergroup_instances;
+
+    // False when source recovery retained nodes after a construct exceeded
+    // the selected VHDL revision. Normal application analysis already owns
+    // the source diagnostic; direct semantic/elaboration callers use this
+    // bit to prevent a recovered later-revision node from becoming executable.
+    // This is transient parse state and is not part of a portable unit.
+    bool vhdl_profile_compatible { true };
 
     [[nodiscard]] const DesignUnit* find(UnitKind kind,
         std::string_view name) const noexcept;

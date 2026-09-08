@@ -129,7 +129,8 @@ bool Lowerer::lower_vhdl_textio_procedure_call(
     conversion.target.two_state = true;
     if (target_type->domain == frontend::ValueDomain::Integer) {
       conversion.format = InputScanFormat::decimal;
-      conversion.target.width = 32;
+      conversion.target.width = static_cast<std::uint32_t>(
+          target_type->width().value_or(32U));
     } else if (target_type->domain == frontend::ValueDomain::Boolean) {
       conversion.format = InputScanFormat::boolean_value;
       conversion.target.width = 1;
@@ -243,7 +244,13 @@ bool Lowerer::lower_vhdl_textio_procedure_call(
           && (value_type == nullptr
               || (value_type->enumeration_literals.empty()
                   && value_type->width() == 1)))) {
-    const auto width = domain == frontend::ValueDomain::Integer ? 32U : 1U;
+    const auto width = domain == frontend::ValueDomain::Integer
+        ? static_cast<std::size_t>(
+              value_type != nullptr
+                  ? value_type->width().value_or(32U)
+                  : frontend::vhdl_predefined_integer_storage_width(
+                        vhdl_standard_))
+        : std::size_t { 1 };
     const auto source = lower_expression(*value, width, value_type);
     if (!source) return true;
     StringMethod operation;

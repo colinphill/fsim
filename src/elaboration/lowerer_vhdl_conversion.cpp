@@ -121,20 +121,13 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_conversion_expression(
       ? std::string_view{expression.text}.substr(
             qualification_prefix.size())
       : std::string_view{expression.text};
-  const auto builtin_type = [](const std::string_view name) {
+  const auto builtin_type = [this](const std::string_view name) {
     frontend::Type result;
     result.spelling = name;
     if (name == "integer" || name == "natural"
         || name == "positive") {
-      result.domain = frontend::ValueDomain::Integer;
-      result.is_signed = true;
-      if (name == "natural") {
-        result.integer_range = frontend::IntegerRange{
-            0, std::numeric_limits<std::int32_t>::max(), false};
-      } else if (name == "positive") {
-        result.integer_range = frontend::IntegerRange{
-            1, std::numeric_limits<std::int32_t>::max(), false};
-      }
+      result = frontend::vhdl_predefined_integer_type(
+          vhdl_standard_, name);
     } else if (name == "boolean") {
       result.domain = frontend::ValueDomain::Boolean;
     } else if (name == "bit") {

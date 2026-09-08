@@ -204,20 +204,27 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_float_function_expression(
       return ExpressionAttempt{};
     }
     const auto value = std::bit_cast<float>(*bits);
-    if (!std::isfinite(value)
-        || value < static_cast<float>(std::numeric_limits<std::int32_t>::min())
-        || value > static_cast<float>(std::numeric_limits<std::int32_t>::max())) {
+    const auto integer_width = static_cast<std::size_t>(
+        frontend::vhdl_predefined_integer_storage_width(vhdl_standard_));
+    const auto rounded = std::nearbyint(static_cast<double>(value));
+    const auto minimum = integer_width == 64U
+        ? -9223372036854775808.0 : -2147483648.0;
+    const auto exclusive_maximum = integer_width == 64U
+        ? 9223372036854775808.0 : 2147483648.0;
+    if (!std::isfinite(rounded) || rounded < minimum
+        || rounded >= exclusive_maximum) {
       report(
           "FSIM-ELAB-VHFLT-004",
-          "floating to_integer requires a finite signed 32-bit result",
+          "floating to_integer requires a finite result in the predefined "
+          "integer range",
           expression.span);
       return std::nullopt;
     }
-    const auto rounded = static_cast<std::int64_t>(std::nearbyint(value));
+    const auto integer = static_cast<std::int64_t>(rounded);
     const auto result = allocate_register(
-        32, frontend::ValueDomain::Integer);
+        integer_width, frontend::ValueDomain::Integer);
     process_.operations.emplace_back(LoadConstant{
-        result, integer_value(rounded)});
+        result, integer_value(integer, integer_width)});
     return result;
   }
 

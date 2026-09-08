@@ -481,8 +481,10 @@ bool Lowerer::lower_vhdl_access_deallocation(
   if (heap == nullptr || !handle) {
     return true;
   }
-  process_.operations.emplace_back(DeleteContainer{
-      heap->objects, *handle, false});
+  if (type->vhdl_access->deallocate_releases_storage) {
+    process_.operations.emplace_back(DeleteContainer{
+        heap->objects, *handle, false});
+  }
   process_.operations.emplace_back(LoadConstant{
       local->second,
       unsigned_value(0, type->vhdl_access->handle_width)});

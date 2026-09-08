@@ -113,8 +113,9 @@ std::optional<PackedLogic4> static_vhdl_value(
               static_cast<std::uint64_t>(value), width));
         };
 
-    if (expression.kind == ExpressionKind::Call
-        && expression.text == "?:"
+    if ((expression.kind == ExpressionKind::Conditional
+         || (expression.kind == ExpressionKind::Call
+             && expression.text == "?:"))
         && expression.operands.size() == 3) {
         std::string condition_error;
         const auto condition = evaluate_constant_expression(

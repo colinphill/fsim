@@ -6,7 +6,9 @@
 namespace fsim::elaboration::elaboration_detail {
 namespace {
 
-    frontend::Type builtin_vhdl_type(const std::string_view name)
+    frontend::Type builtin_vhdl_type(
+        const std::string_view name,
+        const frontend::VhdlStandard standard)
     {
         frontend::Type type;
         type.spelling = std::string { name };
@@ -29,16 +31,7 @@ namespace {
         } else if (
             name == "integer" || name == "natural"
             || name == "positive") {
-            type.domain = frontend::ValueDomain::Integer;
-            type.is_signed = true;
-            constexpr auto first = std::int64_t { std::numeric_limits<std::int32_t>::min() };
-            constexpr auto last = std::int64_t { std::numeric_limits<std::int32_t>::max() };
-            type.integer_range = frontend::IntegerRange {
-                name == "integer" ? first : name == "natural" ? 0
-                                                              : 1,
-                last,
-                false
-            };
+            type = frontend::vhdl_predefined_integer_type(standard, name);
         }
         return type;
     }
@@ -62,7 +55,9 @@ namespace {
                << static_cast<unsigned>(type.domain)
                << ";spelling=" << type.spelling
                << ";nominal=" << type.nominal_type
-               << ";signed=" << (type.is_signed ? 1 : 0);
+               << ";signed=" << (type.is_signed ? 1 : 0)
+               << ";integer-width="
+               << static_cast<unsigned>(type.vhdl_integer_storage_width);
         if (type.packed_range) {
             output << ";packed=" << type.packed_range->left << ':'
                    << type.packed_range->right << ':'
@@ -164,6 +159,8 @@ namespace {
                    << access.maximum_objects << ':'
                    << (access.nullable ? 1 : 0) << ':'
                    << (access.owns_designated_object ? 1 : 0) << ':'
+                   << (access.deallocate_releases_storage ? 1 : 0) << ':'
+                   << (access.reclaim_when_unreachable ? 1 : 0) << ':'
                    << (access.simulation_lifetime ? 1 : 0);
             for (const auto& designated : access.designated_types) {
                 output << ";designated={"
@@ -196,11 +193,38 @@ namespace {
                 }
             }
         }
+        if (type.vhdl_unspecified) {
+            output << ";unspecified="
+                   << static_cast<unsigned>(
+                          type.vhdl_unspecified->type_class)
+                   << ":indexes="
+                   << type.vhdl_unspecified->array_index_count;
+            for (const auto& component :
+                 type.vhdl_unspecified->component_types) {
+                output << ";unspecified-component={"
+                       << canonical_type_identity(component) << '}';
+            }
+        }
         if (type.vhdl_protected) {
             const auto& protected_info = *type.vhdl_protected;
             output << ";protected=" << (protected_info.has_body ? 1 : 0)
                    << ':' << (protected_info.body_conformant ? 1 : 0)
                    << ':' << protected_info.storage_width;
+            for (const auto& generic : protected_info.generic_parameters) {
+                output << ";protected-generic=" << generic.name << ':'
+                       << static_cast<unsigned>(generic.kind) << "={"
+                       << canonical_type_identity(generic.type) << '}';
+                if (generic.default_type) {
+                    output << ":default-type={"
+                           << canonical_type_identity(*generic.default_type)
+                           << '}';
+                }
+                if (generic.default_value.valid()) {
+                    output << ":default-value={"
+                           << expression_identity(generic.default_value)
+                           << '}';
+                }
+            }
             for (std::size_t index = 0;
                 index < protected_info.variables.size(); ++index) {
                 output << ";protected-member="
@@ -211,7 +235,10 @@ namespace {
                        << "={"
                        << canonical_type_identity(
                               protected_info.variables[index].type)
-                       << '}';
+                       << "}:shared="
+                       << (protected_info.variables[index].vhdl_shared ? 1 : 0)
+                       << ":private="
+                       << (protected_info.variables[index].vhdl_private ? 1 : 0);
             }
             for (const auto& function : protected_info.functions) {
                 output << ";protected-function=" << function.name
@@ -232,6 +259,10 @@ namespace {
                            << '}';
                 }
             }
+            for (const auto& alias : protected_info.method_aliases) {
+                output << ";protected-alias=" << alias.name << "->"
+                       << alias.actual;
+            }
         }
         for (const auto& constraint :
             type.vhdl_array_constraints) {
@@ -243,26 +274,11 @@ namespace {
         return output.str();
     }
 
-    bool conforming_function_type(
-        const frontend::Type& formal,
-        const frontend::Type& actual)
-    {
-        if (!formal.named_type.empty()
-            || !actual.named_type.empty()) {
-            return formal.named_type == actual.named_type
-                && formal.spelling == actual.spelling;
-        }
-        return formal.domain == actual.domain
-            && formal.is_signed == actual.is_signed
-            && formal.width() == actual.width()
-            && formal.nominal_type == actual.nominal_type;
-    }
-
     bool conforming_function_profile(
         const frontend::InterfaceFunctionProfile& formal,
         const frontend::FunctionDeclaration& actual)
     {
-        if (!conforming_function_type(
+        if (!frontend::vhdl_base_type_profiles_match(
                 formal.return_type, actual.return_type)
             || formal.arguments.size()
                 != actual.arguments.size()) {
@@ -272,7 +288,9 @@ namespace {
             index < formal.arguments.size(); ++index) {
             if (actual.arguments[index].direction
                     != frontend::PortDirection::Input
-                || !conforming_function_type(
+                || formal.arguments[index].vhdl_file
+                    != actual.arguments[index].vhdl_file
+                || !frontend::vhdl_parameter_type_profiles_match(
                     formal.arguments[index].type,
                     actual.arguments[index].type)) {
                 return false;
@@ -295,7 +313,7 @@ namespace {
             if (formal_argument.direction != actual_argument.direction
                 || formal_argument.object_class
                     != actual_argument.object_class
-                || !conforming_function_type(
+                || !frontend::vhdl_parameter_type_profiles_match(
                     formal_argument.type, actual_argument.type)) {
                 return false;
             }
@@ -673,13 +691,14 @@ namespace {
     }
     std::optional<frontend::Type> resolve_type_mark(
         const frontend::Expression& expression,
-        const NamedTypeEnvironment& parent_types)
+        const NamedTypeEnvironment& parent_types,
+        const frontend::VhdlStandard standard)
     {
         if (expression.kind != frontend::ExpressionKind::Identifier
             || !expression.operands.empty()) {
             return std::nullopt;
         }
-        auto builtin = builtin_vhdl_type(expression.text);
+        auto builtin = builtin_vhdl_type(expression.text, standard);
         if (builtin.domain != frontend::ValueDomain::Unknown) {
             return builtin;
         }
@@ -853,13 +872,14 @@ namespace {
     std::optional<frontend::Type> resolve_subtype_indication(
         const frontend::ParameterOverride& actual,
         const NamedTypeEnvironment& parent_types,
+        const frontend::VhdlStandard standard,
         std::vector<Diagnostic>& diagnostics)
     {
         if (!actual.type_value) {
             if (actual.value.kind
                     == frontend::ExpressionKind::Identifier
                 && actual.value.operands.empty()) {
-                return resolve_type_mark(actual.value, parent_types);
+                return resolve_type_mark(actual.value, parent_types, standard);
             }
             if (actual.value.kind != frontend::ExpressionKind::Slice
                 || actual.value.operands.size() != 3
@@ -871,7 +891,7 @@ namespace {
                 return std::nullopt;
             }
             const auto& mark = actual.value.operands.front();
-            auto base = resolve_type_mark(mark, parent_types);
+            auto base = resolve_type_mark(mark, parent_types, standard);
             if (!base) {
                 return std::nullopt;
             }
@@ -907,12 +927,93 @@ namespace {
             { },
             parsed.named_type_span
         };
-        auto base = resolve_type_mark(mark, parent_types);
+        auto base = resolve_type_mark(mark, parent_types, standard);
         if (!base) {
             return std::nullopt;
         }
         return apply_derived_constraints(
             std::move(*base), parsed, diagnostics);
+    }
+
+    std::string mapped_callable_origin_identity(
+        const std::string_view kind,
+        const frontend::SourceSpan& span)
+    {
+        std::ostringstream output;
+        output << "vhdl-mapped-callable-v1;kind=" << kind
+               << ";declaration=" << frontend::physical_source(span)
+               << ':' << span.begin.offset;
+        return output.str();
+    }
+
+    void retain_pre_mapping_homograph_classes(DesignUnit& unit)
+    {
+        const auto same_function_profile = [](
+            const frontend::FunctionDeclaration& left,
+            const frontend::FunctionDeclaration& right) {
+          if (left.name != right.name
+              || left.arguments.size() != right.arguments.size()
+              || !frontend::vhdl_base_type_profiles_match(
+                  left.return_type, right.return_type)) {
+            return false;
+          }
+          for (std::size_t index = 0; index < left.arguments.size(); ++index) {
+            if (!frontend::vhdl_parameter_type_profiles_match(
+                    left.arguments[index].type,
+                    right.arguments[index].type)) {
+              return false;
+            }
+          }
+          return true;
+        };
+        for (auto current = unit.functions.begin();
+             current != unit.functions.end(); ++current) {
+          auto& function = *current;
+          if (!function.specialization_identity.empty()) {
+            continue;
+          }
+          const auto prior = std::ranges::find_if(
+              unit.functions.begin(), current,
+              [&](const auto& candidate) {
+                return same_function_profile(candidate, function);
+              });
+          function.specialization_identity = prior == current
+              ? mapped_callable_origin_identity("function", function.span)
+              : prior->specialization_identity;
+        }
+
+        const auto same_procedure_profile = [](
+            const frontend::ProcedureDeclaration& left,
+            const frontend::ProcedureDeclaration& right) {
+          if (left.name != right.name
+              || left.arguments.size() != right.arguments.size()) {
+            return false;
+          }
+          for (std::size_t index = 0; index < left.arguments.size(); ++index) {
+            if (!frontend::vhdl_parameter_type_profiles_match(
+                    left.arguments[index].type,
+                    right.arguments[index].type)) {
+              return false;
+            }
+          }
+          return true;
+        };
+        for (auto current = unit.procedures.begin();
+             current != unit.procedures.end(); ++current) {
+          auto& procedure = *current;
+          if (!procedure.specialization_identity.empty()) {
+            continue;
+          }
+          const auto prior = std::ranges::find_if(
+              unit.procedures.begin(), current,
+              [&](const auto& candidate) {
+                return same_procedure_profile(candidate, procedure);
+              });
+          procedure.specialization_identity =
+              prior == current
+              ? mapped_callable_origin_identity("procedure", procedure.span)
+              : prior->specialization_identity;
+        }
     }
 
 } // namespace
@@ -972,6 +1073,14 @@ InterfaceTypeSpecialization specialize_vhdl_interface_types(
         return result;
     }
     result.applied = true;
+    if (std::ranges::any_of(
+            source.parameters,
+            [](const auto& parameter) {
+              return !parameter.local
+                  && parameter.kind == frontend::ParameterKind::Type;
+            })) {
+        retain_pre_mapping_homograph_classes(result.unit);
+    }
 
     std::vector<const frontend::ParameterDeclaration*> formals;
     for (const auto& parameter : source.parameters) {
@@ -1417,7 +1526,7 @@ InterfaceTypeSpecialization specialize_vhdl_interface_types(
         }
         const auto diagnostic_count = diagnostics.size();
         auto actual_type = resolve_subtype_indication(
-            *actuals[index], parent_types, diagnostics);
+            *actuals[index], parent_types, source.vhdl_standard, diagnostics);
         if (!actual_type
             && diagnostics.size() == diagnostic_count) {
             const auto& expression = actuals[index]->value;
@@ -1455,6 +1564,17 @@ InterfaceTypeSpecialization specialize_vhdl_interface_types(
         if (diagnostics.size() != fold_diagnostic_count) {
             continue;
         }
+        if (formal.type.vhdl_unspecified
+            && !frontend::vhdl_unspecified_type_accepts(
+                formal.type, *actual_type)) {
+            diagnostics.push_back({ "FSIM-ELAB-VHUNSPEC-002",
+                "actual subtype for classified interface type generic '"
+                    + formal.name
+                    + "' does not satisfy its VHDL-2019 unspecified type "
+                      "category",
+                actuals[index]->span });
+            continue;
+        }
         result.unit.type_aliases.push_back(
             frontend::TypeAliasDeclaration {
                 formal.name,
@@ -1462,7 +1582,10 @@ InterfaceTypeSpecialization specialize_vhdl_interface_types(
                 formal.span,
                 { },
                 frontend::TypeDeclarationKind::Alias,
-                { } });
+                { },
+                { },
+                { },
+                false });
         result.values.emplace_back(
             formal.name,
             canonical_type_identity(*actual_type));

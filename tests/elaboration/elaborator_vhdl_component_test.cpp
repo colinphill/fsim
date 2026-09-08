@@ -1989,6 +1989,143 @@ end architecture;
             cross_language, "foreign_default_parent.child").unit
         == "sv:work.foreign_default");
 
+    const auto mode_view_port = fsim::frontend::parse_text(
+        "mode-view-port.vhd",
+        R"(
+package view_port_types is
+  type request_bus is record
+    request : bit;
+    response : bit;
+  end record;
+  view initiator of request_bus is
+    request : out;
+    response : in;
+  end view;
+end package;
+
+use work.view_port_types.all;
+entity view_port_leaf is
+  port (channel : view initiator);
+end entity;
+architecture rtl of view_port_leaf is
+begin
+end architecture;
+
+entity view_port_top is
+end entity;
+use work.view_port_types.all;
+architecture rtl of view_port_top is
+  signal link : request_bus;
+  component view_port_leaf is
+    port (channel : view initiator of request_bus);
+  end component;
+begin
+  child : view_port_leaf port map (channel => link);
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl2019);
+    if (!mode_view_port.ok()) {
+        for (const auto& diagnostic : mode_view_port.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(mode_view_port.ok());
+    const auto mode_view_elaborated = fsim::elaboration::elaborate(
+        mode_view_port.design, "vhdl:work.view_port_top(rtl)");
+    if (!mode_view_elaborated.ok()) {
+        for (const auto& diagnostic : mode_view_elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(mode_view_elaborated.ok());
+    const auto mode_view_link =
+        mode_view_elaborated.design->find_signal("view_port_top.link");
+    assert(mode_view_link);
+    const auto& mode_view_bindings =
+        mode_view_elaborated.design->signals()
+            .at(*mode_view_link).vhdl_mode_view_bindings;
+    assert(mode_view_bindings.size() == 1U);
+    const auto& mode_view_binding = mode_view_bindings.front();
+    assert(mode_view_binding.formal == "view_port_top.child.channel");
+    assert(mode_view_binding.view == "initiator");
+    assert(
+        mode_view_binding.kind
+        == fsim::frontend::VhdlModeViewIndicationKind::record);
+    assert(mode_view_binding.elements.size() == 2U);
+    assert(
+        mode_view_binding.elements[0].formal_path
+            == "view_port_top.child.channel.request"
+        && mode_view_binding.elements[0].actual_path
+            == "view_port_top.link.request"
+        && mode_view_binding.elements[0].direction
+            == fsim::frontend::PortDirection::Output);
+    assert(
+        mode_view_binding.elements[1].formal_path
+            == "view_port_top.child.channel.response"
+        && mode_view_binding.elements[1].actual_path
+            == "view_port_top.link.response"
+        && mode_view_binding.elements[1].direction
+            == fsim::frontend::PortDirection::Input);
+
+    const auto invalid_mode_view_port = fsim::frontend::parse_text(
+        "invalid-mode-view-port.vhd",
+        R"(
+package invalid_view_port_types is
+  type lane_t is record
+    request : bit;
+    response : bit;
+  end record;
+  type other_t is record
+    other : bit;
+  end record;
+  view lane_view of lane_t is
+    request : out;
+    response : in;
+  end view;
+  view incomplete_view of lane_t is
+    request : in;
+  end view;
+end package;
+
+use work.invalid_view_port_types.all;
+entity incomplete_view_leaf is
+  port (channel : view incomplete_view);
+end entity;
+architecture rtl of incomplete_view_leaf is begin end architecture;
+
+use work.invalid_view_port_types.all;
+entity incompatible_view_leaf is
+  port (channel : view lane_view of other_t);
+end entity;
+architecture rtl of incompatible_view_leaf is begin end architecture;
+
+entity invalid_view_port_top is end entity;
+use work.invalid_view_port_types.all;
+architecture rtl of invalid_view_port_top is
+  signal lane : lane_t;
+  signal other : other_t;
+begin
+  incomplete_child : entity work.incomplete_view_leaf(rtl)
+    port map (channel => lane);
+  incompatible_child : entity work.incompatible_view_leaf(rtl)
+    port map (channel => other);
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl2019);
+    assert(invalid_mode_view_port.ok());
+    const auto invalid_mode_view_elaborated = fsim::elaboration::elaborate(
+        invalid_mode_view_port.design,
+        "vhdl:work.invalid_view_port_top(rtl)");
+    assert(!invalid_mode_view_elaborated.ok());
+    assert(has_diagnostic(
+        invalid_mode_view_elaborated, "FSIM-ELAB-VHVIEW-003"));
+    assert(has_diagnostic(
+        invalid_mode_view_elaborated, "FSIM-ELAB-VHVIEW-004"));
+
     const auto expression_port_source = R"(
 entity revision_port_leaf is
   port (

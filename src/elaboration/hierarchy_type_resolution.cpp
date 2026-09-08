@@ -14,9 +14,18 @@ using namespace elaboration_detail;
         const auto owner =
             (unit.library.empty() ? std::string{"work"} : unit.library)
             + "." + unit.name;
+        // Mode view declarations remain declarations rather than types; their
+        // record-view composition is resolved independently of type marks.
+        const auto is_mode_view = [](const auto& declaration) {
+            return declaration.declaration_kind
+                == frontend::TypeDeclarationKind::VhdlModeView;
+        };
         for (std::size_t index = 0;
              index < unit.type_aliases.size(); ++index) {
             auto& alias = unit.type_aliases[index];
+            if (is_mode_view(alias)) {
+                continue;
+            }
             if (!vhdl
                 && alias.type.nominal_type.empty()
                 && (alias.type.packed_aggregate
@@ -433,6 +442,119 @@ using namespace elaboration_detail;
             if (!type.systemverilog_class_declaration.empty()) {
                 return true;
             }
+            if (type.vhdl_predefined_subtype_attribute
+                != frontend::VhdlPredefinedSubtypeAttribute::None) {
+                const auto attribute =
+                    type.vhdl_predefined_subtype_attribute;
+                const auto dimension =
+                    type.vhdl_predefined_subtype_attribute_dimension;
+                const auto use_span = type.named_type_span;
+                type.vhdl_predefined_subtype_attribute =
+                    frontend::VhdlPredefinedSubtypeAttribute::None;
+                type.vhdl_predefined_subtype_attribute_dimension.reset();
+                if (!resolve_type(type)) {
+                    return false;
+                }
+                if (attribute
+                    == frontend::VhdlPredefinedSubtypeAttribute::
+                        DesignatedSubtype) {
+                    if (type.vhdl_access
+                        && type.vhdl_access->designated_types.size() == 1U) {
+                        type = type.vhdl_access->designated_types.front();
+                        return true;
+                    }
+                    if (type.vhdl_file
+                        && type.vhdl_file->element_types.size() == 1U) {
+                        type = type.vhdl_file->element_types.front();
+                        return true;
+                    }
+                    report(
+                        "FSIM-ELAB-VHATTR-009",
+                        "the predefined 'designated_subtype attribute "
+                        "requires an access or file type",
+                        use_span);
+                    return false;
+                }
+
+                const auto rank = type.vhdl_array
+                    ? type.vhdl_array->dimensions.size()
+                    : is_packed_array_type(type) ? std::size_t{1}
+                                                 : std::size_t{0};
+                std::int64_t selected_dimension = 1;
+                if (dimension) {
+                    std::string error;
+                    const auto value = evaluate_constant_expression(
+                        *dimension, {}, error);
+                    if (!value) {
+                        report(
+                            "FSIM-ELAB-VHATTR-010",
+                            "the predefined 'index dimension must be "
+                            "locally static",
+                            dimension->span);
+                        return false;
+                    }
+                    selected_dimension = *value;
+                }
+                if (rank == 0U || selected_dimension < 1
+                    || static_cast<std::uint64_t>(selected_dimension)
+                        > rank) {
+                    report(
+                        "FSIM-ELAB-VHATTR-010",
+                        "the predefined 'index attribute requires an array "
+                        "type and a dimension inside its rank",
+                        dimension ? dimension->span : use_span);
+                    return false;
+                }
+
+                frontend::Type result =
+                    frontend::vhdl_predefined_integer_type(
+                        unit.vhdl_standard, "integer");
+                std::optional<frontend::IntegerRange> constraint;
+                if (type.vhdl_array) {
+                    const auto& selected = type.vhdl_array->dimensions[
+                        static_cast<std::size_t>(selected_dimension - 1)];
+                    if (!selected.index_subtype.empty()) {
+                        if (selected.index_subtype == "integer"
+                            || selected.index_subtype == "natural"
+                            || selected.index_subtype == "positive") {
+                            result = frontend::vhdl_predefined_integer_type(
+                                unit.vhdl_standard,
+                                selected.index_subtype);
+                        } else {
+                            result = {};
+                            result.spelling = selected.index_subtype;
+                            result.named_type = selected.index_subtype;
+                            result.named_type_span = selected.index_span;
+                            if (!resolve_type(result)) {
+                                return false;
+                            }
+                        }
+                    }
+                    if (selected.range) {
+                        constraint = frontend::IntegerRange{
+                            selected.range->left,
+                            selected.range->right,
+                            selected.range->descending};
+                    }
+                } else if (type.packed_range) {
+                    constraint = frontend::IntegerRange{
+                        type.packed_range->left,
+                        type.packed_range->right,
+                        type.packed_range->descending};
+                }
+                if (constraint) {
+                    if (result.domain == frontend::ValueDomain::Integer) {
+                        result.integer_range = *constraint;
+                    } else if (!result.enumeration_literals.empty()) {
+                        result.enumeration_range = frontend::EnumerationRange{
+                            constraint->left,
+                            constraint->right,
+                            constraint->descending};
+                    }
+                }
+                type = std::move(result);
+                return true;
+            }
             for (auto& member : type.packed_members) {
                 if (member.nested_types.empty()) {
                     continue;
@@ -665,6 +787,15 @@ using namespace elaboration_detail;
                     }
                 }
             }
+            if (type.vhdl_unspecified) {
+                for (auto& component :
+                     type.vhdl_unspecified->component_types) {
+                    if (!component.vhdl_unspecified
+                        && !resolve_type(component)) {
+                        return false;
+                    }
+                }
+            }
             if (type.vhdl_array) {
                 frontend::Type element;
                 if (!type.vhdl_array->element_types.empty()) {
@@ -853,8 +984,267 @@ using namespace elaboration_detail;
         };
         for (std::size_t index = 0;
              index < unit.type_aliases.size(); ++index) {
+            if (is_mode_view(unit.type_aliases[index])) {
+                (void)resolve_type(unit.type_aliases[index].type);
+                continue;
+            }
             (void)resolve_alias(index);
         }
+        std::unordered_map<std::string, frontend::TypeAliasDeclaration*>
+            mode_views;
+        for (auto& alias : unit.type_aliases) {
+            if (is_mode_view(alias)) {
+                mode_views.try_emplace(alias.name, &alias);
+            }
+        }
+        const auto mode_view =
+            [&](const std::string_view name)
+                -> frontend::TypeAliasDeclaration* {
+              if (const auto found = mode_views.find(std::string { name });
+                  found != mode_views.end()) {
+                  return found->second;
+              }
+              const auto separator = name.find_last_of('.');
+              if (separator != std::string_view::npos) {
+                  if (const auto found = mode_views.find(
+                          std::string { name.substr(separator + 1) });
+                      found != mode_views.end()) {
+                      return found->second;
+                  }
+              }
+              return nullptr;
+            };
+        std::unordered_map<std::string, unsigned char> converse_states;
+        std::function<bool(frontend::TypeAliasDeclaration&)>
+            resolve_converse;
+        resolve_converse = [&](frontend::TypeAliasDeclaration& alias) {
+              if (alias.vhdl_mode_view_converse_of.empty()) {
+                  return true;
+              }
+              auto& state = converse_states[alias.name];
+              if (state == 2) {
+                  return true;
+              }
+              if (state == 1) {
+                  report(
+                      "FSIM-ELAB-VHVIEW-005",
+                      "recursive VHDL converse mode view alias involving '"
+                          + alias.name + "'",
+                      alias.span);
+                  return false;
+              }
+              state = 1;
+              auto* source = mode_view(alias.vhdl_mode_view_converse_of);
+              if (source == nullptr || source == &alias
+                  || !resolve_converse(*source)) {
+                  report(
+                      "FSIM-ELAB-VHVIEW-005",
+                      "VHDL converse mode view alias '" + alias.name
+                          + "' requires one visible nonrecursive mode view",
+                      alias.span);
+                  state = 3;
+                  return false;
+              }
+              alias.type = source->type;
+              alias.vhdl_mode_view_elements =
+                  source->vhdl_mode_view_elements;
+              alias.vhdl_mode_view_converse_parity =
+                  !source->vhdl_mode_view_converse_parity;
+              state = 2;
+              return true;
+            };
+        for (auto& [name, view] : mode_views) {
+            (void)name;
+            (void)resolve_converse(*view);
+        }
+        const auto compatible_vhdl_types = [](
+            const frontend::Type& left,
+            const frontend::Type& right) {
+              if (!left.nominal_type.empty()
+                  || !right.nominal_type.empty()) {
+                  return !left.nominal_type.empty()
+                      && left.nominal_type == right.nominal_type;
+              }
+              return left.domain == right.domain
+                  && left.spelling == right.spelling
+                  && left.named_type == right.named_type
+                  && left.packed_aggregate == right.packed_aggregate;
+            };
+        enum class ModeViewMapState : std::uint8_t {
+            complete,
+            invalid,
+            recursive,
+        };
+        const auto resolve_mode_view_port =
+            [&](auto& port) {
+              if (!port.vhdl_mode_view) {
+                  (void)resolve_type(port.type);
+                  return;
+              }
+              auto& indication = *port.vhdl_mode_view;
+              // Component specialization copies an already-bound interface
+              // profile into a temporary unit. Its declaration-order leaf
+              // map is authoritative and must not be looked up again after
+              // the original package context has been left behind.
+              if (!indication.elements.empty()) {
+                  (void)resolve_type(port.type);
+                  return;
+              }
+              auto* root = mode_view(indication.view);
+              if (root == nullptr) {
+                  report(
+                      "FSIM-ELAB-VHVIEW-001",
+                      "VHDL mode view '" + indication.view
+                          + "' is not visible for interface '"
+                          + port.name + "' in unit '" + unit.name + "'",
+                      indication.span);
+                  return;
+              }
+              // Retain the resolved declaration identity so imported and
+              // selected spellings compare consistently at component/entity
+              // binding boundaries.
+              indication.view = root->name;
+              if (!indication.explicit_subtype
+                  && indication.kind
+                      == frontend::VhdlModeViewIndicationKind::record) {
+                  port.type = root->type;
+              }
+              (void)resolve_type(port.type);
+              const bool compatible_interface = [&] {
+                  if (indication.kind
+                      == frontend::VhdlModeViewIndicationKind::record) {
+                      return compatible_vhdl_types(port.type, root->type);
+                  }
+                  return port.type.vhdl_array
+                      && port.type.vhdl_array->element_types.size() == 1U
+                      && compatible_vhdl_types(
+                          port.type.vhdl_array->element_types.front(),
+                          root->type);
+              }();
+              if (!compatible_interface) {
+                  report(
+                      "FSIM-ELAB-VHVIEW-004",
+                      "VHDL view-based interface '" + port.name
+                          + "' has a subtype incompatible with mode view '"
+                          + indication.view + "'",
+                      indication.span);
+                  return;
+              }
+              indication.elements.clear();
+              std::unordered_set<std::string> active;
+              std::function<ModeViewMapState(
+                  const frontend::TypeAliasDeclaration&,
+                  const std::string&,
+                  bool)> append;
+              append = [&](const frontend::TypeAliasDeclaration& view,
+                           const std::string& prefix,
+                           const bool inherited_converse) {
+                  if (!active.insert(view.name).second) {
+                      return ModeViewMapState::recursive;
+                  }
+                  auto state = ModeViewMapState::complete;
+                  const bool valid_record =
+                      view.type.packed_aggregate
+                          == frontend::PackedAggregateKind::Struct
+                      && view.type.vhdl_resolution_function.empty()
+                      && view.type.packed_members.size()
+                          == view.vhdl_mode_view_elements.size();
+                  if (!valid_record) {
+                      active.erase(view.name);
+                      return ModeViewMapState::invalid;
+                  }
+                  for (const auto& element :
+                       view.vhdl_mode_view_elements) {
+                      const auto member = std::ranges::find_if(
+                          view.type.packed_members,
+                          [&](const frontend::PackedMember& candidate) {
+                              return candidate.name == element.name;
+                          });
+                      if (member == view.type.packed_members.end()) {
+                          state = ModeViewMapState::invalid;
+                          continue;
+                      }
+                      const auto path = prefix + element.name;
+                      if (element.kind
+                          == frontend::VhdlModeViewElementKind::direction) {
+                          auto direction = element.direction;
+                          if (inherited_converse) {
+                              direction = direction
+                                      == frontend::PortDirection::Input
+                                  ? frontend::PortDirection::Output
+                              : direction
+                                      == frontend::PortDirection::Output
+                                  ? frontend::PortDirection::Input
+                              : direction
+                                      == frontend::PortDirection::Buffer
+                                  ? frontend::PortDirection::Input
+                                  : direction;
+                          }
+                          indication.elements.push_back({
+                              path, direction, element.span });
+                          continue;
+                      }
+                      auto* nested = mode_view(element.referenced_view);
+                      if (nested == nullptr
+                          || member->nested_types.size() != 1U) {
+                          state = ModeViewMapState::invalid;
+                          continue;
+                      }
+                      const auto& member_type = member->nested_types.front();
+                      const bool compatible_nested =
+                          element.kind
+                                  == frontend::VhdlModeViewElementKind::record_view
+                              ? compatible_vhdl_types(
+                                    member_type, nested->type)
+                              : member_type.vhdl_array
+                                  && member_type.vhdl_array->element_types.size()
+                                      == 1U
+                                  && compatible_vhdl_types(
+                                      member_type.vhdl_array->element_types.front(),
+                                      nested->type);
+                      if (!compatible_nested) {
+                          state = ModeViewMapState::invalid;
+                          continue;
+                      }
+                      const auto nested_state = append(
+                          *nested,
+                          path
+                              + (element.kind
+                                      == frontend::VhdlModeViewElementKind::array_view
+                                  ? "(<>)."
+                                  : "."),
+                          inherited_converse
+                              != nested->vhdl_mode_view_converse_parity);
+                      if (nested_state == ModeViewMapState::recursive) {
+                          state = ModeViewMapState::recursive;
+                      } else if (nested_state == ModeViewMapState::invalid
+                                 && state != ModeViewMapState::recursive) {
+                          state = ModeViewMapState::invalid;
+                      }
+                  }
+                  active.erase(view.name);
+                  return state;
+              };
+              const auto prefix = indication.kind
+                      == frontend::VhdlModeViewIndicationKind::array
+                  ? std::string { "(<>)." }
+                  : std::string { };
+              const auto state = append(
+                  *root, prefix, root->vhdl_mode_view_converse_parity);
+              if (state != ModeViewMapState::complete) {
+                  indication.elements.clear();
+                  report(
+                      state == ModeViewMapState::recursive
+                          ? "FSIM-ELAB-VHVIEW-002"
+                          : "FSIM-ELAB-VHVIEW-003",
+                      "VHDL mode view '" + indication.view
+                          + (state == ModeViewMapState::recursive
+                                 ? "' has a recursive direction map"
+                                 : "' does not cover one unresolved record "
+                                   "with compatible nested views"),
+                      indication.span);
+              }
+            };
         const auto resolve_declaration =
             [&](auto& declaration) {
                 (void)resolve_type(declaration.type);
@@ -863,6 +1253,7 @@ using namespace elaboration_detail;
             [&](frontend::ParameterDeclaration& generic) {
               switch (generic.kind) {
               case frontend::ParameterKind::Type:
+                  (void)resolve_type(generic.type);
                   if (generic.default_type) {
                       (void)resolve_type(*generic.default_type);
                   }
@@ -912,7 +1303,7 @@ using namespace elaboration_detail;
                     resolve_interface_parameter(generic);
                 }
                 for (auto& port : component.ports) {
-                    (void)resolve_type(port.type);
+                    resolve_mode_view_port(port);
                 }
                 active_interface_type_formals.clear();
                 active_interface_package_formals.clear();
@@ -929,6 +1320,9 @@ using namespace elaboration_detail;
                     std::vector<PriorStatementType>
                         prior_statement_types;
                     for (auto& alias : statement.type_aliases) {
+                        if (is_mode_view(alias)) {
+                            continue;
+                        }
                         (void)resolve_type(alias.type);
                         const auto prior =
                             generated_types.find(alias.name);
@@ -985,6 +1379,9 @@ using namespace elaboration_detail;
               std::vector<Declaration> declarations;
               for (std::size_t index = 0;
                    index < local_region.type_aliases.size(); ++index) {
+                  if (is_mode_view(local_region.type_aliases[index])) {
+                      continue;
+                  }
                   declarations.push_back({
                       local_region.type_aliases[index].span.begin.offset,
                       true, false, false, index});
@@ -1101,8 +1498,16 @@ using namespace elaboration_detail;
                               index});
                       }
                     };
-                append_declarations(
-                    body.type_aliases, DeclarationKind::Type);
+                for (std::size_t index = 0;
+                     index < body.type_aliases.size(); ++index) {
+                    if (is_mode_view(body.type_aliases[index])) {
+                        continue;
+                    }
+                    declarations.push_back({
+                        body.type_aliases[index].span.begin.offset,
+                        DeclarationKind::Type,
+                        index});
+                }
                 append_declarations(
                     body.constants, DeclarationKind::Constant);
                 append_declarations(
@@ -1315,6 +1720,7 @@ using namespace elaboration_detail;
         for (auto& parameter : unit.parameters) {
             if (parameter.kind
                 == frontend::ParameterKind::Type) {
+                (void)resolve_type(parameter.type);
                 if (parameter.default_type) {
                     (void)resolve_type(*parameter.default_type);
                 }
@@ -1344,7 +1750,7 @@ using namespace elaboration_detail;
         }
         if (resolve_ports) {
             for (auto& port : unit.ports) {
-                resolve_declaration(port);
+                resolve_mode_view_port(port);
             }
         }
         for (auto& signal : unit.signals) {

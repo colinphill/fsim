@@ -240,6 +240,9 @@ int main()
         test_vhdl_subtype_declarations();
         test_vhdl_array_type_declarations();
         test_vhdl_access_protected_physical_hir();
+        test_vhdl_2019_protected_type_updates();
+        test_vhdl_2019_unspecified_types();
+        test_vhdl_2019_mode_view_declarations();
         test_vhdl_revision_declaration_profiles();
         test_vhdl_incomplete_type_declarations();
         test_vhdl_nested_composite_hir();
@@ -253,6 +256,7 @@ int main()
         test_verilog_stop_task();
         test_vhdl_conditional_assignments();
         test_vhdl_array_attributes();
+        test_vhdl_2019_predefined_attributes();
         test_vhdl_user_attribute_and_group_declarations();
         test_vhdl_selected_assignments();
         test_vhdl_delay_mechanisms();
@@ -262,6 +266,10 @@ int main()
         test_vhdl_psl_temporal_analysis();
         test_vhdl_case_statements();
         test_vhdl_revision_lexical_profiles();
+        test_vhdl_2019_predefined_integer_range();
+        test_vhdl_2019_conditional_analysis();
+        test_vhdl_2019_profile_isolation();
+        test_vhdl_2019_frontend_recovery_corpus();
         test_vhdl_revision_expression_profiles();
         test_vhdl_synopsys_declaration_profiles();
         test_vhdl_revision_statement_profiles();

@@ -333,6 +333,68 @@ begin end architecture;)",
 begin data <= data'subtype; end architecture;)",
         VhdlStandard::Vhdl2002, "subtype");
 
+    const auto sequential_blocks = parse_text(
+        "vhdl2019_sequential_blocks.vhd",
+        R"(entity vhdl2019_sequential_blocks is end entity;
+architecture rtl of vhdl2019_sequential_blocks is
+  signal result : integer;
+begin
+  exercise : process
+  begin
+    outer : block is
+      constant seed : integer := 2;
+      subtype local_integer is integer range 0 to 7;
+      variable value : local_integer := seed;
+      function bump(input : integer) return integer is
+      begin
+        return input + 1;
+      end function;
+      procedure assign(variable target : out integer) is
+      begin
+        target := bump(seed);
+      end procedure;
+    begin
+      inner : block
+        variable nested : integer := bump(value);
+      begin
+        assign(nested);
+        result <= nested;
+      end block inner;
+    end outer;
+    wait;
+  end process;
+end architecture;)",
+        Language::Vhdl2008,
+        VhdlStandard::Vhdl2019);
+    require(
+        sequential_blocks.ok()
+            && sequential_blocks.design.units.back().processes.size() == 1U,
+        "VHDL-2019 nested sequential blocks must parse");
+    const auto& outer = sequential_blocks.design.units.back()
+                            .processes.front().statements.front();
+    require(
+        outer.kind == StatementKind::Block
+            && outer.label == "outer"
+            && outer.constants.size() == 1U
+            && outer.type_aliases.size() == 1U
+            && outer.declarations.size() == 1U
+            && outer.functions.size() == 1U
+            && outer.procedures.size() == 1U
+            && outer.statements.size() == 1U
+            && outer.statements.front().kind == StatementKind::Block
+            && outer.statements.front().label == "inner"
+            && outer.statements.front().declarations.size() == 1U
+            && outer.statements.front().statements.size() == 2U,
+        "sequential blocks must retain complete nested declarative regions "
+        "and source-ordered bodies");
+    expect_revision_error(
+        "vhdl2008_sequential_block",
+        R"(architecture rtl of vhdl2008_sequential_block is begin
+  process begin block begin null; end block; wait; end process;
+end architecture;)",
+        VhdlStandard::Vhdl2008,
+        "sequential block statements");
+
 }
 
 void test_vhdl_sequential_for_loops()

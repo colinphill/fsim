@@ -488,7 +488,9 @@ bool Lowerer::validate_vhdl_composite_assignment(
             && value.text == "&")) {
         return true;
     }
-    if (value.kind == ExpressionKind::Call && value.text == "?:"
+    if ((value.kind == ExpressionKind::Conditional
+         || (value.kind == ExpressionKind::Call
+             && value.text == "?:"))
         && value.operands.size() == 3) {
         return validate_vhdl_composite_assignment(target, value.operands[1])
             && validate_vhdl_composite_assignment(target, value.operands[2]);

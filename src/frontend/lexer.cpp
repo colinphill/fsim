@@ -51,6 +51,7 @@ namespace {
             "fairness", "force", "parameter", "property", "release", "restrict",
             "restrict_guarantee", "sequence", "strong", "vmode", "vprop",
             "vunit" });
+        static constexpr auto vhdl_2019 = std::to_array<std::string_view>({ "private", "view" });
         if (contains(vhdl_1987, word)) {
             return true;
         }
@@ -60,7 +61,8 @@ namespace {
         if (standard != VhdlStandard::Vhdl1987 && standard != VhdlStandard::Vhdl1993 && word == "protected") {
             return true;
         }
-        return standard == VhdlStandard::Vhdl2008 && contains(vhdl_2008, word);
+        return (standard >= VhdlStandard::Vhdl2008 && contains(vhdl_2008, word))
+            || (standard >= VhdlStandard::Vhdl2019 && contains(vhdl_2019, word));
     }
 
     [[nodiscard]] bool vhdl_2008_bit_string_specifier(
@@ -244,7 +246,7 @@ class Lexer {
       }
       if (peek() == '/' && peek(1) == '*') {
         const auto begin = current_location();
-        if (is_vhdl() && vhdl_standard_ != VhdlStandard::Vhdl2008) {
+        if (is_vhdl() && vhdl_standard_ < VhdlStandard::Vhdl2008) {
             diagnose_revision_feature(
                 "a delimited block comment", VhdlStandard::Vhdl2008, begin);
         }
@@ -315,7 +317,7 @@ class Lexer {
       }
       const auto lower = ascii_lower(text);
       const bool follows_explicit_width = begin.offset != 0U && std::isdigit(static_cast<unsigned char>(source_.text[begin.offset - 1U]));
-      if (vhdl_standard_ != VhdlStandard::Vhdl2008 && peek() == '"' && vhdl_2008_bit_string_specifier(lower) && !follows_explicit_width) {
+      if (vhdl_standard_ < VhdlStandard::Vhdl2008 && peek() == '"' && vhdl_2008_bit_string_specifier(lower) && !follows_explicit_width) {
           diagnose_revision_feature(
               "a D, signed, or unsigned bit-string base specifier",
               VhdlStandard::Vhdl2008, begin);
@@ -396,7 +398,7 @@ class Lexer {
       advance();
     }
 
-    if (is_vhdl() && vhdl_standard_ != VhdlStandard::Vhdl2008) {
+    if (is_vhdl() && vhdl_standard_ < VhdlStandard::Vhdl2008) {
         std::size_t letters = 0;
         while (letters != 2U && std::isalpha(static_cast<unsigned char>(peek(letters)))) {
             ++letters;
@@ -493,7 +495,7 @@ class Lexer {
     if (!terminated) {
       diagnose("FSIM-FE-LEX-004", "unterminated string literal", begin);
     }
-    if (is_vhdl() && vhdl_standard_ != VhdlStandard::Vhdl2008 && terminated && !result_.tokens.empty()) {
+    if (is_vhdl() && vhdl_standard_ < VhdlStandard::Vhdl2008 && terminated && !result_.tokens.empty()) {
         const auto& specifier_token = result_.tokens.back();
         const auto specifier = ascii_lower(specifier_token.text);
         if (specifier_token.kind == TokenKind::Identifier && specifier_token.span.end.offset == begin.offset && (specifier == "b" || specifier == "o" || specifier == "x")) {
@@ -613,7 +615,7 @@ class Lexer {
         emit(TokenKind::At, begin);
         return;
       case '?':
-          if (is_vhdl() && vhdl_standard_ != VhdlStandard::Vhdl2008) {
+          if (is_vhdl() && vhdl_standard_ < VhdlStandard::Vhdl2008) {
               diagnose_revision_feature(
                   "a question-mark delimiter", VhdlStandard::Vhdl2008, begin);
           }
@@ -652,7 +654,7 @@ class Lexer {
         if (consume_if('=')) {
           emit(TokenKind::LessEqual, begin);
         } else if (consume_if('<')) {
-            if (is_vhdl() && vhdl_standard_ != VhdlStandard::Vhdl2008) {
+            if (is_vhdl() && vhdl_standard_ < VhdlStandard::Vhdl2008) {
                 diagnose_revision_feature(
                     "an external-name delimiter", VhdlStandard::Vhdl2008,
                     begin);
@@ -678,7 +680,7 @@ class Lexer {
         if (consume_if('=')) {
           emit(TokenKind::GreaterEqual, begin);
         } else if (consume_if('>')) {
-            if (is_vhdl() && vhdl_standard_ != VhdlStandard::Vhdl2008) {
+            if (is_vhdl() && vhdl_standard_ < VhdlStandard::Vhdl2008) {
                 diagnose_revision_feature(
                     "an external-name delimiter", VhdlStandard::Vhdl2008,
                     begin);

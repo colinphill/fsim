@@ -683,6 +683,8 @@ end package body;
               body.type_aliases[0].type.vhdl_protected &&
               body.type_aliases[0].type.vhdl_protected->body &&
               body.type_aliases[0].type.vhdl_protected->variables.size() == 1 &&
+              body.type_aliases[0].type.vhdl_protected->variables[0]
+                  .vhdl_private &&
               body.type_aliases[0].type.vhdl_protected->procedures[0].defined &&
               body.type_aliases[0].type.vhdl_protected->functions[0].defined,
           "protected body HIR retains private state and method bodies");
@@ -717,6 +719,323 @@ end package;
                                            "invalid_advanced_vhdl_types.vhd";
                               }),
       "physical closing-name failures retain a targeted source span");
+}
+
+void test_vhdl_2019_protected_type_updates() {
+  constexpr std::string_view source = R"(
+package Generic_Protected_Types is
+  type Integer_File is file of integer;
+  type Integer_Access is access integer;
+  type Store is protected
+    generic (
+      type Element_T;
+      Limit : integer := 4;
+      function Equivalent(Left, Right : Element_T) return boolean);
+    variable Count : integer := 0;
+    private shared variable Hidden : Store;
+    procedure Load(file Source : Integer_File; Pointer : Integer_Access);
+    impure function Same(Peer : Store) return boolean;
+    alias Reload is Load [Integer_File, Integer_Access];
+  end protected Store;
+end package;
+)";
+  const auto parsed = parse_text(
+      "vhdl2019-protected.vhd", source, Language::Vhdl2008,
+      VhdlStandard::Vhdl2019);
+  if (!parsed.ok()) {
+    for (const auto &diagnostic : parsed.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  require(parsed.ok() && parsed.design.units.size() == 1,
+          "VHDL-2019 protected type updates must parse");
+  const auto &unit = parsed.design.units.front();
+  require(unit.type_aliases.size() == 3 &&
+              unit.type_aliases.back().type.vhdl_protected,
+          "generic protected type retains its nominal declaration");
+  const auto &info = *unit.type_aliases.back().type.vhdl_protected;
+  require(info.generic_parameters.size() == 3 &&
+              info.generic_parameters[0].kind == ParameterKind::Type &&
+              info.generic_parameters[1].kind == ParameterKind::Value &&
+              info.generic_parameters[1].default_value.text == "4" &&
+              info.generic_parameters[2].kind == ParameterKind::Function,
+          "protected generic interface retains type, value, and function "
+          "formals");
+  require(info.variables.size() == 2 &&
+              info.variables[0].name == "count" &&
+              !info.variables[0].vhdl_shared &&
+              !info.variables[0].vhdl_private &&
+              info.variables[1].name == "hidden" &&
+              info.variables[1].vhdl_shared &&
+              info.variables[1].vhdl_private,
+          "protected public and private variables retain their qualifiers");
+  require(info.procedures.size() == 1 &&
+              info.procedures[0].arguments.size() == 2 &&
+              info.procedures[0].arguments[0].object_class ==
+                  InterfaceObjectClass::File &&
+              info.functions.size() == 1 &&
+              info.functions[0].arguments.size() == 1 &&
+              info.functions[0].arguments[0].type.named_type == "store",
+          "protected methods retain VHDL-2019 parameter classes and types");
+  require(info.method_aliases.size() == 1 &&
+              info.method_aliases[0].name == "reload" &&
+              info.method_aliases[0].actual == "load",
+          "protected method aliases retain their selected target");
+
+  const auto rejected = parse_text(
+      "vhdl2008-protected-updates.vhd", source, Language::Vhdl2008,
+      VhdlStandard::Vhdl2008);
+  require(!rejected.ok() &&
+              std::ranges::count_if(
+                  rejected.diagnostics, [](const Diagnostic &diagnostic) {
+                    return diagnostic.code == "FSIM-FE-VHSTD-003";
+                  }) >= 6,
+          "VHDL-2019 protected type updates stay isolated from VHDL-2008");
+
+  const auto legacy_private = parse_text(
+      "vhdl2008-private-name.vhd",
+      "package private is end package private;", Language::Vhdl2008,
+      VhdlStandard::Vhdl2008);
+  const auto reserved_private = parse_text(
+      "vhdl2019-private-name.vhd",
+      "package private is end package private;", Language::Vhdl2008,
+      VhdlStandard::Vhdl2019);
+  require(legacy_private.ok() && !reserved_private.ok() &&
+              std::ranges::any_of(
+                  reserved_private.diagnostics,
+                  [](const Diagnostic &diagnostic) {
+                    return diagnostic.code == "FSIM-VHDL-LEX-002";
+                  }),
+          "private becomes reserved only in the VHDL-2019 lexical profile");
+}
+
+void test_vhdl_2019_unspecified_types() {
+  constexpr std::string_view source = R"(
+entity Unspecified_Interfaces is
+  generic (
+    type Any_T is private;
+    type Scalar_T is <>;
+    type Discrete_T is (<>);
+    type Integer_T is range <>;
+    type Physical_T is units <>;
+    type Floating_T is range <>.<>;
+    type Array_T is array (type is (<>)) of type is private;
+    type Access_T is access type is private;
+    type File_T is file of type is private
+  );
+  port (
+    Left, Right : in type is private;
+    Values : in type Value_Array is array (type is (<>)) of type is <>
+  );
+end entity;
+)";
+  const auto parsed = parse_text(
+      "vhdl2019-unspecified.vhd", source, Language::Vhdl2008,
+      VhdlStandard::Vhdl2019);
+  if (!parsed.ok()) {
+    for (const auto &diagnostic : parsed.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  require(parsed.ok() && parsed.design.units.size() == 1,
+          "VHDL-2019 unspecified type categories must parse");
+  const auto &unit = parsed.design.units.front();
+  require(unit.parameters.size() == 9 && unit.ports.size() == 3,
+          "unspecified generic and port profiles retain every formal");
+  constexpr std::array expected{
+      VhdlUnspecifiedTypeClass::Private,
+      VhdlUnspecifiedTypeClass::Scalar,
+      VhdlUnspecifiedTypeClass::Discrete,
+      VhdlUnspecifiedTypeClass::Integer,
+      VhdlUnspecifiedTypeClass::Physical,
+      VhdlUnspecifiedTypeClass::Floating,
+      VhdlUnspecifiedTypeClass::Array,
+      VhdlUnspecifiedTypeClass::Access,
+      VhdlUnspecifiedTypeClass::File};
+  for (std::size_t index = 0; index < expected.size(); ++index) {
+    require(unit.parameters[index].kind == ParameterKind::Type &&
+                unit.parameters[index].type.vhdl_unspecified &&
+                unit.parameters[index].type.vhdl_unspecified->type_class ==
+                    expected[index],
+            "each generic retains its exact unspecified type category");
+  }
+  const auto &array = *unit.parameters[6].type.vhdl_unspecified;
+  require(array.array_index_count == 1 && array.component_types.size() == 2 &&
+              array.component_types[0].vhdl_unspecified &&
+              array.component_types[0].vhdl_unspecified->type_class ==
+                  VhdlUnspecifiedTypeClass::Discrete &&
+              array.component_types[1].vhdl_unspecified &&
+              array.component_types[1].vhdl_unspecified->type_class ==
+                  VhdlUnspecifiedTypeClass::Private,
+          "array unspecified profiles retain index and element categories");
+  require(unit.ports[0].type.vhdl_unspecified &&
+              unit.ports[1].type.vhdl_unspecified &&
+              unit.ports[2].type.vhdl_unspecified &&
+              unit.ports[0].type.vhdl_unspecified->inference_identity ==
+                  unit.ports[1].type.vhdl_unspecified->inference_identity &&
+              unit.ports[0].type.vhdl_unspecified->inference_identity !=
+                  unit.ports[2].type.vhdl_unspecified->inference_identity &&
+              unit.ports[2].type.vhdl_unspecified->inference_identity
+                  .ends_with(":value_array"),
+          "names in one interface declaration share one inference identity");
+
+  const Type integer_actual{
+      ValueDomain::Integer, "integer", std::nullopt, true};
+  const Type string_actual{
+      ValueDomain::String, "string", std::nullopt, false};
+  require(vhdl_unspecified_type_accepts(
+              unit.parameters[3].type, integer_actual) &&
+              !vhdl_unspecified_type_accepts(
+                  unit.parameters[3].type, string_actual) &&
+              vhdl_unspecified_type_accepts(
+                  unit.parameters[0].type, string_actual),
+          "unspecified type categories accept only legal actual types");
+  require(vhdl_inferred_type_identity(integer_actual) !=
+              vhdl_inferred_type_identity(string_actual),
+          "distinct actual types retain distinct inference identities");
+
+  const auto rejected = parse_text(
+      "vhdl2008-unspecified.vhd", source, Language::Vhdl2008,
+      VhdlStandard::Vhdl2008);
+  require(!rejected.ok() &&
+              std::ranges::count_if(
+                  rejected.diagnostics, [](const Diagnostic &diagnostic) {
+                    return diagnostic.code == "FSIM-FE-VHSTD-003";
+                  }) >= 12,
+          "unspecified types stay isolated from VHDL-2008");
+
+  const auto malformed = parse_text(
+      "vhdl2019-unspecified-invalid.vhd",
+      "entity Bad is generic (type T is nonsense); end entity;",
+      Language::Vhdl2008, VhdlStandard::Vhdl2019);
+  require(!malformed.ok() &&
+              std::ranges::any_of(
+                  malformed.diagnostics, [](const Diagnostic &diagnostic) {
+                    return diagnostic.code == "FSIM-VHDL-PARSE-286";
+                  }),
+          "malformed unspecified categories have one stable diagnostic");
+}
+
+void test_vhdl_2019_mode_view_declarations() {
+  constexpr std::string_view source = R"(
+package Mode_Views is
+  type Lane_T is record
+    Valid : bit;
+    Data : bit_vector(7 downto 0);
+    Ready : bit;
+    Hold : bit;
+  end record Lane_T;
+  type Lane_Array_T is array (natural range <>) of Lane_T;
+  type Bus_T is record
+    Lane : Lane_T;
+    Lanes : Lane_Array_T(0 to 1);
+  end record Bus_T;
+
+  view Producer of Lane_T is
+    Valid, Data : out;
+    Ready : in;
+    Hold : buffer;
+  end view Producer;
+  view Bus_View of Bus_T is
+    Lane : view Producer;
+    Lanes : view (Producer);
+  end view Bus_View;
+end package;
+)";
+  const auto parsed = parse_text(
+      "vhdl2019-mode-views.vhd", source, Language::Vhdl2008,
+      VhdlStandard::Vhdl2019);
+  if (!parsed.ok()) {
+    for (const auto &diagnostic : parsed.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  require(parsed.ok() && parsed.design.units.size() == 1,
+          "VHDL-2019 mode view declarations must parse");
+  const auto &declarations = parsed.design.units.front().type_aliases;
+  const auto producer = std::ranges::find_if(
+      declarations, [](const TypeAliasDeclaration &declaration) {
+        return declaration.name == "producer";
+      });
+  const auto bus_view = std::ranges::find_if(
+      declarations, [](const TypeAliasDeclaration &declaration) {
+        return declaration.name == "bus_view";
+      });
+  require(producer != declarations.end() &&
+              producer->declaration_kind ==
+                  TypeDeclarationKind::VhdlModeView &&
+              producer->type.named_type == "lane_t" &&
+              producer->vhdl_mode_view_elements.size() == 4,
+          "a mode view retains its record subtype and expands grouped names");
+  require(producer->vhdl_mode_view_elements[0].name == "valid" &&
+              producer->vhdl_mode_view_elements[0].direction ==
+                  PortDirection::Output &&
+              producer->vhdl_mode_view_elements[1].name == "data" &&
+              producer->vhdl_mode_view_elements[1].direction ==
+                  PortDirection::Output &&
+              producer->vhdl_mode_view_elements[2].direction ==
+                  PortDirection::Input &&
+              producer->vhdl_mode_view_elements[3].direction ==
+                  PortDirection::Buffer,
+          "each simple mode view element retains its explicit direction");
+  require(bus_view != declarations.end() &&
+              bus_view->vhdl_mode_view_elements.size() == 2 &&
+              bus_view->vhdl_mode_view_elements[0].kind ==
+                  VhdlModeViewElementKind::record_view &&
+              bus_view->vhdl_mode_view_elements[0].referenced_view ==
+                  "producer" &&
+              bus_view->vhdl_mode_view_elements[1].kind ==
+                  VhdlModeViewElementKind::array_view &&
+              bus_view->vhdl_mode_view_elements[1].referenced_view ==
+                  "producer",
+          "nested record and array view indications retain distinct nodes");
+
+  const auto older = parse_text(
+      "vhdl2008-mode-views.vhd", source, Language::Vhdl2008,
+      VhdlStandard::Vhdl2008);
+  require(!older.ok() && std::ranges::any_of(
+              older.diagnostics, [](const Diagnostic &diagnostic) {
+                return diagnostic.code == "FSIM-FE-VHSTD-003";
+              }),
+          "mode view declarations stay isolated from VHDL-2008");
+
+  const auto malformed = parse_text(
+      "vhdl2019-mode-view-invalid.vhd", R"(
+package Bad_Views is
+  type Pair_T is record Left, Right : bit; end record;
+  view Broken of Pair_T is
+    Left : linkage;
+    Left : sideways;
+  end view Different;
+end package;
+)", Language::Vhdl2008, VhdlStandard::Vhdl2019);
+  const auto has_code = [&](const std::string_view code) {
+    return std::ranges::any_of(
+        malformed.diagnostics, [&](const Diagnostic &diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  require(!malformed.ok() && has_code("FSIM-VHDL-PARSE-287") &&
+              has_code("FSIM-VHDL-SEM-107") &&
+              has_code("FSIM-VHDL-SEM-108"),
+          "malformed, duplicate, mismatched, and linkage elements use stable "
+          "mode view diagnostics");
+
+  const auto legacy_identifier = parse_text(
+      "vhdl2008-view-identifier.vhd",
+      "package view is end package view;", Language::Vhdl2008,
+      VhdlStandard::Vhdl2008);
+  const auto reserved_identifier = parse_text(
+      "vhdl2019-view-identifier.vhd",
+      "package view is end package view;", Language::Vhdl2008,
+      VhdlStandard::Vhdl2019);
+  require(legacy_identifier.ok() && !reserved_identifier.ok() &&
+              std::ranges::any_of(
+                  reserved_identifier.diagnostics,
+                  [](const Diagnostic &diagnostic) {
+                    return diagnostic.code == "FSIM-VHDL-LEX-002";
+                  }),
+          "view becomes reserved only in the VHDL-2019 lexical profile");
 }
 
 void test_vhdl_revision_declaration_profiles()
@@ -1839,7 +2158,8 @@ begin
   end process;
 end architecture;
 )",
-                                 Language::Vhdl2008);
+                                 Language::Vhdl2008,
+                                 VhdlStandard::Vhdl2019);
   require(result.ok(), "VHDL conditional assignments must parse");
   const auto *architecture =
       result.design.find(UnitKind::VhdlArchitecture, "rtl");
@@ -1857,13 +2177,15 @@ end architecture;
       architecture->concurrent_statements[2].value;
   const auto &external_expression =
       architecture->concurrent_statements[3].value;
-  require(declaration.kind == ExpressionKind::Call &&
-              declaration.text == "?:" && declaration.operands.size() == 3 &&
+  require(declaration.kind == ExpressionKind::Conditional &&
+              declaration.text == "when" &&
+              declaration.operands.size() == 3 &&
               declaration.operands[0].text == "true" &&
               declaration.operands[1].text == "\"0001\"" &&
               declaration.operands[2].text == "\"0010\"" &&
-              expression.kind == ExpressionKind::Call &&
-              expression.text == "?:" && expression.operands.size() == 3 &&
+              expression.kind == ExpressionKind::Conditional &&
+              expression.text == "when" &&
+              expression.operands.size() == 3 &&
               expression.operands[0].text == "select_a" &&
               expression.operands[1].text == "a" &&
               expression.operands[2].text == "declaration_value" &&
@@ -1889,6 +2211,25 @@ end architecture;
                   ValueDomain::Logic9,
           "VHDL conditional, case, and external-name expressions must retain "
           "executable HIR");
+
+  const auto legacy_expression = parse_text(
+      "vhdl2008-conditional-expression.vhd",
+      R"(
+entity vhdl2008_conditional_expression is
+end entity;
+architecture rtl of vhdl2008_conditional_expression is
+  constant rejected : integer := 1 when true else 2;
+begin
+end architecture;
+)",
+      Language::Vhdl2008, VhdlStandard::Vhdl2008);
+  require(!legacy_expression.ok() &&
+              std::ranges::any_of(
+                  legacy_expression.diagnostics,
+                  [](const Diagnostic &diagnostic) {
+                    return diagnostic.code == "FSIM-FE-VHSTD-003";
+                  }),
+          "first-class conditional expressions stay isolated from VHDL-2008");
   require(concurrent.kind == StatementKind::If &&
               concurrent.statements.size() == 1 &&
               concurrent.statements[0].value.text == "a" &&

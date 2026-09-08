@@ -60,10 +60,16 @@ void Lowerer::initialize_function_support()
                         && !function.visibility_owner.empty()
                         && candidate.visibility_owner
                             != function.visibility_owner;
+                    const bool mapped_distinct_declarations =
+                        !candidate.specialization_identity.empty()
+                        && !function.specialization_identity.empty()
+                        && candidate.specialization_identity
+                            != function.specialization_identity;
                     if (candidate.arguments.size()
                             != function.arguments.size()
                         || imported_distinct_declarations
-                        || !vhdl_callable_type_matches(
+                        || mapped_distinct_declarations
+                        || !frontend::vhdl_base_type_profiles_match(
                             candidate.return_type,
                             function.return_type)) {
                         return false;
@@ -71,9 +77,7 @@ void Lowerer::initialize_function_support()
                     for (std::size_t argument = 0;
                         argument < function.arguments.size();
                         ++argument) {
-                        if (candidate.arguments[argument].direction
-                                != function.arguments[argument].direction
-                            || !vhdl_callable_type_matches(
+                        if (!frontend::vhdl_parameter_type_profiles_match(
                                 candidate.arguments[argument].type,
                                 function.arguments[argument].type)) {
                             return false;
@@ -101,6 +105,27 @@ void Lowerer::initialize_function_support()
         }
         function_frames_.push_back(std::move(frame));
         overloads.push_back(index);
+    }
+    for (auto& [name, overloads] : function_indices_) {
+        (void)name;
+        std::ranges::stable_sort(
+            overloads,
+            [&](const std::size_t left, const std::size_t right) {
+                const auto& lhs = *function_frames_[left].source;
+                const auto& rhs = *function_frames_[right].source;
+                return std::tie(
+                           lhs.visibility_owner,
+                           lhs.specialization_identity,
+                           lhs.span.source_name.str(),
+                           lhs.span.begin.offset,
+                           lhs.span.end.offset)
+                    < std::tie(
+                           rhs.visibility_owner,
+                           rhs.specialization_identity,
+                           rhs.span.source_name.str(),
+                           rhs.span.begin.offset,
+                           rhs.span.end.offset);
+            });
     }
     function_dependencies_.resize(function_frames_.size());
     if (function_frames_.empty()) {
@@ -306,7 +331,12 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
              index < specialized.arguments.size(); ++index) {
             auto& formal = specialized.arguments[index];
             const auto& actual = *(*actuals)[index];
-            if (unconstrained_builtin_array(formal.type)) {
+            if (formal.type.vhdl_unspecified) {
+                if (const auto actual_type =
+                        vhdl_expression_type(actual)) {
+                    formal.type = *actual_type;
+                }
+            } else if (unconstrained_builtin_array(formal.type)) {
                 if (const auto actual_type =
                         vhdl_expression_type(actual)) {
                     formal.type = *actual_type;
@@ -344,6 +374,63 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
                         0,
                         true};
             }
+        }
+        if (!specialized.vhdl_return_identifier.empty()) {
+            const auto constrained_context = [&]() {
+              if (expected_type == nullptr
+                  || !is_vhdl_array_like(*expected_type)
+                  || !vhdl_callable_type_matches(
+                      specialized.return_type, *expected_type)
+                  || expected_type->width().value_or(0U) == 0U) {
+                return false;
+              }
+              if (!expected_type->vhdl_array) {
+                return expected_type->packed_range.has_value();
+              }
+              return std::ranges::all_of(
+                  expected_type->vhdl_array->dimensions,
+                  [](const auto& dimension) {
+                    return dimension.range.has_value()
+                        && !dimension.unconstrained;
+                  });
+            }();
+            if (!constrained_context) {
+              report(
+                  "FSIM-ELAB-VHRESULT-001",
+                  "VHDL-2019 function result subtype '"
+                      + specialized.vhdl_return_identifier
+                      + "' requires a compatible fully constrained array "
+                        "call context",
+                  expression.span);
+              return std::nullopt;
+            }
+            const auto implicit_subtype = std::ranges::find(
+                specialized.type_aliases,
+                specialized.vhdl_return_identifier,
+                &frontend::TypeAliasDeclaration::name);
+            if (implicit_subtype == specialized.type_aliases.end()) {
+              report(
+                  "FSIM-ELAB-VHRESULT-002",
+                  "VHDL-2019 function result subtype metadata is missing",
+                  specialized.vhdl_return_identifier_span);
+              return std::nullopt;
+            }
+            const auto declaration_identity =
+                implicit_subtype->type.vhdl_type_declaration;
+            specialized.return_type = *expected_type;
+            specialized.return_type.vhdl_type_declaration =
+                declaration_identity;
+            auto specialize_result_subtype =
+                [&](frontend::Type& type) {
+                  if (!declaration_identity.empty()
+                      && type.vhdl_type_declaration
+                          == declaration_identity) {
+                    type = specialized.return_type;
+                  }
+                };
+            elaboration_detail::visit_local_region_types(
+                specialized, specialize_result_subtype);
+            implicit_subtype->type = specialized.return_type;
         }
         for (auto& alias : specialized.type_aliases) {
             substitute_parameters(

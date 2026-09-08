@@ -858,6 +858,142 @@ end architecture;
   assert(has_diagnostic(
       duplicate_result, "FSIM-ELAB-VHOVER-006"));
 
+  const auto unspecified_homographs = fsim::frontend::parse_text(
+      "vhdl-2019-unspecified-homographs.vhd",
+      R"(
+entity unspecified_homographs is
+end entity;
+architecture rtl of unspecified_homographs is
+  function repeated(value : type is private) return integer is
+  begin
+    return 0;
+  end function;
+  function repeated(value : boolean) return integer is
+  begin
+    return 1;
+  end function;
+  procedure repeated_proc(variable value : in type is private) is
+  begin
+    null;
+  end procedure;
+  procedure repeated_proc(variable value : out boolean) is
+  begin
+    null;
+  end procedure;
+begin
+  process
+  begin
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008,
+      fsim::frontend::VhdlStandard::Vhdl2019);
+  if (!unspecified_homographs.ok()) {
+    for (const auto& diagnostic : unspecified_homographs.diagnostics) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+  }
+  assert(unspecified_homographs.ok());
+  const auto unspecified_homograph_result =
+      fsim::elaboration::elaborate(
+          unspecified_homographs.design,
+          "vhdl:work.unspecified_homographs(rtl)");
+  assert(!unspecified_homograph_result.ok());
+  assert(has_diagnostic(
+      unspecified_homograph_result, "FSIM-ELAB-VHOVER-003"));
+  assert(has_diagnostic(
+      unspecified_homograph_result, "FSIM-ELAB-VHOVER-006"));
+
+  const auto unspecified_body_conformance =
+      fsim::frontend::parse_text(
+          "vhdl-2019-unspecified-body-conformance.vhd",
+          R"(
+package profile_conformance is
+  function accept(value : type is private) return integer;
+  procedure store(variable value : inout type is private);
+end package;
+package body profile_conformance is
+  function accept(value : boolean) return integer is
+  begin
+    return 1;
+  end function;
+  procedure store(variable value : inout boolean) is
+  begin
+    value := not value;
+  end procedure;
+end package body;
+entity unspecified_body_conformance is
+end entity;
+use work.profile_conformance.all;
+architecture rtl of unspecified_body_conformance is
+begin
+end architecture;
+)",
+          fsim::frontend::Language::Vhdl2008,
+          fsim::frontend::VhdlStandard::Vhdl2019);
+  assert(unspecified_body_conformance.ok());
+  const auto unspecified_body_result =
+      fsim::elaboration::elaborate(
+          unspecified_body_conformance.design,
+          "vhdl:work.unspecified_body_conformance(rtl)");
+  if (!unspecified_body_result.ok()) {
+    for (const auto& diagnostic : unspecified_body_result.diagnostics) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+  }
+  assert(unspecified_body_result.ok());
+
+  const auto mapped_homographs = fsim::frontend::parse_text(
+      "vhdl-2019-mapped-homographs.vhd",
+      R"(
+package generic_homograph_template is
+  generic (type left_t; type right_t);
+  function choose(value : left_t) return integer;
+  function choose(value : right_t) return integer;
+end package;
+package body generic_homograph_template is
+  function choose(value : left_t) return integer is
+  begin
+    return 1;
+  end function;
+  function choose(value : right_t) return integer is
+  begin
+    return 2;
+  end function;
+end package body;
+entity mapped_homographs is
+end entity;
+architecture rtl of mapped_homographs is
+  package ops is new work.generic_homograph_template
+    generic map (left_t => integer, right_t => integer);
+  signal result : integer;
+begin
+  result <= ops.choose(1);
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008,
+      fsim::frontend::VhdlStandard::Vhdl2019);
+  assert(mapped_homographs.ok());
+  const auto mapped_homograph_result = fsim::elaboration::elaborate(
+      mapped_homographs.design,
+      "vhdl:work.mapped_homographs(rtl)");
+  if (mapped_homograph_result.ok()
+      || !has_diagnostic(
+          mapped_homograph_result, "FSIM-ELAB-VHOVER-001")) {
+    for (const auto& diagnostic : mapped_homograph_result.diagnostics) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+  }
+  assert(!mapped_homograph_result.ok());
+  assert(has_diagnostic(
+      mapped_homograph_result, "FSIM-ELAB-VHOVER-001"));
+  assert(!has_diagnostic(
+      mapped_homograph_result, "FSIM-ELAB-VHOVER-003"));
+
   const auto name_legality = fsim::frontend::parse_text(
       "vhdl-overload-name-legality.vhd",
       R"(

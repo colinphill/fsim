@@ -553,6 +553,13 @@ Process Lowerer::lower_process(
 [[nodiscard]] const frontend::Type* Lowerer::visible_type_mark(
     const std::string_view name) const
 {
+    if (active_function_) {
+        const auto* function = function_frames_[*active_function_].source;
+        if (function != nullptr
+            && function->vhdl_return_identifier == name) {
+            return &function->return_type;
+        }
+    }
     const auto found = visible_type_marks_.find(std::string { name });
     return found == visible_type_marks_.end()
         ? nullptr
@@ -689,21 +696,18 @@ Lowerer::systemverilog_expression_type(
     return nullptr;
 }
 
-[[nodiscard]] std::pair<std::int32_t, std::int32_t>
+[[nodiscard]] std::pair<std::int64_t, std::int64_t>
 Lowerer::integer_bounds(
-    const std::optional<frontend::IntegerRange>& range)
+    const std::optional<frontend::IntegerRange>& range) const
 {
     if (!range) {
-        return {
-            std::numeric_limits<std::int32_t>::min(),
-            std::numeric_limits<std::int32_t>::max()
-        };
+        const auto predefined = frontend::vhdl_predefined_integer_range(
+            vhdl_standard_, "integer");
+        return { predefined.left, predefined.right };
     }
     return {
-        static_cast<std::int32_t>(
-            std::min(range->left, range->right)),
-        static_cast<std::int32_t>(
-            std::max(range->left, range->right))
+        std::min(range->left, range->right),
+        std::max(range->left, range->right)
     };
 }
 
@@ -824,11 +828,19 @@ bool Lowerer::contains_explicit_wait(
 }
 
 [[nodiscard]] std::string Lowerer::declaration_key(
-    const frontend::VariableDeclaration& variable)
+    const frontend::VariableDeclaration& variable) const
 {
-    return variable.span.source_name + ":"
+    auto key = variable.span.source_name + ":"
         + std::to_string(variable.span.begin.offset) + ":"
         + variable.name;
+    if (active_function_) {
+        const auto& frame = function_frames_[*active_function_];
+        if (!frame.source->specialization_identity.empty()) {
+            key += ":function-specialization:"
+                + frame.source->specialization_identity;
+        }
+    }
+    return key;
 }
 
 [[nodiscard]] std::string Lowerer::scoped_local_name(

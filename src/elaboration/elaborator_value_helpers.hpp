@@ -25,7 +25,7 @@ std::uint64_t index_distance(
 
 PackedLogic4 unsigned_value(std::uint64_t value, std::size_t width);
 
-PackedLogic4 integer_value(std::int64_t value);
+PackedLogic4 integer_value(std::int64_t value, std::size_t width = 32U);
 
 PackedLogic4 default_packed_value(
     const frontend::Type& type,

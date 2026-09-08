@@ -292,6 +292,9 @@ using namespace elaboration_detail;
             generic_procedure_imports;
         std::vector<frontend::VhdlComponentDeclaration>
             component_imports;
+        std::vector<frontend::TypeAliasDeclaration>
+            mode_view_imports;
+        std::unordered_map<std::string, std::string> mode_view_owners;
         std::unordered_map<std::string, std::string> bare_owners;
         std::unordered_set<std::string> dependencies;
         const auto owner_library =
@@ -455,6 +458,28 @@ using namespace elaboration_detail;
                         continue;
                     }
                     found_selected = true;
+                    if (alias.declaration_kind
+                        == frontend::TypeDeclarationKind::VhdlModeView) {
+                        const auto [known, inserted] =
+                            mode_view_owners.emplace(
+                                alias.name, package_owner);
+                        if (!inserted && known->second != package_owner) {
+                            report(
+                                "FSIM-ELAB-VHVIEW-001",
+                                "VHDL mode view '" + alias.name
+                                    + "' is directly visible from multiple packages",
+                                item.span);
+                            continue;
+                        }
+                        if (std::ranges::none_of(
+                                mode_view_imports,
+                                [&](const auto& imported) {
+                                    return imported.name == alias.name;
+                                })) {
+                            mode_view_imports.push_back(alias);
+                        }
+                        continue;
+                    }
                     const auto existing =
                         imported_types.find(alias.name);
                     if (existing != imported_types.end()) {
@@ -706,6 +731,23 @@ using namespace elaboration_detail;
             std::make_move_iterator(unit.parameters.begin()),
             std::make_move_iterator(unit.parameters.end()));
         unit.parameters = std::move(imports);
+        std::unordered_set<std::string> local_mode_views;
+        for (const auto& alias : unit.type_aliases) {
+            if (alias.declaration_kind
+                == frontend::TypeDeclarationKind::VhdlModeView) {
+                local_mode_views.insert(alias.name);
+            }
+        }
+        std::erase_if(
+            mode_view_imports,
+            [&](const auto& view) {
+                return local_mode_views.contains(view.name);
+            });
+        mode_view_imports.insert(
+            mode_view_imports.end(),
+            std::make_move_iterator(unit.type_aliases.begin()),
+            std::make_move_iterator(unit.type_aliases.end()));
+        unit.type_aliases = std::move(mode_view_imports);
         std::unordered_set<std::string> local_function_names;
         for (const auto& function : unit.functions) {
             local_function_names.insert(function.name);
@@ -906,12 +948,9 @@ using namespace elaboration_detail;
                       || declaration.pure != body.pure
                       || declaration.arguments.size()
                           != body.arguments.size()
-                      || declaration.return_type.spelling
-                          != body.return_type.spelling
-                      || declaration.return_type.named_type
-                          != body.return_type.named_type
-                      || declaration.return_type.domain
-                          != body.return_type.domain) {
+                      || !frontend::vhdl_base_type_profiles_match(
+                          declaration.return_type,
+                          body.return_type)) {
                       return false;
                   }
                   for (std::size_t index = 0;
@@ -919,12 +958,11 @@ using namespace elaboration_detail;
                        ++index) {
                       if (declaration.arguments[index].direction
                               != body.arguments[index].direction
-                          || declaration.arguments[index].type.spelling
-                              != body.arguments[index].type.spelling
-                          || declaration.arguments[index].type.named_type
-                              != body.arguments[index].type.named_type
-                          || declaration.arguments[index].type.domain
-                              != body.arguments[index].type.domain) {
+                          || declaration.arguments[index].vhdl_file
+                              != body.arguments[index].vhdl_file
+                          || !frontend::vhdl_parameter_type_profiles_match(
+                              declaration.arguments[index].type,
+                              body.arguments[index].type)) {
                           return false;
                       }
                   }
@@ -980,13 +1018,11 @@ using namespace elaboration_detail;
                        index < declaration.arguments.size(); ++index) {
                       const auto& left = declaration.arguments[index];
                       const auto& right = body.arguments[index];
-                      if (left.type.spelling != right.type.spelling
-                          || left.type.named_type
-                              != right.type.named_type
-                          || left.type.domain != right.type.domain
-                          || left.direction != right.direction
+                      if (left.direction != right.direction
                           || left.object_class
-                              != right.object_class) {
+                              != right.object_class
+                          || !frontend::vhdl_parameter_type_profiles_match(
+                              left.type, right.type)) {
                           return false;
                       }
                   }
@@ -1170,7 +1206,10 @@ using namespace elaboration_detail;
                     effective_package.span,
                     { },
                     frontend::TypeDeclarationKind::Alias,
-                    { } });
+                    { },
+                    { },
+                    { },
+                    false });
         }
         auto type_specialized =
             specialize_vhdl_interface_types(

@@ -594,7 +594,10 @@ void VerilogParser::parse_typedef(
         cover(start.span, previous().span),
         std::move(enum_literals),
         TypeDeclarationKind::SystemVerilogTypedef,
-        { } });
+        { },
+        { },
+        { },
+        false });
     for (auto& [parameter, parameter_name] :
         enum_parameters) {
         add_parameter(
@@ -658,7 +661,10 @@ void VerilogParser::parse_nettype(
         cover(start.span, previous().span),
         { },
         TypeDeclarationKind::SystemVerilogNettype,
-        { }
+        { },
+        { },
+        { },
+        false
     };
     declaration.systemverilog_resolution_function = std::move(resolution_function);
     unit.type_aliases.push_back(std::move(declaration));

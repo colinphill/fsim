@@ -97,6 +97,23 @@ namespace codec_detail {
             return value >= frontend::PackedAggregateKind::None
                 && value <= frontend::PackedAggregateKind::TaggedUnion;
         } else if constexpr (
+            std::same_as<T, frontend::VhdlUnspecifiedTypeClass>) {
+            return value >= frontend::VhdlUnspecifiedTypeClass::None
+                && value <= frontend::VhdlUnspecifiedTypeClass::File;
+        } else if constexpr (
+            std::same_as<T, frontend::VhdlPredefinedSubtypeAttribute>) {
+            return value >= frontend::VhdlPredefinedSubtypeAttribute::None
+                && value
+                    <= frontend::VhdlPredefinedSubtypeAttribute::DesignatedSubtype;
+        } else if constexpr (
+            std::same_as<T, frontend::VhdlModeViewElementKind>) {
+            return value >= frontend::VhdlModeViewElementKind::direction
+                && value <= frontend::VhdlModeViewElementKind::array_view;
+        } else if constexpr (
+            std::same_as<T, frontend::VhdlModeViewIndicationKind>) {
+            return value >= frontend::VhdlModeViewIndicationKind::record
+                && value <= frontend::VhdlModeViewIndicationKind::array;
+        } else if constexpr (
             std::same_as<T, frontend::SystemVerilogModportMemberKind>) {
             return value >= frontend::SystemVerilogModportMemberKind::Signal
                 && value <= frontend::SystemVerilogModportMemberKind::Clocking;
@@ -158,10 +175,14 @@ namespace codec_detail {
                 && value <= semantic::vhdl::ObjectClass::file;
         } else if constexpr (std::same_as<T, semantic::vhdl::DeclarationForm>) {
             return value >= semantic::vhdl::DeclarationForm::type
-                && value <= semantic::vhdl::DeclarationForm::group_instance;
+                && value <= semantic::vhdl::DeclarationForm::mode_view;
         } else if constexpr (std::same_as<T, semantic::vhdl::TypeForm>) {
             return value >= semantic::vhdl::TypeForm::unresolved
                 && value <= semantic::vhdl::TypeForm::alias;
+        } else if constexpr (
+            std::same_as<T, semantic::vhdl::UnspecifiedTypeClass>) {
+            return value >= semantic::vhdl::UnspecifiedTypeClass::none
+                && value <= semantic::vhdl::UnspecifiedTypeClass::file;
         } else if constexpr (std::same_as<T, semantic::vhdl::RangeKind>) {
             return value >= semantic::vhdl::RangeKind::integer
                 && value <= semantic::vhdl::RangeKind::array_index;
@@ -208,13 +229,23 @@ namespace codec_detail {
         } else if constexpr (
             std::same_as<T, semantic::vhdl::PredefinedAttribute>) {
             return value >= semantic::vhdl::PredefinedAttribute::left
-                && value <= semantic::vhdl::PredefinedAttribute::value;
+                && value <= semantic::vhdl::PredefinedAttribute::reflect;
         } else if constexpr (std::same_as<T, semantic::vhdl::ExpressionKind>) {
             return value >= semantic::vhdl::ExpressionKind::invalid
-                && value <= semantic::vhdl::ExpressionKind::default_choice;
+                && value <= semantic::vhdl::ExpressionKind::conditional;
         } else if constexpr (std::same_as<T, semantic::vhdl::StatementKind>) {
             return value >= semantic::vhdl::StatementKind::signal_assignment
                 && value <= semantic::vhdl::StatementKind::null_statement;
+        } else if constexpr (
+            std::same_as<T, semantic::vhdl::ModeViewElementForm>) {
+            return value >= semantic::vhdl::ModeViewElementForm::direction
+                && value <= semantic::vhdl::ModeViewElementForm::array_view;
+        } else if constexpr (
+            std::same_as<T, semantic::vhdl::ModeViewCompositionState>) {
+            return value
+                    >= semantic::vhdl::ModeViewCompositionState::uncomposed
+                && value
+                    <= semantic::vhdl::ModeViewCompositionState::recursive;
         } else if constexpr (std::same_as<T, semantic::vhdl::DelayMechanism>) {
             return value >= semantic::vhdl::DelayMechanism::implicit_inertial
                 && value <= semantic::vhdl::DelayMechanism::transport;
@@ -256,10 +287,14 @@ namespace codec_detail {
             value.enumeration_range, value.enumeration_range_expression,
             value.enumeration_base_range, value.enumeration_base_range_expression,
             value.packed_members, value.packed_aggregate, value.integer_range,
+            value.vhdl_integer_storage_width,
             value.integer_range_expression, value.integer_base_range,
             value.integer_base_range_expression, value.discrete_range_expression,
             value.vhdl_array, value.vhdl_access, value.vhdl_file,
-            value.vhdl_physical, value.vhdl_protected,
+            value.vhdl_physical,
+            value.vhdl_predefined_subtype_attribute,
+            value.vhdl_predefined_subtype_attribute_dimension,
+            value.vhdl_protected, value.vhdl_unspecified,
             value.vhdl_array_constraints, value.systemverilog_container,
             value.systemverilog_class_name,
             value.systemverilog_class_declaration,
@@ -291,7 +326,7 @@ namespace codec_detail {
             value.name, value.type, value.direction, value.is_port, value.span,
             value.net_delay, value.drive_strength, value.charge_strength,
             value.charge_decay, value.interface_type, value.modport,
-            value.default_value);
+            value.default_value, value.vhdl_mode_view);
     }
 
     template <typename T>
@@ -313,7 +348,7 @@ namespace codec_detail {
         return std::tie(
             value.name, value.type, value.initializer, value.span,
             value.vhdl_shared, value.vhdl_file, value.vhdl_file_open_kind,
-            value.systemverilog_const);
+            value.systemverilog_const, value.vhdl_private);
     }
 
     template <typename T>

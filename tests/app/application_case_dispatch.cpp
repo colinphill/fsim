@@ -135,6 +135,7 @@ int fsim_application_case_vhdl_components();
 int fsim_application_case_vhdl_integer_shifts();
 int fsim_application_case_vhdl_logic9();
 int fsim_application_case_vhdl_numeric();
+int fsim_application_case_vhdl_2019_integer();
 int fsim_application_case_vhdl_fixed();
 int fsim_application_case_vhdl_float();
 int fsim_application_case_vhdl_ieee_integration();
@@ -158,6 +159,7 @@ constexpr NamedApplicationCase application_cases[] = {
     { "vhdl_integer_shifts", fsim_application_case_vhdl_integer_shifts },
     { "vhdl_logic9", fsim_application_case_vhdl_logic9 },
     { "vhdl_numeric", fsim_application_case_vhdl_numeric },
+    { "vhdl_2019_integer", fsim_application_case_vhdl_2019_integer },
     { "vhdl_fixed", fsim_application_case_vhdl_fixed },
     { "vhdl_float", fsim_application_case_vhdl_float },
     { "vhdl_ieee_integration", fsim_application_case_vhdl_ieee_integration },

@@ -1,9 +1,333 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_parser_internal.hpp"
 
+#include <concepts>
+#include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace fsim::frontend {
+
+std::shared_ptr<VhdlProtectedInfo> VhdlParser::parse_vhdl_protected_type(
+    const Token &start, const std::string_view canonical_name,
+    const bool body) {
+  DesignUnit protected_region;
+  protected_region.language = Language::Vhdl2008;
+
+  if (!body && match_keyword("generic", true)) {
+    require_vhdl_standard(
+        previous(), VhdlStandard::Vhdl2019,
+        "a generic interface on a protected type",
+        "select VHDL-2019 or move the generic interface outside the protected "
+        "type");
+    parse_vhdl_generics(protected_region, previous(), true);
+  }
+
+  auto argument_requires_vhdl_2019 = [&](const Type &type) {
+    const auto separator = type.spelling.find_last_of('.');
+    const auto simple_name = type.spelling.substr(
+        separator == std::string::npos ? 0 : separator + 1);
+    const auto found = vhdl_named_type_kinds_.find(simple_name);
+    return found != vhdl_named_type_kinds_.end() &&
+           (found->second == TypeDeclarationKind::VhdlAccess ||
+            found->second == TypeDeclarationKind::VhdlFile ||
+            found->second == TypeDeclarationKind::VhdlProtected);
+  };
+  auto require_extended_method_parameters = [&](const auto &arguments) {
+    for (const auto &argument : arguments) {
+      bool extended = argument_requires_vhdl_2019(argument.type);
+      if constexpr (std::same_as<std::remove_cvref_t<decltype(argument)>,
+                                 FunctionArgument>) {
+        extended = extended || argument.vhdl_file;
+      } else {
+        extended = extended ||
+                   argument.object_class == InterfaceObjectClass::File;
+      }
+      if (!extended) {
+        continue;
+      }
+      Token parameter;
+      parameter.kind = TokenKind::Identifier;
+      parameter.text = argument.name;
+      parameter.span = argument.span;
+      require_vhdl_standard(
+          parameter, VhdlStandard::Vhdl2019,
+          "an access, file, or protected parameter on a protected method",
+          "select VHDL-2019 or use a scalar or composite value parameter");
+    }
+  };
+
+  std::vector<VariableDeclaration> variables;
+  std::vector<SignalAliasDeclaration> method_aliases;
+  while (!at_end() &&
+         !(keyword("end", 0, true) && keyword("protected", 1, true))) {
+    if ((keyword("pure", 0, true) || keyword("impure", 0, true)) &&
+        keyword("function", 1, true)) {
+      const bool pure = match_keyword("pure", true);
+      if (!pure) {
+        (void)match_keyword("impure", true);
+      }
+      const auto function_start = expect_keyword("function", true);
+      const auto prior_size = protected_region.functions.size();
+      parse_vhdl_function_item(protected_region, function_start, pure, !body);
+      for (auto index = prior_size; index < protected_region.functions.size();
+           ++index) {
+        require_extended_method_parameters(
+            protected_region.functions[index].arguments);
+      }
+      continue;
+    }
+    if (match_keyword("function", true)) {
+      const auto prior_size = protected_region.functions.size();
+      parse_vhdl_function_item(protected_region, previous(), true, !body);
+      for (auto index = prior_size; index < protected_region.functions.size();
+           ++index) {
+        require_extended_method_parameters(
+            protected_region.functions[index].arguments);
+      }
+      continue;
+    }
+    if (match_keyword("procedure", true)) {
+      const auto prior_size = protected_region.procedures.size();
+      parse_vhdl_procedure_item(protected_region, previous(), !body);
+      for (auto index = prior_size; index < protected_region.procedures.size();
+           ++index) {
+        require_extended_method_parameters(
+            protected_region.procedures[index].arguments);
+      }
+      continue;
+    }
+    if (match_keyword("alias", true)) {
+      const auto alias_start = previous();
+      require_vhdl_standard(
+          alias_start, VhdlStandard::Vhdl2019,
+          "a protected method alias",
+          "select VHDL-2019 or call the protected method by its declared name");
+      const auto alias_name = expect_identifier("protected method alias name");
+      expect_keyword("is", true, "FSIM-VHDL-PARSE-277");
+      auto target = parse_vhdl_selected_name("protected method alias target");
+      if (match(TokenKind::LeftBracket)) {
+        const auto signature_start = previous();
+        std::size_t signature_tokens = 0;
+        while (!at_end() && !at(TokenKind::RightBracket) &&
+               !at(TokenKind::Semicolon)) {
+          ++signature_tokens;
+          advance();
+        }
+        if (signature_tokens == 0) {
+          error(signature_start, "FSIM-VHDL-PARSE-277",
+                "a protected method alias signature cannot be empty");
+        }
+        expect(TokenKind::RightBracket,
+               "']' after protected method alias signature",
+               "FSIM-VHDL-PARSE-277");
+      }
+      expect(TokenKind::Semicolon, "';' after protected method alias",
+             "FSIM-VHDL-PARSE-277");
+      const auto canonical_alias = vhdl_name(alias_name.text);
+      if (std::ranges::any_of(method_aliases, [&](const auto &existing) {
+            return existing.name == canonical_alias;
+          })) {
+        error(alias_name, "FSIM-VHDL-SEM-094",
+              "duplicate protected method alias '" + canonical_alias + "'");
+      } else {
+        method_aliases.push_back(SignalAliasDeclaration{
+            canonical_alias, std::move(target), {}, PortDirection::Unknown,
+            span_from(alias_start, previous())});
+      }
+      continue;
+    }
+
+    const bool explicit_private = match_keyword("private", true);
+    if (explicit_private) {
+      require_vhdl_standard(
+          previous(), VhdlStandard::Vhdl2019,
+          "an explicitly private protected member",
+          "select VHDL-2019 or place private state in the protected body");
+    }
+    const bool shared = match_keyword("shared", true);
+    if (match_keyword("variable", true)) {
+      const auto variable_start = previous();
+      if (!body) {
+        require_vhdl_standard(
+            variable_start, VhdlStandard::Vhdl2019,
+            "a protected variable declaration",
+            "select VHDL-2019 or place private state in the protected body");
+      }
+      std::vector<Token> names{expect_identifier("protected variable name")};
+      while (match(TokenKind::Comma)) {
+        names.push_back(expect_identifier("protected variable name"));
+      }
+      expect(TokenKind::Colon, "':' after protected variable names",
+             "FSIM-VHDL-PARSE-245");
+      const auto variable_type = parse_vhdl_type(true, true);
+      std::optional<Expression> initializer;
+      if (match(TokenKind::ColonEqual)) {
+        initializer = parse_expression();
+      }
+      expect(TokenKind::Semicolon,
+             "';' after protected variable declaration",
+             "FSIM-VHDL-PARSE-246");
+      for (const auto &variable_name : names) {
+        const auto canonical_variable = vhdl_name(variable_name.text);
+        if (std::ranges::any_of(variables, [&](const auto &existing) {
+              return existing.name == canonical_variable;
+            })) {
+          error(variable_name, "FSIM-VHDL-SEM-091",
+                "duplicate protected variable '" + canonical_variable + "'");
+          continue;
+        }
+        variables.push_back(VariableDeclaration{
+            canonical_variable, variable_type, initializer,
+            span_from(variable_start, previous()), shared, false, std::nullopt,
+            body || explicit_private});
+      }
+      continue;
+    }
+    if (explicit_private || shared) {
+      error(current(), "FSIM-VHDL-PARSE-245",
+            "expected 'variable' after protected object qualifier");
+      skip_to_semicolon();
+      continue;
+    }
+
+    const auto item = advance();
+    error(item, "FSIM-VHDL-UNSUPPORTED-055",
+          "unsupported protected type declarative item '" + item.text + "'");
+    skip_to_semicolon();
+  }
+
+  expect_keyword("end", true, "FSIM-VHDL-PARSE-247");
+  expect_keyword("protected", true, "FSIM-VHDL-PARSE-248");
+  if (body) {
+    expect_keyword("body", true, "FSIM-VHDL-PARSE-249");
+  }
+  if (at(TokenKind::Identifier)) {
+    const auto end_name = advance();
+    if (vhdl_name(end_name.text) != canonical_name) {
+      error(end_name, "FSIM-VHDL-SEM-092",
+            "protected type end name '" + vhdl_name(end_name.text) +
+                "' does not match '" + std::string(canonical_name) + "'");
+    }
+  }
+  expect(TokenKind::Semicolon, "';' after protected type declaration",
+         "FSIM-VHDL-PARSE-250");
+
+  auto protected_info = std::make_shared<VhdlProtectedInfo>();
+  protected_info->body = body;
+  protected_info->generic_parameters = std::move(protected_region.parameters);
+  protected_info->variables = std::move(variables);
+  protected_info->functions = std::move(protected_region.functions);
+  protected_info->procedures = std::move(protected_region.procedures);
+  protected_info->method_aliases = std::move(method_aliases);
+  protected_info->span = span_from(start, previous());
+  return protected_info;
+}
+
+void VhdlParser::parse_vhdl_mode_view_declaration(
+    std::vector<TypeAliasDeclaration> &declarations, const Token &start,
+    const bool nested_scope) {
+  (void)nested_scope;
+  require_vhdl_standard(
+      start, VhdlStandard::Vhdl2019, "a mode view declaration",
+      "select VHDL-2019 or declare ordinary scalar interface modes");
+
+  const auto name = expect_identifier("mode view name");
+  const auto canonical_name = vhdl_name(name.text);
+  const bool duplicate = std::ranges::any_of(
+      declarations, [&](const TypeAliasDeclaration &declaration) {
+        return declaration.name == canonical_name;
+      });
+  if (duplicate) {
+    error(name, "FSIM-VHDL-SEM-107",
+          "duplicate mode view declaration '" + canonical_name + "'");
+  }
+
+  expect_keyword("of", true, "FSIM-VHDL-PARSE-287");
+  auto record_subtype = parse_vhdl_type(true, true);
+  expect_keyword("is", true, "FSIM-VHDL-PARSE-287");
+
+  std::vector<VhdlModeViewElement> elements;
+  std::unordered_set<std::string> element_names;
+  while (!at_end() &&
+         !(keyword("end", 0, true) && keyword("view", 1, true))) {
+    std::vector<Token> names{expect_identifier("mode view element name")};
+    while (match(TokenKind::Comma)) {
+      names.push_back(expect_identifier("mode view element name"));
+    }
+    expect(TokenKind::Colon, "':' after mode view element names",
+           "FSIM-VHDL-PARSE-287");
+
+    VhdlModeViewElementKind kind = VhdlModeViewElementKind::direction;
+    PortDirection direction = PortDirection::Unknown;
+    std::string referenced_view;
+    if (match_keyword("in", true)) {
+      direction = PortDirection::Input;
+    } else if (match_keyword("out", true)) {
+      direction = PortDirection::Output;
+    } else if (match_keyword("inout", true)) {
+      direction = PortDirection::Inout;
+    } else if (match_keyword("buffer", true)) {
+      direction = PortDirection::Buffer;
+    } else if (match_keyword("linkage", true)) {
+      error(previous(), "FSIM-VHDL-SEM-108",
+            "a mode view element cannot have linkage mode");
+    } else if (match_keyword("view", true)) {
+      if (match(TokenKind::LeftParen)) {
+        kind = VhdlModeViewElementKind::array_view;
+        referenced_view = parse_vhdl_selected_name(
+            "array element mode view name");
+        expect(TokenKind::RightParen, "')' after array element mode view",
+               "FSIM-VHDL-PARSE-287");
+      } else {
+        kind = VhdlModeViewElementKind::record_view;
+        referenced_view = parse_vhdl_selected_name(
+            "record element mode view name");
+      }
+    } else {
+      error(current(), "FSIM-VHDL-PARSE-287",
+            "expected an element mode or nested mode view indication");
+      if (!at(TokenKind::Semicolon)) {
+        advance();
+      }
+    }
+    expect(TokenKind::Semicolon, "';' after mode view element definition",
+           "FSIM-VHDL-PARSE-287");
+
+    for (const auto &element_name : names) {
+      const auto canonical_element = vhdl_name(element_name.text);
+      if (!element_names.insert(canonical_element).second) {
+        error(element_name, "FSIM-VHDL-SEM-107",
+              "duplicate mode view element '" + canonical_element + "'");
+        continue;
+      }
+      elements.push_back(VhdlModeViewElement{
+          canonical_element, kind, direction, referenced_view,
+          span_from(element_name, previous())});
+    }
+  }
+
+  expect_keyword("end", true, "FSIM-VHDL-PARSE-287");
+  expect_keyword("view", true, "FSIM-VHDL-PARSE-287");
+  if (at(TokenKind::Identifier)) {
+    const auto end_name = advance();
+    if (vhdl_name(end_name.text) != canonical_name) {
+      error(end_name, "FSIM-VHDL-SEM-107",
+            "mode view end name '" + vhdl_name(end_name.text) +
+                "' does not match declaration name '" + canonical_name +
+                "'");
+    }
+  }
+  expect(TokenKind::Semicolon, "';' after mode view declaration",
+         "FSIM-VHDL-PARSE-287");
+
+  if (!duplicate) {
+    declarations.push_back(TypeAliasDeclaration{
+        canonical_name, std::move(record_subtype), span_from(start, previous()),
+        { }, TypeDeclarationKind::VhdlModeView, { }, std::move(elements),
+        { }, false});
+  }
+}
 
 void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
                                         const bool nested_scope) {
@@ -51,7 +375,10 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
               span_from(start, previous()),
               { },
               TypeDeclarationKind::VhdlIncomplete,
-              { } });
+              { },
+              { },
+              { },
+              false });
     }
     return;
   }
@@ -78,6 +405,8 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
     file.element_types.push_back(std::move(element_type));
     type.vhdl_file = std::move(file);
     if (!duplicate) {
+      vhdl_named_type_kinds_.insert_or_assign(
+          canonical_name, TypeDeclarationKind::VhdlFile);
       if (!nested_scope) {
         vhdl_named_types_.insert(canonical_name);
       }
@@ -87,7 +416,10 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
               span_from(start, previous()),
               { },
               TypeDeclarationKind::VhdlFile,
-              { } });
+              { },
+              { },
+              { },
+              false });
     }
     return;
   }
@@ -107,8 +439,15 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
     VhdlAccessInfo access;
     access.designated_span = designated_span;
     access.designated_types.push_back(std::move(designated_type));
+    if (vhdl_standard_ >= VhdlStandard::Vhdl2019) {
+      access.deallocate_releases_storage = false;
+      access.reclaim_when_unreachable = true;
+      access.simulation_lifetime = false;
+    }
     type.vhdl_access = std::move(access);
     if (!duplicate) {
+      vhdl_named_type_kinds_.insert_or_assign(
+          canonical_name, TypeDeclarationKind::VhdlAccess);
       if (!nested_scope) {
         vhdl_named_types_.insert(canonical_name);
       }
@@ -118,7 +457,10 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
               span_from(start, previous()),
               { },
               TypeDeclarationKind::VhdlAccess,
-              { } });
+              { },
+              { },
+              { },
+              false });
     }
     return;
   }
@@ -197,87 +539,23 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
               span_from(start, previous()),
               { },
               TypeDeclarationKind::VhdlPhysical,
-              { } });
+              { },
+              { },
+              { },
+              false });
     }
     return;
   }
   if (match_keyword("protected", true)) {
-      require_vhdl_standard(
-          previous(), VhdlStandard::Vhdl2000, "a protected type declaration",
-          "select VHDL-2000 or replace the protected object with an ordinary "
-          "package-managed declaration");
-      const bool body = match_keyword("body", true);
-      DesignUnit protected_region;
-      protected_region.language = Language::Vhdl2008;
-      std::vector<VariableDeclaration> variables;
-      while (!at_end() && !(keyword("end", 0, true) && keyword("protected", 1, true))) {
-          if ((keyword("pure", 0, true) || keyword("impure", 0, true)) && keyword("function", 1, true)) {
-              const bool pure = match_keyword("pure", true);
-              if (!pure) {
-                  (void)match_keyword("impure", true);
-              }
-              const auto function_start = expect_keyword("function", true);
-              parse_vhdl_function_item(protected_region, function_start, pure, !body);
-              continue;
-          }
-          if (match_keyword("function", true)) {
-              parse_vhdl_function_item(protected_region, previous(), true, !body);
-              continue;
-          }
-          if (match_keyword("procedure", true)) {
-              parse_vhdl_procedure_item(protected_region, previous(), !body);
-              continue;
-          }
-          if (body && match_keyword("variable", true)) {
-              const auto variable_start = previous();
-              std::vector<Token> names { expect_identifier("protected variable name") };
-              while (match(TokenKind::Comma)) {
-                  names.push_back(expect_identifier("protected variable name"));
-              }
-              expect(TokenKind::Colon, "':' after protected variable names",
-                  "FSIM-VHDL-PARSE-245");
-              const auto variable_type = parse_vhdl_type(true, true);
-              std::optional<Expression> initializer;
-              if (match(TokenKind::ColonEqual)) {
-                  initializer = parse_expression();
-              }
-              expect(TokenKind::Semicolon, "';' after protected variable declaration",
-                  "FSIM-VHDL-PARSE-246");
-              for (const auto& variable_name : names) {
-                  const auto canonical_variable = vhdl_name(variable_name.text);
-                  if (std::ranges::any_of(variables, [&](const auto& existing) {
-                          return existing.name == canonical_variable;
-                      })) {
-                      error(variable_name, "FSIM-VHDL-SEM-091",
-                          "duplicate protected variable '" + canonical_variable + "'");
-                      continue;
-                  }
-                  variables.push_back(VariableDeclaration {
-                      canonical_variable, variable_type, initializer,
-                      span_from(variable_start, previous()) });
-              }
-              continue;
-          }
-          const auto item = advance();
-          error(item, "FSIM-VHDL-UNSUPPORTED-055",
-              "unsupported protected type declarative item '" + item.text + "'");
-          skip_to_semicolon();
-      }
-    expect_keyword("end", true, "FSIM-VHDL-PARSE-247");
-    expect_keyword("protected", true, "FSIM-VHDL-PARSE-248");
-    if (body) {
-      expect_keyword("body", true, "FSIM-VHDL-PARSE-249");
+    require_vhdl_standard(
+        previous(), VhdlStandard::Vhdl2000, "a protected type declaration",
+        "select VHDL-2000 or replace the protected object with an ordinary "
+        "package-managed declaration");
+    const bool body = match_keyword("body", true);
+    if (!duplicate && !body) {
+      vhdl_named_type_kinds_.insert_or_assign(
+          canonical_name, TypeDeclarationKind::VhdlProtected);
     }
-    if (at(TokenKind::Identifier)) {
-      const auto end_name = advance();
-      if (vhdl_name(end_name.text) != canonical_name) {
-        error(end_name, "FSIM-VHDL-SEM-092",
-              "protected type end name '" + vhdl_name(end_name.text) +
-                  "' does not match '" + canonical_name + "'");
-      }
-    }
-    expect(TokenKind::Semicolon, "';' after protected type declaration",
-           "FSIM-VHDL-PARSE-250");
 
     Type type;
     type.spelling = canonical_name;
@@ -285,16 +563,8 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
                         std::to_string(start.span.begin.offset) + ":" +
                         canonical_name;
     type.vhdl_type_declaration = type.nominal_type;
-    type.vhdl_protected = std::make_shared<VhdlProtectedInfo>(
-        VhdlProtectedInfo{body,
-                          false,
-                          false,
-                          std::move(variables),
-                          std::move(protected_region.functions),
-                          std::move(protected_region.procedures),
-                          {},
-                          0,
-                          span_from(start, previous())});
+    type.vhdl_protected =
+        parse_vhdl_protected_type(start, canonical_name, body);
     if (!duplicate) {
       if (!nested_scope && !body) {
         vhdl_named_types_.insert(canonical_name);
@@ -306,7 +576,10 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
               { },
               body ? TypeDeclarationKind::VhdlProtectedBody
                    : TypeDeclarationKind::VhdlProtected,
-              { } });
+              { },
+              { },
+              { },
+              false });
     }
     return;
   }
@@ -320,10 +593,6 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
     VhdlArrayInfo array;
 
     expect(TokenKind::LeftParen, "'(' after array", "FSIM-VHDL-PARSE-143");
-    constexpr auto integer_first =
-        std::int64_t{std::numeric_limits<std::int32_t>::min()};
-    constexpr auto integer_last =
-        std::int64_t{std::numeric_limits<std::int32_t>::max()};
     do {
       VhdlArrayDimension dimension;
       const auto index_start = current();
@@ -344,11 +613,13 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
 
       if (dimension.index_subtype == "integer") {
         dimension.index_base_range =
-            IntegerRange{integer_first, integer_last, false};
+            vhdl_predefined_integer_range(vhdl_standard_, "integer");
       } else if (dimension.index_subtype == "natural") {
-        dimension.index_base_range = IntegerRange{0, integer_last, false};
+        dimension.index_base_range =
+            vhdl_predefined_integer_range(vhdl_standard_, "natural");
       } else if (dimension.index_subtype == "positive") {
-        dimension.index_base_range = IntegerRange{1, integer_last, false};
+        dimension.index_base_range =
+            vhdl_predefined_integer_range(vhdl_standard_, "positive");
       } else {
         error(index_start, "FSIM-VHDL-UNSUPPORTED-027",
               "VHDL arrays currently require integer, natural, or "
@@ -440,7 +711,10 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
               span_from(start, previous()),
               { },
               TypeDeclarationKind::VhdlArray,
-              { } });
+              { },
+              { },
+              { },
+              false });
     }
     return;
   }
@@ -526,7 +800,8 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
       }
       unit.type_aliases.push_back(TypeAliasDeclaration {
           canonical_name, std::move(type), span_from(start, previous()),
-          std::move(literals), TypeDeclarationKind::VhdlEnumeration, { } });
+          std::move(literals), TypeDeclarationKind::VhdlEnumeration, { },
+          { }, { }, false });
     }
     return;
   }
@@ -643,7 +918,10 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
             span_from(start, previous()),
             { },
             TypeDeclarationKind::VhdlRecord,
-            { } });
+            { },
+            { },
+            { },
+            false });
   }
 }
 
@@ -1132,7 +1410,10 @@ void VhdlParser::parse_subtype_declaration(DesignUnit &unit, const Token &start,
           span_from(start, previous()),
           { },
           TypeDeclarationKind::VhdlSubtype,
-          { } });
+          { },
+          { },
+          { },
+          false });
 }
 
 void VhdlParser::parse_signal_declaration(
@@ -1182,8 +1463,63 @@ void VhdlParser::parse_signal_declaration(
 }
 
 void VhdlParser::parse_vhdl_object_alias(
+    std::vector<TypeAliasDeclaration> &type_aliases,
     std::vector<SignalAliasDeclaration> &aliases, const Token &start) {
   const auto name = expect_identifier("alias name");
+  const auto is_converse_alias = [&]() {
+    if (!keyword("is", 0, true) || !at(TokenKind::Identifier, 1)) {
+      return false;
+    }
+    std::size_t lookahead = 2;
+    while (at(TokenKind::Dot, lookahead)
+           && at(TokenKind::Identifier, lookahead + 1)) {
+      lookahead += 2;
+    }
+    return at(TokenKind::Apostrophe, lookahead)
+        && at(TokenKind::Identifier, lookahead + 1)
+        && keyword("converse", lookahead + 1, true);
+  };
+  if (is_converse_alias()) {
+    (void)match_keyword("is", true);
+    require_vhdl_standard(
+        start, VhdlStandard::Vhdl2019,
+        "a converse mode view alias",
+        "select VHDL-2019 or declare an explicit mode view");
+    const auto target = parse_vhdl_selected_name(
+        "converse mode view name");
+    expect(TokenKind::Apostrophe,
+        "apostrophe before converse", "FSIM-VHDL-PARSE-295");
+    const auto attribute = expect_identifier("converse attribute");
+    if (vhdl_name(attribute.text) != "converse") {
+      error(attribute, "FSIM-VHDL-SEM-113",
+          "an untyped alias may denote only the predefined 'converse mode "
+          "view attribute");
+    }
+    if (at(TokenKind::LeftParen)) {
+      error(current(), "FSIM-VHDL-SEM-113",
+          "the predefined 'converse attribute does not accept an argument");
+      skip_to_semicolon();
+    } else {
+      expect(TokenKind::Semicolon, "';' after converse mode view alias",
+          "FSIM-VHDL-PARSE-295");
+    }
+    const auto canonical = vhdl_name(name.text);
+    if (std::ranges::any_of(type_aliases, [&](const auto &alias) {
+          return alias.name == canonical;
+        })) {
+      error(name, "FSIM-VHDL-SEM-114",
+          "duplicate converse mode view alias '" + canonical + "'");
+      return;
+    }
+    TypeAliasDeclaration alias;
+    alias.name = canonical;
+    alias.span = span_from(start, previous());
+    alias.declaration_kind = TypeDeclarationKind::VhdlModeView;
+    alias.vhdl_mode_view_converse_of = target;
+    alias.vhdl_mode_view_converse_parity = true;
+    type_aliases.push_back(std::move(alias));
+    return;
+  }
   if (!match(TokenKind::Colon)) {
     error(name, "FSIM-VHDL-UNSUPPORTED-054",
           "bounded object aliases require an explicit subtype indication");
@@ -1251,7 +1587,7 @@ bool VhdlParser::parse_vhdl_local_nonobject_declaration(
     return true;
   }
   if (match_keyword("alias", true)) {
-    parse_vhdl_object_alias(signal_aliases, previous());
+    parse_vhdl_object_alias(type_aliases, signal_aliases, previous());
     return true;
   }
   if (keyword("package", 0, true) && at(TokenKind::Identifier, 1) &&
@@ -1299,6 +1635,10 @@ bool VhdlParser::parse_vhdl_local_nonobject_declaration(
     parse_vhdl_group_declaration(declarations, previous());
     attributes = std::move(declarations.vhdl_attributes);
     groups = std::move(declarations.vhdl_groups);
+    return true;
+  }
+  if (match_keyword("view", true)) {
+    parse_vhdl_mode_view_declaration(type_aliases, previous(), true);
     return true;
   }
   if (!match_keyword("type", true) && !match_keyword("subtype", true)) {

@@ -13,7 +13,9 @@ std::optional<std::size_t> Lowerer::infer_width(const Expression& expression) co
         const auto name = std::string_view { expression.text }.substr(
             separator == std::string::npos ? 0 : separator + 1);
         if (name == "conv_integer") {
-            return std::size_t { 32 };
+            return static_cast<std::size_t>(
+                frontend::vhdl_predefined_integer_storage_width(
+                    vhdl_standard_));
         }
         if ((name == "and_reduce" || name == "nand_reduce"
                 || name == "or_reduce" || name == "nor_reduce"
@@ -51,7 +53,11 @@ std::optional<std::size_t> Lowerer::infer_width(const Expression& expression) co
         return std::size_t { 1 };
     }
     if (expression.kind == ExpressionKind::IntegerLiteral) {
-        return std::size_t { 32 };
+        return language_ == frontend::Language::Vhdl2008
+            ? static_cast<std::size_t>(
+                  frontend::vhdl_predefined_integer_storage_width(
+                      vhdl_standard_))
+            : std::size_t { 32 };
     }
     if (expression.kind == ExpressionKind::Aggregate) {
         return std::nullopt;
@@ -243,8 +249,9 @@ std::optional<std::size_t> Lowerer::infer_width(const Expression& expression) co
             }
         }
     }
-    if (expression.kind == ExpressionKind::Call
-        && expression.text == "?:"
+    if ((expression.kind == ExpressionKind::Conditional
+         || (expression.kind == ExpressionKind::Call
+             && expression.text == "?:"))
         && expression.operands.size() == 3) {
         const auto when_true = infer_width(expression.operands[1]);
         const auto when_false = infer_width(expression.operands[2]);
@@ -323,7 +330,9 @@ std::optional<std::size_t> Lowerer::infer_width(const Expression& expression) co
         const auto name = std::string_view { expression.text }.substr(
             separator == std::string::npos ? 0 : separator + 1);
         if (name == "to_integer") {
-            return std::size_t { 32 };
+            return static_cast<std::size_t>(
+                frontend::vhdl_predefined_integer_storage_width(
+                    vhdl_standard_));
         }
         if (name == "is_x") {
             return std::size_t { 1 };
@@ -408,11 +417,17 @@ std::optional<std::size_t> Lowerer::infer_width(const Expression& expression) co
             == ExpressionKind::Identifier) {
         const auto* type = visible_type_mark(
             expression.operands.front().text);
+        if (type == nullptr
+            && vhdl_standard_ >= frontend::VhdlStandard::Vhdl2019) {
+            type = object_type(expression.operands.front().text);
+        }
         if (type != nullptr
             && !type->enumeration_literals.empty()) {
             if (expression.text == "'length"
                 || expression.text == "'pos") {
-                return std::size_t { 32 };
+                return static_cast<std::size_t>(
+                    frontend::vhdl_predefined_integer_storage_width(
+                        vhdl_standard_));
             }
             if (expression.text == "'ascending") {
                 return std::size_t { 1 };
@@ -442,7 +457,9 @@ std::optional<std::size_t> Lowerer::infer_width(const Expression& expression) co
             || expression.text == "'low"
             || expression.text == "'high"
             || expression.text == "'length")) {
-        return std::size_t { 32 };
+        return static_cast<std::size_t>(
+            frontend::vhdl_predefined_integer_storage_width(
+                vhdl_standard_));
     }
     if (expression.kind == ExpressionKind::Call
         && language_ == frontend::Language::Vhdl2008
@@ -700,6 +717,10 @@ std::optional<std::size_t> Lowerer::select_offset(
     case ExpressionKind::DefaultChoice:
     case ExpressionKind::Invalid:
         return false;
+    case ExpressionKind::Conditional:
+        return expression.operands.size() == 3U
+            && is_signed_expression(expression.operands[1])
+            && is_signed_expression(expression.operands[2]);
     case ExpressionKind::Index:
         return false;
     case ExpressionKind::Slice:
@@ -820,6 +841,10 @@ std::optional<std::size_t> Lowerer::select_offset(
                 == ExpressionKind::Identifier) {
             const auto* type = visible_type_mark(
                 expression.operands.front().text);
+            if (type == nullptr
+                && vhdl_standard_ >= frontend::VhdlStandard::Vhdl2019) {
+                type = object_type(expression.operands.front().text);
+            }
             if (type != nullptr) {
                 if (!type->enumeration_literals.empty()) {
                     return expression.text == "'pos"
@@ -1139,6 +1164,10 @@ std::optional<std::size_t> Lowerer::select_offset(
                 == ExpressionKind::Identifier) {
             const auto* type = visible_type_mark(
                 expression.operands.front().text);
+            if (type == nullptr
+                && vhdl_standard_ >= frontend::VhdlStandard::Vhdl2019) {
+                type = object_type(expression.operands.front().text);
+            }
             if (type != nullptr) {
                 if (!type->enumeration_literals.empty()) {
                     return expression.text == "'pos"
@@ -1178,6 +1207,10 @@ std::optional<std::size_t> Lowerer::select_offset(
     case ExpressionKind::DefaultChoice:
     case ExpressionKind::Invalid:
         return false;
+    case ExpressionKind::Conditional:
+        return expression.operands.size() == 3U
+            && is_integer_expression(expression.operands[1])
+            && is_integer_expression(expression.operands[2]);
     }
     return false;
 }
@@ -1900,9 +1933,17 @@ void Lowerer::initialize_variables(
             declaration_registers_.emplace(key, register_id);
             auto debug_name = scoped_local_name(variable.name);
             if (!debug_local_names_.emplace(debug_name).second) {
-                debug_name += "@"
-                    + std::to_string(variable.span.begin.line)
-                    + ":" + std::to_string(variable.span.begin.column);
+                if (active_function_) {
+                    debug_name += "@callable-"
+                        + std::to_string(
+                            function_frames_[*active_function_]
+                                .invocation_identity);
+                } else {
+                    debug_name += "@"
+                        + std::to_string(variable.span.begin.line)
+                        + ":"
+                        + std::to_string(variable.span.begin.column);
+                }
                 debug_local_names_.emplace(debug_name);
             }
             process_.debug_locals.push_back(DebugLocal {

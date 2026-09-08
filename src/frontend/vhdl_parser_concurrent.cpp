@@ -401,6 +401,12 @@ bool VhdlParser::parse_vhdl_generate_declarations(
           body.variables, previous());
       continue;
     }
+    if (match_keyword("view", true)) {
+      parsed = true;
+      parse_vhdl_mode_view_declaration(
+          body.type_aliases, previous(), true);
+      continue;
+    }
     if (match_keyword("type", true)) {
       parsed = true;
       DesignUnit declarations;
@@ -426,7 +432,7 @@ bool VhdlParser::parse_vhdl_generate_declarations(
     if (match_keyword("alias", true)) {
       parsed = true;
       parse_vhdl_object_alias(
-          body.signal_aliases, previous());
+          body.type_aliases, body.signal_aliases, previous());
       continue;
     }
     if (keyword("pure", 0, true)

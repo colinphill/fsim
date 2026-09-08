@@ -47,7 +47,7 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "3d99c5c8f1335e1de7a3cf87a883e2cfbe151bf7f7ba55128b6e7efabf5d62e2")
+  "238084297c9ba6cdc04487c9ef07e86d98d183960495cd9dd2e03a8d0c8a3737")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "design/library contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
@@ -89,7 +89,7 @@ fsim_require_design_library_tokens("${FSIM_DESIGN_HEADER}"
   "Producer paths are deliberately")
 fsim_require_design_library_tokens("${FSIM_LIBRARY_HEADER}"
   "kFormatVersion = 5"
-  "kPortableSchemaVersion = 10"
+  "kPortableSchemaVersion = 11"
   "Empty when an exporter intentionally omits source text"
   "enough producer identity to make admission an exact"
   "Opens only fsim-library.toml")

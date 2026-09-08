@@ -116,6 +116,15 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
     const std::size_t expected_width,
     const frontend::Type* expected_type)
 {
+    const bool vhdl_conditional =
+        expression.kind == ExpressionKind::Conditional
+        || (expression.kind == ExpressionKind::Call
+            && expression.text == "?:");
+    if (language_ == frontend::Language::Vhdl2008
+        && vhdl_conditional) {
+        return ExpressionAttempt { lower_vhdl_conditional_expression(
+            expression, expected_width, expected_type) };
+    }
     if (auto floating = lower_vhdl_float_function_expression(
             expression, expected_width, expected_type);
         floating.handled) {

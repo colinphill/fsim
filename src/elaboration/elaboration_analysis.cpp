@@ -416,6 +416,16 @@ void collect_qualified_identifiers(
         }
     }
     if (type.vhdl_protected) {
+        for (const auto& generic :
+             type.vhdl_protected->generic_parameters) {
+            collect_qualified_identifiers(generic.type, identifiers);
+            if (generic.default_type) {
+                collect_qualified_identifiers(*generic.default_type, identifiers);
+            }
+            if (generic.default_value.valid()) {
+                collect_qualified_identifiers(generic.default_value, identifiers);
+            }
+        }
         for (const auto& variable : type.vhdl_protected->variables) {
             collect_qualified_identifiers(variable.type, identifiers);
         }
@@ -430,6 +440,12 @@ void collect_qualified_identifiers(
             for (const auto& argument : procedure.arguments) {
                 collect_qualified_identifiers(argument.type, identifiers);
             }
+        }
+    }
+    if (type.vhdl_unspecified) {
+        for (const auto& component :
+             type.vhdl_unspecified->component_types) {
+            collect_qualified_identifiers(component, identifiers);
         }
     }
     if (type.systemverilog_container) {
@@ -1458,6 +1474,13 @@ void append_generated_body(
               }
           }
           if (type.vhdl_protected) {
+              for (auto& generic :
+                   type.vhdl_protected->generic_parameters) {
+                  self(self, generic.type);
+                  if (generic.default_type) {
+                      self(self, *generic.default_type);
+                  }
+              }
               for (auto& variable : type.vhdl_protected->variables) {
                   self(self, variable.type);
               }
@@ -1471,6 +1494,12 @@ void append_generated_body(
                   for (auto& argument : procedure.arguments) {
                       self(self, argument.type);
                   }
+              }
+          }
+          if (type.vhdl_unspecified) {
+              for (auto& component :
+                   type.vhdl_unspecified->component_types) {
+                  self(self, component);
               }
           }
           if (type.systemverilog_container

@@ -101,6 +101,7 @@ cmake/CheckVerilogClosureAudit.cmake
 cmake/CheckVerilogDocumentation.cmake
 cmake/CheckVerilogGapInventory.cmake
 cmake/CheckVerilogSystemVerilogStandardModeInventory.cmake
+cmake/CheckVhdl2019Inventory.cmake
 cmake/CheckVhdlPslClosureAudit.cmake
 cmake/CheckVhdlPslDocumentation.cmake
 cmake/CheckVhdlPslGapInventory.cmake
@@ -637,6 +638,10 @@ src/app/application_vhdl_analysis.cpp
 src/app/application_vhdl_debug.cpp
 src/app/application_vhdl_executable_hir.cpp
 src/app/application_vhdl_hir.cpp
+src/app/application_vhdl_hir_callables.tpp
+src/app/application_vhdl_hir_statements.tpp
+src/app/application_vhdl_hir_types.tpp
+src/app/application_vhdl_mode_view.cpp
 src/app/application_vhdl_psl.cpp
 src/app/application_vpi.cpp
 src/app/tcl.cpp
@@ -877,6 +882,8 @@ src/frontend/verilog_parser_udp.cpp
 src/frontend/verilog_parser_units.cpp
 src/frontend/verilog_preprocessor.cpp
 src/frontend/verilog_udp.cpp
+src/frontend/vhdl_conditional_analysis.cpp
+src/frontend/vhdl_conditional_analysis_internal.hpp
 src/frontend/vhdl_parser.cpp
 src/frontend/vhdl_parser_components.cpp
 src/frontend/vhdl_parser_concurrent.cpp
@@ -1267,6 +1274,7 @@ tests/app/uvm_phase_tlm_sequence_probe.hpp
 tests/app/uvm_process_limits.cpp
 tests/app/uvm_process_limits.hpp
 tests/app/vcd_control_application_test.cpp
+tests/app/vhdl_2019_integer_application_test.cpp
 tests/app/vhdl_advanced_type_application_test.cpp
 tests/app/vhdl_analysis_order_application_test.cpp
 tests/app/vhdl_array_application_test.cpp
@@ -1446,6 +1454,7 @@ tests/feature_matrix/verilog_systemverilog_compatibility_corpus.tsv
 tests/feature_matrix/verilog_systemverilog_compatibility_inventory.tsv
 tests/feature_matrix/verilog_systemverilog_revision_corpus.tsv
 tests/feature_matrix/verilog_systemverilog_standard_mode_inventory.tsv
+tests/feature_matrix/vhdl_2019_inventory.tsv
 tests/feature_matrix/vhdl_psl_gap_inventory.tsv
 tests/feature_matrix/vhdl_psl_release_closure.tsv
 tests/feature_matrix/vhdl_revision_corpus.tsv

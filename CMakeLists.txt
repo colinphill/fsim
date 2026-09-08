@@ -514,6 +514,7 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_units.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/systemverilog_scalar_folding.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_udp.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_conditional_analysis.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_concurrent.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_components.cpp"
@@ -1209,6 +1210,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_systemverilog_hir.cpp
       src/app/application_systemverilog_executable_hir.cpp
       src/app/application_vhdl_hir.cpp
+      src/app/application_vhdl_mode_view.cpp
   src/app/application_vhdl_psl.cpp
   src/app/application_vhdl_debug.cpp
       src/app/application_vpi.cpp

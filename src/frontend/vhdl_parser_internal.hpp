@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -30,6 +31,13 @@ simple_vhdl_integer_constant(const Expression &expression) {
   if (expression.kind == ExpressionKind::Unary &&
       expression.operands.size() == 1 &&
       (expression.text == "+" || expression.text == "-")) {
+    if (expression.text == "-" &&
+        expression.operands.front().kind == ExpressionKind::IntegerLiteral) {
+      const auto magnitude = decimal_u64(expression.operands.front().text);
+      if (magnitude && *magnitude == (std::uint64_t{1} << 63U)) {
+        return std::numeric_limits<std::int64_t>::min();
+      }
+    }
     const auto magnitude = simple_vhdl_integer_constant(expression.operands.front());
     if (!magnitude) {
       return std::nullopt;
@@ -164,8 +172,18 @@ private:
 
   void parse_vhdl_ports(DesignUnit &unit);
 
+  struct ParsedVhdlModeViewIndication {
+    Type type;
+    VhdlModeViewIndication indication;
+  };
+
+  ParsedVhdlModeViewIndication
+  parse_vhdl_mode_view_indication(const Token &start);
+
   Type parse_vhdl_type(const bool allow_integer = false,
                        const bool /*runtime_base_integer_only*/ = false);
+
+  Type parse_vhdl_unspecified_type(const Token &start);
 
   void parse_vhdl_end(std::string_view expected_kind);
 
@@ -173,6 +191,15 @@ private:
 
   void parse_type_declaration(DesignUnit &unit, const Token &start,
                               bool nested_scope = false);
+
+  void parse_vhdl_mode_view_declaration(
+      std::vector<TypeAliasDeclaration> &declarations,
+      const Token &start,
+      bool nested_scope = false);
+
+  std::shared_ptr<VhdlProtectedInfo>
+  parse_vhdl_protected_type(const Token &start,
+                            std::string_view canonical_name, bool body);
 
   void parse_vhdl_attribute_declaration(DesignUnit &unit, const Token &start);
 
@@ -192,8 +219,10 @@ private:
   void parse_signal_declaration(
       std::vector<SignalDeclaration> &signals,
       const std::vector<ParameterDeclaration> *constants = nullptr);
-  void parse_vhdl_object_alias(std::vector<SignalAliasDeclaration> &aliases,
-                               const Token &start);
+  void parse_vhdl_object_alias(
+      std::vector<TypeAliasDeclaration> &type_aliases,
+      std::vector<SignalAliasDeclaration> &aliases,
+      const Token &start);
   void parse_vhdl_shared_variable(DesignUnit &unit, const Token &start);
   void parse_vhdl_file_declaration(std::vector<VariableDeclaration> &files,
                                    const Token &start);
@@ -258,6 +287,8 @@ private:
   std::optional<Statement>
   parse_sequential_statement(const std::optional<Token> &opening_label);
 
+  void parse_sequential_block_declarations(Statement &statement);
+
   std::optional<Statement> parse_vhdl_procedure_call();
 
   Statement parse_vhdl_assertion(const Token &start);
@@ -313,11 +344,13 @@ private:
 
   std::size_t sequential_loop_depth_{};
   std::unordered_set<std::string> vhdl_named_types_;
+  std::unordered_map<std::string, TypeDeclarationKind> vhdl_named_type_kinds_;
   std::vector<std::string> sequential_loop_labels_;
   std::vector<std::string> sequential_loop_labels_seen_;
   bool numeric_bit_context_{};
   bool in_vhdl_function_{};
   bool in_vhdl_procedure_{};
+  bool vhdl_profile_compatible_{true};
   VhdlStandard vhdl_standard_ { VhdlStandard::Vhdl2008 };
 };
 

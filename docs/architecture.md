@@ -208,7 +208,7 @@ and do not become scalar predicates accidentally. A PSL monitor may observe a
 signal driven by the existing VITAL path-delay runtime on a later clock sample,
 preserving the same delta ordering as every other signal consumer. Portable
 library units retain the frontend PSL declaration/directive token and source-
-span ownership through owning-unit schema 17. Standalone designs additionally
+span ownership through owning-unit schema 27. Standalone designs additionally
 carry a checksummed `FSIMVHIR` payload containing the complete owning VHDL HIR,
 including analyzed PSL clocks, declarations, temporal operators, directives,
 and source IDs. Loading validates every retained semantic ID and enum before
@@ -242,7 +242,7 @@ state without publishing native addresses; released, stale, and foreign-
 simulation handles remain distinguishable.
 
 The VHDL/PSL artifact boundary is source-free and replayable. `.fsimobj` and
-relocated `.fsimlib` inputs rebuild the same semantic HIR from schema-17 owning
+relocated `.fsimlib` inputs rebuild the same semantic HIR from schema-27 owning
 units, while `.fsimdesign` restores the HIR directly beside semantic, DesignIR,
 and runtime payloads. Compiler-supplied IEEE package contents remain part of
 the standard-source digest set, and the explicit standard-library identity is

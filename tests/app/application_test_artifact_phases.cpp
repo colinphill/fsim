@@ -25,14 +25,14 @@ namespace fsim::test {
 void ApplicationTestFixture::test_artifact_phase_semantics()
 {
     install_governed_process_address_space_ceiling();
-    static_assert(app::kRuntimeStateSchema == 50);
+    static_assert(app::kRuntimeStateSchema == 51);
     static_assert(app::kSemanticStateSchema == 4);
     static_assert(app::kDesignIrStateSchema == 4);
     static_assert(app::kClassStateSchema == 11);
     static_assert(app::kSystemVerilogConstraintHirStateSchema == 7);
     static_assert(app::kSystemVerilogCoverageStateSchema == 5);
     static_assert(app::kSystemVerilogUvmStateSchema == 3);
-    static_assert(app::kVhdlHirStateSchema == 2);
+    static_assert(app::kVhdlHirStateSchema == 3);
     const auto copy_artifact_tree = [](
                                         const std::filesystem::path& source_root,
                                         const std::filesystem::path& destination) {
@@ -53,7 +53,12 @@ void ApplicationTestFixture::test_artifact_phase_semantics()
     const auto vhdl_source = directory / "artifact_phase.vhd";
     const auto sv_object = directory / "artifact-sv.fsimobj";
     const auto vhdl_object = directory / "artifact-vhdl.fsimobj";
+    const auto vhdl_2019_object = directory / "artifact-vhdl-2019.fsimobj";
     const auto design = directory / "artifact-mixed.fsimdesign";
+    const auto vhdl_2008_design
+        = directory / "artifact-vhdl-2008.fsimdesign";
+    const auto vhdl_2019_design
+        = directory / "artifact-vhdl-2019.fsimdesign";
     const auto trace = directory / "artifact-mixed.vcd";
     {
         std::ofstream output(sv_source);
@@ -298,7 +303,13 @@ end architecture;
     const auto vhdl_source_text = support::path_to_utf8(vhdl_source);
     const auto sv_object_text = support::path_to_utf8(sv_object);
     const auto vhdl_object_text = support::path_to_utf8(vhdl_object);
+    const auto vhdl_2019_object_text
+        = support::path_to_utf8(vhdl_2019_object);
     const auto design_text = support::path_to_utf8(design);
+    const auto vhdl_2008_design_text
+        = support::path_to_utf8(vhdl_2008_design);
+    const auto vhdl_2019_design_text
+        = support::path_to_utf8(vhdl_2019_design);
     const auto trace_text = support::path_to_utf8(trace);
     auto services = app::make_cli_services();
     std::ostringstream output;
@@ -410,9 +421,36 @@ end architecture;
             return diagnostic.code == "FSIM-ART-0001"
                 && diagnostic.message
                 == "unsupported .fsimobj identity: found format 8 and "
-                   "portable-unit schema 10; required format 7 and "
-                   "portable-unit schema 10; regenerate .fsimobj with "
+                   "portable-unit schema 11; required format 7 and "
+                   "portable-unit schema 11; regenerate .fsimobj with "
                    "this fsim build";
+        }));
+    output.str({ });
+    error.str({ });
+    const std::vector<const char*> vhdl_2019_compile {
+        "fsim", "compile", "--lang", "vhdl", "--standard", "19",
+        "--library", "work", "--output", vhdl_2019_object_text.c_str(),
+        vhdl_source_text.c_str()
+    };
+    const auto vhdl_2019_result = cli::run(
+        static_cast<int>(vhdl_2019_compile.size()),
+        vhdl_2019_compile.data(), services, output, error);
+    if (vhdl_2019_result != 0) {
+        std::cerr << error.str();
+    }
+    assert(vhdl_2019_result == 0);
+    assert(error.str().empty());
+    diagnostic::Engine vhdl_2019_metadata_diagnostics;
+    const auto vhdl_2019_metadata = artifact::load_object_metadata(
+        vhdl_2019_object, vhdl_2019_metadata_diagnostics);
+    assert(vhdl_2019_metadata
+        && !vhdl_2019_metadata_diagnostics.has_error());
+    assert(vhdl_2019_metadata->standard == "2019");
+    assert(vhdl_2019_metadata->compilation_digest
+        != vhdl_metadata->compilation_digest);
+    assert(std::ranges::all_of(
+        vhdl_2019_metadata->units, [](const auto& unit) {
+            return unit.standard == "2019";
         }));
     output.str({ });
     error.str({ });
@@ -561,6 +599,43 @@ end architecture;
         })->package_dependencies.front().revision += "-changed";
     assert(artifact::compute_design_digest(changed_unit_revision)
         != design_digest);
+    const auto elaborate_vhdl_identity = [&](const char* object_path,
+                                              const char* output_path) {
+        const std::array<const char*, 8> arguments {
+            "fsim", "elaborate", "--object", object_path, "--top",
+            "root=vhdl:work.phase_watch(rtl)", "--output", output_path
+        };
+        output.str({ });
+        error.str({ });
+        const auto result = cli::run(
+            static_cast<int>(arguments.size()), arguments.data(), services,
+            output, error);
+        if (result != 0) {
+            std::cerr << error.str();
+        }
+        assert(result == 0);
+        assert(error.str().empty());
+    };
+    elaborate_vhdl_identity(
+        vhdl_object_text.c_str(), vhdl_2008_design_text.c_str());
+    elaborate_vhdl_identity(
+        vhdl_2019_object_text.c_str(), vhdl_2019_design_text.c_str());
+    diagnostic::Engine vhdl_identity_diagnostics;
+    const auto vhdl_2008_identity = artifact::load_design_metadata(
+        vhdl_2008_design, vhdl_identity_diagnostics);
+    const auto vhdl_2019_identity = artifact::load_design_metadata(
+        vhdl_2019_design, vhdl_identity_diagnostics);
+    assert(vhdl_2008_identity && vhdl_2019_identity
+        && !vhdl_identity_diagnostics.has_error());
+    assert(vhdl_2008_identity->objects.size() == 1U
+        && vhdl_2019_identity->objects.size() == 1U);
+    assert(vhdl_2008_identity->objects.front().standard == "2008"
+        && vhdl_2019_identity->objects.front().standard == "2019");
+    assert(vhdl_2008_identity->design_digest
+        != vhdl_2019_identity->design_digest);
+    assert(vhdl_2008_identity->cache_key != vhdl_2019_identity->cache_key);
+    assert(vhdl_2008_identity->specialization_cache_keys
+        != vhdl_2019_identity->specialization_cache_keys);
     auto changed_design_dependency = *design_metadata;
     std::ranges::find_if(
         changed_design_dependency.objects,
@@ -684,6 +759,179 @@ end architecture;
         *restored_vhdl_hir, coverage_checkpoint->semantics,
         vhdl_hir_codec_diagnostics);
     assert(repeated_vhdl_hir == vhdl_hir_bytes);
+
+    auto vhdl_2019_hir = *restored_vhdl_hir;
+    assert(
+        vhdl_2019_hir.declarations().size() >= 2U
+        && !vhdl_2019_hir.types().empty()
+        && !vhdl_2019_hir.expressions().empty()
+        && !vhdl_2019_hir.statements().empty());
+    auto& vhdl_2019_declaration
+        = vhdl_2019_hir.mutable_declarations().front();
+    vhdl_2019_declaration.form
+        = semantic::vhdl::DeclarationForm::mode_view;
+    vhdl_2019_declaration.alias_target = semantic::vhdl::Name {
+        "observe", "observe", { }, std::nullopt, { } };
+    vhdl_2019_declaration.mode_view.emplace();
+    vhdl_2019_declaration.mode_view->record_subtype.integer_storage_width
+        = 64U;
+    vhdl_2019_declaration.mode_view->composition
+        = semantic::vhdl::ModeViewCompositionState::complete;
+    semantic::vhdl::ModeViewElement mode_view_element;
+    mode_view_element.element.spelling = "request";
+    mode_view_element.element.canonical = "request";
+    mode_view_element.form
+        = semantic::vhdl::ModeViewElementForm::direction;
+    mode_view_element.direction = semantic::vhdl::Direction::input;
+    mode_view_element.subtype.emplace();
+    mode_view_element.subtype->integer_storage_width = 64U;
+    vhdl_2019_declaration.mode_view->elements.push_back(
+        std::move(mode_view_element));
+    vhdl_2019_declaration.interface_view.emplace();
+    vhdl_2019_declaration.interface_view->view.spelling = "bus_view";
+    vhdl_2019_declaration.interface_view->view.canonical = "bus_view";
+    vhdl_2019_declaration.interface_view->explicit_subtype = true;
+    vhdl_2019_declaration.interface_view->composition
+        = semantic::vhdl::ModeViewCompositionState::complete;
+    auto& vhdl_2019_callable
+        = vhdl_2019_hir.mutable_declarations()[1];
+    vhdl_2019_callable.form = semantic::vhdl::DeclarationForm::function;
+    vhdl_2019_callable.callable.emplace();
+    vhdl_2019_callable.callable->function = true;
+    vhdl_2019_callable.callable->return_identifier
+        = vhdl_2019_declaration.id;
+
+    auto& vhdl_2019_type = vhdl_2019_hir.mutable_types().front();
+    vhdl_2019_type.base.predefined_attribute
+        = semantic::vhdl::PredefinedAttribute::index;
+    vhdl_2019_type.base.predefined_attribute_dimension
+        = vhdl_2019_hir.expressions().front().id;
+    vhdl_2019_type.base.integer_storage_width = 64U;
+    vhdl_2019_type.base.unspecified_class
+        = semantic::vhdl::UnspecifiedTypeClass::array;
+    vhdl_2019_type.base.unspecified_component_classes = {
+        semantic::vhdl::UnspecifiedTypeClass::integer };
+    vhdl_2019_type.base.unspecified_component_type_marks = { "integer" };
+    vhdl_2019_type.base.unspecified_array_index_count = 1U;
+    vhdl_2019_type.base.unspecified_inference_identity
+        = "vhdl-2019-round-trip:T";
+    vhdl_2019_type.deallocate_releases_storage = false;
+    vhdl_2019_type.reclaim_when_unreachable = true;
+    vhdl_2019_type.attributes.push_back(
+        semantic::vhdl::PredefinedAttribute::reflect);
+
+    auto& vhdl_2019_expression
+        = vhdl_2019_hir.mutable_expressions().front();
+    vhdl_2019_expression.kind
+        = semantic::vhdl::ExpressionKind::conditional;
+    vhdl_2019_expression.inferred_type_identities = {
+        "vhdl-2019-round-trip:T=integer" };
+    vhdl_2019_expression.unspecified_type_inference_unique = true;
+
+    auto& vhdl_2019_statement
+        = vhdl_2019_hir.mutable_statements().front();
+    vhdl_2019_statement.kind = semantic::vhdl::StatementKind::block;
+    vhdl_2019_statement.declarations = {
+        vhdl_2019_declaration.id };
+    vhdl_2019_statement.nested_scope = vhdl_2019_declaration.scope;
+
+    diagnostic::Engine vhdl_2019_hir_diagnostics;
+    const auto vhdl_2019_hir_bytes = app::serialize_vhdl_hir_state(
+        vhdl_2019_hir, coverage_checkpoint->semantics,
+        vhdl_2019_hir_diagnostics);
+    assert(vhdl_2019_hir_bytes && !vhdl_2019_hir_diagnostics.has_error());
+    auto restored_vhdl_2019_hir = app::deserialize_vhdl_hir_state(
+        *vhdl_2019_hir_bytes, "vhdl-2019-hir.bin",
+        coverage_checkpoint->semantics, vhdl_2019_hir_diagnostics);
+    assert(
+        restored_vhdl_2019_hir
+        && !vhdl_2019_hir_diagnostics.has_error()
+        && restored_vhdl_2019_hir->declarations().front().mode_view
+        && restored_vhdl_2019_hir->declarations().front()
+                .mode_view->elements.front().direction
+            == semantic::vhdl::Direction::input
+        && restored_vhdl_2019_hir->declarations().front().interface_view
+        && restored_vhdl_2019_hir->declarations()[1].callable
+        && restored_vhdl_2019_hir->declarations()[1]
+                .callable->return_identifier
+            == restored_vhdl_2019_hir->declarations().front().id
+        && restored_vhdl_2019_hir->types().front()
+                .base.predefined_attribute
+            == semantic::vhdl::PredefinedAttribute::index
+        && restored_vhdl_2019_hir->types().front()
+                .base.integer_storage_width
+            == 64U
+        && restored_vhdl_2019_hir->types().front()
+                .base.unspecified_class
+            == semantic::vhdl::UnspecifiedTypeClass::array
+        && restored_vhdl_2019_hir->types().front()
+                .reclaim_when_unreachable
+        && restored_vhdl_2019_hir->expressions().front().kind
+            == semantic::vhdl::ExpressionKind::conditional
+        && restored_vhdl_2019_hir->expressions().front()
+                .unspecified_type_inference_unique
+        && restored_vhdl_2019_hir->statements().front().kind
+            == semantic::vhdl::StatementKind::block);
+    diagnostic::Engine repeated_vhdl_2019_hir_diagnostics;
+    assert(app::serialize_vhdl_hir_state(
+               *restored_vhdl_2019_hir, coverage_checkpoint->semantics,
+               repeated_vhdl_2019_hir_diagnostics)
+        == vhdl_2019_hir_bytes);
+    auto invalid_vhdl_2019_hir = *restored_vhdl_2019_hir;
+    invalid_vhdl_2019_hir.mutable_declarations().front()
+        .mode_view->composition
+        = static_cast<semantic::vhdl::ModeViewCompositionState>(255);
+    diagnostic::Engine invalid_vhdl_2019_hir_diagnostics;
+    assert(!app::serialize_vhdl_hir_state(
+        invalid_vhdl_2019_hir, coverage_checkpoint->semantics,
+        invalid_vhdl_2019_hir_diagnostics));
+
+    auto vhdl_2019_runtime_state = coverage_checkpoint->design.state();
+    assert(!vhdl_2019_runtime_state.signal_info.empty());
+    elaboration::VhdlModeViewBinding runtime_view;
+    runtime_view.formal = "bus";
+    runtime_view.view = "bus_view";
+    runtime_view.kind = frontend::VhdlModeViewIndicationKind::record;
+    runtime_view.elements.push_back({
+        "request", "request", frontend::PortDirection::Input, { } });
+    vhdl_2019_runtime_state.signal_info.front()
+        .vhdl_mode_view_bindings.push_back(std::move(runtime_view));
+    const auto vhdl_2019_runtime_design
+        = elaboration::ElaboratedDesign::from_state(
+            std::move(vhdl_2019_runtime_state));
+    assert(vhdl_2019_runtime_design);
+    diagnostic::Engine vhdl_2019_runtime_diagnostics;
+    const auto vhdl_2019_runtime_bytes = app::serialize_runtime_state(
+        *vhdl_2019_runtime_design, vhdl_2019_runtime_diagnostics);
+    assert(
+        vhdl_2019_runtime_bytes
+        && !vhdl_2019_runtime_diagnostics.has_error());
+    auto restored_vhdl_2019_runtime = app::deserialize_runtime_state(
+        *vhdl_2019_runtime_bytes, "vhdl-2019-runtime.bin",
+        vhdl_2019_runtime_diagnostics);
+    assert(
+        restored_vhdl_2019_runtime
+        && !vhdl_2019_runtime_diagnostics.has_error()
+        && restored_vhdl_2019_runtime->signals().front()
+                .vhdl_mode_view_bindings.size()
+            == 1U
+        && restored_vhdl_2019_runtime->signals().front()
+                .vhdl_mode_view_bindings.front().elements.front().direction
+            == frontend::PortDirection::Input);
+    auto invalid_vhdl_2019_runtime_state
+        = restored_vhdl_2019_runtime->state();
+    invalid_vhdl_2019_runtime_state.signal_info.front()
+        .vhdl_mode_view_bindings.front().kind
+        = static_cast<frontend::VhdlModeViewIndicationKind>(255);
+    const auto invalid_vhdl_2019_runtime_design
+        = elaboration::ElaboratedDesign::from_state(
+            std::move(invalid_vhdl_2019_runtime_state));
+    assert(invalid_vhdl_2019_runtime_design);
+    diagnostic::Engine invalid_vhdl_2019_runtime_diagnostics;
+    assert(!app::serialize_runtime_state(
+        *invalid_vhdl_2019_runtime_design,
+        invalid_vhdl_2019_runtime_diagnostics));
+
     auto future_vhdl_hir = *vhdl_hir_bytes;
     future_vhdl_hir[8] = static_cast<char>(app::kVhdlHirStateSchema + 1U);
     diagnostic::Engine future_vhdl_hir_diagnostics;

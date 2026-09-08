@@ -92,7 +92,8 @@ begin
   end process;
 end architecture;
 )",
-      fsim::frontend::Language::Vhdl2008);
+      fsim::frontend::Language::Vhdl2008,
+      fsim::frontend::VhdlStandard::Vhdl2019);
   assert(parsed.ok());
   const auto elaborated = fsim::elaboration::elaborate(
       parsed.design, "vhdl:work.attribute_closure(rtl)");
@@ -143,7 +144,8 @@ end architecture;
         + std::string{expression}
         + ";\nend architecture;\n";
     const auto invalid = fsim::frontend::parse_text(
-        filename, source, fsim::frontend::Language::Vhdl2008);
+        filename, source, fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl2019);
     assert(invalid.ok());
     const auto result = fsim::elaboration::elaborate(
         invalid.design, "vhdl:work.invalid(rtl)");
@@ -244,6 +246,54 @@ end architecture;
         != std::string_view::npos;
   }
   assert(checked);
+
+  constexpr std::array older_standards{
+      fsim::frontend::VhdlStandard::Vhdl1987,
+      fsim::frontend::VhdlStandard::Vhdl1993,
+      fsim::frontend::VhdlStandard::Vhdl2000,
+      fsim::frontend::VhdlStandard::Vhdl2002,
+      fsim::frontend::VhdlStandard::Vhdl2008};
+  constexpr std::string_view scalar_length_source = R"(
+entity Legacy_Scalar_Attribute is end entity;
+architecture rtl of Legacy_Scalar_Attribute is
+  subtype Count_T is integer range 0 to 3;
+  signal Result : integer;
+begin
+  Result <= Count_T'length;
+end architecture;
+)";
+  for (const auto standard : older_standards) {
+    const auto legacy = fsim::frontend::parse_text(
+        "vhdl-legacy-scalar-length.vhd", scalar_length_source,
+        fsim::frontend::Language::Vhdl2008, standard);
+    assert(legacy.ok() && legacy.design.vhdl_profile_compatible);
+    const auto rejected = fsim::elaboration::elaborate(
+        legacy.design,
+        "vhdl:work.legacy_scalar_attribute(rtl)");
+    assert(
+        !rejected.ok()
+        && has_diagnostic(rejected, "FSIM-ELAB-VHATTR-011"));
+  }
+
+  const auto recovered = fsim::frontend::parse_text(
+      "vhdl2008-recovered-object-shorthand.vhd", R"(
+entity Recovered is end entity;
+architecture rtl of Recovered is
+  type State_T is (Idle, Busy);
+  signal State : State_T;
+  signal Position : integer;
+begin
+  Position <= State'pos;
+end architecture;
+)", fsim::frontend::Language::Vhdl2008,
+      fsim::frontend::VhdlStandard::Vhdl2008);
+  assert(!recovered.ok() && !recovered.design.vhdl_profile_compatible);
+  const auto recovered_rejected = fsim::elaboration::elaborate(
+      recovered.design, "vhdl:work.recovered(rtl)");
+  assert(
+      !recovered_rejected.ok()
+      && has_diagnostic(
+          recovered_rejected, "FSIM-ELAB-VHPROFILE-001"));
 }
 
 }  // namespace fsim::tests::elaboration

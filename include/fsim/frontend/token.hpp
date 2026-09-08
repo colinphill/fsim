@@ -21,6 +21,7 @@ enum class VhdlStandard {
     Vhdl2000,
     Vhdl2002,
     Vhdl2008,
+    Vhdl2019,
 };
 
 enum class StandardRevision {
@@ -37,6 +38,9 @@ enum class StandardRevision {
     SystemVerilog2009,
     SystemVerilog2012,
     SystemVerilog2017,
+    // Appended to preserve the serialized numeric identities of every
+    // retained v3 standard revision.
+    Vhdl2019,
 };
 
 [[nodiscard]] constexpr std::string_view to_string(
@@ -53,6 +57,8 @@ enum class StandardRevision {
         return "vhdl-2002";
     case StandardRevision::Vhdl2008:
         return "vhdl-2008";
+    case StandardRevision::Vhdl2019:
+        return "vhdl-2019";
     case StandardRevision::Verilog1995:
         return "verilog-1995";
     case StandardRevision::Verilog2001:
@@ -87,6 +93,8 @@ enum class StandardRevision {
         return "2002";
     case StandardRevision::Vhdl2008:
         return "2008";
+    case StandardRevision::Vhdl2019:
+        return "2019";
     case StandardRevision::Verilog1995:
         return "1995";
     case StandardRevision::Verilog2001:
@@ -120,6 +128,8 @@ enum class StandardRevision {
         return "2002";
     case VhdlStandard::Vhdl2008:
         return "2008";
+    case VhdlStandard::Vhdl2019:
+        return "2019";
     }
     return "2008";
 }

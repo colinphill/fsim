@@ -144,9 +144,9 @@ whole bind succeeds. Shutdown precedes unload.
 | Family | Current identity | Top-level content |
 | --- | --- | --- |
 | `fsim.toml` | project schema 3 | user-authored project, source, library, build, run, trace, SDF, SystemC, and code-coverage settings |
-| `.fsimobj` | `FSIMOBJ\0`, format 7, portable schema 10 | canonical metadata, v3 code-coverage identity, optional source payloads, portable owning units |
+| `.fsimobj` | `FSIMOBJ\0`, format 7, portable schema 11 | canonical metadata, v3 code-coverage identity, optional source payloads, portable owning units |
 | `.fsimdesign` | `FSIMDES\0`, format 12, runtime ABI 1 | roots/bindings/provenance, v3 code-coverage identity, and checksummed runtime, semantic, DesignIR, HIR, coverage, UVM, SDF, trace, SystemC, and SCV state |
-| `.fsimlib` | canonical TOML format 5, portable schema 10 | logical-library metadata, optional sources, portable units, optional exact native accelerators |
+| `.fsimlib` | canonical TOML format 5, portable schema 11 | logical-library metadata, optional sources, portable units, optional exact native accelerators |
 | `.fsimscobj` | `FSIMSCO\0`, format 2, runtime ABI 1, SystemC ABI 4 | one C++20 translation unit, dependency identity, and native object |
 | `.fsimscplugin` | format 2, runtime ABI 1, SystemC ABI 4 | ordered object identities, link settings, sorted factory schema, and native shared library |
 | LLVM object cache | `FSIM-OBJECT-CACHE-V1`, key schema `fsim-llvm-native-object-v168` | checksum-framed native object keyed by target, lowering controls, and v3 code-coverage identity; canonical lowercase SHA-256 key; 256 MiB read ceiling |
@@ -162,10 +162,10 @@ model `none`; enabled foundation coverage uses
 `fsim-code-coverage-foundation-v3`. Versioned v2 objects and designs are
 rejected directly; there is no compatibility reader or migration.
 
-The portable owning-unit and class codecs are schema 26; UDP declarations are
-schema 1. The standalone design's current state schemas are runtime 48,
-semantic 3, DesignIR 3, class 10, SystemVerilog constraint HIR 6, coverage 4,
-UVM 2, and VHDL HIR 1. Checkpoint envelopes are schema 1 or 2 according to the
+The portable owning-unit and class codecs are schema 27; UDP declarations are
+schema 1. The standalone design's current state schemas are runtime 51,
+semantic 4, DesignIR 4, class 11, SystemVerilog constraint HIR 7, coverage 5,
+UVM 3, and VHDL HIR 3. Checkpoint envelopes are schema 1 or 2 according to the
 typed checkpoint family. SDF application records use explicit schema 1, 2, or
 4 owners; trace archives use schema 1, and the clean-room FST container carries
 its own fixed v2 container identity. SCV artifact/cache, protocol, transport,
@@ -184,7 +184,7 @@ and [incremental native contract](../tests/feature_matrix/incremental_native_con
 source + selected language profile
   -> .fsimobj
        -> optional source payloads
-       -> schema-26 owning units / schema-1 UDP declarations
+       -> schema-27 owning units / schema-1 UDP declarations
   -> .fsimlib
        -> optional sources + portable units
        -> optional exact LLVM/SystemC native accelerators

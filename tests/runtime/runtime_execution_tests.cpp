@@ -42,6 +42,10 @@ void test_checked_vhdl_integer_operations()
             static_cast<std::uint32_t>(value),
             0);
     };
+    const auto wide_integer = [](const std::int64_t value) {
+        return PackedLogic4::from_aval_bval(
+            64, static_cast<std::uint64_t>(value), 0);
+    };
 
     Interpreter interpreter;
     std::array<SignalId, 4> outputs { };
@@ -49,6 +53,30 @@ void test_checked_vhdl_integer_operations()
         outputs[index] = interpreter.add_signal(
             { "top.integer_" + std::to_string(index), integer(0) });
     }
+
+    Interpreter wide_interpreter;
+    const auto wide_output = wide_interpreter.add_signal(
+        { "top.wide_integer", wide_integer(0) });
+    Process wide_process;
+    wide_process.id = 0;
+    wide_process.name = "checked_wide_integer_success";
+    wide_process.register_count = 4;
+    wide_process.operations = {
+        LoadConstant { 0, wide_integer(INT64_C(4294967296)) },
+        LoadConstant { 1, wide_integer(3) },
+        IntegerBinary { IntegerBinaryOperator::multiply, 2, 0, 1 },
+        IntegerUnary { IntegerUnaryOperator::negate, 3, 2 },
+        IntegerCheck {
+            3, -INT64_C(12884901888), -INT64_C(12884901888) },
+        WriteBlocking { wide_output, 3 },
+        Halt { }
+    };
+    (void)wide_interpreter.add_process(std::move(wide_process));
+    require(
+        wide_interpreter.run().status == RunStatus::completed
+            && wide_interpreter.signal_value(wide_output)
+                == wide_integer(-INT64_C(12884901888)),
+        "checked 64-bit integer arithmetic preserves values beyond 32 bits");
     Process process;
     process.id = 0;
     process.name = "checked_integer_success";
@@ -106,6 +134,19 @@ void test_checked_vhdl_integer_operations()
               0, integer(std::numeric_limits<std::int32_t>::max()) },
             LoadConstant { 1, integer(1) },
             IntegerBinary { IntegerBinaryOperator::add, 2, 0, 1 },
+            Halt { } },
+        "VHDL integer arithmetic overflow");
+    expect_failure(
+        { LoadConstant {
+              0, wide_integer(std::numeric_limits<std::int64_t>::max()) },
+            LoadConstant { 1, wide_integer(1) },
+            IntegerBinary { IntegerBinaryOperator::add, 2, 0, 1 },
+            Halt { } },
+        "VHDL integer arithmetic overflow");
+    expect_failure(
+        { LoadConstant {
+              0, wide_integer(std::numeric_limits<std::int64_t>::min()) },
+            IntegerUnary { IntegerUnaryOperator::absolute, 1, 0 },
             Halt { } },
         "VHDL integer arithmetic overflow");
     expect_failure(

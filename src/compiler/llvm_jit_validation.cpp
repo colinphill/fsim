@@ -1750,8 +1750,8 @@ using namespace runtime::simir;
                     }
                     record_definition(operation.destination, index);
                     record_use(operation.source, index);
-                    constrain_width(operation.destination, 32U, index);
-                    constrain_width(operation.source, 32U, index);
+                    unify_registers(
+                        operation.destination, operation.source, index);
                 } else if constexpr (std::is_same_v<OperationType, IntegerBinary>) {
                     switch (operation.operation) {
                     case IntegerBinaryOperator::add:
@@ -1770,9 +1770,9 @@ using namespace runtime::simir;
                     record_definition(operation.destination, index);
                     record_use(operation.lhs, index);
                     record_use(operation.rhs, index);
-                    constrain_width(operation.destination, 32U, index);
-                    constrain_width(operation.lhs, 32U, index);
-                    constrain_width(operation.rhs, 32U, index);
+                    unify_registers(operation.lhs, operation.rhs, index);
+                    unify_registers(
+                        operation.destination, operation.lhs, index);
                 } else if constexpr (std::is_same_v<OperationType, IntegerCheck>) {
                     if (operation.lower > operation.upper) {
                         reject(
@@ -1780,7 +1780,6 @@ using namespace runtime::simir;
                             "IntegerCheck has an inverted range");
                     }
                     record_use(operation.source, index);
-                    constrain_width(operation.source, 32U, index);
                 } else if constexpr (std::is_same_v<OperationType, ConditionalSelect>) {
                     record_definition(operation.destination, index);
                     record_use(operation.condition, index);
@@ -2115,6 +2114,36 @@ using namespace runtime::simir;
         }
     }
     for (std::size_t index = 0; index < process.operations.size(); ++index) {
+        visit_operation(
+            [&](const auto& operation) {
+                using OperationType = std::decay_t<decltype(operation)>;
+                if constexpr (std::is_same_v<OperationType, IntegerUnary>) {
+                    const auto width =
+                        result.register_widths[operation.source];
+                    if (width != 32U && width != 64U) {
+                        reject(
+                            process, index,
+                            "IntegerUnary requires a 32- or 64-bit operand");
+                    }
+                } else if constexpr (
+                    std::is_same_v<OperationType, IntegerBinary>) {
+                    const auto width = result.register_widths[operation.lhs];
+                    if (width != 32U && width != 64U) {
+                        reject(
+                            process, index,
+                            "IntegerBinary requires 32- or 64-bit operands");
+                    }
+                } else if constexpr (
+                    std::is_same_v<OperationType, IntegerCheck>) {
+                    const auto width = result.register_widths[operation.source];
+                    if (width != 32U && width != 64U) {
+                        reject(
+                            process, index,
+                            "IntegerCheck requires a 32- or 64-bit operand");
+                    }
+                }
+            },
+            process.operations[index]);
         const auto wide_register = [&](const RegisterId id) {
             return result.register_widths[id] > 64;
         };

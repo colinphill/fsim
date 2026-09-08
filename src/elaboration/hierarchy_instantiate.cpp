@@ -44,6 +44,150 @@ namespace {
     }
 
     template <typename SignalMap>
+    void adapt_vhdl_unspecified_port_types(
+        DesignUnit& unit,
+        const frontend::Instance& instance,
+        const SignalMap& parent_signals,
+        const std::span<const SignalInfo> signal_info,
+        std::vector<std::pair<std::string, std::string>>& identities,
+        std::vector<Diagnostic>& diagnostics)
+    {
+        if (unit.language != frontend::Language::Vhdl2008
+            || std::ranges::none_of(
+                unit.ports, [](const auto& port) {
+                    return port.type.vhdl_unspecified != nullptr;
+                })) {
+            return;
+        }
+        const auto actual_type = [](const SignalInfo& info) {
+            frontend::Type type;
+            type.domain = info.source_domain;
+            type.spelling = info.type_name;
+            type.is_signed = info.is_signed;
+            type.packed_range = info.packed_range;
+            if (info.vhdl_array) {
+                type.vhdl_array = *info.vhdl_array;
+            }
+            if (info.vhdl_access) {
+                type.vhdl_access = *info.vhdl_access;
+            }
+            if (info.vhdl_physical) {
+                type.vhdl_physical = *info.vhdl_physical;
+            }
+            type.packed_members = info.packed_members;
+            type.integer_range = info.integer_range;
+            if (info.source_domain == frontend::ValueDomain::Integer
+                && (info.width == 32U || info.width == 64U)) {
+                type.vhdl_integer_storage_width =
+                    static_cast<std::uint8_t>(info.width);
+            }
+            type.nominal_type = info.nominal_type;
+            type.enumeration_literals = info.enumeration_literals;
+            type.enumeration_range = info.enumeration_range;
+            return type;
+        };
+        struct Inference {
+            frontend::Type type;
+            std::string identity;
+        };
+        std::unordered_map<std::string, Inference> inferred;
+        std::vector<bool> connected(unit.ports.size());
+        std::size_t positional = 0;
+        for (const auto& connection : instance.connections) {
+            std::size_t port_index = unit.ports.size();
+            if (connection.port) {
+                const auto found = std::ranges::find_if(
+                    unit.ports, [&](const auto& port) {
+                        return port.name == *connection.port;
+                    });
+                if (found != unit.ports.end()) {
+                    port_index = static_cast<std::size_t>(
+                        std::distance(unit.ports.begin(), found));
+                }
+            } else {
+                while (positional < unit.ports.size()
+                    && connected[positional]) {
+                    ++positional;
+                }
+                port_index = positional++;
+            }
+            if (port_index >= unit.ports.size()
+                || connected[port_index]) {
+                continue;
+            }
+            connected[port_index] = true;
+            const auto& formal = unit.ports[port_index];
+            if (!formal.type.vhdl_unspecified) {
+                continue;
+            }
+            if (connection.kind != frontend::PortActualKind::Expression
+                || connection.value.kind
+                    != frontend::ExpressionKind::Identifier) {
+                diagnostics.push_back({ "FSIM-ELAB-VHUNSPEC-001",
+                    "port association for unspecified formal '"
+                        + formal.name
+                        + "' does not determine one concrete actual subtype",
+                    connection.span });
+                continue;
+            }
+            const auto actual = parent_signals.find(connection.value.text);
+            if (actual == parent_signals.end()
+                || actual->second >= signal_info.size()) {
+                continue;
+            }
+            auto type = actual_type(signal_info[actual->second]);
+            if (!frontend::vhdl_unspecified_type_accepts(
+                    formal.type, type)) {
+                diagnostics.push_back({ "FSIM-ELAB-VHUNSPEC-001",
+                    "actual subtype for port '" + formal.name
+                        + "' does not satisfy its VHDL-2019 unspecified "
+                          "type category",
+                    connection.span });
+                continue;
+            }
+            const auto& profile = *formal.type.vhdl_unspecified;
+            const auto key = profile.inference_identity.empty()
+                ? formal.name : profile.inference_identity;
+            auto identity = frontend::vhdl_inferred_type_identity(type);
+            const auto [existing, inserted] = inferred.emplace(
+                key, Inference { type, identity });
+            if (!inserted && existing->second.identity != identity) {
+                diagnostics.push_back({ "FSIM-ELAB-VHUNSPEC-001",
+                    "port associations sharing one unspecified formal type "
+                    "infer conflicting concrete subtypes",
+                    connection.span });
+            }
+        }
+        for (auto& port : unit.ports) {
+            if (!port.type.vhdl_unspecified) {
+                continue;
+            }
+            const auto& profile = *port.type.vhdl_unspecified;
+            const auto key = profile.inference_identity.empty()
+                ? port.name : profile.inference_identity;
+            const auto actual = inferred.find(key);
+            if (actual == inferred.end()) {
+                diagnostics.push_back({ "FSIM-ELAB-VHUNSPEC-001",
+                    "port '" + port.name
+                        + "' does not determine one unique legal actual type "
+                          "for its unspecified formal",
+                    port.span });
+                continue;
+            }
+            port.type = actual->second.type;
+            const auto identity_name =
+                "__vhdl_unspecified_port_type." + key;
+            if (std::ranges::none_of(
+                    identities, [&](const auto& item) {
+                        return item.first == identity_name;
+                    })) {
+                identities.emplace_back(
+                    identity_name, actual->second.identity);
+            }
+        }
+    }
+
+    template <typename SignalMap>
     void adapt_vhdl_array_port_shapes(
         DesignUnit& unit,
         const frontend::Instance& instance,
@@ -767,22 +911,12 @@ void HierarchyBuilder::instantiate(
         type.integer_range = range;
         return type;
     };
-    static const auto builtin_integer = builtin_scalar(
-        frontend::ValueDomain::Integer,
-        "integer",
-        frontend::IntegerRange {
-            std::numeric_limits<std::int32_t>::min(),
-            std::numeric_limits<std::int32_t>::max(), false });
-    static const auto builtin_natural = builtin_scalar(
-        frontend::ValueDomain::Integer,
-        "natural",
-        frontend::IntegerRange {
-            0, std::numeric_limits<std::int32_t>::max(), false });
-    static const auto builtin_positive = builtin_scalar(
-        frontend::ValueDomain::Integer,
-        "positive",
-        frontend::IntegerRange {
-            1, std::numeric_limits<std::int32_t>::max(), false });
+    const auto builtin_integer = frontend::vhdl_predefined_integer_type(
+        unit.vhdl_standard, "integer");
+    const auto builtin_natural = frontend::vhdl_predefined_integer_type(
+        unit.vhdl_standard, "natural");
+    const auto builtin_positive = frontend::vhdl_predefined_integer_type(
+        unit.vhdl_standard, "positive");
     static const auto builtin_boolean = builtin_scalar(
         frontend::ValueDomain::Boolean, "boolean");
     static const auto builtin_bit = builtin_scalar(

@@ -430,9 +430,11 @@ end architecture;
         && info.vhdl_access
         && info.vhdl_access->handle_width == 32
         && info.vhdl_access->maximum_objects
-            == std::numeric_limits<std::uint32_t>::max()
+               == std::numeric_limits<std::uint32_t>::max()
         && info.vhdl_access->nullable
         && info.vhdl_access->owns_designated_object
+        && info.vhdl_access->deallocate_releases_storage
+        && !info.vhdl_access->reclaim_when_unreachable
         && info.vhdl_access->simulation_lifetime
         && info.vhdl_access->designated_types.size() == 1
         && info.vhdl_access->designated_types[0].width() == 8);

@@ -250,8 +250,10 @@ bool Lowerer::lower_vhdl_file_procedure_call(
 
 void Lowerer::initialize_procedure_support()
 {
+    vhdl_procedure_specializations_.clear();
     procedure_frames_.clear();
     procedure_indices_.clear();
+    vhdl_procedure_specialization_indices_.clear();
     pending_procedures_.clear();
     procedure_dependencies_.clear();
     procedure_suspending_.clear();
@@ -286,9 +288,15 @@ void Lowerer::initialize_procedure_support()
                     && !procedure.visibility_owner.empty()
                     && candidate.visibility_owner
                         != procedure.visibility_owner;
+                const bool mapped_distinct_declarations =
+                    !candidate.specialization_identity.empty()
+                    && !procedure.specialization_identity.empty()
+                    && candidate.specialization_identity
+                        != procedure.specialization_identity;
                 if (candidate.arguments.size()
                         != procedure.arguments.size()
-                    || imported_distinct_declarations) {
+                    || imported_distinct_declarations
+                    || mapped_distinct_declarations) {
                     return false;
                 }
                 for (std::size_t argument = 0;
@@ -296,9 +304,7 @@ void Lowerer::initialize_procedure_support()
                     ++argument) {
                     const auto& left = candidate.arguments[argument];
                     const auto& right = procedure.arguments[argument];
-                    if (left.direction != right.direction
-                        || left.object_class != right.object_class
-                        || !vhdl_callable_type_matches(
+                    if (!frontend::vhdl_parameter_type_profiles_match(
                             left.type, right.type)) {
                         return false;
                     }
@@ -319,6 +325,27 @@ void Lowerer::initialize_procedure_support()
         frame.invocation_identity = next_callable_invocation_identity_++;
         procedure_frames_.push_back(std::move(frame));
         overloads.push_back(index);
+    }
+    for (auto& [name, overloads] : procedure_indices_) {
+        (void)name;
+        std::ranges::stable_sort(
+            overloads,
+            [&](const std::size_t left, const std::size_t right) {
+                const auto& lhs = *procedure_frames_[left].source;
+                const auto& rhs = *procedure_frames_[right].source;
+                return std::tie(
+                           lhs.visibility_owner,
+                           lhs.specialization_identity,
+                           lhs.span.source_name.str(),
+                           lhs.span.begin.offset,
+                           lhs.span.end.offset)
+                    < std::tie(
+                           rhs.visibility_owner,
+                           rhs.specialization_identity,
+                           rhs.span.source_name.str(),
+                           rhs.span.begin.offset,
+                           rhs.span.end.offset);
+            });
     }
     procedure_dependencies_.resize(procedure_frames_.size());
     procedure_suspending_.reserve(procedure_frames_.size());
@@ -397,12 +424,12 @@ void Lowerer::lower_procedure_call(const Statement& statement)
     if (!selected.index) {
         return;
     }
-    const auto procedure_index = *selected.index;
-    auto& frame = procedure_frames_[procedure_index];
-    const auto& procedure = *frame.source;
+    auto procedure_index = *selected.index;
+    const auto& declared_procedure =
+        *procedure_frames_[procedure_index].source;
 
     std::vector<const frontend::Expression*> actuals(
-        procedure.arguments.size());
+        declared_procedure.arguments.size());
     std::size_t next_positional = 0;
     bool saw_named = false;
     for (const auto& association :
@@ -411,14 +438,14 @@ void Lowerer::lower_procedure_call(const Statement& statement)
         if (association.formal) {
             saw_named = true;
             const auto formal = std::ranges::find_if(
-                procedure.arguments,
+                declared_procedure.arguments,
                 [&](const auto& candidate) {
                     return candidate.name == *association.formal;
                 });
-            if (formal == procedure.arguments.end()) {
+            if (formal == declared_procedure.arguments.end()) {
                 report(
                     "FSIM-ELAB-VHPROC-015",
-                    "procedure '" + procedure.name
+                    "procedure '" + declared_procedure.name
                         + "' has no formal parameter '"
                         + *association.formal + "'",
                     association.span);
@@ -426,7 +453,7 @@ void Lowerer::lower_procedure_call(const Statement& statement)
             }
             index = static_cast<std::size_t>(
                 std::distance(
-                    procedure.arguments.begin(), formal));
+                    declared_procedure.arguments.begin(), formal));
         } else {
             if (saw_named) {
                 report(
@@ -435,11 +462,11 @@ void Lowerer::lower_procedure_call(const Statement& statement)
                     "named actual",
                     association.span);
             }
-            if (next_positional >= procedure.arguments.size()) {
+            if (next_positional >= declared_procedure.arguments.size()) {
                 report(
                     "FSIM-ELAB-VHPROC-017",
                     "too many actual parameters for procedure '"
-                        + procedure.name + "'",
+                        + declared_procedure.name + "'",
                     association.span);
                 continue;
             }
@@ -449,7 +476,7 @@ void Lowerer::lower_procedure_call(const Statement& statement)
             report(
                 "FSIM-ELAB-VHPROC-015",
                 "duplicate actual for procedure formal '"
-                    + procedure.arguments[*index].name + "'",
+                    + declared_procedure.arguments[*index].name + "'",
                 association.span);
             continue;
         }
@@ -458,14 +485,15 @@ void Lowerer::lower_procedure_call(const Statement& statement)
     for (std::size_t index = 0;
         index < actuals.size(); ++index) {
         if (actuals[index] == nullptr) {
-            if (procedure.arguments[index].default_value) {
-                actuals[index] = &*procedure.arguments[index].default_value;
+            if (declared_procedure.arguments[index].default_value) {
+                actuals[index] =
+                    &*declared_procedure.arguments[index].default_value;
             } else {
                 report(
                     "FSIM-ELAB-VHPROC-017",
-                    "procedure '" + procedure.name
+                    "procedure '" + declared_procedure.name
                         + "' requires an actual for formal '"
-                        + procedure.arguments[index].name + "'",
+                        + declared_procedure.arguments[index].name + "'",
                     statement.span);
             }
         }
@@ -477,6 +505,62 @@ void Lowerer::lower_procedure_call(const Statement& statement)
             })) {
         return;
     }
+
+    if (std::ranges::any_of(
+            declared_procedure.arguments,
+            [](const auto& argument) {
+                return argument.type.vhdl_unspecified != nullptr;
+            })) {
+        auto specialized = declared_procedure;
+        std::string specialization_identity =
+            std::to_string(procedure_index);
+        for (std::size_t index = 0;
+             index < specialized.arguments.size(); ++index) {
+            auto& argument = specialized.arguments[index];
+            if (!argument.type.vhdl_unspecified) {
+                continue;
+            }
+            const auto actual_type =
+                vhdl_expression_type(*actuals[index]);
+            if (!actual_type) {
+                report(
+                    "FSIM-ELAB-VHUNSPEC-001",
+                    "procedure call does not determine one unique legal "
+                    "actual type for unspecified formal '" + argument.name
+                        + "'",
+                    actuals[index]->span);
+                return;
+            }
+            argument.type = *actual_type;
+            specialization_identity += "|" +
+                frontend::vhdl_inferred_type_identity(*actual_type);
+        }
+        if (const auto found =
+                vhdl_procedure_specialization_indices_.find(
+                    specialization_identity);
+            found != vhdl_procedure_specialization_indices_.end()) {
+            procedure_index = found->second;
+        } else {
+            specialized.specialization_identity = specialization_identity;
+            vhdl_procedure_specializations_.push_back(
+                std::move(specialized));
+            ProcedureFrame specialized_frame;
+            specialized_frame.source =
+                &vhdl_procedure_specializations_.back();
+            specialized_frame.invocation_identity =
+                next_callable_invocation_identity_++;
+            procedure_index = procedure_frames_.size();
+            procedure_frames_.push_back(std::move(specialized_frame));
+            procedure_dependencies_.emplace_back();
+            procedure_suspending_.push_back(contains_explicit_wait(
+                vhdl_procedure_specializations_.back().statements));
+            vhdl_procedure_specialization_indices_.emplace(
+                std::move(specialization_identity), procedure_index);
+        }
+    }
+
+    auto& frame = procedure_frames_[procedure_index];
+    const auto& procedure = *frame.source;
 
     if (!frame.allocated) {
         frame.arguments.reserve(procedure.arguments.size());

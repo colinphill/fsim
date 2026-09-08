@@ -26,6 +26,7 @@ bool tf_application_profile_supported(
     case frontend::StandardRevision::Vhdl2000:
     case frontend::StandardRevision::Vhdl2002:
     case frontend::StandardRevision::Vhdl2008:
+    case frontend::StandardRevision::Vhdl2019:
       return false;
   }
   return false;

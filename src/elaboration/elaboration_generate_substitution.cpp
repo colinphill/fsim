@@ -96,6 +96,15 @@ void qualify_generated_type(
         }
     }
     if (type.vhdl_protected) {
+        for (auto& generic : type.vhdl_protected->generic_parameters) {
+            qualify_generated_type(generic.type, names);
+            if (generic.default_type) {
+                qualify_generated_type(*generic.default_type, names);
+            }
+            if (generic.default_value.valid()) {
+                qualify_generated_expression(generic.default_value, names);
+            }
+        }
         for (auto& variable : type.vhdl_protected->variables) {
             qualify_generated_type(variable.type, names);
         }
@@ -109,6 +118,12 @@ void qualify_generated_type(
             for (auto& argument : procedure.arguments) {
                 qualify_generated_type(argument.type, names);
             }
+        }
+    }
+    if (type.vhdl_unspecified) {
+        for (auto& component :
+             type.vhdl_unspecified->component_types) {
+            qualify_generated_type(component, names);
         }
     }
     for (auto& constraint : type.vhdl_array_constraints) {

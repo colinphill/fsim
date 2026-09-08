@@ -1705,6 +1705,18 @@ add_test(
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckVhdlStandardModeInventory.cmake"
 )
 add_test(
+  NAME fsim.vhdl-2019-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckVhdl2019Inventory.cmake"
+)
+set_tests_properties(
+  fsim.vhdl-2019-inventory
+  PROPERTIES
+    LABELS "vhdl;vhdl2019;inventory;documentation;positive;negative;fast"
+)
+add_test(
   NAME fsim.verilog-systemverilog-standard-mode-inventory
   COMMAND
     "${CMAKE_COMMAND}"
@@ -4772,6 +4784,10 @@ if(TARGET fsim_application)
     fsim_add_application_case(
       2 vhdl_numeric app/vhdl_numeric_application_test.cpp
       fsim.application.vhdl_numeric fast vhdl packages numeric)
+    fsim_add_application_case(
+      2 vhdl_2019_integer app/vhdl_2019_integer_application_test.cpp
+      fsim.application.vhdl_2019_integer
+      fast vhdl vhdl2019 integer llvm cache)
     fsim_add_application_case(
       2 vhdl_fixed app/vhdl_fixed_application_test.cpp
       fsim.application.vhdl_fixed fast vhdl packages fixed)

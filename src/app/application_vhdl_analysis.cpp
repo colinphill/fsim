@@ -446,6 +446,106 @@ void validate_vhdl_analysis_order(
   AnalysisOrderValidator{diagnostics}.run(units);
 }
 
+void validate_vhdl_mode_view_interfaces(
+    const std::span<const frontend::DesignUnit> units,
+    diagnostic::Engine& diagnostics) {
+  const auto is_view = [](const auto& declaration) {
+    return declaration.declaration_kind
+        == frontend::TypeDeclarationKind::VhdlModeView;
+  };
+  const auto package = [&](const std::string_view library,
+                           const std::string_view name) {
+    return std::ranges::find_if(
+        units,
+        [&](const frontend::DesignUnit& candidate) {
+          return candidate.kind == frontend::UnitKind::VhdlPackage
+              && candidate.primary_name.empty()
+              && library_of(candidate) == library
+              && candidate.name == name;
+        });
+  };
+  const auto visible_count = [&](const frontend::DesignUnit& unit,
+                                 const std::string_view view_name)
+      -> std::size_t {
+    const auto parts = selected_name_parts(view_name);
+    const auto owner_library = library_of(unit);
+    const auto package_has_view = [&](const std::string_view library,
+                                      const std::string_view package_name,
+                                      const std::string_view name) {
+      const auto found = package(
+          selected_library(library, owner_library), package_name);
+      return found != units.end()
+          && std::ranges::any_of(
+              found->type_aliases,
+              [&](const auto& declaration) {
+                return is_view(declaration) && declaration.name == name;
+              });
+    };
+    if (parts.size() == 2) {
+      return package_has_view(owner_library, parts[0], parts[1]) ? 1U : 0U;
+    }
+    if (parts.size() == 3) {
+      return package_has_view(parts[0], parts[1], parts[2]) ? 1U : 0U;
+    }
+    if (parts.size() != 1) {
+      return 0U;
+    }
+    std::size_t count = static_cast<std::size_t>(
+        std::ranges::count_if(
+            unit.type_aliases,
+            [&](const auto& declaration) {
+              return is_view(declaration)
+                  && declaration.name == parts.front();
+            }));
+    for (const auto& item : unit.vhdl_context) {
+      if (item.kind != frontend::VhdlContextItemKind::UseClause) {
+        continue;
+      }
+      for (const auto& selected : item.selected_names) {
+        const auto imported = selected_name_parts(selected);
+        if (imported.size() == 3
+            && (imported[2] == "all" || imported[2] == parts.front())
+            && package_has_view(imported[0], imported[1], parts.front())) {
+          ++count;
+        }
+      }
+    }
+    return count;
+  };
+  const auto validate = [&](const frontend::DesignUnit& unit,
+                            const auto& port) {
+    if (!port.vhdl_mode_view) {
+      return;
+    }
+    const auto count = visible_count(unit, port.vhdl_mode_view->view);
+    if (count == 1U) {
+      return;
+    }
+    diagnostics.error(
+        "FSIM-VHDL-SEM-109",
+        count == 0U
+            ? "mode view '" + port.vhdl_mode_view->view
+                + "' is not visible for interface '" + port.name + "'"
+            : "mode view '" + port.vhdl_mode_view->view
+                + "' is visible from multiple packages for interface '"
+                + port.name + "'",
+        span(port.vhdl_mode_view->span));
+  };
+  for (const auto& unit : units) {
+    if (unit.language != frontend::Language::Vhdl2008) {
+      continue;
+    }
+    for (const auto& port : unit.ports) {
+      validate(unit, port);
+    }
+    for (const auto& component : unit.vhdl_component_declarations) {
+      for (const auto& port : component.ports) {
+        validate(unit, port);
+      }
+    }
+  }
+}
+
 void validate_vhdl_package_declarations(
     const std::span<const frontend::DesignUnit> units,
     diagnostic::Engine& diagnostics) {
@@ -502,6 +602,21 @@ void validate_vhdl_package_declarations(
       }
     }
   }
+}
+
+bool validate_vhdl_profile_compatibility(
+    const frontend::ParsedDesign& parsed,
+    diagnostic::Engine& diagnostics) {
+  if (parsed.vhdl_profile_compatible) {
+    return true;
+  }
+  if (!diagnostics.has_error()) {
+    diagnostics.error(
+        "FSIM-FE-VHSTD-003",
+        "source analysis retained a recovery node for a VHDL construct "
+        "that is unavailable in the selected language revision");
+  }
+  return false;
 }
 
 }  // namespace fsim::app::application_detail

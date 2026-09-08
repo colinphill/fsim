@@ -344,6 +344,9 @@ static std::optional<CheckedProject> check_project_impl(
       }
     }
     auto result = std::move(snapshot.result);
+    checked.parsed.vhdl_profile_compatible =
+        checked.parsed.vhdl_profile_compatible
+        && result.design.vhdl_profile_compatible;
     for (const auto& frontend_diagnostic : result.diagnostics) {
       import_diagnostic(diagnostics, frontend_diagnostic);
     }
@@ -599,6 +602,8 @@ static std::optional<CheckedProject> check_project_impl(
           unit.vhdl_compatibility_profile = vhdl_compatibility_profile();
       }
   }
+  (void)validate_vhdl_profile_compatibility(
+      checked.parsed, diagnostics);
   inject_vhdl_standard_libraries(checked, diagnostics);
   for (const auto& mapped : checked.mapped_libraries) {
     if (!validate_vhdl_package_dependencies(
@@ -608,6 +613,7 @@ static std::optional<CheckedProject> check_project_impl(
     }
   }
   validate_vhdl_analysis_order(checked.parsed.units, diagnostics);
+  validate_vhdl_mode_view_interfaces(checked.parsed.units, diagnostics);
   validate_vhdl_package_declarations(checked.parsed.units, diagnostics);
   std::vector<frontend::Diagnostic> class_diagnostics;
   (void)frontend::resolve_systemverilog_classes(
@@ -649,10 +655,15 @@ static std::optional<CheckedProject> check_project_impl(
         checked.systemc_sources,
         checked.standard_sources);
     checked.vhdl_hir = build_vhdl_hir(checked.parsed, checked.semantics);
+    (void)validate_vhdl_mode_view_hir(
+        checked.vhdl_hir, diagnostics);
     checked.systemverilog_hir = build_systemverilog_hir(
         checked.parsed,
         checked.semantics,
         checked.systemverilog_class_specializations);
+    if (diagnostics.has_error()) {
+      return std::nullopt;
+    }
     if (!checked.semantics.valid()) {
       diagnostics.error(
           "FSIM-SEM-0001",

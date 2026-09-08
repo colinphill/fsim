@@ -257,7 +257,10 @@ PackedLogic4 default_packed_value(
           static_cast<std::uint64_t>(
               type.integer_range
                   ? type.integer_range->left
-                  : std::numeric_limits<std::int32_t>::min()),
+                  : type.vhdl_integer_storage_width == 64U
+                  ? std::numeric_limits<std::int64_t>::min()
+                  : static_cast<std::int64_t>(
+                        std::numeric_limits<std::int32_t>::min())),
           width);
   }
   if (type.packed_aggregate

@@ -358,6 +358,160 @@ end architecture;
     }
     assert(loop_shadow_result.ok());
 
+    const auto contextual_result = fsim::frontend::parse_text(
+        "vhdl-2019-contextual-result.vhd",
+        R"(
+entity contextual_result is
+end entity;
+
+architecture rtl of contextual_result is
+  function fill(value : bit) return result_t of bit_vector is
+    variable answer : result_t := (others => value);
+    variable result_length : integer := result_t'length;
+  begin
+    if result_length = answer'length then
+      return answer;
+    end if;
+    return (others => not value);
+  end function;
+  signal narrow : bit_vector(3 downto 0) := (others => '0');
+  signal wide : bit_vector(7 downto 0) := (others => '1');
+begin
+  exercise : process
+  begin
+    narrow <= fill('1');
+    wide <= fill('0');
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl2019);
+    if (!contextual_result.ok()) {
+        for (const auto& diagnostic : contextual_result.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(contextual_result.ok());
+    const auto& contextual_function =
+        contextual_result.design.units.back().functions.front();
+    assert(contextual_function.vhdl_return_identifier == "result_t");
+    assert(contextual_function.type_aliases.front().name == "result_t");
+    const auto contextual_elaboration = fsim::elaboration::elaborate(
+        contextual_result.design,
+        "vhdl:work.contextual_result(rtl)");
+    if (!contextual_elaboration.ok()) {
+        for (const auto& diagnostic : contextual_elaboration.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(contextual_elaboration.ok());
+    auto contextual_interpreter =
+        contextual_elaboration.design->create_interpreter();
+    assert(contextual_interpreter->run().status
+           == fsim::runtime::RunStatus::completed);
+    const auto narrow = contextual_elaboration.design->find_signal("narrow");
+    const auto wide = contextual_elaboration.design->find_signal("wide");
+    assert(narrow && wide);
+    assert(contextual_interpreter->signal_value(*narrow).to_msb_string()
+           == "1111");
+    assert(contextual_interpreter->signal_value(*wide).to_msb_string()
+           == "00000000");
+
+    const auto legacy_contextual_result = fsim::frontend::parse_text(
+        "vhdl-2008-contextual-result.vhd",
+        R"(
+entity legacy_contextual_result is end entity;
+architecture rtl of legacy_contextual_result is
+  function fill(value : bit) return result_t of bit_vector is
+  begin
+    return (others => value);
+  end function;
+begin
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl2008);
+    assert(!legacy_contextual_result.ok());
+    assert(std::ranges::any_of(
+        legacy_contextual_result.diagnostics,
+        [](const auto& diagnostic) {
+          return diagnostic.code == "FSIM-FE-VHSTD-003";
+        }));
+
+    const auto unconstrained_context = fsim::frontend::parse_text(
+        "vhdl-2019-unconstrained-result.vhd",
+        R"(
+entity unconstrained_result is end entity;
+architecture rtl of unconstrained_result is
+  function fill(value : bit) return result_t of bit_vector is
+  begin
+    return (others => value);
+  end function;
+  function first(value : bit_vector) return bit is
+  begin
+    return value(value'left);
+  end function;
+  signal observed : bit;
+begin
+  observed <= first(fill('1'));
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl2019);
+    assert(unconstrained_context.ok());
+    const auto rejected_unconstrained = fsim::elaboration::elaborate(
+        unconstrained_context.design,
+        "vhdl:work.unconstrained_result(rtl)");
+    assert(!rejected_unconstrained.ok());
+    assert(has_diagnostic(
+        rejected_unconstrained, "FSIM-ELAB-VHRESULT-001"));
+
+    const auto duplicate_result = fsim::frontend::parse_text(
+        "vhdl-2019-duplicate-result.vhd",
+        R"(
+entity duplicate_result is end entity;
+architecture rtl of duplicate_result is
+  function fill(value : bit) return result_t of bit_vector is
+    subtype result_t is bit_vector(1 downto 0);
+  begin
+    return (others => value);
+  end function;
+begin
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl2019);
+    assert(!duplicate_result.ok());
+    assert(std::ranges::any_of(
+        duplicate_result.diagnostics,
+        [](const auto& diagnostic) {
+          return diagnostic.code == "FSIM-VHDL-SEM-036";
+        }));
+
+    const auto conflicting_result = fsim::frontend::parse_text(
+        "vhdl-2019-conflicting-result.vhd",
+        R"(
+entity conflicting_result is end entity;
+architecture rtl of conflicting_result is
+  function fill(result_t : bit) return result_t of bit_vector is
+  begin
+    return (others => result_t);
+  end function;
+begin
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl2019);
+    assert(!conflicting_result.ok());
+    assert(std::ranges::any_of(
+        conflicting_result.diagnostics,
+        [](const auto& diagnostic) {
+          return diagnostic.code == "FSIM-VHDL-SEM-112";
+        }));
+
     const auto negative_mod = fsim::frontend::parse_text(
         "negative-mod-constant-function.vhd",
         R"(

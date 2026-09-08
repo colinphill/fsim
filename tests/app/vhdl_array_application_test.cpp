@@ -706,6 +706,10 @@ std::string run_expected_dynamic_failure(
     assert(false && "dynamic packed-index failure was not reported");
   } catch (const fsim::runtime::simir::InterpreterError& error) {
     const auto message = std::string{error.what()};
+    if (message.find(expected_message) == std::string::npos) {
+      std::cerr << "expected dynamic failure containing '"
+                << expected_message << "', got '" << message << "'\n";
+    }
     assert(message.find(expected_message) != std::string::npos);
     return message;
   }

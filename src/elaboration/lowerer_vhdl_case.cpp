@@ -107,10 +107,8 @@ bool Lowerer::validate_vhdl_case_choices(
     const auto range = selector_type != nullptr
             && selector_type->integer_range
         ? *selector_type->integer_range
-        : frontend::IntegerRange{
-              std::numeric_limits<std::int32_t>::min(),
-              std::numeric_limits<std::int32_t>::max(),
-              false};
+        : frontend::vhdl_predefined_integer_range(
+              vhdl_standard_, "integer");
     domain_lower = std::min(range.left, range.right);
     domain_upper = std::max(range.left, range.right);
   } else if (selector_domain == frontend::ValueDomain::Bit2
@@ -314,7 +312,7 @@ std::optional<RegisterId> Lowerer::lower_vhdl_case_range_condition(
     process_.operations.emplace_back(LoadConstant{
         target,
         domain == frontend::ValueDomain::Integer
-            ? integer_value(value)
+            ? integer_value(value, width)
             : unsigned_value(static_cast<std::uint64_t>(value), width)});
     return target;
   };

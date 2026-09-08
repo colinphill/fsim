@@ -51,7 +51,7 @@ The governed runner requires exact equality through:
 - source-independent replay and portable VHPI checkpoint remapping;
 - duplicated/reordered VHDL roots and adjacent SystemVerilog/SystemC roots.
 
-Owning-unit schema 17 preserves frontend PSL state. Standalone designs add the
+Owning-unit schema 27 preserves frontend PSL state. Standalone designs add the
 checksummed schema-1 `FSIMVHIR` payload for complete VHDL semantic HIR,
 including analyzed PSL state. Load rejects incompatible schema, checksum,
 trailing bytes, enum values, duplicate identities, invalid semantic links, or

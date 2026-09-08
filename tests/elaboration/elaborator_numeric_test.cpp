@@ -946,7 +946,8 @@ begin
   converted_value <= Reverse_T'val(2);
 end architecture;
 )",
-            fsim::frontend::Language::Vhdl2008);
+            fsim::frontend::Language::Vhdl2008,
+            fsim::frontend::VhdlStandard::Vhdl2019);
     assert(constrained_vhdl_enumerations.ok());
     const auto constrained_enumeration_design =
         fsim::elaboration::elaborate(
@@ -1053,7 +1054,7 @@ end architecture;
         && constrained_enumeration_interpreter
                 ->signal_value(*length_value)
                 .to_msb_string()
-            == "00000000000000000000000000000011"
+            == "0000000000000000000000000000000000000000000000000000000000000011"
         && constrained_enumeration_interpreter
                 ->signal_value(*ascending_value)
                 .to_msb_string()
@@ -1061,7 +1062,7 @@ end architecture;
         && constrained_enumeration_interpreter
                 ->signal_value(*position_value)
                 .to_msb_string()
-            == "00000000000000000000000000000001"
+            == "0000000000000000000000000000000000000000000000000000000000000001"
         && constrained_enumeration_interpreter
                 ->signal_value(*converted_value)
                 .to_msb_string()

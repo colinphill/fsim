@@ -421,7 +421,7 @@ VhdlParser::parse_vhdl_function_parameters() {
 
     const auto type_start = current();
     const auto type = parse_vhdl_type(true, true);
-    if (type.named_type.empty()
+    if (!type.vhdl_unspecified && type.named_type.empty()
         && (type.packed_range
             || (type.domain != ValueDomain::Integer
                 && type.domain != ValueDomain::Boolean
@@ -570,7 +570,7 @@ VhdlParser::parse_vhdl_procedure_parameters() {
 
     const auto type_start = current();
     const auto type = parse_vhdl_type(true, true);
-    if (type.named_type.empty()
+    if (!type.vhdl_unspecified && type.named_type.empty()
         && (type.packed_range
             || (type.domain != ValueDomain::Integer
                 && type.domain != ValueDomain::Boolean
@@ -793,8 +793,51 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
   function.arguments = parse_vhdl_function_parameters();
   expect_keyword(
       "return", true, "FSIM-VHDL-PARSE-155");
+  std::optional<Token> result_identifier;
+  if (at(TokenKind::Identifier) && keyword("of", 1, true)) {
+    result_identifier = advance();
+    function.vhdl_return_identifier = vhdl_name(result_identifier->text);
+    function.vhdl_return_identifier_span = result_identifier->span;
+    (void)advance();
+    (void)require_vhdl_standard(
+        *result_identifier, VhdlStandard::Vhdl2019,
+        "a function result subtype identifier",
+        "select VHDL-2019 or remove the identifier and 'of'");
+  }
   const auto result_start = current();
   function.return_type = parse_vhdl_type(true, true);
+  if (result_identifier) {
+    auto result_subtype = function.return_type;
+    result_subtype.vhdl_type_declaration =
+        result_identifier->span.source_name + ":"
+        + std::to_string(result_identifier->span.begin.offset) + ":"
+        + function.vhdl_return_identifier;
+    function.type_aliases.push_back(TypeAliasDeclaration {
+        function.vhdl_return_identifier,
+        std::move(result_subtype),
+        result_identifier->span,
+        { },
+        TypeDeclarationKind::VhdlSubtype,
+        { },
+        { },
+        { },
+        false });
+    const bool conflicts_with_profile =
+        function.vhdl_return_identifier == function.name
+        || std::ranges::any_of(
+            function.arguments,
+            [&](const FunctionArgument& argument) {
+              return argument.name == function.vhdl_return_identifier;
+            });
+    if (conflicts_with_profile) {
+      error(
+          *result_identifier,
+          "FSIM-VHDL-SEM-112",
+          "function result subtype identifier '"
+              + function.vhdl_return_identifier
+              + "' conflicts with the function profile");
+    }
+  }
   if (function.return_type.named_type.empty()
       && (function.return_type.packed_range
           || (function.return_type.domain != ValueDomain::Integer
@@ -876,6 +919,7 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
           vhdl_name(local_name.text);
       const bool conflict =
           canonical == function.name
+          || canonical == function.vhdl_return_identifier
           || std::ranges::any_of(
               function.arguments,
               [&](const FunctionArgument& argument) {
@@ -910,6 +954,31 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
       function.package_instances,
       function.functions,
       function.procedures);
+  if (!function.vhdl_return_identifier.empty()) {
+    const auto conflicts_with_result = [&](const auto& declarations) {
+      return std::ranges::any_of(
+          declarations,
+          [&](const auto& declaration) {
+            return declaration.name == function.vhdl_return_identifier
+                && declaration.span.begin.offset
+                    != function.vhdl_return_identifier_span.begin.offset;
+          });
+    };
+    if (conflicts_with_result(function.constants)
+        || conflicts_with_result(function.type_aliases)
+        || conflicts_with_result(function.signal_aliases)
+        || conflicts_with_result(function.variables)
+        || conflicts_with_result(function.package_instances)
+        || conflicts_with_result(function.functions)
+        || conflicts_with_result(function.procedures)) {
+      error(
+          *result_identifier,
+          "FSIM-VHDL-SEM-112",
+          "function result subtype identifier '"
+              + function.vhdl_return_identifier
+              + "' conflicts with a function-local declaration");
+    }
+  }
 
   expect_keyword(
       "begin", true, "FSIM-VHDL-PARSE-161");

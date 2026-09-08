@@ -239,6 +239,8 @@ void VhdlParser::parse_vhdl_component_ports(
         "FSIM-VHDL-PARSE-222");
 
     PortDirection direction = PortDirection::Unknown;
+    std::optional<VhdlModeViewIndication> mode_view;
+    Type type;
     if (match_keyword("in", true)) {
       direction = PortDirection::Input;
     } else if (match_keyword("out", true)) {
@@ -247,6 +249,10 @@ void VhdlParser::parse_vhdl_component_ports(
       direction = PortDirection::Inout;
     } else if (match_keyword("buffer", true)) {
       direction = PortDirection::Buffer;
+    } else if (match_keyword("view", true)) {
+      auto parsed = parse_vhdl_mode_view_indication(previous());
+      type = std::move(parsed.type);
+      mode_view = std::move(parsed.indication);
     } else {
       error(
           current(),
@@ -254,11 +260,13 @@ void VhdlParser::parse_vhdl_component_ports(
           "expected component port mode");
     }
 
-    auto type = parse_vhdl_type(true, true);
+    if (!mode_view) {
+      type = parse_vhdl_type(true, true);
+    }
     std::optional<Expression> default_value;
     if (match(TokenKind::ColonEqual)) {
       default_value = parse_expression();
-      if (direction != PortDirection::Input) {
+      if (!mode_view && direction != PortDirection::Input) {
         error(
             names.front(),
             "FSIM-VHDL-SEM-072",
@@ -293,7 +301,8 @@ void VhdlParser::parse_vhdl_component_ports(
               type,
               direction,
               default_value,
-              span_from(name, previous())});
+              span_from(name, previous()),
+              mode_view});
     }
     if (!match(TokenKind::Semicolon)
         && !at(TokenKind::RightParen)) {

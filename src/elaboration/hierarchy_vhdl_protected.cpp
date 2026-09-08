@@ -7,14 +7,6 @@ void HierarchyBuilder::merge_vhdl_protected_types(
     DesignUnit& package,
     const DesignUnit& package_body)
 {
-    const auto same_type = [](
-                               const frontend::Type& left,
-                               const frontend::Type& right) {
-        return left.spelling == right.spelling
-            && left.named_type == right.named_type
-            && left.domain == right.domain
-            && left.is_signed == right.is_signed;
-    };
     const auto conforming_function = [&](
                                          const frontend::FunctionDeclaration& declaration,
                                          const frontend::FunctionDeclaration& definition) {
@@ -22,7 +14,7 @@ void HierarchyBuilder::merge_vhdl_protected_types(
             || declaration.pure != definition.pure
             || declaration.arguments.size()
                 != definition.arguments.size()
-            || !same_type(
+            || !frontend::vhdl_base_type_profiles_match(
                 declaration.return_type, definition.return_type)) {
             return false;
         }
@@ -31,7 +23,9 @@ void HierarchyBuilder::merge_vhdl_protected_types(
             const auto& left = declaration.arguments[index];
             const auto& right = definition.arguments[index];
             if (left.direction != right.direction
-                || !same_type(left.type, right.type)) {
+                || left.vhdl_file != right.vhdl_file
+                || !frontend::vhdl_parameter_type_profiles_match(
+                    left.type, right.type)) {
                 return false;
             }
         }
@@ -51,7 +45,8 @@ void HierarchyBuilder::merge_vhdl_protected_types(
             const auto& right = definition.arguments[index];
             if (left.direction != right.direction
                 || left.object_class != right.object_class
-                || !same_type(left.type, right.type)) {
+                || !frontend::vhdl_parameter_type_profiles_match(
+                    left.type, right.type)) {
                 return false;
             }
         }
@@ -142,9 +137,16 @@ void HierarchyBuilder::merge_vhdl_protected_types(
         public_info.has_body = true;
         public_info.body_conformant = conformant;
         if (conformant) {
-            public_info.variables = body_info.variables;
+            public_info.variables.insert(
+                public_info.variables.end(),
+                body_info.variables.begin(),
+                body_info.variables.end());
             public_info.functions = body_info.functions;
             public_info.procedures = body_info.procedures;
+            public_info.method_aliases.insert(
+                public_info.method_aliases.end(),
+                body_info.method_aliases.begin(),
+                body_info.method_aliases.end());
         }
     }
     std::erase_if(

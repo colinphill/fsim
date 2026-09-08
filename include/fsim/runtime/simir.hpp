@@ -816,8 +816,8 @@ enum class IntegerUnaryOperator : std::uint8_t {
     absolute,
 };
 
-/// A checked operation on the portable signed 32-bit VHDL integer
-/// representation. Unknown operands and overflow are language errors.
+/// A checked operation on the profile-selected signed 32- or 64-bit VHDL
+/// integer representation. Unknown operands and overflow are language errors.
 struct IntegerUnary {
     IntegerUnaryOperator operation { IntegerUnaryOperator::negate };
     RegisterId destination { };
@@ -841,12 +841,12 @@ struct IntegerBinary {
     RegisterId rhs { };
 };
 
-/// Require a known signed 32-bit value to belong to an elaborated VHDL
+/// Require a known signed 32- or 64-bit value to belong to an elaborated VHDL
 /// scalar subtype before it is stored.
 struct IntegerCheck {
     RegisterId source { };
-    std::int32_t lower { };
-    std::int32_t upper { };
+    std::int64_t lower { };
+    std::int64_t upper { };
 };
 
 /// Select between equal-width values using SystemVerilog conditional

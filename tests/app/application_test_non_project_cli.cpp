@@ -495,6 +495,10 @@ void ApplicationTestFixture::test_non_project_cli()
         "fsim", "check", "--lang", "vhdl-93",
         "--standard", "93", source_text.c_str()
     };
+    const std::vector<const char*> vhdl_2019_standard_arguments {
+        "fsim", "check", "--lang", "vhdl-2019",
+        "--standard", "19", source_text.c_str()
+    };
     const std::vector<const char*> verilog_standard_arguments {
         "fsim",
         "check",
@@ -518,6 +522,10 @@ void ApplicationTestFixture::test_non_project_cli()
             assert(invocation.standard == "93");
             assert(config.source_sets.front().standard == "1993");
         } else if (standard_calls == 1) {
+            assert(invocation.language == project::Language::vhdl);
+            assert(invocation.standard == "19");
+            assert(config.source_sets.front().standard == "2019");
+        } else if (standard_calls == 2) {
             assert(invocation.language == project::Language::verilog);
             assert(invocation.standard == "v2001-noconfig");
             assert(config.source_sets.front().standard == "2001-noconfig");
@@ -546,6 +554,12 @@ void ApplicationTestFixture::test_non_project_cli()
         == 0);
     output.str({ });
     error.str({ });
+    assert(cli::run(static_cast<int>(vhdl_2019_standard_arguments.size()),
+               vhdl_2019_standard_arguments.data(), services, output,
+               error)
+        == 0);
+    output.str({ });
+    error.str({ });
     assert(cli::run(static_cast<int>(verilog_standard_arguments.size()),
                verilog_standard_arguments.data(), services, output,
                error)
@@ -556,7 +570,7 @@ void ApplicationTestFixture::test_non_project_cli()
                systemverilog_standard_arguments.data(), services, output,
                error)
         == 0);
-    assert(standard_calls == 3);
+    assert(standard_calls == 4);
     assert(error.str().empty());
     const std::vector<const char*> help_arguments { "fsim", "--help" };
     output.str({ });
@@ -565,6 +579,7 @@ void ApplicationTestFixture::test_non_project_cli()
                help_arguments.data(), services, output, error)
         == 0);
     assert(output.str().find("Verilog: 95/1995") != std::string::npos);
+    assert(output.str().find("19/2019") != std::string::npos);
     assert(output.str().find("SystemVerilog: 05/2005") != std::string::npos);
     assert(error.str().empty());
     output.str({ });

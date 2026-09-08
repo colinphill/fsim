@@ -175,6 +175,12 @@ class_property_descriptor(
     const frontend::ParsedDesign& parsed,
     semantic::Model& semantics);
 
+void compose_vhdl_mode_views(semantic::vhdl::Hir& hir);
+
+bool validate_vhdl_mode_view_hir(
+    const semantic::vhdl::Hir& hir,
+    diagnostic::Engine& diagnostics);
+
 void complete_vhdl_executable_hir(
     const frontend::ParsedDesign& parsed,
     semantic::Model& semantics,
@@ -1228,8 +1234,16 @@ void validate_vhdl_analysis_order(
     std::span<const frontend::DesignUnit> units,
     diagnostic::Engine& diagnostics);
 
+void validate_vhdl_mode_view_interfaces(
+    std::span<const frontend::DesignUnit> units,
+    diagnostic::Engine& diagnostics);
+
 void validate_vhdl_package_declarations(
     std::span<const frontend::DesignUnit> units,
+    diagnostic::Engine& diagnostics);
+
+[[nodiscard]] bool validate_vhdl_profile_compatibility(
+    const frontend::ParsedDesign& parsed,
     diagnostic::Engine& diagnostics);
 
 void inject_vhdl_standard_libraries(

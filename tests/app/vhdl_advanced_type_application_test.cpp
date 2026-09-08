@@ -443,6 +443,103 @@ end architecture;
     }
 }
 
+void verify_vhdl_2019_access_lifetime(
+    const std::filesystem::path& directory)
+{
+    const auto lifetime_directory = directory / "access-2019";
+    std::filesystem::create_directories(lifetime_directory);
+    const auto source = lifetime_directory / "access_lifetime.vhd";
+    {
+        std::ofstream output { source };
+        output << R"(
+entity Access_Lifetime is end entity;
+architecture rtl of access_lifetime is
+  type Bit_Pointer is access bit;
+  signal Released_Null : boolean;
+  signal Alias_Value : bit;
+begin
+  exercise : process
+    variable Pointer : Bit_Pointer;
+    variable Saved : Bit_Pointer;
+  begin
+    Pointer := new bit;
+    Saved := Pointer;
+    Deallocate(Pointer);
+    Deallocate(Pointer);
+    Released_Null <= Pointer = null;
+    Alias_Value <= Saved.all;
+    wait;
+  end process;
+end architecture;
+)";
+        assert(output.good());
+    }
+
+    for (const auto optimization : {
+             fsim::project::Optimization::o0,
+             fsim::project::Optimization::o2 }) {
+        fsim::project::Config config;
+        config.base_directory = lifetime_directory;
+        config.project.name = "vhdl-2019-access-lifetime";
+        config.project.top = "vhdl:work.access_lifetime(rtl)";
+        config.project.time_resolution = "1ns";
+        config.build.optimization = optimization;
+        config.build.cache_path = lifetime_directory
+            / (optimization == fsim::project::Optimization::o0
+                    ? "cache-o0"
+                    : "cache-o2");
+        config.run.max_deltas = 1000;
+        fsim::project::SourceSet sources;
+        sources.language = fsim::project::Language::vhdl;
+        sources.standard = "2019";
+        sources.library = "work";
+        sources.files.push_back(source);
+        config.source_sets.push_back(std::move(sources));
+
+        for (const auto engine : {
+                 fsim::app::SimulationEngine::interpreter,
+                 fsim::app::SimulationEngine::compiled }) {
+            fsim::diagnostic::Engine diagnostics;
+            auto project = fsim::app::build_project(config, diagnostics);
+            if (!project) {
+                for (const auto& diagnostic : diagnostics.diagnostics()) {
+                    std::cerr << diagnostic.code << ": "
+                              << diagnostic.message << '\n';
+                }
+            }
+            assert(project);
+            assert(std::ranges::any_of(
+                project->vhdl_hir.types(),
+                [](const auto& type) {
+                    return type.name == "bit_pointer"
+                        && !type.deallocate_releases_storage
+                        && type.reclaim_when_unreachable;
+                }));
+            assert(std::ranges::none_of(
+                project->design.processes().front().operations,
+                [](const auto& operation) {
+                    return fsim::runtime::simir::operation_get_if<
+                               fsim::runtime::simir::DeleteContainer>(
+                               &operation)
+                        != nullptr;
+                }));
+            fsim::app::Simulation simulation {
+                std::move(*project), config.run.max_deltas, engine
+            };
+            const auto released = simulation.find_signal(
+                "access_lifetime.released_null");
+            const auto alias = simulation.find_signal(
+                "access_lifetime.alias_value");
+            assert(released && alias);
+            const auto result = simulation.run();
+            assert(
+                result.status == fsim::runtime::RunStatus::completed
+                && simulation.read_signal(*released).to_msb_string() == "1"
+                && simulation.read_signal(*alias).to_msb_string() == "0");
+        }
+    }
+}
+
 void verify_protected_revision_execution(
     const std::filesystem::path& directory)
 {
@@ -522,6 +619,7 @@ int main()
         assert(edited.cache.hits == 0 && edited.cache.misses == 1);
 #endif
     }
+    verify_vhdl_2019_access_lifetime(directory.path);
     verify_protected_revision_execution(directory.path);
     verify_vhdl_1993_shared_execution(directory.path);
     verify_vhdl_1987_declaration_execution(directory.path);

@@ -97,6 +97,9 @@ Lowerer::lower_vhdl_numeric_function_expression(
     }
 
     if (name == "to_integer" || synopsys_integer) {
+        const auto integer_width = static_cast<std::size_t>(
+            frontend::vhdl_predefined_integer_storage_width(
+                vhdl_standard_));
         if (expression.operands.size() != 1) {
             report(
                 "FSIM-ELAB-VHNUM-001",
@@ -123,8 +126,8 @@ Lowerer::lower_vhdl_numeric_function_expression(
         if (!source) {
             return std::nullopt;
         }
-        const auto value_width = signed_operand ? std::size_t { 32 }
-                                                : std::size_t { 31 };
+        const auto value_width = signed_operand
+            ? integer_width : integer_width - 1U;
         const auto narrowed = resize_register(
             *source, value_width, signed_operand);
         const auto restored = resize_register(
@@ -160,17 +163,18 @@ Lowerer::lower_vhdl_numeric_function_expression(
             "integer range",
             AssertionSeverity::failure,
             numeric_source_location(expression.operands.front().span) });
-        const auto resized = resize_register(narrowed, 32, signed_operand);
+        const auto resized = resize_register(
+            narrowed, integer_width, signed_operand);
         const auto zero = allocate_register(
-            32, frontend::ValueDomain::Logic4);
+            integer_width, frontend::ValueDomain::Logic4);
         process_.operations.emplace_back(LoadConstant {
-            zero, PackedLogic4(32, Logic4::zero) });
+            zero, PackedLogic4(integer_width, Logic4::zero) });
         const auto selected = allocate_register(
-            32, frontend::ValueDomain::Logic4);
+            integer_width, frontend::ValueDomain::Logic4);
         process_.operations.emplace_back(ConditionalSelect {
             selected, known, resized, zero });
         const auto result = allocate_register(
-            32, frontend::ValueDomain::Integer);
+            integer_width, frontend::ValueDomain::Integer);
         process_.operations.emplace_back(CopyRegister { result, selected });
         return result;
     }
@@ -248,9 +252,7 @@ Lowerer::lower_vhdl_numeric_function_expression(
             value.span);
         return std::nullopt;
     }
-    const auto source_width = is_integer_expression(value)
-        ? std::optional<std::size_t> { 32U }
-        : infer_width(value);
+    const auto source_width = infer_width(value);
     if (!source_width) {
         report(
             "FSIM-ELAB-VHNUM-003",
@@ -263,8 +265,10 @@ Lowerer::lower_vhdl_numeric_function_expression(
         return std::nullopt;
     }
     if (unsigned_result && is_integer_expression(value)) {
+        const auto integer_range = frontend::vhdl_predefined_integer_range(
+            vhdl_standard_, "integer");
         process_.operations.emplace_back(IntegerCheck {
-            *source, 0, std::numeric_limits<std::int32_t>::max() });
+            *source, 0, integer_range.right });
     }
     const auto resized = resize_register(
         *source, result_width,

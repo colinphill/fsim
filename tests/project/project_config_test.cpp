@@ -750,6 +750,10 @@ void test_vhdl_standard_values()
         std::tuple { "2002", "2002", VhdlStandard::vhdl_2002 },
         std::tuple { "08", "2008", VhdlStandard::vhdl_2008 },
         std::tuple { "2008", "2008", VhdlStandard::vhdl_2008 },
+        std::tuple { "19", "2019", VhdlStandard::vhdl_2019 },
+        std::tuple { "2019", "2019", VhdlStandard::vhdl_2019 },
+        std::tuple { "vhdl-19", "2019", VhdlStandard::vhdl_2019 },
+        std::tuple { "vhdl-2019", "2019", VhdlStandard::vhdl_2019 },
     };
     for (const auto& [spelling, canonical, identity] : aliases) {
         fsim::diagnostic::Engine diagnostics;
@@ -772,6 +776,8 @@ void test_vhdl_standard_values()
     }
     check(
         fsim::project::parse_language("VHDL-93")
+                == fsim::project::Language::vhdl
+            && fsim::project::parse_language("VHDL-2019")
                 == fsim::project::Language::vhdl
             && fsim::project::default_standard(fsim::project::Language::vhdl)
                 == "2008",

@@ -191,6 +191,23 @@ struct Diagnostic {
     frontend::SourceSpan span;
 };
 
+struct VhdlModeViewElementBinding {
+    std::string formal_path;
+    std::string actual_path;
+    frontend::PortDirection direction { frontend::PortDirection::Unknown };
+    frontend::SourceSpan source;
+};
+
+struct VhdlModeViewBinding {
+    std::string formal;
+    std::string view;
+    frontend::VhdlModeViewIndicationKind kind {
+        frontend::VhdlModeViewIndicationKind::record
+    };
+    std::vector<VhdlModeViewElementBinding> elements;
+    frontend::SourceSpan source;
+};
+
 struct SignalInfo {
     runtime::simir::SignalId id { };
     std::string name;
@@ -218,6 +235,10 @@ struct SignalInfo {
     bool is_port { };
     frontend::PortDirection direction { frontend::PortDirection::Unknown };
     frontend::SourceSpan declaration_span;
+    // A composite signal can cross several view-based VHDL boundaries. Each
+    // binding retains the declaration-order formal-to-actual leaf map; Batch
+    // 184 materializes these leaves as directional runtime endpoints.
+    std::vector<VhdlModeViewBinding> vhdl_mode_view_bindings;
     runtime::simir::ResolutionKind resolution {
         runtime::simir::ResolutionKind::none
     };

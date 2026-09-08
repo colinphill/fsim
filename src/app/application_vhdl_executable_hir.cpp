@@ -122,6 +122,8 @@ class VhdlExecutableBuilder final {
         return vh::ExpressionKind::replication;
       case frontend::ExpressionKind::DefaultChoice:
         return vh::ExpressionKind::default_choice;
+      case frontend::ExpressionKind::Conditional:
+        return vh::ExpressionKind::conditional;
     }
     return vh::ExpressionKind::invalid;
   }
@@ -357,6 +359,8 @@ class VhdlExecutableBuilder final {
     vh::SubtypeIndication subtype;
     subtype.type_mark = type_reference(input.type, input.span, scope);
     subtype.signed_value = input.type.is_signed;
+    subtype.integer_storage_width =
+        input.type.vhdl_integer_storage_width;
     output.subtype = subtype;
     output.declared_value = model_.add_value(
         scope,
@@ -391,18 +395,23 @@ class VhdlExecutableBuilder final {
     output.source = statement_source;
     output.origin = statement_origin;
     auto child_scope = enclosing_scope;
-    if (!input.declarations.empty()) {
+    if (input.kind == frontend::StatementKind::Block) {
       const auto scope_name = input.label.empty() ? "<block>" : input.label;
-      child_scope = model_.add_scope(
-          model_.scopes()[enclosing_scope.value()].unit,
-          enclosing_scope,
-          scope_name,
-          statement_source,
-          statement_origin);
+      const auto found_scope = std::ranges::find_if(
+          model_.scopes(), [&](const semantic::Scope& candidate) {
+            return candidate.parent == enclosing_scope
+                && candidate.name == scope_name
+                && candidate.source == statement_source;
+          });
+      if (found_scope == model_.scopes().end()) {
+        throw std::logic_error{"missing VHDL sequential block scope"};
+      }
+      child_scope = found_scope->id;
       output.nested_scope = child_scope;
-      for (const auto& declaration : input.declarations) {
-        output.declarations.push_back(block_variable(
-            declaration, child_scope, statement_origin));
+      for (const auto& declaration : hir_.declarations()) {
+        if (declaration.scope == child_scope) {
+          output.declarations.push_back(declaration.id);
+        }
       }
     }
     output.target = expression(input.target, child_scope, statement_origin);
@@ -499,6 +508,10 @@ class VhdlExecutableBuilder final {
             child, child_scope, statement_origin));
       }
       output.alternatives.push_back(std::move(converted));
+    }
+    if (input.kind == frontend::StatementKind::Block) {
+      fill_callable_bodies(input.functions, input.procedures, child_scope);
+      fill_protected_types(input.type_aliases, child_scope);
     }
     hir_.mutable_statements().push_back(std::move(output));
     return id;
@@ -755,6 +768,12 @@ class VhdlExecutableBuilder final {
     auto& overloads = hir_.mutable_overload_sets();
     overloads.clear();
     for (auto& [key, declarations] : groups) {
+      std::ranges::sort(
+          declarations,
+          [](const semantic::DeclarationId left,
+             const semantic::DeclarationId right) {
+            return left.value() < right.value();
+          });
       overloads.push_back(
           {key.first, std::move(key.second), std::move(declarations)});
     }
@@ -782,6 +801,157 @@ class VhdlExecutableBuilder final {
           break;
         }
         visible_scope = parent_scope(*visible_scope);
+      }
+    }
+    const auto find_declaration = [&](const semantic::DeclarationId id)
+        -> const vh::Declaration* {
+      const auto found = std::ranges::find_if(
+          hir_.declarations(),
+          [&](const vh::Declaration& declaration) {
+            return declaration.id == id;
+          });
+      return found == hir_.declarations().end() ? nullptr : &*found;
+    };
+    const auto find_expression = [&](const semantic::ExpressionId id)
+        -> const vh::Expression* {
+      const auto found = std::ranges::find_if(
+          hir_.expressions(), [&](const vh::Expression& expression) {
+            return expression.id == id;
+          });
+      return found == hir_.expressions().end() ? nullptr : &*found;
+    };
+    const auto actual_type_identity = [&](const vh::Expression& expression)
+        -> std::optional<std::string> {
+      if (!expression.nominal_type.empty()) {
+        return "nominal:" + expression.nominal_type;
+      }
+      if (!expression.referenced_name
+          || !expression.referenced_name->selected) {
+        return std::nullopt;
+      }
+      const auto* declaration = find_declaration(
+          *expression.referenced_name->selected);
+      if (declaration == nullptr || !declaration->subtype) {
+        return std::nullopt;
+      }
+      const auto& mark = declaration->subtype->type_mark;
+      return mark.target.valid()
+          ? std::optional<std::string>{
+                "type:" + std::to_string(mark.target.value())}
+          : !mark.spelling.empty()
+              ? std::optional<std::string>{"mark:" + mark.spelling}
+              : std::nullopt;
+    };
+
+    for (auto& expression : hir_.mutable_expressions()) {
+      if (expression.kind != vh::ExpressionKind::call
+          || !expression.referenced_name) {
+        continue;
+      }
+      std::vector<std::pair<semantic::DeclarationId,
+                            std::vector<std::string>>> inferred_candidates;
+      bool has_unspecified_candidate = false;
+      for (const auto candidate_id :
+           expression.referenced_name->overloads) {
+        const auto* candidate = find_declaration(candidate_id);
+        if (candidate == nullptr || !candidate->callable
+            || !candidate->callable->function
+            || candidate->callable->formals.size()
+                != expression.operands.size()) {
+          continue;
+        }
+        std::vector<const vh::Expression*> actuals(
+            candidate->callable->formals.size());
+        bool association_valid = true;
+        for (std::size_t index = 0;
+             index < expression.operands.size(); ++index) {
+          std::size_t formal_index = index;
+          if (index < expression.argument_names.size()
+              && !expression.argument_names[index].empty()) {
+            const auto named = std::ranges::find_if(
+                candidate->callable->formals,
+                [&](const semantic::DeclarationId formal_id) {
+                  const auto* formal = find_declaration(formal_id);
+                  return formal != nullptr
+                      && canonical_vhdl_name(formal->name)
+                          == canonical_vhdl_name(
+                              expression.argument_names[index]);
+                });
+            if (named == candidate->callable->formals.end()) {
+              association_valid = false;
+              break;
+            }
+            formal_index = static_cast<std::size_t>(std::distance(
+                candidate->callable->formals.begin(), named));
+          }
+          if (actuals[formal_index] != nullptr) {
+            association_valid = false;
+            break;
+          }
+          actuals[formal_index] = find_expression(
+              expression.operands[index]);
+        }
+        if (!association_valid
+            || std::ranges::any_of(actuals, [](const auto* actual) {
+                 return actual == nullptr;
+               })) {
+          continue;
+        }
+
+        std::unordered_map<std::string, std::string> inference;
+        bool candidate_uses_unspecified = false;
+        bool candidate_valid = true;
+        for (std::size_t index = 0;
+             index < candidate->callable->formals.size(); ++index) {
+          const auto* formal = find_declaration(
+              candidate->callable->formals[index]);
+          if (formal == nullptr || !formal->subtype
+              || formal->subtype->unspecified_class
+                  == vh::UnspecifiedTypeClass::none) {
+            continue;
+          }
+          candidate_uses_unspecified = true;
+          const auto identity = actual_type_identity(*actuals[index]);
+          if (!identity) {
+            candidate_valid = false;
+            break;
+          }
+          const auto key =
+              formal->subtype->unspecified_inference_identity.empty()
+              ? std::to_string(index)
+              : formal->subtype->unspecified_inference_identity;
+          const auto [found, inserted] = inference.emplace(key, *identity);
+          if (!inserted && found->second != *identity) {
+            candidate_valid = false;
+            break;
+          }
+        }
+        has_unspecified_candidate = has_unspecified_candidate
+            || candidate_uses_unspecified;
+        if (!candidate_uses_unspecified || !candidate_valid) {
+          continue;
+        }
+        std::vector<std::string> identities;
+        identities.reserve(inference.size());
+        for (const auto& [key, identity] : inference) {
+          identities.push_back(key + "=" + identity);
+        }
+        std::ranges::sort(identities);
+        inferred_candidates.emplace_back(
+            candidate_id, std::move(identities));
+      }
+      if (!has_unspecified_candidate) {
+        continue;
+      }
+      expression.referenced_name->selected.reset();
+      expression.inferred_type_identities.clear();
+      expression.unspecified_type_inference_unique =
+          inferred_candidates.size() == 1U;
+      if (expression.unspecified_type_inference_unique) {
+        expression.referenced_name->selected =
+            inferred_candidates.front().first;
+        expression.inferred_type_identities =
+            std::move(inferred_candidates.front().second);
       }
     }
   }

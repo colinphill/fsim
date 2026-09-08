@@ -376,7 +376,10 @@ InterfaceTypeSpecialization specialize_systemverilog_type_parameters(
                 { },
                 frontend::TypeDeclarationKind::
                     SystemVerilogTypedef,
-                { } });
+                { },
+                { },
+                { },
+                false });
         result.values.emplace_back(
             formal.name,
             supported_type_actual(*actual_type)
@@ -420,7 +423,10 @@ InterfaceTypeSpecialization specialize_systemverilog_type_parameters(
                 { },
                 frontend::TypeDeclarationKind::
                     SystemVerilogTypedef,
-                { } });
+                { },
+                { },
+                { },
+                false });
         result.values.emplace_back(
             parameter.name,
             supported_type_actual(*actual_type)

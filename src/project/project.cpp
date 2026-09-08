@@ -1886,6 +1886,8 @@ std::string_view to_string(const VhdlStandard standard) noexcept
         return "2002";
     case VhdlStandard::vhdl_2008:
         return "2008";
+    case VhdlStandard::vhdl_2019:
+        return "2019";
     }
     return "2008";
 }
@@ -1991,7 +1993,8 @@ std::optional<Language> parse_language(const std::string_view spelling) noexcept
         || normalized == "vhdl-1993" || normalized == "vhdl-00"
         || normalized == "vhdl-2000" || normalized == "vhdl-02"
         || normalized == "vhdl-2002" || normalized == "vhdl-08"
-        || normalized == "vhdl-2008") {
+        || normalized == "vhdl-2008" || normalized == "vhdl-19"
+        || normalized == "vhdl-2019") {
         return Language::vhdl;
     }
     if (normalized == "verilog" || normalized == "v"
@@ -2040,6 +2043,10 @@ std::optional<VhdlStandard> parse_vhdl_standard(
     if (normalized == "08" || normalized == "2008"
         || normalized == "vhdl-08" || normalized == "vhdl-2008") {
         return VhdlStandard::vhdl_2008;
+    }
+    if (normalized == "19" || normalized == "2019"
+        || normalized == "vhdl-19" || normalized == "vhdl-2019") {
+        return VhdlStandard::vhdl_2019;
     }
     return std::nullopt;
 }

@@ -63,6 +63,7 @@ enum class DeclarationForm : std::uint8_t {
     attribute_specification,
     group_template,
     group_instance,
+    mode_view,
 };
 
 enum class TypeForm : std::uint8_t {
@@ -78,6 +79,19 @@ enum class TypeForm : std::uint8_t {
     physical,
     subtype,
     alias,
+};
+
+enum class UnspecifiedTypeClass : std::uint8_t {
+    none,
+    private_type,
+    scalar,
+    discrete,
+    integer,
+    physical,
+    floating,
+    array,
+    access,
+    file,
 };
 
 enum class RangeKind : std::uint8_t {
@@ -187,6 +201,11 @@ enum class PredefinedAttribute : std::uint8_t {
     rightof,
     image,
     value,
+    // Appended for VHDL-2019 so every retained v3 numeric identity above is
+    // stable across object/design serialization.
+    index,
+    designated_subtype,
+    reflect,
 };
 
 enum class ExpressionKind : std::uint8_t {
@@ -206,6 +225,7 @@ enum class ExpressionKind : std::uint8_t {
     concatenation,
     replication,
     default_choice,
+    conditional,
 };
 
 enum class StatementKind : std::uint8_t {
@@ -273,6 +293,11 @@ struct Expression {
     std::vector<AggregateAssociation> associations;
     std::string nominal_type;
     std::optional<std::string> decoded_string;
+    // VHDL-2019 unspecified interface types are inferred from associated
+    // typed actuals. These identities are populated only when exactly one
+    // callable profile yields one consistent type per implicit formal.
+    std::vector<std::string> inferred_type_identities;
+    bool unspecified_type_inference_unique { };
 };
 
 struct DelayValue {
@@ -367,9 +392,19 @@ struct Process {
 struct SubtypeIndication {
     TypeReference type_mark;
     Name resolution_function;
+    std::optional<PredefinedAttribute> predefined_attribute;
+    std::optional<ExpressionId> predefined_attribute_dimension;
     std::vector<RangeConstraint> constraints;
     bool signed_value { };
     bool unconstrained { };
+    std::uint8_t integer_storage_width { };
+    UnspecifiedTypeClass unspecified_class {
+        UnspecifiedTypeClass::none
+    };
+    std::vector<UnspecifiedTypeClass> unspecified_component_classes;
+    std::vector<std::string> unspecified_component_type_marks;
+    std::size_t unspecified_array_index_count { };
+    std::string unspecified_inference_identity;
 };
 
 struct RecordElement {
@@ -411,6 +446,8 @@ struct TypeDefinition {
     std::optional<SubtypeIndication> element_subtype;
     std::vector<RecordElement> record_elements;
     std::optional<SubtypeIndication> designated_subtype;
+    bool deallocate_releases_storage { true };
+    bool reclaim_when_unreachable { };
     std::vector<DeclarationId> protected_members;
     std::vector<PhysicalUnit> physical_units;
     std::vector<PredefinedAttribute> attributes;
@@ -432,6 +469,7 @@ struct CallableProfile {
     bool pure { };
     bool defined { };
     std::optional<SubtypeIndication> return_type;
+    std::optional<DeclarationId> return_identifier;
     std::vector<DeclarationId> formals;
 };
 
@@ -464,6 +502,47 @@ struct GroupProfile {
     std::vector<Name> entries;
 };
 
+enum class ModeViewElementForm : std::uint8_t {
+    direction,
+    record_view,
+    array_view,
+};
+
+enum class ModeViewCompositionState : std::uint8_t {
+    uncomposed,
+    complete,
+    invalid,
+    recursive,
+};
+
+struct ModeViewElement {
+    Name element;
+    ModeViewElementForm form { ModeViewElementForm::direction };
+    Direction direction { Direction::unknown };
+    std::optional<Name> referenced_view;
+    std::optional<SubtypeIndication> subtype;
+    std::vector<ModeViewElement> elements;
+};
+
+struct ModeViewProfile {
+    SubtypeIndication record_subtype;
+    std::vector<ModeViewElement> elements;
+    std::optional<Name> converse_of;
+    ModeViewCompositionState composition {
+        ModeViewCompositionState::uncomposed
+    };
+};
+
+struct ModeViewInterfaceProfile {
+    ModeViewElementForm form { ModeViewElementForm::record_view };
+    Name view;
+    bool explicit_subtype { };
+    std::vector<ModeViewElement> elements;
+    ModeViewCompositionState composition {
+        ModeViewCompositionState::uncomposed
+    };
+};
+
 struct Declaration {
     DeclarationId id;
     ScopeId scope;
@@ -480,12 +559,17 @@ struct Declaration {
     Direction direction { Direction::unknown };
     bool shared { };
     bool local { };
+    // Present for an alias declaration. Protected method aliases are untyped,
+    // so the target is retained independently from the optional subtype.
+    std::optional<Name> alias_target;
     std::optional<ScopeId> nested_scope;
     std::optional<CallableProfile> callable;
     std::optional<ComponentProfile> component;
     std::optional<PackageProfile> package;
     std::optional<AttributeProfile> attribute;
     std::optional<GroupProfile> group;
+    std::optional<ModeViewProfile> mode_view;
+    std::optional<ModeViewInterfaceProfile> interface_view;
     bool deferred { };
     std::optional<DeclarationId> completion;
     std::optional<SourceSpanId> completion_source;

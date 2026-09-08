@@ -146,7 +146,12 @@ std::optional<RegisterId> Lowerer::lower_vhdl_scalar_attribute(
       || expression.text == "'val" || expression.text == "'succ"
       || expression.text == "'pred" || expression.text == "'leftof"
       || expression.text == "'rightof";
-  if (!scalar_type(type_mark)) {
+  const bool object_shorthand =
+      vhdl_standard_ >= frontend::VhdlStandard::Vhdl2019
+      && expression.text != "'val" && scalar_value_attribute
+      && expression.operands.size() == 1U && scalar_type(object);
+  const auto* attribute_type = object_shorthand ? object : type_mark;
+  if (!scalar_type(attribute_type)) {
     if (type_mark != nullptr && is_vhdl_array_like(*type_mark)
         && scalar_value_attribute) {
       report(
@@ -172,7 +177,17 @@ std::optional<RegisterId> Lowerer::lower_vhdl_scalar_attribute(
     }
     return std::nullopt;
   }
-  const auto& type = *type_mark;
+  const auto& type = *attribute_type;
+  if (vhdl_standard_ < frontend::VhdlStandard::Vhdl2019
+      && (expression.text == "'length" || expression.text == "'range"
+          || expression.text == "'reverse_range")) {
+    report(
+        "FSIM-ELAB-VHATTR-011",
+        expression.text
+            + " on a scalar prefix requires the VHDL-2019 profile",
+        expression.span);
+    return std::nullopt;
+  }
   const bool enumeration = !type.enumeration_literals.empty();
   const bool integer = type.domain == frontend::ValueDomain::Integer;
   const bool boolean = type.domain == frontend::ValueDomain::Boolean;
@@ -214,7 +229,8 @@ std::optional<RegisterId> Lowerer::lower_vhdl_scalar_attribute(
   }
 
   const auto width_value = type.width();
-  if (!width_value || *width_value == 0 || *width_value > 32
+  if (!width_value || *width_value == 0
+      || *width_value > (integer ? 64U : 32U)
       || (enumeration
           && type.enumeration_literals.size()
               > static_cast<std::size_t>(
@@ -236,17 +252,16 @@ std::optional<RegisterId> Lowerer::lower_vhdl_scalar_attribute(
           false});
     }
     if (integer) {
-      const auto value = type.integer_range.value_or(frontend::IntegerRange{
-          std::numeric_limits<std::int32_t>::min(),
-          std::numeric_limits<std::int32_t>::max(),
-          false});
+      const auto value = type.integer_range.value_or(
+          frontend::vhdl_predefined_integer_range(
+              vhdl_standard_, "integer"));
       return frontend::EnumerationRange{
           value.left, value.right, value.descending};
     }
     return frontend::EnumerationRange{0, 1, false};
   }();
-  const auto left = static_cast<std::int32_t>(range.left);
-  const auto right = static_cast<std::int32_t>(range.right);
+  const auto left = range.left;
+  const auto right = range.right;
   const auto low = std::min(left, right);
   const auto high = std::max(left, right);
   const std::string diagnostic = enumeration
@@ -270,12 +285,12 @@ std::optional<RegisterId> Lowerer::lower_vhdl_scalar_attribute(
         expression.span);
     return false;
   };
-  const auto load_scalar = [&](const std::int32_t value) {
+  const auto load_scalar = [&](const std::int64_t value) {
     const auto destination = allocate_register(width, type.domain);
     process_.operations.emplace_back(LoadConstant{
         destination,
-        integer ? integer_value(value)
-                : unsigned_value(static_cast<std::uint32_t>(value), width)});
+        integer ? integer_value(value, width)
+                : unsigned_value(static_cast<std::uint64_t>(value), width)});
     return destination;
   };
 
@@ -304,11 +319,25 @@ std::optional<RegisterId> Lowerer::lower_vhdl_scalar_attribute(
     if (!require_arity(0)) {
       return std::nullopt;
     }
-    const auto destination =
-        allocate_register(32, frontend::ValueDomain::Integer);
+    const auto integer_width = static_cast<std::size_t>(
+        frontend::vhdl_predefined_integer_storage_width(vhdl_standard_));
+    const auto integer_range = frontend::vhdl_predefined_integer_range(
+        vhdl_standard_, "integer");
+    const auto distance = index_distance(low, high);
+    if (distance == std::numeric_limits<std::uint64_t>::max()
+        || distance + 1U
+            > static_cast<std::uint64_t>(integer_range.right)) {
+      report(
+          range_diagnostic,
+          "'length result is outside the predefined integer range",
+          expression.span);
+      return std::nullopt;
+    }
+    const auto destination = allocate_register(
+        integer_width, frontend::ValueDomain::Integer);
     process_.operations.emplace_back(
         LoadConstant{destination, integer_value(
-            static_cast<std::int64_t>(high) - low + 1)});
+            static_cast<std::int64_t>(distance + 1U), integer_width)});
     return destination;
   }
   if (expression.text == "'ascending") {
@@ -339,7 +368,7 @@ std::optional<RegisterId> Lowerer::lower_vhdl_scalar_attribute(
         expression.span);
     return std::nullopt;
   }
-  if (!require_arity(1)) {
+  if (!require_arity(object_shorthand ? 0U : 1U)) {
     return std::nullopt;
   }
 
@@ -360,11 +389,14 @@ std::optional<RegisterId> Lowerer::lower_vhdl_scalar_attribute(
           expression.operands[1].span);
       return std::nullopt;
     }
-    const auto argument = lower_expression(expression.operands[1], 32);
-    if (!argument || register_width(*argument) != 32) {
+    const auto integer_width = static_cast<std::size_t>(
+        frontend::vhdl_predefined_integer_storage_width(vhdl_standard_));
+    const auto argument = lower_expression(
+        expression.operands[1], integer_width);
+    if (!argument || register_width(*argument) != integer_width) {
       report(
           diagnostic,
-          "'val argument does not have the portable 32-bit integer representation",
+          "'val argument does not have the profile-selected integer representation",
           expression.operands[1].span);
       return std::nullopt;
     }
@@ -376,7 +408,9 @@ std::optional<RegisterId> Lowerer::lower_vhdl_scalar_attribute(
   }
 
   const auto argument = [&]() -> std::optional<RegisterId> {
-    const auto& candidate = expression.operands[1];
+    const auto& candidate = object_shorthand
+        ? expression.operands.front()
+        : expression.operands[1];
     if (enumeration) {
       if (candidate.kind == ExpressionKind::IntegerLiteral
           || candidate.kind == ExpressionKind::BooleanLiteral
@@ -451,9 +485,13 @@ std::optional<RegisterId> Lowerer::lower_vhdl_scalar_attribute(
     return std::nullopt;
   }
   process_.operations.emplace_back(IntegerCheck{ordinal, lower, upper});
-  const auto one = allocate_register(32, frontend::ValueDomain::Integer);
-  process_.operations.emplace_back(LoadConstant{one, integer_value(1)});
-  const auto adjusted = allocate_register(32, frontend::ValueDomain::Integer);
+  const auto ordinal_width = register_width(ordinal);
+  const auto one = allocate_register(
+      ordinal_width, frontend::ValueDomain::Integer);
+  process_.operations.emplace_back(
+      LoadConstant{one, integer_value(1, ordinal_width)});
+  const auto adjusted = allocate_register(
+      ordinal_width, frontend::ValueDomain::Integer);
   process_.operations.emplace_back(IntegerBinary{
       successor ? IntegerBinaryOperator::add
                 : IntegerBinaryOperator::subtract,
