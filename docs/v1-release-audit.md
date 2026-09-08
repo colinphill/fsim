@@ -17,7 +17,7 @@ runtime evidence, and names evidence paths that exist in the checkout.
 |---|---|---:|---:|
 | SystemVerilog language | `SV` | 854 | Task 2 plus v2 Batches 144-157, 159-162, and 165 |
 | SystemVerilog release contract | `V1-SV` | 9 | Task 2 |
-| VHDL language | `VH` | 279 | Task 3 plus v2 Batches 140-143 and 158 |
+| VHDL language | `VH` | 281 | Task 3 plus v2 Batches 140-143 and 158 and v3 Batch 184 |
 | VHDL release contract | `V1-VH` | 8 | Task 3 |
 | Mixed-language behavior | `ML` | 17 | Task 4 plus v2 Batch 134 |
 | SystemC behavior | `SC` | 28 | Task 4 |
@@ -119,7 +119,7 @@ The synchronized Batch 165 Change 19 candidate corpus freezes 1,294 executable r
 5,176 linked evidence cells, and 617 exact paths split across 272 test, 318
 production, and 27 release/build owners. It retains 144 runtime files and 36
 corpus CTests with matrix digest
-`dddb62ed63296b973dfbc6aa649162a9f2b634645e88098645acc6e4ba905e3e`
+`28aca45a0ca88ded646cbd1baff5d9cc29346d3bf8a0da0fa0187dd58b0179da`
 and evidence digest
 `e4076a40c31945c3385495a1c3076b85518143712c89ea1fa3f629fffaac6120`.
 

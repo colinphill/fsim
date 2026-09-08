@@ -25,14 +25,14 @@ namespace fsim::test {
 void ApplicationTestFixture::test_artifact_phase_semantics()
 {
     install_governed_process_address_space_ceiling();
-    static_assert(app::kRuntimeStateSchema == 51);
+    static_assert(app::kRuntimeStateSchema == 59);
     static_assert(app::kSemanticStateSchema == 4);
     static_assert(app::kDesignIrStateSchema == 4);
     static_assert(app::kClassStateSchema == 11);
     static_assert(app::kSystemVerilogConstraintHirStateSchema == 7);
     static_assert(app::kSystemVerilogCoverageStateSchema == 5);
     static_assert(app::kSystemVerilogUvmStateSchema == 3);
-    static_assert(app::kVhdlHirStateSchema == 3);
+    static_assert(app::kVhdlHirStateSchema == 4);
     const auto copy_artifact_tree = [](
                                         const std::filesystem::path& source_root,
                                         const std::filesystem::path& destination) {
@@ -343,29 +343,38 @@ end architecture;
     assert(vhdl_metadata->standard == "2008");
     assert(vhdl_metadata->compatibility_profile
         == "fsim-synopsys-ieee-compat-v2");
-    assert(vhdl_metadata->vhdl_package_dependencies.size() == 2U);
-    assert(vhdl_metadata->vhdl_package_dependencies.front().package
-        == "ieee.std_logic_arith");
-    assert(vhdl_metadata->vhdl_package_dependencies.back().package
-        == "ieee.std_logic_unsigned");
+    assert(vhdl_metadata->vhdl_package_dependencies.size() == 6U);
+    const auto vhdl_dependency = [&](const std::string_view package) {
+        const auto found = std::ranges::find(
+            vhdl_metadata->vhdl_package_dependencies, package,
+            &library::VhdlPackageDependency::package);
+        assert(found != vhdl_metadata->vhdl_package_dependencies.end());
+        return found;
+    };
     assert(std::ranges::all_of(
         vhdl_metadata->vhdl_package_dependencies,
         [](const auto& dependency) {
             return dependency.standard == "2008"
                 && dependency.predefined_environment
-                    == "ieee-1076-standard:2008:fsim-v1"
-                && dependency.revision.starts_with(
-                    "synopsys-legacy-ieee:1990-1992:"
-                    "fsim-synopsys-ieee-compat-v2:")
-                && dependency.revision.ends_with(":vhdl-2008")
+                    == "ieee-1076-standard:2008:fsim-v3"
                 && dependency.source_digest.size() == 64U;
         }));
-    assert(vhdl_metadata->vhdl_package_dependencies.front().revision
+    assert(vhdl_dependency("ieee.numeric_std")->revision
+        == "ieee-p1076:1076-2019:"
+           "16a012320947d378611cc7457f64ed76cb52bac4");
+    assert(vhdl_dependency("ieee.std_logic_1164")->revision
+        == "ieee-p1076:1076-2019:"
+           "16a012320947d378611cc7457f64ed76cb52bac4");
+    assert(vhdl_dependency("ieee.std_logic_arith")->revision
         == "synopsys-legacy-ieee:1990-1992:"
            "fsim-synopsys-ieee-compat-v2:std_logic_arith:vhdl-2008");
-    assert(vhdl_metadata->vhdl_package_dependencies.back().revision
+    assert(vhdl_dependency("ieee.std_logic_unsigned")->revision
         == "synopsys-legacy-ieee:1990-1992:"
            "fsim-synopsys-ieee-compat-v2:std_logic_unsigned:vhdl-2008");
+    assert(vhdl_dependency("ieee.vital_timing")->revision
+        == "ieee-vital:2000:fsim-clean-room-v1");
+    assert(vhdl_dependency("ieee.vital_primitives")->revision
+        == "ieee-vital:2000:fsim-clean-room-v1");
     const auto vhdl_compilation_digest = artifact::compute_object_compilation_digest(*vhdl_metadata);
     auto changed_vhdl_revision = *vhdl_metadata;
     changed_vhdl_revision.standard = "1993";
@@ -495,7 +504,7 @@ end architecture;
     output.str({ });
     error.str({ });
     const std::vector<const char*> elaborate {
-        "fsim", "elaborate", "--object", vhdl_object_text.c_str(),
+        "fsim", "elaborate", "--object", vhdl_2019_object_text.c_str(),
         "--object", sv_object_text.c_str(), "--top",
         "main=sv:work.phase_tb", "--top", "observer=sv:work.phase_watch",
         "--top", "scalar=sv:work.scalar_artifact",
@@ -530,11 +539,11 @@ end architecture;
         design_metadata->objects,
         [](const auto& object) { return object.language == "vhdl"; });
     assert(vhdl_design_input != design_metadata->objects.end());
-    assert(vhdl_design_input->standard == "2008");
+    assert(vhdl_design_input->standard == "2019");
     assert(vhdl_design_input->compatibility_profile
         == "fsim-synopsys-ieee-compat-v2");
     assert(vhdl_design_input->vhdl_package_dependencies
-        == vhdl_metadata->vhdl_package_dependencies);
+        == vhdl_2019_metadata->vhdl_package_dependencies);
     const auto sv_design_input = std::ranges::find_if(
         design_metadata->objects,
         [](const auto& object) { return object.language == "systemverilog"; });
@@ -554,9 +563,9 @@ end architecture;
     assert(std::ranges::all_of(
         design_metadata->vhdl_unit_provenance,
         [](const auto& provenance) {
-            return provenance.standard == "2008"
+            return provenance.standard == "2019"
                 && provenance.predefined_environment
-                    == "ieee-1076-standard:2008:fsim-v1"
+                    == "ieee-1076-standard:2019:fsim-v3"
                 && provenance.compatibility_profile
                     == "fsim-synopsys-ieee-compat-v2";
         }));
@@ -637,11 +646,20 @@ end architecture;
     assert(vhdl_2008_identity->specialization_cache_keys
         != vhdl_2019_identity->specialization_cache_keys);
     auto changed_design_dependency = *design_metadata;
-    std::ranges::find_if(
+    auto& changed_object_dependencies = std::ranges::find_if(
         changed_design_dependency.objects,
         [](const auto& object) { return object.language == "vhdl"; })
-        ->vhdl_package_dependencies.front().source_digest =
-            std::string(64, '0');
+        ->vhdl_package_dependencies;
+    const auto stale_package = changed_object_dependencies.front().package;
+    changed_object_dependencies.front().source_digest = std::string(64, '0');
+    for (auto& provenance : changed_design_dependency.vhdl_unit_provenance) {
+        const auto dependency = std::ranges::find(
+            provenance.package_dependencies, stale_package,
+            &library::VhdlPackageDependency::package);
+        if (dependency != provenance.package_dependencies.end()) {
+            dependency->source_digest = std::string(64, '0');
+        }
+    }
     changed_design_dependency.design_digest =
         artifact::compute_design_digest(changed_design_dependency);
     const auto stale_design =
@@ -728,7 +746,7 @@ end architecture;
     assert(std::ranges::any_of(
         coverage_checkpoint->design.processes(),
         [](const auto& process) {
-            return process.language_standard == "2008"
+            return process.language_standard == "2019"
                 && process.compatibility_profile
                 == "fsim-synopsys-ieee-compat-v2";
         }));
@@ -893,7 +911,8 @@ end architecture;
     runtime_view.view = "bus_view";
     runtime_view.kind = frontend::VhdlModeViewIndicationKind::record;
     runtime_view.elements.push_back({
-        "request", "request", frontend::PortDirection::Input, { } });
+        "request", "request", frontend::PortDirection::Input, { },
+        runtime::simir::SignalId { 0U }, 0U, 1U });
     vhdl_2019_runtime_state.signal_info.front()
         .vhdl_mode_view_bindings.push_back(std::move(runtime_view));
     const auto vhdl_2019_runtime_design
@@ -917,7 +936,22 @@ end architecture;
             == 1U
         && restored_vhdl_2019_runtime->signals().front()
                 .vhdl_mode_view_bindings.front().elements.front().direction
-            == frontend::PortDirection::Input);
+            == frontend::PortDirection::Input
+        && restored_vhdl_2019_runtime->signals().front()
+                .vhdl_mode_view_bindings.front().elements.front().signal
+            == 0U
+        && restored_vhdl_2019_runtime->signals().front()
+                .vhdl_mode_view_bindings.front().elements.front().lsb_offset
+            == 0U
+        && restored_vhdl_2019_runtime->signals().front()
+                .vhdl_mode_view_bindings.front().elements.front().width
+            == 1U);
+    auto invalid_vhdl_2019_endpoint_state
+        = restored_vhdl_2019_runtime->state();
+    invalid_vhdl_2019_endpoint_state.signal_info.front()
+        .vhdl_mode_view_bindings.front().elements.front().width = 0U;
+    assert(!elaboration::ElaboratedDesign::from_state(
+        std::move(invalid_vhdl_2019_endpoint_state)));
     auto invalid_vhdl_2019_runtime_state
         = restored_vhdl_2019_runtime->state();
     invalid_vhdl_2019_runtime_state.signal_info.front()
@@ -1249,9 +1283,9 @@ end architecture;
     assert(error.str().find("ambiguous") != std::string::npos);
     assert(!std::filesystem::exists(ambiguous_design));
     std::filesystem::rename(
-        vhdl_object,
-        directory / "artifact-vhdl.fsimobj.producer-hidden");
-    assert(!std::filesystem::exists(vhdl_object));
+        vhdl_2019_object,
+        directory / "artifact-vhdl-2019.fsimobj.producer-hidden");
+    assert(!std::filesystem::exists(vhdl_2019_object));
 
     std::vector<runtime::SystemVerilogUvmCheckpointArtifact>
         replay_checkpoints;
@@ -1326,9 +1360,9 @@ end architecture;
             simulation.vhdl_provenance_comments();
         assert(std::ranges::any_of(
             provenance_comments, [](const auto& comment) {
-                return comment.find("standard=2008") != std::string::npos
+                return comment.find("standard=2019") != std::string::npos
                     && comment.find(
-                           "environment=ieee-1076-standard:2008:fsim-v1")
+                           "environment=ieee-1076-standard:2019:fsim-v3")
                         != std::string::npos
                     && comment.find(
                            "profile=fsim-synopsys-ieee-compat-v2")
@@ -1418,12 +1452,15 @@ end architecture;
     const auto interpreted = run_engine(app::SimulationEngine::interpreter);
     const auto compiled = run_engine(app::SimulationEngine::compiled);
     const auto compiled_warm = run_engine(app::SimulationEngine::compiled);
+    const auto debug = run_engine(app::SimulationEngine::debug);
     assert(interpreted == compiled);
     assert(compiled == compiled_warm);
+    assert(compiled_warm == debug);
     assert(
-        replay_checkpoints.size() == 3
+        replay_checkpoints.size() == 4
         && replay_checkpoints[0] == replay_checkpoints[1]
-        && replay_checkpoints[1] == replay_checkpoints[2]);
+        && replay_checkpoints[1] == replay_checkpoints[2]
+        && replay_checkpoints[2] == replay_checkpoints[3]);
     assert(std::get<0>(interpreted) == "00000001");
     assert(std::get<1>(interpreted) == "1");
 
@@ -1472,9 +1509,9 @@ end architecture;
         != std::string::npos);
     assert(trace_bytes.find("$comment fsim-vhdl-scope path=")
         != std::string::npos);
-    assert(trace_bytes.find("standard=2008") != std::string::npos);
+    assert(trace_bytes.find("standard=2019") != std::string::npos);
     assert(trace_bytes.find(
-               "environment=ieee-1076-standard:2008:fsim-v1")
+               "environment=ieee-1076-standard:2019:fsim-v3")
         != std::string::npos);
     assert(trace_bytes.find(
                "profile=fsim-synopsys-ieee-compat-v2")

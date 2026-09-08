@@ -20,6 +20,493 @@ namespace {
 
 } // namespace
 
+bool Lowerer::lower_vhdl_simulator_procedure_call(
+    const Statement& statement)
+{
+    const auto api = frontend::vhdl_simulator_api(statement.procedure_name);
+    if (api == frontend::VhdlSimulatorApi::none) {
+        return false;
+    }
+    if (vhdl_standard_ < frontend::VhdlStandard::Vhdl2019) {
+        report(
+            "FSIM-ELAB-VHENV-001",
+            "the STD.ENV simulator API requires VHDL-2019",
+            statement.span);
+        return true;
+    }
+    if (api == frontend::VhdlSimulatorApi::set_psl_cover_assert) {
+        if (statement.procedure_arguments.size() > 1U
+            || std::ranges::any_of(
+                statement.procedure_arguments,
+                [](const auto& association) {
+                    return association.formal
+                        && *association.formal != "enable";
+                })) {
+            report(
+                "FSIM-ELAB-VHENV-003",
+                "STD.ENV SETPSLCOVERASSERT accepts at most one BOOLEAN ENABLE actual",
+                statement.span);
+            return true;
+        }
+        std::optional<RegisterId> enable;
+        if (statement.procedure_arguments.empty()) {
+            enable = allocate_register(1U, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(LoadConstant {
+                *enable, PackedLogic4::from_aval_bval(1U, 1U, 0U) });
+        } else {
+            const auto& actual = statement.procedure_arguments.front().value;
+            enable = lower_expression(actual, 1U);
+            if (!enable) {
+                return true;
+            }
+            if (register_width(*enable) != 1U
+                || register_domain(*enable)
+                    != frontend::ValueDomain::Boolean) {
+                report(
+                    "FSIM-ELAB-VHENV-004",
+                    "STD.ENV SETPSLCOVERASSERT ENABLE must be BOOLEAN",
+                    actual.span);
+                return true;
+            }
+        }
+        process_.operations.emplace_back(VhdlPslApi {
+            VhdlPslApiKind::set_cover_assert, std::nullopt, enable });
+        return true;
+    }
+    if (api == frontend::VhdlSimulatorApi::clear_psl_state) {
+        if (!statement.procedure_arguments.empty()) {
+            report(
+                "FSIM-ELAB-VHENV-003",
+                "STD.ENV CLEARPSLSTATE does not accept arguments",
+                statement.span);
+            return true;
+        }
+        process_.operations.emplace_back(VhdlPslApi {
+            VhdlPslApiKind::clear_state, std::nullopt, std::nullopt });
+        return true;
+    }
+    const auto assert_source = SourceLocation {
+        statement.span.source_name.str(),
+        static_cast<std::uint32_t>(statement.span.begin.line),
+        static_cast<std::uint32_t>(statement.span.begin.column) };
+    const auto severity_type = [] {
+        frontend::Type type;
+        type.spelling = "severity_level";
+        type.domain = frontend::ValueDomain::Bit2;
+        type.packed_range = frontend::PackedRange { 1, 0, true };
+        type.enumeration_literals = {
+            "note", "warning", "error", "failure" };
+        return type;
+    }();
+    const auto boolean_type = [] {
+        frontend::Type type;
+        type.spelling = "boolean";
+        type.domain = frontend::ValueDomain::Boolean;
+        type.packed_range = frontend::PackedRange { 0, 0, true };
+        type.nominal_type = "@builtin:boolean";
+        type.vhdl_type_declaration = type.nominal_type;
+        return type;
+    }();
+    const auto constant = [&](const std::size_t width,
+                              const frontend::ValueDomain domain,
+                              const std::uint64_t value) {
+        const auto result = allocate_register(width, domain);
+        process_.operations.emplace_back(LoadConstant {
+            result, PackedLogic4::from_aval_bval(width, value, 0U) });
+        return result;
+    };
+    if (api == frontend::VhdlSimulatorApi::clear_vhdl_assert) {
+        if (!statement.procedure_arguments.empty()) {
+            report(
+                "FSIM-ELAB-VHENV-003",
+                "STD.ENV CLEARVHDLASSERT does not accept arguments",
+                statement.span);
+            return true;
+        }
+        process_.operations.emplace_back(VhdlAssertApi {
+            VhdlAssertApiKind::clear, std::nullopt, std::nullopt,
+            std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+            assert_source });
+        return true;
+    }
+    if (api == frontend::VhdlSimulatorApi::set_vhdl_assert_enable) {
+        if (statement.procedure_arguments.size() > 2U) {
+            report(
+                "FSIM-ELAB-VHENV-003",
+                "STD.ENV SETVHDLASSERTENABLE has no matching standardized association profile",
+                statement.span);
+            return true;
+        }
+        const Expression* level_actual { };
+        const Expression* enable_actual { };
+        std::size_t positional { };
+        bool valid { true };
+        for (const auto& association : statement.procedure_arguments) {
+            if (association.formal) {
+                if (*association.formal == "level" && level_actual == nullptr) {
+                    level_actual = &association.value;
+                } else if (*association.formal == "enable"
+                    && enable_actual == nullptr) {
+                    enable_actual = &association.value;
+                } else {
+                    valid = false;
+                }
+                continue;
+            }
+            if (statement.procedure_arguments.size() == 1U) {
+                if (vhdl_expression_matches_type(
+                        association.value, severity_type)) {
+                    level_actual = &association.value;
+                } else {
+                    enable_actual = &association.value;
+                }
+            } else if (positional++ == 0U && level_actual == nullptr) {
+                level_actual = &association.value;
+            } else if (enable_actual == nullptr) {
+                enable_actual = &association.value;
+            } else {
+                valid = false;
+            }
+        }
+        if (!valid) {
+            report(
+                "FSIM-ELAB-VHENV-003",
+                "STD.ENV SETVHDLASSERTENABLE has no matching standardized association profile",
+                statement.span);
+            return true;
+        }
+        std::optional<RegisterId> level;
+        if (level_actual != nullptr) {
+            level = lower_expression(*level_actual, 2U, &severity_type);
+            if (!level || register_width(*level) != 2U) {
+                report(
+                    "FSIM-ELAB-VHENV-004",
+                    "STD.ENV SETVHDLASSERTENABLE LEVEL must be SEVERITY_LEVEL",
+                    level_actual->span);
+                return true;
+            }
+        }
+        std::optional<RegisterId> enable;
+        if (enable_actual != nullptr) {
+            enable = lower_expression(*enable_actual, 1U, &boolean_type);
+            if (!enable || register_width(*enable) != 1U
+                || register_domain(*enable)
+                    != frontend::ValueDomain::Boolean) {
+                report(
+                    "FSIM-ELAB-VHENV-004",
+                    "STD.ENV SETVHDLASSERTENABLE ENABLE must be BOOLEAN",
+                    enable_actual->span);
+                return true;
+            }
+        } else {
+            enable = constant(1U, frontend::ValueDomain::Boolean, 1U);
+        }
+        process_.operations.emplace_back(VhdlAssertApi {
+            VhdlAssertApiKind::set_enable, std::nullopt, std::nullopt,
+            level, enable, std::nullopt, std::nullopt, assert_source });
+        return true;
+    }
+    if (api == frontend::VhdlSimulatorApi::set_vhdl_assert_format) {
+        const auto count = statement.procedure_arguments.size();
+        std::array<const Expression*, 3> actuals { nullptr, nullptr, nullptr };
+        static constexpr std::array names {
+            std::string_view { "level" }, std::string_view { "format" },
+            std::string_view { "valid" } };
+        std::size_t positional { };
+        bool valid = count == 2U || count == 3U;
+        for (const auto& association : statement.procedure_arguments) {
+            std::size_t formal = positional;
+            if (!association.formal) {
+                ++positional;
+            } else {
+                const auto found = std::ranges::find(names, *association.formal);
+                if (found == names.end()) {
+                    valid = false;
+                    continue;
+                }
+                formal = static_cast<std::size_t>(
+                    std::distance(names.begin(), found));
+            }
+            if (formal >= actuals.size() || actuals[formal] != nullptr) {
+                valid = false;
+            } else {
+                actuals[formal] = &association.value;
+            }
+        }
+        valid = valid && actuals[0] != nullptr && actuals[1] != nullptr
+            && (count == 2U ? actuals[2] == nullptr : actuals[2] != nullptr);
+        if (!valid) {
+            report(
+                "FSIM-ELAB-VHENV-003",
+                "STD.ENV SETVHDLASSERTFORMAT has no matching standardized association profile",
+                statement.span);
+            return true;
+        }
+        const auto level = lower_expression(*actuals[0], 2U, &severity_type);
+        const auto format = lower_string_expression(*actuals[1]);
+        if (!level || register_width(*level) != 2U) {
+            report(
+                "FSIM-ELAB-VHENV-004",
+                "STD.ENV SETVHDLASSERTFORMAT LEVEL must be SEVERITY_LEVEL",
+                actuals[0]->span);
+            return true;
+        }
+        if (!format) {
+            report(
+                "FSIM-ELAB-VHENV-004",
+                "STD.ENV SETVHDLASSERTFORMAT FORMAT must be STRING-compatible",
+                actuals[1]->span);
+            return true;
+        }
+        std::optional<RegisterId> format_valid;
+        if (actuals[2] != nullptr) {
+            const auto local = actuals[2]->kind == ExpressionKind::Identifier
+                ? locals_.find(actuals[2]->text) : locals_.end();
+            const auto* type = actuals[2]->kind == ExpressionKind::Identifier
+                ? object_type(actuals[2]->text) : nullptr;
+            if (local == locals_.end() || type == nullptr
+                || type->domain != frontend::ValueDomain::Boolean) {
+                report(
+                    "FSIM-ELAB-VHENV-004",
+                    "STD.ENV SETVHDLASSERTFORMAT VALID must be a writable BOOLEAN variable",
+                    actuals[2]->span);
+                return true;
+            }
+            format_valid = local->second;
+        }
+        process_.operations.emplace_back(VhdlAssertApi {
+            VhdlAssertApiKind::set_format, std::nullopt, std::nullopt,
+            *level, std::nullopt, *format, format_valid, assert_source });
+        return true;
+    }
+    if (api == frontend::VhdlSimulatorApi::set_vhdl_read_severity) {
+        if (statement.procedure_arguments.size() > 1U
+            || std::ranges::any_of(statement.procedure_arguments,
+                [](const auto& association) {
+                    return association.formal
+                        && *association.formal != "level";
+                })) {
+            report(
+                "FSIM-ELAB-VHENV-003",
+                "STD.ENV SETVHDLREADSEVERITY accepts at most one SEVERITY_LEVEL actual",
+                statement.span);
+            return true;
+        }
+        auto level = constant(
+            2U, frontend::ValueDomain::Bit2,
+            static_cast<std::uint64_t>(AssertionSeverity::failure));
+        if (!statement.procedure_arguments.empty()) {
+            const auto& actual = statement.procedure_arguments.front().value;
+            const auto lowered = lower_expression(actual, 2U, &severity_type);
+            if (!lowered || register_width(*lowered) != 2U) {
+                report(
+                    "FSIM-ELAB-VHENV-004",
+                    "STD.ENV SETVHDLREADSEVERITY LEVEL must be SEVERITY_LEVEL",
+                    actual.span);
+                return true;
+            }
+            level = *lowered;
+        }
+        process_.operations.emplace_back(VhdlAssertApi {
+            VhdlAssertApiKind::set_read_severity, std::nullopt,
+            std::nullopt, level, std::nullopt, std::nullopt,
+            std::nullopt, assert_source });
+        return true;
+    }
+    const bool directory_procedure = api
+            == frontend::VhdlSimulatorApi::dir_open
+        || api == frontend::VhdlSimulatorApi::dir_close
+        || api == frontend::VhdlSimulatorApi::dir_workingdir
+        || api == frontend::VhdlSimulatorApi::dir_createdir
+        || api == frontend::VhdlSimulatorApi::dir_deletedir
+        || api == frontend::VhdlSimulatorApi::dir_deletefile;
+    if (directory_procedure) {
+        std::vector<std::string_view> formals;
+        if (api == frontend::VhdlSimulatorApi::dir_open) {
+            formals = { "dir", "path", "status" };
+        } else if (api == frontend::VhdlSimulatorApi::dir_close) {
+            formals = { "dir" };
+        } else if (api == frontend::VhdlSimulatorApi::dir_createdir) {
+            formals = statement.procedure_arguments.size() == 3U
+                ? std::vector<std::string_view> { "path", "parents", "status" }
+                : std::vector<std::string_view> { "path", "status" };
+        } else if (api == frontend::VhdlSimulatorApi::dir_deletedir) {
+            formals = statement.procedure_arguments.size() == 3U
+                ? std::vector<std::string_view> { "path", "recursive", "status" }
+                : std::vector<std::string_view> { "path", "status" };
+        } else {
+            formals = { "path", "status" };
+        }
+        bool valid = statement.procedure_arguments.size() == formals.size();
+        std::vector<const Expression*> actuals(formals.size(), nullptr);
+        std::size_t positional = 0U;
+        for (const auto& association : statement.procedure_arguments) {
+            std::size_t formal = positional;
+            if (!association.formal) {
+                ++positional;
+            } else {
+                const auto found = std::ranges::find(
+                    formals, *association.formal);
+                if (found == formals.end()) {
+                    valid = false;
+                    continue;
+                }
+                formal = static_cast<std::size_t>(
+                    std::distance(formals.begin(), found));
+            }
+            if (formal >= actuals.size() || actuals[formal] != nullptr) {
+                valid = false;
+            } else {
+                actuals[formal] = &association.value;
+            }
+        }
+        valid = valid && std::ranges::all_of(
+            actuals, [](const Expression* value) { return value != nullptr; });
+        if (!valid) {
+            report(
+                "FSIM-ELAB-VHENV-003",
+                "STD.ENV directory procedure has no matching standardized association profile",
+                statement.span);
+            return true;
+        }
+        std::optional<ContainerRegisterId> directory;
+        std::optional<StringRegisterId> path;
+        std::optional<RegisterId> option;
+        std::optional<RegisterId> status;
+        std::size_t next = 0U;
+        if (api == frontend::VhdlSimulatorApi::dir_open
+            || api == frontend::VhdlSimulatorApi::dir_close) {
+            const auto& value = *actuals[next++];
+            const auto found = value.kind == ExpressionKind::Identifier
+                ? container_locals_.find(value.text) : container_locals_.end();
+            const auto* type = value.kind == ExpressionKind::Identifier
+                ? object_type(value.text) : nullptr;
+            if (found == container_locals_.end() || type == nullptr
+                || !frontend::is_vhdl_environment_directory(*type)) {
+                report(
+                    "FSIM-ELAB-VHENV-006",
+                    "STD.ENV directory DIR must be a DIRECTORY variable",
+                    value.span);
+                return true;
+            }
+            directory = found->second;
+        }
+        if (api != frontend::VhdlSimulatorApi::dir_close) {
+            path = lower_string_expression(*actuals[next++]);
+            if (!path) {
+                report(
+                    "FSIM-ELAB-VHENV-006",
+                    "STD.ENV directory PATH must be STRING-compatible",
+                    actuals[next - 1U]->span);
+                return true;
+            }
+        }
+        if ((api == frontend::VhdlSimulatorApi::dir_createdir
+                || api == frontend::VhdlSimulatorApi::dir_deletedir)
+            && actuals.size() == 3U) {
+            option = lower_expression(*actuals[next++], 1U);
+            if (!option) {
+                return true;
+            }
+        }
+        if (api != frontend::VhdlSimulatorApi::dir_close) {
+            const auto& value = *actuals[next];
+            const auto found = value.kind == ExpressionKind::Identifier
+                ? locals_.find(value.text) : locals_.end();
+            const auto* type = value.kind == ExpressionKind::Identifier
+                ? object_type(value.text) : nullptr;
+            const auto status_kind = api
+                    == frontend::VhdlSimulatorApi::dir_createdir
+                ? frontend::VhdlSimulatorApi::dir_create_status
+                : api == frontend::VhdlSimulatorApi::dir_deletedir
+                ? frontend::VhdlSimulatorApi::dir_delete_status
+                : api == frontend::VhdlSimulatorApi::dir_deletefile
+                ? frontend::VhdlSimulatorApi::file_delete_status
+                : frontend::VhdlSimulatorApi::dir_open_status;
+            const auto expected =
+                frontend::vhdl_environment_directory_status_type(status_kind);
+            if (found == locals_.end() || type == nullptr
+                || type->nominal_type != expected.nominal_type
+                || register_width(found->second) != 3U) {
+                report(
+                    "FSIM-ELAB-VHENV-006",
+                    "STD.ENV directory STATUS must be a writable matching status variable",
+                    value.span);
+                return true;
+            }
+            status = found->second;
+        }
+        using Kind = VhdlEnvironmentDirectoryKind;
+        const auto kind = api == frontend::VhdlSimulatorApi::dir_open
+            ? Kind::open
+            : api == frontend::VhdlSimulatorApi::dir_close
+            ? Kind::close
+            : api == frontend::VhdlSimulatorApi::dir_workingdir
+            ? Kind::set_working_directory
+            : api == frontend::VhdlSimulatorApi::dir_createdir
+            ? Kind::create_directory
+            : api == frontend::VhdlSimulatorApi::dir_deletedir
+            ? Kind::delete_directory : Kind::delete_file;
+        process_.operations.emplace_back(VhdlEnvironmentDirectory {
+            kind, status, std::nullopt, directory, path, option });
+        return true;
+    }
+    if (api == frontend::VhdlSimulatorApi::resolution_limit) {
+        report(
+            "FSIM-ELAB-VHENV-002",
+            "STD.ENV RESOLUTION_LIMIT is a function and cannot be called as a procedure",
+            statement.span);
+        return true;
+    }
+    if (api != frontend::VhdlSimulatorApi::stop
+        && api != frontend::VhdlSimulatorApi::finish) {
+        report(
+            "FSIM-ELAB-VHENV-002",
+            "STD.ENV functions, constants, and types cannot be called as procedures",
+            statement.span);
+        return true;
+    }
+    if (statement.procedure_arguments.size() > 1U
+        || std::ranges::any_of(
+            statement.procedure_arguments,
+            [](const auto& association) {
+                return association.formal
+                    && *association.formal != "status";
+            })) {
+        report(
+            "FSIM-ELAB-VHENV-003",
+            "STD.ENV STOP and FINISH accept at most one INTEGER STATUS actual",
+            statement.span);
+        return true;
+    }
+    std::optional<RegisterId> status;
+    if (!statement.procedure_arguments.empty()) {
+        const auto& actual = statement.procedure_arguments.front().value;
+        if (!is_integer_expression(actual)) {
+            report(
+                "FSIM-ELAB-VHENV-004",
+                "STD.ENV simulator status must be an INTEGER expression",
+                actual.span);
+            return true;
+        }
+        const auto width = static_cast<std::size_t>(
+            frontend::vhdl_predefined_integer_storage_width(vhdl_standard_));
+        status = lower_expression(actual, width);
+        if (!status) {
+            return true;
+        }
+        if (register_width(*status) != width) {
+            *status = resize_register(*status, width, true);
+        }
+    }
+    if (api == frontend::VhdlSimulatorApi::stop) {
+        process_.operations.emplace_back(Pause { status });
+    } else {
+        process_.operations.emplace_back(Stop { status });
+    }
+    return true;
+}
+
 bool Lowerer::lower_vhdl_file_procedure_call(
     const Statement& statement)
 {
@@ -378,6 +865,10 @@ void Lowerer::initialize_procedure_support()
 
 void Lowerer::lower_procedure_call(const Statement& statement)
 {
+    if (language_ == frontend::Language::Vhdl2008
+        && lower_vhdl_simulator_procedure_call(statement)) {
+        return;
+    }
     if (language_ == frontend::Language::Vhdl2008
         && lower_vhdl_vital_delay_call(statement)) {
         return;
@@ -882,6 +1373,7 @@ void Lowerer::lower_procedure_body(
         process_.operations.emplace_back(
             FileClose { handle, true, true });
     }
+    emit_vhdl_access_scope_cleanup(frame.source->variables);
     process_.operations.emplace_back(
         Return { procedure_call_stack_ });
     for (const auto push_site : frame.invocation_push_sites) {

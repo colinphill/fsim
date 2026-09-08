@@ -702,6 +702,218 @@ struct CoverageQuery {
     CoverageQueryKind kind { CoverageQueryKind::overall_type };
 };
 
+/// One VHDL-2019 STD.ENV PSL query or control request. Queries own a
+/// destination, SET_PSL_COVER_ASSERT owns an enable operand, and
+/// CLEAR_PSL_STATE owns neither. The scheduler-owned PSL engine remains the
+/// single state authority for interpreted and compiled execution.
+enum class VhdlPslApiKind : std::uint8_t {
+    assert_failed,
+    is_covered,
+    get_cover_assert,
+    is_assert_covered,
+    set_cover_assert,
+    clear_state,
+};
+
+struct VhdlPslApi {
+    VhdlPslApiKind kind { VhdlPslApiKind::assert_failed };
+    std::optional<RegisterId> destination;
+    std::optional<RegisterId> enable;
+
+    friend bool operator==(const VhdlPslApi&, const VhdlPslApi&) = default;
+};
+
+inline auto archive_fields(const VhdlPslApi& operation)
+{
+    return std::tie(operation.kind, operation.destination, operation.enable);
+}
+
+inline auto archive_fields(VhdlPslApi& operation)
+{
+    return std::tie(operation.kind, operation.destination, operation.enable);
+}
+
+/// Scheduler-owned VHDL-2019 report/assert control and query service.
+enum class VhdlAssertApiKind : std::uint8_t {
+    is_failed,
+    get_count,
+    clear,
+    set_enable,
+    get_enable,
+    set_format,
+    get_format,
+    set_read_severity,
+    get_read_severity,
+    record_read_failure,
+};
+
+struct VhdlAssertApi {
+    VhdlAssertApiKind kind { VhdlAssertApiKind::is_failed };
+    std::optional<RegisterId> destination;
+    std::optional<StringRegisterId> string_destination;
+    std::optional<RegisterId> level;
+    std::optional<RegisterId> enable;
+    std::optional<StringRegisterId> format;
+    std::optional<RegisterId> valid;
+    SourceLocation source;
+
+    friend bool operator==(const VhdlAssertApi&, const VhdlAssertApi&) = default;
+};
+
+inline auto archive_fields(const VhdlAssertApi& operation)
+{
+    return std::tie(operation.kind, operation.destination,
+        operation.string_destination, operation.level, operation.enable,
+        operation.format, operation.valid, operation.source);
+}
+
+inline auto archive_fields(VhdlAssertApi& operation)
+{
+    return std::tie(operation.kind, operation.destination,
+        operation.string_destination, operation.level, operation.enable,
+        operation.format, operation.valid, operation.source);
+}
+
+/// Immutable VHDL-2019 reflection metadata carried by the executable design.
+/// Runtime mirror objects copy this descriptor and the reflected value; they
+/// never retain frontend pointers or expose host addresses.
+enum class VhdlReflectionClass : std::uint8_t {
+    enumeration,
+    integer,
+    floating,
+    physical,
+    record,
+    array,
+    access,
+    file,
+    protected_type,
+};
+
+struct VhdlReflectionRange {
+    std::int64_t left { };
+    std::int64_t right { };
+    bool ascending { };
+
+    friend bool operator==(
+        const VhdlReflectionRange&, const VhdlReflectionRange&) = default;
+};
+
+inline auto archive_fields(const VhdlReflectionRange& range)
+{
+    return std::tie(range.left, range.right, range.ascending);
+}
+
+inline auto archive_fields(VhdlReflectionRange& range)
+{
+    return std::tie(range.left, range.right, range.ascending);
+}
+
+struct VhdlReflectionType {
+    VhdlReflectionClass type_class { VhdlReflectionClass::integer };
+    std::string simple_name;
+    std::uint32_t packed_width { };
+    bool signed_value { };
+    std::uint64_t lsb_offset { };
+    std::vector<VhdlReflectionRange> ranges;
+    std::vector<std::string> names;
+    std::vector<std::uint64_t> scales;
+    std::vector<VhdlReflectionType> children;
+
+    friend bool operator==(
+        const VhdlReflectionType&, const VhdlReflectionType&) = default;
+};
+
+inline auto archive_fields(const VhdlReflectionType& type)
+{
+    return std::tie(type.type_class, type.simple_name, type.packed_width,
+        type.signed_value, type.lsb_offset, type.ranges, type.names,
+        type.scales, type.children);
+}
+
+inline auto archive_fields(VhdlReflectionType& type)
+{
+    return std::tie(type.type_class, type.simple_name, type.packed_width,
+        type.signed_value, type.lsb_offset, type.ranges, type.names,
+        type.scales, type.children);
+}
+
+enum class VhdlReflectionApiKind : std::uint8_t {
+    create_subtype,
+    create_value,
+    get_type_class,
+    get_subtype_mirror,
+    convert,
+    convert_generic,
+    simple_name,
+    enumeration_literal,
+    pos,
+    image,
+    left,
+    right,
+    low,
+    high,
+    length,
+    ascending,
+    value,
+    units_length,
+    unit_name,
+    unit_index,
+    scale,
+    record_element_name,
+    record_element_index,
+    record_element_subtype,
+    aggregate_get,
+    dimensions,
+    array_index_subtype,
+    array_element_subtype,
+    access_get,
+    is_null,
+    designated_subtype,
+    file_logical_name,
+    file_open_kind,
+};
+
+/// One exact STD.REFLECTION mirror creation or protected-method query.
+/// Mirror handles are bounded 32-bit access values. `source` is copied when a
+/// value mirror is created; query arguments are either packed or string and
+/// results are written to exactly one destination family.
+struct VhdlReflectionApi {
+    VhdlReflectionApiKind kind { VhdlReflectionApiKind::create_subtype };
+    std::optional<RegisterId> destination;
+    std::optional<StringRegisterId> string_destination;
+    std::optional<RegisterId> receiver;
+    std::optional<RegisterId> source;
+    std::optional<ContainerRegisterId> access_heap;
+    RareVector<RegisterId> arguments;
+    std::optional<StringRegisterId> string_argument;
+    std::uint32_t result_width { };
+    VhdlReflectionType type;
+    SourceLocation source_location;
+
+    friend bool operator==(
+        const VhdlReflectionApi&, const VhdlReflectionApi&) = default;
+};
+
+inline auto archive_fields(const VhdlReflectionApi& operation)
+{
+    return std::tie(operation.kind, operation.destination,
+        operation.string_destination, operation.receiver, operation.source,
+        operation.access_heap, operation.arguments, operation.string_argument,
+        operation.result_width,
+        operation.type,
+        operation.source_location);
+}
+
+inline auto archive_fields(VhdlReflectionApi& operation)
+{
+    return std::tie(operation.kind, operation.destination,
+        operation.string_destination, operation.receiver, operation.source,
+        operation.access_heap, operation.arguments, operation.string_argument,
+        operation.result_width,
+        operation.type,
+        operation.source_location);
+}
+
 enum class SystemVerilogCoverageCommand : std::int32_t {
     start = 0,
     stop = 1,
@@ -833,6 +1045,184 @@ struct RandomDistribution {
     RegisterId first { };
     std::optional<RegisterId> second;
 };
+
+/// One scheduler-owned VHDL-2019 STD.ENV data/time operation. REAL values use
+/// the existing binary64 scalar payload; TIME_RECORD uses its exact 515-bit
+/// packed record layout. Optional operands distinguish the standardized
+/// overloads without embedding host time or timezone data in persisted SimIR.
+enum class VhdlEnvironmentTimeKind : std::uint8_t {
+    current_local,
+    current_utc,
+    current_epoch,
+    local_from_epoch,
+    utc_from_epoch,
+    epoch_from_local,
+    local_from_utc_record,
+    utc_from_local_record,
+    add_seconds,
+    subtract_seconds,
+    reverse_subtract_seconds,
+    difference_seconds,
+    time_to_seconds,
+    seconds_to_time,
+};
+
+struct VhdlEnvironmentTime {
+    VhdlEnvironmentTimeKind kind { VhdlEnvironmentTimeKind::current_local };
+    RegisterId destination { };
+    std::optional<RegisterId> first;
+    std::optional<RegisterId> second;
+
+    friend bool operator==(const VhdlEnvironmentTime&,
+        const VhdlEnvironmentTime&) = default;
+};
+
+inline auto archive_fields(const VhdlEnvironmentTime& operation)
+{
+    return std::tie(operation.kind, operation.destination,
+        operation.first, operation.second);
+}
+
+inline auto archive_fields(VhdlEnvironmentTime& operation)
+{
+    return std::tie(operation.kind, operation.destination,
+        operation.first, operation.second);
+}
+
+struct VhdlEnvironmentTimeToString {
+    StringRegisterId destination { };
+    RegisterId record { };
+    RegisterId fractional_digits { };
+
+    friend bool operator==(const VhdlEnvironmentTimeToString&,
+        const VhdlEnvironmentTimeToString&) = default;
+};
+
+inline auto archive_fields(const VhdlEnvironmentTimeToString& operation)
+{
+    return std::tie(operation.destination, operation.record,
+        operation.fractional_digits);
+}
+
+inline auto archive_fields(VhdlEnvironmentTimeToString& operation)
+{
+    return std::tie(operation.destination, operation.record,
+        operation.fractional_digits);
+}
+
+/// One bounded VHDL-2019 STD.ENV directory operation. Directory values use a
+/// string container whose first element is the canonical name and whose
+/// remaining elements are the deterministically ordered item names.
+enum class VhdlEnvironmentDirectoryKind : std::uint8_t {
+    open,
+    close,
+    item_exists,
+    item_is_directory,
+    item_is_file,
+    set_working_directory,
+    get_working_directory,
+    separator,
+    create_directory,
+    delete_directory,
+    delete_file,
+};
+
+struct VhdlEnvironmentDirectory {
+    VhdlEnvironmentDirectoryKind kind {
+        VhdlEnvironmentDirectoryKind::item_exists
+    };
+    std::optional<RegisterId> result;
+    std::optional<StringRegisterId> string_result;
+    std::optional<ContainerRegisterId> directory;
+    std::optional<StringRegisterId> path;
+    std::optional<RegisterId> option;
+
+    friend bool operator==(const VhdlEnvironmentDirectory&,
+        const VhdlEnvironmentDirectory&) = default;
+};
+
+inline auto archive_fields(const VhdlEnvironmentDirectory& operation)
+{
+    return std::tie(operation.kind, operation.result,
+        operation.string_result, operation.directory,
+        operation.path, operation.option);
+}
+
+inline auto archive_fields(VhdlEnvironmentDirectory& operation)
+{
+    return std::tie(operation.kind, operation.result,
+        operation.string_result, operation.directory,
+        operation.path, operation.option);
+}
+
+/// Runtime query for one VHDL-2019 STD.ENV environment variable. Tool and
+/// language identity functions lower to deterministic string constants.
+struct VhdlEnvironmentGetenv {
+    StringRegisterId destination { };
+    StringRegisterId name { };
+
+    friend bool operator==(const VhdlEnvironmentGetenv&,
+        const VhdlEnvironmentGetenv&) = default;
+};
+
+inline auto archive_fields(const VhdlEnvironmentGetenv& operation)
+{
+    return std::tie(operation.destination, operation.name);
+}
+
+inline auto archive_fields(VhdlEnvironmentGetenv& operation)
+{
+    return std::tie(operation.destination, operation.name);
+}
+
+/// Materialize the VHDL-2019 call path visible at one exact source-level call
+/// as a CALL_PATH_VECTOR_PTR-compatible container value.
+struct VhdlEnvironmentGetCallPath {
+    ContainerRegisterId destination { };
+    SourceLocation source;
+    InternedString scope;
+
+    friend bool operator==(const VhdlEnvironmentGetCallPath&,
+        const VhdlEnvironmentGetCallPath&) = default;
+};
+
+inline auto archive_fields(const VhdlEnvironmentGetCallPath& operation)
+{
+    return std::tie(operation.destination, operation.source, operation.scope);
+}
+
+inline auto archive_fields(VhdlEnvironmentGetCallPath& operation)
+{
+    return std::tie(operation.destination, operation.source, operation.scope);
+}
+
+/// Format either the call path visible at one exact source-level call or a
+/// previously materialized CALL_PATH_VECTOR_PTR-compatible container.
+struct VhdlEnvironmentCallPath {
+    StringRegisterId destination { };
+    StringRegisterId separator { };
+    std::optional<ContainerRegisterId> source_value;
+    std::optional<RegisterId> source_index;
+    SourceLocation source;
+    InternedString scope;
+
+    friend bool operator==(const VhdlEnvironmentCallPath&,
+        const VhdlEnvironmentCallPath&) = default;
+};
+
+inline auto archive_fields(const VhdlEnvironmentCallPath& operation)
+{
+    return std::tie(operation.destination, operation.separator,
+        operation.source_value, operation.source_index,
+        operation.source, operation.scope);
+}
+
+inline auto archive_fields(VhdlEnvironmentCallPath& operation)
+{
+    return std::tie(operation.destination, operation.separator,
+        operation.source_value, operation.source_index,
+        operation.source, operation.scope);
+}
 #include "fsim/runtime/simir_randomize.hpp"
 /// Emit a nonfatal VHDL report with retained severity and source metadata.
 struct Report {
@@ -852,10 +1242,37 @@ struct StringReport {
 
 /// Stop the complete simulation, as requested by `$finish` or an equivalent
 /// language construct.
-struct Stop { };
+struct Stop {
+  /// Optional language-level process status. The scheduler never interprets
+  /// it; the embedding application decides how to map it to a host status.
+  std::optional<RegisterId> status;
+
+  friend bool operator==(const Stop&, const Stop&) = default;
+};
+
+inline auto archive_fields(const Stop& operation) {
+  return std::tie(operation.status);
+}
+
+inline auto archive_fields(Stop& operation) {
+  return std::tie(operation.status);
+}
 
 /// Pause simulation at a resumable boundary, as requested by `$stop`.
-struct Pause { };
+struct Pause {
+  /// Optional language-level process status retained at the safe boundary.
+  std::optional<RegisterId> status;
+
+  friend bool operator==(const Pause&, const Pause&) = default;
+};
+
+inline auto archive_fields(const Pause& operation) {
+  return std::tie(operation.status);
+}
+
+inline auto archive_fields(Pause& operation) {
+  return std::tie(operation.status);
+}
 
 struct Halt {
     bool program_exit { };

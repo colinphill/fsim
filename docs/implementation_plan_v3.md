@@ -2508,8 +2508,9 @@ starts on branch codex/v3 from clean v2 checkpoint
     passed all 380 tests and, under the user-directed carry-forward rule,
     supplied the Debug/Release result without duplicate rebuilds or retests.
     This extra run does not alter the governing cadence: sanitizer and hosted
-    monitoring remain restricted to Batch 180, Batch 190, and release-closing
-    Change 20s. Closure refreshes the bounded
+    monitoring remain restricted to Batch 180 and Batch 190. Release-closing
+    Change 20s outside those two boundaries do not add either lane. Closure
+    refreshes the bounded
     source/license/control inventories to 1,376, 1,671, and 719 entries and
     keeps every composed historical release audit green. Windows hosted audit
     expectations advance by the nineteen unconditional TF tests to 371
@@ -3597,26 +3598,600 @@ starts on branch codex/v3 from clean v2 checkpoint
 
 ### Batch 184 - VHDL-2019 runtime, environment APIs, VHPI, and closure
 
-1. Elaborate interface views and nested directional connections.
-2. Execute view-based signal and variable updates.
-3. Execute revised allocation and automatic reclamation behavior.
-4. Execute sequential blocks across wait, return, and exception boundaries.
-5. Implement the standard simulator API additions.
-6. Implement standard data and time APIs.
-7. Implement standard directory APIs.
-8. Implement standard environment APIs.
-9. Implement current-file, line, and call-path APIs.
-10. Implement the standardized PSL API.
-11. Implement report/assert statement APIs.
-12. Implement the reflection API and reflected type/value model.
-13. Update predefined packages and governed package compilation.
-14. Implement revised tool, conditional-analysis, and protection directives.
-15. Update VHPI capabilities, information model, and property access.
-16. Update VHPI callbacks, value access, tool execution, and headers.
-17. Integrate VHDL-2019 constructs with code and PSL coverage.
-18. Prove interpreter, LLVM, debug, artifact, cache, and mixed-language behavior.
-19. Close every active VHDL-2019 clause row and publish independent documentation.
-20. Run standard batch closure and declare full VHDL-2019 support complete.
+1. **Complete.** Elaborate interface views and nested directional connections.
+   Elaboration now turns every composed record-view and constrained
+   array-view leaf into an explicit endpoint over its associated packed
+   signal. Each endpoint retains the concrete formal and actual hierarchy
+   paths, leaf direction, signal ID, least-significant-bit offset, width, and
+   source span. Array placeholders are expanded in declared index order after
+   specialization, including nested arrays and multidimensional constraints;
+   null arrays produce no endpoints, while unconstrained layouts, missing
+   members, arithmetic overflow, out-of-range slices, and more than 65,536
+   endpoints fail transactionally under `FSIM-ELAB-VHVIEW-006`. Boundary type
+   validation now also applies to view-based associations before endpoint
+   publication. Restored runtime state validates endpoint ownership, bounds,
+   and uniqueness. Runtime-state schema 52 replaces schema 51 directly, with
+   no compatibility reader. The independently authored elaboration corpus
+   proves a nested record containing both nested record views and an array
+   view, including eight exact paths and packed offsets; artifact evidence
+   proves the new fields round-trip and rejects malformed endpoint state.
+   V19-B184-C01 is preserved, leaving eighteen active and nineteen preserved
+   rows at normalized SHA-256
+   `3a97b341d221b007f24bd9277896ef984ed63b82284e13b87aae38aabaadbb0f`.
+   No source path was added, so the source-package manifest remains at 1,788
+   ordered payload paths and SHA-256
+   `419a5f4a1ea6786c9da50d53ba625941c3dd65f631b3b4e110f1f2ad4a0128f9`.
+   The exact LLVM 22.1.8 Clang warnings-as-errors Debug elaboration and
+   application targets build with eight workers, and the focused elaboration,
+   artifact, schema, inventory, diagnostics, manifest, and portability gates
+   pass. Release, clean-first, sanitizers, hosted monitoring, commit, and push
+   remain deferred.
+2. **Complete.** Execute view-based signal and variable updates. The VHDL
+   assignment lowerer now reconstructs each selected target through record,
+   array-index, and slice nodes, correlates it with the current instance's
+   explicit Change 1 endpoints, and rejects any whole or selected write that
+   overlaps an input leaf under `FSIM-ELAB-VHVIEW-007`. Output, buffer, and
+   inout leaves remain writable without making the entire mixed-direction
+   signal writable or read-only. Index spelling is removed only for direction
+   comparison, so static and dynamic selections share the same element-view
+   rule while concrete packed offsets remain authoritative at runtime.
+   Disjoint view-leaf process drivers on an unresolved composite are accepted;
+   overlapping regions retain the existing multiple-driver rejection.
+   Independently authored execution evidence stages a complete record through
+   a process variable, updates its selected member, reads an input view leaf,
+   and writes an output leaf. Interpreter, cold compiled, and warm compiled
+   execution agree at LLVM O0 and O2, while focused negative evidence rejects
+   a write to the input leaf and nested record/array writes prove selection
+   matching. V19-B184-C02 is preserved, leaving seventeen active and twenty
+   preserved rows at normalized SHA-256
+   `9961510657913d975ea546f7bee4e753864b965c8ea7c646745311ac1b8e6b9d`.
+   No source path was added, so the source-package manifest remains at 1,788
+   ordered payload paths and SHA-256
+   `419a5f4a1ea6786c9da50d53ba625941c3dd65f631b3b4e110f1f2ad4a0128f9`.
+   The exact LLVM 22.1.8 Clang warnings-as-errors Debug elaboration and
+   application targets build with eight workers, and the focused engine,
+   direction, inventory, diagnostics, manifest, and portability gates pass.
+   Release, clean-first, sanitizers, hosted monitoring, commit, and push remain
+   deferred.
+3. **Complete.** Execute revised allocation and automatic reclamation behavior.
+   A VHDL-2019 whole-access assignment now snapshots the displaced handle,
+   publishes the new value, and reaches a deterministic reclamation safe point.
+   The safe point compares the non-null candidate with every visible local root
+   of the same nominal access type in canonical register order and deletes the
+   owning-container entry only when no root still designates it. `Deallocate`
+   uses the same sequence after nulling its inout object, so an alias preserves
+   storage while loss of the final designating value reclaims it. Automatic
+   nested-block, procedure, and function locals are nulled and swept at their
+   common epilogues, including early-return and disable paths; returned values,
+   arguments, outer locals, and static callable state remain roots. Existing
+   `Branch`, `Binary`, and `DeleteContainer` SimIR primitives carry the behavior
+   through the interpreter and LLVM O0/O2 paths without a new persisted
+   operation or schema revision. Independently authored bounded-storage tests
+   prove that unreachable storage can be reused with a one-object limit and
+   that a surviving alias prevents premature reuse; the retained older-profile
+   exhaustion case proves that 2019 reclamation does not leak backward. The
+   application corpus also proves aliasing, repeated `Deallocate`, final-root
+   loss, fresh allocation, and dereference results across both engines.
+   V19-B184-C03 is preserved, leaving sixteen active and 21 preserved rows at
+   normalized SHA-256
+   `ee56709a3785082e5bb61e5725784a850fe7214685735301461b7d6f884bd8cc`.
+   No source path was added, so the source-package manifest remains at 1,788
+   ordered payload paths and SHA-256
+   `419a5f4a1ea6786c9da50d53ba625941c3dd65f631b3b4e110f1f2ad4a0128f9`.
+   The exact LLVM 22.1.8 Clang warnings-as-errors Debug elaboration and
+   application targets build with eight workers; the focused engine,
+   bounded-resource, alias, profile-isolation, inventory, diagnostics,
+   manifest, schema, portability, and whitespace gates pass 8/8 in 5.88
+   seconds. No Release, clean-first, sanitizer, hosted-CI, commit, or push
+   action ran.
+4. **Complete.** Execute sequential blocks across wait, return, and exception
+   boundaries. A sequential block retains one activation's packed, string,
+   container, file, and access-object registers when a wait suspends execution;
+   resumption continues after the wait without replaying declarations. Normal
+   loop re-entry still executes the declaration initializers for the new block
+   activation. Return sites created inside a VHDL block are now rewritten to a
+   block-owned cleanup path. That path closes files and releases unreachable
+   VHDL-2019 access storage, then contributes one continuation return to the
+   enclosing block or callable epilogue; nested returns therefore cross every
+   lexical cleanup boundary in order, while normal fallthrough skips the
+   return-only path. Runtime assertion failures after a suspended block retain
+   the exact assertion source and hierarchy-qualified block debug scope while
+   propagating unchanged through interpreter and compiled executors. The
+   independently authored runtime design observes values 5, 7, and 9 for
+   wait-preserved, return, and two-entry initialization behavior at time 2;
+   interpreter, cold compiled, and warm compiled runs agree at LLVM O0 and O2.
+   A second design suspends inside a named block and proves the same failure
+   message, source, and lexical scope in both engines. Existing HIR evidence
+   retains distinct nested block scopes, and pre-2019 profile rejection remains
+   unchanged. V19-B184-C04 is preserved, leaving fifteen active and 22
+   preserved rows at normalized SHA-256
+   `aa95be7785cd04c5efbb1693ebcb64e2ec01063e0dd613072604e3d6058ad40a`.
+   No source path or persisted operation changed, so the source-package
+   manifest remains at 1,788 ordered payload paths and SHA-256
+   `419a5f4a1ea6786c9da50d53ba625941c3dd65f631b3b4e110f1f2ad4a0128f9`,
+   and no schema revision is required. The exact LLVM 22.1.8 Clang
+   warnings-as-errors Debug application and elaboration targets build with
+   eight workers; the focused HIR, wait, return, exception, engine, inventory,
+   diagnostics, manifest, schema, portability, and whitespace gates pass 9/9
+   in 5.62 seconds. No Release, clean-first, sanitizer, hosted-CI, commit, or
+   push action ran.
+5. **Complete.** Implement the standard simulator API additions. Exact
+   VHDL-2019 selected names now recognize `STD.ENV.STOP`, `STD.ENV.FINISH`, and
+   `STD.ENV.RESOLUTION_LIMIT` without treating arbitrary user subprograms with
+   the same terminal identifier as intrinsic calls. The parser rejects all
+   three names under older profiles, semantic analysis validates procedure
+   versus function use plus the optional named `STATUS` association, and
+   hierarchy package import bypasses ordinary package lookup only for those
+   exact intrinsic identities. `RESOLUTION_LIMIT` lowers to one scheduler tick
+   in a TIME-compatible 64-bit register. `STOP` lowers to the existing
+   resumable pause boundary and `FINISH` to the existing terminal stop
+   boundary; both carry an optional signed INTEGER register whose value is
+   captured at the interpreter/compiled safe point. LLVM validation, frame
+   synchronization, and native-cache keys include that register without a new
+   runtime callback or operation tag. The application returns a supplied
+   status in the portable range 0 through 255 and rejects other host statuses
+   under `FSIM-RUN-VHENV-001`. Runtime-state schema 52 remains the direct v3
+   format while the unreleased `Pause` and `Stop` archive records gain their
+   optional field. Independently authored evidence proves exact-name HIR and
+   SimIR retention, VHDL-2008 isolation, malformed-call rejection, resumable
+   status 3 at tick 1, terminal status 7 at tick 2, no execution beyond
+   `FINISH`, and interpreter, Debug, cold/warm LLVM O0, and cold/warm LLVM O2
+   equivalence with native-cache misses and hits. V19-B184-C05 is preserved,
+   leaving fourteen active and 23 preserved rows at normalized SHA-256
+   `4d01c0c7b01da691a1c5d84c44c7eee5647b6fab1c97e89e653b8e5300e338a1`.
+   No source path was added, so the source-package manifest remains at 1,788
+   ordered payload paths and SHA-256
+   `419a5f4a1ea6786c9da50d53ba625941c3dd65f631b3b4e110f1f2ad4a0128f9`.
+   The exact LLVM 22.1.8 Clang warnings-as-errors Debug application target
+   builds with eight workers, and the focused simulator API, diagnostics,
+   manifest, inventory, schema, and portability gates pass 7/7 in 7.10
+   seconds. No Release, clean-first, sanitizer, hosted-CI, commit, or push
+   action ran.
+6. **Complete.** Implement standard data and time APIs. Exact VHDL-2019
+   `STD.ENV` recognition now exposes `DAYOFWEEK`, the bounded `TIME_RECORD`
+   layout, no-argument and converting `LOCALTIME`, `GMTIME`, and `EPOCH`
+   overloads, `TIME_RECORD`/`REAL` arithmetic, `TIME_TO_SECONDS`,
+   `SECONDS_TO_TIME`, and both `TO_STRING` forms. Semantic analysis validates
+   named associations, subprogram categories, overloads, result contexts, and
+   the `FRAC_DIGITS` range before executable lowering where possible. Project
+   time normalization now retains the built-in `TIME` nominal identity instead
+   of turning physical literals into untyped integers, and unary real
+   expressions participate in the same overload inference as their operands.
+   Decimal real literals retain exact binary64 payloads through VHDL HIR.
+   Runtime conversion uses bounded platform calendar services, validates every
+   record field and round trip, preserves microseconds, and reports
+   unrepresentable local dates, epoch values, TIME results, and formatting
+   arguments without host-state leakage. Two validated SimIR operations cover
+   packed data/time results and retained strings; interpreter, Debug, and LLVM
+   O0/O2 execution share those boundaries, while wide-register JIT admission,
+   host-boundary classification, and cache identity prevent silent interpreter
+   fallback. Runtime-state schema 53 replaces schema 52 directly and VHDL HIR
+   schema 4 replaces schema 3 directly, with no compatibility readers.
+   Independently authored evidence covers UTC and local calendar fields,
+   weekday/day-of-year retention, all arithmetic directions, conversions,
+   current-time calls, default and fractional formatting, malformed overloads,
+   runtime range failures, deterministic runtime/HIR serialization, and
+   interpreter, Debug, cold/warm LLVM O0, and cold/warm LLVM O2 equivalence with
+   native-cache miss/hit proof. V19-B184-C06 is preserved, leaving thirteen
+   active and 24 preserved rows at normalized SHA-256
+   `5f4a0347be412dab2de4eb1e23d37eea14ff48bead985999b93761499b2fc4ac`.
+   No source path was added, so the source-package manifest remains at 1,788
+   ordered payload paths and SHA-256
+   `419a5f4a1ea6786c9da50d53ba625941c3dd65f631b3b4e110f1f2ad4a0128f9`.
+   The exact LLVM 22.1.8 Clang warnings-as-errors Debug application targets
+   build with eight workers, and the focused simulator API, artifact,
+   diagnostics, manifest, inventory, schema, portability, and whitespace gates
+   pass 11/11 in 8.47 seconds. No Release, clean-first, sanitizer, hosted-CI,
+   commit, or push action ran.
+7. **Complete.** Implement standard directory APIs. Exact VHDL-2019
+   `STD.ENV` recognition now provides `DIRECTORY_ITEMS`, `DIRECTORY`, all four
+   status types, both procedure and impure-function overloads for open,
+   working-directory, create-directory, delete-directory, and delete-file,
+   plus close, item queries, and `DIR_SEPARATOR`. Older profiles reject the
+   surface, semantic analysis checks call category and association profiles,
+   and elaboration requires writable directory/status variables and
+   string-compatible paths. One versioned `VhdlEnvironmentDirectory` SimIR
+   operation carries every packed, string, and container result through the
+   interpreter, Debug engine, and compiled LLVM host boundary; its operation
+   identity is retained in runtime artifacts and native-cache keys. Runtime
+   paths are UTF-8 converted, weakly canonicalized, and confined to the project
+   root. Enumeration is sorted and bounded to 4,096 entries and 1 MiB of text;
+   root and logical-working-directory ancestors cannot be removed. Portable
+   status values cover missing items, wrong object kinds, nonempty directories,
+   denied access, and other errors without throwing for ordinary filesystem
+   outcomes. Runtime-state schema 54 directly replaces schema 53 with no
+   compatibility reader. Independently authored evidence exercises every API
+   family and overload, deterministic item order, logical working-directory
+   changes, root-escape denial, all status families, old-profile and malformed
+   calls, wrong-type rejection, artifact round trips, and interpreter, Debug,
+   cold/warm LLVM O0, and cold/warm LLVM O2 execution. The compiled boundary's
+   successor is explicitly registered as a native resume entry, preventing an
+   invalid-PC dispatch after host execution. V19-B184-C07 is preserved,
+   leaving twelve active and 25 preserved rows at normalized SHA-256
+   `889605766da8f58d5fb5ab7a64bd2d1f4690cec2d8dca7840f762bec4d2adc9a`.
+   No source path was added, so the source-package manifest remains at 1,788
+   ordered payload paths and SHA-256
+   `419a5f4a1ea6786c9da50d53ba625941c3dd65f631b3b4e110f1f2ad4a0128f9`.
+   The exact LLVM 22.1.8 Clang warnings-as-errors Debug application targets
+   build with eight workers; focused directory, artifact, diagnostics,
+   manifest, inventory, schema, and portability gates pass 10/10 in 8.16
+   seconds, and the whitespace gate is clean. No Release, clean-first,
+   sanitizer, hosted-CI, commit, or push action ran.
+8. **Complete.** Implement standard environment APIs. Exact VHDL-2019
+   `STD.ENV` recognition now provides both `GETENV` result profiles plus
+   `VHDL_VERSION`, `TOOL_TYPE`, `TOOL_VENDOR`, `TOOL_NAME`, `TOOL_EDITION`,
+   and `TOOL_VERSION`. The direct string result and the `LINE` result observed
+   through `.ALL` share one bounded string representation; named association
+   checking accepts only `NAME`, and older profiles reject every intrinsic.
+   `GETENV` is the sole host boundary: it reads only the explicitly requested
+   environment variable, returns the empty string when absent, never records
+   the name or value in persisted artifacts, and rejects embedded nulls or a
+   result beyond the existing 4,096-byte string ceiling with stable errors.
+   Language and tool information lower to deterministic constants, so compiler
+   paths, operating-system details, and other host state cannot leak through
+   those functions. One `VhdlEnvironmentGetenv` SimIR operation is validated,
+   serialized, included in native-cache identity, and registered as a compiled
+   resume boundary; runtime-state schema 55 directly replaces schema 54 with
+   no compatibility reader. Independently authored evidence covers present and
+   absent variables, both `GETENV` result profiles, every identity function,
+   VHDL-2008 isolation, malformed and wrong-type calls, bounded failure
+   equivalence, artifact round trips, and interpreter, Debug, cold/warm LLVM
+   O0, and cold/warm LLVM O2 execution. V19-B184-C08 is preserved, leaving
+   eleven active and 26 preserved rows at normalized SHA-256
+   `0d9eff72c9618358e661666484e2ca7440cd2a3e4be24225b6211e2e28faa205`.
+   No source path was added, so the source-package manifest remains at 1,788
+   ordered payload paths and SHA-256
+   `419a5f4a1ea6786c9da50d53ba625941c3dd65f631b3b4e110f1f2ad4a0128f9`.
+   The exact LLVM 22.1.8 Clang warnings-as-errors Debug application targets
+   build with eight workers, and the focused environment, artifact,
+   diagnostics, source-package, inventory, ABI/schema, nested-schema, and
+   portability gates pass 10/10 in 8.48 seconds; the whitespace gate is clean.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+9. **Complete.** Implement current-file, line, and call-path APIs. Exact
+   VHDL-2019 `STD.ENV` recognition now exposes the overloaded `FILE_NAME`,
+   `FILE_PATH`, and `FILE_LINE` functions together with `CALL_PATH_ELEMENT`,
+   `CALL_PATH_VECTOR`, `CALL_PATH_VECTOR_PTR`, `GET_CALL_PATH`, and the element,
+   vector, and access-value `TO_STRING` profiles. Source functions lower from
+   the call-site span: file names are leaf names, paths use the normalized
+   source identity, and lines retain the positive source line. `GET_CALL_PATH`
+   materializes at most 256 scheduler-visible language frames in a bounded
+   heterogeneous container; each frame owns its scope name, file name, file
+   path, and line without retaining a host pointer. Direct record-field reads,
+   access dereference, vector indexing, saved-path formatting, and single-frame
+   formatting use the same value. Aggregate member-selection results own their
+   resolved leaf type so dereference/index lowering cannot retain a pointer into
+   temporary VHDL type storage. Interpreter, Debug, and compiled execution
+   collect the language call stack only at the governed host boundary, and
+   native-callable isolation is disabled for processes that require that stack.
+   LLVM validation, resume registration, artifact serialization, and cache-key
+   identity cover both new operations and the selected source container/index.
+   Runtime-state schema 56 directly replaces schema 55 with no compatibility
+   reader. Independently authored evidence covers current source identity,
+   nested callable paths, materialization, all four element fields, element and
+   vector formatting, access dereference, older-profile rejection, malformed
+   profiles, artifact round trips, and interpreter, Debug, cold/warm LLVM O0,
+   and cold/warm LLVM O2 equivalence. V19-B184-C09 is preserved, leaving ten
+   active and 27 preserved rows at normalized SHA-256
+   `dab7be40f47a6b0664d0c514ed0ed0e24d17971155c927f5f4399bb61df1c527`.
+   No source path was added, so the source-package manifest remains at 1,788
+   ordered payload paths and SHA-256
+   `419a5f4a1ea6786c9da50d53ba625941c3dd65f631b3b4e110f1f2ad4a0128f9`.
+   The exact LLVM 22.1.8 Clang warnings-as-errors Debug application targets
+   build with eight workers, and the focused source-location, artifact,
+   diagnostics, source-package, inventory, ABI/schema, nested-schema, and
+   portability gates pass 11/11 in 9.00 seconds. The environment integration
+   test also passes ten consecutive invocations after the leaf-type lifetime
+   repair. No Release, clean-first, sanitizer, hosted-CI, commit, or push
+   action ran.
+10. **Complete.** Implement the standardized PSL API. Exact VHDL-2019
+    `STD.ENV` recognition now provides `PSLASSERTFAILED`, `PSLISCOVERED`,
+    `GETPSLCOVERASSERT`, `PSLISASSERTCOVERED`, `SETPSLCOVERASSERT`, and
+    `CLEARPSLSTATE`, while every older VHDL profile rejects those intrinsic
+    identities. Semantic analysis and lowering distinguish the four
+    no-argument Boolean functions from the two procedures, validate the
+    optional named Boolean `ENABLE` association, and retain its default value
+    of true. The scheduler-owned VHDL PSL execution service records assertion
+    failures, ordinary cover goals, assertion cover goals, the current
+    cover-assert setting, and whether assertion coverage was ever enabled.
+    `CLEARPSLSTATE` resets the monitor engine, accumulated result counters,
+    coverage goals, and every API flag to their post-elaboration values.
+    A validated `VhdlPslApi` SimIR operation carries queries and controls
+    through interpreter, Debug, and compiled host-boundary execution; LLVM
+    resume admission, frame synchronization, native-cache identity, and
+    artifact serialization all include its exact operands. Runtime-state
+    schema 57 directly replaces schema 56 with no compatibility reader.
+    Independently authored evidence checks initial state, default and named
+    controls, successful cover and assert coverage, assertion failure,
+    clearing, VHDL-2008 rejection, interpreter/Debug/LLVM O0/LLVM O2
+    equivalence, cold/warm native-cache reuse, and design-artifact replay.
+    V19-B184-C10 is preserved, leaving nine active and 28 preserved rows at
+    normalized SHA-256
+    `736aa35c89ceb1eddb5f528f1d66045ec42edab0648c33a7c457322d02f0cd1f`.
+    No source path was added, so the source-package manifest remains at 1,788
+    ordered payload paths and SHA-256
+    `419a5f4a1ea6786c9da50d53ba625941c3dd65f631b3b4e110f1f2ad4a0128f9`.
+    The exact LLVM 22.1.8 Clang warnings-as-errors Debug application targets
+    build with eight workers, and the focused PSL API, artifact, diagnostics,
+    source-package, inventory, ABI/schema, nested-schema, portability, and
+    whitespace gates pass 10/10 in 9.19 seconds. No Release, clean-first,
+    sanitizer, hosted-CI, commit, or push action ran.
+11. **Complete.** Implement report/assert statement APIs. VHDL-2019 now
+    recognizes the standardized `ISVHDLASSERTFAILED`, `GETVHDLASSERTCOUNT`,
+    `CLEARVHDLASSERT`, `SETVHDLASSERTENABLE`, `GETVHDLASSERTENABLE`,
+    `SETVHDLASSERTFORMAT`, `GETVHDLASSERTFORMAT`, `SETVHDLREADSEVERITY`, and
+    `GETVHDLREADSEVERITY` `STD.ENV` surfaces while older profiles reject the
+    intrinsic identities. Semantic analysis and lowering enforce the exact
+    function/procedure categories, optional `LEVEL` and `ENABLE` defaults,
+    writable `VALID` result, and Boolean, `SEVERITY_LEVEL`, `NATURAL`, and
+    string profiles. The scheduler is the single state owner for saturating
+    per-severity counts, aggregate warning/error/failure queries, per-level
+    enables and formats, and TextIO read severity. Disabled reports do not
+    publish or terminate, `CLEARVHDLASSERT` preserves controls while clearing
+    counts, invalid checked formats leave the prior format intact, and failed
+    TextIO reads without `GOOD` enter the same report/assert state machine.
+    A validated `VhdlAssertApi` SimIR boundary carries every query, control,
+    source location, and TextIO failure through interpreter, Debug, and LLVM
+    O0/O2 execution. Compiled VHDL-2019 string reports hand control back to
+    the scheduler service before any failure decision, so compiled and
+    interpreted enable/count/termination behavior is identical. Serialization
+    and native-cache keys include the exact operation operands; runtime-state
+    schema 58 directly replaces schema 57 with no compatibility reader.
+    Independently authored evidence covers defaults, named and positional
+    controls, suppression, formatted source/instance/time output, aggregate
+    and per-level queries, count clearing, invalid format retention, TextIO
+    failure severity, VHDL-2008 rejection, interpreter/Debug/LLVM O0/LLVM O2
+    equivalence, cold/warm native-cache reuse, and artifact replay.
+    V19-B184-C11 is preserved, leaving eight active and 29 preserved rows at
+    normalized SHA-256
+    `c5b1f3c9ba0e18c4b909c439b2c4c64cd97840ec9853a439439d63ee11534b1e`.
+    No source path was added, so the source-package manifest remains at 1,788
+    ordered payload paths and SHA-256
+    `419a5f4a1ea6786c9da50d53ba625941c3dd65f631b3b4e110f1f2ad4a0128f9`.
+    The exact LLVM 22.1.8 Clang warnings-as-errors Debug application targets
+    build with eight workers. The focused report/assert API, artifact,
+    diagnostics, source-package, inventory, ABI/schema, nested-schema,
+    portability, and whitespace gates pass: nine CTest lanes pass in 9.03
+    seconds and `git diff --check` is clean. No Release, clean-first,
+    sanitizer, hosted-CI, commit, or push action ran.
+12. **Complete.** Implemented the VHDL-2019 `STD.REFLECTION` mirror model as
+    compiler-owned, profile-gated subtype/value handles with recursive
+    descriptors for enumeration, integer, floating, physical, record, array,
+    access, file, and protected classes. The validated `VhdlReflectionApi`
+    SimIR boundary creates immutable value snapshots, performs generic and
+    class-specific conversions, exposes scalar bounds/images, physical units,
+    record and multidimensional array selection, designated subtypes/access
+    values, and exact file logical-name/open-kind state. Access mirrors snapshot
+    the designated heap value at reflection time; descriptor depth, aggregate
+    cardinality, string bytes, index arity, arithmetic, and physical scales are
+    bounded before or during execution. Interpreter, Debug, and LLVM O0/O2 use
+    the same runtime registry and host boundary, while serialization and native
+    cache keys retain every descriptor and operand. Runtime-state schema 59
+    directly replaces schema 58 with no compatibility reader. Independently
+    authored tests cover typed/generic conversions, immutable enumeration and
+    access snapshots, bounds, record/array lookup, physical units, floating,
+    protected, and file classes, older-profile rejection, artifact replay, and
+    cold/warm compiled execution. V19-B184-C12 is preserved, leaving seven
+    active and 30 preserved rows at normalized SHA-256
+    `bbf48153f27fb96e24f26c8d0dacc771dfb4e7d42cc30d7d047cc9875c071f42`.
+    No source path was added, so the source-package manifest remains at 1,788
+    ordered payload paths and SHA-256
+    `419a5f4a1ea6786c9da50d53ba625941c3dd65f631b3b4e110f1f2ad4a0128f9`.
+    The exact LLVM 22.1.8 Clang warnings-as-errors Debug frontend/application
+    targets build with eight workers. The focused frontend, reflection,
+    attribute/profile, artifact, diagnostics, source-package, inventory,
+    ABI/schema, nested-schema, and portability gates pass 10/10 in 5.76
+    seconds. No Release, clean-first, sanitizer, hosted-CI, commit, or push
+    action ran.
+13. **Complete.** Updated governed predefined-package compilation around the
+    v3 VHDL environment identity. Every VHDL-2019 analysis verifies and
+    snapshots the exact compiler-owned `std.standard`, `std.textio`, `std.env`,
+    and `std.reflection` sources, rejects project redeclarations, and records
+    their source identities without depending on checkout location. Official
+    IEEE projection now includes the previously missing `numeric_bit_unsigned`,
+    `numeric_std_unsigned`, and `math_complex` declarations and bodies with
+    revision-correct minimum-profile rejection and transitive package
+    selection. The predefined environment uses
+    `ieee-1076-standard:<year>:fsim-v3` for every retained profile and exposes
+    the VHDL-2019 `reflect` and `converse` attributes only in that profile.
+    Object, library, design, debugger, and VHPI provenance now retain every
+    directly selected governed package with its selected VHDL revision,
+    predefined-environment identity, governed revision, and complete
+    declaration/body digest. Artifact loading validates every official IEEE,
+    VITAL, Synopsys-compatibility, and 2019 `std` dependency against the current
+    compiler-owned identity and rejects stale or unavailable inputs without a
+    compatibility reader. Focused regression repair also prevents quoted VHDL
+    logic-vector literals from being stolen by the VHDL-2019 string-comparison
+    path while retaining reflected-string comparisons. Independently authored
+    evidence checks the 2019 declaration/operator/attribute matrix, all 18
+    governed source snapshots, the newly projected packages, direct provenance,
+    stale-input rejection, older-profile behavior, mixed-language Debug/LLVM
+    execution, and object/library/design round trips. V19-B184-C13 is preserved,
+    leaving six active and 31 preserved rows at normalized SHA-256
+    `0001605683161a29f90709de89a5697152ff769c78c0b838ec73e0fd9c01d1c6`.
+    No source path was added, so the source-package manifest remains at 1,788
+    ordered payload paths and SHA-256
+    `419a5f4a1ea6786c9da50d53ba625941c3dd65f631b3b4e110f1f2ad4a0128f9`.
+    The exact LLVM 22.1.8 Clang warnings-as-errors Debug application target
+    builds with eight workers. The focused package/application/artifact slice
+    passes 11/11 in 3.83 seconds and the diagnostics, source-package, inventory,
+    ABI/schema, nested-schema, and portability policy slice passes 8/8 in 4.72
+    seconds; `git diff --check` is clean. No Release, clean-first, sanitizer,
+    hosted-CI, commit, or push action ran.
+14. **Complete.** Implemented the revised VHDL tool-directive prepass with
+    profile-isolated conditional analysis and protection envelopes. VHDL-2019
+    accepts active `warning`/`error` message directives and both `end` and
+    `end if`; inactive branches remain masked and cannot publish messages.
+    VHDL-2008 and later accept plaintext protection `begin`/`end` envelopes,
+    while encrypted `begin_protected`/`end_protected` payload is masked before
+    lexing and receives one stable unavailable-key-provider diagnostic. Older
+    profiles, malformed messages, nested or mismatched controls, and
+    unterminated envelopes fail with owned diagnostics without logging payload
+    text. Independently authored frontend evidence covers active/inactive
+    diagnostics, doubled-quote strings, recovery, profile rejection, plaintext
+    coordinate preservation, encrypted masking, and malformed envelope
+    structure. The focused validation also repaired the accumulated source-line
+    budget by partitioning the unchanged LLVM validation visitor, hierarchy
+    port connection, interpreter profiling, and VHDL-2019 integration fixture
+    at existing semantic boundaries; every authored source is below the
+    2,000-line refactor target. V19-B184-C14 is preserved, leaving five active
+    and 32 preserved rows at normalized SHA-256
+    `eb788b4ee7d7bbbc6a4f3a4cd627810364511b139faacebbd771e0a0544082fa`.
+    Four partition paths advance the source-package manifest to 1,792 ordered
+    payload paths at SHA-256
+    `59153de17ad5622e4e021ec24a6787872a5676dccbf0bc005484a32b52a63d1e`.
+    Exact LLVM 22.1.8 Clang warnings-as-errors Debug frontend, application,
+    LLVM, elaboration, and runtime targets build with at least eight workers.
+    The focused frontend, VHDL integration, artifact, diagnostics, source-line,
+    source-package, inventory, and portability lanes pass 8/8 in 9.07 seconds.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+15. **Complete.** Extended the simulation-owned VHPI information model with an
+    immutable VHDL-2019 capability record, append-only object and relationship
+    identities, and checked typed property access. Contexts, interfaces, ports,
+    generics, aliases, attributes, literals, physical units, composite
+    elements, interface views, and nested view elements now have distinct
+    kinds; `Parent` supplies a bounded zero-or-one snapshot iterator. Property
+    queries own their string results and distinguish absent optional metadata,
+    unknown properties, stale handles, and cross-simulation handles while
+    exposing kind, hierarchy, source, name, index, standard, environment,
+    compatibility, and package-provenance data. Reused object slots clear all
+    provenance before publication, and checkpoint validation accepts the new
+    append-only kind range. The application registry now includes primary
+    entity declarations when elaborating an architecture and recursively
+    publishes composed VHDL-2019 view elements below view ports. Independent
+    runtime and application evidence covers capability bounds, unsupported
+    identities, property result types/errors, parent iteration, new object
+    kinds, real elaborated view ports, and nested hierarchy. V19-B184-C15 is
+    preserved, leaving four active and 33 preserved rows at normalized SHA-256
+    `d540ea4e2da3becb428dbc4421166ee0e79ac500e11cdc7c78af2f795423a7c3`.
+    No source path was added, so the source-package manifest remains at 1,792
+    ordered payload paths and SHA-256
+    `59153de17ad5622e4e021ec24a6787872a5676dccbf0bc005484a32b52a63d1e`.
+    Exact LLVM 22.1.8 Clang warnings-as-errors Debug runtime and application
+    targets build with eight workers. The focused runtime, view-port
+    application, inventory, resource, source-line, and source-package lanes
+    pass 6/6 in 4.33 seconds. No Release, clean-first, sanitizer, hosted-CI,
+    commit, or push action ran.
+16. **Complete.** Advanced the append-only public VHPI host to ABI v3 while
+    preserving the complete 40-byte v1 and 56-byte v2 prefixes. The 80-byte v3
+    host requires checked capability-query, typed-value-access, and bounded
+    tool-execution callbacks sharing the validated service context. Public
+    fixed-width records define capability flags, callback reasons, scalar and
+    binary-string value formats, read/write access, tool actions, sized value
+    payloads, and sized tool requests. The generic service enumeration now
+    appends property, tool, and capability families without renumbering its
+    original thirteen entries. Host validation rejects truncated v3 tables and
+    each absent callback before image open. The internal callback system adds
+    object-free tool events with copied action/text data while retaining
+    canonical callback order and exception containment. Independently compiled
+    C and C++ images query 2019 capabilities, transfer a typed value, execute a
+    bounded save request, exercise all sixteen service families, and preserve
+    exact transcripts across interpreter/O0/O2 labels and relocated loads.
+    C11/C++20 probes freeze every new layout and function-pointer type.
+    V19-B184-C16 is preserved, leaving three active and 34 preserved rows at
+    normalized SHA-256
+    `8af401517d2b7b3639244a74f783a52ff0ac21776f6d7fe061cdd398c6b0cf24`.
+    No source path was added, so the source-package manifest remains at 1,792
+    paths and SHA-256
+    `59153de17ad5622e4e021ec24a6787872a5676dccbf0bc005484a32b52a63d1e`.
+    Exact LLVM 22.1.8 Clang warnings-as-errors Debug runtime and reference-image
+    targets build with eight workers. Runtime, public API/ABI, installed-public,
+    foreign-ABI, inventory, resource, source-line, and source-package lanes pass
+    8/8 in 4.78 seconds. No Release, clean-first, sanitizer, hosted-CI, commit,
+    or push action ran.
+17. **Complete.** Extended language-independent VHDL statement discovery into
+    VHDL-2019 sequential-block declarative regions. Executable statements in
+    block-local functions and procedures, recursively nested local callables,
+    the block body, and its nested statement forests now share the existing
+    bounded traversal, exclusion controls, canonical source identities, and
+    stable point-ID algorithm. Lexical source sorting keeps point order
+    independent of declaration-container layout, and explicit callable-count,
+    statement-count, and nesting ceilings fail transactionally. The retained
+    VHDL profiles participate in the same identity path, with a relocation
+    differential proving that VHDL-2019 block and local-callable point IDs do
+    not depend on checkout location. PSL database projection no longer hashes
+    the transient semantic source-span number into a bin identity: it resolves
+    that number through the authenticated source binding and hashes the durable
+    v3 source identity instead. Duplicate-directive detection uses that same
+    durable identity. Remapped semantic spans consequently produce byte-for-
+    byte equal PSL metric records, while changed authenticated source contents
+    produce different bin identities. The standardized VHDL-2019 PSL API now
+    proves complete returned coverage-record equality across interpreter,
+    Debug, LLVM O0, and LLVM O2 cold/warm execution. V19-B184-C17 is preserved,
+    leaving two active and 35 preserved rows at normalized SHA-256
+    `94ef6a96d80bd2df64eddcfbc24521dea8be765418e6a9533f45c2bf0140c04d`.
+    No source path was added, so the source-package manifest remains at 1,792
+    paths and SHA-256
+    `59153de17ad5622e4e021ec24a6787872a5676dccbf0bc005484a32b52a63d1e`.
+    Exact LLVM 22.1.8 Clang warnings-as-errors Debug application, elaboration,
+    and PSL database targets build with eight workers. The focused functional
+    slice passes 3/3 in 2.92 seconds and the inventory, resource, source-line,
+    and source-package governance slice passes 4/4 in 4.56 seconds. No Release,
+    clean-first, sanitizer, hosted-CI, commit, or push action ran.
+18. **Complete.** Promoted both retained cross-domain integration owners to
+    execute their VHDL side under the VHDL-2019 profile. The direct project
+    matrix composes a SystemVerilog top, VHDL-2019 middle, and native SystemC
+    leaf across 137-bit nine-state boundaries and proves identical run status,
+    time/delta, PSL attempts, scalar and wide values, signal-change sequence,
+    debugger output, VCD, specialization keys, language/profile provenance,
+    and timing-path identities under interpreter, Debug, LLVM O0/O2, cold and
+    warm native caches, reordered roots, and retained older Verilog/SystemVerilog
+    profiles. The standalone artifact matrix now elaborates the mixed design
+    from the VHDL-2019 `.fsimobj`, verifies the 2019 predefined-environment and
+    package provenance in `.fsimdesign`, and compares interpreter, compiled
+    cold/warm, and Debug results plus portable checkpoints before producer
+    removal and relocation. A relocated interpreter run and standalone compiled
+    CLI run preserve the same design observations. Governance freezes the
+    required engine, cache, artifact, relocation, and mixed-language witnesses.
+    V19-B184-C18 is preserved, leaving one active and 36 preserved rows at
+    normalized SHA-256
+    `de39d5aa90f39f2290c472f36a06ac35249ea931d67b2f672d2764291e7fa3d6`.
+    No source path was added, so the source-package manifest remains at 1,792
+    paths and SHA-256
+    `59153de17ad5622e4e021ec24a6787872a5676dccbf0bc005484a32b52a63d1e`.
+    Exact LLVM 22.1.8 Clang warnings-as-errors Debug application targets build
+    with eight workers. The typed-boundary matrix passes in 46.53 seconds, the
+    artifact-phase matrix passes in 0.66 seconds, and the resource contract
+    passes in 4.25 seconds. No Release, clean-first, sanitizer, hosted-CI,
+    commit, or push action ran.
+19. **Complete.** Closed the last active independently worded VHDL-2019 row,
+    leaving the 37-row frontend/runtime inventory fully preserved. Published
+    `docs/vhdl-2019.md` as the public profile guide: it documents selection,
+    profile isolation, supported language additions, runtime and predefined
+    APIs, code/PSL coverage, append-only VHPI v3, standalone artifacts,
+    mixed-language execution, and deliberate boundaries using project-authored
+    summaries and examples. The inventory checker requires that complete guide
+    structure, rejects private-reference path/material tokens in both the
+    inventory and guide, and requires the guide in the deterministic source
+    manifest. The public feature matrix removes the obsolete broad post-2008
+    deferral, retains VHDL-AMS, broader PSL, and vendor-only extensions as
+    deliberate exclusions, and links the closed ledger and guide. The feature-
+    matrix authoring contract records all 37 rows as preserved. The inventory
+    now has zero active and 37 preserved rows at normalized SHA-256
+    `87e90ceea9effba9b2fbbb44a63152bb11f07d4afb674d71c43ae667afe30dbe`.
+    Adding the guide advances the source-package manifest to 1,793 paths and
+    SHA-256
+    `ed17b79a627158eb101a7ea2f5a7275d52aebf7d004d3aa59f08dbd5a750bd9d`.
+    The focused inventory and source-package lanes pass 2/2 in 1.13 seconds.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+20. **Complete.** Closed the full VHDL-2019 batch with clean Clang 22 and LLVM
+    22.1.8 warnings-as-errors builds using eight workers. The clean Release
+    build completed all 2,935 build steps in 847.96 seconds before the final
+    Debug regression suite; the changed frontend/application targets were
+    rebuilt in both configurations after qualification exposed that a null
+    `chandle` aggregate initializer was being rejected. Integral constant zero
+    now converts to the null `chandle`, while nonzero integral constants retain
+    the stable rejection, with focused frontend and application coverage.
+    Frozen release governance now reflects the measured 2,661 production
+    diagnostics, 1,428 bounded sources, 1,728 SPDX-owned files, 746 release
+    test/control files, and 1,296 execute rows/5,184 evidence cells. The final
+    candidate owns 627 exact evidence paths split 278 test, 323 production,
+    and 26 release paths, with 146 runtime owners; matrix SHA-256 is
+    `28aca45a0ca88ded646cbd1baff5d9cc29346d3bf8a0da0fa0187dd58b0179da`
+    and evidence SHA-256 is
+    `2915ba1d963be5a0215313df3a0c6a62ff3406a972f2b2bd3446c16187154049`.
+    The complete Debug suite passes 405/405 in 132.03 seconds and the complete
+    Release suite passes 405/405 in 139.68 seconds. Sanitizers and hosted-CI
+    monitoring did not run and remain reserved exclusively for Batch 190.
 
 ### Batch 185 - SystemVerilog-2023 frontend, data model, classes, and processes
 
@@ -3708,7 +4283,7 @@ starts on branch codex/v3 from clean v2 checkpoint
 17. Complete licenses, SBOM, provenance, and private-reference exclusion audits.
 18. Freeze the v3.0 release record and exact tag message.
 19. Set every product/version/package identity to 3.0.0.
-20. Run final local/hosted qualification, commit, push, tag, and publish v3.0.0.
+20. Run final local qualification, commit, push, tag, and publish v3.0.0.
 
 ## v3.1.0
 
@@ -3779,7 +4354,7 @@ starts on branch codex/v3 from clean v2 checkpoint
 17. Close all parallel execution inventory rows.
 18. Freeze v3.1 ABI/schema and release records.
 19. Set every release identity to 3.1.0.
-20. Run final local/hosted qualification, commit, push, tag, and publish v3.1.0.
+20. Run final local qualification, commit, push, tag, and publish v3.1.0.
 
 ## v3.2.0
 
@@ -3827,7 +4402,7 @@ starts on branch codex/v3 from clean v2 checkpoint
 17. Publish capability, failure, and selection documentation.
 18. Close all performance-lowering inventory rows and release records.
 19. Set every release identity to 3.2.0.
-20. Run final local/hosted qualification, commit, push, tag, and publish v3.2.0.
+20. Run final local qualification, commit, push, tag, and publish v3.2.0.
 
 ## v3.3.0
 
@@ -3875,7 +4450,7 @@ starts on branch codex/v3 from clean v2 checkpoint
 17. Prove every extension family on Linux and Windows LLDB.
 18. Publish SDK helpers, LLDB examples, and troubleshooting guidance.
 19. Set every release identity to 3.3.0 and close debugger inventory rows.
-20. Run final local/hosted qualification, commit, push, tag, and publish v3.3.0.
+20. Run final local qualification, commit, push, tag, and publish v3.3.0.
 
 ## v3.4.0
 
@@ -3923,4 +4498,4 @@ starts on branch codex/v3 from clean v2 checkpoint
 17. Enforce package entry, size, permissions, and resource ceilings.
 18. Publish installation, signing, support-matrix, and release documentation.
 19. Set every product and package identity to 3.4.0.
-20. Run final local/hosted/package qualification, commit, push, tag, and publish v3.4.0.
+20. Run final local/package qualification, commit, push, tag, and publish v3.4.0.

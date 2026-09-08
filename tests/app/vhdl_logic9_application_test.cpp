@@ -465,19 +465,24 @@ MixedCapture run_mixed(
     assert(
         provenance_scope->compatibility_profile
         == "fsim-synopsys-ieee-compat-v2");
-    assert(provenance_scope->package_dependencies.size() == 1U);
-    assert(
-        provenance_scope->package_dependencies.front().package
-        == "ieee.std_logic_unsigned");
+    assert(provenance_scope->package_dependencies.size() == 2U);
+    assert(std::ranges::any_of(
+        provenance_scope->package_dependencies, [](const auto& package) {
+            return package.package == "ieee.std_logic_1164";
+        }));
+    const auto compatibility_package = std::ranges::find_if(
+        provenance_scope->package_dependencies, [](const auto& package) {
+            return package.package == "ieee.std_logic_unsigned";
+        });
+    assert(compatibility_package
+        != provenance_scope->package_dependencies.end());
     capture.standard = provenance_scope->standard;
     capture.predefined_environment
         = provenance_scope->predefined_environment;
     capture.compatibility_profile
         = provenance_scope->compatibility_profile;
-    capture.package
-        = provenance_scope->package_dependencies.front().package;
-    capture.package_revision
-        = provenance_scope->package_dependencies.front().revision;
+    capture.package = compatibility_package->package;
+    capture.package_revision = compatibility_package->revision;
     capture.debug_snapshot = fsim::app::format_vhdl_debug_snapshot(
         debug_snapshot);
     capture.unit_identity = provenance_scope->path + "|"
@@ -501,10 +506,15 @@ MixedCapture run_mixed(
     assert(
         vhpi_scope.value.compatibility_profile
         == capture.compatibility_profile);
-    assert(vhpi_scope.value.package_dependencies.size() == 1U);
-    assert(
-        vhpi_scope.value.package_dependencies.front().package
-        == capture.package);
+    assert(vhpi_scope.value.package_dependencies.size() == 2U);
+    const auto vhpi_compatibility_package = std::ranges::find_if(
+        vhpi_scope.value.package_dependencies, [](const auto& package) {
+            return package.package == "ieee.std_logic_unsigned";
+        });
+    assert(vhpi_compatibility_package
+        != vhpi_scope.value.package_dependencies.end());
+    assert(vhpi_compatibility_package->revision
+        == capture.package_revision);
     assert(
         !simulation.vhdl_vhpi_objects().find("ieee")
         && !simulation.vhdl_vhpi_objects().find(

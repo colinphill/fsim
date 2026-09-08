@@ -1,9 +1,111 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_internal.hpp"
+#include "fsim/version.hpp"
 
 namespace fsim::elaboration {
 using namespace runtime::simir;
 namespace {
+
+    struct VhdlDirectoryStringSelection {
+        std::string object;
+        const Expression* index { };
+    };
+
+    struct VhdlCallPathStringSelection {
+        const Expression* container { };
+        const Expression* index { };
+        std::uint32_t member { };
+    };
+
+    [[nodiscard]] std::optional<VhdlCallPathStringSelection>
+    vhdl_call_path_string_selection(const Expression& expression)
+    {
+        const Expression* selected = &expression;
+        if (selected->kind == ExpressionKind::Call
+            && (selected->text == "@vhdl-member:all"
+                || selected->text == "@vhdl-dereference")
+            && selected->operands.size() == 1U) {
+            selected = &selected->operands.front();
+        }
+        constexpr std::string_view prefix { "@vhdl-member:" };
+        if (selected->kind != ExpressionKind::Call
+            || !selected->text.starts_with(prefix)
+            || selected->operands.size() != 1U) {
+            return std::nullopt;
+        }
+        const auto name = std::string_view { selected->text }.substr(
+            prefix.size());
+        const auto member = name == "name" ? std::optional<std::uint32_t> { 0U }
+            : name == "file_name" ? std::optional<std::uint32_t> { 1U }
+            : name == "file_path" ? std::optional<std::uint32_t> { 2U }
+            : std::nullopt;
+        const auto& indexed = selected->operands.front();
+        if (!member || indexed.kind != ExpressionKind::Index
+            || indexed.operands.size() != 2U) {
+            return std::nullopt;
+        }
+        return VhdlCallPathStringSelection {
+            &indexed.operands.front(), &indexed.operands[1], *member };
+    }
+
+    [[nodiscard]] std::optional<VhdlDirectoryStringSelection>
+    vhdl_directory_string_selection(const Expression& expression)
+    {
+        constexpr std::string_view name_suffix { ".name" };
+        constexpr std::string_view items_suffix { ".items" };
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "@vhdl-dereference"
+            && expression.operands.size() == 1U
+            && expression.operands.front().kind
+                == ExpressionKind::Identifier
+            && expression.operands.front().text.ends_with(name_suffix)) {
+            auto object = expression.operands.front().text;
+            object.resize(object.size() - name_suffix.size());
+            return VhdlDirectoryStringSelection {
+                std::move(object), nullptr };
+        }
+        if (expression.kind != ExpressionKind::Call
+            || expression.text != "@vhdl-member:all"
+            || expression.operands.size() != 1U) {
+            return std::nullopt;
+        }
+        const auto& selection = expression.operands.front();
+        if (selection.kind != ExpressionKind::Index
+            || selection.operands.size() != 2U) {
+            return std::nullopt;
+        }
+        const auto& items = selection.operands.front();
+        if (items.kind != ExpressionKind::Call
+            || items.text != "@vhdl-dereference"
+            || items.operands.size() != 1U
+            || items.operands.front().kind != ExpressionKind::Identifier
+            || !items.operands.front().text.ends_with(items_suffix)) {
+            return std::nullopt;
+        }
+        auto object = items.operands.front().text;
+        object.resize(object.size() - items_suffix.size());
+        return VhdlDirectoryStringSelection {
+            std::move(object), &selection.operands[1] };
+    }
+
+    [[nodiscard]] const Expression* vhdl_environment_getenv_call(
+        const Expression& expression)
+    {
+        if (frontend::vhdl_simulator_api(expression.text)
+            == frontend::VhdlSimulatorApi::getenv) {
+            return &expression;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && (expression.text == "@vhdl-member:all"
+                || expression.text == "@vhdl-dereference")
+            && expression.operands.size() == 1U
+            && frontend::vhdl_simulator_api(
+                expression.operands.front().text)
+                == frontend::VhdlSimulatorApi::getenv) {
+            return &expression.operands.front();
+        }
+        return nullptr;
+    }
 
     [[nodiscard]] std::string systemverilog_type_name(
         const frontend::Type& type);
@@ -163,6 +265,80 @@ namespace {
 bool Lowerer::is_string_expression(
     const Expression& expression) const
 {
+    if (language_ == frontend::Language::Vhdl2008
+        && vhdl_standard_ >= frontend::VhdlStandard::Vhdl2019
+        && (expression.kind == ExpressionKind::Call
+            || expression.kind == ExpressionKind::Identifier)) {
+        const auto separator = expression.text.find_last_of('.');
+        if (separator != std::string::npos) {
+            const auto receiver = expression.text.substr(0U, separator);
+            const auto method = std::string_view { expression.text }.substr(
+                separator + 1U);
+            const auto* type = object_type(receiver);
+            const auto type_name = type == nullptr ? std::string { }
+                : !type->vhdl_type_declaration.empty()
+                    ? type->vhdl_type_declaration : type->spelling;
+            const bool mirror = type != nullptr
+                && (type_name.find("value_mirror") != std::string::npos
+                    || type_name.find("subtype_mirror") != std::string::npos);
+            if (mirror && (method == "simple_name" || method == "image"
+                    || method == "unit_name" || method == "element_name"
+                    || method == "get_file_logical_name")) {
+                return true;
+            }
+        }
+    }
+    if (language_ == frontend::Language::Vhdl2008
+        && vhdl_standard_ >= frontend::VhdlStandard::Vhdl2019) {
+        if (vhdl_call_path_string_selection(expression)) {
+            return true;
+        }
+        if (const auto selected = vhdl_directory_string_selection(expression);
+            selected && container_locals_.contains(selected->object)
+            && object_type(selected->object) != nullptr
+            && frontend::is_vhdl_environment_directory(
+                *object_type(selected->object))) {
+            return true;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "@vhdl-dereference"
+            && expression.operands.size() == 1U
+            && expression.operands.front().kind == ExpressionKind::Identifier
+            && string_locals_.contains(expression.operands.front().text)) {
+            const auto* type = object_type(expression.operands.front().text);
+            const auto separator = type == nullptr
+                ? std::string::npos : type->spelling.find_last_of('.');
+            if (type != nullptr && type->domain == frontend::ValueDomain::String
+                && type->spelling.substr(separator == std::string::npos
+                        ? 0U : separator + 1U) == "line") {
+                return true;
+            }
+        }
+        const auto api = frontend::vhdl_simulator_api(expression.text);
+        const bool environment_string
+            = vhdl_environment_getenv_call(expression) != nullptr
+            || api == frontend::VhdlSimulatorApi::vhdl_version
+            || api == frontend::VhdlSimulatorApi::tool_type
+            || api == frontend::VhdlSimulatorApi::tool_vendor
+            || api == frontend::VhdlSimulatorApi::tool_name
+            || api == frontend::VhdlSimulatorApi::tool_edition
+            || api == frontend::VhdlSimulatorApi::tool_version
+            || api == frontend::VhdlSimulatorApi::file_name
+            || api == frontend::VhdlSimulatorApi::file_path
+            || api == frontend::VhdlSimulatorApi::file_line
+            || api == frontend::VhdlSimulatorApi::get_vhdl_assert_format;
+        if ((api == frontend::VhdlSimulatorApi::dir_separator
+                && (expression.kind == ExpressionKind::Identifier
+                    || (expression.kind == ExpressionKind::Call
+                        && expression.operands.empty())))
+            || (api == frontend::VhdlSimulatorApi::dir_workingdir
+                && ((expression.kind == ExpressionKind::Call
+                        && expression.operands.empty())
+                    || expression.kind == ExpressionKind::Identifier))
+            || environment_string) {
+            return true;
+        }
+    }
     if (expression.kind == ExpressionKind::StringLiteral) {
         return true;
     }
@@ -239,6 +415,373 @@ std::optional<StringRegisterId>
 Lowerer::lower_string_expression(
     const Expression& expression)
 {
+    if (language_ == frontend::Language::Vhdl2008
+        && vhdl_standard_ >= frontend::VhdlStandard::Vhdl2019
+        && is_string_expression(expression)) {
+        if (auto reflected = lower_vhdl_reflection_string_expression(expression)) {
+            return reflected;
+        }
+    }
+    if (language_ == frontend::Language::Vhdl2008
+        && vhdl_standard_ >= frontend::VhdlStandard::Vhdl2019) {
+        if (const auto selected = vhdl_call_path_string_selection(expression);
+            selected) {
+            const auto source_type = vhdl_expression_type(*selected->container);
+            if (!source_type
+                || source_type->nominal_type
+                    != "@builtin:std.env.call_path_vector") {
+                report(
+                    "FSIM-ELAB-VHENV-007",
+                    "STD.ENV call-path field selection requires a CALL_PATH_VECTOR value",
+                    expression.span);
+                return std::nullopt;
+            }
+            auto index = lower_expression(*selected->index, 32U);
+            const auto source = lower_container_expression(
+                *selected->container);
+            if (!index || !source) {
+                return std::nullopt;
+            }
+            if (register_width(*index) != 32U) {
+                *index = resize_register(*index, 32U, true);
+            }
+            const auto destination = allocate_string_register();
+            process_.operations.emplace_back(ContainerStringRead {
+                destination, *source, *index, true, false, false,
+                { selected->member } });
+            return destination;
+        }
+        if (const auto selected = vhdl_directory_string_selection(expression);
+            selected) {
+            const auto local = container_locals_.find(selected->object);
+            const auto* type = object_type(selected->object);
+            if (local == container_locals_.end() || type == nullptr
+                || !frontend::is_vhdl_environment_directory(*type)) {
+                report(
+                    "FSIM-ELAB-VHENV-007",
+                    "STD.ENV DIRECTORY selection requires a DIRECTORY variable",
+                    expression.span);
+                return std::nullopt;
+            }
+            auto index = allocate_register(32U, frontend::ValueDomain::Integer);
+            if (selected->index == nullptr) {
+                process_.operations.emplace_back(LoadConstant {
+                    index, integer_value(0) });
+            } else {
+                auto source = lower_expression(*selected->index, 32U);
+                if (!source) {
+                    return std::nullopt;
+                }
+                if (register_width(*source) != 32U) {
+                    *source = resize_register(*source, 32U, true);
+                }
+                const auto one = allocate_register(
+                    32U, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(LoadConstant {
+                    one, integer_value(1) });
+                process_.operations.emplace_back(IntegerBinary {
+                    IntegerBinaryOperator::add, index, *source, one });
+            }
+            const auto destination = allocate_string_register();
+            process_.operations.emplace_back(ContainerStringRead {
+                destination, local->second, index, true, false, false, { } });
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "@vhdl-dereference"
+            && expression.operands.size() == 1U
+            && expression.operands.front().kind == ExpressionKind::Identifier) {
+            const auto& object = expression.operands.front();
+            const auto local = string_locals_.find(object.text);
+            const auto* type = object_type(object.text);
+            const auto separator = type == nullptr
+                ? std::string::npos : type->spelling.find_last_of('.');
+            if (local != string_locals_.end() && type != nullptr
+                && type->domain == frontend::ValueDomain::String
+                && type->spelling.substr(separator == std::string::npos
+                        ? 0U : separator + 1U) == "line") {
+                return local->second;
+            }
+        }
+        const auto api = frontend::vhdl_simulator_api(expression.text);
+        if (api == frontend::VhdlSimulatorApi::get_vhdl_assert_format) {
+            const bool names_valid = expression.call_argument_names.empty()
+                || (expression.call_argument_names.size()
+                        == expression.operands.size()
+                    && expression.call_argument_names.size() == 1U
+                    && (expression.call_argument_names.front().empty()
+                        || expression.call_argument_names.front()
+                            == "level"));
+            if (expression.kind != ExpressionKind::Call
+                || expression.operands.size() != 1U || !names_valid) {
+                report(
+                    "FSIM-ELAB-VHENV-003",
+                    "STD.ENV GETVHDLASSERTFORMAT requires one SEVERITY_LEVEL actual",
+                    expression.span);
+                return std::nullopt;
+            }
+            frontend::Type severity;
+            severity.spelling = "severity_level";
+            severity.domain = frontend::ValueDomain::Bit2;
+            severity.packed_range = frontend::PackedRange { 1, 0, true };
+            severity.enumeration_literals = {
+                "note", "warning", "error", "failure" };
+            const auto level = lower_expression(
+                expression.operands.front(), 2U, &severity);
+            if (!level || register_width(*level) != 2U) {
+                report(
+                    "FSIM-ELAB-VHENV-004",
+                    "STD.ENV GETVHDLASSERTFORMAT LEVEL must be SEVERITY_LEVEL",
+                    expression.operands.front().span);
+                return std::nullopt;
+            }
+            const auto destination = allocate_string_register();
+            process_.operations.emplace_back(VhdlAssertApi {
+                VhdlAssertApiKind::get_format,
+                std::nullopt,
+                destination,
+                *level,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                SourceLocation {
+                    expression.span.source_name.str(),
+                    static_cast<std::uint32_t>(expression.span.begin.line),
+                    static_cast<std::uint32_t>(expression.span.begin.column) } });
+            return destination;
+        }
+        const bool environment_identity
+            = api == frontend::VhdlSimulatorApi::vhdl_version
+            || api == frontend::VhdlSimulatorApi::tool_type
+            || api == frontend::VhdlSimulatorApi::tool_vendor
+            || api == frontend::VhdlSimulatorApi::tool_name
+            || api == frontend::VhdlSimulatorApi::tool_edition
+            || api == frontend::VhdlSimulatorApi::tool_version;
+        if (const auto* getenv = vhdl_environment_getenv_call(expression)) {
+            const bool names_valid = getenv->call_argument_names.empty()
+                || (getenv->call_argument_names.size() == 1U
+                    && (getenv->call_argument_names.front().empty()
+                        || getenv->call_argument_names.front() == "name"));
+            if (getenv->kind != ExpressionKind::Call
+                || getenv->operands.size() != 1U || !names_valid) {
+                report(
+                    "FSIM-ELAB-VHENV-003",
+                    "STD.ENV GETENV requires one STRING NAME actual",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto name = lower_string_expression(
+                getenv->operands.front());
+            if (!name) {
+                report(
+                    "FSIM-ELAB-VHENV-004",
+                    "STD.ENV GETENV NAME must be STRING-compatible",
+                    getenv->operands.front().span);
+                return std::nullopt;
+            }
+            const auto destination = allocate_string_register();
+            process_.operations.emplace_back(VhdlEnvironmentGetenv {
+                destination, *name });
+            return destination;
+        }
+        if (environment_identity) {
+            if ((expression.kind != ExpressionKind::Identifier
+                    && expression.kind != ExpressionKind::Call)
+                || !expression.operands.empty()) {
+                report(
+                    "FSIM-ELAB-VHENV-003",
+                    "STD.ENV environment identity functions do not accept arguments",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto value = api == frontend::VhdlSimulatorApi::vhdl_version
+                ? std::string { "2019" }
+                : api == frontend::VhdlSimulatorApi::tool_type
+                ? std::string { "SIMULATION" }
+                : api == frontend::VhdlSimulatorApi::tool_vendor
+                ? std::string { "fsim project" }
+                : api == frontend::VhdlSimulatorApi::tool_name
+                ? std::string { "fsim" }
+                : api == frontend::VhdlSimulatorApi::tool_edition
+                ? std::string { "community" }
+                : std::string { fsim::version };
+            const auto destination = allocate_string_register();
+            process_.operations.emplace_back(
+                LoadStringConstant { destination, value });
+            return destination;
+        }
+        const bool source_identity
+            = api == frontend::VhdlSimulatorApi::file_name
+            || api == frontend::VhdlSimulatorApi::file_path
+            || api == frontend::VhdlSimulatorApi::file_line;
+        if (source_identity) {
+            if ((expression.kind != ExpressionKind::Identifier
+                    && expression.kind != ExpressionKind::Call)
+                || !expression.operands.empty()) {
+                report(
+                    "FSIM-ELAB-VHENV-003",
+                    "STD.ENV source-location functions do not accept arguments",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto source_path = std::filesystem::path {
+                expression.span.source_name.str() }.lexically_normal();
+            const auto value = api == frontend::VhdlSimulatorApi::file_name
+                ? source_path.filename().generic_string()
+                : api == frontend::VhdlSimulatorApi::file_path
+                ? source_path.generic_string()
+                : std::to_string(expression.span.begin.line);
+            const auto destination = allocate_string_register();
+            process_.operations.emplace_back(
+                LoadStringConstant { destination, value });
+            return destination;
+        }
+        if (api == frontend::VhdlSimulatorApi::to_string
+            && !expression.operands.empty()) {
+            const auto unwrap_call_path = [](const Expression& value)
+                -> const Expression* {
+                if (frontend::vhdl_simulator_api(value.text)
+                    == frontend::VhdlSimulatorApi::get_call_path) {
+                    return &value;
+                }
+                if (value.kind == ExpressionKind::Call
+                    && value.text == "@vhdl-dereference"
+                    && value.operands.size() == 1U
+                    && frontend::vhdl_simulator_api(
+                           value.operands.front().text)
+                        == frontend::VhdlSimulatorApi::get_call_path) {
+                    return &value.operands.front();
+                }
+                return nullptr;
+            };
+            std::array<const Expression*, 2> actuals { nullptr, nullptr };
+            bool valid = expression.operands.size() <= 2U
+                && (expression.call_argument_names.empty()
+                        || expression.call_argument_names.size()
+                            == expression.operands.size());
+            std::size_t positional = 0U;
+            for (std::size_t index = 0;
+                valid && index < expression.operands.size(); ++index) {
+                const auto name = expression.call_argument_names.empty()
+                    ? std::string_view { }
+                    : std::string_view {
+                          expression.call_argument_names[index] };
+                std::size_t formal = positional;
+                if (name.empty()) {
+                    ++positional;
+                } else if (name == "call_path") {
+                    formal = 0U;
+                } else if (name == "separator") {
+                    formal = 1U;
+                } else {
+                    valid = false;
+                    continue;
+                }
+                if (formal >= actuals.size()
+                    || actuals[formal] != nullptr) {
+                    valid = false;
+                } else {
+                    actuals[formal] = &expression.operands[index];
+                }
+            }
+            const auto* call_path = valid && actuals[0] != nullptr
+                ? unwrap_call_path(*actuals[0]) : nullptr;
+            const auto call_path_type = valid && actuals[0] != nullptr
+                ? vhdl_expression_type(*actuals[0]) : std::nullopt;
+            const bool call_path_value = call_path_type
+                && frontend::is_vhdl_environment_call_path_type(
+                    *call_path_type);
+            if (call_path != nullptr || call_path_value) {
+                const bool element_value = call_path_type
+                    && call_path_type->nominal_type
+                        == "@builtin:std.env.call_path_element";
+                valid = call_path == nullptr
+                    || (call_path->operands.empty()
+                    && (call_path->kind == ExpressionKind::Identifier
+                        || call_path->kind == ExpressionKind::Call));
+                if (!valid || actuals[0] == nullptr
+                    || (element_value && actuals[1] != nullptr)) {
+                    report(
+                        "FSIM-ELAB-VHENV-003",
+                        "STD.ENV TO_STRING call-path overload has no matching standardized association profile",
+                        expression.span);
+                    return std::nullopt;
+                }
+                std::optional<ContainerRegisterId> source_value;
+                std::optional<RegisterId> source_index;
+                if (element_value
+                    && actuals[0]->kind == ExpressionKind::Index
+                    && actuals[0]->operands.size() == 2U) {
+                    source_value = lower_container_expression(
+                        actuals[0]->operands.front());
+                    source_index = lower_expression(
+                        actuals[0]->operands[1], 32U);
+                    if (source_index
+                        && register_width(*source_index) != 32U) {
+                        *source_index = resize_register(
+                            *source_index, 32U, true);
+                    }
+                    if (!source_value || !source_index) {
+                        return std::nullopt;
+                    }
+                } else if (call_path == nullptr) {
+                    source_value = lower_container_expression(*actuals[0]);
+                    if (!source_value) {
+                        return std::nullopt;
+                    }
+                }
+                std::optional<StringRegisterId> separator_value;
+                if (actuals[1] != nullptr) {
+                    separator_value = lower_string_expression(*actuals[1]);
+                } else {
+                    separator_value = allocate_string_register();
+                    process_.operations.emplace_back(LoadStringConstant {
+                        *separator_value, "\n" });
+                }
+                if (!separator_value) {
+                    report(
+                        "FSIM-ELAB-VHENV-004",
+                        "STD.ENV TO_STRING SEPARATOR must be STRING-compatible",
+                        actuals[1]->span);
+                    return std::nullopt;
+                }
+                const auto destination = allocate_string_register();
+                process_.operations.emplace_back(VhdlEnvironmentCallPath {
+                    destination,
+                    *separator_value,
+                    source_value,
+                    source_index,
+                    SourceLocation {
+                        expression.span.source_name.str(),
+                        static_cast<std::uint32_t>(
+                            expression.span.begin.line),
+                        static_cast<std::uint32_t>(
+                            expression.span.begin.column) },
+                    debug_scope_name() });
+                return destination;
+            }
+        }
+        const bool separator = api
+                == frontend::VhdlSimulatorApi::dir_separator
+            && (expression.kind == ExpressionKind::Identifier
+                || (expression.kind == ExpressionKind::Call
+                    && expression.operands.empty()));
+        const bool working = api
+                == frontend::VhdlSimulatorApi::dir_workingdir
+            && ((expression.kind == ExpressionKind::Call
+                    && expression.operands.empty())
+                || expression.kind == ExpressionKind::Identifier);
+        if (separator || working) {
+            const auto destination = allocate_string_register();
+            process_.operations.emplace_back(VhdlEnvironmentDirectory {
+                separator
+                    ? VhdlEnvironmentDirectoryKind::separator
+                    : VhdlEnvironmentDirectoryKind::get_working_directory,
+                std::nullopt, destination, std::nullopt,
+                std::nullopt, std::nullopt });
+            return destination;
+        }
+    }
     if (expression.kind == ExpressionKind::StringLiteral) {
         if (!expression.decoded_string) {
             report(
@@ -307,7 +850,7 @@ Lowerer::lower_string_expression(
             }
             const auto destination = allocate_string_register();
             process_.operations.emplace_back(ContainerStringRead {
-                destination, *source, *index, true, true });
+                destination, *source, *index, true, true, false, { } });
             return destination;
         }
         const auto runtime_type = container_expression_runtime_type(expression.operands.front());
@@ -350,7 +893,8 @@ Lowerer::lower_string_expression(
                 : runtime_type->fixed
                     || is_signed_expression(expression.operands[1]),
             false,
-            string_index });
+            string_index,
+            { } });
         return destination;
     }
     if (expression.kind == ExpressionKind::Concatenation
@@ -383,6 +927,89 @@ Lowerer::lower_string_expression(
         return destination;
     }
     if (expression.kind == ExpressionKind::Call) {
+        if (language_ == frontend::Language::Vhdl2008
+            && frontend::vhdl_simulator_api(expression.text)
+                == frontend::VhdlSimulatorApi::to_string) {
+            if (vhdl_standard_ < frontend::VhdlStandard::Vhdl2019
+                || expression.operands.empty()
+                || expression.operands.size() > 2U) {
+                report(
+                    "FSIM-ELAB-VHENV-003",
+                    "STD.ENV TO_STRING requires VHDL-2019, one TIME_RECORD, and an optional FRAC_DIGITS",
+                    expression.span);
+                return std::nullopt;
+            }
+            std::array<const Expression*, 2> actuals { nullptr, nullptr };
+            std::size_t positional = 0U;
+            bool valid = true;
+            for (std::size_t index = 0;
+                index < expression.operands.size(); ++index) {
+                const auto name = expression.call_argument_names.empty()
+                    ? std::string_view { }
+                    : std::string_view {
+                          expression.call_argument_names[index] };
+                std::size_t formal = 0U;
+                if (name.empty()) {
+                    formal = positional++;
+                } else if (name == "trec") {
+                    formal = 0U;
+                } else if (name == "frac_digits") {
+                    formal = 1U;
+                } else {
+                    valid = false;
+                    continue;
+                }
+                if (formal >= actuals.size() || actuals[formal] != nullptr) {
+                    valid = false;
+                    continue;
+                }
+                actuals[formal] = &expression.operands[index];
+            }
+            if (!valid || actuals[0] == nullptr) {
+                report(
+                    "FSIM-ELAB-VHENV-003",
+                    "STD.ENV TO_STRING has no matching standardized association profile",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto record_type =
+                frontend::vhdl_environment_time_record_type();
+            const auto actual_type = vhdl_expression_type(*actuals[0]);
+            if (!actual_type
+                || !frontend::is_vhdl_environment_time_record(
+                    *actual_type)) {
+                report(
+                    "FSIM-ELAB-VHENV-003",
+                    "STD.ENV TO_STRING TREC must have type TIME_RECORD",
+                    actuals[0]->span);
+                return std::nullopt;
+            }
+            const auto record = lower_expression(
+                *actuals[0], 515U, &record_type);
+            auto integer_type = frontend::vhdl_predefined_integer_type(
+                frontend::VhdlStandard::Vhdl2019, "integer");
+            integer_type.integer_range = frontend::IntegerRange {
+                0, 6, false };
+            std::optional<RegisterId> fractional_digits;
+            if (actuals[1] != nullptr) {
+                fractional_digits = lower_expression(
+                    *actuals[1], 64U, &integer_type);
+            } else {
+                fractional_digits = allocate_register(
+                    64U, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(LoadConstant {
+                    *fractional_digits,
+                    PackedLogic4::from_aval_bval(64U, 0U, 0U) });
+            }
+            if (!record || !fractional_digits) {
+                return std::nullopt;
+            }
+            const auto destination = allocate_string_register();
+            process_.operations.emplace_back(
+                VhdlEnvironmentTimeToString {
+                    destination, *record, *fractional_digits });
+            return destination;
+        }
         if (expression.text == "$typename") {
             if (language_ != frontend::Language::SystemVerilog2017
                 || expression.operands.size() != 1U) {

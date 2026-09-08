@@ -80,6 +80,7 @@ constexpr std::array kRetainedStandards {
     fsim::frontend::VhdlStandard::Vhdl2000,
     fsim::frontend::VhdlStandard::Vhdl2002,
     fsim::frontend::VhdlStandard::Vhdl2008,
+    fsim::frontend::VhdlStandard::Vhdl2019,
 };
 
 void test_all_profiles_and_statement_families()
@@ -264,6 +265,87 @@ end rtl;
         "VHDL discovery must use the canonical Change 4 identity algorithm");
 }
 
+void test_vhdl2019_sequential_block_callables()
+{
+    using namespace fsim;
+    constexpr std::string_view source_text = R"(entity block_coverage is end entity;
+architecture rtl of block_coverage is
+  signal result : integer := 0;
+begin
+  worker : process
+  begin
+    outer : block is
+      variable value : integer := 0;
+      function bump(input : integer) return integer is
+      begin
+        return input + 1;
+      end function;
+      procedure assign(variable target : out integer) is
+      begin
+        target := bump(1);
+      end procedure;
+    begin
+      inner : block
+      begin
+        assign(value);
+        result <= value;
+      end block inner;
+    end block outer;
+    wait;
+  end process;
+end architecture;
+)";
+    const auto root = checkout_root("vhdl2019-block");
+    const auto source_path = root / "rtl/block_coverage.vhd";
+    const auto source = make_source(root, source_path, source_text);
+    const auto parsed = frontend::parse_text(source.source_name, source_text,
+        frontend::Language::Vhdl2008,
+        frontend::VhdlStandard::Vhdl2019);
+    require(parsed.ok() && parsed.design.units.size() == 2U,
+        "the VHDL-2019 sequential-block coverage fixture must parse");
+    const auto& statements
+        = parsed.design.units.back().processes.front().statements;
+    require(!statements.empty(),
+        "the VHDL-2019 coverage fixture must retain process statements");
+    const auto discovered = elaboration::discover_vhdl_statement_points(
+        statements, frontend::Language::Vhdl2008,
+        frontend::VhdlStandard::Vhdl2019, std::span { &source, 1U });
+    require(discovered.ok() && discovered.points.size() == 5U,
+        "sequential-block bodies and their local callable bodies must all be "
+        "code-coverage points");
+    const std::vector expected_kinds {
+        frontend::StatementKind::Return,
+        frontend::StatementKind::Assignment,
+        frontend::StatementKind::ProcedureCall,
+        frontend::StatementKind::Assignment,
+        frontend::StatementKind::WaitUntil,
+    };
+    require(std::ranges::equal(discovered.points, expected_kinds, { },
+                &elaboration::VhdlStatementCoveragePoint::statement_kind,
+                std::identity { }),
+        "VHDL-2019 block-local callable and block-body points must retain "
+        "lexical source order");
+
+    const auto relocated_root = checkout_root("vhdl2019-block-relocated");
+    const auto relocated_source = make_source(relocated_root,
+        relocated_root / "rtl/block_coverage.vhd", source_text);
+    const auto relocated_parse = frontend::parse_text(
+        relocated_source.source_name, source_text,
+        frontend::Language::Vhdl2008,
+        frontend::VhdlStandard::Vhdl2019);
+    require(relocated_parse.ok(),
+        "the relocated VHDL-2019 block coverage fixture must parse");
+    const auto relocated = elaboration::discover_vhdl_statement_points(
+        relocated_parse.design.units.back().processes.front().statements,
+        frontend::Language::Vhdl2008,
+        frontend::VhdlStandard::Vhdl2019,
+        std::span { &relocated_source, 1U });
+    require(relocated.ok()
+            && point_ids(relocated) == point_ids(discovered),
+        "VHDL-2019 block and local-callable coverage point identities must "
+        "survive checkout relocation");
+}
+
 void test_rejections_and_limits()
 {
     using namespace fsim;
@@ -382,6 +464,7 @@ int main()
 {
     test_all_profiles_and_statement_families();
     test_relocation_and_direct_identity();
+    test_vhdl2019_sequential_block_callables();
     test_rejections_and_limits();
     return 0;
 }

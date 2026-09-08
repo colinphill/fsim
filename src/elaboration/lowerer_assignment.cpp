@@ -49,6 +49,96 @@ void Lowerer::validate_read_only_signal_writes(
     }
 }
 
+bool Lowerer::validate_vhdl_mode_view_write(
+    const SignalId signal,
+    const Expression& target,
+    const frontend::SourceSpan& source)
+{
+    if (language_ != frontend::Language::Vhdl2008
+        || signal >= design_.signal_info_.size()) {
+        return true;
+    }
+    constexpr std::string_view member_prefix { "@vhdl-member:" };
+    const auto target_path = [&](const auto& self,
+                                 const Expression& expression)
+        -> std::optional<std::string> {
+        if (expression.kind == ExpressionKind::Identifier) {
+            return expression.text;
+        }
+        if ((expression.kind == ExpressionKind::Index
+                || expression.kind == ExpressionKind::Slice)
+            && !expression.operands.empty()) {
+            return self(self, expression.operands.front());
+        }
+        if (expression.kind == ExpressionKind::Call
+            && expression.text.starts_with(member_prefix)
+            && expression.operands.size() == 1U) {
+            auto base = self(self, expression.operands.front());
+            if (!base) {
+                return std::nullopt;
+            }
+            *base += '.';
+            *base += expression.text.substr(member_prefix.size());
+            return base;
+        }
+        return std::nullopt;
+    };
+    auto relative = target_path(target_path, target);
+    if (!relative) {
+        return true;
+    }
+    auto normalized = [](const std::string_view path) {
+        std::string result;
+        result.reserve(path.size());
+        std::size_t index = 0U;
+        while (index < path.size()) {
+            if (path[index] != '(') {
+                result += path[index++];
+                continue;
+            }
+            const auto close = path.find(')', index + 1U);
+            if (close == std::string_view::npos) {
+                result.append(path.substr(index));
+                break;
+            }
+            index = close + 1U;
+        }
+        return result;
+    };
+    const auto is_prefix = [](const std::string_view prefix,
+                              const std::string_view value) {
+        return value == prefix
+            || (value.size() > prefix.size()
+                && value.starts_with(prefix)
+                && value[prefix.size()] == '.');
+    };
+    const auto full_target = relative->starts_with(hierarchy_ + ".")
+        ? *relative
+        : hierarchy_ + "." + *relative;
+    const auto normalized_target = normalized(full_target);
+    for (const auto& binding :
+         design_.signal_info_[signal].vhdl_mode_view_bindings) {
+        for (const auto& endpoint : binding.elements) {
+            const auto normalized_endpoint = normalized(endpoint.formal_path);
+            if (!is_prefix(normalized_target, normalized_endpoint)
+                && !is_prefix(normalized_endpoint, normalized_target)) {
+                continue;
+            }
+            if (endpoint.direction == frontend::PortDirection::Input) {
+                report(
+                    "FSIM-ELAB-VHVIEW-007",
+                    "VHDL mode-view input endpoint '"
+                        + endpoint.formal_path
+                        + "' is read-only within instance '"
+                        + hierarchy_ + "'",
+                    source);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 std::optional<std::int64_t>
 Lowerer::static_integer_value(const Expression& expression)
 {
@@ -1197,6 +1287,11 @@ void Lowerer::lower_assignment(const Statement& statement)
         }
         return;
     }
+    if (signal != signals_.end()
+        && !validate_vhdl_mode_view_write(
+            signal->second, statement.target, statement.target.span)) {
+        return;
+    }
     const auto whole_width = local != locals_.end()
         ? register_width(local->second)
         : design_.signal_info_[signal->second].width;
@@ -1531,6 +1626,21 @@ void Lowerer::lower_assignment(const Statement& statement)
                 return;
             }
         }
+        std::optional<RegisterId> replaced_vhdl_access;
+        const auto reclaiming_vhdl_access = contextual_target_type != nullptr
+            && contextual_target_type->vhdl_access
+            && contextual_target_type->vhdl_access
+                   ->reclaim_when_unreachable
+            && !dynamic_part_selection
+            && !dynamic_selection
+            && !has_selected_offset;
+        if (reclaiming_vhdl_access) {
+            replaced_vhdl_access = allocate_register(
+                contextual_target_type->vhdl_access->handle_width,
+                frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(CopyRegister {
+                *replaced_vhdl_access, local->second });
+        }
         if (dynamic_part_selection) {
             process_.operations.emplace_back(DynamicPartInsert {
                 local->second,
@@ -1552,6 +1662,15 @@ void Lowerer::lower_assignment(const Statement& statement)
         } else {
             process_.operations.emplace_back(
                 CopyRegister { local->second, *value });
+        }
+        if (replaced_vhdl_access) {
+            if (const auto heap = vhdl_access_heap(
+                    *contextual_target_type, statement.target.span)) {
+                emit_vhdl_access_reclamation(
+                    *contextual_target_type,
+                    *heap,
+                    *replaced_vhdl_access);
+            }
         }
         if (selected_member_reference) {
             for (const auto& context :

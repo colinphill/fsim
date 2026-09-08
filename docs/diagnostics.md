@@ -170,6 +170,9 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-FE-VHDECL-001` | error | A deferred VHDL package constant has no full declaration in the corresponding package body. |
 | `FSIM-FE-VHDECL-002` | error | A deferred VHDL package constant and its full declaration have nonconforming subtype indications. |
 | `FSIM-FE-VHDECL-003` | error | A package body redeclares a nondeferred constant from the package declaration. |
+| `FSIM-FE-VHENV-001` | error | A VHDL-2019 `STD.ENV` procedure, function, or type is used in the wrong syntactic category. |
+| `FSIM-FE-VHENV-002` | error | A VHDL-2019 `STD.ENV` function call has an invalid category, argument count, or named association. |
+| `FSIM-FE-VHENV-003` | error | A VHDL-2019 `STD.ENV` directory procedure has no standardized argument profile matching the call. |
 | `FSIM-FE-VHSTD-001` | error | A required compiler-supplied IEEE 1076-2019 source file is unavailable or unreadable. |
 | `FSIM-FE-VHSTD-002` | error | A compiler-supplied IEEE 1076-2019 source file does not match its pinned upstream checksum. |
 | `FSIM-FE-VHSTD-003` | error | A selected VHDL revision does not provide a declaration, expression, name, association, operator, context, generate, process, statement, instantiation, or port-map feature and names its minimum revision and migration, or fsim's intrinsic semantic projection of a pinned IEEE package is internally invalid for an owning revision. |
@@ -210,6 +213,12 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-VHDL-CA-002` | error | A conditional analysis directive or its expression is malformed. |
 | `FSIM-VHDL-CA-003` | error | Conditional analysis branch or group nesting is structurally invalid. |
 | `FSIM-VHDL-CA-004` | error | Conditional analysis nesting exceeds the bounded 128-level policy. |
+| `FSIM-VHDL-CA-005` | warning | An active VHDL-2019 conditional-analysis warning directive published its decoded message. |
+| `FSIM-VHDL-CA-006` | error | An active VHDL-2019 conditional-analysis error directive published its decoded message and failed analysis. |
+| `FSIM-VHDL-PROTECT-001` | error | A protect tool directive was used under a VHDL revision older than 2008. |
+| `FSIM-VHDL-PROTECT-002` | error | A protected source or decryption envelope has malformed, nested, or unmatched controls. |
+| `FSIM-VHDL-PROTECT-003` | error | A protected decryption envelope requires a key provider that this build does not supply. |
+| `FSIM-VHDL-PROTECT-004` | error | A protected source or decryption envelope is unterminated. |
 | `FSIM-FE-PARSE-001` | error | A parser expectation using the common fallback code failed. |
 | `FSIM-FE-PP-0001` | error | Include directories or macro definitions were supplied for a VHDL source set; these settings apply only to Verilog/SystemVerilog or SystemC. |
 
@@ -747,6 +756,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-PARSE-293` | error | A VHDL-2019 sequential block is missing its terminating semicolon. |
 | `FSIM-VHDL-PARSE-294` | error | A VHDL-2019 subtype-valued predefined attribute has a malformed argument list. |
 | `FSIM-VHDL-PARSE-295` | error | A VHDL-2019 converse mode-view alias has a missing attribute delimiter or terminator. |
+| `FSIM-VHDL-PARSE-296` | error | A VHDL real literal has malformed or unsupported spelling. |
 
 ### Embedded VHDL PSL parsing and ownership
 
@@ -2157,6 +2167,13 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-ELAB-VHARRAYATTR-002` | error | A VHDL array attribute selects a nonstatic dimension or a dimension outside the concrete array rank. |
 | `FSIM-ELAB-VHARRAYATTR-003` | error | VHDL `range` or `reverse_range` is used as a scalar expression rather than a discrete range. |
 | `FSIM-ELAB-VHARRAYATTR-004` | error | A scalar VHDL array attribute result is outside the portable signed 32-bit integer representation. |
+| `FSIM-ELAB-VHENV-001` | error | The standardized VHDL `STD.ENV` API is lowered under a profile older than VHDL-2019. |
+| `FSIM-ELAB-VHENV-002` | error | A VHDL-2019 `STD.ENV` subprogram or type is used in the wrong procedure, function, or value category. |
+| `FSIM-ELAB-VHENV-003` | error | A VHDL-2019 `STD.ENV` call has an invalid executable form or no matching standardized overload or association profile. |
+| `FSIM-ELAB-VHENV-004` | error | A VHDL-2019 `STD.ENV` argument or result context has an incompatible type. |
+| `FSIM-ELAB-VHENV-005` | error | VHDL-2019 `TIME_RECORD` arithmetic has an operand or result profile outside the standardized `TIME_RECORD` and `REAL` overloads. |
+| `FSIM-ELAB-VHENV-006` | error | A VHDL-2019 `STD.ENV` directory actual is not a writable directory/status variable or a string-compatible path. |
+| `FSIM-ELAB-VHENV-007` | error | A VHDL-2019 `DIRECTORY` name or item selection does not designate a supported directory variable. |
 | `FSIM-ELAB-VHDLMATCH-001` | error | A matching case or selected assignment is outside VHDL-2008 or has a selector outside the bounded bit/std_ulogic scalar or one-dimensional-array domain. |
 | `FSIM-ELAB-VHDLMATCH-002` | error | A bounded matching choice is not a locally static bit/std_ulogic literal of the selector width. |
 | `FSIM-ELAB-VHDLMATCH-003` | error | Two matching choices overlap after applying `-` wildcard and 0/L or 1/H equivalence. |
@@ -2189,11 +2206,16 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-ELAB-VHVIEW-003` | error | A VHDL view root is invalid or incomplete, or a nested view is incompatible with its record member or array element subtype. |
 | `FSIM-ELAB-VHVIEW-004` | error | A VHDL view-based interface has a record subtype or array element subtype that is incompatible with the referenced mode-view root. |
 | `FSIM-ELAB-VHVIEW-005` | error | A VHDL converse mode-view alias has no visible source view or forms a recursive alias chain. |
+| `FSIM-ELAB-VHVIEW-006` | error | A VHDL view-based association cannot materialize a bounded concrete packed-storage endpoint for every nested record and array leaf. |
+| `FSIM-ELAB-VHVIEW-007` | error | A VHDL assignment target overlaps an input leaf of the active instance's mode-view interface. |
 | `FSIM-ELAB-VHCOND-001` | error | A VHDL conditional expression is malformed, appears outside VHDL, or uses the first-class expression form before VHDL-2019. |
 | `FSIM-ELAB-VHCOND-002` | error | VHDL conditional-expression results do not resolve to one surrounding common base type and width. |
 | `FSIM-ELAB-VHCOND-003` | error | A VHDL-2019 conditional-expression condition is not Boolean or an implicitly convertible scalar bit or standard-logic value. |
 | `FSIM-ELAB-VHRESULT-001` | error | A VHDL-2019 function result subtype cannot obtain a compatible fully constrained array subtype from its immediate call context. |
 | `FSIM-ELAB-VHRESULT-002` | error | A VHDL-2019 function result subtype lost its implicit declaration metadata before contextual specialization. |
+| `FSIM-ELAB-VHREFLECT-001` | error | A VHDL-2019 `reflect` attribute lacks a resolved type/object prefix or a compatible mirror result context. |
+| `FSIM-ELAB-VHREFLECT-002` | error | A reflection method result has no bounded packed runtime representation. |
+| `FSIM-ELAB-VHREFLECT-003` | error | A reflection selector has conflicting string arguments or an index vector beyond the bounded 32-dimension model. |
 | `FSIM-ELAB-VITAL-001` | error | A compiler-supplied VITAL constant is used without its exact concrete delay or map context. |
 | `FSIM-ELAB-VITAL-002` | error | A scalar VITAL primitive is used in a nonscalar result context. |
 | `FSIM-ELAB-VITAL-003` | error | A VITAL function call has a missing, excessive, duplicate, unknown, or misplaced actual. |
@@ -2633,6 +2655,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-RUN-ASSERT-0001` | assertion severity | A false HDL assertion stopped a CLI simulation; the diagnostic retains its source location and message. |
 | `FSIM-HDL-REPORT` | report severity | A VHDL report or SystemVerilog severity task was emitted through a command or Tcl output stream. |
 | `FSIM-RUN-DELTA-0001` | error | Simulation exceeded `max_deltas`; the message includes pending processes and recent signals. |
+| `FSIM-RUN-VHENV-001` | error | A VHDL-2019 simulator status is outside the portable host-process range 0 through 255. |
 | `FSIM-VCD-0001` | error | The trace output directory could not be created. |
 | `FSIM-VCD-0002` | error | The VCD trace file could not be opened. |
 | `FSIM-VCD-0003` | error | VCD declaration, immutable selection ownership, append-only late-snapshot/value emission, timestamp scaling, flushing, staged publication, or terminal lifecycle completion failed. The first terminal failure is retained and reported once; an incomplete trace is never reported as cleanly complete. |

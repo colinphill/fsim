@@ -293,6 +293,36 @@ void test_vhdl_vhpi_callbacks() {
               std::begin(lifecycle_kinds), std::end(lifecycle_kinds)),
       "VHPI lifecycle callback kinds lost identity or order");
 
+  std::vector<std::string> tool_events;
+  const auto tool_callback = callbacks.register_callback(
+      {VhdlVhpiCallbackKind::ToolExecution,
+       0,
+       true,
+       31,
+       [&](const VhdlVhpiCallbackEvent& event) {
+         require_vhpi_callback(
+             event.kind == VhdlVhpiCallbackKind::ToolExecution
+                 && event.data.object == 0U
+                 && event.data.related_identity == FSIM_VHPI_TOOL_SAVE
+                 && event.user_data == 31U,
+             "VHPI tool callback lost action or ownership");
+         tool_events.push_back(event.data.message);
+       }});
+  const VhdlVhpiEventData tool_data{
+      0,
+      FSIM_VHPI_TOOL_SAVE,
+      std::nullopt,
+      "checkpoint.fsim",
+      std::nullopt,
+      0};
+  require_vhpi_callback(
+      tool_callback
+          && callbacks.publish(
+                 VhdlVhpiCallbackKind::ToolExecution, tool_data)
+              == VhdlVhpiCallbackError::None
+          && tool_events == std::vector<std::string>{"checkpoint.fsim"},
+      "VHPI tool execution callback publishes bounded action data");
+
   VhdlVhpiObjectRegistry foreign_objects{1202};
   const auto foreign_root = callback_object(
       foreign_objects, VhdlVhpiObjectKind::Root, 0, "foreign");

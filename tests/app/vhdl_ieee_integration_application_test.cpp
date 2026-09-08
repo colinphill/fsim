@@ -2,7 +2,10 @@
 #include "fsim/app/application.hpp"
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
+#include "fsim/frontend/parser.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
+#include "fsim/support/environment.hpp"
+#include "fsim/version.hpp"
 
 #include "governed_process_limits.hpp"
 
@@ -10,6 +13,7 @@
 #include <array>
 #include <cassert>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -17,6 +21,7 @@
 #include <sstream>
 #include <string>
 #include <system_error>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -29,6 +34,47 @@ struct TemporaryDirectory {
         std::error_code error;
         std::filesystem::remove_all(path, error);
     }
+};
+
+class ScopedEnvironment final {
+public:
+    ScopedEnvironment(
+        std::string name, const std::optional<std::string>& value)
+        : name_(std::move(name))
+    {
+        previous_ = fsim::support::environment_variable(name_);
+#if defined(_WIN32)
+        assert(::_putenv_s(
+            name_.c_str(), value ? value->c_str() : "") == 0);
+#else
+        if (value) {
+            assert(::setenv(name_.c_str(), value->c_str(), 1) == 0);
+        } else {
+            assert(::unsetenv(name_.c_str()) == 0);
+        }
+#endif
+    }
+
+    ScopedEnvironment(const ScopedEnvironment&) = delete;
+    ScopedEnvironment& operator=(const ScopedEnvironment&) = delete;
+
+    ~ScopedEnvironment()
+    {
+#if defined(_WIN32)
+        (void)::_putenv_s(
+            name_.c_str(), previous_ ? previous_->c_str() : "");
+#else
+        if (previous_) {
+            (void)::setenv(name_.c_str(), previous_->c_str(), 1);
+        } else {
+            (void)::unsetenv(name_.c_str());
+        }
+#endif
+    }
+
+private:
+    std::string name_;
+    std::optional<std::string> previous_;
 };
 
 fsim::project::Config make_config(
@@ -400,7 +446,8 @@ void verify_revision_environments(const std::filesystem::path& directory)
              Expected { "1993", 15, 36, 30, 14 },
              Expected { "2000", 15, 36, 30, 14 },
              Expected { "2002", 15, 36, 30, 14 },
-             Expected { "2008", 19, 45, 32, 17 } }) {
+             Expected { "2008", 19, 45, 32, 17 },
+             Expected { "2019", 19, 45, 34, 17 } }) {
         const auto source = directory / ("environment-" + std::string { expected.year } + ".vhd");
         const auto unit_name = "environment_" + std::string { expected.year };
         {
@@ -453,7 +500,7 @@ void verify_revision_environments(const std::filesystem::path& directory)
         const auto& environment = architecture->vhdl_predefined_environment;
         assert(environment.identity
             == "ieee-1076-standard:" + std::string { expected.year }
-                + ":fsim-v1");
+                + ":fsim-v3");
         assert(environment.working_library == "legacy_work");
         assert((environment.implicit_libraries
             == std::vector<std::string> { "std", "work" }));
@@ -488,7 +535,8 @@ void verify_revision_environments(const std::filesystem::path& directory)
         };
         assert(has_export("std_logic_vector"));
         assert(has_export("xnor") == (expected.year != "1987"));
-        assert(has_export("to_hstring") == (expected.year == "2008"));
+        assert(has_export("to_hstring")
+            == (expected.year == "2008" || expected.year == "2019"));
 
         const auto package_unit = [&](const std::string_view name) {
             return std::ranges::find_if(
@@ -677,6 +725,8 @@ end package std_logic_signed;
         }));
 }
 
+#include "vhdl_ieee_integration_vhdl2019.tpp"
+
 } // namespace
 
 int main()
@@ -689,6 +739,11 @@ int main()
     };
     std::filesystem::create_directories(directory.path);
     verify_revision_environments(directory.path);
+    verify_vhdl2019_governed_packages(directory.path);
+    verify_vhdl2019_simulator_api(directory.path);
+    verify_vhdl2019_directory_api(directory.path);
+    verify_vhdl2019_environment_api(directory.path);
+    verify_vhdl2019_assert_api(directory.path);
 
     const auto context = directory.path / "00_context.vhd";
     const auto entity = directory.path / "01_entity.vhd";

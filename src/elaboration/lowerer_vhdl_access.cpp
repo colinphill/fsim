@@ -128,6 +128,89 @@ bool Lowerer::validate_vhdl_access_handle(
   return true;
 }
 
+void Lowerer::emit_vhdl_access_reclamation(
+    const frontend::Type& access_type,
+    const VhdlAccessHeap& heap,
+    const RegisterId candidate) {
+  if (!access_type.vhdl_access
+      || !access_type.vhdl_access->reclaim_when_unreachable) {
+    return;
+  }
+
+  std::vector<RegisterId> roots;
+  const auto identity = access_identity(access_type);
+  for (const auto& [name, type] : local_types_) {
+    if (type == nullptr || !type->vhdl_access
+        || access_identity(*type) != identity) {
+      continue;
+    }
+    if (const auto local = locals_.find(name); local != locals_.end()) {
+      roots.push_back(local->second);
+    }
+  }
+  std::ranges::sort(roots);
+  roots.erase(std::unique(roots.begin(), roots.end()), roots.end());
+
+  const auto width = access_type.vhdl_access->handle_width;
+  const auto zero = allocate_register(width, frontend::ValueDomain::Bit2);
+  process_.operations.emplace_back(LoadConstant{
+      zero, unsigned_value(0, width)});
+  auto reachable = allocate_register(1, frontend::ValueDomain::Boolean);
+  process_.operations.emplace_back(Binary{
+      BinaryOperator::case_equal, reachable, candidate, zero});
+  for (const auto root : roots) {
+    const auto equal = allocate_register(
+        1, frontend::ValueDomain::Boolean);
+    process_.operations.emplace_back(Binary{
+        BinaryOperator::case_equal, equal, candidate, root});
+    const auto combined = allocate_register(
+        1, frontend::ValueDomain::Boolean);
+    process_.operations.emplace_back(Binary{
+        BinaryOperator::bit_or, combined, reachable, equal});
+    reachable = combined;
+  }
+
+  const auto branch = static_cast<InstructionIndex>(
+      process_.operations.size());
+  process_.operations.emplace_back(Branch{
+      reachable, 0, 0, UnknownBranchPolicy::error});
+  const auto reclaim = static_cast<InstructionIndex>(
+      process_.operations.size());
+  process_.operations.emplace_back(DeleteContainer{
+      heap.objects, candidate, false});
+  const auto finish = static_cast<InstructionIndex>(
+      process_.operations.size());
+  process_.operations[branch] = Branch{
+      reachable, finish, reclaim, UnknownBranchPolicy::error};
+}
+
+void Lowerer::emit_vhdl_access_scope_cleanup(
+    const std::vector<frontend::VariableDeclaration>& variables) {
+  for (const auto& variable : variables) {
+    if (!variable.type.vhdl_access
+        || !variable.type.vhdl_access->reclaim_when_unreachable) {
+      continue;
+    }
+    const auto local = locals_.find(variable.name);
+    if (local == locals_.end()) {
+      continue;
+    }
+    const auto heap = vhdl_access_heap(variable.type, variable.span);
+    if (heap == nullptr) {
+      continue;
+    }
+    const auto width = variable.type.vhdl_access->handle_width;
+    const auto released = allocate_register(
+        width, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(CopyRegister{
+        released, local->second});
+    process_.operations.emplace_back(LoadConstant{
+        local->second, unsigned_value(0, width)});
+    emit_vhdl_access_reclamation(
+        variable.type, *heap, released);
+  }
+}
+
 Lowerer::ExpressionAttempt Lowerer::lower_vhdl_access_expression(
     const Expression& expression,
     const std::size_t expected_width,
@@ -137,6 +220,12 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_access_expression(
   }
   if (expression.kind == ExpressionKind::Binary
       && expression.operands.size() == 2) {
+    if (is_string_expression(expression.operands[0])
+        || is_string_expression(expression.operands[1])) {
+      // Access-to-STRING dereferences are consumed by the string lowering
+      // path, including STD.ENV DIRECTORY Name and Items selections.
+      return {};
+    }
     const auto lhs_type =
         vhdl_expression_type(expression.operands[0]);
     const auto rhs_type =
@@ -481,13 +570,17 @@ bool Lowerer::lower_vhdl_access_deallocation(
   if (heap == nullptr || !handle) {
     return true;
   }
+  const auto released = allocate_register(
+      type->vhdl_access->handle_width, frontend::ValueDomain::Bit2);
+  process_.operations.emplace_back(CopyRegister{released, *handle});
   if (type->vhdl_access->deallocate_releases_storage) {
     process_.operations.emplace_back(DeleteContainer{
-        heap->objects, *handle, false});
+        heap->objects, released, false});
   }
   process_.operations.emplace_back(LoadConstant{
       local->second,
       unsigned_value(0, type->vhdl_access->handle_width)});
+  emit_vhdl_access_reclamation(*type, *heap, released);
   return true;
 }
 

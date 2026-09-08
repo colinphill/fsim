@@ -196,6 +196,12 @@ struct VhdlModeViewElementBinding {
     std::string actual_path;
     frontend::PortDirection direction { frontend::PortDirection::Unknown };
     frontend::SourceSpan source;
+    // Explicit packed-storage endpoint after every record selection and
+    // concrete array index has been elaborated. A view never creates separate
+    // storage: each leaf addresses the associated signal directly.
+    runtime::simir::SignalId signal { };
+    std::uint64_t lsb_offset { };
+    std::uint64_t width { };
 };
 
 struct VhdlModeViewBinding {

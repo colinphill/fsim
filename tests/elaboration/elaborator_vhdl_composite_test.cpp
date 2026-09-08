@@ -786,6 +786,95 @@ end architecture;
             != std::string_view::npos;
     }
     assert(saw_exhaustion);
+
+    auto reclaimed = fsim::frontend::parse_text(
+        "reclaimed_access_heap.vhd",
+        R"(
+entity Reclaimed_Access_Heap is
+end entity;
+architecture rtl of reclaimed_access_heap is
+  type Bit_Pointer is access bit;
+  signal Reused : bit;
+begin
+  exercise : process
+    variable Pointer : Bit_Pointer;
+  begin
+    Pointer := new bit;
+    Pointer := null;
+    Pointer := new bit;
+    Pointer.all := '1';
+    Reused <= Pointer.all;
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl2019);
+    assert(reclaimed.ok());
+    auto& reclaimed_architecture = reclaimed.design.units.back();
+    assert(
+        reclaimed_architecture.type_aliases.size() == 1
+        && reclaimed_architecture.type_aliases[0].type.vhdl_access);
+    reclaimed_architecture.type_aliases[0]
+        .type.vhdl_access->maximum_objects = 1;
+    const auto reclaimed_design = fsim::elaboration::elaborate(
+        reclaimed.design,
+        "vhdl:work.reclaimed_access_heap(rtl)");
+    assert(reclaimed_design.ok());
+    const auto reused = reclaimed_design.design->find_signal("reused");
+    assert(reused);
+    auto reclaimed_interpreter =
+        reclaimed_design.design->create_interpreter();
+    assert(
+        reclaimed_interpreter->run().status
+            == fsim::runtime::RunStatus::completed
+        && reclaimed_interpreter->signal_value(*reused).to_msb_string()
+            == "1");
+
+    auto retained_alias = fsim::frontend::parse_text(
+        "retained_access_alias.vhd",
+        R"(
+entity Retained_Access_Alias is
+end entity;
+architecture rtl of retained_access_alias is
+  type Bit_Pointer is access bit;
+begin
+  exercise : process
+    variable Pointer : Bit_Pointer;
+    variable Saved : Bit_Pointer;
+  begin
+    Pointer := new bit;
+    Saved := Pointer;
+    Deallocate(Pointer);
+    Pointer := new bit;
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl2019);
+    assert(retained_alias.ok());
+    auto& retained_alias_architecture = retained_alias.design.units.back();
+    assert(
+        retained_alias_architecture.type_aliases.size() == 1
+        && retained_alias_architecture.type_aliases[0].type.vhdl_access);
+    retained_alias_architecture.type_aliases[0]
+        .type.vhdl_access->maximum_objects = 1;
+    const auto retained_alias_design = fsim::elaboration::elaborate(
+        retained_alias.design,
+        "vhdl:work.retained_access_alias(rtl)");
+    assert(retained_alias_design.ok());
+    auto retained_alias_interpreter =
+        retained_alias_design.design->create_interpreter();
+    bool preserved_alias_storage = false;
+    try {
+        (void)retained_alias_interpreter->run();
+    } catch (const fsim::runtime::simir::AssertionError& error) {
+        preserved_alias_storage = std::string_view { error.what() }.find(
+            "VHDL access allocation exceeded its owning-storage limit")
+            != std::string_view::npos;
+    }
+    assert(preserved_alias_storage);
 }
 
 void test_vhdl_protected_type_storage()

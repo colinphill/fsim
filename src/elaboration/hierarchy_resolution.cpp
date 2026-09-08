@@ -377,7 +377,8 @@ void HierarchyBuilder::validate_process_drivers()
             }
         }
         if (!overlap
-            && (info.vhdl_array
+            && (!info.vhdl_mode_view_bindings.empty()
+                || info.vhdl_array
                 || std::ranges::all_of(
                     process_drivers,
                     [](const auto& driver) {

@@ -212,6 +212,7 @@ enum class ExpressionKind : std::uint8_t {
     invalid,
     name,
     integer_literal,
+    real_literal,
     boolean_literal,
     logic_literal,
     string_literal,

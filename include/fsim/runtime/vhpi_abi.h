@@ -6,6 +6,7 @@
 
 #define FSIM_VHPI_HOST_ABI_VERSION 1u
 #define FSIM_VHPI_HOST_ABI_VERSION_V2 2u
+#define FSIM_VHPI_HOST_ABI_VERSION_V3 3u
 #define FSIM_VHPI_PLUGIN_ABI_VERSION 1u
 #define FSIM_VHPI_PLUGIN_BIND_SYMBOL "fsim_vhpi_plugin_bind_v1"
 
@@ -85,8 +86,49 @@ typedef enum fsim_vhpi_service_operation_v1 {
   FSIM_VHPI_SERVICE_IO = 10,
   FSIM_VHPI_SERVICE_USER_DATA = 11,
   FSIM_VHPI_SERVICE_CHECKPOINT = 12,
-  FSIM_VHPI_SERVICE_LIFECYCLE = 13
+  FSIM_VHPI_SERVICE_LIFECYCLE = 13,
+  FSIM_VHPI_SERVICE_PROPERTY = 14,
+  FSIM_VHPI_SERVICE_TOOL = 15,
+  FSIM_VHPI_SERVICE_CAPABILITY = 16
 } fsim_vhpi_service_operation_v1;
+
+typedef enum fsim_vhpi_callback_reason_v3 {
+  FSIM_VHPI_CALLBACK_SIGNAL = 0,
+  FSIM_VHPI_CALLBACK_PROCESS = 1,
+  FSIM_VHPI_CALLBACK_EVENT = 2,
+  FSIM_VHPI_CALLBACK_TRANSACTION = 3,
+  FSIM_VHPI_CALLBACK_ASSERTION = 4,
+  FSIM_VHPI_CALLBACK_START_OF_SIMULATION = 5,
+  FSIM_VHPI_CALLBACK_END_OF_SIMULATION = 6,
+  FSIM_VHPI_CALLBACK_START_OF_SAVE = 7,
+  FSIM_VHPI_CALLBACK_END_OF_SAVE = 8,
+  FSIM_VHPI_CALLBACK_START_OF_RESTART = 9,
+  FSIM_VHPI_CALLBACK_END_OF_RESTART = 10,
+  FSIM_VHPI_CALLBACK_START_OF_RESET = 11,
+  FSIM_VHPI_CALLBACK_END_OF_RESET = 12,
+  FSIM_VHPI_CALLBACK_TOOL_EXECUTION = 13
+} fsim_vhpi_callback_reason_v3;
+
+typedef enum fsim_vhpi_value_format_v3 {
+  FSIM_VHPI_VALUE_BOOLEAN = 0,
+  FSIM_VHPI_VALUE_CHARACTER = 1,
+  FSIM_VHPI_VALUE_INTEGER = 2,
+  FSIM_VHPI_VALUE_REAL = 3,
+  FSIM_VHPI_VALUE_TIME = 4,
+  FSIM_VHPI_VALUE_ENUMERATION = 5,
+  FSIM_VHPI_VALUE_PHYSICAL = 6,
+  FSIM_VHPI_VALUE_ACCESS = 7,
+  FSIM_VHPI_VALUE_LOGIC9 = 8,
+  FSIM_VHPI_VALUE_BINARY_STRING = 9
+} fsim_vhpi_value_format_v3;
+
+typedef enum fsim_vhpi_tool_action_v3 {
+  FSIM_VHPI_TOOL_STOP = 0,
+  FSIM_VHPI_TOOL_FINISH = 1,
+  FSIM_VHPI_TOOL_RESET = 2,
+  FSIM_VHPI_TOOL_RESTART = 3,
+  FSIM_VHPI_TOOL_SAVE = 4
+} fsim_vhpi_tool_action_v3;
 
 typedef struct fsim_vhpi_service_request_v1 {
   uint32_t struct_size;
@@ -123,6 +165,71 @@ typedef struct fsim_vhpi_host_v2 {
   void* service_context;
   fsim_vhpi_invoke_service_v1 invoke_service;
 } fsim_vhpi_host_v2;
+
+#define FSIM_VHPI_CAPABILITY_SELECTED_NAMES 0x00000001u
+#define FSIM_VHPI_CAPABILITY_SOURCE_LOCATIONS 0x00000002u
+#define FSIM_VHPI_CAPABILITY_INTERFACE_VIEWS 0x00000004u
+#define FSIM_VHPI_CAPABILITY_PACKAGE_PROVENANCE 0x00000008u
+#define FSIM_VHPI_CAPABILITY_TOOL_EXECUTION 0x00000010u
+
+typedef struct fsim_vhpi_capabilities_v3 {
+  uint32_t struct_size;
+  uint32_t vhdl_revision;
+  uint32_t object_kind_count;
+  uint32_t relationship_kind_count;
+  uint32_t property_kind_count;
+  uint32_t maximum_index_dimensions;
+  uint32_t maximum_package_dependencies;
+  uint32_t flags;
+} fsim_vhpi_capabilities_v3;
+
+typedef fsim_vhpi_status_v1(FSIM_VHPI_CALL *fsim_vhpi_query_capabilities_v3)(
+    void* context, fsim_vhpi_capabilities_v3* capabilities);
+
+typedef enum fsim_vhpi_value_access_v3 {
+  FSIM_VHPI_VALUE_READ = 0,
+  FSIM_VHPI_VALUE_WRITE = 1
+} fsim_vhpi_value_access_v3;
+
+typedef struct fsim_vhpi_value_v3 {
+  uint32_t struct_size;
+  fsim_vhpi_value_format_v3 format;
+  uint32_t flags;
+  uint32_t buffer_size;
+  fsim_vhpi_handle_v1 object;
+  int64_t integer;
+  double real;
+  void* buffer;
+} fsim_vhpi_value_v3;
+
+typedef fsim_vhpi_status_v1(FSIM_VHPI_CALL *fsim_vhpi_access_value_v3)(
+    void* context,
+    fsim_vhpi_value_access_v3 access,
+    fsim_vhpi_value_v3* value);
+
+typedef struct fsim_vhpi_tool_request_v3 {
+  uint32_t struct_size;
+  fsim_vhpi_tool_action_v3 action;
+  uint32_t flags;
+  uint32_t text_size;
+  int32_t status;
+  uint32_t reserved;
+  const char* text;
+} fsim_vhpi_tool_request_v3;
+
+typedef fsim_vhpi_status_v1(FSIM_VHPI_CALL *fsim_vhpi_execute_tool_v3)(
+    void* context, const fsim_vhpi_tool_request_v3* request);
+
+/*
+ * v3 retains the complete v2 host prefix. All three appended callbacks use
+ * v2.service_context and validate the size of every pointed-to record.
+ */
+typedef struct fsim_vhpi_host_v3 {
+  fsim_vhpi_host_v2 v2;
+  fsim_vhpi_query_capabilities_v3 query_capabilities;
+  fsim_vhpi_access_value_v3 access_value;
+  fsim_vhpi_execute_tool_v3 execute_tool;
+} fsim_vhpi_host_v3;
 
 typedef fsim_vhpi_status_v1(FSIM_VHPI_CALL *fsim_vhpi_plugin_lifecycle_v1)(
     void* context);

@@ -30,6 +30,7 @@ enum class VhdlVhpiCallbackKind : std::uint32_t {
   EndOfRestart,
   StartOfReset,
   EndOfReset,
+  ToolExecution,
 };
 
 enum class VhdlVhpiCallbackStatus : std::uint32_t {

@@ -26,9 +26,7 @@ namespace {
         const frontend::Expression& expression)
     {
         if (expression.kind != frontend::ExpressionKind::Index
-            || expression.operands.size() != 2
-            || expression.operands.front().kind
-                != frontend::ExpressionKind::Identifier) {
+            || expression.operands.size() != 2) {
             return nullptr;
         }
         return &expression.operands.front();
@@ -45,14 +43,18 @@ Lowerer::unpacked_aggregate_member_reference(
         || !expression.text.starts_with(member_index_prefix)) {
         return std::nullopt;
     }
-    const auto* container = object_type(base->text);
+    const auto resolved_container = base->kind == ExpressionKind::Identifier
+        ? std::optional<frontend::Type> { }
+        : vhdl_expression_type(*base);
+    const auto* container = base->kind == ExpressionKind::Identifier
+        ? object_type(base->text)
+        : resolved_container ? &*resolved_container : nullptr;
     if (container == nullptr || !aggregate_element_container(*container)) {
         return std::nullopt;
     }
 
     const frontend::Type* selected = &container->systemverilog_container->element_types.front();
     UnpackedAggregateMemberReference result;
-    result.container_type = container;
     auto remaining = std::string_view { expression.text }.substr(
         member_index_prefix.size());
     while (!remaining.empty()) {
@@ -83,7 +85,7 @@ Lowerer::unpacked_aggregate_member_reference(
     if (result.members.empty()) {
         return std::nullopt;
     }
-    result.leaf_type = selected;
+    result.leaf_type = *selected;
     return result;
 }
 
@@ -96,7 +98,12 @@ Lowerer::lower_unpacked_aggregate_member_read(
         || !expression.text.starts_with(member_index_prefix)) {
         return { };
     }
-    const auto* type = object_type(base->text);
+    const auto resolved_type = base->kind == ExpressionKind::Identifier
+        ? std::optional<frontend::Type> { }
+        : vhdl_expression_type(*base);
+    const auto* type = base->kind == ExpressionKind::Identifier
+        ? object_type(base->text)
+        : resolved_type ? &*resolved_type : nullptr;
     if (type == nullptr || !aggregate_element_container(*type)) {
         return { };
     }
@@ -108,14 +115,14 @@ Lowerer::lower_unpacked_aggregate_member_read(
             expression.span);
         return std::nullopt;
     }
-    const auto width = reference->leaf_type->width();
+    const auto width = reference->leaf_type.width();
     if (!width || *width == 0
-        || reference->leaf_type->domain
+        || reference->leaf_type.domain
             == frontend::ValueDomain::String
-        || reference->leaf_type->systemverilog_container
-        || reference->leaf_type->packed_aggregate
+        || reference->leaf_type.systemverilog_container
+        || reference->leaf_type.packed_aggregate
             == frontend::PackedAggregateKind::UnpackedStruct
-        || reference->leaf_type->packed_aggregate
+        || reference->leaf_type.packed_aggregate
             == frontend::PackedAggregateKind::UnpackedUnion) {
         report(
             "FSIM-ELAB-SVCONTAINER-024",
@@ -152,7 +159,7 @@ Lowerer::lower_unpacked_aggregate_member_read(
             *index, runtime_type->index_width,
             runtime_type->signed_indices);
     }
-    const auto destination = allocate_register(*width, reference->leaf_type->domain);
+    const auto destination = allocate_register(*width, reference->leaf_type.domain);
     process_.operations.emplace_back(ContainerAggregateRead {
         destination, *source, *index, reference->members,
         runtime_type->associative
@@ -672,16 +679,16 @@ bool Lowerer::lower_unpacked_aggregate_assignment(
 
     if (statement.target.text.starts_with(member_index_prefix)) {
         const auto reference = unpacked_aggregate_member_reference(statement.target);
-        const auto width = reference && reference->leaf_type
-            ? reference->leaf_type->width()
+        const auto width = reference
+            ? reference->leaf_type.width()
             : std::nullopt;
         if (!reference || !width || *width == 0
-            || reference->leaf_type->domain
+            || reference->leaf_type.domain
                 == frontend::ValueDomain::String
-            || reference->leaf_type->systemverilog_container
-            || reference->leaf_type->packed_aggregate
+            || reference->leaf_type.systemverilog_container
+            || reference->leaf_type.packed_aggregate
                 == frontend::PackedAggregateKind::UnpackedStruct
-            || reference->leaf_type->packed_aggregate
+            || reference->leaf_type.packed_aggregate
                 == frontend::PackedAggregateKind::UnpackedUnion) {
             report(
                 "FSIM-ELAB-SVCONTAINER-024",
@@ -691,7 +698,7 @@ bool Lowerer::lower_unpacked_aggregate_assignment(
             return true;
         }
         auto value = lower_expression(
-            statement.value, *width, reference->leaf_type);
+            statement.value, *width, &reference->leaf_type);
         if (!value) {
             return true;
         }

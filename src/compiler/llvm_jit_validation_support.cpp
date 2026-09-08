@@ -91,12 +91,31 @@ bool supports_wide_register_operation(
                 || std::is_same_v<OperationType, SystemCommand>
                 || std::is_same_v<OperationType, VcdControl>
                 || std::is_same_v<OperationType, SystemVerilogMath>
+                || std::is_same_v<OperationType, VhdlEnvironmentTime>
+                || std::is_same_v<
+                    OperationType,
+                    VhdlEnvironmentTimeToString>
+                || std::is_same_v<
+                    OperationType,
+                    VhdlEnvironmentDirectory>
+                || std::is_same_v<
+                    OperationType,
+                    VhdlEnvironmentGetenv>
+                || std::is_same_v<
+                    OperationType,
+                    VhdlEnvironmentCallPath>
+                || std::is_same_v<
+                    OperationType,
+                    VhdlEnvironmentGetCallPath>
                 || std::is_same_v<OperationType, FileScan>
                 || std::is_same_v<OperationType, FileWriteFormatted>
                 || std::is_same_v<OperationType, CallableFramePush>
                 || std::is_same_v<OperationType, CallableFramePop>
                 || std::is_same_v<OperationType, CoverageSample>
                 || std::is_same_v<OperationType, CoverageQuery>
+                || std::is_same_v<OperationType, VhdlPslApi>
+                || std::is_same_v<OperationType, VhdlAssertApi>
+                || std::is_same_v<OperationType, VhdlReflectionApi>
                 || std::is_same_v<OperationType, CoverageControl>
                 || std::is_same_v<OperationType, CoverageAccess>
                 || std::is_same_v<OperationType, CodeCoverageHit>
@@ -197,6 +216,8 @@ void validate_fork_operation(
     return fsim::runtime::simir::operation_holds<WaitFor>(operation)
         || fsim::runtime::simir::operation_holds<CoverageSample>(operation)
         || fsim::runtime::simir::operation_holds<CoverageQuery>(operation)
+        || fsim::runtime::simir::operation_holds<VhdlPslApi>(operation)
+        || fsim::runtime::simir::operation_holds<VhdlAssertApi>(operation)
         || fsim::runtime::simir::operation_holds<CoverageControl>(operation)
         || fsim::runtime::simir::operation_holds<CoverageAccess>(operation)
         || fsim::runtime::simir::operation_holds<SystemCommand>(operation)
@@ -238,6 +259,19 @@ void validate_fork_operation(
         || fsim::runtime::simir::operation_holds<SemaphoreCreate>(operation)
         || fsim::runtime::simir::operation_holds<SemaphoreGet>(operation)
         || fsim::runtime::simir::operation_holds<SemaphorePut>(operation)
+        || fsim::runtime::simir::operation_holds<VhdlEnvironmentTime>(
+            operation)
+        || fsim::runtime::simir::operation_holds<
+            VhdlEnvironmentTimeToString>(operation)
+        || fsim::runtime::simir::operation_holds<
+            VhdlEnvironmentDirectory>(operation)
+        || fsim::runtime::simir::operation_holds<
+            VhdlEnvironmentGetenv>(operation)
+        || fsim::runtime::simir::operation_holds<
+            VhdlEnvironmentCallPath>(operation)
+        || fsim::runtime::simir::operation_holds<
+            VhdlEnvironmentGetCallPath>(operation)
+        || fsim::runtime::simir::operation_holds<VhdlReflectionApi>(operation)
         || fsim::runtime::simir::operation_holds<Pause>(operation)
         || fsim::runtime::simir::operation_holds<ClassAllocate>(operation)
         || fsim::runtime::simir::operation_holds<ClassPropertyRead>(operation)

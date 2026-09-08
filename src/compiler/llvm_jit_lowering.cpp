@@ -52,6 +52,8 @@ using runtime::simir::CodeCoverageHit;
 using runtime::simir::CoverageControl;
 using runtime::simir::CoverageAccess;
 using runtime::simir::CoverageQuery;
+using runtime::simir::VhdlPslApi;
+using runtime::simir::VhdlAssertApi;
 using runtime::simir::CoverageSample;
 using runtime::simir::DebugPoint;
 using runtime::simir::DisableBlock;
@@ -131,6 +133,13 @@ using runtime::simir::SignalLastEvent;
 using runtime::simir::SignalLastValue;
 using runtime::simir::StochasticQueueOperation;
 using runtime::simir::Stop;
+using runtime::simir::VhdlEnvironmentTime;
+using runtime::simir::VhdlEnvironmentTimeToString;
+using runtime::simir::VhdlEnvironmentDirectory;
+using runtime::simir::VhdlEnvironmentGetenv;
+using runtime::simir::VhdlEnvironmentCallPath;
+using runtime::simir::VhdlEnvironmentGetCallPath;
+using runtime::simir::VhdlReflectionApi;
 using runtime::simir::StringReport;
 using runtime::simir::SystemCommand;
 using runtime::simir::TimeDisplay;
@@ -299,6 +308,18 @@ struct NativeCallablePlan {
     }
     if (safe_identities.size()
         > FSIM_JIT_NATIVE_CALL_STACK_CAPACITY_V1) {
+        safe_identities.clear();
+    }
+    if (std::ranges::any_of(
+            process.operations, [](const auto& operation) {
+                return fsim::runtime::simir::operation_holds<
+                           VhdlEnvironmentCallPath>(operation)
+                    || fsim::runtime::simir::operation_holds<
+                           VhdlEnvironmentGetCallPath>(operation);
+            })) {
+        // GET_CALL_PATH observes the complete language-level caller chain.
+        // Keep that rare process on the runtime-owned call stack instead of
+        // hiding callable frames in LLVM-native calls.
         safe_identities.clear();
     }
 

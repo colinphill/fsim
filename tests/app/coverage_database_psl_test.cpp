@@ -143,6 +143,39 @@ int main()
         && attempt_ten->instance_identity != attempt_three->instance_identity
         && attempt_ten->source_identity != attempt_three->source_identity);
 
+    auto remapped_coverage = coverage();
+    for (auto& item : remapped_coverage) {
+        item.source_span += 100U;
+    }
+    const std::array remapped_bindings {
+        app::PslCoverageDatabaseSource { 112U, id(2U) },
+        app::PslCoverageDatabaseSource { 111U, id(1U) },
+    };
+    const auto remapped = app::project_psl_coverage_namespace(
+        database(), remapped_coverage, remapped_bindings, id(3U));
+    assert(remapped.ok() && remapped.contents->metrics == made.contents->metrics);
+
+    auto changed_source_database = database();
+    changed_source_database.sources[0].identity = id(4U);
+    std::ranges::sort(changed_source_database.sources, { },
+        &artifact::CoverageDatabaseSourceRecord::identity);
+    const std::array changed_source_bindings {
+        app::PslCoverageDatabaseSource { 12U, id(2U) },
+        app::PslCoverageDatabaseSource { 11U, id(4U) },
+    };
+    const auto changed_source = app::project_psl_coverage_namespace(
+        std::move(changed_source_database), coverage(),
+        changed_source_bindings, id(3U));
+    assert(changed_source.ok());
+    const auto changed_attempt_ten = std::ranges::find_if(
+        changed_source.contents->metrics, [](const auto& metric) {
+            return metric.family
+                    == artifact::CoverageDatabaseMetricFamily::PslDirective
+                && metric.hits == 10U;
+    });
+    assert(changed_attempt_ten != changed_source.contents->metrics.end()
+        && changed_attempt_ten->bin_identity != attempt_ten->bin_identity);
+
     auto maximum = coverage();
     maximum.resize(1U);
     maximum[0].attempts = std::numeric_limits<std::uint64_t>::max();

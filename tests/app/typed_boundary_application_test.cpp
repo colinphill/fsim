@@ -434,7 +434,7 @@ fsim::project::Config make_config(
 
     fsim::project::SourceSet vhdl_sources;
     vhdl_sources.language = fsim::project::Language::vhdl;
-    vhdl_sources.standard = "2008";
+    vhdl_sources.standard = "2019";
     vhdl_sources.library = "work";
     vhdl_sources.compilation_unit = "file";
     vhdl_sources.files.push_back(vhdl_source);
@@ -975,6 +975,11 @@ int main()
            "stages=direct/interpreter/llvm-o0/llvm-o2/cache-cold/cache-warm/"
            "debug/vcd/multiple-root/uvm/mixed-vhdl/mixed-systemc/public-api "
            "resources=as6g/delta1000/vcd64 gaps=0 widths=129logic9\n";
+    std::cout
+        << "FSIM-VHDL-2019-MIXED-PASS "
+           "stages=interpreter/llvm-o0/llvm-o2/cache-cold/cache-warm/debug/"
+           "vcd/multiple-root/mixed-systemverilog/mixed-systemc "
+           "resources=as6g/delta1000/vcd64 gaps=0 widths=137logic9\n";
     std::cout
         << "FSIM-OLDER-MODE-MIXED-PASS "
            "modes=v1995/v2001/v2001-noconfig/sv2005/sv2009/sv2012 "

@@ -6,6 +6,55 @@ using namespace runtime::simir;
 
 namespace {
 
+frontend::Type vhdl_real_type()
+{
+  frontend::Type type;
+  type.domain = frontend::ValueDomain::Bit2;
+  type.spelling = "real";
+  type.systemverilog_scalar = frontend::SystemVerilogScalarKind::Real;
+  type.is_signed = true;
+  type.packed_range = frontend::PackedRange { 63, 0, true };
+  type.nominal_type = "@builtin:real";
+  type.vhdl_type_declaration = type.nominal_type;
+  return type;
+}
+
+frontend::Type vhdl_time_type()
+{
+  frontend::Type type;
+  type.domain = frontend::ValueDomain::Integer;
+  type.spelling = "time";
+  type.is_signed = true;
+  type.packed_range = frontend::PackedRange { 63, 0, true };
+  type.integer_range = frontend::IntegerRange {
+      0, std::numeric_limits<std::int64_t>::max(), false };
+  type.nominal_type = "@builtin:time";
+  type.vhdl_type_declaration = type.nominal_type;
+  return type;
+}
+
+frontend::Type vhdl_string_type()
+{
+  frontend::Type type;
+  type.domain = frontend::ValueDomain::String;
+  type.spelling = "string";
+  return type;
+}
+
+frontend::Type vhdl_positive_type()
+{
+  frontend::Type type;
+  type.domain = frontend::ValueDomain::Integer;
+  type.spelling = "positive";
+  type.is_signed = true;
+  type.packed_range = frontend::PackedRange { 63, 0, true };
+  type.integer_range = frontend::IntegerRange {
+      1, std::numeric_limits<std::int64_t>::max(), false };
+  type.nominal_type = "@builtin:positive";
+  type.vhdl_type_declaration = type.nominal_type;
+  return type;
+}
+
 std::optional<std::uint64_t> range_count(
     const frontend::IntegerRange& range) {
   if (range.descending ? range.left < range.right
@@ -203,6 +252,9 @@ std::optional<frontend::Type> Lowerer::vhdl_expression_type(
   if (language_ != frontend::Language::Vhdl2008) {
     return std::nullopt;
   }
+  if (expression.nominal_type == "@builtin:time") {
+    return vhdl_time_type();
+  }
   if (!expression.nominal_type.empty()) {
     const auto type = std::ranges::find_if(
         visible_type_marks_, [&](const auto& entry) {
@@ -211,6 +263,157 @@ std::optional<frontend::Type> Lowerer::vhdl_expression_type(
         });
     if (type != visible_type_marks_.end()) {
       return *type->second;
+    }
+  }
+  if (expression.kind == ExpressionKind::IntegerLiteral
+      && expression.systemverilog_scalar_kind
+          == frontend::SystemVerilogScalarKind::Real) {
+    return vhdl_real_type();
+  }
+  const auto environment_api = frontend::vhdl_simulator_api(
+      expression.text);
+  switch (environment_api) {
+  case frontend::VhdlSimulatorApi::resolution_limit:
+  case frontend::VhdlSimulatorApi::seconds_to_time:
+    return vhdl_time_type();
+  case frontend::VhdlSimulatorApi::localtime:
+  case frontend::VhdlSimulatorApi::gmtime:
+    return frontend::vhdl_environment_time_record_type();
+  case frontend::VhdlSimulatorApi::epoch:
+  case frontend::VhdlSimulatorApi::time_to_seconds:
+    return vhdl_real_type();
+  case frontend::VhdlSimulatorApi::to_string:
+  case frontend::VhdlSimulatorApi::getenv:
+  case frontend::VhdlSimulatorApi::vhdl_version:
+  case frontend::VhdlSimulatorApi::tool_type:
+  case frontend::VhdlSimulatorApi::tool_vendor:
+  case frontend::VhdlSimulatorApi::tool_name:
+  case frontend::VhdlSimulatorApi::tool_edition:
+  case frontend::VhdlSimulatorApi::tool_version:
+  case frontend::VhdlSimulatorApi::file_name:
+  case frontend::VhdlSimulatorApi::file_path:
+  case frontend::VhdlSimulatorApi::get_vhdl_assert_format:
+    return vhdl_string_type();
+  case frontend::VhdlSimulatorApi::get_call_path:
+    return frontend::vhdl_environment_call_path_vector_ptr_type();
+  case frontend::VhdlSimulatorApi::file_line:
+    return vhdl_positive_type();
+  case frontend::VhdlSimulatorApi::dir_open:
+    return frontend::vhdl_environment_directory_status_type(
+        frontend::VhdlSimulatorApi::dir_open_status);
+  case frontend::VhdlSimulatorApi::dir_itemexists:
+  case frontend::VhdlSimulatorApi::dir_itemisdir:
+  case frontend::VhdlSimulatorApi::dir_itemisfile:
+  case frontend::VhdlSimulatorApi::psl_assert_failed:
+  case frontend::VhdlSimulatorApi::psl_is_covered:
+  case frontend::VhdlSimulatorApi::get_psl_cover_assert:
+  case frontend::VhdlSimulatorApi::psl_is_assert_covered:
+  case frontend::VhdlSimulatorApi::is_vhdl_assert_failed:
+  case frontend::VhdlSimulatorApi::get_vhdl_assert_enable: {
+    frontend::Type boolean;
+    boolean.domain = frontend::ValueDomain::Boolean;
+    boolean.spelling = "boolean";
+    boolean.packed_range = frontend::PackedRange { 0, 0, true };
+    boolean.nominal_type = "@builtin:boolean";
+    boolean.vhdl_type_declaration = boolean.nominal_type;
+    return boolean;
+  }
+  case frontend::VhdlSimulatorApi::get_vhdl_assert_count: {
+    frontend::Type natural;
+    natural.domain = frontend::ValueDomain::Integer;
+    natural.spelling = "natural";
+    natural.is_signed = true;
+    natural.packed_range = frontend::PackedRange { 63, 0, true };
+    natural.integer_range = frontend::IntegerRange {
+        0, std::numeric_limits<std::int64_t>::max(), false };
+    natural.nominal_type = "@builtin:natural";
+    natural.vhdl_type_declaration = natural.nominal_type;
+    return natural;
+  }
+  case frontend::VhdlSimulatorApi::get_vhdl_read_severity: {
+    frontend::Type severity;
+    severity.domain = frontend::ValueDomain::Bit2;
+    severity.spelling = "severity_level";
+    severity.packed_range = frontend::PackedRange { 1, 0, true };
+    severity.enumeration_literals = {
+        "note", "warning", "error", "failure" };
+    return severity;
+  }
+  case frontend::VhdlSimulatorApi::dir_workingdir:
+    return expression.operands.empty()
+        ? vhdl_string_type()
+        : frontend::vhdl_environment_directory_status_type(
+              frontend::VhdlSimulatorApi::dir_open_status);
+  case frontend::VhdlSimulatorApi::dir_createdir:
+    return frontend::vhdl_environment_directory_status_type(
+        frontend::VhdlSimulatorApi::dir_create_status);
+  case frontend::VhdlSimulatorApi::dir_deletedir:
+    return frontend::vhdl_environment_directory_status_type(
+        frontend::VhdlSimulatorApi::dir_delete_status);
+  case frontend::VhdlSimulatorApi::dir_deletefile:
+    return frontend::vhdl_environment_directory_status_type(
+        frontend::VhdlSimulatorApi::file_delete_status);
+  case frontend::VhdlSimulatorApi::dir_separator:
+    return vhdl_string_type();
+  case frontend::VhdlSimulatorApi::none:
+  case frontend::VhdlSimulatorApi::stop:
+  case frontend::VhdlSimulatorApi::finish:
+  case frontend::VhdlSimulatorApi::dayofweek:
+  case frontend::VhdlSimulatorApi::time_record:
+  case frontend::VhdlSimulatorApi::directory_items:
+  case frontend::VhdlSimulatorApi::directory:
+  case frontend::VhdlSimulatorApi::call_path_element:
+  case frontend::VhdlSimulatorApi::call_path_vector:
+  case frontend::VhdlSimulatorApi::call_path_vector_ptr:
+  case frontend::VhdlSimulatorApi::dir_open_status:
+  case frontend::VhdlSimulatorApi::dir_create_status:
+  case frontend::VhdlSimulatorApi::dir_delete_status:
+  case frontend::VhdlSimulatorApi::file_delete_status:
+  case frontend::VhdlSimulatorApi::dir_close:
+  case frontend::VhdlSimulatorApi::set_psl_cover_assert:
+  case frontend::VhdlSimulatorApi::clear_psl_state:
+  case frontend::VhdlSimulatorApi::clear_vhdl_assert:
+  case frontend::VhdlSimulatorApi::set_vhdl_assert_enable:
+  case frontend::VhdlSimulatorApi::set_vhdl_assert_format:
+  case frontend::VhdlSimulatorApi::set_vhdl_read_severity:
+    break;
+  }
+  if (expression.kind == ExpressionKind::Unary
+      && expression.operands.size() == 1U
+      && (expression.text == "+" || expression.text == "-")) {
+    return vhdl_expression_type(expression.operands.front());
+  }
+  if (expression.kind == ExpressionKind::Binary
+      && expression.operands.size() == 2U) {
+    const auto left = vhdl_expression_type(expression.operands[0]);
+    const auto right = vhdl_expression_type(expression.operands[1]);
+    const bool left_record = left
+        && frontend::is_vhdl_environment_time_record(*left);
+    const bool right_record = right
+        && frontend::is_vhdl_environment_time_record(*right);
+    if ((expression.text == "+" || expression.text == "-")
+        && (left_record || right_record)) {
+      return left_record && right_record
+          ? std::optional<frontend::Type> { vhdl_real_type() }
+          : std::optional<frontend::Type> {
+                frontend::vhdl_environment_time_record_type() };
+    }
+    const bool left_real = left
+        && left->systemverilog_scalar
+            == frontend::SystemVerilogScalarKind::Real;
+    const bool right_real = right
+        && right->systemverilog_scalar
+            == frontend::SystemVerilogScalarKind::Real;
+    if (left_real || right_real) {
+      if (expression.text == "=" || expression.text == "/="
+          || expression.text == "<" || expression.text == "<="
+          || expression.text == ">" || expression.text == ">=") {
+        frontend::Type boolean;
+        boolean.domain = frontend::ValueDomain::Boolean;
+        boolean.spelling = "boolean";
+        return boolean;
+      }
+      return vhdl_real_type();
     }
   }
   if (expression.kind == ExpressionKind::Call
@@ -250,6 +453,15 @@ std::optional<frontend::Type> Lowerer::vhdl_expression_type(
         ? std::optional<frontend::Type>{*type}
         : std::nullopt;
   }
+  if (expression.kind == ExpressionKind::Index
+      && expression.operands.size() == 2U) {
+    const auto source = vhdl_expression_type(
+        expression.operands.front());
+    if (source && source->systemverilog_container
+        && source->systemverilog_container->element_types.size() == 1U) {
+      return source->systemverilog_container->element_types.front();
+    }
+  }
   if (expression.kind == ExpressionKind::Conditional
       && expression.operands.size() == 3U) {
     auto when_true = vhdl_expression_type(expression.operands[1]);
@@ -277,6 +489,14 @@ std::optional<frontend::Type> Lowerer::vhdl_expression_type(
         && expression.operands.size() == 1) {
       const auto source = vhdl_expression_type(
           expression.operands.front());
+      if (source && source->domain == frontend::ValueDomain::String) {
+        return source;
+      }
+      if (source
+          && source->nominal_type
+              == "@builtin:std.env.call_path_vector_ptr") {
+        return frontend::vhdl_environment_call_path_vector_type();
+      }
       return source && source->vhdl_access
               && source->vhdl_access->designated_types.size() == 1
           ? std::optional<frontend::Type>{
@@ -288,6 +508,11 @@ std::optional<frontend::Type> Lowerer::vhdl_expression_type(
         && expression.operands.size() == 1) {
       const auto source = vhdl_expression_type(
           expression.operands.front());
+      if (expression.text == "@vhdl-member:all"
+          && source
+          && source->domain == frontend::ValueDomain::String) {
+        return source;
+      }
       return source
           ? record_member_type(
               *source,
@@ -446,6 +671,14 @@ Lowerer::lower_vhdl_array_selection_expression(
       const auto member = std::ranges::find(
           source_type->packed_members, name,
           &frontend::PackedMember::name);
+      if (expression.operands.front().kind == ExpressionKind::Index
+          && expression.operands.front().operands.size() == 2U
+          && source_type->packed_aggregate
+              == frontend::PackedAggregateKind::UnpackedStruct) {
+        auto aggregate_read = expression.operands.front();
+        aggregate_read.text = "index." + std::string{name};
+        return lower_unpacked_aggregate_member_read(aggregate_read);
+      }
       const auto source_width = source_type->width();
       const auto member_width = selected_type->width();
       if (member == source_type->packed_members.end()

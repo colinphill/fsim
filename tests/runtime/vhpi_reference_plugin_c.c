@@ -56,13 +56,46 @@ static fsim_vhpi_status_v1 FSIM_VHPI_CALL startup(void* context) {
   static const char* names[] = {
       "hierarchy", "type", "value", "driver", "control", "time",
       "callback", "foreign", "association", "io", "user-data",
-      "checkpoint", "start-lifecycle",
+      "checkpoint", "start-lifecycle", "property", "tool", "capability",
   };
   uint32_t operation;
   host = (const fsim_vhpi_host_v2*)context;
   report_startup();
+  if (host->v1.abi_version == FSIM_VHPI_HOST_ABI_VERSION_V3) {
+    const fsim_vhpi_host_v3* host_v3 = (const fsim_vhpi_host_v3*)host;
+    fsim_vhpi_capabilities_v3 capabilities;
+    fsim_vhpi_value_v3 value;
+    fsim_vhpi_tool_request_v3 tool;
+    memset(&capabilities, 0, sizeof(capabilities));
+    capabilities.struct_size = (uint32_t)sizeof(capabilities);
+    if (host_v3->query_capabilities(
+            host_v3->v2.service_context, &capabilities)
+            != FSIM_VHPI_STATUS_OK
+        || capabilities.vhdl_revision != 2019u
+        || (capabilities.flags & FSIM_VHPI_CAPABILITY_TOOL_EXECUTION) == 0u) {
+      return FSIM_VHPI_STATUS_INTERNAL_ERROR;
+    }
+    memset(&value, 0, sizeof(value));
+    value.struct_size = (uint32_t)sizeof(value);
+    value.format = FSIM_VHPI_VALUE_INTEGER;
+    if (host_v3->access_value(
+            host_v3->v2.service_context, FSIM_VHPI_VALUE_READ, &value)
+            != FSIM_VHPI_STATUS_OK
+        || value.integer != 2019) {
+      return FSIM_VHPI_STATUS_INTERNAL_ERROR;
+    }
+    memset(&tool, 0, sizeof(tool));
+    tool.struct_size = (uint32_t)sizeof(tool);
+    tool.action = FSIM_VHPI_TOOL_SAVE;
+    tool.text = "reference-save.fsim";
+    tool.text_size = (uint32_t)strlen(tool.text);
+    if (host_v3->execute_tool(host_v3->v2.service_context, &tool)
+        != FSIM_VHPI_STATUS_OK) {
+      return FSIM_VHPI_STATUS_INTERNAL_ERROR;
+    }
+  }
   for (operation = FSIM_VHPI_SERVICE_HIERARCHY;
-       operation <= FSIM_VHPI_SERVICE_LIFECYCLE;
+       operation <= FSIM_VHPI_SERVICE_CAPABILITY;
        ++operation) {
     const fsim_vhpi_status_v1 status =
         call_service(operation, 0, names[operation - 1]);
@@ -85,7 +118,8 @@ fsim_vhpi_plugin_bind_v1(
     fsim_vhpi_plugin_v1* plugin) {
   static const char name[] = "fsim-vhpi-reference-c";
   if (host_v1 == NULL || plugin == NULL
-      || host_v1->abi_version != FSIM_VHPI_HOST_ABI_VERSION_V2
+      || (host_v1->abi_version != FSIM_VHPI_HOST_ABI_VERSION_V2
+          && host_v1->abi_version != FSIM_VHPI_HOST_ABI_VERSION_V3)
       || host_v1->struct_size < sizeof(fsim_vhpi_host_v2)) {
     return FSIM_VHPI_STATUS_UNSUPPORTED;
   }

@@ -1057,6 +1057,35 @@ std::optional<std::size_t> Lowerer::select_offset(
                                  .source_domain)
                 == frontend::ValueDomain::Integer;
         }
+        if (vhdl_standard_ >= frontend::VhdlStandard::Vhdl2019) {
+            const auto separator = expression.text.find_last_of('.');
+            if (separator != std::string::npos) {
+                const auto receiver = expression.text.substr(0U, separator);
+                const auto method = std::string_view { expression.text }.substr(
+                    separator + 1U);
+                const auto* type = object_type(receiver);
+                const auto type_name = type == nullptr ? std::string_view { }
+                    : !type->vhdl_type_declaration.empty()
+                        ? std::string_view { type->vhdl_type_declaration }
+                        : std::string_view { type->spelling };
+                const bool mirror = type != nullptr
+                    && (type_name.find("value_mirror") != std::string_view::npos
+                        || type_name.find("subtype_mirror")
+                            != std::string_view::npos);
+                if (mirror && (method == "pos" || method == "length"
+                        || method == "units_length"
+                        || method == "unit_index" || method == "scale"
+                        || method == "element_index"
+                        || method == "dimensions"
+                        || (method == "value"
+                            && (type_name.find("integer_value_mirror")
+                                    != std::string_view::npos
+                                || type_name.find("physical_value_mirror")
+                                    != std::string_view::npos)))) {
+                    return true;
+                }
+            }
+        }
         return false;
     case ExpressionKind::Unary:
         return expression.operands.size() == 1
@@ -1114,6 +1143,10 @@ std::optional<std::size_t> Lowerer::select_offset(
         if (language_ == frontend::Language::Vhdl2008
             && expression.text.starts_with(
                 "@vhdl-physical:")) {
+            return true;
+        }
+        if (const auto type = vhdl_expression_type(expression);
+            type && type->domain == frontend::ValueDomain::Integer) {
             return true;
         }
         if (expression.text == "@vhdl-dereference") {

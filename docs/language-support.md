@@ -82,7 +82,7 @@ single-argument conversion interpretations and static values. A VHDL-93
 component/direct-entity application executes an exact selected 137-bit port
 actual without narrowing, while the same revision rejects a dynamic composed
 port expression that VHDL-2008 elaborates.
-Each VHDL unit owns a canonical `ieee-1076-standard:<year>:fsim-v1`
+Each VHDL unit owns a canonical `ieee-1076-standard:<year>:fsim-v3`
 environment with its working library, implicit `std`/`work` and
 `std.standard.all` visibility, exact standard declarations and operator
 profiles, the `fs` through `hr` time-unit ladder with `fs` as the default, and
@@ -94,6 +94,24 @@ IEEE packages are parsed under the requesting source's revision, later package
 families are rejected at their owning use clause, and one project cannot mix
 incompatible revisions of the same intrinsic IEEE environment. Older modes do
 not inherit VHDL-2008 string-conversion intrinsics such as `to_hstring`.
+VHDL-2019 compilation additionally verifies and snapshots the governed
+`std.standard`, `std.textio`, `std.env`, and `std.reflection` sources. Official
+IEEE projection includes `numeric_bit_unsigned`, `numeric_std_unsigned`, and
+`math_complex` with their revision-correct minimum profiles. Object, library,
+and design provenance records each selected compiler-supplied package's VHDL
+revision, predefined-environment identity, and complete declaration/body source
+digest; stale or unavailable identities are rejected instead of being migrated.
+VHDL-2019 conditional analysis accepts `if`, `elsif`, `else`, and either
+`end` or `end if`, plus active-branch `warning` and `error` message directives.
+Inactive branches remain lexically masked and cannot publish their diagnostic
+directives. Protection envelopes are profile gated from VHDL-2008: plaintext
+`begin`/`end` envelopes preserve source coordinates and compile their payload,
+while `begin_protected`/`end_protected` payload bytes are masked before lexical
+analysis and receive one stable unavailable-key-provider diagnostic. Nested,
+mismatched, and unterminated protection controls are rejected without exposing
+or reproducing protected payload text. VHDL-1993 and older profiles reject the
+protection surface, and no compatibility reader or proprietary key provider is
+implied.
 Compiler-owned IEEE and Synopsys package projections are parsed under every
 older selectable revision. The
 historical `ieee.std_logic_signed`, `std_logic_unsigned`, `std_logic_arith` and
@@ -486,6 +504,52 @@ execution reproduce the same PSL attempts, coverage, debugger snapshot, and
 VCD across interpreter and LLVM O2 cold/warm runs. Portable VHPI checkpoint
 restore verifies the artifact/cache identity and remaps stable object names to
 fresh generation-qualified handles rather than serializing host addresses.
+
+Batch 184 Change 15 extends the internal VHPI information model for
+VHDL-2019 without renumbering the retained object identities. Capability
+discovery reports the exact supported object, relationship, property, index,
+and package-provenance bounds. Checked typed properties expose names, parent,
+kind, source coordinates, hierarchy counts, and standard/package provenance;
+the parent relationship has deterministic zero-or-one snapshot semantics.
+Elaborated view ports retain a distinct port object with recursively published
+view-element children, including entity interfaces selected through an
+architecture.
+
+Batch 184 Change 16 advances the append-only VHPI host to ABI v3 while
+retaining the complete v1/v2 prefixes. The v3 table provides directly checked
+capability, scalar value, and tool-execution callbacks and extends the generic
+service range with property, tool, and capability families. C-compatible
+records carry explicit sizes, fixed-width values, bounded text, and reserved
+fields; the loader rejects every truncated table or missing callback before
+opening an image. Tool actions also publish a deterministic object-free VHPI
+callback with copied action data.
+
+Batch 184 Change 17 integrates VHDL-2019 sequential blocks with the v3 code
+and PSL coverage model. Statement discovery includes executable statements in
+recursively nested block-local functions and procedures as well as the block
+body, with lexical ordering and bounded traversal. Their point identities use
+the same canonical source identity as retained VHDL profiles and therefore
+survive checkout relocation. PSL database bins resolve transient semantic
+source numbers through authenticated source bindings before identity hashing;
+renumbering a semantic span cannot change a bin, while changing the bound
+source identity must. Standardized PSL API coverage records agree across the
+interpreter, Debug engine, LLVM O0, and LLVM O2 cold/warm paths.
+
+Batch 184 Change 18 qualifies the VHDL-2019 execution surface in both direct
+mixed projects and standalone artifacts. The direct matrix places a
+VHDL-2019 component between a SystemVerilog top and native SystemC leaf and
+compares 137-bit nine-state values, PSL observations, debugger output, VCD,
+provenance, and cache identities across interpreter, Debug, LLVM O0/O2, cold
+and warm cache states, and reordered roots. The artifact matrix elaborates its
+mixed design from a VHDL-2019 object, retains the 2019 standard-library
+environment in the design artifact, and reproduces execution and portable
+checkpoint results after producer removal and artifact relocation.
+
+Batch 184 Change 19 closes all 37 independently worded VHDL-2019 inventory
+rows. The complete profile-selection, language, runtime/API, coverage, VHPI,
+artifact, mixed-language, and deliberate-boundary guidance is published in
+[`vhdl-2019.md`](vhdl-2019.md). VHDL-AMS, PSL beyond the governed digital
+surface, and vendor-only extensions remain separate from that claim.
 
 Batch 163 Changes 17-18 close and govern that boundary. The clause inventory
 contains 29 supported VHDL-2008/embedded-PSL rows, zero unresolved active rows,

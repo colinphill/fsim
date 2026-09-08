@@ -80,6 +80,9 @@ public:
     [[nodiscard]] const std::vector<runtime::VhdlPslAttemptSnapshot>&
     attempts() const noexcept;
     [[nodiscard]] std::vector<ConcurrentAssertionCoverage> coverage() const;
+    [[nodiscard]] bool apply_api(
+        runtime::simir::VhdlPslApiKind kind,
+        std::optional<bool> enable = std::nullopt);
     void set_completion_hook(runtime::VhdlPslCompletionHook hook);
 
 private:
@@ -1231,6 +1234,10 @@ void report_vhdl_duplicate_design_unit(
     diagnostic::Engine& diagnostics);
 
 void validate_vhdl_analysis_order(
+    std::span<const frontend::DesignUnit> units,
+    diagnostic::Engine& diagnostics);
+
+void validate_vhdl_simulator_api(
     std::span<const frontend::DesignUnit> units,
     diagnostic::Engine& diagnostics);
 

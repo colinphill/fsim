@@ -44,14 +44,16 @@ VhdlVhpiCallbackSystem::~VhdlVhpiCallbackSystem() {
 bool VhdlVhpiCallbackSystem::valid_kind(
     const VhdlVhpiCallbackKind kind) noexcept {
   return static_cast<std::uint32_t>(kind)
-      <= static_cast<std::uint32_t>(VhdlVhpiCallbackKind::EndOfReset);
+      <= static_cast<std::uint32_t>(VhdlVhpiCallbackKind::ToolExecution);
 }
 
 bool VhdlVhpiCallbackSystem::lifecycle_kind(
     const VhdlVhpiCallbackKind kind) noexcept {
   return static_cast<std::uint32_t>(kind)
       >= static_cast<std::uint32_t>(
-          VhdlVhpiCallbackKind::StartOfSimulation);
+          VhdlVhpiCallbackKind::StartOfSimulation)
+      && static_cast<std::uint32_t>(kind)
+          <= static_cast<std::uint32_t>(VhdlVhpiCallbackKind::EndOfReset);
 }
 
 bool VhdlVhpiCallbackSystem::valid() const noexcept {
@@ -92,6 +94,9 @@ VhdlVhpiCallbackError VhdlVhpiCallbackSystem::validate_object(
         : VhdlVhpiCallbackError::InvalidObject;
   case VhdlVhpiCallbackKind::Event:
     return VhdlVhpiCallbackError::None;
+  case VhdlVhpiCallbackKind::ToolExecution:
+    return object == 0U ? VhdlVhpiCallbackError::None
+                        : VhdlVhpiCallbackError::InvalidRequest;
   case VhdlVhpiCallbackKind::StartOfSimulation:
   case VhdlVhpiCallbackKind::EndOfSimulation:
   case VhdlVhpiCallbackKind::StartOfSave:
@@ -277,7 +282,8 @@ VhdlVhpiCallbackError VhdlVhpiCallbackSystem::publish(
   if (!valid_kind(kind)) {
     return VhdlVhpiCallbackError::InvalidKind;
   }
-  if (!lifecycle_kind(kind) && data.object == 0U) {
+  if (!lifecycle_kind(kind) && kind != VhdlVhpiCallbackKind::ToolExecution
+      && data.object == 0U) {
     return VhdlVhpiCallbackError::InvalidRequest;
   }
   const auto checked_object = validate_object(kind, data.object);

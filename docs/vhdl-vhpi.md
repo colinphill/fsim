@@ -6,8 +6,8 @@ and portable handle remapping, also see the public
 [`vhdl-psl.md`](vhdl-psl.md) support boundary and
 [`vhdl-psl-tutorial.md`](vhdl-psl-tutorial.md).
 
-fsim v2 provides a simulation-owned, versioned VHPI boundary for VHDL-87,
-VHDL-93, VHDL-2000, VHDL-2002 and VHDL-2008.
+fsim v3 provides a simulation-owned, versioned VHPI boundary for VHDL-87,
+VHDL-93, VHDL-2000, VHDL-2002, VHDL-2008, and VHDL-2019.
 The implementation uses stable integer identities and owning C++ services;
 plug-ins and portable artifacts never receive addresses of simulator objects.
 VHPI handles, regions, selected names, values, and restart rules are distinct
@@ -25,7 +25,10 @@ enumeration; user occurrences expose only their dependency provenance.
 The public C header is `include/fsim/runtime/vhpi_abi.h`. The frozen 40-byte
 v1 host supports bounded diagnostic reporting. The 56-byte v2 host begins with
 that complete v1 table and appends a service context plus one C-compatible
-invocation callback. Every table and service record has an explicit size.
+invocation callback. The 80-byte v3 host retains the complete v2 prefix and
+adds checked capability-query, typed-value-access, and tool-execution
+callbacks sharing the validated service context. Every table and service
+record has an explicit size.
 Images must check both `abi_version` and `struct_size` before reading an
 extension.
 
@@ -50,8 +53,8 @@ fsim_vhpi_plugin_bind_v1(const fsim_vhpi_host_v1 *host,
                          fsim_vhpi_plugin_v1 *plugin) {
   static const char name[] = "example-vhpi";
   if (!host || !plugin ||
-      host->abi_version != FSIM_VHPI_HOST_ABI_VERSION_V2 ||
-      host->struct_size < sizeof(fsim_vhpi_host_v2))
+      host->abi_version != FSIM_VHPI_HOST_ABI_VERSION_V3 ||
+      host->struct_size < sizeof(fsim_vhpi_host_v3))
     return FSIM_VHPI_STATUS_UNSUPPORTED;
   plugin->abi_version = FSIM_VHPI_PLUGIN_ABI_VERSION;
   plugin->struct_size = sizeof(*plugin);
@@ -67,8 +70,9 @@ fsim_vhpi_plugin_bind_v1(const fsim_vhpi_host_v1 *host,
 
 The buildable C and C++ images in
 `tests/runtime/vhpi_reference_plugin_c.c` and
-`tests/runtime/vhpi_reference_plugin_cpp.cpp` exercise all thirteen service
-families, diagnostic reporting, and exact startup/shutdown.
+`tests/runtime/vhpi_reference_plugin_cpp.cpp` exercise all sixteen service
+families, VHDL-2019 capability discovery, scalar value access, bounded tool
+execution, diagnostic reporting, and exact startup/shutdown.
 
 ## Hierarchy, types, and values
 
@@ -78,6 +82,23 @@ case-exact extended names, signed multidimensional indices, selected/full
 names, source locations, parent/kind metadata, and stable creation order.
 Lookup and relationship iteration distinguish invalid, stale, released,
 exhausted, and cross-simulation identities.
+
+The VHDL-2019 information model exposes an immutable capability record before
+object discovery. It reports the supported object, relationship, and property
+ranges plus the bounded index and package-provenance limits. New object kinds
+cover contexts, interfaces, ports, generics, aliases, attributes, enumeration
+literals, physical units, record and array elements, interface views, and
+nested view elements. Existing numeric identities remain unchanged.
+
+Checked property access returns an explicitly typed owning result for object
+kind, parent, live-child count, creation ordinal, name variants, index count,
+source coordinates, language/predefined-environment identity, compatibility
+profile, and package-dependency count. Missing optional metadata, unknown
+properties, and foreign or stale handles remain distinct errors. The `Parent`
+relationship is a bounded zero-or-one snapshot iterator. Elaborated
+VHDL-2019 view ports publish their recursively composed elements beneath the
+port, including when the selected architecture obtains its interface from its
+primary entity.
 
 Type/subtype descriptors retain scalar kind, canonical base identity,
 resolution function, direction, null ranges, and bounded recursive array/
@@ -98,7 +119,8 @@ Time queries retain ticks, unit, precision, delta, phase, and next time.
 Callbacks cover signal, process, event, transaction, assertion, simulation,
 save, restart, and reset lifecycle regions with copied data, safe self/peer
 removal, nested registration/re-entry, exception containment, and deterministic
-teardown.
+teardown. VHDL-2019 adds a global tool-execution callback carrying one bounded
+action identity and copied request text without requiring an object handle.
 
 Foreign subprograms and models retain copied profiles, typed arguments/results,
 call and registration user data, lifecycle, nested calls, and checked release.

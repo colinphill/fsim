@@ -38,7 +38,7 @@ fsim::library::Metadata example_metadata()
         { "systemverilog", "2017" }, { "vhdl", "2008" }
     };
     metadata.vhdl_package_dependencies = {{
-        "2008", "ieee-1076-standard:2008:fsim-v1",
+        "2008", "ieee-1076-standard:2008:fsim-v3",
         "ieee.std_logic_unsigned",
         "synopsys-legacy-ieee:1990-1992:fsim-synopsys-ieee-compat-v2",
         std::string(64, 'f') }};

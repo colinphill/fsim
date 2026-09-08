@@ -32,6 +32,10 @@ struct ReferenceHost {
   std::string report_code;
   std::string report_message;
   std::uint32_t reports{};
+  std::uint32_t capability_queries{};
+  std::uint32_t value_accesses{};
+  std::uint32_t tool_executions{};
+  std::string tool_text;
   bool unloaded{};
 };
 
@@ -58,7 +62,7 @@ fsim_vhpi_status_v1 FSIM_VHPI_CALL reference_invoke(
       || request->struct_size < sizeof(*request)
       || result->struct_size < sizeof(*result)
       || request->operation < FSIM_VHPI_SERVICE_HIERARCHY
-      || request->operation > FSIM_VHPI_SERVICE_LIFECYCLE
+      || request->operation > FSIM_VHPI_SERVICE_CAPABILITY
       || request->text == nullptr || request->text_size > 4096U) {
     return FSIM_VHPI_STATUS_INVALID_ARGUMENT;
   }
@@ -89,6 +93,68 @@ fsim_vhpi_status_v1 FSIM_VHPI_CALL reference_invoke(
   return FSIM_VHPI_STATUS_OK;
 }
 
+fsim_vhpi_status_v1 FSIM_VHPI_CALL reference_capabilities(
+    void* const context,
+    fsim_vhpi_capabilities_v3* const capabilities) {
+  if (context == nullptr || capabilities == nullptr
+      || capabilities->struct_size < sizeof(*capabilities)) {
+    return FSIM_VHPI_STATUS_INVALID_ARGUMENT;
+  }
+  auto& host = *static_cast<ReferenceHost*>(context);
+  ++host.capability_queries;
+  *capabilities = {
+      static_cast<std::uint32_t>(sizeof(*capabilities)),
+      2019U,
+      32U,
+      4U,
+      15U,
+      32U,
+      256U,
+      FSIM_VHPI_CAPABILITY_SELECTED_NAMES
+          | FSIM_VHPI_CAPABILITY_SOURCE_LOCATIONS
+          | FSIM_VHPI_CAPABILITY_INTERFACE_VIEWS
+          | FSIM_VHPI_CAPABILITY_PACKAGE_PROVENANCE
+          | FSIM_VHPI_CAPABILITY_TOOL_EXECUTION,
+  };
+  return FSIM_VHPI_STATUS_OK;
+}
+
+fsim_vhpi_status_v1 FSIM_VHPI_CALL reference_value_access(
+    void* const context,
+    const fsim_vhpi_value_access_v3 access,
+    fsim_vhpi_value_v3* const value) {
+  if (context == nullptr || value == nullptr
+      || value->struct_size < sizeof(*value)
+      || access != FSIM_VHPI_VALUE_READ
+      || value->format != FSIM_VHPI_VALUE_INTEGER || value->flags != 0U) {
+    return FSIM_VHPI_STATUS_INVALID_ARGUMENT;
+  }
+  auto& host = *static_cast<ReferenceHost*>(context);
+  ++host.value_accesses;
+  value->integer = 2019;
+  return FSIM_VHPI_STATUS_OK;
+}
+
+fsim_vhpi_status_v1 FSIM_VHPI_CALL reference_tool_execution(
+    void* const context,
+    const fsim_vhpi_tool_request_v3* const request) {
+  if (context == nullptr || request == nullptr
+      || request->struct_size < sizeof(*request)
+      || request->action != FSIM_VHPI_TOOL_SAVE || request->flags != 0U
+      || request->status != 0 || request->reserved != 0U
+      || request->text == nullptr || request->text_size > 4096U) {
+    return FSIM_VHPI_STATUS_INVALID_ARGUMENT;
+  }
+  auto& host = *static_cast<ReferenceHost*>(context);
+  ++host.tool_executions;
+  try {
+    host.tool_text.assign(request->text, request->text_size);
+  } catch (...) {
+    return FSIM_VHPI_STATUS_RESOURCE_LIMIT;
+  }
+  return FSIM_VHPI_STATUS_OK;
+}
+
 std::vector<ServiceCall> exercise_reference(
     const std::filesystem::path& path,
     const std::string_view expected_name,
@@ -109,20 +175,28 @@ std::vector<ServiceCall> exercise_reference(
       std::string_view{"user-data"},
       std::string_view{"checkpoint"},
       std::string_view{"start-lifecycle"},
+      std::string_view{"property"},
+      std::string_view{"tool"},
+      std::string_view{"capability"},
   };
   ReferenceHost service;
-  auto host = make_vhdl_vhpi_host_v2(
+  auto host = make_vhdl_vhpi_host_v3(
       simulation_identity,
       &service,
       reference_report,
       &service,
-      reference_invoke);
-  auto loaded = load_vhdl_vhpi_plugin(path, host.v1);
+      reference_invoke,
+      reference_capabilities,
+      reference_value_access,
+      reference_tool_execution);
+  auto loaded = load_vhdl_vhpi_plugin(path, host.v2.v1);
   require_reference(
       loaded && loaded.value->name() == expected_name
           && loaded.value->path() == path.lexically_normal()
           && service.calls.size() == expected_text.size()
-          && service.reports == 1
+          && service.reports == 1 && service.capability_queries == 1
+          && service.value_accesses == 1 && service.tool_executions == 1
+          && service.tool_text == "reference-save.fsim"
           && service.report_code == expected_report,
       "VHPI reference image did not report, load, and invoke every service");
   for (std::size_t index = 0; index < expected_text.size(); ++index) {
@@ -172,27 +246,62 @@ void test_vhdl_vhpi_reference_plugins() {
   static_assert(sizeof(fsim_vhpi_host_v1) == 40);
   static_assert(offsetof(fsim_vhpi_host_v2, v1) == 0);
   static_assert(sizeof(fsim_vhpi_host_v2) == 56);
+  static_assert(offsetof(fsim_vhpi_host_v3, v2) == 0);
+  static_assert(sizeof(fsim_vhpi_host_v3) == 80);
   static_assert(sizeof(fsim_vhpi_service_request_v1)
       == (sizeof(void*) == 8 ? 48 : 40));
   static_assert(sizeof(fsim_vhpi_service_result_v1) == 40);
 
   ReferenceHost service;
-  auto host = make_vhdl_vhpi_host_v2(
-      1'582, &service, reference_report, &service, reference_invoke);
+  auto host = make_vhdl_vhpi_host_v3(
+      1'582,
+      &service,
+      reference_report,
+      &service,
+      reference_invoke,
+      reference_capabilities,
+      reference_value_access,
+      reference_tool_execution);
   require_reference(
-      validate_vhdl_vhpi_host(host.v1) == VhdlVhpiAbiError::None,
-      "VHPI v2 reference host validation failed");
-  host.service_context = nullptr;
+      validate_vhdl_vhpi_host(host.v2.v1) == VhdlVhpiAbiError::None,
+      "VHPI v3 reference host validation failed");
+  host.v2.service_context = nullptr;
   require_reference(
-      validate_vhdl_vhpi_host(host.v1)
+      validate_vhdl_vhpi_host(host.v2.v1)
           == VhdlVhpiAbiError::ServiceContext,
-      "VHPI v2 missing service context was accepted");
-  host.service_context = &service;
-  host.invoke_service = nullptr;
+      "VHPI v3 missing service context was accepted");
+  host.v2.service_context = &service;
+  host.v2.invoke_service = nullptr;
   require_reference(
-      validate_vhdl_vhpi_host(host.v1)
+      validate_vhdl_vhpi_host(host.v2.v1)
           == VhdlVhpiAbiError::ServiceCallback,
-      "VHPI v2 missing service callback was accepted");
+      "VHPI v3 missing service callback was accepted");
+  host.v2.invoke_service = reference_invoke;
+  host.query_capabilities = nullptr;
+  require_reference(
+      validate_vhdl_vhpi_host(host.v2.v1)
+          == VhdlVhpiAbiError::CapabilityCallback,
+      "VHPI v3 missing capability callback was accepted");
+  host.query_capabilities = reference_capabilities;
+  host.access_value = nullptr;
+  require_reference(
+      validate_vhdl_vhpi_host(host.v2.v1)
+          == VhdlVhpiAbiError::ValueCallback,
+      "VHPI v3 missing value callback was accepted");
+  host.access_value = reference_value_access;
+  host.execute_tool = nullptr;
+  require_reference(
+      validate_vhdl_vhpi_host(host.v2.v1)
+          == VhdlVhpiAbiError::ToolCallback,
+      "VHPI v3 missing tool callback was accepted");
+  require_reference(
+      load_vhdl_vhpi_plugin(
+          std::filesystem::path{FSIM_VHPI_REFERENCE_C_PLUGIN_PATH}.concat(
+              ".unopened-v3-host"),
+          host.v2.v1)
+              .error
+          == VhdlVhpiPluginError::HostAbi,
+      "VHPI loader did not reject an incomplete v3 host before image open");
 
   enum class Engine { Interpreter, CompiledO0, CompiledO2 };
   std::vector<std::vector<ServiceCall>> c_transcripts;
@@ -289,7 +398,7 @@ void test_vhdl_vhpi_reference_plugins() {
           == FSIM_VHPI_STATUS_INVALID_ARGUMENT,
       "VHPI service boundary accepted a truncated request");
   bad_request = request;
-  bad_request.operation = 0;
+  bad_request.operation = FSIM_VHPI_SERVICE_CAPABILITY + 1U;
   require_reference(
       reference_invoke(&malformed, &bad_request, &result)
           == FSIM_VHPI_STATUS_INVALID_ARGUMENT,

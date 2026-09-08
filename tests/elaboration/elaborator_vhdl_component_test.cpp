@@ -2009,6 +2009,7 @@ entity view_port_leaf is
 end entity;
 architecture rtl of view_port_leaf is
 begin
+  channel.request <= channel.response;
 end architecture;
 
 entity view_port_top is
@@ -2020,6 +2021,7 @@ architecture rtl of view_port_top is
     port (channel : view initiator of request_bus);
   end component;
 begin
+  link.response <= '1';
   child : view_port_leaf port map (channel => link);
 end architecture;
 )",
@@ -2061,14 +2063,177 @@ end architecture;
         && mode_view_binding.elements[0].actual_path
             == "view_port_top.link.request"
         && mode_view_binding.elements[0].direction
-            == fsim::frontend::PortDirection::Output);
+            == fsim::frontend::PortDirection::Output
+        && mode_view_binding.elements[0].signal == *mode_view_link
+        && mode_view_binding.elements[0].lsb_offset == 1U
+        && mode_view_binding.elements[0].width == 1U);
     assert(
         mode_view_binding.elements[1].formal_path
             == "view_port_top.child.channel.response"
         && mode_view_binding.elements[1].actual_path
             == "view_port_top.link.response"
         && mode_view_binding.elements[1].direction
-            == fsim::frontend::PortDirection::Input);
+            == fsim::frontend::PortDirection::Input
+        && mode_view_binding.elements[1].signal == *mode_view_link
+        && mode_view_binding.elements[1].lsb_offset == 0U
+        && mode_view_binding.elements[1].width == 1U);
+    auto mode_view_interpreter =
+        mode_view_elaborated.design->create_interpreter();
+    assert(mode_view_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(mode_view_interpreter->signal_value(*mode_view_link).to_msb_string()
+        == "11");
+
+    const auto illegal_mode_view_write = fsim::frontend::parse_text(
+        "illegal-mode-view-write.vhd",
+        R"(
+package illegal_view_write_types is
+  type request_bus is record
+    request : bit;
+    response : bit;
+  end record;
+  view initiator of request_bus is
+    request : out;
+    response : in;
+  end view;
+end package;
+use work.illegal_view_write_types.all;
+entity illegal_view_write_leaf is
+  port (channel : view initiator);
+end entity;
+architecture rtl of illegal_view_write_leaf is
+begin
+  channel.response <= '0';
+end architecture;
+entity illegal_view_write_top is end entity;
+use work.illegal_view_write_types.all;
+architecture rtl of illegal_view_write_top is
+  signal link : request_bus;
+begin
+  child : entity work.illegal_view_write_leaf(rtl)
+    port map (channel => link);
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl2019);
+    assert(illegal_mode_view_write.ok());
+    const auto illegal_mode_view_write_elaborated =
+        fsim::elaboration::elaborate(
+            illegal_mode_view_write.design,
+            "vhdl:work.illegal_view_write_top(rtl)");
+    assert(!illegal_mode_view_write_elaborated.ok());
+    assert(has_diagnostic(
+        illegal_mode_view_write_elaborated,
+        "FSIM-ELAB-VHVIEW-007"));
+
+    const auto nested_mode_view_port = fsim::frontend::parse_text(
+        "nested-mode-view-port.vhd",
+        R"(
+package nested_view_port_types is
+  type lane_t is record
+    request : bit;
+    response : bit;
+  end record;
+  type pair_t is record
+    left : lane_t;
+    right : lane_t;
+  end record;
+  type lane_array_t is array (natural range <>) of lane_t;
+  type bus_t is record
+    pair : pair_t;
+    lanes : lane_array_t(0 to 1);
+  end record;
+  view initiator of lane_t is
+    request : out;
+    response : in;
+  end view;
+  view pair_view of pair_t is
+    left, right : view initiator;
+  end view;
+  view bus_view of bus_t is
+    pair : view pair_view;
+    lanes : view (initiator);
+  end view;
+end package;
+
+use work.nested_view_port_types.all;
+entity nested_view_leaf is
+  port (channel : view bus_view);
+end entity;
+architecture rtl of nested_view_leaf is
+begin
+  channel.pair.left.request <= channel.pair.left.response;
+  channel.lanes(0).request <= channel.lanes(0).response;
+end architecture;
+
+entity nested_view_top is end entity;
+use work.nested_view_port_types.all;
+architecture rtl of nested_view_top is
+  signal link : bus_t;
+begin
+  child : entity work.nested_view_leaf(rtl)
+    port map (channel => link);
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl2019);
+    if (!nested_mode_view_port.ok()) {
+        for (const auto& diagnostic : nested_mode_view_port.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(nested_mode_view_port.ok());
+    const auto nested_mode_view_elaborated = fsim::elaboration::elaborate(
+        nested_mode_view_port.design,
+        "vhdl:work.nested_view_top(rtl)");
+    if (!nested_mode_view_elaborated.ok()) {
+        for (const auto& diagnostic : nested_mode_view_elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(nested_mode_view_elaborated.ok());
+    const auto nested_mode_view_link =
+        nested_mode_view_elaborated.design->find_signal(
+            "nested_view_top.link");
+    assert(nested_mode_view_link);
+    const auto& nested_bindings =
+        nested_mode_view_elaborated.design->signals()
+            .at(*nested_mode_view_link).vhdl_mode_view_bindings;
+    assert(nested_bindings.size() == 1U);
+    const auto& nested_endpoints = nested_bindings.front().elements;
+    assert(nested_endpoints.size() == 8U);
+    const std::array<std::string_view, 8> expected_suffixes {
+        "pair.left.request", "pair.left.response",
+        "pair.right.request", "pair.right.response",
+        "lanes(0).request", "lanes(1).request",
+        "lanes(0).response", "lanes(1).response" };
+    const std::array<std::uint64_t, 8> expected_offsets {
+        7U, 6U, 5U, 4U, 3U, 1U, 2U, 0U };
+    const std::array<fsim::frontend::PortDirection, 8>
+        expected_directions {
+            fsim::frontend::PortDirection::Output,
+            fsim::frontend::PortDirection::Input,
+            fsim::frontend::PortDirection::Output,
+            fsim::frontend::PortDirection::Input,
+            fsim::frontend::PortDirection::Output,
+            fsim::frontend::PortDirection::Output,
+            fsim::frontend::PortDirection::Input,
+            fsim::frontend::PortDirection::Input };
+    for (std::size_t index = 0; index < nested_endpoints.size(); ++index) {
+        const auto& endpoint = nested_endpoints[index];
+        assert(endpoint.formal_path
+            == "nested_view_top.child.channel."
+                + std::string { expected_suffixes[index] });
+        assert(endpoint.actual_path
+            == "nested_view_top.link."
+                + std::string { expected_suffixes[index] });
+        assert(endpoint.signal == *nested_mode_view_link);
+        assert(endpoint.lsb_offset == expected_offsets[index]);
+        assert(endpoint.width == 1U);
+        assert(endpoint.direction == expected_directions[index]);
+    }
 
     const auto invalid_mode_view_port = fsim::frontend::parse_text(
         "invalid-mode-view-port.vhd",

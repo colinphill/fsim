@@ -398,7 +398,8 @@ std::optional<ElaboratedDesign> ElaboratedDesign::from_state(
                     runtime::simir::StrengthRank>>(
                     runtime::simir::StrengthRank::supply);
         };
-        if (state.signal_info[index].id != index
+        const auto& signal_info = state.signal_info[index];
+        if (signal_info.id != index
             || state.signal_info[index].width
                 != state.signals[index].initial_value.width()
             || !valid_strength(
@@ -409,6 +410,26 @@ std::optional<ElaboratedDesign> ElaboratedDesign::from_state(
                 && !valid_strength(
                     *state.signals[index].charge_strength))) {
             return std::nullopt;
+        }
+        for (const auto& binding : signal_info.vhdl_mode_view_bindings) {
+            if (binding.formal.empty() || binding.view.empty()
+                || binding.elements.size() > 65'536U) {
+                return std::nullopt;
+            }
+            std::unordered_set<std::uint64_t> endpoint_offsets;
+            endpoint_offsets.reserve(binding.elements.size());
+            for (const auto& endpoint : binding.elements) {
+                if (endpoint.formal_path.empty()
+                    || endpoint.actual_path.empty()
+                    || endpoint.signal != index
+                    || endpoint.width == 0U
+                    || endpoint.lsb_offset > signal_info.width
+                    || endpoint.width
+                        > signal_info.width - endpoint.lsb_offset
+                    || !endpoint_offsets.insert(endpoint.lsb_offset).second) {
+                    return std::nullopt;
+                }
+            }
         }
     }
     for (std::size_t index = 0; index < state.string_object_info.size(); ++index) {

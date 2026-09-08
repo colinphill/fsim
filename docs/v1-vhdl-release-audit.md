@@ -2,7 +2,7 @@
 # Final VHDL v1 release audit
 
 This is the Batch 130 Task 3 inspection record, advanced through Batch 158, for
-all 279 `VH` rows and all
+all 281 `VH` rows and all
 8 `V1-VH` release-contract rows in the
 [feature matrix](feature-matrix.md). It narrows evidence claims; it does not
 broaden the VHDL-2008 v1 subset.

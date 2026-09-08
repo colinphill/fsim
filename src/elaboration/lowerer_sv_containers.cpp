@@ -269,6 +269,48 @@ std::optional<ContainerRegisterId>
 Lowerer::lower_container_expression(
     const Expression& expression)
 {
+    if (language_ == frontend::Language::Vhdl2008
+        && vhdl_standard_ >= frontend::VhdlStandard::Vhdl2019) {
+        const auto api = frontend::vhdl_simulator_api(expression.text);
+        if (api == frontend::VhdlSimulatorApi::get_call_path) {
+            if ((expression.kind != ExpressionKind::Identifier
+                    && expression.kind != ExpressionKind::Call)
+                || !expression.operands.empty()) {
+                report(
+                    "FSIM-ELAB-VHENV-003",
+                    "STD.ENV GET_CALL_PATH does not accept arguments",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto type =
+                frontend::vhdl_environment_call_path_vector_ptr_type();
+            const auto runtime_type = container_type(type, expression.span);
+            if (!runtime_type) {
+                return std::nullopt;
+            }
+            const auto destination = allocate_container_register(*runtime_type);
+            process_.operations.emplace_back(VhdlEnvironmentGetCallPath {
+                destination,
+                SourceLocation {
+                    expression.span.source_name.str(),
+                    static_cast<std::uint32_t>(expression.span.begin.line),
+                    static_cast<std::uint32_t>(expression.span.begin.column) },
+                debug_scope_name() });
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "@vhdl-dereference"
+            && expression.operands.size() == 1U) {
+            const auto source_type = vhdl_expression_type(
+                expression.operands.front());
+            if (source_type
+                && frontend::is_vhdl_environment_call_path_type(
+                    *source_type)) {
+                return lower_container_expression(
+                    expression.operands.front());
+            }
+        }
+    }
     if (expression.kind == ExpressionKind::Index) {
         if (expression.operands.size() == 2) {
             const auto runtime_type = container_expression_runtime_type(

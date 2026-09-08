@@ -319,6 +319,12 @@ namespace {
         SourceSpan opener;
     };
 
+    struct ProtectionFrame {
+        bool encrypted { };
+        bool diagnosed { };
+        SourceSpan opener;
+    };
+
     class ConditionalAnalysis {
     public:
         ConditionalAnalysis(SourceText source, const VhdlStandard standard)
@@ -353,6 +359,13 @@ namespace {
                 diagnose("FSIM-VHDL-CA-003",
                     "unterminated conditional analysis directive; add `end if",
                     frame.opener);
+            }
+            if (protection_ && protection_->diagnosed) {
+                diagnose("FSIM-VHDL-PROTECT-004",
+                    protection_->encrypted
+                        ? "unterminated protected decryption envelope; add `protect end_protected"
+                        : "unterminated protected source envelope; add `protect end",
+                    protection_->opener);
             }
             return { std::move(output_), std::move(diagnostics_) };
         }
@@ -394,6 +407,43 @@ namespace {
                 ++end;
             }
             return { value.substr(0U, end), trim(value.substr(end)) };
+        }
+
+        [[nodiscard]] static std::pair<std::string_view, std::string_view>
+        split_protection_word(const std::string_view value) noexcept
+        {
+            std::size_t end = 0U;
+            while (end != value.size()
+                && (std::isalpha(static_cast<unsigned char>(value[end])) != 0
+                    || value[end] == '_')) {
+                ++end;
+            }
+            return { value.substr(0U, end), trim(value.substr(end)) };
+        }
+
+        [[nodiscard]] static std::optional<std::string>
+        directive_string(std::string_view value)
+        {
+            value = trim(value);
+            if (value.size() < 2U || value.front() != '"') {
+                return std::nullopt;
+            }
+            std::string result;
+            for (std::size_t index = 1U; index < value.size(); ++index) {
+                if (value[index] != '"') {
+                    result.push_back(value[index]);
+                    continue;
+                }
+                if (index + 1U < value.size() && value[index + 1U] == '"') {
+                    result.push_back('"');
+                    ++index;
+                    continue;
+                }
+                return trim(value.substr(index + 1U)).empty()
+                    ? std::optional<std::string> { std::move(result) }
+                    : std::nullopt;
+            }
+            return std::nullopt;
         }
 
         [[nodiscard]] static std::string_view strip_line_comment(
@@ -451,6 +501,66 @@ namespace {
             }
         }
 
+        void process_protection(
+            const std::string_view remainder, const SourceSpan& span)
+        {
+            const auto [raw_keyword, arguments]
+                = split_protection_word(remainder);
+            const auto keyword = lower_copy(raw_keyword);
+            const bool reporting = active();
+            const bool supported = standard_ >= VhdlStandard::Vhdl2008;
+            const bool control_reporting = reporting && supported;
+            if (!supported && reporting) {
+                diagnose("FSIM-VHDL-PROTECT-001",
+                    "protect tool directives require VHDL-2008 or later",
+                    span);
+            }
+            if (keyword == "begin" || keyword == "begin_protected") {
+                if (!arguments.empty() && control_reporting) {
+                    diagnose("FSIM-VHDL-PROTECT-002",
+                        "a protected envelope opening directive takes no operands",
+                        span);
+                }
+                if (protection_) {
+                    if (control_reporting) {
+                        diagnose("FSIM-VHDL-PROTECT-002",
+                            "protected source envelopes cannot be nested", span);
+                    }
+                    return;
+                }
+                protection_ = ProtectionFrame {
+                    keyword == "begin_protected", control_reporting, span
+                };
+                if (protection_->encrypted && control_reporting) {
+                    diagnose("FSIM-VHDL-PROTECT-003",
+                        "the protected decryption envelope requires an unavailable key provider",
+                        span);
+                }
+                return;
+            }
+            if (keyword == "end" || keyword == "end_protected") {
+                const bool encrypted_end = keyword == "end_protected";
+                if (!arguments.empty() && control_reporting) {
+                    diagnose("FSIM-VHDL-PROTECT-002",
+                        "a protected envelope closing directive takes no operands",
+                        span);
+                }
+                if (!protection_ || protection_->encrypted != encrypted_end) {
+                    if (control_reporting) {
+                        diagnose("FSIM-VHDL-PROTECT-002",
+                            "protected envelope closing directive has no matching opening directive",
+                            span);
+                    }
+                    return;
+                }
+                protection_.reset();
+                return;
+            }
+            // The remaining protect pragma expressions are metadata for an
+            // encrypting or decrypting tool. They do not alter plain VHDL
+            // semantics and encrypted metadata is never exposed downstream.
+        }
+
         [[nodiscard]] std::optional<bool> condition(
             std::string_view text, const SourceSpan& span)
         {
@@ -491,6 +601,32 @@ namespace {
                 && (source_.text[first] == ' ' || source_.text[first] == '\t')) {
                 ++first;
             }
+            if (protection_ && protection_->encrypted) {
+                if (first != line_end && source_.text[first] == '`') {
+                    const auto protected_text = trim(strip_line_comment(
+                        std::string_view { source_.text }.substr(
+                            first + 1U, line_end - first - 1U)));
+                    const auto [directive_word, directive_remainder]
+                        = split_word(protected_text);
+                    if (lower_copy(directive_word) == "protect") {
+                        const auto [keyword, arguments]
+                            = split_protection_word(directive_remainder);
+                        const auto control = lower_copy(keyword);
+                        if (control == "begin" || control == "begin_protected"
+                            || control == "end"
+                            || control == "end_protected") {
+                            const auto span = line_span(
+                                line_begin, line_end, line, first);
+                            process_protection(directive_remainder, span);
+                            mask(line_begin, line_end);
+                            return;
+                        }
+                        (void)arguments;
+                    }
+                }
+                mask(line_begin, line_end);
+                return;
+            }
             if (first == line_end || source_.text[first] != '`'
                 || block_comment_depth_ != 0U) {
                 update_block_comment_depth(line_begin, line_end);
@@ -506,7 +642,8 @@ namespace {
                     first + 1U, line_end - first - 1U))));
             const auto directive = lower_copy(word);
             if (directive != "if" && directive != "elsif" && directive != "else"
-                && directive != "end") {
+                && directive != "end" && directive != "warning"
+                && directive != "error" && directive != "protect") {
                 if (!active()) {
                     mask(line_begin, line_end);
                 }
@@ -514,10 +651,35 @@ namespace {
             }
             mask(line_begin, line_end);
 
+            if (directive == "protect") {
+                process_protection(remainder, span);
+                return;
+            }
+
             if (standard_ != VhdlStandard::Vhdl2019) {
                 diagnose("FSIM-VHDL-CA-001",
                     "conditional analysis directives require VHDL-2019; select that revision or remove the directive",
                     span);
+            }
+
+            if (directive == "warning" || directive == "error") {
+                const auto message = directive_string(remainder);
+                if (!message) {
+                    diagnose("FSIM-VHDL-CA-002",
+                        "a conditional analysis warning or error directive requires exactly one string literal",
+                        span);
+                    return;
+                }
+                if (standard_ != VhdlStandard::Vhdl2019 || !active()) {
+                    return;
+                }
+                diagnostics_.push_back(Diagnostic {
+                    directive == "warning" ? DiagnosticSeverity::Warning
+                                           : DiagnosticSeverity::Error,
+                    directive == "warning" ? "FSIM-VHDL-CA-005"
+                                           : "FSIM-VHDL-CA-006",
+                    *message, span, { } });
+                return;
             }
 
             if (overflow_depth_ != 0U) {
@@ -528,9 +690,10 @@ namespace {
                     (void)condition(remainder, span);
                 } else if (directive == "end") {
                     const auto [ending_word, ending_remainder] = split_word(remainder);
-                    if (lower_copy(ending_word) != "if" || !ending_remainder.empty()) {
+                    if ((!ending_word.empty() && lower_copy(ending_word) != "if")
+                        || !ending_remainder.empty()) {
                         diagnose("FSIM-VHDL-CA-002",
-                            "a conditional analysis closing directive must be `end if",
+                            "a conditional analysis closing directive must be `end or `end if",
                             span);
                     } else {
                         --overflow_depth_;
@@ -593,9 +756,10 @@ namespace {
             }
 
             const auto [ending_word, ending_remainder] = split_word(remainder);
-            if (lower_copy(ending_word) != "if" || !ending_remainder.empty()) {
+            if ((!ending_word.empty() && lower_copy(ending_word) != "if")
+                || !ending_remainder.empty()) {
                 diagnose("FSIM-VHDL-CA-002",
-                    "a conditional analysis closing directive must be `end if", span);
+                    "a conditional analysis closing directive must be `end or `end if", span);
                 return;
             }
             stack_.pop_back();
@@ -607,6 +771,7 @@ namespace {
         std::size_t block_comment_depth_ { };
         std::size_t overflow_depth_ { };
         std::vector<ConditionalFrame> stack_;
+        std::optional<ProtectionFrame> protection_;
         std::vector<Diagnostic> diagnostics_;
     };
 

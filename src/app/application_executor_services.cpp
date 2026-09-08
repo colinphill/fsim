@@ -129,6 +129,12 @@ void LlvmProcessExecutor::write_report(
                 runtime::simir::AssertionSeverity>(ordinal);
             const auto message = state.executor->read_string_register(
                 string_report->message);
+            if (state.process->language_standard == "2019") {
+                state.context->vhdl_report(
+                    instruction, message, severity,
+                    string_report->source, string_report->standalone);
+                return;
+            }
             if (severity == runtime::simir::AssertionSeverity::failure) {
                 if (string_report->standalone) {
                     state.context->report(

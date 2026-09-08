@@ -921,6 +921,30 @@ void HierarchyBuilder::instantiate(
         frontend::ValueDomain::Boolean, "boolean");
     static const auto builtin_bit = builtin_scalar(
         frontend::ValueDomain::Bit2, "bit");
+    static const auto builtin_vhdl_real = [] {
+        frontend::Type type;
+        type.domain = frontend::ValueDomain::Bit2;
+        type.spelling = "real";
+        type.systemverilog_scalar =
+            frontend::SystemVerilogScalarKind::Real;
+        type.is_signed = true;
+        type.packed_range = frontend::PackedRange { 63, 0, true };
+        type.nominal_type = "@builtin:real";
+        type.vhdl_type_declaration = type.nominal_type;
+        return type;
+    }();
+    static const auto builtin_vhdl_time = [] {
+        frontend::Type type;
+        type.domain = frontend::ValueDomain::Integer;
+        type.spelling = "time";
+        type.is_signed = true;
+        type.packed_range = frontend::PackedRange { 63, 0, true };
+        type.integer_range = frontend::IntegerRange {
+            0, std::numeric_limits<std::int64_t>::max(), false };
+        type.nominal_type = "@builtin:time";
+        type.vhdl_type_declaration = type.nominal_type;
+        return type;
+    }();
     const auto builtin_systemverilog_scalar = [](
                                                   const std::string_view spelling,
                                                   const frontend::SystemVerilogScalarKind kind,
@@ -964,6 +988,8 @@ void HierarchyBuilder::instantiate(
         visible_type_marks.emplace("positive", &builtin_positive);
         visible_type_marks.emplace("boolean", &builtin_boolean);
         visible_type_marks.emplace("bit", &builtin_bit);
+        visible_type_marks.emplace("real", &builtin_vhdl_real);
+        visible_type_marks.emplace("time", &builtin_vhdl_time);
     } else if (
         unit.language
         == frontend::Language::SystemVerilog2017) {

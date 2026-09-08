@@ -17,6 +17,10 @@ constexpr std::uint32_t required_host_v2_size =
     static_cast<std::uint32_t>(
         offsetof(fsim_vhpi_host_v2, invoke_service)
         + sizeof(fsim_vhpi_host_v2::invoke_service));
+constexpr std::uint32_t required_host_v3_size =
+    static_cast<std::uint32_t>(
+        offsetof(fsim_vhpi_host_v3, execute_tool)
+        + sizeof(fsim_vhpi_host_v3::execute_tool));
 constexpr std::uint32_t required_plugin_size = static_cast<std::uint32_t>(
     offsetof(fsim_vhpi_plugin_v1, shutdown)
     + sizeof(fsim_vhpi_plugin_v1::shutdown));
@@ -112,10 +116,36 @@ fsim_vhpi_host_v2 make_vhdl_vhpi_host_v2(
   return result;
 }
 
+fsim_vhpi_host_v3 make_vhdl_vhpi_host_v3(
+    const std::uint64_t simulation_identity,
+    void* const report_context,
+    const fsim_vhpi_report_v1 report,
+    void* const service_context,
+    const fsim_vhpi_invoke_service_v1 invoke_service,
+    const fsim_vhpi_query_capabilities_v3 query_capabilities,
+    const fsim_vhpi_access_value_v3 access_value,
+    const fsim_vhpi_execute_tool_v3 execute_tool) noexcept {
+  auto result = fsim_vhpi_host_v3{
+      make_vhdl_vhpi_host_v2(
+          simulation_identity,
+          report_context,
+          report,
+          service_context,
+          invoke_service),
+      query_capabilities,
+      access_value,
+      execute_tool,
+  };
+  result.v2.v1.abi_version = FSIM_VHPI_HOST_ABI_VERSION_V3;
+  result.v2.v1.struct_size = required_host_v3_size;
+  return result;
+}
+
 VhdlVhpiAbiError validate_vhdl_vhpi_host(
     const fsim_vhpi_host_v1& host) noexcept {
   if (host.abi_version != FSIM_VHPI_HOST_ABI_VERSION
-      && host.abi_version != FSIM_VHPI_HOST_ABI_VERSION_V2) {
+      && host.abi_version != FSIM_VHPI_HOST_ABI_VERSION_V2
+      && host.abi_version != FSIM_VHPI_HOST_ABI_VERSION_V3) {
     return VhdlVhpiAbiError::AbiVersion;
   }
   if (host.struct_size < required_host_size) {
@@ -136,7 +166,7 @@ VhdlVhpiAbiError validate_vhdl_vhpi_host(
   if (host.report == nullptr) {
     return VhdlVhpiAbiError::ReportCallback;
   }
-  if (host.abi_version == FSIM_VHPI_HOST_ABI_VERSION_V2) {
+  if (host.abi_version >= FSIM_VHPI_HOST_ABI_VERSION_V2) {
     if (host.struct_size < required_host_v2_size) {
       return VhdlVhpiAbiError::AbiSize;
     }
@@ -147,6 +177,22 @@ VhdlVhpiAbiError validate_vhdl_vhpi_host(
     }
     if (host_v2.invoke_service == nullptr) {
       return VhdlVhpiAbiError::ServiceCallback;
+    }
+  }
+  if (host.abi_version == FSIM_VHPI_HOST_ABI_VERSION_V3) {
+    if (host.struct_size < required_host_v3_size) {
+      return VhdlVhpiAbiError::AbiSize;
+    }
+    const auto& host_v3 =
+        reinterpret_cast<const fsim_vhpi_host_v3&>(host);
+    if (host_v3.query_capabilities == nullptr) {
+      return VhdlVhpiAbiError::CapabilityCallback;
+    }
+    if (host_v3.access_value == nullptr) {
+      return VhdlVhpiAbiError::ValueCallback;
+    }
+    if (host_v3.execute_tool == nullptr) {
+      return VhdlVhpiAbiError::ToolCallback;
     }
   }
   return VhdlVhpiAbiError::None;

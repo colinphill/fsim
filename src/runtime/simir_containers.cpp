@@ -1146,6 +1146,53 @@ void Interpreter::Impl::execute_container(
     const ContainerStringRead& operation)
 {
     const auto& source = read_container_register(process, operation.source);
+    if (!operation.members.empty()) {
+        if (source.type.element_kind != ContainerElementKind::Aggregate
+            || source.type.associative || operation.string_index) {
+            container_error(
+                process.program.id, process.pc,
+                "aggregate string member read requires an indexed aggregate container");
+        }
+        const auto at = source.type.fixed
+            ? operation.linear_index
+                ? known_index(
+                      process.program.id, process.pc,
+                      get_register(process, operation.index), true,
+                      "multidimensional linear index")
+                : fixed_offset(
+                      process.program.id, process.pc, source.type,
+                      get_register(process, operation.index))
+            : known_index(
+                  process.program.id, process.pc,
+                  get_register(process, operation.index),
+                  operation.signed_index, "container index");
+        if (at >= source.nested_elements.size()) {
+            container_error(
+                process.program.id, process.pc,
+                "aggregate container index is out of range");
+        }
+        const auto* selected = &source.nested_elements[at];
+        for (const auto member : operation.members) {
+            if (selected->type.element_kind != ContainerElementKind::Aggregate
+                || member >= selected->nested_elements.size()) {
+                container_error(
+                    process.program.id, process.pc,
+                    "aggregate string member read path is invalid");
+            }
+            selected = &selected->nested_elements[member];
+        }
+        if (selected->type.element_kind != ContainerElementKind::String
+            || !selected->type.fixed
+            || selected->string_elements.size() != 1U) {
+            container_error(
+                process.program.id, process.pc,
+                "aggregate string member read requires a scalar string leaf");
+        }
+        get_string_register(process, operation.destination)
+            = selected->string_elements.front();
+        ++process.pc;
+        return;
+    }
     if (source.type.element_kind != ContainerElementKind::String) {
         container_error(
             process.program.id, process.pc,

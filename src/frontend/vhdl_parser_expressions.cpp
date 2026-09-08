@@ -2,9 +2,82 @@
 #include "vhdl_parser_internal.hpp"
 
 #include <bit>
+#include <charconv>
 #include <new>
 
 namespace fsim::frontend {
+namespace {
+
+std::optional<SystemVerilogDecimalLiteral> vhdl_real_payload(
+    const std::string_view spelling)
+{
+    if (spelling.find('#') != std::string_view::npos) {
+        return std::nullopt;
+    }
+    std::string compact;
+    compact.reserve(spelling.size());
+    for (const auto character : spelling) {
+        if (character != '_') {
+            compact.push_back(character);
+        }
+    }
+    const auto exponent_position = compact.find_first_of("eE");
+    if (exponent_position != std::string::npos
+        && compact.find_first_of("eE", exponent_position + 1U)
+            != std::string::npos) {
+        return std::nullopt;
+    }
+    const auto mantissa = std::string_view{compact}.substr(
+        0, exponent_position);
+    const auto point = mantissa.find('.');
+    if (point == std::string_view::npos
+        || point == 0U || point + 1U == mantissa.size()
+        || mantissa.find('.', point + 1U) != std::string_view::npos) {
+        return std::nullopt;
+    }
+    std::int64_t exponent{};
+    if (exponent_position != std::string::npos) {
+        const auto text = std::string_view{compact}.substr(
+            exponent_position + 1U);
+        const auto parsed = std::from_chars(
+            text.data(), text.data() + text.size(), exponent);
+        if (text.empty() || parsed.ec != std::errc{}
+            || parsed.ptr != text.data() + text.size()) {
+            return std::nullopt;
+        }
+    }
+    const auto fractional_digits = mantissa.size() - point - 1U;
+    if (fractional_digits
+        > static_cast<std::size_t>(
+            std::numeric_limits<std::int64_t>::max())
+        || exponent < std::numeric_limits<std::int64_t>::min()
+                + static_cast<std::int64_t>(fractional_digits)) {
+        return std::nullopt;
+    }
+    exponent -= static_cast<std::int64_t>(fractional_digits);
+    std::string digits;
+    digits.reserve(mantissa.size() - 1U);
+    digits.append(mantissa.substr(0, point));
+    digits.append(mantissa.substr(point + 1U));
+    const auto first = digits.find_first_not_of('0');
+    if (first == std::string::npos) {
+        return SystemVerilogDecimalLiteral{
+            SystemVerilogDecimalLiteralKind::Real, "0", 0, {}};
+    }
+    digits.erase(0, first);
+    while (digits.size() > 1U && digits.back() == '0') {
+        if (exponent == std::numeric_limits<std::int64_t>::max()) {
+            return std::nullopt;
+        }
+        digits.pop_back();
+        ++exponent;
+    }
+    return SystemVerilogDecimalLiteral{
+        SystemVerilogDecimalLiteralKind::Real,
+        std::move(digits), exponent, {}};
+}
+
+} // namespace
 
 std::optional<Expression> VhdlParser::parse_vhdl_bit_string_literal()
 {
@@ -438,6 +511,18 @@ Expression VhdlParser::parse_primary()
         Expression literal {
             ExpressionKind::IntegerLiteral, token.text, { }, token.span
         };
+        if (token.text.find('.') != std::string::npos) {
+            literal.systemverilog_decimal_literal =
+                vhdl_real_payload(token.text);
+            if (!literal.systemverilog_decimal_literal) {
+                error(token, "FSIM-VHDL-PARSE-296",
+                    "malformed or unsupported VHDL real literal '"
+                        + token.text + "'");
+            } else {
+                literal.systemverilog_scalar_kind =
+                    SystemVerilogScalarKind::Real;
+            }
+        }
         static constexpr std::array<std::string_view, 34>
             physical_literal_terminators {
                 "after", "begin", "case", "downto", "else",
@@ -694,6 +779,13 @@ Expression VhdlParser::parse_primary()
                 selected.text = canonical;
                 selected.span = cover(name.span, part.span);
             }
+        }
+        if (vhdl_simulator_api(selected.text)
+            != VhdlSimulatorApi::none) {
+            require_vhdl_standard(
+                name, VhdlStandard::Vhdl2019,
+                "the STD.ENV simulator, data, and time interface",
+                "select VHDL-2019 or remove the STD.ENV reference");
         }
         if (saw_dereference) {
             for (;;) {

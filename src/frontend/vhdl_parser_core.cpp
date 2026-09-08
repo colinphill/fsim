@@ -1053,7 +1053,83 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
             "the predefined " + simple_name + " type",
             "select VHDL-2008 or declare an explicit array type");
     }
-    if (simple_name == "bit" || simple_name == "bit_vector") {
+    if (spelling == "std.env.dayofweek") {
+        require_vhdl_standard(
+            first, VhdlStandard::Vhdl2019,
+            "the STD.ENV DAYOFWEEK type",
+            "select VHDL-2019 or declare an independent calendar type");
+        type = vhdl_environment_dayofweek_type();
+    } else if (spelling == "std.env.time_record") {
+        require_vhdl_standard(
+            first, VhdlStandard::Vhdl2019,
+            "the STD.ENV TIME_RECORD type",
+            "select VHDL-2019 or declare an independent calendar record");
+        type = vhdl_environment_time_record_type();
+    } else if (spelling == "std.env.call_path_element") {
+        require_vhdl_standard(
+            first, VhdlStandard::Vhdl2019,
+            "the STD.ENV CALL_PATH_ELEMENT type",
+            "select VHDL-2019 or declare an independent call-path record");
+        type = vhdl_environment_call_path_element_type();
+    } else if (spelling == "std.env.call_path_vector") {
+        require_vhdl_standard(
+            first, VhdlStandard::Vhdl2019,
+            "the STD.ENV CALL_PATH_VECTOR type",
+            "select VHDL-2019 or declare an independent call-path vector");
+        type = vhdl_environment_call_path_vector_type();
+    } else if (spelling == "std.env.call_path_vector_ptr") {
+        require_vhdl_standard(
+            first, VhdlStandard::Vhdl2019,
+            "the STD.ENV CALL_PATH_VECTOR_PTR type",
+            "select VHDL-2019 or declare an independent call-path access type");
+        type = vhdl_environment_call_path_vector_ptr_type();
+    } else if (spelling == "std.env.directory") {
+        require_vhdl_standard(
+            first, VhdlStandard::Vhdl2019,
+            "the STD.ENV DIRECTORY type",
+            "select VHDL-2019 or declare an independent directory type");
+        type = vhdl_environment_directory_type();
+    } else if (spelling == "std.env.directory_items") {
+        require_vhdl_standard(
+            first, VhdlStandard::Vhdl2019,
+            "the STD.ENV DIRECTORY_ITEMS type",
+            "select VHDL-2019 or declare an independent directory-items type");
+        type = vhdl_environment_directory_items_type();
+    } else if (spelling == "std.env.dir_open_status") {
+        require_vhdl_standard(
+            first, VhdlStandard::Vhdl2019,
+            "the STD.ENV DIR_OPEN_STATUS type",
+            "select VHDL-2019 or declare an independent status type");
+        type = vhdl_environment_directory_status_type(
+            VhdlSimulatorApi::dir_open_status);
+    } else if (spelling == "std.env.dir_create_status") {
+        require_vhdl_standard(
+            first, VhdlStandard::Vhdl2019,
+            "the STD.ENV DIR_CREATE_STATUS type",
+            "select VHDL-2019 or declare an independent status type");
+        type = vhdl_environment_directory_status_type(
+            VhdlSimulatorApi::dir_create_status);
+    } else if (spelling == "std.env.dir_delete_status") {
+        require_vhdl_standard(
+            first, VhdlStandard::Vhdl2019,
+            "the STD.ENV DIR_DELETE_STATUS type",
+            "select VHDL-2019 or declare an independent status type");
+        type = vhdl_environment_directory_status_type(
+            VhdlSimulatorApi::dir_delete_status);
+    } else if (spelling == "std.env.file_delete_status") {
+        require_vhdl_standard(
+            first, VhdlStandard::Vhdl2019,
+            "the STD.ENV FILE_DELETE_STATUS type",
+            "select VHDL-2019 or declare an independent status type");
+        type = vhdl_environment_directory_status_type(
+            VhdlSimulatorApi::file_delete_status);
+    } else if (const auto reflection = vhdl_reflection_type(simple_name)) {
+        require_vhdl_standard(
+            first, VhdlStandard::Vhdl2019,
+            "the STD.REFLECTION " + simple_name + " type",
+            "select VHDL-2019 or remove the reflection API use");
+        type = *reflection;
+    } else if (simple_name == "bit" || simple_name == "bit_vector") {
         type.domain = ValueDomain::Bit2;
     } else if (simple_name == "std_logic" || simple_name == "std_logic_vector" || simple_name == "std_ulogic" || simple_name == "std_ulogic_vector") {
         type.domain = ValueDomain::Logic9;
@@ -1074,6 +1150,13 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
         type.domain = ValueDomain::Boolean;
     } else if (simple_name == "string" || simple_name == "line") {
         type.domain = ValueDomain::String;
+    } else if (simple_name == "real") {
+        type.domain = ValueDomain::Bit2;
+        type.systemverilog_scalar = SystemVerilogScalarKind::Real;
+        type.is_signed = true;
+        type.packed_range = PackedRange { 63, 0, true };
+        type.nominal_type = "@builtin:real";
+        type.vhdl_type_declaration = type.nominal_type;
     } else if (simple_name == "side") {
         type.domain = ValueDomain::Bit2;
         type.packed_range = PackedRange { 0, 0, true };
@@ -1101,7 +1184,8 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
     } else if (simple_name == "integer" || simple_name == "natural" || simple_name == "positive") {
         type = vhdl_predefined_integer_type(vhdl_standard_, simple_name);
     }
-    if (type.domain == ValueDomain::Unknown) {
+    if (type.domain == ValueDomain::Unknown
+        && type.nominal_type.empty()) {
         type.named_type = spelling;
         type.named_type_span = cover(first.span, previous().span);
     } else if (type.domain == ValueDomain::Integer && !allow_integer) {

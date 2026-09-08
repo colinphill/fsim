@@ -133,6 +133,17 @@ namespace codec_detail {
             return value >= runtime::simir::FileTextTargetKind::string_register
                 && value <= runtime::simir::FileTextTargetKind::packed_signal;
         } else if constexpr (
+            std::same_as<T, runtime::simir::VhdlReflectionClass>) {
+            return value >= runtime::simir::VhdlReflectionClass::enumeration
+                && value
+                    <= runtime::simir::VhdlReflectionClass::protected_type;
+        } else if constexpr (
+            std::same_as<T, runtime::simir::VhdlReflectionApiKind>) {
+            return value
+                    >= runtime::simir::VhdlReflectionApiKind::create_subtype
+                && value
+                    <= runtime::simir::VhdlReflectionApiKind::file_open_kind;
+        } else if constexpr (
             std::same_as<T, runtime::simir::CoverageSampleTrigger>) {
             return value >= runtime::simir::CoverageSampleTrigger::explicit_sample
                 && value <= runtime::simir::CoverageSampleTrigger::event;

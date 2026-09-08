@@ -455,8 +455,16 @@ convert_systemverilog_scalar_constant(
     std::string& error) {
   error.clear();
   if (target == value.kind) return value;
-  if (target == SystemVerilogScalarKind::Chandle
-      || value.kind == SystemVerilogScalarKind::Chandle) {
+  if (target == SystemVerilogScalarKind::Chandle) {
+    const auto integral = value.integral();
+    if (integral && *integral == 0) {
+      return SystemVerilogScalarConstant {
+          SystemVerilogScalarKind::Chandle, 0U};
+    }
+    error = "chandle casts require a chandle or null operand";
+    return std::nullopt;
+  }
+  if (value.kind == SystemVerilogScalarKind::Chandle) {
     error = "chandle casts require a chandle or null operand";
     return std::nullopt;
   }

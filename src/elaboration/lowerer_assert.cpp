@@ -104,7 +104,8 @@ void Lowerer::lower_assert(const Statement& statement) {
     if (!condition) {
       return;
     }
-    if (static_message && static_severity) {
+    if (static_message && static_severity
+        && vhdl_standard_ < frontend::VhdlStandard::Vhdl2019) {
       process_.operations.emplace_back(Assert{
           *condition,
           statement.assertion_message,
@@ -115,7 +116,8 @@ void Lowerer::lower_assert(const Statement& statement) {
               static_cast<std::uint32_t>(statement.span.begin.column)}});
       return;
     }
-  } else if (static_message && static_severity) {
+  } else if (static_message && static_severity
+      && vhdl_standard_ < frontend::VhdlStandard::Vhdl2019) {
     process_.operations.emplace_back(runtime::simir::Report{
         statement.output_text,
         *static_severity,

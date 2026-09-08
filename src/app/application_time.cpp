@@ -437,6 +437,7 @@ bool normalize_delays(
       expression.text = std::to_string(
           scaled_magnitude * literal_factor);
       expression.operands.clear();
+      expression.nominal_type = "@builtin:time";
       return true;
     };
     const auto normalize_expression = [&](frontend::Expression& expression) {

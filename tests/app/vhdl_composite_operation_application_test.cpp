@@ -29,6 +29,14 @@ struct Capture {
   fsim::app::NativeCacheStatistics cache;
 };
 
+struct ViewCapture {
+  fsim::runtime::RunResult result;
+  std::string value;
+  std::size_t compiled_processes{};
+  std::size_t compiled_modules{};
+  fsim::app::NativeCacheStatistics cache;
+};
+
 fsim::project::Config make_config(
     const std::filesystem::path& directory,
     const std::filesystem::path& source,
@@ -103,6 +111,53 @@ void verify_capture(const Capture& capture) {
       "1", "1", "1", "1", "1", "1", "01"}));
 }
 
+fsim::project::Config make_view_config(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization) {
+  fsim::project::Config config;
+  config.base_directory = directory;
+  config.project.name = "vhdl-2019-view-execution";
+  config.project.top = "vhdl:work.view_execution_top(rtl)";
+  config.project.time_resolution = "1ns";
+  config.build.optimization = optimization;
+  config.build.cache_path = directory
+      / (optimization == fsim::project::Optimization::o0
+             ? "view-cache-o0" : "view-cache-o2");
+  config.run.max_deltas = 1000;
+  fsim::project::SourceSet sources;
+  sources.language = fsim::project::Language::vhdl;
+  sources.standard = "2019";
+  sources.library = "work";
+  sources.files.push_back(source);
+  config.source_sets.push_back(std::move(sources));
+  return config;
+}
+
+ViewCapture run_view_once(
+    const fsim::project::Config& config,
+    const fsim::app::SimulationEngine engine) {
+  fsim::diagnostic::Engine diagnostics;
+  auto project = fsim::app::build_project(config, diagnostics);
+  if (!project) {
+    for (const auto& diagnostic : diagnostics.diagnostics()) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(project);
+  fsim::app::Simulation simulation{
+      std::move(*project), config.run.max_deltas, engine};
+  const auto link = simulation.find_signal("view_execution_top.link");
+  assert(link);
+  ViewCapture capture;
+  capture.compiled_processes = simulation.compiled_process_count();
+  capture.compiled_modules = simulation.compiled_module_count();
+  capture.cache = simulation.native_cache_statistics();
+  capture.result = simulation.run();
+  capture.value = simulation.read_signal(*link).to_msb_string();
+  return capture;
+}
+
 }  // namespace
 
 int main() {
@@ -113,6 +168,7 @@ int main() {
       / ("fsim-vhdl-composite-operations-" + std::to_string(serial))};
   std::filesystem::create_directories(directory.path);
   const auto source = directory.path / "composite_operations.vhd";
+  const auto view_source = directory.path / "view_execution.vhd";
   {
     std::ofstream output{source};
     output << R"(
@@ -173,6 +229,47 @@ end architecture;
 )";
     assert(output.good());
   }
+  {
+    std::ofstream output{view_source};
+    output << R"(
+package view_execution_types is
+  type request_bus is record
+    request : bit;
+    response : bit;
+  end record;
+  view initiator of request_bus is
+    request : out;
+    response : in;
+  end view;
+end package;
+
+use work.view_execution_types.all;
+entity view_execution_leaf is
+  port (channel : view initiator);
+end entity;
+architecture rtl of view_execution_leaf is
+begin
+  copy : process(all)
+    variable staged : request_bus;
+  begin
+    staged := channel;
+    staged.request := staged.response;
+    channel.request <= staged.request;
+  end process;
+end architecture;
+
+entity view_execution_top is end entity;
+use work.view_execution_types.all;
+architecture rtl of view_execution_top is
+  signal link : request_bus;
+begin
+  link.response <= '1';
+  child : entity work.view_execution_leaf(rtl)
+    port map (channel => link);
+end architecture;
+)";
+    assert(output.good());
+  }
 
   for (const auto optimization : {
            fsim::project::Optimization::o0,
@@ -195,6 +292,30 @@ end architecture;
     assert(cold.cache.hits == 0 && cold.cache.misses == 1);
     assert(warm.compiled_processes == 1 && warm.compiled_modules == 1);
     assert(warm.cache.hits == 1 && warm.cache.misses == 0);
+#endif
+
+    const auto view_config = make_view_config(
+        directory.path, view_source, optimization);
+    const auto view_reference = run_view_once(
+        view_config, fsim::app::SimulationEngine::interpreter);
+    const auto view_cold = run_view_once(
+        view_config, fsim::app::SimulationEngine::compiled);
+    const auto view_warm = run_view_once(
+        view_config, fsim::app::SimulationEngine::compiled);
+    assert(view_reference.result.status
+        == fsim::runtime::RunStatus::completed);
+    assert(view_reference.value == "11");
+    assert(view_reference.result.time == view_cold.result.time);
+    assert(view_reference.result.delta == view_cold.result.delta);
+    assert(view_reference.value == view_cold.value
+        && view_cold.value == view_warm.value);
+#if defined(FSIM_HAS_LLVM)
+    assert(view_cold.compiled_processes == 2
+        && view_cold.compiled_modules == 2);
+    assert(view_cold.cache.hits == 0 && view_cold.cache.misses == 2);
+    assert(view_warm.compiled_processes == 2
+        && view_warm.compiled_modules == 2);
+    assert(view_warm.cache.hits == 2 && view_warm.cache.misses == 0);
 #endif
   }
   std::cout << "VHDL composite operation application tests passed\n";

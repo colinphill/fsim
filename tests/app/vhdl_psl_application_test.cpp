@@ -117,7 +117,8 @@ struct TemporaryDirectory {
 fsim::project::Config make_config(
     const std::filesystem::path& directory,
     const std::filesystem::path& source,
-    const fsim::project::Optimization optimization)
+    const fsim::project::Optimization optimization,
+    const std::string_view standard = "2008")
 {
     fsim::project::Config config;
     config.base_directory = directory;
@@ -131,7 +132,7 @@ fsim::project::Config make_config(
     config.run.max_deltas = 1'000U;
     fsim::project::SourceSet sources;
     sources.language = fsim::project::Language::vhdl;
-    sources.standard = "2008";
+    sources.standard = std::string { standard };
     sources.library = "work";
     sources.files.push_back(source);
     config.source_sets.push_back(std::move(sources));
@@ -504,6 +505,47 @@ void verify(const Capture& capture, const bool compiled)
 #endif
 }
 
+std::vector<fsim::app::ConcurrentAssertionCoverage> verify_vhdl2019_psl_api(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::app::SimulationEngine engine,
+    const fsim::project::Optimization optimization)
+{
+    auto config = make_config(directory, source, optimization, "2019");
+    config.project.name = "vhdl2019_psl_api";
+    config.project.top = "vhdl:work.psl_api(rtl)";
+    config.build.cache_path = directory
+        / (optimization == fsim::project::Optimization::o0
+                ? "psl-api-cache-o0" : "psl-api-cache-o2");
+    fsim::diagnostic::Engine diagnostics;
+    auto project = fsim::app::build_project(config, diagnostics);
+    if (!project) {
+        for (const auto& diagnostic : diagnostics.diagnostics()) {
+            std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+        }
+    }
+    assert(project && diagnostics.empty());
+    fsim::app::Simulation simulation {
+        std::move(*project), config.run.max_deltas, engine
+    };
+    const auto result = simulation.run();
+    assert(result.status == fsim::runtime::RunStatus::stopped);
+    const auto coverage = simulation.vhdl_psl_coverage();
+    assert(coverage.size() == 2U);
+    assert(std::ranges::all_of(coverage, [](const auto& item) {
+        return item.attempts == 0U && item.passes == 0U
+            && item.failures == 0U && item.vacuous == 0U
+            && item.aborted == 0U;
+    }));
+#if defined(FSIM_HAS_LLVM)
+    assert((simulation.compiled_process_count() != 0U)
+        == (engine != fsim::app::SimulationEngine::interpreter));
+#else
+    assert(simulation.compiled_process_count() == 0U);
+#endif
+    return coverage;
+}
+
 } // namespace
 
 int main()
@@ -516,6 +558,128 @@ int main()
                 std::chrono::steady_clock::now().time_since_epoch().count()))
     };
     std::filesystem::create_directories(directory.path);
+
+    const auto psl_api_source = directory.path / "psl_api.vhd";
+    {
+        std::ofstream output(psl_api_source, std::ios::binary);
+        output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity psl_api is end entity;
+
+architecture rtl of psl_api is
+  signal clk : std_logic := '0';
+  signal goal : std_logic := '0';
+  -- psl default clock is clk = '1';
+begin
+  -- psl COVER_GOAL: cover goal = '1';
+  -- psl ASSERT_GOAL: assert goal = '1';
+
+  controller : process
+  begin
+    assert not std.env.PslAssertFailed report "initial assert-failed state" severity failure;
+    assert not std.env.PslIsCovered report "initial covered state" severity failure;
+    assert not std.env.GetPslCoverAssert report "initial cover-assert state" severity failure;
+    assert not std.env.PslIsAssertCovered report "initial assert-covered state" severity failure;
+
+    std.env.SetPslCoverAssert;
+    assert std.env.GetPslCoverAssert report "cover-assert enable" severity failure;
+    goal <= '1';
+    wait for 1 ns;
+    clk <= '1';
+    wait for 1 ns;
+    wait for 1 ns;
+    assert std.env.PslIsCovered report "first edge coverage" severity failure;
+    assert std.env.PslIsAssertCovered report "first edge assert coverage" severity failure;
+    assert not std.env.PslAssertFailed report "first edge assertion result" severity failure;
+
+    clk <= '0';
+    goal <= '0';
+    wait for 1 ns;
+    clk <= '1';
+    wait for 1 ns;
+    wait for 1 ns;
+    assert std.env.PslAssertFailed report "second edge assertion failure" severity failure;
+    std.env.SetPslCoverAssert(Enable => false);
+    assert not std.env.GetPslCoverAssert report "cover-assert disable" severity failure;
+
+    std.env.ClearPslState;
+    assert not std.env.PslAssertFailed report "cleared assert-failed state" severity failure;
+    assert not std.env.PslIsCovered report "cleared covered state" severity failure;
+    assert not std.env.GetPslCoverAssert report "cleared cover-assert state" severity failure;
+    assert not std.env.PslIsAssertCovered report "cleared assert-covered state" severity failure;
+    std.env.finish;
+  end process;
+end architecture;
+)";
+        assert(output.good());
+    }
+
+    const auto psl_api_interpreter = verify_vhdl2019_psl_api(
+        directory.path, psl_api_source,
+        fsim::app::SimulationEngine::interpreter,
+        fsim::project::Optimization::o0);
+    const auto psl_api_debug = verify_vhdl2019_psl_api(
+        directory.path, psl_api_source,
+        fsim::app::SimulationEngine::debug,
+        fsim::project::Optimization::o0);
+    const auto psl_api_o0 = verify_vhdl2019_psl_api(
+        directory.path, psl_api_source,
+        fsim::app::SimulationEngine::compiled,
+        fsim::project::Optimization::o0);
+    const auto psl_api_o2_cold = verify_vhdl2019_psl_api(
+        directory.path, psl_api_source,
+        fsim::app::SimulationEngine::compiled,
+        fsim::project::Optimization::o2);
+    const auto psl_api_o2_warm = verify_vhdl2019_psl_api(
+        directory.path, psl_api_source,
+        fsim::app::SimulationEngine::compiled,
+        fsim::project::Optimization::o2);
+    assert(psl_api_interpreter == psl_api_debug
+        && psl_api_interpreter == psl_api_o0
+        && psl_api_interpreter == psl_api_o2_cold
+        && psl_api_interpreter == psl_api_o2_warm);
+
+    auto legacy_psl_api_config = make_config(directory.path, psl_api_source,
+        fsim::project::Optimization::o0, "2008");
+    legacy_psl_api_config.project.name = "legacy_psl_api_rejection";
+    legacy_psl_api_config.project.top = "vhdl:work.psl_api(rtl)";
+    fsim::diagnostic::Engine legacy_psl_api_diagnostics;
+    assert(!fsim::app::build_project(
+        legacy_psl_api_config, legacy_psl_api_diagnostics));
+    assert(std::ranges::any_of(
+        legacy_psl_api_diagnostics.diagnostics(), [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-FE-VHSTD-003";
+        }));
+
+    auto psl_api_artifact_config = make_config(directory.path, psl_api_source,
+        fsim::project::Optimization::o2, "2019");
+    psl_api_artifact_config.project.name = "vhdl2019_psl_api_artifact";
+    psl_api_artifact_config.project.top = "vhdl:work.psl_api(rtl)";
+    psl_api_artifact_config.build.cache_path
+        = directory.path / "psl-api-artifact-cache";
+    const auto psl_api_object = directory.path / "psl-api.fsimobj";
+    const auto psl_api_design = directory.path / "psl-api.fsimdesign";
+    fsim::diagnostic::Engine psl_api_artifact_diagnostics;
+    assert(fsim::app::compile_artifact(psl_api_artifact_config,
+        psl_api_object, psl_api_artifact_diagnostics));
+    const std::array psl_api_objects { psl_api_object };
+    auto psl_api_elaborate_config = psl_api_artifact_config;
+    psl_api_elaborate_config.source_sets.clear();
+    assert(fsim::app::elaborate_artifact(psl_api_elaborate_config,
+        psl_api_objects, psl_api_design, psl_api_artifact_diagnostics));
+    auto psl_api_artifact = fsim::app::load_design_artifact(
+        psl_api_design, psl_api_artifact_diagnostics);
+    assert(psl_api_artifact && !psl_api_artifact_diagnostics.has_error());
+    fsim::app::Simulation psl_api_artifact_simulation {
+        std::move(*psl_api_artifact),
+        psl_api_artifact_config.run.max_deltas,
+        fsim::app::SimulationEngine::compiled
+    };
+    assert(psl_api_artifact_simulation.run().status
+        == fsim::runtime::RunStatus::stopped);
+
     const auto source = directory.path / "psl_execution.vhd";
     {
         std::ofstream output(source, std::ios::binary);

@@ -266,6 +266,10 @@ std::optional<RegisterId> Lowerer::lower_expression(
 {
     auto attempt = lower_class_expression(
         expression, expected_width, expected_type);
+    if (!attempt.handled && language_ == frontend::Language::Vhdl2008) {
+        attempt = lower_vhdl_simulator_function_expression(
+            expression, expected_width, expected_type);
+    }
     if (!attempt.handled) {
         attempt = expression.kind == ExpressionKind::Update
             ? ExpressionAttempt { lower_procedural_update_expression(
@@ -1865,7 +1869,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
         if (expected_type != nullptr
             && expected_type->systemverilog_scalar
                 != frontend::SystemVerilogScalarKind::None
-            && expression.systemverilog_decimal_literal) {
+            && expression.kind == ExpressionKind::IntegerLiteral) {
             std::string error;
             const auto evaluated = frontend::evaluate_systemverilog_scalar_constant(
                 expression, { }, { }, error);

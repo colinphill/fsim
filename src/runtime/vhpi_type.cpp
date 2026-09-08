@@ -15,6 +15,11 @@ bool declaration_kind(const VhdlVhpiObjectKind kind) noexcept {
     case VhdlVhpiObjectKind::Variable:
     case VhdlVhpiObjectKind::Constant:
     case VhdlVhpiObjectKind::File:
+    case VhdlVhpiObjectKind::Port:
+    case VhdlVhpiObjectKind::Generic:
+    case VhdlVhpiObjectKind::Alias:
+    case VhdlVhpiObjectKind::RecordElement:
+    case VhdlVhpiObjectKind::ArrayElement:
       return true;
     default:
       return false;

@@ -1306,6 +1306,10 @@ using namespace elaboration_detail;
         for (const auto& identifier : ordered) {
             const auto& reference_span =
                 identifiers.at(identifier);
+            if (frontend::vhdl_simulator_api(identifier)
+                != frontend::VhdlSimulatorApi::none) {
+                continue;
+            }
             if (local_qualified_items.contains(identifier)) {
                 continue;
             }

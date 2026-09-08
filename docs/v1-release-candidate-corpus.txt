@@ -1,22 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
 # Batch 130 Task 9 final release-candidate corpus.
 # Every required row is classified execute and owns nonempty P+/P-/E/R links.
-# matrix-rows: 1294
-# matrix-sha256: dddb62ed63296b973dfbc6aa649162a9f2b634645e88098645acc6e4ba905e3e
-# evidence-slots: 5176
-# evidence-paths: 622
-# evidence-sha256: 4f3f7cfb428f6bac7bb6acd5f81b8176240ed7a0f19940da9880e2c3e41e8fb6
+# matrix-rows: 1296
+# matrix-sha256: 28aca45a0ca88ded646cbd1baff5d9cc29346d3bf8a0da0fa0187dd58b0179da
+# evidence-slots: 5184
+# evidence-paths: 627
+# evidence-sha256: 2915ba1d963be5a0215313df3a0c6a62ff3406a972f2b2bd3446c16187154049
 # verilog-gap-sha256: 338b64ba883f6243d9f799d31c22f873e871a5977bbb9fc9c45ae3b5ea738c84
 # verilog-width-sha256: a1cef90f58dc984e69e1f6c35247090498553d4f8d10c57b1a1bcd2fc06aee05
 # verilog-closure-sha256: a80eea635da93dff681c7118cd3339e7b4bb679c83a2cf7137cc3eeccef6f39e
-# test-evidence-paths: 275
-# production-evidence-paths: 321
+# test-evidence-paths: 278
+# production-evidence-paths: 323
 # release-evidence-paths: 26
-# runtime-evidence-paths: 145
+# runtime-evidence-paths: 146
 # corpus-ctests: 36
 # required-status: execute
 #
-# B130-T9-ROWS: all 1294 required IDs are unique and in one of the eight
+# B130-T9-ROWS: all 1296 required IDs are unique and in one of the eight
 # reviewed SV/VHDL/mixed/SystemC/common release surfaces.
 # B130-T9-CLASSIFICATION: no required row remains parse, v1-target, deferred,
 # or an evidence gap; every row is reclassified only through its exact matrix

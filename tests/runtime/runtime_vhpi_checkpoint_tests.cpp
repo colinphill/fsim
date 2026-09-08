@@ -46,6 +46,8 @@ struct Hierarchy {
   VhdlVhpiObjectRegistry objects;
   fsim_vhpi_handle_v1 root{};
   fsim_vhpi_handle_v1 entity{};
+  fsim_vhpi_handle_v1 view{};
+  fsim_vhpi_handle_v1 view_element{};
   fsim_vhpi_handle_v1 signal{};
 
   explicit Hierarchy(const std::uint64_t identity) : objects(identity) {
@@ -55,15 +57,24 @@ struct Hierarchy {
     const auto made_entity = objects.create_object({
         VhdlVhpiObjectKind::Entity, made_root.value, "Top", {},
         VhdlVhpiSourceLocation{"design/top.vhd", 3, 1}});
+    const auto made_view = objects.create_object({
+        VhdlVhpiObjectKind::InterfaceView, made_entity.value, "Bus_View", {},
+        VhdlVhpiSourceLocation{"design/top.vhd", 5, 3}});
+    const auto made_view_element = objects.create_object({
+        VhdlVhpiObjectKind::ViewElement, made_view.value, "Ready", {},
+        VhdlVhpiSourceLocation{"design/top.vhd", 6, 5}});
     const std::array<std::int64_t, 1> index{7};
     const auto made_signal = objects.create_object({
         VhdlVhpiObjectKind::Signal, made_entity.value, "Data", index,
         VhdlVhpiSourceLocation{"design/top.vhd", 7, 3}});
     require_checkpoint(
-        made_root && made_entity && made_signal,
+        made_root && made_entity && made_view && made_view_element
+            && made_signal,
         "VHPI checkpoint hierarchy creation failed");
     root = made_root.value;
     entity = made_entity.value;
+    view = made_view.value;
+    view_element = made_view_element.value;
     signal = made_signal.value;
   }
 };
@@ -85,7 +96,9 @@ VhdlVhpiCheckpointError portable_error(
 void test_vhdl_vhpi_checkpoint_restart_and_artifact() {
   Hierarchy source{1'580};
   Hierarchy target{1'581};
-  const std::array exported{source.root, source.entity, source.signal};
+  const std::array exported{
+      source.root, source.entity, source.view, source.view_element,
+      source.signal};
   const auto saved_compatibility = compatibility("/build/original");
   const auto saved_native = native_state();
   const auto captured = capture_vhdl_vhpi_checkpoint(
@@ -95,7 +108,7 @@ void test_vhdl_vhpi_checkpoint_restart_and_artifact() {
           && captured.artifact.source_simulation_identity == 1'580
           && captured.artifact.host_size == sizeof(fsim_vhpi_host_v1)
           && captured.artifact.plugin_size == sizeof(fsim_vhpi_plugin_v1)
-          && captured.artifact.objects.size() == 3
+          && captured.artifact.objects.size() == 5
           && captured.artifact.objects.back().full_name
               == "work.top.data(7)"
           && captured.artifact.native_state.plugin_contexts == 1,

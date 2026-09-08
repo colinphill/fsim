@@ -818,6 +818,20 @@
                         0,
                         FSIM_JIT_FRAME_STATE_READY,
                         next_instruction);
+                } else if constexpr (std::is_same_v<OperationType, VhdlPslApi>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
+                } else if constexpr (std::is_same_v<OperationType, VhdlAssertApi>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
                 } else if constexpr (
                     std::is_same_v<OperationType, CoverageControl>) {
                     return_result(
@@ -888,6 +902,26 @@
                     branch_to_next();
                 } else if constexpr (
                     std::is_same_v<OperationType, RandomDistribution>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
+                } else if constexpr (
+                    std::is_same_v<OperationType, VhdlEnvironmentTime>
+                    || std::is_same_v<OperationType,
+                        VhdlEnvironmentTimeToString>
+                    || std::is_same_v<OperationType,
+                        VhdlEnvironmentDirectory>
+                    || std::is_same_v<OperationType,
+                        VhdlEnvironmentGetenv>
+                    || std::is_same_v<OperationType,
+                        VhdlEnvironmentCallPath>
+                    || std::is_same_v<OperationType,
+                        VhdlEnvironmentGetCallPath>
+                    || std::is_same_v<OperationType,
+                        VhdlReflectionApi>) {
                     return_result(
                         FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
                         instruction,
@@ -1016,10 +1050,16 @@
                         FSIM_JIT_FRAME_STATE_READY,
                         next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, Pause>) {
+                    if (operation.status) {
+                        synchronize_uses_to_frame();
+                    }
                     return_result(
                         FSIM_JIT_RESUME_STATUS_PAUSED, instruction, 0,
                         FSIM_JIT_FRAME_STATE_READY, next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, Stop>) {
+                    if (operation.status) {
+                        synchronize_uses_to_frame();
+                    }
                     return_result(
                         FSIM_JIT_RESUME_STATUS_STOPPED, instruction, 0,
                         FSIM_JIT_FRAME_STATE_STOPPED, next_instruction);

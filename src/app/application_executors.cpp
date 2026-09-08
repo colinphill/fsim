@@ -857,6 +857,10 @@ private:
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::CoverageQuery>(operation)
             || fsim::runtime::simir::operation_holds<
+                runtime::simir::VhdlPslApi>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::VhdlAssertApi>(operation)
+            || fsim::runtime::simir::operation_holds<
                 runtime::simir::CoverageControl>(operation)
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::CoverageAccess>(operation)
@@ -870,6 +874,20 @@ private:
                 runtime::simir::VcdControl>(operation)
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::CoverageDatabaseControl>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::VhdlEnvironmentTime>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::VhdlEnvironmentTimeToString>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::VhdlEnvironmentDirectory>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::VhdlEnvironmentGetenv>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::VhdlEnvironmentCallPath>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::VhdlEnvironmentGetCallPath>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::VhdlReflectionApi>(operation)
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::StochasticQueueOperation>(operation)
             || fsim::runtime::simir::operation_holds<

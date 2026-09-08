@@ -550,6 +550,10 @@ for (const auto& operation : process.operations) {
                 add_key_u64(
                     builder, "string-index",
                     value.string_index ? 1U : 0U);
+                add_key_u64(builder, "member-count", value.members.size());
+                for (const auto member : value.members) {
+                    add_key_u64(builder, "member", member);
+                }
             } else if constexpr (std::is_same_v<
                                      OperationType,
                                      runtime::simir::ContainerStringWrite>) {
@@ -1493,6 +1497,41 @@ for (const auto& operation : process.operations) {
                 add_key_u64(
                     builder, "kind",
                     static_cast<std::uint64_t>(value.kind));
+            } else if constexpr (std::is_same_v<OperationType, VhdlPslApi>) {
+                builder.add("operation", "VhdlPslApi");
+                add_key_u64(builder, "kind",
+                    static_cast<std::uint64_t>(value.kind));
+                add_key_u64(builder, "has-destination",
+                    value.destination.has_value() ? 1U : 0U);
+                if (value.destination) {
+                    add_key_u64(builder, "destination", *value.destination);
+                }
+                add_key_u64(builder, "has-enable",
+                    value.enable.has_value() ? 1U : 0U);
+                if (value.enable) {
+                    add_key_u64(builder, "enable", *value.enable);
+                }
+            } else if constexpr (std::is_same_v<OperationType, VhdlAssertApi>) {
+                builder.add("operation", "VhdlAssertApi");
+                add_key_u64(builder, "kind",
+                    static_cast<std::uint64_t>(value.kind));
+                const auto optional_register = [&](const std::string_view name,
+                                                   const auto& operand) {
+                    add_key_u64(builder, std::string { "has-" } + std::string { name },
+                        operand.has_value() ? 1U : 0U);
+                    if (operand) {
+                        add_key_u64(builder, name, *operand);
+                    }
+                };
+                optional_register("destination", value.destination);
+                optional_register("string-destination", value.string_destination);
+                optional_register("level", value.level);
+                optional_register("enable", value.enable);
+                optional_register("format", value.format);
+                optional_register("valid", value.valid);
+                builder.add("source-path", value.source.path);
+                add_key_u64(builder, "source-line", value.source.line);
+                add_key_u64(builder, "source-column", value.source.column);
             } else if constexpr (
                 std::is_same_v<OperationType, CoverageControl>) {
                 builder.add("operation", "CoverageControl");
@@ -1582,6 +1621,82 @@ for (const auto& operation : process.operations) {
                     value.second.has_value() ? 1U : 0U);
                 if (value.second)
                     add_key_u64(builder, "second", *value.second);
+            } else if constexpr (
+                std::is_same_v<OperationType, VhdlEnvironmentTime>) {
+                builder.add("operation", "VhdlEnvironmentTime");
+                add_key_u64(builder, "kind",
+                    static_cast<std::uint8_t>(value.kind));
+                add_key_u64(builder, "destination", value.destination);
+                add_key_u64(builder, "has-first", value.first ? 1U : 0U);
+                if (value.first)
+                    add_key_u64(builder, "first", *value.first);
+                add_key_u64(builder, "has-second", value.second ? 1U : 0U);
+                if (value.second)
+                    add_key_u64(builder, "second", *value.second);
+            } else if constexpr (
+                std::is_same_v<OperationType,
+                    VhdlEnvironmentTimeToString>) {
+                builder.add("operation", "VhdlEnvironmentTimeToString");
+                add_key_u64(builder, "destination", value.destination);
+                add_key_u64(builder, "record", value.record);
+                add_key_u64(builder, "fractional-digits",
+                    value.fractional_digits);
+            } else if constexpr (
+                std::is_same_v<OperationType,
+                    VhdlEnvironmentDirectory>) {
+                builder.add("operation", "VhdlEnvironmentDirectory");
+                add_key_u64(builder, "kind",
+                    static_cast<std::uint8_t>(value.kind));
+                const auto optional_id = [&](const std::string_view name,
+                                             const auto id) {
+                    add_key_u64(builder, std::string { "has-" } + std::string { name },
+                        id.has_value() ? 1U : 0U);
+                    if (id) {
+                        add_key_u64(builder, name, *id);
+                    }
+                };
+                optional_id("result", value.result);
+                optional_id("string-result", value.string_result);
+                optional_id("directory", value.directory);
+                optional_id("path", value.path);
+                optional_id("option", value.option);
+            } else if constexpr (
+                std::is_same_v<OperationType,
+                    VhdlEnvironmentGetenv>) {
+                builder.add("operation", "VhdlEnvironmentGetenv");
+                add_key_u64(builder, "destination", value.destination);
+                add_key_u64(builder, "name", value.name);
+            } else if constexpr (
+                std::is_same_v<OperationType,
+                    VhdlEnvironmentCallPath>) {
+                builder.add("operation", "VhdlEnvironmentCallPath");
+                add_key_u64(builder, "destination", value.destination);
+                add_key_u64(builder, "separator", value.separator);
+                builder.add("source-value-present",
+                    value.source_value ? "1" : "0");
+                if (value.source_value) {
+                    add_key_u64(
+                        builder, "source-value", *value.source_value);
+                }
+                builder.add("source-index-present",
+                    value.source_index ? "1" : "0");
+                if (value.source_index) {
+                    add_key_u64(
+                        builder, "source-index", *value.source_index);
+                }
+                builder.add("source-file", value.source.path.str());
+                add_key_u64(builder, "source-line", value.source.line);
+                add_key_u64(builder, "source-column", value.source.column);
+                builder.add("scope", value.scope.str());
+            } else if constexpr (
+                std::is_same_v<OperationType,
+                    VhdlEnvironmentGetCallPath>) {
+                builder.add("operation", "VhdlEnvironmentGetCallPath");
+                add_key_u64(builder, "destination", value.destination);
+                builder.add("source-file", value.source.path.str());
+                add_key_u64(builder, "source-line", value.source.line);
+                add_key_u64(builder, "source-column", value.source.column);
+                builder.add("scope", value.scope.str());
             } else if constexpr (
                 std::is_same_v<OperationType, StochasticQueueOperation>) {
                 builder.add("operation", "StochasticQueueOperation");
@@ -2081,10 +2196,80 @@ for (const auto& operation : process.operations) {
                 builder.add("operation", "SemaphorePut");
                 add_key_u64(builder, "receiver", value.receiver);
                 add_key_u64(builder, "keys", value.keys);
+            } else if constexpr (
+                std::is_same_v<
+                    OperationType, runtime::simir::VhdlReflectionApi>) {
+                builder.add("operation", "VhdlReflectionApi");
+                add_key_u64(
+                    builder, "kind", static_cast<std::uint8_t>(value.kind));
+                const auto add_optional_register =
+                    [&](const std::string_view name, const auto& operand) {
+                        builder.add(
+                            std::string { name } + "-present",
+                            operand.has_value() ? "1" : "0");
+                        if (operand) {
+                            add_key_u64(builder, name, *operand);
+                        }
+                    };
+                add_optional_register("destination", value.destination);
+                add_optional_register(
+                    "string-destination", value.string_destination);
+                add_optional_register("receiver", value.receiver);
+                add_optional_register("source", value.source);
+                add_optional_register("access-heap", value.access_heap);
+                add_key_u64(builder, "argument-count", value.arguments.size());
+                for (const auto argument : value.arguments) {
+                    add_key_u64(builder, "argument", argument);
+                }
+                add_optional_register("string-argument", value.string_argument);
+                add_key_u64(builder, "result-width", value.result_width);
+                const auto add_type = [&](const auto& self,
+                                          const runtime::simir::VhdlReflectionType& type)
+                    -> void {
+                    add_key_u64(builder, "type-class",
+                        static_cast<std::uint8_t>(type.type_class));
+                    builder.add("type-name", type.simple_name);
+                    add_key_u64(builder, "type-width", type.packed_width);
+                    add_key_u64(builder, "type-signed", type.signed_value);
+                    add_key_u64(builder, "type-offset", type.lsb_offset);
+                    add_key_u64(builder, "range-count", type.ranges.size());
+                    for (const auto& range : type.ranges) {
+                        add_key_u64(builder, "range-left",
+                            static_cast<std::uint64_t>(range.left));
+                        add_key_u64(builder, "range-right",
+                            static_cast<std::uint64_t>(range.right));
+                        add_key_u64(builder, "range-ascending", range.ascending);
+                    }
+                    add_key_u64(builder, "name-count", type.names.size());
+                    for (const auto& name : type.names) {
+                        builder.add("type-member-name", name);
+                    }
+                    add_key_u64(builder, "scale-count", type.scales.size());
+                    for (const auto scale : type.scales) {
+                        add_key_u64(builder, "type-scale", scale);
+                    }
+                    add_key_u64(builder, "child-count", type.children.size());
+                    for (const auto& child : type.children) {
+                        self(self, child);
+                    }
+                };
+                add_type(add_type, value.type);
+                builder.add("source-path", value.source_location.path);
+                add_key_u64(builder, "source-line", value.source_location.line);
+                add_key_u64(
+                    builder, "source-column", value.source_location.column);
             } else if constexpr (std::is_same_v<OperationType, Pause>) {
                 builder.add("operation", "Pause");
+                add_key_u64(
+                    builder, "status",
+                    value.status.value_or(
+                        std::numeric_limits<RegisterId>::max()));
             } else if constexpr (std::is_same_v<OperationType, Stop>) {
                 builder.add("operation", "Stop");
+                add_key_u64(
+                    builder, "status",
+                    value.status.value_or(
+                        std::numeric_limits<RegisterId>::max()));
             } else if constexpr (std::is_same_v<OperationType, Halt>) {
                 builder.add("operation", "Halt");
                 add_key_u64(

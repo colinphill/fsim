@@ -158,7 +158,7 @@ namespace {
             vh::Expression output;
             output.id = id;
             output.scope = scope;
-            output.kind = expression_kind(value.kind);
+            output.kind = expression_kind(value);
             output.text = value.text;
             output.source = span;
             output.origin = expression_origin;
@@ -202,15 +202,18 @@ namespace {
         }
 
         [[nodiscard]] vh::ExpressionKind expression_kind(
-            const frontend::ExpressionKind kind) const noexcept
+            const frontend::Expression& expression) const noexcept
         {
-            switch (kind) {
+            switch (expression.kind) {
             case frontend::ExpressionKind::Invalid:
                 return vh::ExpressionKind::invalid;
             case frontend::ExpressionKind::Identifier:
                 return vh::ExpressionKind::name;
             case frontend::ExpressionKind::IntegerLiteral:
-                return vh::ExpressionKind::integer_literal;
+                return expression.systemverilog_scalar_kind
+                        == frontend::SystemVerilogScalarKind::Real
+                    ? vh::ExpressionKind::real_literal
+                    : vh::ExpressionKind::integer_literal;
             case frontend::ExpressionKind::BooleanLiteral:
                 return vh::ExpressionKind::boolean_literal;
             case frontend::ExpressionKind::LogicLiteral:

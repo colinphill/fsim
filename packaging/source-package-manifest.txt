@@ -186,6 +186,7 @@ docs/v3-resume.md
 docs/verilog-2005-closure-audit.md
 docs/verilog-2005-tutorial.md
 docs/verilog-2005.md
+docs/vhdl-2019.md
 docs/vhdl-psl-closure-audit.md
 docs/vhdl-psl-tutorial.md
 docs/vhdl-psl.md
@@ -688,6 +689,7 @@ src/compiler/llvm_jit_operations_value.cpp
 src/compiler/llvm_jit_process_modules.tpp
 src/compiler/llvm_jit_validation.cpp
 src/compiler/llvm_jit_validation_class.hpp
+src/compiler/llvm_jit_validation_operations_prefix.tpp
 src/compiler/llvm_jit_validation_selection.cpp
 src/compiler/llvm_jit_validation_signal.hpp
 src/compiler/llvm_jit_validation_support.cpp
@@ -745,6 +747,7 @@ src/elaboration/elaborator_internal.hpp
 src/elaboration/elaborator_value_helpers.hpp
 src/elaboration/hierarchy_builder.cpp
 src/elaboration/hierarchy_builder_types.hpp
+src/elaboration/hierarchy_connect_ports.tpp
 src/elaboration/hierarchy_generic_interfaces.cpp
 src/elaboration/hierarchy_instantiate.cpp
 src/elaboration/hierarchy_instantiate_processes_and_children.tpp
@@ -970,6 +973,7 @@ src/runtime/simir_fork.cpp
 src/runtime/simir_format.cpp
 src/runtime/simir_internal.hpp
 src/runtime/simir_interpreter.cpp
+src/runtime/simir_interpreter_profiles.tpp
 src/runtime/simir_logic.cpp
 src/runtime/simir_module_path.cpp
 src/runtime/simir_random_distribution.cpp
@@ -1288,6 +1292,7 @@ tests/app/vhdl_float_application_test.cpp
 tests/app/vhdl_function_generic_application_test.cpp
 tests/app/vhdl_generic_subprogram_application_test.cpp
 tests/app/vhdl_ieee_integration_application_test.cpp
+tests/app/vhdl_ieee_integration_vhdl2019.tpp
 tests/app/vhdl_integer_shift_application_test.cpp
 tests/app/vhdl_logic9_application_test.cpp
 tests/app/vhdl_numeric_application_test.cpp

@@ -27,6 +27,40 @@ void test_vhdl_vhpi_error_and_handles() {
   using fsim::runtime::VhdlVhpiObjectError;
   using fsim::runtime::VhdlVhpiObjectKind;
   using fsim::runtime::VhdlVhpiObjectRegistry;
+  using fsim::runtime::VhdlVhpiPropertyKind;
+  using fsim::runtime::VhdlVhpiRelationshipKind;
+
+  const auto capabilities = VhdlVhpiObjectRegistry::capabilities();
+  require_vhpi_object(
+      capabilities.vhdl_revision == 2019U
+          && capabilities.object_kind_count
+              == static_cast<std::uint32_t>(VhdlVhpiObjectKind::ViewElement)
+                  + 1U
+          && capabilities.relationship_kind_count
+              == static_cast<std::uint32_t>(VhdlVhpiRelationshipKind::Parent)
+                  + 1U
+          && capabilities.property_kind_count
+              == static_cast<std::uint32_t>(
+                     VhdlVhpiPropertyKind::PackageDependencyCount)
+                  + 1U
+          && capabilities.maximum_index_dimensions == 32U
+          && capabilities.maximum_package_dependencies == 256U
+          && capabilities.selected_names && capabilities.source_locations
+          && capabilities.interface_views
+          && capabilities.package_provenance,
+      "VHPI capability discovery reports the complete 2019 information model");
+  require_vhpi_object(
+      VhdlVhpiObjectRegistry::supports(VhdlVhpiObjectKind::InterfaceView)
+          && VhdlVhpiObjectRegistry::supports(VhdlVhpiObjectKind::ViewElement)
+          && VhdlVhpiObjectRegistry::supports(VhdlVhpiRelationshipKind::Parent)
+          && VhdlVhpiObjectRegistry::supports(VhdlVhpiPropertyKind::FullName)
+          && !VhdlVhpiObjectRegistry::supports(
+              static_cast<VhdlVhpiObjectKind>(999U))
+          && !VhdlVhpiObjectRegistry::supports(
+              static_cast<VhdlVhpiRelationshipKind>(999U))
+          && !VhdlVhpiObjectRegistry::supports(
+              static_cast<VhdlVhpiPropertyKind>(999U)),
+      "VHPI capability discovery rejects unknown model identities");
 
   VhdlVhpiErrorState errors{301};
   VhdlVhpiErrorState other_errors{302};

@@ -5,6 +5,7 @@
 
 #include "elaboration_targets.hpp"
 #include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/parser.hpp"
 #include "fsim/frontend/systemverilog_scalar_folding.hpp"
 
 #include <algorithm>
@@ -1177,8 +1178,13 @@ private:
         const Expression&, std::size_t, const frontend::Type*);
     ExpressionAttempt lower_vhdl_protected_expression(
         const Expression&, std::size_t, const frontend::Type*);
+    ExpressionAttempt lower_vhdl_reflection_expression(
+        const Expression&, std::size_t, const frontend::Type*);
+    std::optional<StringRegisterId> lower_vhdl_reflection_string_expression(
+        const Expression&);
     ExpressionAttempt lower_vhdl_physical_expression(
         const Expression&, std::size_t, const frontend::Type*);
+    bool lower_vhdl_simulator_procedure_call(const Statement&);
     bool lower_vhdl_protected_procedure_call(const Statement&);
     bool lower_vhdl_file_procedure_call(const Statement&);
     bool lower_vhdl_textio_procedure_call(const Statement&);
@@ -1197,6 +1203,10 @@ private:
     std::optional<RegisterId> vhdl_access_index(const Expression&, const frontend::Type&);
     bool validate_vhdl_access_handle(
         const VhdlAccessHeap&, RegisterId, const frontend::SourceSpan&);
+    void emit_vhdl_access_reclamation(
+        const frontend::Type&, const VhdlAccessHeap&, RegisterId);
+    void emit_vhdl_access_scope_cleanup(
+        const std::vector<frontend::VariableDeclaration>&);
     ExpressionAttempt lower_vhdl_conversion_expression(
         const Expression&, std::size_t, const frontend::Type*);
     ExpressionAttempt lower_vhdl_composite_expression(const Expression&,
@@ -1385,8 +1395,7 @@ private:
     ExpressionAttempt lower_multidimensional_container_read(
         const Expression& expression);
     struct UnpackedAggregateMemberReference {
-        const frontend::Type* container_type { };
-        const frontend::Type* leaf_type { };
+        frontend::Type leaf_type;
         std::vector<std::uint32_t> members;
     };
     [[nodiscard]] std::optional<UnpackedAggregateMemberReference>
@@ -1434,6 +1443,10 @@ private:
     ExpressionAttempt lower_vhdl_fixed_function_expression(const Expression&, std::size_t, const frontend::Type*);
     ExpressionAttempt lower_vhdl_float_function_expression(const Expression&, std::size_t, const frontend::Type*);
     ExpressionAttempt lower_vhdl_numeric_function_expression(const Expression&, std::size_t, const frontend::Type*);
+    ExpressionAttempt lower_vhdl_simulator_function_expression(
+        const Expression&, std::size_t, const frontend::Type*);
+    ExpressionAttempt lower_vhdl_environment_binary_expression(
+        const Expression&, const frontend::Type*);
     ExpressionAttempt lower_user_function_expression(const Expression& expression,
         std::size_t expected_width,
         const frontend::Type* expected_type);
@@ -1562,6 +1575,10 @@ private:
         const std::unordered_set<std::size_t>& roots) const;
 
     void validate_read_only_signal_writes(
+        const frontend::SourceSpan& source);
+    [[nodiscard]] bool validate_vhdl_mode_view_write(
+        runtime::simir::SignalId signal,
+        const frontend::Expression& target,
         const frontend::SourceSpan& source);
     void collect_identifiers(
         const Expression& expression,

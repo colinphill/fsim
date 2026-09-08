@@ -36,6 +36,18 @@ enum class VhdlVhpiObjectKind : std::uint32_t {
   File,
   Type,
   Subtype,
+  Context,
+  Interface,
+  Port,
+  Generic,
+  Alias,
+  Attribute,
+  EnumerationLiteral,
+  PhysicalUnit,
+  RecordElement,
+  ArrayElement,
+  InterfaceView,
+  ViewElement,
 };
 
 enum class VhdlVhpiObjectError {
@@ -53,6 +65,7 @@ enum class VhdlVhpiObjectError {
   InvalidProvenance,
   NotFound,
   HasChildren,
+  InvalidProperty,
   ResourceLimit,
 };
 
@@ -142,6 +155,58 @@ enum class VhdlVhpiRelationshipKind : std::uint32_t {
   Children,
   Regions,
   Declarations,
+  Parent,
+};
+
+enum class VhdlVhpiPropertyKind : std::uint32_t {
+  ObjectKind,
+  Parent,
+  LiveChildren,
+  Ordinal,
+  Name,
+  SelectedName,
+  FullName,
+  IndexCount,
+  SourceFile,
+  SourceLine,
+  SourceColumn,
+  LanguageStandard,
+  PredefinedEnvironment,
+  CompatibilityProfile,
+  PackageDependencyCount,
+};
+
+enum class VhdlVhpiPropertyValueKind : std::uint32_t {
+  ObjectKind,
+  Handle,
+  UnsignedInteger,
+  String,
+};
+
+struct VhdlVhpiPropertyResult {
+  VhdlVhpiPropertyValueKind kind{VhdlVhpiPropertyValueKind::UnsignedInteger};
+  VhdlVhpiObjectKind object_kind{VhdlVhpiObjectKind::Root};
+  fsim_vhpi_handle_v1 handle{};
+  std::uint64_t unsigned_integer{};
+  std::string string;
+  VhdlVhpiObjectError error{VhdlVhpiObjectError::None};
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return error == VhdlVhpiObjectError::None;
+  }
+};
+
+struct VhdlVhpiCapabilities {
+  std::uint32_t vhdl_revision{2019U};
+  std::uint32_t object_kind_count{};
+  std::uint32_t relationship_kind_count{};
+  std::uint32_t property_kind_count{};
+  std::uint32_t maximum_index_dimensions{};
+  std::uint32_t maximum_package_dependencies{};
+  bool selected_names{};
+  bool source_locations{};
+  bool interface_views{};
+  bool package_provenance{};
 };
 
 struct VhdlVhpiIteratorResult {
@@ -182,6 +247,16 @@ class VhdlVhpiObjectRegistry final {
       fsim_vhpi_handle_v1 parent,
       std::string_view name,
       std::span<const std::int64_t> indices = {}) const;
+  [[nodiscard]] static VhdlVhpiCapabilities capabilities() noexcept;
+  [[nodiscard]] static bool supports(
+      VhdlVhpiObjectKind kind) noexcept;
+  [[nodiscard]] static bool supports(
+      VhdlVhpiRelationshipKind relationship) noexcept;
+  [[nodiscard]] static bool supports(
+      VhdlVhpiPropertyKind property) noexcept;
+  [[nodiscard]] VhdlVhpiPropertyResult property(
+      fsim_vhpi_handle_v1 handle,
+      VhdlVhpiPropertyKind property) const;
   [[nodiscard]] VhdlVhpiObjectError release_object(
       fsim_vhpi_handle_v1 handle);
 

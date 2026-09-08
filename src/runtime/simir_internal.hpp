@@ -560,6 +560,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     struct FileState {
         ProcessId owner { };
         std::filesystem::path path;
+        std::string logical_name;
         std::string mode;
         std::unique_ptr<std::fstream> stream;
         std::optional<std::uint8_t> pushback;
@@ -586,6 +587,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<std::vector<ContainerObjectId>>
         signal_container_aliases;
     std::filesystem::path file_root;
+    // STD.ENV DIR_WORKINGDIR is simulator-local state. Never mutate the host
+    // process working directory, which would race parallel simulation.
+    std::filesystem::path vhdl_working_directory;
     std::vector<std::string> plusargs;
     SystemVerilogTimeFormat time_format;
     std::map<FileHandle, FileState> files;
@@ -736,6 +740,23 @@ struct Interpreter::Impl : SchedulerBatchTask {
     ReportHook report_hook;
     CoverageSampleHook coverage_sample_hook;
     CoverageQueryHook coverage_query_hook;
+    VhdlPslApiHook vhdl_psl_api_hook;
+    std::array<std::uint64_t, 4> vhdl_assert_counts { };
+    std::array<bool, 4> vhdl_assert_enabled { true, true, true, true };
+    std::array<std::string, 4> vhdl_assert_formats {
+        "{r}", "{r}", "{r}", "{r}" };
+    AssertionSeverity vhdl_read_severity { AssertionSeverity::error };
+    struct VhdlReflectionMirror {
+        VhdlReflectionType type;
+        PackedLogic4 value { 0U };
+        bool has_value { };
+        std::optional<PackedLogic4> designated_value;
+    };
+    // Index zero is the null access value. Positive identities are stable for
+    // the simulation lifetime and contain owning value snapshots.
+    std::vector<VhdlReflectionMirror> vhdl_reflection_mirrors {
+        VhdlReflectionMirror { }
+    };
     CoverageControlHook coverage_control_hook;
     CoverageAccessHook coverage_access_hook;
     CodeCoverageCounters code_coverage_counters;
@@ -764,6 +785,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     bool started { };
     bool validation_only { };
     bool stopped_by_design { };
+    std::optional<std::int64_t> simulator_status;
     bool finals_ran { };
     bool process_profile_enabled { };
     bool process_profile_reported { };
@@ -1074,6 +1096,17 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void handle_boundary(ProcessState& process,
         InstructionIndex instruction,
         InstructionIndex next_instruction);
+    void execute_vhdl_assert_api(
+        ProcessState& process, const VhdlAssertApi& operation);
+    void execute_vhdl_reflection_api(
+        ProcessState& process, const VhdlReflectionApi& operation);
+    void execute_vhdl_report(
+        ProcessState& process,
+        InstructionIndex instruction,
+        std::string_view message,
+        AssertionSeverity severity,
+        const SourceLocation& source,
+        bool standalone);
     void handle_external_boundary(
         ProcessState& process,
         InstructionIndex instruction,

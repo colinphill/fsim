@@ -44,7 +44,386 @@ namespace {
         return false;
     }
 
+    [[nodiscard]] std::string reflection_simple_name(
+        const frontend::Type& type)
+    {
+        auto name = !type.vhdl_type_declaration.empty()
+            ? type.vhdl_type_declaration
+            : !type.nominal_type.empty() ? type.nominal_type : type.spelling;
+        const auto separator = name.find_last_of(".:@");
+        if (separator != std::string::npos) {
+            name.erase(0U, separator + 1U);
+        }
+        return name;
+    }
+
+    [[nodiscard]] VhdlReflectionType reflection_type(
+        const frontend::Type& source, const std::uint64_t offset = 0U)
+    {
+        VhdlReflectionType result;
+        result.simple_name = reflection_simple_name(source);
+        result.signed_value = source.is_signed;
+        result.lsb_offset = offset;
+        if (const auto width = source.width(); width
+            && *width <= std::numeric_limits<std::uint32_t>::max()) {
+            result.packed_width = static_cast<std::uint32_t>(*width);
+        }
+        if (!source.enumeration_literals.empty()) {
+            result.type_class = VhdlReflectionClass::enumeration;
+            result.names = source.enumeration_literals;
+            const auto range = source.enumeration_range.value_or(
+                frontend::EnumerationRange { 0,
+                    static_cast<std::int64_t>(source.enumeration_literals.size()) - 1,
+                    false });
+            result.ranges.push_back(
+                { range.left, range.right, !range.descending });
+        } else if (source.vhdl_physical) {
+            result.type_class = VhdlReflectionClass::physical;
+            const auto range = source.vhdl_physical->resolved_range
+                .value_or(frontend::IntegerRange {
+                    std::numeric_limits<std::int64_t>::min(),
+                    std::numeric_limits<std::int64_t>::max(), false });
+            result.ranges.push_back(
+                { range.left, range.right, !range.descending });
+            for (const auto& unit : source.vhdl_physical->units) {
+                result.names.push_back(unit.name);
+                result.scales.push_back(static_cast<std::uint64_t>(
+                    unit.scale_factor.value_or(1)));
+            }
+        } else if (!source.packed_members.empty()) {
+            result.type_class = VhdlReflectionClass::record;
+            for (const auto& member : source.packed_members) {
+                result.names.push_back(member.name);
+                frontend::Type member_type;
+                if (!member.nested_types.empty()) {
+                    member_type = member.nested_types.front();
+                } else {
+                    member_type.domain = member.domain;
+                    member_type.spelling = member.spelling;
+                    member_type.packed_range = member.packed_range;
+                    member_type.is_signed = member.is_signed;
+                }
+                result.children.push_back(
+                    reflection_type(member_type, member.lsb_offset));
+            }
+        } else if (source.vhdl_array) {
+            result.type_class = VhdlReflectionClass::array;
+            for (const auto& dimension : source.vhdl_array->dimensions) {
+                if (dimension.range) {
+                    result.ranges.push_back({ dimension.range->left,
+                        dimension.range->right,
+                        !dimension.range->descending });
+                }
+            }
+            if (!source.vhdl_array->element_types.empty()) {
+                result.children.push_back(
+                    reflection_type(source.vhdl_array->element_types.front()));
+            }
+        } else if (source.vhdl_access) {
+            result.type_class = VhdlReflectionClass::access;
+            result.packed_width = source.vhdl_access->handle_width;
+            if (!source.vhdl_access->designated_types.empty()) {
+                result.children.push_back(reflection_type(
+                    source.vhdl_access->designated_types.front()));
+            }
+        } else if (source.vhdl_file) {
+            result.type_class = VhdlReflectionClass::file;
+            result.packed_width = 32U;
+            if (!source.vhdl_file->element_types.empty()) {
+                result.children.push_back(
+                    reflection_type(source.vhdl_file->element_types.front()));
+            }
+        } else if (source.vhdl_protected) {
+            result.type_class = VhdlReflectionClass::protected_type;
+            result.packed_width = 0U;
+        } else if (source.spelling == "real"
+            || source.systemverilog_scalar
+                == frontend::SystemVerilogScalarKind::Real) {
+            result.type_class = VhdlReflectionClass::floating;
+            result.packed_width = 64U;
+        } else {
+            result.type_class = VhdlReflectionClass::integer;
+            const auto range = source.integer_range.value_or(
+                frontend::IntegerRange {
+                    std::numeric_limits<std::int64_t>::min(),
+                    std::numeric_limits<std::int64_t>::max(), false });
+            result.ranges.push_back(
+                { range.left, range.right, !range.descending });
+        }
+        return result;
+    }
+
+    [[nodiscard]] bool reflection_mirror_type(const frontend::Type* type)
+    {
+        if (type == nullptr) {
+            return false;
+        }
+        const auto name = reflection_simple_name(*type);
+        return name == "value_mirror" || name == "subtype_mirror"
+            || name.ends_with("_value_mirror")
+            || name.ends_with("_subtype_mirror");
+    }
+
+    [[nodiscard]] std::optional<VhdlReflectionClass>
+    reflection_conversion_class(const std::string_view method)
+    {
+        if (method == "to_enumeration") return VhdlReflectionClass::enumeration;
+        if (method == "to_integer") return VhdlReflectionClass::integer;
+        if (method == "to_floating") return VhdlReflectionClass::floating;
+        if (method == "to_physical") return VhdlReflectionClass::physical;
+        if (method == "to_record") return VhdlReflectionClass::record;
+        if (method == "to_array") return VhdlReflectionClass::array;
+        if (method == "to_access") return VhdlReflectionClass::access;
+        if (method == "to_file") return VhdlReflectionClass::file;
+        if (method == "to_protected") return VhdlReflectionClass::protected_type;
+        return std::nullopt;
+    }
+
+    [[nodiscard]] SourceLocation reflection_location(
+        const frontend::SourceSpan& span)
+    {
+        return SourceLocation { span.source_name.str(),
+            static_cast<std::uint32_t>(span.begin.line),
+            static_cast<std::uint32_t>(span.begin.column) };
+    }
+
 } // namespace
+
+Lowerer::ExpressionAttempt Lowerer::lower_vhdl_reflection_expression(
+    const Expression& expression,
+    const std::size_t expected_width,
+    const frontend::Type* expected_type)
+{
+    if (vhdl_standard_ < frontend::VhdlStandard::Vhdl2019) {
+        return ExpressionAttempt { };
+    }
+    if (expression.kind == ExpressionKind::Call
+        && expression.text == "'reflect"
+        && expression.operands.size() == 1U
+        && expression.operands.front().kind == ExpressionKind::Identifier) {
+        const auto& prefix = expression.operands.front();
+        const auto* object = object_type(prefix.text);
+        const auto* type_mark = visible_type_mark(prefix.text);
+        const bool value_mirror = object != nullptr;
+        const auto* reflected = value_mirror ? object : type_mark;
+        if (reflected == nullptr || expected_width != 32U
+            || !reflection_mirror_type(expected_type)) {
+            report("FSIM-ELAB-VHREFLECT-001",
+                "'reflect requires a resolved VHDL type or object and a matching reflection mirror context",
+                expression.span);
+            return ExpressionAttempt { std::nullopt };
+        }
+        auto descriptor = reflection_type(*reflected);
+        std::optional<RegisterId> source;
+        if (value_mirror && descriptor.packed_width != 0U) {
+            source = lower_expression(prefix, descriptor.packed_width, reflected);
+            if (!source) return ExpressionAttempt { std::nullopt };
+        }
+        std::optional<ContainerRegisterId> access_heap;
+        if (value_mirror && reflected->vhdl_access) {
+            const auto* heap = vhdl_access_heap(*reflected, expression.span);
+            if (heap == nullptr) {
+                return ExpressionAttempt { std::nullopt };
+            }
+            access_heap = heap->objects;
+        }
+        const auto destination = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        VhdlReflectionApi operation;
+        operation.kind = value_mirror
+            ? VhdlReflectionApiKind::create_value
+            : VhdlReflectionApiKind::create_subtype;
+        operation.destination = destination;
+        operation.source = source;
+        operation.access_heap = access_heap;
+        operation.result_width = 32U;
+        operation.type = std::move(descriptor);
+        operation.source_location = reflection_location(expression.span);
+        process_.operations.emplace_back(std::move(operation));
+        return destination;
+    }
+
+    if ((expression.kind != ExpressionKind::Call
+            && expression.kind != ExpressionKind::Identifier)
+        || expression.text.starts_with("@")) {
+        return ExpressionAttempt { };
+    }
+    const auto selected = protected_name(expression.text);
+    if (!selected || !reflection_mirror_type(object_type(selected->object))) {
+        return ExpressionAttempt { };
+    }
+    if (expected_width == 0U
+        || expected_width > std::numeric_limits<std::uint32_t>::max()) {
+        report("FSIM-ELAB-VHREFLECT-002",
+            "reflection method result has no bounded packed representation",
+            expression.span);
+        return ExpressionAttempt { std::nullopt };
+    }
+    const auto receiver = lower_expression(Expression {
+        ExpressionKind::Identifier, selected->object, { }, expression.span },
+        32U, object_type(selected->object));
+    if (!receiver) return ExpressionAttempt { std::nullopt };
+
+    auto kind = VhdlReflectionApiKind::get_type_class;
+    VhdlReflectionType conversion;
+    const auto* receiver_type = object_type(selected->object);
+    const auto receiver_kind = receiver_type == nullptr
+        ? std::string { } : reflection_simple_name(*receiver_type);
+    if (selected->method == "get_type_class"
+        || selected->method == "get_value_class") {
+        kind = VhdlReflectionApiKind::get_type_class;
+    } else if (selected->method == "get_subtype_mirror") {
+        kind = VhdlReflectionApiKind::get_subtype_mirror;
+    } else if (selected->method == "to_subtype_mirror"
+        || selected->method == "to_value_mirror") {
+        kind = VhdlReflectionApiKind::convert_generic;
+    } else if (const auto target = reflection_conversion_class(selected->method)) {
+        kind = VhdlReflectionApiKind::convert;
+        conversion.type_class = *target;
+    } else if (selected->method == "enumeration_literal") kind = VhdlReflectionApiKind::enumeration_literal;
+    else if (selected->method == "pos") kind = VhdlReflectionApiKind::pos;
+    else if (selected->method == "left") kind = VhdlReflectionApiKind::left;
+    else if (selected->method == "right") kind = VhdlReflectionApiKind::right;
+    else if (selected->method == "low") kind = VhdlReflectionApiKind::low;
+    else if (selected->method == "high") kind = VhdlReflectionApiKind::high;
+    else if (selected->method == "length") kind = VhdlReflectionApiKind::length;
+    else if (selected->method == "ascending") kind = VhdlReflectionApiKind::ascending;
+    else if (selected->method == "value") kind = VhdlReflectionApiKind::value;
+    else if (selected->method == "units_length") kind = VhdlReflectionApiKind::units_length;
+    else if (selected->method == "unit_index") kind = VhdlReflectionApiKind::unit_index;
+    else if (selected->method == "scale") kind = VhdlReflectionApiKind::scale;
+    else if (selected->method == "element_index") kind = VhdlReflectionApiKind::record_element_index;
+    else if (selected->method == "element_subtype") {
+        kind = receiver_kind.starts_with("array_")
+            ? VhdlReflectionApiKind::array_element_subtype
+            : VhdlReflectionApiKind::record_element_subtype;
+    } else if (selected->method == "get") {
+        kind = receiver_kind.starts_with("access_")
+            ? VhdlReflectionApiKind::access_get
+            : VhdlReflectionApiKind::aggregate_get;
+    }
+    else if (selected->method == "dimensions") kind = VhdlReflectionApiKind::dimensions;
+    else if (selected->method == "index_subtype") kind = VhdlReflectionApiKind::array_index_subtype;
+    else if (selected->method == "designated_subtype") kind = VhdlReflectionApiKind::designated_subtype;
+    else if (selected->method == "is_null") kind = VhdlReflectionApiKind::is_null;
+    else if (selected->method == "get_file_open_kind") kind = VhdlReflectionApiKind::file_open_kind;
+    else {
+        return ExpressionAttempt { };
+    }
+
+    VhdlReflectionApi operation;
+    operation.kind = kind;
+    operation.destination = allocate_register(
+        expected_width,
+        expected_type != nullptr ? expected_type->domain
+                                 : frontend::ValueDomain::Bit2);
+    operation.receiver = *receiver;
+    operation.result_width = static_cast<std::uint32_t>(expected_width);
+    operation.type = std::move(conversion);
+    operation.source_location = reflection_location(expression.span);
+    for (const auto& operand : expression.operands) {
+        if (is_string_expression(operand)) {
+            if (operation.string_argument) {
+                report("FSIM-ELAB-VHREFLECT-003",
+                    "reflection method accepts at most one string selector",
+                    operand.span);
+                return ExpressionAttempt { std::nullopt };
+            }
+            operation.string_argument = lower_string_expression(operand);
+            if (!operation.string_argument) return ExpressionAttempt { std::nullopt };
+        } else {
+            const auto operand_type = vhdl_expression_type(operand);
+            const auto operand_width = operand_type
+                ? operand_type->width() : std::optional<std::uint64_t> { };
+            const bool index_vector = operand_type
+                && operand_type->vhdl_array
+                && !operand_type->vhdl_array->element_types.empty()
+                && operand_type->vhdl_array->element_types.front().domain
+                    == frontend::ValueDomain::Integer
+                && operand_width && *operand_width > 64U
+                && *operand_width % 64U == 0U;
+            if (index_vector) {
+                const auto count = *operand_width / 64U;
+                if (count > 32U
+                    || *operand_width
+                        > std::numeric_limits<std::uint32_t>::max()) {
+                    report("FSIM-ELAB-VHREFLECT-003",
+                        "reflection index vector exceeds 32 dimensions",
+                        operand.span);
+                    return ExpressionAttempt { std::nullopt };
+                }
+                const auto packed_indices = lower_expression(
+                    operand, static_cast<std::size_t>(*operand_width),
+                    &*operand_type);
+                if (!packed_indices) {
+                    return ExpressionAttempt { std::nullopt };
+                }
+                for (std::uint64_t index = 0U; index < count; ++index) {
+                    const auto argument = allocate_register(
+                        64U, frontend::ValueDomain::Integer);
+                    process_.operations.emplace_back(Extract { argument,
+                        *packed_indices,
+                        static_cast<std::uint32_t>(
+                            (count - index - 1U) * 64U), 64U });
+                    operation.arguments.push_back(argument);
+                }
+                continue;
+            }
+            auto argument = lower_expression(operand, 64U);
+            if (!argument) return ExpressionAttempt { std::nullopt };
+            if (register_width(*argument) != 64U) {
+                *argument = resize_register(*argument, 64U, true);
+            }
+            operation.arguments.push_back(*argument);
+        }
+    }
+    const auto destination = *operation.destination;
+    process_.operations.emplace_back(std::move(operation));
+    return destination;
+}
+
+std::optional<StringRegisterId>
+Lowerer::lower_vhdl_reflection_string_expression(
+    const Expression& expression)
+{
+    if (vhdl_standard_ < frontend::VhdlStandard::Vhdl2019
+        || (expression.kind != ExpressionKind::Call
+            && expression.kind != ExpressionKind::Identifier)) {
+        return std::nullopt;
+    }
+    const auto selected = protected_name(expression.text);
+    if (!selected || !reflection_mirror_type(object_type(selected->object))) {
+        return std::nullopt;
+    }
+    auto kind = VhdlReflectionApiKind::simple_name;
+    if (selected->method == "simple_name") kind = VhdlReflectionApiKind::simple_name;
+    else if (selected->method == "image") kind = VhdlReflectionApiKind::image;
+    else if (selected->method == "unit_name") kind = VhdlReflectionApiKind::unit_name;
+    else if (selected->method == "element_name") kind = VhdlReflectionApiKind::record_element_name;
+    else if (selected->method == "get_file_logical_name") kind = VhdlReflectionApiKind::file_logical_name;
+    else return std::nullopt;
+
+    const auto receiver = lower_expression(Expression {
+        ExpressionKind::Identifier, selected->object, { }, expression.span },
+        32U, object_type(selected->object));
+    if (!receiver) return std::nullopt;
+    VhdlReflectionApi operation;
+    operation.kind = kind;
+    operation.string_destination = allocate_string_register();
+    operation.receiver = *receiver;
+    operation.source_location = reflection_location(expression.span);
+    for (const auto& operand : expression.operands) {
+        auto argument = lower_expression(operand, 64U);
+        if (!argument) return std::nullopt;
+        if (register_width(*argument) != 64U) {
+            *argument = resize_register(*argument, 64U, true);
+        }
+        operation.arguments.push_back(*argument);
+    }
+    const auto destination = *operation.string_destination;
+    process_.operations.emplace_back(std::move(operation));
+    return destination;
+}
 
 Lowerer::ExpressionAttempt
 Lowerer::lower_vhdl_protected_expression(
@@ -52,6 +431,11 @@ Lowerer::lower_vhdl_protected_expression(
     const std::size_t expected_width,
     const frontend::Type* expected_type)
 {
+    auto reflection = lower_vhdl_reflection_expression(
+        expression, expected_width, expected_type);
+    if (reflection.handled) {
+        return reflection;
+    }
     if ((expression.kind != ExpressionKind::Call
             && expression.kind != ExpressionKind::Identifier)
         || expression.text.starts_with("@")) {

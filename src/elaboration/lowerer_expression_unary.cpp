@@ -276,7 +276,8 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
         && expression.operands.size() == 1
         && (expression.text == "+"
             || expression.text == "-")) {
-        if (language_ == frontend::Language::SystemVerilog2017
+        if ((language_ == frontend::Language::SystemVerilog2017
+                || language_ == frontend::Language::Vhdl2008)
             && expected_type != nullptr
             && expected_type->systemverilog_scalar
                 != frontend::SystemVerilogScalarKind::None) {
@@ -327,6 +328,19 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
                 return destination;
             }
         }
+        const auto vhdl_operand_type =
+            language_ == frontend::Language::Vhdl2008
+            ? vhdl_expression_type(expression.operands[0])
+            : std::optional<frontend::Type> { };
+        const auto* scalar_type = expected_type != nullptr
+                && expected_type->systemverilog_scalar
+                    != frontend::SystemVerilogScalarKind::None
+            ? expected_type
+            : vhdl_operand_type
+                    && vhdl_operand_type->systemverilog_scalar
+                        != frontend::SystemVerilogScalarKind::None
+            ? &*vhdl_operand_type
+            : nullptr;
         const auto source_width = language_ == frontend::Language::SystemVerilog2017
             ? std::max(
                   expected_width,
@@ -335,7 +349,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
             : infer_width(expression.operands[0])
                   .value_or(expected_width);
         auto source = lower_expression(
-            expression.operands[0], source_width);
+            expression.operands[0], source_width, scalar_type);
         if (source
             && language_
                 == frontend::Language::SystemVerilog2017
@@ -347,6 +361,23 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
         }
         if (!source || expression.text == "+") {
             return source;
+        }
+        if (language_ == frontend::Language::Vhdl2008
+            && scalar_type != nullptr) {
+            const auto zero = allocate_register(
+                64U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(LoadConstant {
+                zero, PackedLogic4::from_aval_bval(
+                          64U, std::bit_cast<std::uint64_t>(0.0), 0U) });
+            const auto destination = allocate_register(
+                64U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(SystemVerilogScalarBinary {
+                runtime::SystemVerilogScalarBinaryOperator::Subtract,
+                destination, zero, *source,
+                frontend::SystemVerilogScalarKind::Real,
+                frontend::SystemVerilogScalarKind::Real,
+                frontend::SystemVerilogScalarKind::Real });
+            return destination;
         }
         if (language_ == frontend::Language::Vhdl2008
             && register_domain(*source)

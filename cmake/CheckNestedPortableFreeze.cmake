@@ -116,14 +116,14 @@ set(FSIM_DESIGN_CODEC
 set(FSIM_DESIGN_TEST
   "${FSIM_SOURCE_DIR}/tests/app/application_test_artifact_phases.cpp")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_HEADER}"
-  "kRuntimeStateSchema = 51"
+  "kRuntimeStateSchema = 59"
   "kSemanticStateSchema = 4"
   "kDesignIrStateSchema = 4"
   "kClassStateSchema = 11"
   "kSystemVerilogConstraintHirStateSchema = 7"
   "kSystemVerilogCoverageStateSchema = 5"
   "kSystemVerilogUvmStateSchema = 3"
-  "kVhdlHirStateSchema = 3")
+  "kVhdlHirStateSchema = 4")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_CODEC}"
   "kMaximumNesting = 1024"
   "design state string exceeds the payload"
@@ -132,7 +132,7 @@ fsim_require_nested_portable_tokens("${FSIM_DESIGN_CODEC}"
   "design state exceeds the safe structural nesting depth"
   "design state contains trailing bytes")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_TEST}"
-  "kRuntimeStateSchema == 51"
+  "kRuntimeStateSchema == 59"
   "kSystemVerilogCoverageStateSchema == 5"
   "kSystemVerilogUvmStateSchema == 3"
   "future-coverage-state.bin"

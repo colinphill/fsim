@@ -1074,9 +1074,20 @@ struct VhdlPslExecution::Impl {
                         switch (attempt.outcome) {
                         case VhdlPslAttemptOutcome::pass:
                             ++item.passes;
+                            if (directive_kinds.at(coverage_index)
+                                    == runtime::VhdlPslDirectiveKind::cover
+                                || (directive_kinds.at(coverage_index)
+                                        == runtime::VhdlPslDirectiveKind::assertion
+                                    && cover_assert_enabled)) {
+                                goals_reached.at(coverage_index) = true;
+                            }
                             break;
                         case VhdlPslAttemptOutcome::failure:
                             ++item.failures;
+                            if (directive_kinds.at(coverage_index)
+                                == runtime::VhdlPslDirectiveKind::assertion) {
+                                assert_failed = true;
+                            }
                             break;
                         case VhdlPslAttemptOutcome::vacuous:
                             ++item.vacuous;
@@ -1106,6 +1117,8 @@ struct VhdlPslExecution::Impl {
                     item.kind = coverage_kind(directive_kind(directive.kind));
                     item.slot = static_cast<std::uint32_t>(index);
                     item.source_span = directive.source.value();
+                    directive_kinds.push_back(directive_kind(directive.kind));
+                    goals_reached.push_back(false);
                     coverage.push_back(std::move(item));
                 }
             }
@@ -1177,6 +1190,11 @@ struct VhdlPslExecution::Impl {
     std::vector<ClockBinding> clocks;
     std::vector<SignalBinding> samples;
     std::vector<ConcurrentAssertionCoverage> coverage;
+    std::vector<runtime::VhdlPslDirectiveKind> directive_kinds;
+    std::vector<bool> goals_reached;
+    bool assert_failed { };
+    bool cover_assert_enabled { };
+    bool cover_assert_ever_enabled { };
     runtime::VhdlPslCompletionHook completion_hook;
 };
 
@@ -1226,6 +1244,80 @@ const std::vector<runtime::VhdlPslAttemptSnapshot>& VhdlPslExecution::attempts()
 std::vector<ConcurrentAssertionCoverage> VhdlPslExecution::coverage() const
 {
     return impl_->coverage;
+}
+
+bool VhdlPslExecution::apply_api(
+    const runtime::simir::VhdlPslApiKind kind,
+    const std::optional<bool> enable)
+{
+    using Kind = runtime::simir::VhdlPslApiKind;
+    if (kind == Kind::assert_failed) {
+        return impl_->assert_failed;
+    }
+    if (kind == Kind::get_cover_assert) {
+        return impl_->cover_assert_enabled;
+    }
+    if (kind == Kind::is_assert_covered) {
+        bool any_assert { };
+        bool all_covered = true;
+        for (std::size_t index = 0U;
+            index < impl_->directive_kinds.size(); ++index) {
+            if (impl_->directive_kinds[index]
+                != runtime::VhdlPslDirectiveKind::assertion) {
+                continue;
+            }
+            any_assert = true;
+            all_covered = all_covered && impl_->goals_reached[index];
+        }
+        return impl_->cover_assert_ever_enabled
+            && any_assert && all_covered;
+    }
+    if (kind == Kind::is_covered) {
+        bool any_enabled { };
+        bool all_covered = true;
+        for (std::size_t index = 0U;
+            index < impl_->directive_kinds.size(); ++index) {
+            const auto directive = impl_->directive_kinds[index];
+            const bool enabled_goal
+                = directive == runtime::VhdlPslDirectiveKind::cover
+                || (directive == runtime::VhdlPslDirectiveKind::assertion
+                    && impl_->cover_assert_enabled);
+            if (!enabled_goal) {
+                continue;
+            }
+            any_enabled = true;
+            all_covered = all_covered && impl_->goals_reached[index];
+        }
+        return any_enabled && all_covered;
+    }
+    if (kind == Kind::set_cover_assert) {
+        if (!enable) {
+            throw std::logic_error {
+                "SET_PSL_COVER_ASSERT requires an enable value"
+            };
+        }
+        impl_->cover_assert_enabled = *enable;
+        impl_->cover_assert_ever_enabled
+            = impl_->cover_assert_ever_enabled || *enable;
+        return impl_->cover_assert_enabled;
+    }
+    if (kind == Kind::clear_state) {
+        impl_->engine.reset();
+        for (auto& item : impl_->coverage) {
+            item.attempts = 0U;
+            item.passes = 0U;
+            item.failures = 0U;
+            item.vacuous = 0U;
+            item.aborted = 0U;
+        }
+        std::fill(
+            impl_->goals_reached.begin(), impl_->goals_reached.end(), false);
+        impl_->assert_failed = false;
+        impl_->cover_assert_enabled = false;
+        impl_->cover_assert_ever_enabled = false;
+        return false;
+    }
+    throw std::logic_error { "unknown VHDL PSL API request" };
 }
 
 void VhdlPslExecution::set_completion_hook(runtime::VhdlPslCompletionHook hook)

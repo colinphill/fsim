@@ -21,6 +21,9 @@ enum class VhdlVhpiAbiError {
   ReportCallback,
   ServiceContext,
   ServiceCallback,
+  CapabilityCallback,
+  ValueCallback,
+  ToolCallback,
 };
 
 enum class VhdlVhpiPluginError {
@@ -91,6 +94,16 @@ struct VhdlVhpiPluginLoadResult {
     fsim_vhpi_report_v1 report,
     void* service_context,
     fsim_vhpi_invoke_service_v1 invoke_service) noexcept;
+
+[[nodiscard]] fsim_vhpi_host_v3 make_vhdl_vhpi_host_v3(
+    std::uint64_t simulation_identity,
+    void* report_context,
+    fsim_vhpi_report_v1 report,
+    void* service_context,
+    fsim_vhpi_invoke_service_v1 invoke_service,
+    fsim_vhpi_query_capabilities_v3 query_capabilities,
+    fsim_vhpi_access_value_v3 access_value,
+    fsim_vhpi_execute_tool_v3 execute_tool) noexcept;
 
 [[nodiscard]] VhdlVhpiAbiError validate_vhdl_vhpi_host(
     const fsim_vhpi_host_v1& host) noexcept;

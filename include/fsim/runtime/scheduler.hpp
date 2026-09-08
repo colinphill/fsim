@@ -48,6 +48,9 @@ struct RunResult {
   SimulationTick time = 0;
   std::uint64_t delta = 0;
   std::uint64_t callbacks_executed = 0;
+  /// Exact INTEGER status supplied by a language-level simulator-control
+  /// procedure, when one was supplied. External stop requests leave it empty.
+  std::optional<std::int64_t> simulator_status;
 };
 
 struct SchedulerBatchResult {

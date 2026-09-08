@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <map>
 #include <set>
+#include <variant>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -16,6 +17,13 @@ namespace {
 
     struct PendingStatement {
         const frontend::Statement* statement { };
+        std::size_t depth { };
+    };
+
+    struct PendingCallable {
+        std::variant<const frontend::FunctionDeclaration*,
+            const frontend::ProcedureDeclaration*>
+            declaration;
         std::size_t depth { };
     };
 
@@ -128,6 +136,80 @@ VhdlCoveragePointResult discover_vhdl_statement_points(
                   return true;
               };
 
+        const auto enqueue_block_callables
+            = [&](const frontend::Statement& block,
+                  const std::size_t depth) {
+                  std::vector<PendingCallable> callables;
+                  callables.reserve(
+                      block.functions.size() + block.procedures.size());
+                  for (const auto& function : block.functions) {
+                      callables.push_back(PendingCallable { &function, depth });
+                  }
+                  for (const auto& procedure : block.procedures) {
+                      callables.push_back(PendingCallable { &procedure, depth });
+                  }
+                  std::vector<PendingStatement> bodies;
+                  std::size_t visited_callables { };
+                  while (!callables.empty()) {
+                      if (++visited_callables > limits.maximum_statements) {
+                          return false;
+                      }
+                      const auto callable = callables.back();
+                      callables.pop_back();
+                      if (callable.depth > limits.maximum_nesting) {
+                          return false;
+                      }
+                      const auto append = [&](const auto* declaration) {
+                          if (declaration->statements.size()
+                              > limits.maximum_statements - scheduled) {
+                              return false;
+                          }
+                          scheduled += declaration->statements.size();
+                          for (const auto& statement : declaration->statements) {
+                              bodies.push_back(PendingStatement {
+                                  &statement, callable.depth });
+                          }
+                          if (declaration->functions.size()
+                                  > limits.maximum_statements
+                                      - callables.size()
+                              || declaration->procedures.size()
+                                  > limits.maximum_statements
+                                      - callables.size()
+                                      - declaration->functions.size()) {
+                              return false;
+                          }
+                          for (const auto& function : declaration->functions) {
+                              callables.push_back(PendingCallable {
+                                  &function, callable.depth + 1U });
+                          }
+                          for (const auto& procedure : declaration->procedures) {
+                              callables.push_back(PendingCallable {
+                                  &procedure, callable.depth + 1U });
+                          }
+                          return true;
+                      };
+                      if (!std::visit(append, callable.declaration)) {
+                          return false;
+                      }
+                  }
+                  std::ranges::sort(bodies, [](const auto& left,
+                                                const auto& right) {
+                      const auto left_source
+                          = frontend::physical_source(left.statement->span);
+                      const auto right_source
+                          = frontend::physical_source(right.statement->span);
+                      return left_source != right_source
+                          ? left_source < right_source
+                          : left.statement->span.begin.offset
+                              < right.statement->span.begin.offset;
+                  });
+                  for (auto body = bodies.rbegin(); body != bodies.rend();
+                      ++body) {
+                      pending.push_back(*body);
+                  }
+                  return true;
+              };
+
         while (!pending.empty()) {
             const auto current = pending.back();
             pending.pop_back();
@@ -150,7 +232,10 @@ VhdlCoveragePointResult discover_vhdl_statement_points(
             if (!enqueue(current.statement->else_statements,
                     current.depth + 1U)
                 || !enqueue(current.statement->statements,
-                    current.depth + 1U)) {
+                    current.depth + 1U)
+                || (current.statement->kind == frontend::StatementKind::Block
+                    && !enqueue_block_callables(
+                        *current.statement, current.depth + 1U))) {
                 return reject(
                     VhdlCoveragePointError::ResourceLimit, current_index);
             }

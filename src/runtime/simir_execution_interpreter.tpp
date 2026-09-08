@@ -1387,6 +1387,13 @@ void Interpreter::Impl::execute(ProcessId id)
                         const auto message = op.message.empty()
                             ? std::string_view { "assertion failed" }
                             : std::string_view { op.message };
+                        if (process.program.language_standard == "2019") {
+                            execute_vhdl_report(
+                                process, process.pc, message, op.severity,
+                                op.source, false);
+                            ++process.pc;
+                            return;
+                        }
                         if (op.severity != AssertionSeverity::failure
                             && report_hook) {
                             report_hook(
@@ -1517,6 +1524,13 @@ void Interpreter::Impl::execute(ProcessId id)
                         | (encoded.get(1) == Logic4::one ? 2U : 0U);
                     const auto severity = static_cast<AssertionSeverity>(ordinal);
                     const auto& message = get_string_register(process, op.message);
+                    if (process.program.language_standard == "2019") {
+                        execute_vhdl_report(
+                            process, process.pc, message, severity,
+                            op.source, op.standalone);
+                        ++process.pc;
+                        return;
+                    }
                     if (severity == AssertionSeverity::failure) {
                         if (op.standalone && report_hook) {
                             report_hook(
@@ -1618,6 +1632,45 @@ void Interpreter::Impl::execute(ProcessId id)
                         fail(process, "coverage query service returned an invalid real payload");
                     }
                     get_register(process, op.destination) = std::move(value);
+                    ++process.pc;
+                } else if constexpr (std::is_same_v<OperationType, VhdlPslApi>) {
+                    const bool query = op.kind == VhdlPslApiKind::assert_failed
+                        || op.kind == VhdlPslApiKind::is_covered
+                        || op.kind == VhdlPslApiKind::get_cover_assert
+                        || op.kind == VhdlPslApiKind::is_assert_covered;
+                    const bool set = op.kind == VhdlPslApiKind::set_cover_assert;
+                    const bool clear = op.kind == VhdlPslApiKind::clear_state;
+                    if ((!query && !set && !clear)
+                        || (query && (!op.destination || op.enable))
+                        || (set && (op.destination || !op.enable))
+                        || (clear && (op.destination || op.enable))) {
+                        fail(process, "VHDL PSL API operation is invalid");
+                    }
+                    if (!vhdl_psl_api_hook) {
+                        fail(process, "VHDL PSL API service is unavailable");
+                    }
+                    std::optional<bool> enable;
+                    if (op.enable) {
+                        const auto& value = get_register(process, *op.enable);
+                        if (value.width() != 1U || value.is_logic9()
+                            || value.low_word().bval != 0U) {
+                            fail(process,
+                                "VHDL PSL API enable value is not BOOLEAN");
+                        }
+                        enable = (value.low_word().aval & 1U) != 0U;
+                    }
+                    const auto result = vhdl_psl_api_hook(op.kind, enable);
+                    if (op.destination) {
+                        get_register(process, *op.destination)
+                            = PackedLogic4::from_aval_bval(
+                                1U, result ? 1U : 0U, 0U);
+                    }
+                    ++process.pc;
+                } else if constexpr (std::is_same_v<OperationType, VhdlAssertApi>) {
+                    execute_vhdl_assert_api(process, op);
+                    ++process.pc;
+                } else if constexpr (std::is_same_v<OperationType, VhdlReflectionApi>) {
+                    execute_vhdl_reflection_api(process, op);
                     ++process.pc;
                 } else if constexpr (
                     std::is_same_v<OperationType, CoverageControl>) {
@@ -1767,6 +1820,19 @@ void Interpreter::Impl::execute(ProcessId id)
                             0U);
                     ++process.pc;
                 } else if constexpr (
+                    std::is_same_v<OperationType, VhdlEnvironmentTime>
+                    || std::is_same_v<OperationType,
+                        VhdlEnvironmentTimeToString>
+                    || std::is_same_v<OperationType,
+                        VhdlEnvironmentDirectory>
+                    || std::is_same_v<OperationType,
+                        VhdlEnvironmentGetenv>
+                    || std::is_same_v<OperationType,
+                        VhdlEnvironmentCallPath>
+                    || std::is_same_v<OperationType,
+                        VhdlEnvironmentGetCallPath>) {
+                    boundary = true;
+                } else if constexpr (
                     std::is_same_v<OperationType, ScopeRandomize>) {
                     SystemVerilogScopeRandomizeRequest request;
                     request.limits.maximum_domain_values = op.maximum_domain_values;
@@ -1802,6 +1868,13 @@ void Interpreter::Impl::execute(ProcessId id)
                         32, result.language_result(), 0);
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, Report>) {
+                    if (process.program.language_standard == "2019") {
+                        execute_vhdl_report(
+                            process, process.pc, op.message, op.severity,
+                            op.source, true);
+                        ++process.pc;
+                        return;
+                    }
                     if (report_hook) {
                         report_hook(
                             process.program.id,

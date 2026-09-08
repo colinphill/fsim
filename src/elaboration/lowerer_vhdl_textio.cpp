@@ -161,6 +161,8 @@ bool Lowerer::lower_vhdl_textio_procedure_call(
         return true;
       }
       success = good_local->second;
+    } else if (vhdl_standard_ >= frontend::VhdlStandard::Vhdl2019) {
+      success = allocate_register(1U, frontend::ValueDomain::Boolean);
     }
     const auto count = allocate_register(
         32, frontend::ValueDomain::Integer);
@@ -174,6 +176,22 @@ bool Lowerer::lower_vhdl_textio_procedure_call(
         !success,
         success,
         true});
+    if (good == nullptr
+        && vhdl_standard_ >= frontend::VhdlStandard::Vhdl2019) {
+      const auto branch = static_cast<InstructionIndex>(
+          process_.operations.size());
+      process_.operations.emplace_back(Branch {
+          *success, branch + 2U, branch + 1U,
+          UnknownBranchPolicy::when_false });
+      process_.operations.emplace_back(VhdlAssertApi {
+          VhdlAssertApiKind::record_read_failure,
+          std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+          std::nullopt, std::nullopt,
+          SourceLocation {
+              statement.span.source_name.str(),
+              static_cast<std::uint32_t>(statement.span.begin.line),
+              static_cast<std::uint32_t>(statement.span.begin.column) } });
+    }
     return true;
   }
 

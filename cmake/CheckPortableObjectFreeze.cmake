@@ -147,7 +147,7 @@ fsim_require_portable_object_tokens("${FSIM_PORTABLE_TEST}"
 fsim_require_portable_object_tokens("${FSIM_PHASE_TEST}"
   ".fsimobj"
   "artifact-vhdl-stale.fsimobj"
-  "artifact-vhdl.fsimobj.producer-hidden"
+  "artifact-vhdl-2019.fsimobj.producer-hidden"
   "stages=compile/object/elaborate/design/simulate")
 fsim_require_portable_object_tokens("${FSIM_TEST_BUILD}"
   "NAME fsim.portable-object-schema-freeze"

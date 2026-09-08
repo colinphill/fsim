@@ -28,7 +28,7 @@ using ValueOperationGroup = OperationGroup<LoadConstant, CopyRegister, ConvertTo
     Binary, Insert, DynamicInsert, DynamicPartInsert,
     IntegerUnary, IntegerBinary, IntegerCheck,
     ConditionalSelect, RandomValue, RandomDistribution, ScopeRandomize,
-    StochasticQueueOperation>;
+    StochasticQueueOperation, VhdlEnvironmentTime>;
 
 using SignalOperationGroup = OperationGroup<ReadSignal, SignalEvent, SignalLastValue, SignalLastEvent,
     SignalActive,
@@ -52,7 +52,8 @@ using StringOperationGroup = OperationGroup<LoadStringConstant, CopyStringRegist
     WriteStringObject, ConcatenateStrings, CompareStrings,
     StringLength, StringIndex, StringReplaceCodePoint,
     StringMethod, PlusArgSelect, SystemCommand, VcdControl,
-    CoverageDatabaseControl, CoverageAccess>;
+    CoverageDatabaseControl, CoverageAccess, VhdlEnvironmentTimeToString,
+    VhdlEnvironmentGetenv, VhdlEnvironmentCallPath>;
 
 using ContainerOperationGroup = OperationGroup<SystemVerilogScalarBinary, SystemVerilogMath, ResizeContainer,
     CopyContainerRegister,
@@ -67,7 +68,8 @@ using ContainerOperationGroup = OperationGroup<SystemVerilogScalarBinary, System
     VitalMemoryDeclare,
     PushContainer, PopContainer,
     ContainerStringRead, ContainerStringWrite,
-    ContainerElementRead, ContainerElementWrite, PlaEvaluate>;
+    ContainerElementRead, ContainerElementWrite,
+    VhdlEnvironmentDirectory, VhdlEnvironmentGetCallPath, PlaEvaluate>;
 
 using FileOperationGroup = OperationGroup<FileOpen, FileClose, FileWriteLiteral, FileWriteFormatted,
     FileWriteString, FileReadLine, FileEndOfFile,
@@ -88,7 +90,8 @@ using ControlOperationGroup = OperationGroup<Jump, Call, Return,
 
 using OutputOperationGroup = OperationGroup<Display, FormatDisplay, StringDisplay, StringReport,
     TimeDisplay, MonitorInstall, MonitorControl, TimeFormatControl,
-    CoverageSample, CoverageQuery, CodeCoverageHit, CoverageControl>;
+    CoverageSample, CoverageQuery, CodeCoverageHit, CoverageControl,
+    VhdlPslApi, VhdlAssertApi, VhdlReflectionApi>;
 
 using ClassOperationGroup = OperationGroup<
     ClassAllocate, ClassPropertyRead, ClassPropertyWrite, ClassMethodCall,
@@ -325,7 +328,7 @@ static_assert(
         + std::variant_size_v<ControlOperationGroup::Storage>
         + std::variant_size_v<OutputOperationGroup::Storage>
         + std::variant_size_v<ClassOperationGroup::Storage>
-    == 181);
+    == 190);
 
 template <typename Alternative>
 [[nodiscard]] Alternative* operation_get_if(Operation* operation) noexcept

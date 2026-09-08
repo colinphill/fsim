@@ -63,6 +63,41 @@ bool VhdlVhpiObjectRegistry::valid() const noexcept {
   return simulation_identity_ != 0U && registry_identity_ != 0U;
 }
 
+VhdlVhpiCapabilities VhdlVhpiObjectRegistry::capabilities() noexcept {
+  return {
+      2019U,
+      static_cast<std::uint32_t>(VhdlVhpiObjectKind::ViewElement) + 1U,
+      static_cast<std::uint32_t>(VhdlVhpiRelationshipKind::Parent) + 1U,
+      static_cast<std::uint32_t>(VhdlVhpiPropertyKind::PackageDependencyCount)
+          + 1U,
+      static_cast<std::uint32_t>(maximum_index_dimensions),
+      static_cast<std::uint32_t>(maximum_package_dependencies),
+      true,
+      true,
+      true,
+      true,
+  };
+}
+
+bool VhdlVhpiObjectRegistry::supports(
+    const VhdlVhpiObjectKind kind) noexcept {
+  return static_cast<std::uint32_t>(kind)
+      <= static_cast<std::uint32_t>(VhdlVhpiObjectKind::ViewElement);
+}
+
+bool VhdlVhpiObjectRegistry::supports(
+    const VhdlVhpiRelationshipKind relationship) noexcept {
+  return static_cast<std::uint32_t>(relationship)
+      <= static_cast<std::uint32_t>(VhdlVhpiRelationshipKind::Parent);
+}
+
+bool VhdlVhpiObjectRegistry::supports(
+    const VhdlVhpiPropertyKind property) noexcept {
+  return static_cast<std::uint32_t>(property)
+      <= static_cast<std::uint32_t>(
+          VhdlVhpiPropertyKind::PackageDependencyCount);
+}
+
 fsim_vhpi_handle_v1 VhdlVhpiObjectRegistry::encode_object(
     const std::uint32_t slot,
     const std::uint16_t generation) const noexcept {
@@ -362,6 +397,7 @@ bool VhdlVhpiObjectRegistry::is_region(
     case VhdlVhpiObjectKind::Generate:
     case VhdlVhpiObjectKind::Process:
     case VhdlVhpiObjectKind::Subprogram:
+    case VhdlVhpiObjectKind::Context:
       return true;
     default:
       return false;
@@ -376,7 +412,7 @@ VhdlVhpiObjectResult VhdlVhpiObjectRegistry::create_object(
     return {{}, VhdlVhpiObjectError::InvalidSimulation};
   }
   if (static_cast<std::uint32_t>(kind)
-      > static_cast<std::uint32_t>(VhdlVhpiObjectKind::Subtype)) {
+      > static_cast<std::uint32_t>(VhdlVhpiObjectKind::ViewElement)) {
     return {{}, VhdlVhpiObjectError::InvalidKind};
   }
 
@@ -422,6 +458,10 @@ VhdlVhpiObjectResult VhdlVhpiObjectRegistry::create_object(
     record.full_name.clear();
     record.indices.clear();
     record.source.reset();
+    record.language_standard.clear();
+    record.predefined_environment.clear();
+    record.compatibility_profile.clear();
+    record.package_dependencies.clear();
   } else {
     if (objects_.size() >= slot_mask) {
       return {{}, VhdlVhpiObjectError::ResourceLimit};
@@ -463,7 +503,7 @@ VhdlVhpiObjectResult VhdlVhpiObjectRegistry::create_object(
     return {{}, VhdlVhpiObjectError::InvalidSimulation};
   }
   if (static_cast<std::uint32_t>(descriptor.kind)
-      > static_cast<std::uint32_t>(VhdlVhpiObjectKind::Subtype)) {
+      > static_cast<std::uint32_t>(VhdlVhpiObjectKind::ViewElement)) {
     return {{}, VhdlVhpiObjectError::InvalidKind};
   }
   if (descriptor.indices.size() > maximum_index_dimensions) {
@@ -678,6 +718,94 @@ VhdlVhpiObjectLookupResult VhdlVhpiObjectRegistry::lookup_object(
   return lookup_locked(handle);
 }
 
+VhdlVhpiPropertyResult VhdlVhpiObjectRegistry::property(
+    const fsim_vhpi_handle_v1 handle,
+    const VhdlVhpiPropertyKind property_kind) const {
+  std::scoped_lock lock{mutex_};
+  if (!valid()) {
+    return {{}, {}, {}, {}, {}, VhdlVhpiObjectError::InvalidSimulation};
+  }
+  const auto metadata = lookup_locked(handle);
+  if (!metadata) {
+    return {{}, {}, {}, {}, {}, metadata.error};
+  }
+  if (!supports(property_kind)) {
+    return {{}, {}, {}, {}, {}, VhdlVhpiObjectError::InvalidProperty};
+  }
+  const auto unsigned_result = [](const std::uint64_t value) {
+    VhdlVhpiPropertyResult result;
+    result.kind = VhdlVhpiPropertyValueKind::UnsignedInteger;
+    result.unsigned_integer = value;
+    return result;
+  };
+  const auto string_result = [](const std::string& value) {
+    VhdlVhpiPropertyResult result;
+    result.kind = VhdlVhpiPropertyValueKind::String;
+    result.string = value;
+    return result;
+  };
+  const auto& value = metadata.value;
+  switch (property_kind) {
+    case VhdlVhpiPropertyKind::ObjectKind: {
+      VhdlVhpiPropertyResult result;
+      result.kind = VhdlVhpiPropertyValueKind::ObjectKind;
+      result.object_kind = value.kind;
+      return result;
+    }
+    case VhdlVhpiPropertyKind::Parent: {
+      VhdlVhpiPropertyResult result;
+      result.kind = VhdlVhpiPropertyValueKind::Handle;
+      result.handle = value.parent;
+      return result;
+    }
+    case VhdlVhpiPropertyKind::LiveChildren:
+      return unsigned_result(value.live_children);
+    case VhdlVhpiPropertyKind::Ordinal:
+      return unsigned_result(value.ordinal);
+    case VhdlVhpiPropertyKind::Name:
+      return string_result(value.name);
+    case VhdlVhpiPropertyKind::SelectedName:
+      return string_result(value.selected_name);
+    case VhdlVhpiPropertyKind::FullName:
+      return string_result(value.full_name);
+    case VhdlVhpiPropertyKind::IndexCount:
+      return unsigned_result(value.indices.size());
+    case VhdlVhpiPropertyKind::SourceFile:
+      return value.source
+          ? string_result(value.source->file)
+          : VhdlVhpiPropertyResult{{}, {}, {}, {}, {},
+                VhdlVhpiObjectError::NotFound};
+    case VhdlVhpiPropertyKind::SourceLine:
+      return value.source
+          ? unsigned_result(value.source->line)
+          : VhdlVhpiPropertyResult{{}, {}, {}, {}, {},
+                VhdlVhpiObjectError::NotFound};
+    case VhdlVhpiPropertyKind::SourceColumn:
+      return value.source
+          ? unsigned_result(value.source->column)
+          : VhdlVhpiPropertyResult{{}, {}, {}, {}, {},
+                VhdlVhpiObjectError::NotFound};
+    case VhdlVhpiPropertyKind::LanguageStandard:
+      return value.language_standard.empty()
+          ? VhdlVhpiPropertyResult{{}, {}, {}, {}, {},
+                VhdlVhpiObjectError::NotFound}
+          : string_result(value.language_standard);
+    case VhdlVhpiPropertyKind::PredefinedEnvironment:
+      return value.predefined_environment.empty()
+          ? VhdlVhpiPropertyResult{{}, {}, {}, {}, {},
+                VhdlVhpiObjectError::NotFound}
+          : string_result(value.predefined_environment);
+    case VhdlVhpiPropertyKind::CompatibilityProfile:
+      return value.compatibility_profile.empty()
+          ? VhdlVhpiPropertyResult{{}, {}, {}, {}, {},
+                VhdlVhpiObjectError::NotFound}
+          : string_result(value.compatibility_profile);
+    case VhdlVhpiPropertyKind::PackageDependencyCount:
+      return unsigned_result(value.package_dependencies.size());
+  }
+  return {{}, {}, {}, {}, {}, VhdlVhpiObjectError::InvalidProperty};
+}
+
 VhdlVhpiObjectLookupResult VhdlVhpiObjectRegistry::find(
     const std::string_view full_name) const {
   std::scoped_lock lock{mutex_};
@@ -882,7 +1010,7 @@ VhdlVhpiIteratorResult VhdlVhpiObjectRegistry::iterate_relationship(
   }
   if (static_cast<std::uint32_t>(relationship)
       > static_cast<std::uint32_t>(
-          VhdlVhpiRelationshipKind::Declarations)) {
+          VhdlVhpiRelationshipKind::Parent)) {
     return {{}, VhdlVhpiIteratorError::InvalidRelationship};
   }
   std::uint32_t parent_slot{};
@@ -890,7 +1018,14 @@ VhdlVhpiIteratorResult VhdlVhpiObjectRegistry::iterate_relationship(
   if (parent_error != VhdlVhpiObjectError::None) {
     return {{}, iterator_error(parent_error)};
   }
-  (void)parent_slot;
+  if (relationship == VhdlVhpiRelationshipKind::Parent) {
+    const auto object_parent = objects_[parent_slot].parent;
+    if (object_parent == 0U) {
+      return create_iterator_locked({});
+    }
+    return create_iterator_locked(
+        std::span<const fsim_vhpi_handle_v1>{&object_parent, 1U});
+  }
 
   std::vector<std::pair<std::uint64_t, fsim_vhpi_handle_v1>> ordered;
   try {

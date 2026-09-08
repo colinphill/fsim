@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace fsim::tests::frontend {
 
@@ -19,6 +20,16 @@ namespace {
         if (!condition) {
             throw std::runtime_error(std::string { message });
         }
+    }
+
+    [[nodiscard]] bool has_diagnostic_code(
+        const std::vector<Diagnostic>& diagnostics,
+        const std::string_view code)
+    {
+        return std::ranges::any_of(
+            diagnostics, [&](const Diagnostic& diagnostic) {
+                return diagnostic.code == code;
+            });
     }
 
 } // namespace
@@ -397,6 +408,151 @@ void test_vhdl_2019_conditional_analysis()
                }),
         "conditional analysis rejects excess nesting without losing group "
         "synchronization or growing its frame stack past the bound");
+
+    const auto messages = parse_text(
+        "vhdl2019-conditional-messages.vhd",
+        "`warning \"selected \"\"warning\"\"\"\n"
+        "`if TOOL_TYPE = \"SYNTHESIS\" then\n"
+        "`error \"inactive error\"\n"
+        "`else\n"
+        "entity directive_messages is end entity directive_messages;\n"
+        "`end\n",
+        Language::Vhdl2008,
+        VhdlStandard::Vhdl2019);
+    const auto selected_warning = std::ranges::find_if(
+        messages.diagnostics, [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-VHDL-CA-005";
+        });
+    require(
+        messages.ok() && messages.design.units.size() == 1U
+            && messages.design.units.front().name == "directive_messages"
+            && selected_warning != messages.diagnostics.end()
+            && selected_warning->severity == DiagnosticSeverity::Warning
+            && selected_warning->message == "selected \"warning\""
+            && selected_warning->span.begin.line == 1U
+            && std::ranges::none_of(
+                messages.diagnostics, [](const Diagnostic& diagnostic) {
+                    return diagnostic.code == "FSIM-VHDL-CA-006";
+                }),
+        "conditional warning/error directives honor branch selection, decode "
+        "VHDL strings, and accept the optional if on `end");
+
+    const auto active_error = parse_text(
+        "vhdl2019-conditional-error.vhd",
+        "`error \"requested analysis failure\"\n"
+        "entity retained_after_error is end entity retained_after_error;\n",
+        Language::Vhdl2008,
+        VhdlStandard::Vhdl2019);
+    const auto emitted_error = std::ranges::find_if(
+        active_error.diagnostics, [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-VHDL-CA-006";
+        });
+    require(
+        !active_error.ok() && active_error.design.units.size() == 1U
+            && emitted_error != active_error.diagnostics.end()
+            && emitted_error->severity == DiagnosticSeverity::Error
+            && emitted_error->message == "requested analysis failure",
+        "an active conditional error directive fails analysis without hiding "
+        "the remaining source");
+
+    const auto malformed_message = parse_text(
+        "vhdl2019-conditional-message-malformed.vhd",
+        "`warning not_a_string\n"
+        "entity malformed_message is end entity malformed_message;\n",
+        Language::Vhdl2008,
+        VhdlStandard::Vhdl2019);
+    require(
+        !malformed_message.ok()
+            && has_diagnostic_code(
+                malformed_message.diagnostics, "FSIM-VHDL-CA-002"),
+        "conditional messages require one bounded VHDL string literal");
+
+    const auto plaintext_protection = parse_text(
+        "vhdl2008-protect-plain.vhd",
+        "`protect\n"
+        "`protect author = \"independent test\"\n"
+        "`protect begin\n"
+        "entity protected_plaintext is end entity protected_plaintext;\n"
+        "`protect end\n",
+        Language::Vhdl2008,
+        VhdlStandard::Vhdl2008);
+    require(
+        plaintext_protection.ok()
+            && plaintext_protection.design.units.size() == 1U
+            && plaintext_protection.design.units.front().name
+                == "protected_plaintext"
+            && plaintext_protection.design.units.front().span.begin.line == 4U,
+        "VHDL-2008 plaintext protect envelopes retain source while masking "
+        "tool metadata at stable coordinates");
+
+    const auto encrypted_protection = parse_text(
+        "vhdl2019-protect-encrypted.vhd",
+        "`protect begin_protected\n"
+        "encoded payload that is not VHDL @@@\n"
+        "`protect end_protected\n"
+        "entity after_protected is end entity after_protected;\n",
+        Language::Vhdl2008,
+        VhdlStandard::Vhdl2019);
+    require(
+        !encrypted_protection.ok()
+            && encrypted_protection.design.units.size() == 1U
+            && encrypted_protection.design.units.front().name
+                == "after_protected"
+            && std::ranges::count_if(
+                   encrypted_protection.diagnostics,
+                   [](const Diagnostic& diagnostic) {
+                       return diagnostic.code == "FSIM-VHDL-PROTECT-003";
+                   })
+                == 1U
+            && std::ranges::none_of(
+                encrypted_protection.diagnostics,
+                [](const Diagnostic& diagnostic) {
+                    return diagnostic.code == "FSIM-VHDL-LEX-001";
+                }),
+        "encrypted protect envelopes are contained and rejected once without "
+        "lexing protected payload bytes");
+
+    const auto legacy_protection = parse_text(
+        "vhdl1993-protect.vhd",
+        "`protect begin\n"
+        "entity legacy_protected is end entity legacy_protected;\n"
+        "`protect end\n",
+        Language::Vhdl2008,
+        VhdlStandard::Vhdl1993);
+    require(
+        !legacy_protection.ok()
+            && !legacy_protection.design.vhdl_profile_compatible
+            && std::ranges::count_if(
+                   legacy_protection.diagnostics,
+                   [](const Diagnostic& diagnostic) {
+                       return diagnostic.code == "FSIM-VHDL-PROTECT-001";
+                   })
+                == 2U,
+        "protect tool directives remain isolated from pre-2008 profiles");
+
+    const auto malformed_protection = parse_text(
+        "vhdl2019-protect-malformed.vhd",
+        "`protect begin\n"
+        "`protect begin\n"
+        "entity nested_protected is end entity nested_protected;\n"
+        "`protect end\n"
+        "`protect end\n"
+        "`protect begin_protected\n",
+        Language::Vhdl2008,
+        VhdlStandard::Vhdl2019);
+    require(
+        !malformed_protection.ok()
+            && std::ranges::count_if(
+                   malformed_protection.diagnostics,
+                   [](const Diagnostic& diagnostic) {
+                       return diagnostic.code == "FSIM-VHDL-PROTECT-002";
+                   })
+                == 2U
+            && has_diagnostic_code(
+                malformed_protection.diagnostics,
+                "FSIM-VHDL-PROTECT-004"),
+        "nested, unmatched, and unterminated protection controls retain "
+        "deterministic synchronization diagnostics");
 }
 
 void test_vhdl_2019_profile_isolation()

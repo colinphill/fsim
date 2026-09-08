@@ -446,6 +446,380 @@ void validate_vhdl_analysis_order(
   AnalysisOrderValidator{diagnostics}.run(units);
 }
 
+void validate_vhdl_simulator_api(
+    const std::span<const frontend::DesignUnit> units,
+    diagnostic::Engine& diagnostics) {
+  const auto validate_expression = [&](const auto& self,
+                                       const frontend::Expression& expression)
+      -> void {
+    const auto api = frontend::vhdl_simulator_api(expression.text);
+    if (api == frontend::VhdlSimulatorApi::stop
+        || api == frontend::VhdlSimulatorApi::finish
+        || api == frontend::VhdlSimulatorApi::set_psl_cover_assert
+        || api == frontend::VhdlSimulatorApi::clear_psl_state
+        || api == frontend::VhdlSimulatorApi::clear_vhdl_assert
+        || api == frontend::VhdlSimulatorApi::set_vhdl_assert_enable
+        || api == frontend::VhdlSimulatorApi::set_vhdl_assert_format
+        || api == frontend::VhdlSimulatorApi::set_vhdl_read_severity) {
+      diagnostics.error(
+          "FSIM-FE-VHENV-001",
+          "this STD.ENV declaration is a procedure and cannot be used as a value",
+          span(expression.span));
+    } else if (api == frontend::VhdlSimulatorApi::resolution_limit
+               && expression.kind == frontend::ExpressionKind::Call
+               && !expression.operands.empty()) {
+      diagnostics.error(
+          "FSIM-FE-VHENV-002",
+          "STD.ENV RESOLUTION_LIMIT does not accept arguments",
+          span(expression.span));
+    } else if (api == frontend::VhdlSimulatorApi::dayofweek
+               || api == frontend::VhdlSimulatorApi::time_record
+               || api == frontend::VhdlSimulatorApi::directory_items
+               || api == frontend::VhdlSimulatorApi::directory
+               || api == frontend::VhdlSimulatorApi::call_path_element
+               || api == frontend::VhdlSimulatorApi::call_path_vector
+               || api == frontend::VhdlSimulatorApi::call_path_vector_ptr
+               || api == frontend::VhdlSimulatorApi::dir_open_status
+               || api == frontend::VhdlSimulatorApi::dir_create_status
+               || api == frontend::VhdlSimulatorApi::dir_delete_status
+               || api == frontend::VhdlSimulatorApi::file_delete_status) {
+      diagnostics.error(
+          "FSIM-FE-VHENV-001",
+          "STD.ENV DAYOFWEEK and TIME_RECORD are types and cannot be used as values",
+          span(expression.span));
+    } else if (api != frontend::VhdlSimulatorApi::none) {
+      const auto names_valid = [&](const std::span<const std::string_view> names) {
+        if (expression.call_argument_names.empty()) {
+          return true;
+        }
+        return expression.call_argument_names.size()
+                == expression.operands.size()
+            && std::ranges::all_of(
+                expression.call_argument_names,
+                [&](const std::string& name) {
+                  return name.empty()
+                      || std::ranges::find(names, name) != names.end();
+                });
+      };
+      bool valid = true;
+      switch (api) {
+        case frontend::VhdlSimulatorApi::localtime:
+        case frontend::VhdlSimulatorApi::gmtime: {
+          static constexpr std::array names{
+              std::string_view{"timer"}, std::string_view{"trec"}};
+          valid = expression.operands.size() <= 1U && names_valid(names);
+          break;
+        }
+        case frontend::VhdlSimulatorApi::epoch: {
+          static constexpr std::array names{std::string_view{"trec"}};
+          valid = expression.operands.size() <= 1U && names_valid(names);
+          break;
+        }
+        case frontend::VhdlSimulatorApi::time_to_seconds: {
+          static constexpr std::array names{std::string_view{"time_val"}};
+          valid = expression.operands.size() == 1U && names_valid(names);
+          break;
+        }
+        case frontend::VhdlSimulatorApi::seconds_to_time: {
+          static constexpr std::array names{std::string_view{"real_val"}};
+          valid = expression.operands.size() == 1U && names_valid(names);
+          break;
+        }
+        case frontend::VhdlSimulatorApi::to_string: {
+          static constexpr std::array names{
+              std::string_view{"trec"},
+              std::string_view{"frac_digits"},
+              std::string_view{"call_path"},
+              std::string_view{"separator"}};
+          valid = !expression.operands.empty()
+              && expression.operands.size() <= 2U && names_valid(names);
+          break;
+        }
+        case frontend::VhdlSimulatorApi::getenv: {
+          static constexpr std::array names{std::string_view{"name"}};
+          valid = expression.operands.size() == 1U && names_valid(names);
+          break;
+        }
+        case frontend::VhdlSimulatorApi::vhdl_version:
+        case frontend::VhdlSimulatorApi::tool_type:
+        case frontend::VhdlSimulatorApi::tool_vendor:
+        case frontend::VhdlSimulatorApi::tool_name:
+        case frontend::VhdlSimulatorApi::tool_edition:
+        case frontend::VhdlSimulatorApi::tool_version:
+        case frontend::VhdlSimulatorApi::get_call_path:
+        case frontend::VhdlSimulatorApi::file_name:
+        case frontend::VhdlSimulatorApi::file_path:
+        case frontend::VhdlSimulatorApi::file_line:
+        case frontend::VhdlSimulatorApi::psl_assert_failed:
+        case frontend::VhdlSimulatorApi::psl_is_covered:
+        case frontend::VhdlSimulatorApi::get_psl_cover_assert:
+        case frontend::VhdlSimulatorApi::psl_is_assert_covered:
+        case frontend::VhdlSimulatorApi::get_vhdl_read_severity:
+          valid = expression.operands.empty();
+          break;
+        case frontend::VhdlSimulatorApi::is_vhdl_assert_failed:
+        case frontend::VhdlSimulatorApi::get_vhdl_assert_count:
+        case frontend::VhdlSimulatorApi::get_vhdl_assert_enable: {
+          static constexpr std::array names{std::string_view{"level"}};
+          valid = expression.operands.size() <= 1U && names_valid(names);
+          break;
+        }
+        case frontend::VhdlSimulatorApi::get_vhdl_assert_format: {
+          static constexpr std::array names{std::string_view{"level"}};
+          valid = expression.operands.size() == 1U && names_valid(names);
+          break;
+        }
+        case frontend::VhdlSimulatorApi::dir_open: {
+          static constexpr std::array names{
+              std::string_view{"dir"}, std::string_view{"path"}};
+          valid = expression.operands.size() == 2U && names_valid(names);
+          break;
+        }
+        case frontend::VhdlSimulatorApi::dir_itemexists:
+        case frontend::VhdlSimulatorApi::dir_itemisdir:
+        case frontend::VhdlSimulatorApi::dir_itemisfile: {
+          static constexpr std::array names{std::string_view{"path"}};
+          valid = expression.operands.size() == 1U && names_valid(names);
+          break;
+        }
+        case frontend::VhdlSimulatorApi::dir_workingdir: {
+          static constexpr std::array names{std::string_view{"path"}};
+          valid = expression.operands.size() <= 1U && names_valid(names);
+          break;
+        }
+        case frontend::VhdlSimulatorApi::dir_createdir: {
+          static constexpr std::array names{
+              std::string_view{"path"}, std::string_view{"parents"}};
+          valid = !expression.operands.empty()
+              && expression.operands.size() <= 2U && names_valid(names);
+          break;
+        }
+        case frontend::VhdlSimulatorApi::dir_deletedir: {
+          static constexpr std::array names{
+              std::string_view{"path"}, std::string_view{"recursive"}};
+          valid = !expression.operands.empty()
+              && expression.operands.size() <= 2U && names_valid(names);
+          break;
+        }
+        case frontend::VhdlSimulatorApi::dir_deletefile: {
+          static constexpr std::array names{std::string_view{"path"}};
+          valid = expression.operands.size() == 1U && names_valid(names);
+          break;
+        }
+        case frontend::VhdlSimulatorApi::dir_separator:
+          valid = expression.operands.empty();
+          break;
+        case frontend::VhdlSimulatorApi::dir_close:
+        case frontend::VhdlSimulatorApi::set_psl_cover_assert:
+        case frontend::VhdlSimulatorApi::clear_psl_state:
+        case frontend::VhdlSimulatorApi::clear_vhdl_assert:
+        case frontend::VhdlSimulatorApi::set_vhdl_assert_enable:
+        case frontend::VhdlSimulatorApi::set_vhdl_assert_format:
+        case frontend::VhdlSimulatorApi::set_vhdl_read_severity:
+          valid = false;
+          break;
+        case frontend::VhdlSimulatorApi::none:
+        case frontend::VhdlSimulatorApi::stop:
+        case frontend::VhdlSimulatorApi::finish:
+        case frontend::VhdlSimulatorApi::resolution_limit:
+        case frontend::VhdlSimulatorApi::dayofweek:
+        case frontend::VhdlSimulatorApi::time_record:
+        case frontend::VhdlSimulatorApi::directory_items:
+        case frontend::VhdlSimulatorApi::directory:
+        case frontend::VhdlSimulatorApi::call_path_element:
+        case frontend::VhdlSimulatorApi::call_path_vector:
+        case frontend::VhdlSimulatorApi::call_path_vector_ptr:
+        case frontend::VhdlSimulatorApi::dir_open_status:
+        case frontend::VhdlSimulatorApi::dir_create_status:
+        case frontend::VhdlSimulatorApi::dir_delete_status:
+        case frontend::VhdlSimulatorApi::file_delete_status:
+          break;
+      }
+      if (!valid) {
+          diagnostics.error(
+              "FSIM-FE-VHENV-002",
+              "STD.ENV call has no matching standardized association profile",
+              span(expression.span));
+      }
+    }
+    for (const auto& operand : expression.operands) {
+      self(self, operand);
+    }
+  };
+  const auto validate_statements = [
+      &](const auto& self,
+          const std::span<const frontend::Statement> statements) -> void {
+    for (const auto& statement : statements) {
+      if (statement.kind == frontend::StatementKind::ProcedureCall) {
+        const auto api = frontend::vhdl_simulator_api(
+            statement.procedure_name);
+        if (api == frontend::VhdlSimulatorApi::resolution_limit) {
+          diagnostics.error(
+              "FSIM-FE-VHENV-001",
+              "STD.ENV RESOLUTION_LIMIT is a function and cannot be called as a procedure",
+              span(statement.span));
+        } else if (api == frontend::VhdlSimulatorApi::stop
+                   || api == frontend::VhdlSimulatorApi::finish) {
+          const bool invalid_actuals =
+              statement.procedure_arguments.size() > 1U
+              || std::ranges::any_of(
+                  statement.procedure_arguments,
+                  [](const auto& association) {
+                    return association.formal
+                        && *association.formal != "status";
+                  });
+          if (invalid_actuals) {
+            diagnostics.error(
+                "FSIM-FE-VHENV-002",
+                "STD.ENV STOP and FINISH accept at most one INTEGER STATUS actual",
+              span(statement.span));
+          }
+        } else if (api
+                       == frontend::VhdlSimulatorApi::set_psl_cover_assert) {
+          const bool invalid_actuals
+              = statement.procedure_arguments.size() > 1U
+              || std::ranges::any_of(
+                  statement.procedure_arguments,
+                  [](const auto& association) {
+                    return association.formal
+                        && *association.formal != "enable";
+                  });
+          if (invalid_actuals) {
+            diagnostics.error(
+                "FSIM-FE-VHENV-002",
+                "STD.ENV SETPSLCOVERASSERT accepts at most one BOOLEAN ENABLE actual",
+                span(statement.span));
+          }
+        } else if (api == frontend::VhdlSimulatorApi::clear_psl_state) {
+          if (!statement.procedure_arguments.empty()) {
+            diagnostics.error(
+                "FSIM-FE-VHENV-002",
+                "STD.ENV CLEARPSLSTATE does not accept arguments",
+              span(statement.span));
+          }
+        } else if (api == frontend::VhdlSimulatorApi::clear_vhdl_assert) {
+          if (!statement.procedure_arguments.empty()) {
+            diagnostics.error(
+                "FSIM-FE-VHENV-002",
+                "STD.ENV CLEARVHDLASSERT does not accept arguments",
+                span(statement.span));
+          }
+        } else if (api
+                       == frontend::VhdlSimulatorApi::set_vhdl_assert_enable) {
+          const bool invalid_actuals
+              = statement.procedure_arguments.size() > 2U
+              || std::ranges::any_of(
+                  statement.procedure_arguments,
+                  [](const auto& association) {
+                    return association.formal
+                        && *association.formal != "level"
+                        && *association.formal != "enable";
+                  });
+          if (invalid_actuals) {
+            diagnostics.error(
+                "FSIM-FE-VHENV-002",
+                "STD.ENV SETVHDLASSERTENABLE has no matching standardized association profile",
+                span(statement.span));
+          }
+        } else if (api
+                       == frontend::VhdlSimulatorApi::set_vhdl_assert_format) {
+          const auto count = statement.procedure_arguments.size();
+          const bool invalid_actuals
+              = (count != 2U && count != 3U)
+              || std::ranges::any_of(
+                  statement.procedure_arguments,
+                  [](const auto& association) {
+                    return association.formal
+                        && *association.formal != "level"
+                        && *association.formal != "format"
+                        && *association.formal != "valid";
+                  });
+          if (invalid_actuals) {
+            diagnostics.error(
+                "FSIM-FE-VHENV-002",
+                "STD.ENV SETVHDLASSERTFORMAT has no matching standardized association profile",
+                span(statement.span));
+          }
+        } else if (api
+                       == frontend::VhdlSimulatorApi::set_vhdl_read_severity) {
+          const bool invalid_actuals
+              = statement.procedure_arguments.size() > 1U
+              || std::ranges::any_of(
+                  statement.procedure_arguments,
+                  [](const auto& association) {
+                    return association.formal
+                        && *association.formal != "level";
+                  });
+          if (invalid_actuals) {
+            diagnostics.error(
+                "FSIM-FE-VHENV-002",
+                "STD.ENV SETVHDLREADSEVERITY accepts at most one SEVERITY_LEVEL actual",
+                span(statement.span));
+          }
+        } else if (api == frontend::VhdlSimulatorApi::dir_open
+                   || api == frontend::VhdlSimulatorApi::dir_close
+                   || api == frontend::VhdlSimulatorApi::dir_workingdir
+                   || api == frontend::VhdlSimulatorApi::dir_createdir
+                   || api == frontend::VhdlSimulatorApi::dir_deletedir
+                   || api == frontend::VhdlSimulatorApi::dir_deletefile) {
+          const auto count = statement.procedure_arguments.size();
+          const bool valid_count = api == frontend::VhdlSimulatorApi::dir_open
+              ? count == 3U
+              : api == frontend::VhdlSimulatorApi::dir_close
+              ? count == 1U
+              : (api == frontend::VhdlSimulatorApi::dir_createdir
+                    || api == frontend::VhdlSimulatorApi::dir_deletedir)
+              ? count == 2U || count == 3U
+              : count == 2U;
+          if (!valid_count) {
+            diagnostics.error(
+                "FSIM-FE-VHENV-003",
+                "STD.ENV directory procedure has no matching standardized association profile",
+                span(statement.span));
+          }
+        } else if (api != frontend::VhdlSimulatorApi::none) {
+          diagnostics.error(
+              "FSIM-FE-VHENV-001",
+              "STD.ENV functions, constants, and types cannot be called as procedures",
+              span(statement.span));
+        }
+      }
+      validate_expression(validate_expression, statement.target);
+      validate_expression(validate_expression, statement.value);
+      validate_expression(validate_expression, statement.condition);
+      validate_expression(validate_expression, statement.vhdl_guard);
+      validate_expression(validate_expression, statement.loop_initial);
+      validate_expression(validate_expression, statement.loop_limit);
+      for (const auto& association : statement.procedure_arguments) {
+        validate_expression(validate_expression, association.value);
+      }
+      for (const auto& alternative : statement.case_alternatives) {
+        for (const auto& choice : alternative.choices) {
+          validate_expression(validate_expression, choice);
+        }
+        self(self, alternative.statements);
+      }
+      self(self, statement.statements);
+      self(self, statement.else_statements);
+      self(self, statement.loop_updates);
+    }
+  };
+  for (const auto& unit : units) {
+    if (unit.language != frontend::Language::Vhdl2008) {
+      continue;
+    }
+    for (const auto& process : unit.processes) {
+      validate_statements(validate_statements, process.statements);
+    }
+    for (const auto& function : unit.functions) {
+      validate_statements(validate_statements, function.statements);
+    }
+    for (const auto& procedure : unit.procedures) {
+      validate_statements(validate_statements, procedure.statements);
+    }
+  }
+}
+
 void validate_vhdl_mode_view_interfaces(
     const std::span<const frontend::DesignUnit> units,
     diagnostic::Engine& diagnostics) {

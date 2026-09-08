@@ -12,7 +12,8 @@ ParseResult parse_vhdl(SourceText source, const VhdlStandard vhdl_standard)
     auto conditional = analyze_vhdl_conditionals(std::move(source), vhdl_standard);
     const bool conditional_profile_compatible = std::ranges::none_of(
         conditional.diagnostics, [](const Diagnostic& diagnostic) {
-            return diagnostic.code == "FSIM-VHDL-CA-001";
+            return diagnostic.code == "FSIM-VHDL-CA-001"
+                || diagnostic.code == "FSIM-VHDL-PROTECT-001";
         });
     auto lexed = lex(
         std::move(conditional.source), Language::Vhdl2008, vhdl_standard);

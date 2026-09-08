@@ -1325,6 +1325,28 @@ endclass
           && *rounded_time->integral() == 1,
       "real-to-time conversion uses deterministic nearest rounding");
 
+  const auto integer_zero = evaluate_systemverilog_scalar_constant(
+      Expression { ExpressionKind::IntegerLiteral, "0", { }, { } },
+      {}, {}, scalar_error);
+  require(integer_zero.has_value(), "the integral zero literal folds");
+  const auto null_chandle = convert_systemverilog_scalar_constant(
+      *integer_zero, SystemVerilogScalarKind::Chandle, scalar_error);
+  require(
+      null_chandle
+          && null_chandle->kind == SystemVerilogScalarKind::Chandle
+          && null_chandle->bits == 0U,
+      "the integral zero literal converts to the null chandle value");
+  const auto integer_one = evaluate_systemverilog_scalar_constant(
+      Expression { ExpressionKind::IntegerLiteral, "1", { }, { } },
+      {}, {}, scalar_error);
+  require(integer_one.has_value(), "the integral one literal folds");
+  require(
+      !convert_systemverilog_scalar_constant(
+          *integer_one, SystemVerilogScalarKind::Chandle, scalar_error)
+          && scalar_error
+              == "chandle casts require a chandle or null operand",
+      "nonzero integral values do not convert to chandle values");
+
   require(
       parsed.design.systemverilog_classes.size() == 1
           && parsed.design.systemverilog_classes.front().properties.size()

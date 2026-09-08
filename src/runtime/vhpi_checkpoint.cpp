@@ -134,7 +134,7 @@ bool valid_objects(
           || object.full_name.size() > maximum_full_name_size
           || object.full_name.find('\0') != std::string::npos
           || static_cast<std::uint32_t>(object.kind)
-              > static_cast<std::uint32_t>(VhdlVhpiObjectKind::Subtype)
+              > static_cast<std::uint32_t>(VhdlVhpiObjectKind::ViewElement)
           || !handles.insert(object.source).second
           || !names.insert(object.full_name).second) {
         return false;

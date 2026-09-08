@@ -457,6 +457,7 @@ architecture rtl of access_lifetime is
   type Bit_Pointer is access bit;
   signal Released_Null : boolean;
   signal Alias_Value : bit;
+  signal Fresh_Value : bit;
 begin
   exercise : process
     variable Pointer : Bit_Pointer;
@@ -468,6 +469,10 @@ begin
     Deallocate(Pointer);
     Released_Null <= Pointer = null;
     Alias_Value <= Saved.all;
+    Saved := null;
+    Pointer := new bit;
+    Pointer.all := '1';
+    Fresh_Value <= Pointer.all;
     wait;
   end process;
 end architecture;
@@ -504,7 +509,9 @@ end architecture;
             if (!project) {
                 for (const auto& diagnostic : diagnostics.diagnostics()) {
                     std::cerr << diagnostic.code << ": "
-                              << diagnostic.message << '\n';
+                              << diagnostic.message << " at "
+                              << diagnostic.span.begin.line << ':'
+                              << diagnostic.span.begin.column << '\n';
                 }
             }
             assert(project);
@@ -515,14 +522,14 @@ end architecture;
                         && !type.deallocate_releases_storage
                         && type.reclaim_when_unreachable;
                 }));
-            assert(std::ranges::none_of(
+            assert(std::ranges::count_if(
                 project->design.processes().front().operations,
                 [](const auto& operation) {
                     return fsim::runtime::simir::operation_get_if<
                                fsim::runtime::simir::DeleteContainer>(
                                &operation)
                         != nullptr;
-                }));
+                }) >= 4);
             fsim::app::Simulation simulation {
                 std::move(*project), config.run.max_deltas, engine
             };
@@ -530,12 +537,267 @@ end architecture;
                 "access_lifetime.released_null");
             const auto alias = simulation.find_signal(
                 "access_lifetime.alias_value");
-            assert(released && alias);
+            const auto fresh = simulation.find_signal(
+                "access_lifetime.fresh_value");
+            assert(released && alias && fresh);
             const auto result = simulation.run();
             assert(
                 result.status == fsim::runtime::RunStatus::completed
                 && simulation.read_signal(*released).to_msb_string() == "1"
-                && simulation.read_signal(*alias).to_msb_string() == "0");
+                && simulation.read_signal(*alias).to_msb_string() == "0"
+                && simulation.read_signal(*fresh).to_msb_string() == "1");
+        }
+    }
+}
+
+void verify_vhdl_2019_reflection(
+    const std::filesystem::path& directory)
+{
+    const auto reflection_directory = directory / "reflection-2019";
+    std::filesystem::create_directories(reflection_directory);
+    const auto source = reflection_directory / "reflection.vhd";
+    {
+        std::ofstream output { source };
+        output << R"(
+library std;
+use std.reflection.all;
+
+entity Reflection_2019 is end entity;
+architecture rtl of reflection_2019 is
+  type State_T is (Idle, Busy, Done);
+  subtype Active_T is State_T range Busy to Done;
+  subtype Small_Int is integer range 2 to 5;
+  type Pair_T is record
+    First : integer;
+    Second : State_T;
+  end record;
+  type Values_T is array(1 to 2) of integer;
+  type Integer_Pointer is access integer;
+  type Distance_T is range 0 to 10000 units
+    um;
+    mm = 1000 um;
+  end units Distance_T;
+  type Integer_File is file of integer;
+  type Guard_T is protected
+    impure function Read return integer;
+  end protected Guard_T;
+  signal Class_Code : integer;
+  signal Literal_Count : integer;
+  signal Snapshot_Pos : integer;
+  signal Left_Pos : integer;
+  signal Is_Ascending : boolean;
+  signal Integer_Left : integer;
+  signal Record_Length : integer;
+  signal Record_First : integer;
+  signal Array_Dimensions : integer;
+  signal Array_Second : integer;
+  signal Access_Value : integer;
+  signal Access_Null : boolean;
+  signal Physical_Units : integer;
+  signal Physical_Unit : integer;
+  signal Floating_Class : integer;
+  signal Protected_Class : integer;
+  signal File_Class : integer;
+  signal File_Mode : integer;
+begin
+  exercise : process
+    variable State : Active_T := Busy;
+    variable Pair_Value : Pair_T := (7, Busy);
+    variable Values : Values_T;
+    variable Pointer : Integer_Pointer;
+    variable Distance : Distance_T;
+    variable Real_Value : real := 1.5;
+    variable Type_View : Subtype_Mirror;
+    variable Enum_Type : Enumeration_Subtype_Mirror;
+    variable Value_View : Value_Mirror;
+    variable Enum_Value : Enumeration_Value_Mirror;
+    variable Left_Value : Enumeration_Value_Mirror;
+    variable Integer_Type : Integer_Subtype_Mirror;
+    variable Integer_Value : Integer_Value_Mirror;
+    variable Record_Value : Record_Value_Mirror;
+    variable Record_Type : Record_Subtype_Mirror;
+    variable Array_Value : Array_Value_Mirror;
+    variable Array_Type : Array_Subtype_Mirror;
+    variable Access_Value_View : Access_Value_Mirror;
+    variable Physical_Value : Physical_Value_Mirror;
+    variable Physical_Type : Physical_Subtype_Mirror;
+    variable File_Value : File_Value_Mirror;
+    file Reflection_Output : Integer_File open write_mode is "reflection-output.dat";
+  begin
+    Type_View := Active_T'reflect;
+    Enum_Type := Type_View.to_enumeration;
+    Value_View := State'reflect;
+    Enum_Value := Value_View.to_enumeration;
+    Left_Value := Enum_Type.left;
+    State := Done;
+    Class_Code <= Type_Class'pos(Type_View.get_type_class);
+    Literal_Count <= Enum_Type.length;
+    Snapshot_Pos <= Enum_Value.pos;
+    Left_Pos <= Left_Value.pos;
+    Is_Ascending <= Enum_Type.ascending;
+    assert Enum_Value.image = "busy"
+      report "reflection value mirrors must retain immutable snapshots"
+      severity failure;
+    Value_View := Enum_Value.to_value_mirror;
+    Type_View := Enum_Type.to_subtype_mirror;
+    Enum_Value := Enum_Type.enumeration_literal("done");
+    assert Enum_Value.pos = 2
+      report "enumeration literal reflection returned the wrong ordinal"
+      severity failure;
+    Type_View := Small_Int'reflect;
+    Integer_Type := Type_View.to_integer;
+    Integer_Value := Integer_Type.left;
+    Integer_Left <= Integer_Value.value;
+    Value_View := Pair_Value'reflect;
+    Record_Value := Value_View.to_record;
+    Record_Type := Record_Value.get_subtype_mirror;
+    Record_Length <= Record_Type.length;
+    Value_View := Record_Value.get("first");
+    Integer_Value := Value_View.to_integer;
+    Record_First <= Integer_Value.value;
+    Values(1) := 11;
+    Values(2) := 22;
+    Value_View := Values'reflect;
+    Array_Value := Value_View.to_array;
+    Array_Type := Array_Value.get_subtype_mirror;
+    Array_Dimensions <= Array_Type.dimensions;
+    Value_View := Array_Value.get(2);
+    Integer_Value := Value_View.to_integer;
+    Array_Second <= Integer_Value.value;
+    Pointer := new integer;
+    Pointer.all := 9;
+    Value_View := Pointer'reflect;
+    Access_Value_View := Value_View.to_access;
+    Pointer.all := 10;
+    Access_Null <= Access_Value_View.is_null;
+    Value_View := Access_Value_View.get;
+    Integer_Value := Value_View.to_integer;
+    Access_Value <= Integer_Value.value;
+    Distance := 2 mm;
+    Value_View := Distance'reflect;
+    Physical_Value := Value_View.to_physical;
+    Physical_Type := Physical_Value.get_subtype_mirror;
+    Physical_Units <= Physical_Type.units_length;
+    Physical_Unit <= Physical_Value.unit_index;
+    Value_View := Real_Value'reflect;
+    Floating_Class <= Type_Class'pos(Value_View.get_value_class);
+    Type_View := Guard_T'reflect;
+    Protected_Class <= Type_Class'pos(Type_View.get_type_class);
+    Type_View := Integer_File'reflect;
+    File_Class <= Type_Class'pos(Type_View.get_type_class);
+    Value_View := Reflection_Output'reflect;
+    File_Value := Value_View.to_file;
+    assert File_Value.get_file_logical_name = "reflection-output.dat"
+      report "file reflection lost the logical name"
+      severity failure;
+    File_Mode <= File_Open_Kind'pos(File_Value.get_file_open_kind);
+    wait;
+  end process;
+end architecture;
+)";
+        assert(output.good());
+    }
+
+    for (const auto optimization : {
+             fsim::project::Optimization::o0,
+             fsim::project::Optimization::o2 }) {
+        fsim::project::Config config;
+        config.base_directory = reflection_directory;
+        config.project.name = "vhdl-2019-reflection";
+        config.project.top = "vhdl:work.reflection_2019(rtl)";
+        config.project.time_resolution = "1ns";
+        config.build.optimization = optimization;
+        config.build.cache_path = reflection_directory
+            / (optimization == fsim::project::Optimization::o0
+                    ? "cache-o0" : "cache-o2");
+        config.run.max_deltas = 1000;
+        fsim::project::SourceSet sources;
+        sources.language = fsim::project::Language::vhdl;
+        sources.standard = "2019";
+        sources.library = "work";
+        sources.files.push_back(source);
+        config.source_sets.push_back(std::move(sources));
+
+        for (const auto engine : {
+                 fsim::app::SimulationEngine::interpreter,
+                 fsim::app::SimulationEngine::compiled,
+                 fsim::app::SimulationEngine::compiled }) {
+            fsim::diagnostic::Engine diagnostics;
+            auto project = fsim::app::build_project(config, diagnostics);
+            if (!project) {
+                for (const auto& diagnostic : diagnostics.diagnostics()) {
+                    std::cerr << diagnostic.code << ": "
+                              << diagnostic.message << " at "
+                              << diagnostic.span.begin.line << ':'
+                              << diagnostic.span.begin.column << '\n';
+                }
+            }
+            assert(project);
+            fsim::app::Simulation simulation {
+                std::move(*project), config.run.max_deltas, engine
+            };
+            const auto class_code = simulation.find_signal(
+                "reflection_2019.class_code");
+            const auto count = simulation.find_signal(
+                "reflection_2019.literal_count");
+            const auto snapshot = simulation.find_signal(
+                "reflection_2019.snapshot_pos");
+            const auto left = simulation.find_signal(
+                "reflection_2019.left_pos");
+            const auto ascending = simulation.find_signal(
+                "reflection_2019.is_ascending");
+            const auto integer_left = simulation.find_signal(
+                "reflection_2019.integer_left");
+            const auto record_length = simulation.find_signal(
+                "reflection_2019.record_length");
+            const auto record_first = simulation.find_signal(
+                "reflection_2019.record_first");
+            const auto array_dimensions = simulation.find_signal(
+                "reflection_2019.array_dimensions");
+            const auto array_second = simulation.find_signal(
+                "reflection_2019.array_second");
+            const auto access_value = simulation.find_signal(
+                "reflection_2019.access_value");
+            const auto access_null = simulation.find_signal(
+                "reflection_2019.access_null");
+            const auto physical_units = simulation.find_signal(
+                "reflection_2019.physical_units");
+            const auto physical_unit = simulation.find_signal(
+                "reflection_2019.physical_unit");
+            const auto floating_class = simulation.find_signal(
+                "reflection_2019.floating_class");
+            const auto protected_class = simulation.find_signal(
+                "reflection_2019.protected_class");
+            const auto file_class = simulation.find_signal(
+                "reflection_2019.file_class");
+            const auto file_mode = simulation.find_signal(
+                "reflection_2019.file_mode");
+            assert(class_code && count && snapshot && left && ascending
+                && integer_left && record_length && record_first
+                && array_dimensions && array_second && access_value
+                && access_null && physical_units && physical_unit
+                && floating_class && protected_class && file_class
+                && file_mode);
+            const auto result = simulation.run();
+            assert(result.status == fsim::runtime::RunStatus::completed);
+            assert(simulation.read_signal(*class_code).low_word().aval == 0U);
+            assert(simulation.read_signal(*count).low_word().aval == 2U);
+            assert(simulation.read_signal(*snapshot).low_word().aval == 1U);
+            assert(simulation.read_signal(*left).low_word().aval == 1U);
+            assert(simulation.read_signal(*ascending).low_word().aval == 1U);
+            assert(simulation.read_signal(*integer_left).low_word().aval == 2U);
+            assert(simulation.read_signal(*record_length).low_word().aval == 2U);
+            assert(simulation.read_signal(*record_first).low_word().aval == 7U);
+            assert(simulation.read_signal(*array_dimensions).low_word().aval == 1U);
+            assert(simulation.read_signal(*array_second).low_word().aval == 22U);
+            assert(simulation.read_signal(*access_value).low_word().aval == 9U);
+            assert(simulation.read_signal(*access_null).low_word().aval == 0U);
+            assert(simulation.read_signal(*physical_units).low_word().aval == 2U);
+            assert(simulation.read_signal(*physical_unit).low_word().aval == 1U);
+            assert(simulation.read_signal(*floating_class).low_word().aval == 2U);
+            assert(simulation.read_signal(*protected_class).low_word().aval == 8U);
+            assert(simulation.read_signal(*file_class).low_word().aval == 7U);
+            assert(simulation.read_signal(*file_mode).low_word().aval == 1U);
         }
     }
 }
@@ -620,6 +882,7 @@ int main()
 #endif
     }
     verify_vhdl_2019_access_lifetime(directory.path);
+    verify_vhdl_2019_reflection(directory.path);
     verify_protected_revision_execution(directory.path);
     verify_vhdl_1993_shared_execution(directory.path);
     verify_vhdl_1987_declaration_execution(directory.path);

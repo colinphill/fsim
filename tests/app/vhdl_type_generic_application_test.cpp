@@ -477,6 +477,31 @@ architecture rtl of mode_view_hir_top is begin end architecture;
   assert(retained_view.elements.front().elements.front().elements.size()
       == 3);
 
+  fsim::diagnostic::Engine vhpi_diagnostics;
+  auto vhpi_project = fsim::app::build_project(config, vhpi_diagnostics);
+  assert(vhpi_project);
+  fsim::app::Simulation simulation{
+      std::move(*vhpi_project), config.run.max_deltas};
+  auto& vhpi = simulation.vhdl_vhpi_objects();
+  const auto channel = vhpi.find("mode_view_hir_top.channel");
+  const auto ready = vhpi.find("mode_view_hir_top.channel.ready");
+  assert(channel && ready);
+  assert(vhpi
+             .property(channel.value.handle,
+                 fsim::runtime::VhdlVhpiPropertyKind::ObjectKind)
+             .object_kind
+      == fsim::runtime::VhdlVhpiObjectKind::Port);
+  assert(vhpi
+             .property(ready.value.handle,
+                 fsim::runtime::VhdlVhpiPropertyKind::ObjectKind)
+             .object_kind
+      == fsim::runtime::VhdlVhpiObjectKind::ViewElement);
+  assert(vhpi
+             .property(ready.value.handle,
+                 fsim::runtime::VhdlVhpiPropertyKind::Parent)
+             .handle
+      == channel.value.handle);
+
   const auto invalid_source = directory / "vhdl_2019_mode_view_invalid.vhd";
   {
     std::ofstream output(invalid_source, std::ios::binary);

@@ -157,6 +157,11 @@ bool Lowerer::vhdl_expression_matches_type(
     return true;
   }
   if (expression.kind == ExpressionKind::IntegerLiteral) {
+    if (expression.systemverilog_scalar_kind
+        == frontend::SystemVerilogScalarKind::Real) {
+      return formal.systemverilog_scalar
+          == frontend::SystemVerilogScalarKind::Real;
+    }
     return formal.domain == frontend::ValueDomain::Integer;
   }
   if (expression.kind == ExpressionKind::BooleanLiteral) {

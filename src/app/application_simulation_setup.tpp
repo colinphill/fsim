@@ -643,6 +643,11 @@ Impl(
             } catch (...) {
             }
         });
+    interpreter->set_vhdl_psl_api_hook(
+        [this](const runtime::simir::VhdlPslApiKind kind,
+            const std::optional<bool> enable) {
+            return vhdl_psl->apply_api(kind, enable);
+        });
 #include "application_simulation_setup_execution.tpp"
     interpreter->set_signal_change_hook(
         [this](

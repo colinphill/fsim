@@ -178,7 +178,7 @@ int main() {
     vhdl_metadata.units.front().standard = vhdl_metadata.standard;
     vhdl_metadata.units.front().compatibility_profile
         = vhdl_metadata.compatibility_profile;
-    vhdl_metadata.vhdl_package_dependencies = { { "1993", "ieee-1076-standard:1993:fsim-v1",
+    vhdl_metadata.vhdl_package_dependencies = { { "1993", "ieee-1076-standard:1993:fsim-v3",
         "ieee.std_logic_unsigned",
         "synopsys-legacy-ieee:1990-1992:fsim-synopsys-ieee-compat-v2",
         checksum("synopsys-unsigned-source") } };

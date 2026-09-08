@@ -357,6 +357,237 @@ end architecture;
       }));
 }
 
+void verify_sequential_block_runtime(
+    const std::filesystem::path& directory) {
+  const auto block_directory = directory / "sequential-block-2019";
+  std::filesystem::create_directories(block_directory);
+  const auto source = block_directory / "sequential_block_runtime.vhd";
+  {
+    std::ofstream output(source, std::ios::binary);
+    output << R"(
+entity sequential_block_runtime is
+end entity;
+architecture rtl of sequential_block_runtime is
+  type Bit_Pointer is access bit;
+  signal wait_value : integer := 0;
+  signal return_value : integer := 0;
+  signal reentry_value : integer := 0;
+  procedure leave_nested(variable target : out integer) is
+  begin
+    returned : block is
+      variable local_value : integer := 7;
+      variable transient : Bit_Pointer;
+    begin
+      transient := new bit;
+      target := local_value;
+      return;
+      target := 99;
+    end block returned;
+  end procedure;
+begin
+  exercise : process
+    variable result : integer := 0;
+    variable iteration : integer := 0;
+    variable total : integer := 0;
+  begin
+    delayed : block is
+      variable retained : integer := 2;
+    begin
+      retained := retained + 1;
+      wait for 2 ns;
+      retained := retained + 2;
+      wait_value <= retained;
+    end block delayed;
+
+    leave_nested(result);
+    return_value <= result;
+
+    while iteration < 2 loop
+      iteration := iteration + 1;
+      repeated : block is
+        variable fresh : integer := 3;
+      begin
+        fresh := fresh + iteration;
+        total := total + fresh;
+      end block repeated;
+    end loop;
+    reentry_value <= total;
+    wait;
+  end process;
+end architecture;
+)";
+    assert(output.good());
+  }
+
+  struct Result {
+    fsim::runtime::RunResult run;
+    std::array<std::uint64_t, 3> values{};
+    std::size_t compiled_processes{};
+  };
+  const auto run = [&](const fsim::project::Optimization optimization,
+                       const fsim::app::SimulationEngine engine) {
+    auto config = make_config(block_directory, source, optimization);
+    config.project.name = "vhdl-2019-sequential-block-runtime";
+    config.project.top = "vhdl:work.sequential_block_runtime(rtl)";
+    config.source_sets.front().standard = "2019";
+    config.build.cache_path = block_directory
+        / (optimization == fsim::project::Optimization::o0
+               ? "cache-o0"
+               : "cache-o2");
+    fsim::diagnostic::Engine diagnostics;
+    auto project = fsim::app::build_project(config, diagnostics);
+    if (!project) {
+      for (const auto& diagnostic : diagnostics.diagnostics()) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    assert(project);
+    assert(std::ranges::any_of(
+        project->design.processes().front().operations,
+        [](const auto& operation) {
+          return fsim::runtime::simir::operation_get_if<
+                     fsim::runtime::simir::DeleteContainer>(&operation)
+              != nullptr;
+        }));
+    for (const std::string_view label : {
+             "delayed", "returned", "repeated"}) {
+      const auto block = std::ranges::find(
+          project->vhdl_hir.statements(), label,
+          &fsim::semantic::vhdl::Statement::label);
+      assert(
+          block != project->vhdl_hir.statements().end()
+          && block->kind == fsim::semantic::vhdl::StatementKind::block
+          && block->nested_scope);
+    }
+    fsim::app::Simulation simulation{
+        std::move(*project), config.run.max_deltas, engine};
+    const auto waited = simulation.find_signal(
+        "sequential_block_runtime.wait_value");
+    const auto returned = simulation.find_signal(
+        "sequential_block_runtime.return_value");
+    const auto reentered = simulation.find_signal(
+        "sequential_block_runtime.reentry_value");
+    assert(waited && returned && reentered);
+    Result result;
+    result.compiled_processes = simulation.compiled_process_count();
+    result.run = simulation.run();
+    result.values = {
+        simulation.read_signal(*waited).low_word().aval,
+        simulation.read_signal(*returned).low_word().aval,
+        simulation.read_signal(*reentered).low_word().aval};
+    return result;
+  };
+
+  for (const auto optimization : {
+           fsim::project::Optimization::o0,
+           fsim::project::Optimization::o2}) {
+    const auto reference = run(
+        optimization, fsim::app::SimulationEngine::interpreter);
+    const auto cold = run(
+        optimization, fsim::app::SimulationEngine::compiled);
+    const auto warm = run(
+        optimization, fsim::app::SimulationEngine::compiled);
+    constexpr std::array<std::uint64_t, 3> expected{5, 7, 9};
+    assert(
+        reference.run.status == fsim::runtime::RunStatus::completed
+        && reference.run.time == 2
+        && reference.values == expected
+        && cold.run.status == reference.run.status
+        && cold.run.time == reference.run.time
+        && cold.values == reference.values
+        && warm.run.status == reference.run.status
+        && warm.run.time == reference.run.time
+        && warm.values == reference.values);
+#if defined(FSIM_HAS_LLVM)
+    assert(cold.compiled_processes > 0 && warm.compiled_processes > 0);
+#endif
+  }
+
+  const auto exception_source =
+      block_directory / "sequential_block_exception.vhd";
+  {
+    std::ofstream output(exception_source, std::ios::binary);
+    output << R"(
+entity sequential_block_exception is
+end entity;
+architecture rtl of sequential_block_exception is
+begin
+  exercise : process
+  begin
+    failing : block is
+      variable retained : integer := 4;
+    begin
+      wait for 1 ns;
+      retained := retained + 1;
+      assert retained = 0
+        report "sequential block exception propagated"
+        severity failure;
+    end block failing;
+    wait;
+  end process;
+end architecture;
+)";
+    assert(output.good());
+  }
+  for (const auto optimization : {
+           fsim::project::Optimization::o0,
+           fsim::project::Optimization::o2}) {
+    for (const auto engine : {
+             fsim::app::SimulationEngine::interpreter,
+             fsim::app::SimulationEngine::compiled}) {
+      auto config = make_config(
+          block_directory, exception_source, optimization);
+      config.project.name = "vhdl-2019-sequential-block-exception";
+      config.project.top =
+          "vhdl:work.sequential_block_exception(rtl)";
+      config.source_sets.front().standard = "2019";
+      config.build.cache_path = block_directory
+          / (optimization == fsim::project::Optimization::o0
+                 ? "exception-cache-o0"
+                 : "exception-cache-o2");
+      fsim::diagnostic::Engine diagnostics;
+      auto project = fsim::app::build_project(config, diagnostics);
+      if (!project) {
+        for (const auto& diagnostic : diagnostics.diagnostics()) {
+          std::cerr << diagnostic.code << ": "
+                    << diagnostic.message << '\n';
+        }
+      }
+      assert(project);
+      assert(std::ranges::any_of(
+          project->design.processes().front().operations,
+          [](const auto& operation) {
+            const auto* point =
+                fsim::runtime::simir::operation_get_if<
+                    fsim::runtime::simir::DebugPoint>(&operation);
+            return point != nullptr
+                && point->scope.find(".failing")
+                    != std::string::npos;
+          }));
+      fsim::app::Simulation simulation{
+          std::move(*project), config.run.max_deltas, engine};
+#if defined(FSIM_HAS_LLVM)
+      if (engine == fsim::app::SimulationEngine::compiled) {
+        assert(simulation.compiled_process_count() > 0);
+      }
+#endif
+      bool propagated = false;
+      try {
+        (void)simulation.run();
+      } catch (const fsim::runtime::simir::AssertionError& error) {
+        propagated = std::string_view{error.what()}.find(
+                         "sequential block exception propagated")
+                != std::string_view::npos
+            && error.source().path.ends_with(
+                "sequential_block_exception.vhd")
+            && error.source().line != 0;
+      }
+      assert(propagated);
+    }
+  }
+}
+
 void verify_executable_hir(const fsim::project::Config& config) {
   fsim::diagnostic::Engine diagnostics;
   auto checked = fsim::app::check_project(config, diagnostics);
@@ -625,6 +856,7 @@ end architecture;
           directory.path,
           source,
           fsim::project::Optimization::o0));
+  verify_sequential_block_runtime(directory.path);
 
   for (const auto optimization : {
            fsim::project::Optimization::o0,

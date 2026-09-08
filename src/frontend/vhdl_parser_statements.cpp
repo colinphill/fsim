@@ -638,6 +638,13 @@ VhdlParser::parse_vhdl_procedure_call() {
   Statement statement;
   statement.kind = StatementKind::ProcedureCall;
   statement.procedure_name = std::move(name);
+  if (vhdl_simulator_api(statement.procedure_name)
+      != VhdlSimulatorApi::none) {
+    require_vhdl_standard(
+        start, VhdlStandard::Vhdl2019,
+        "the STD.ENV simulator, data, and time interface",
+        "select VHDL-2019 or remove the STD.ENV call");
+  }
   if (match(TokenKind::LeftParen)) {
     bool saw_named = false;
     if (!at(TokenKind::RightParen)) {

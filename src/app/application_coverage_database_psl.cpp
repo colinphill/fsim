@@ -85,6 +85,7 @@ namespace {
 
     CoverageDatabaseIdentity bin_identity(
         const ConcurrentAssertionCoverage& item,
+        const CoverageDatabaseIdentity source_identity,
         const std::string_view role) noexcept
     {
         support::Sha256 hash;
@@ -93,7 +94,8 @@ namespace {
         update_text(hash, item.process);
         update_u64(hash, static_cast<std::uint8_t>(item.kind));
         update_u64(hash, item.slot);
-        update_u64(hash, item.source_span);
+        update_u64(hash, source_identity.high);
+        update_u64(hash, source_identity.low);
         update_text(hash, role);
         return identity_from_digest(hash.finish());
     }
@@ -176,8 +178,8 @@ PslCoverageDatabaseResult project_psl_coverage_namespace(
         }
 
         std::set<std::tuple<std::string, std::string,
-            ConcurrentAssertionCoverageKind, std::uint32_t, std::uint32_t>>
-            identities;
+            ConcurrentAssertionCoverageKind, std::uint32_t, std::uint64_t,
+            std::uint64_t>> identities;
         static constexpr std::array property_roles {
             std::string_view { "pass" }, std::string_view { "failure" },
             std::string_view { "vacuous" }, std::string_view { "aborted" }
@@ -191,14 +193,14 @@ PslCoverageDatabaseResult project_psl_coverage_namespace(
                 || !valid_kind(item.kind)) {
                 return fail(PslCoverageDatabaseError::InvalidDirective, index);
             }
-            const auto key = std::tie(item.name, item.process, item.kind,
-                item.slot, item.source_span);
-            if (!identities.emplace(key).second) {
-                return fail(PslCoverageDatabaseError::DuplicateDirective, index);
-            }
             const auto source = source_map.find(item.source_span);
             if (source == source_map.end()) {
                 return fail(PslCoverageDatabaseError::UnknownSource, index);
+            }
+            const auto key = std::tie(item.name, item.process, item.kind,
+                item.slot, source->second.high, source->second.low);
+            if (!identities.emplace(key).second) {
+                return fail(PslCoverageDatabaseError::DuplicateDirective, index);
             }
             std::uint64_t completed { };
             if (!checked_add(completed, item.passes)
@@ -215,7 +217,8 @@ PslCoverageDatabaseResult project_psl_coverage_namespace(
                 contents.metrics.push_back(CoverageDatabaseMetricRecord {
                     CoverageDatabaseNamespace::Psl, family,
                     CoverageDatabaseMetricScope::Instance,
-                    bin_identity(item, role), source->second, owner, run_identity,
+                    bin_identity(item, source->second, role), source->second,
+                    owner, run_identity,
                     hits, 0U,
                     hits == std::numeric_limits<std::uint64_t>::max(), false });
             };

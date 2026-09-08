@@ -238,7 +238,7 @@ endforeach()
 foreach(FSIM_TOKEN IN ITEMS
     "34 supported, 0 active, and 3 deferred"
     "12 preserved, 0 active, and 3 physical"
-    "diagnostic catalog covers 2638 production codes"
+    "diagnostic catalog covers 2661 production codes"
     "against the 2500-line hard limit with a 2000-line refactor target"
     "v1 conformance audit:"
     "resource portability contract:")

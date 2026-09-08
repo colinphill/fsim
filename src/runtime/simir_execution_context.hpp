@@ -923,6 +923,17 @@ struct Interpreter::Impl::ExecutionContext final
         owner.report_hook(process, message, severity, source,
             owner.scheduler.now(), owner.scheduler.delta());
     }
+    void vhdl_report(
+        const InstructionIndex instruction,
+        const std::string_view message,
+        const AssertionSeverity severity,
+        const SourceLocation& source,
+        const bool standalone) override
+    {
+        owner.execute_vhdl_report(
+            owner.processes[process], instruction, message, severity,
+            source, standalone);
+    }
     [[nodiscard]] Logic9 evaluate_vital_timing_check(
         const InstructionIndex instruction, const VitalTimingCheck& operation) override
     {

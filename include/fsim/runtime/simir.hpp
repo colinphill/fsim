@@ -392,6 +392,7 @@ struct ContainerStringRead {
     bool signed_index { true };
     bool linear_index { };
     bool string_index { };
+    std::vector<std::uint32_t> members;
 };
 
 struct ContainerStringWrite {
@@ -1721,6 +1722,8 @@ public:
         std::span<const std::uint8_t>,
         CoverageSampleTrigger)>;
     using CoverageQueryHook = std::function<PackedLogic4(CoverageQueryKind)>;
+    using VhdlPslApiHook = std::function<bool(
+        VhdlPslApiKind, std::optional<bool>)>;
     using CoverageControlHook
         = std::function<std::int32_t(const CoverageControlEvent&)>;
     using CoverageAccessHook
@@ -1951,6 +1954,7 @@ public:
     void set_report_hook(ReportHook hook);
     void set_coverage_sample_hook(CoverageSampleHook hook);
     void set_coverage_query_hook(CoverageQueryHook hook);
+    void set_vhdl_psl_api_hook(VhdlPslApiHook hook);
     void set_coverage_control_hook(CoverageControlHook hook);
     void set_coverage_access_hook(CoverageAccessHook hook);
     /// Install or restore the dense simulation-owned code counters before

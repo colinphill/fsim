@@ -100,6 +100,7 @@ void Interpreter::Impl::set_file_root(
     }
     if (root.empty()) {
         file_root.clear();
+        vhdl_working_directory.clear();
         return;
     }
     std::error_code error;
@@ -110,6 +111,7 @@ void Interpreter::Impl::set_file_root(
         };
     }
     file_root = std::move(root);
+    vhdl_working_directory = file_root;
 }
 
 FileHandle Interpreter::Impl::open_file(
@@ -208,6 +210,7 @@ FileHandle Interpreter::Impl::open_file(
         FileState {
             process,
             std::move(checked),
+            std::string { path_text },
             std::string { mode_text },
             std::move(stream),
             std::nullopt,

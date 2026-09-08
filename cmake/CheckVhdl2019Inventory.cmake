@@ -20,6 +20,7 @@ set(FSIM_PLAN "${FSIM_SOURCE_DIR}/docs/implementation_plan_v3.md")
 set(FSIM_TEST_CMAKE "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
 set(FSIM_FEATURE_README
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/README.md")
+set(FSIM_GUIDE "${FSIM_SOURCE_DIR}/docs/vhdl-2019.md")
 set(FSIM_SOURCE_MANIFEST
   "${FSIM_SOURCE_DIR}/packaging/source-package-manifest.txt")
 foreach(FSIM_INPUT IN ITEMS
@@ -27,6 +28,7 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_PLAN}"
     "${FSIM_TEST_CMAKE}"
     "${FSIM_FEATURE_README}"
+    "${FSIM_GUIDE}"
     "${FSIM_SOURCE_MANIFEST}")
   if(NOT EXISTS "${FSIM_INPUT}")
     message(FATAL_ERROR "VHDL-2019 inventory input is missing: ${FSIM_INPUT}")
@@ -34,7 +36,7 @@ foreach(FSIM_INPUT IN ITEMS
 endforeach()
 
 set(FSIM_EXPECTED_DIGEST
-  "2dfcaeeb274f240014cb12a9ccaf0f7c8889eaae6291dfcfb1c35b5289744a1f")
+  "87e90ceea9effba9b2fbbb44a63152bb11f07d4afb674d71c43ae667afe30dbe")
 fsim_normalized_text_sha256("${FSIM_INVENTORY}" FSIM_ACTUAL_DIGEST)
 if(NOT FSIM_ACTUAL_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
@@ -120,9 +122,9 @@ foreach(FSIM_INDEX RANGE 2 38)
   endforeach()
 endforeach()
 
-if(NOT FSIM_ACTIVE_COUNT EQUAL 19 OR NOT FSIM_PRESERVED_COUNT EQUAL 18)
+if(NOT FSIM_ACTIVE_COUNT EQUAL 0 OR NOT FSIM_PRESERVED_COUNT EQUAL 37)
   message(FATAL_ERROR
-    "VHDL-2019 inventory must contain 19 active and eighteen preserved rows after Change 19")
+    "VHDL-2019 inventory must contain zero active and 37 preserved rows after Batch 184 Change 19")
 endif()
 foreach(FSIM_CHANGE RANGE 2 19)
   if(FSIM_CHANGE LESS 10)
@@ -172,7 +174,8 @@ foreach(FSIM_BATCH IN ITEMS 183 184)
 endforeach()
 foreach(FSIM_TOKEN IN ITEMS
     "Build a private-reference-derived, independently worded 2008-to-2019 clause inventory."
-    "Close every active VHDL-2019 clause row"
+    "Closed the last active independently worded VHDL-2019 row"
+    "zero active and 37 preserved rows"
     "Sanitizers and hosted Linux and Windows qualification run only at every")
   string(FIND "${FSIM_PLAN_TEXT}" "${FSIM_TOKEN}" FSIM_TOKEN_OFFSET)
   if(FSIM_TOKEN_OFFSET EQUAL -1)
@@ -197,9 +200,39 @@ if(FSIM_README_OFFSET EQUAL -1)
   message(FATAL_ERROR "feature-matrix README omits the VHDL-2019 inventory")
 endif()
 
+file(READ "${FSIM_GUIDE}" FSIM_GUIDE_TEXT)
+foreach(FSIM_TOKEN IN ITEMS
+    "# VHDL-2019 support"
+    "standard = \"2019\""
+    "## Language additions"
+    "## Runtime and predefined APIs"
+    "## Coverage"
+    "## VHPI"
+    "## Artifacts and mixed-language designs"
+    "## Deliberate boundaries"
+    "vhdl_2019_inventory.tsv")
+  string(FIND "${FSIM_GUIDE_TEXT}" "${FSIM_TOKEN}" FSIM_GUIDE_OFFSET)
+  if(FSIM_GUIDE_OFFSET EQUAL -1)
+    message(FATAL_ERROR
+      "VHDL-2019 guide lost required token: ${FSIM_TOKEN}")
+  endif()
+endforeach()
+string(TOLOWER "${FSIM_GUIDE_TEXT}" FSIM_GUIDE_LOWER)
+foreach(FSIM_FORBIDDEN IN ITEMS
+    "/home/" "standards/" ".pdf" "private-reference" "lrm text"
+    "ieee says" "verbatim")
+  string(FIND "${FSIM_GUIDE_LOWER}" "${FSIM_FORBIDDEN}"
+    FSIM_FORBIDDEN_OFFSET)
+  if(NOT FSIM_FORBIDDEN_OFFSET EQUAL -1)
+    message(FATAL_ERROR
+      "VHDL-2019 guide contains forbidden reference material token: ${FSIM_FORBIDDEN}")
+  endif()
+endforeach()
+
 file(READ "${FSIM_SOURCE_MANIFEST}" FSIM_SOURCE_MANIFEST_TEXT)
 foreach(FSIM_PATH IN ITEMS
     "cmake/CheckVhdl2019Inventory.cmake"
+    "docs/vhdl-2019.md"
     "src/app/application_vhdl_mode_view.cpp"
     "src/frontend/vhdl_conditional_analysis.cpp"
     "src/frontend/vhdl_conditional_analysis_internal.hpp"

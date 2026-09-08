@@ -561,9 +561,38 @@ Process Lowerer::lower_process(
         }
     }
     const auto found = visible_type_marks_.find(std::string { name });
-    return found == visible_type_marks_.end()
-        ? nullptr
-        : found->second;
+    if (found != visible_type_marks_.end()) {
+        return found->second;
+    }
+    if (vhdl_standard_ >= frontend::VhdlStandard::Vhdl2019) {
+        static const auto reflection_type_class =
+            frontend::vhdl_reflection_type("type_class");
+        static const auto reflection_value_class =
+            frontend::vhdl_reflection_type("value_class");
+        if (name == "type_class") {
+            return &*reflection_type_class;
+        }
+        if (name == "value_class") {
+            return &*reflection_value_class;
+        }
+    }
+    if (vhdl_standard_ >= frontend::VhdlStandard::Vhdl1993
+        && name == "file_open_kind") {
+        static const auto file_open_kind = [] {
+            frontend::Type type;
+            type.domain = frontend::ValueDomain::Bit2;
+            type.spelling = "file_open_kind";
+            type.nominal_type = "@builtin:file_open_kind";
+            type.vhdl_type_declaration = type.nominal_type;
+            type.packed_range = frontend::PackedRange { 1, 0, true };
+            type.enumeration_literals = {
+                "read_mode", "write_mode", "append_mode" };
+            type.enumeration_range = frontend::EnumerationRange { 0, 2, false };
+            return type;
+        }();
+        return &file_open_kind;
+    }
+    return nullptr;
 }
 
 [[nodiscard]] const frontend::Type*
@@ -933,6 +962,8 @@ void Lowerer::lower_block(const Statement& statement)
     const auto declaration_scope = local_scope_;
     const auto block_begin = static_cast<InstructionIndex>(
         process_.operations.size());
+    const auto function_returns_begin = function_return_jumps_.size();
+    const auto procedure_returns_begin = procedure_return_jumps_.size();
     local_scope_.push_back(block_scope_name(statement));
     const bool named = !statement.label.empty();
     std::optional<std::size_t> named_control_index;
@@ -942,6 +973,10 @@ void Lowerer::lower_block(const Statement& statement)
         named_block_controls_.push_back(
             { statement.label, declaration_scope, block_begin, std::nullopt, { } });
     }
+    const bool automatic_scope = !(active_function_
+                                     && !function_frames_[*active_function_].source->automatic)
+        && !(active_task_
+            && !task_frames_[*active_task_].source->automatic);
     if (active_function_
         && !function_frames_[*active_function_].source->automatic) {
         bind_static_callable_variables(
@@ -973,14 +1008,59 @@ void Lowerer::lower_block(const Statement& statement)
             };
         }
     }
-    for (const auto& variable : statement.declarations) {
-        if (variable.vhdl_file || variable.type.vhdl_file) {
-            const auto file = locals_.find(variable.name);
-            if (file != locals_.end()) {
-                process_.operations.emplace_back(
-                    FileClose { file->second, true, true });
+    const auto emit_cleanup = [&] {
+        for (const auto& variable : statement.declarations) {
+            if (variable.vhdl_file || variable.type.vhdl_file) {
+                const auto file = locals_.find(variable.name);
+                if (file != locals_.end()) {
+                    process_.operations.emplace_back(
+                        FileClose { file->second, true, true });
+                }
             }
         }
+        if (automatic_scope) {
+            emit_vhdl_access_scope_cleanup(statement.declarations);
+        }
+    };
+    emit_cleanup();
+
+    const auto route_returns_through_cleanup =
+        [&](std::vector<InstructionIndex>& returns,
+            const std::size_t first) {
+            if (language_ != frontend::Language::Vhdl2008
+                || first >= returns.size()) {
+                return;
+            }
+            const auto normal_exit = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Jump { });
+            const auto return_cleanup = static_cast<InstructionIndex>(
+                process_.operations.size());
+            emit_cleanup();
+            const auto continuation = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Jump { });
+            for (auto index = first; index < returns.size(); ++index) {
+                process_.operations[returns[index]] = Jump {
+                    return_cleanup
+                };
+            }
+            returns.erase(
+                returns.begin()
+                    + static_cast<std::ptrdiff_t>(first),
+                returns.end());
+            returns.push_back(continuation);
+            process_.operations[normal_exit] = Jump {
+                static_cast<InstructionIndex>(
+                    process_.operations.size())
+            };
+        };
+    if (active_function_) {
+        route_returns_through_cleanup(
+            function_return_jumps_, function_returns_begin);
+    } else if (active_procedure_) {
+        route_returns_through_cleanup(
+            procedure_return_jumps_, procedure_returns_begin);
     }
     local_scope_.pop_back();
     locals_ = std::move(outer_locals);

@@ -46,6 +46,8 @@ void test_vhdl_vhpi_hierarchy_and_names() {
   using fsim::runtime::VhdlVhpiObjectKind;
   using fsim::runtime::VhdlVhpiPackageProvenance;
   using fsim::runtime::VhdlVhpiObjectRegistry;
+  using fsim::runtime::VhdlVhpiPropertyKind;
+  using fsim::runtime::VhdlVhpiPropertyValueKind;
   using fsim::runtime::VhdlVhpiRelationshipKind;
   using fsim::runtime::VhdlVhpiSourceLocation;
 
@@ -53,7 +55,7 @@ void test_vhdl_vhpi_hierarchy_and_names() {
   VhdlVhpiObjectRegistry other_registry{402};
   VhdlVhpiSourceLocation root_source{"design/top.vhd", 2, 1};
   const std::vector<VhdlVhpiPackageProvenance> root_packages {
-      { "1993", "ieee-1076-standard:1993:fsim-v1",
+      { "1993", "ieee-1076-standard:1993:fsim-v3",
           "ieee.std_logic_unsigned",
           "synopsys-legacy-ieee:1990-1992:"
           "fsim-synopsys-ieee-compat-v2:std_logic_unsigned:vhdl-1993",
@@ -64,7 +66,7 @@ void test_vhdl_vhpi_hierarchy_and_names() {
   };
   root_descriptor.language_standard = "1993";
   root_descriptor.predefined_environment
-      = "ieee-1076-standard:1993:fsim-v1";
+      = "ieee-1076-standard:1993:fsim-v3";
   root_descriptor.compatibility_profile
       = "fsim-synopsys-ieee-compat-v2";
   root_descriptor.package_dependencies = root_packages;
@@ -123,7 +125,7 @@ void test_vhdl_vhpi_hierarchy_and_names() {
           && root_metadata.value.source->file == "design/top.vhd"
           && root_metadata.value.language_standard == "1993"
           && root_metadata.value.predefined_environment
-              == "ieee-1076-standard:1993:fsim-v1"
+              == "ieee-1076-standard:1993:fsim-v3"
           && root_metadata.value.compatibility_profile
               == "fsim-synopsys-ieee-compat-v2"
           && root_metadata.value.package_dependencies.size() == 1U
@@ -146,6 +148,61 @@ void test_vhdl_vhpi_hierarchy_and_names() {
           && signal_metadata.value.source->line == 18
           && signal_metadata.value.source->column == 9,
       "VHPI metadata owns canonical selected/full names and source records");
+
+  const auto signal_kind = registry.property(
+      signal.value, VhdlVhpiPropertyKind::ObjectKind);
+  const auto signal_parent = registry.property(
+      signal.value, VhdlVhpiPropertyKind::Parent);
+  const auto signal_name = registry.property(
+      signal.value, VhdlVhpiPropertyKind::Name);
+  const auto signal_full_name = registry.property(
+      signal.value, VhdlVhpiPropertyKind::FullName);
+  const auto signal_index_count = registry.property(
+      signal.value, VhdlVhpiPropertyKind::IndexCount);
+  const auto signal_source = registry.property(
+      signal.value, VhdlVhpiPropertyKind::SourceFile);
+  const auto signal_line = registry.property(
+      signal.value, VhdlVhpiPropertyKind::SourceLine);
+  const auto root_standard = registry.property(
+      root.value, VhdlVhpiPropertyKind::LanguageStandard);
+  const auto root_environment = registry.property(
+      root.value, VhdlVhpiPropertyKind::PredefinedEnvironment);
+  const auto root_compatibility = registry.property(
+      root.value, VhdlVhpiPropertyKind::CompatibilityProfile);
+  const auto root_package_count = registry.property(
+      root.value, VhdlVhpiPropertyKind::PackageDependencyCount);
+  require_vhpi_hierarchy(
+      signal_kind
+          && signal_kind.kind == VhdlVhpiPropertyValueKind::ObjectKind
+          && signal_kind.object_kind == VhdlVhpiObjectKind::Signal
+          && signal_parent
+          && signal_parent.kind == VhdlVhpiPropertyValueKind::Handle
+          && signal_parent.handle == entity.value && signal_name
+          && signal_name.kind == VhdlVhpiPropertyValueKind::String
+          && signal_name.string == "\\Data.Bus\\" && signal_full_name
+          && signal_full_name.string == "work.top.\\Data.Bus\\(7)"
+          && signal_index_count && signal_index_count.unsigned_integer == 1U
+          && signal_source && signal_source.string == "design/top.vhd"
+          && signal_line && signal_line.unsigned_integer == 18U
+          && root_standard && root_standard.string == "1993"
+          && root_environment
+          && root_environment.string == "ieee-1076-standard:1993:fsim-v3"
+          && root_compatibility
+          && root_compatibility.string == "fsim-synopsys-ieee-compat-v2"
+          && root_package_count && root_package_count.unsigned_integer == 1U,
+      "VHPI checked properties preserve kind, identity, source, and provenance");
+  require_vhpi_hierarchy(
+      registry.property(entity.value, VhdlVhpiPropertyKind::LanguageStandard)
+              .error
+              == VhdlVhpiObjectError::NotFound
+          && registry.property(
+                 entity.value, static_cast<VhdlVhpiPropertyKind>(999U))
+                 .error
+              == VhdlVhpiObjectError::InvalidProperty
+          && registry.property(other_root.value, VhdlVhpiPropertyKind::Name)
+                 .error
+              == VhdlVhpiObjectError::CrossSimulation,
+      "VHPI property access diagnoses absent, unknown, and foreign properties");
 
   require_vhpi_hierarchy(
       registry.find("WoRk.ToP.Gen(3, -1)").value.handle == generate.value
@@ -247,25 +304,49 @@ void test_vhdl_vhpi_hierarchy_and_names() {
               == VhdlVhpiObjectError::InvalidParent,
       "VHPI named hierarchy rejects an anonymous parent");
 
+  const auto interface_view = registry.create_object(
+      VhdlVhpiObjectDescriptor{VhdlVhpiObjectKind::InterfaceView,
+          entity.value, "bus_view", {},
+          VhdlVhpiSourceLocation{"design/top.vhd", 30, 3}});
+  const auto view_element = registry.create_object(
+      VhdlVhpiObjectDescriptor{VhdlVhpiObjectKind::ViewElement,
+          interface_view.value, "ready", {},
+          VhdlVhpiSourceLocation{"design/top.vhd", 31, 5}});
+  require_vhpi_hierarchy(
+      interface_view && view_element
+          && registry
+                 .property(interface_view.value, VhdlVhpiPropertyKind::ObjectKind)
+                 .object_kind
+              == VhdlVhpiObjectKind::InterfaceView,
+      "VHPI 2019 interface views and their elements have distinct object kinds");
+
   const auto children = registry.iterate_relationship(
       entity.value, VhdlVhpiRelationshipKind::Children);
   const auto regions = registry.iterate_relationship(
       entity.value, VhdlVhpiRelationshipKind::Regions);
   const auto declarations = registry.iterate_relationship(
       entity.value, VhdlVhpiRelationshipKind::Declarations);
+  const auto view_parent = registry.iterate_relationship(
+      view_element.value, VhdlVhpiRelationshipKind::Parent);
+  const auto root_parent = registry.iterate_relationship(
+      root.value, VhdlVhpiRelationshipKind::Parent);
   require_vhpi_hierarchy(
-      children && regions && declarations,
+      children && regions && declarations && view_parent && root_parent,
       "VHPI checked relationship iterators are created");
   require_vhpi_hierarchy(
       scan_all(registry, children.value)
               == std::vector<fsim_vhpi_handle_v1>{
-                  generate.value, signal.value, block.value, variable.value}
+                  generate.value, signal.value, block.value, variable.value,
+                  interface_view.value}
           && scan_all(registry, regions.value)
               == std::vector<fsim_vhpi_handle_v1>{
                   generate.value, block.value}
           && scan_all(registry, declarations.value)
               == std::vector<fsim_vhpi_handle_v1>{
-                  signal.value, variable.value},
+                  signal.value, variable.value, interface_view.value}
+          && scan_all(registry, view_parent.value)
+              == std::vector<fsim_vhpi_handle_v1>{interface_view.value}
+          && scan_all(registry, root_parent.value).empty(),
       "VHPI relationships preserve creation order and region classification");
   require_vhpi_hierarchy(
       registry.iterate_relationship(
@@ -286,6 +367,10 @@ void test_vhdl_vhpi_hierarchy_and_names() {
           && registry.release_object(block.value)
               == VhdlVhpiObjectError::None
           && registry.release_object(variable.value)
+              == VhdlVhpiObjectError::None
+          && registry.release_object(view_element.value)
+              == VhdlVhpiObjectError::None
+          && registry.release_object(interface_view.value)
               == VhdlVhpiObjectError::None
           && registry.release_object(entity.value)
               == VhdlVhpiObjectError::None

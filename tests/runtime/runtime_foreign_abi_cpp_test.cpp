@@ -54,17 +54,30 @@ static_assert(sizeof(fsim_vhpi_host_v1) == 40U);
 static_assert(sizeof(fsim_vhpi_service_request_v1) == 48U);
 static_assert(sizeof(fsim_vhpi_service_result_v1) == 40U);
 static_assert(sizeof(fsim_vhpi_host_v2) == 56U);
+static_assert(sizeof(fsim_vhpi_capabilities_v3) == 32U);
+static_assert(sizeof(fsim_vhpi_value_v3) == 48U);
+static_assert(sizeof(fsim_vhpi_tool_request_v3) == 32U);
+static_assert(sizeof(fsim_vhpi_host_v3) == 80U);
 static_assert(sizeof(fsim_vhpi_plugin_v1) == 48U);
 using VhpiReport = void(FSIM_VHPI_CALL*)(
     void*, const fsim_vhpi_error_view_v1*);
 using VhpiInvoke = fsim_vhpi_status_v1(FSIM_VHPI_CALL*)(
     void*, const fsim_vhpi_service_request_v1*, fsim_vhpi_service_result_v1*);
 using VhpiLifecycle = fsim_vhpi_status_v1(FSIM_VHPI_CALL*)(void*);
+using VhpiCapability = fsim_vhpi_status_v1(FSIM_VHPI_CALL*)(
+    void*, fsim_vhpi_capabilities_v3*);
+using VhpiValueAccess = fsim_vhpi_status_v1(FSIM_VHPI_CALL*)(
+    void*, fsim_vhpi_value_access_v3, fsim_vhpi_value_v3*);
+using VhpiToolExecution = fsim_vhpi_status_v1(FSIM_VHPI_CALL*)(
+    void*, const fsim_vhpi_tool_request_v3*);
 using VhpiBind = fsim_vhpi_status_v1(FSIM_VHPI_CALL*)(
     const fsim_vhpi_host_v1*, fsim_vhpi_plugin_v1*);
 static_assert(std::is_same_v<fsim_vhpi_report_v1, VhpiReport>);
 static_assert(std::is_same_v<fsim_vhpi_invoke_service_v1, VhpiInvoke>);
 static_assert(std::is_same_v<fsim_vhpi_plugin_lifecycle_v1, VhpiLifecycle>);
+static_assert(std::is_same_v<fsim_vhpi_query_capabilities_v3, VhpiCapability>);
+static_assert(std::is_same_v<fsim_vhpi_access_value_v3, VhpiValueAccess>);
+static_assert(std::is_same_v<fsim_vhpi_execute_tool_v3, VhpiToolExecution>);
 static_assert(std::is_same_v<fsim_vhpi_plugin_bind_v1_fn, VhpiBind>);
 
 static_assert(sizeof(fsim_uvm_foreign_snapshot_v1) == 48U);

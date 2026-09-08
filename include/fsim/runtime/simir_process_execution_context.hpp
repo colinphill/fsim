@@ -815,6 +815,20 @@ public:
         std::string_view,
         AssertionSeverity,
         const SourceLocation&) { }
+    /// Execute one VHDL-2019 report/assert through the scheduler-owned policy.
+    /// The policy may suppress the report, format it, count it, or raise a
+    /// FAILURE after the generated C ABI has returned to C++.
+    virtual void vhdl_report(
+        InstructionIndex instruction,
+        std::string_view message,
+        AssertionSeverity severity,
+        const SourceLocation& source,
+        bool standalone)
+    {
+        (void)instruction;
+        (void)standalone;
+        report(message, severity, source);
+    }
 
     [[nodiscard]] virtual Logic9 evaluate_vital_timing_check(
         InstructionIndex,

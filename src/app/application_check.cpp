@@ -613,6 +613,7 @@ static std::optional<CheckedProject> check_project_impl(
     }
   }
   validate_vhdl_analysis_order(checked.parsed.units, diagnostics);
+  validate_vhdl_simulator_api(checked.parsed.units, diagnostics);
   validate_vhdl_mode_view_interfaces(checked.parsed.units, diagnostics);
   validate_vhdl_package_declarations(checked.parsed.units, diagnostics);
   std::vector<frontend::Diagnostic> class_diagnostics;

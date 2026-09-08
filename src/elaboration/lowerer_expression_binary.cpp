@@ -144,6 +144,13 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
     const std::size_t expected_width,
     const frontend::Type* expected_type)
 {
+    if (language_ == frontend::Language::Vhdl2008) {
+        auto environment = lower_vhdl_environment_binary_expression(
+            expression, expected_type);
+        if (environment.handled) {
+            return environment;
+        }
+    }
     if (language_ == frontend::Language::SystemVerilog2017
         && expression.kind == ExpressionKind::Binary
         && expression.operands.size() == 2U
@@ -218,6 +225,13 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
     if (vhdl_composite.handled) {
         return vhdl_composite;
     }
+    const bool string_lhs = expression.operands.size() == 2
+        && is_string_expression(expression.operands[0]);
+    const bool string_rhs = expression.operands.size() == 2
+        && is_string_expression(expression.operands[1]);
+    const bool string_equality = language_ == frontend::Language::Vhdl2008
+        ? string_lhs && string_rhs
+        : string_lhs || string_rhs;
     if (expression.kind == ExpressionKind::Binary
         && expression.operands.size() == 2
         && (is_container_expression(expression.operands[0])
@@ -287,11 +301,12 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
     if (expression.kind == ExpressionKind::Binary
         && expression.operands.size() == 2
         && (expression.text == "=="
-            || expression.text == "!=")
-        && (is_string_expression(expression.operands[0])
-            || is_string_expression(expression.operands[1]))) {
-        if (!is_string_expression(expression.operands[0])
-            || !is_string_expression(expression.operands[1])) {
+            || expression.text == "!="
+            || (language_ == frontend::Language::Vhdl2008
+                && (expression.text == "="
+                    || expression.text == "/=")))
+        && string_equality) {
+        if (!string_lhs || !string_rhs) {
             report(
                 "FSIM-ELAB-SVSTRING-012",
                 "string equality requires two string operands",
@@ -310,7 +325,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                 destination,
                 *lhs,
                 *rhs,
-                expression.text == "!=" });
+                expression.text == "!=" || expression.text == "/=" });
         return destination;
     }
     if (expression.kind == ExpressionKind::Binary
@@ -622,6 +637,14 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                     = operand.systemverilog_scalar_kind;
                 return &inferred;
             }
+            if (language_ == frontend::Language::Vhdl2008) {
+                const auto type = vhdl_expression_type(operand);
+                if (type && type->systemverilog_scalar
+                        != frontend::SystemVerilogScalarKind::None) {
+                    inferred = *type;
+                    return &inferred;
+                }
+            }
             return nullptr;
         };
         frontend::Type inferred_lhs_scalar_type;
@@ -637,7 +660,8 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
             : lhs_scalar_type != nullptr
             ? lhs_scalar_type
             : rhs_scalar_type;
-        if (language_ == frontend::Language::SystemVerilog2017
+        if ((language_ == frontend::Language::SystemVerilog2017
+                || language_ == frontend::Language::Vhdl2008)
             && scalar_context != nullptr) {
             using ScalarOperator = runtime::SystemVerilogScalarBinaryOperator;
             std::optional<ScalarOperator> scalar_operation;
@@ -649,9 +673,11 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                 scalar_operation = ScalarOperator::Multiply;
             else if (expression.text == "/")
                 scalar_operation = ScalarOperator::Divide;
-            else if (expression.text == "==" || expression.text == "===") {
+            else if (expression.text == "==" || expression.text == "==="
+                || expression.text == "=") {
                 scalar_operation = ScalarOperator::Equal;
-            } else if (expression.text == "!=" || expression.text == "!==") {
+            } else if (expression.text == "!=" || expression.text == "!=="
+                || expression.text == "/=") {
                 scalar_operation = ScalarOperator::NotEqual;
             } else if (expression.text == "<")
                 scalar_operation = ScalarOperator::Less;
@@ -708,7 +734,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
             }
             const auto destination = allocate_register(
                 comparison ? 1U : width(result_kind),
-                frontend::ValueDomain::Bit2);
+                comparison
+                        && language_ == frontend::Language::Vhdl2008
+                    ? frontend::ValueDomain::Boolean
+                    : frontend::ValueDomain::Bit2);
             process_.operations.emplace_back(SystemVerilogScalarBinary {
                 *scalar_operation, destination, *lhs, *rhs,
                 lhs_kind, rhs_kind,
@@ -790,10 +819,18 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                 expression.span);
             return std::nullopt;
         }
-        const auto* lhs_enumeration_type = enumeration_expression_type(
+        const frontend::Type* lhs_enumeration_type = enumeration_expression_type(
             expression.operands[0]);
-        const auto* rhs_enumeration_type = enumeration_expression_type(
+        const frontend::Type* rhs_enumeration_type = enumeration_expression_type(
             expression.operands[1]);
+        if (lhs_enumeration_type == nullptr && lhs_vhdl_type
+            && !lhs_vhdl_type->enumeration_literals.empty()) {
+            lhs_enumeration_type = &*lhs_vhdl_type;
+        }
+        if (rhs_enumeration_type == nullptr && rhs_vhdl_type
+            && !rhs_vhdl_type->enumeration_literals.empty()) {
+            rhs_enumeration_type = &*rhs_vhdl_type;
+        }
         if (language_ == frontend::Language::Vhdl2008
             && (expression.text == "="
                 || expression.text == "/="

@@ -164,3 +164,9 @@ the official Accellera interface. Reclassification of the removed proxy paths
 and the official kernel bridge produces 506 interpreter, 423 LLVM/native, 282
 cache, 112 debugger, 137 VCD/trace, 503 scheduling, and 115 failure/diagnostic
 rows. The governed corpus union remains 36 registered CTests.
+
+Batch 184 advances the synchronized differential inventory to 1,296 required
+rows and 146 distinct runtime owners. VHDL-2019 coverage and mixed-language
+artifact closure produce 507 interpreter, 424 LLVM/native, 283 cache, 114
+debugger, 138 VCD/trace, 504 scheduling, and 115 failure/diagnostic rows. The
+governed corpus union remains 36 registered CTests.

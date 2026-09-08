@@ -82,7 +82,7 @@ void test_vhdl_vhpi_host_abi() {
   };
   expect_host(
       [](auto& value) {
-        value.abi_version = FSIM_VHPI_HOST_ABI_VERSION_V2 + 1U;
+        value.abi_version = FSIM_VHPI_HOST_ABI_VERSION_V3 + 1U;
       },
       VhdlVhpiAbiError::AbiVersion,
       "VHPI host rejects an unknown ABI version");

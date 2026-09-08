@@ -14,9 +14,26 @@ namespace {
         std::string_view body_hash;
     };
 
+    struct StdPackageSource {
+        std::string_view name;
+        std::string_view path;
+        std::string_view hash;
+    };
+
     constexpr std::string_view kIeeePackageRevision = "ieee-p1076:1076-2019:16a012320947d378611cc7457f64ed76cb52bac4";
     constexpr std::string_view kVitalPackageRevision = "ieee-vital:2000:fsim-clean-room-v1";
     constexpr std::string_view kSynopsysPackageRevision = "synopsys-legacy-ieee:1990-1992:fsim-synopsys-ieee-compat-v2";
+
+    constexpr std::array kStdPackages {
+        StdPackageSource { "standard", "std/standard.vhdl",
+            "0c091149ab228e6a2a53cc9bf1a377ca393e2208384dfb92bccc4f24b8e5deef" },
+        StdPackageSource { "textio", "std/textio.vhdl",
+            "01028097080267c951b06d31ea4b4b98a4047674dbbcf4791e691e6e043ee978" },
+        StdPackageSource { "env", "std/env.vhdl",
+            "59169bc8381578d4176cb6589f2cb7c407539f53d055b64da365c12ea18bf1ae" },
+        StdPackageSource { "reflection", "std/reflection.vhdl",
+            "66f6366e77c67385c2b66ecb2e746bed091090f41d870742886aa5576042d698" },
+    };
 
     template <typename Range>
     void append_strings(std::vector<std::string>& target, const Range& values)
@@ -30,7 +47,7 @@ namespace {
     {
         frontend::VhdlPredefinedEnvironment result;
         result.identity = "ieee-1076-standard:"
-            + std::string { frontend::to_string(standard) } + ":fsim-v1";
+            + std::string { frontend::to_string(standard) } + ":fsim-v3";
         result.working_library = library.empty() ? "work" : std::string { library };
         result.implicit_libraries = { "std", "work" };
         result.implicit_packages = { "std.standard.all" };
@@ -119,6 +136,11 @@ namespace {
                 result.attributes,
                 std::array<std::string, 2> { "subtype", "element" });
         }
+        if (standard >= frontend::VhdlStandard::Vhdl2019) {
+            append_strings(
+                result.attributes,
+                std::array<std::string, 2> { "reflect", "converse" });
+        }
         return result;
     }
 
@@ -139,10 +161,13 @@ namespace {
         const std::string_view package)
     {
         if (package == "numeric_bit" || package == "numeric_std"
-            || package == "math_real" || package.starts_with("vital_")) {
+            || package == "math_real" || package == "math_complex"
+            || package.starts_with("vital_")) {
             return frontend::VhdlStandard::Vhdl1993;
         }
-        if (package == "fixed_float_types" || package == "fixed_generic_pkg"
+        if (package == "numeric_bit_unsigned"
+            || package == "numeric_std_unsigned"
+            || package == "fixed_float_types" || package == "fixed_generic_pkg"
             || package == "fixed_pkg" || package == "float_generic_pkg"
             || package == "float_pkg") {
             return frontend::VhdlStandard::Vhdl2008;
@@ -253,17 +278,35 @@ end package vital_memory;
             "ieee/numeric_bit-body.vhdl",
             "21fc27ef3d7ff0932ebb6c92a4d5f10865b1867ce392a008c2de1d6fde3e11ab" },
         PackageSource {
+            "numeric_bit_unsigned",
+            "ieee/numeric_bit_unsigned.vhdl",
+            "49bb77a8ad3eb9945040a880b5daf5895f5d98b25ae52565622ebbda1b27d8da",
+            "ieee/numeric_bit_unsigned-body.vhdl",
+            "bcf17a63b59f1d739c3f2f29642df97457671338eaef8e9acdb946cfbadd0236" },
+        PackageSource {
             "numeric_std",
             "ieee/numeric_std.vhdl",
             "fcb9b1d05f8d98cd068e464bf20804d432a234128b253218524901bc96d19631",
             "ieee/numeric_std-body.vhdl",
             "10e8bdc4fedc881a972f5900abe833d24397d686e07b566479c47495acf39721" },
         PackageSource {
+            "numeric_std_unsigned",
+            "ieee/numeric_std_unsigned.vhdl",
+            "a39859f391c7d635e26cfec870e601513400796b8cb02f0662094463f4d107e3",
+            "ieee/numeric_std_unsigned-body.vhdl",
+            "dccecb858d476cecfb00048f1495a60c130a7561b9096b864be5a000ca597b19" },
+        PackageSource {
             "math_real",
             "ieee/math_real.vhdl",
             "33fe4fe3fc21cbe6c36ed4969d96ed25549680bb3d936f106078fe47af2fec7b",
             "ieee/math_real-body.vhdl",
             "ed057e95cd908b547d128d6a29dbfcf243ba64468d6e6cc780090bc9cd79f3b2" },
+        PackageSource {
+            "math_complex",
+            "ieee/math_complex.vhdl",
+            "deddee8078c0c85f276bd5ebe1a49ac303116fc8fd6a7943c84a80eff73b969a",
+            "ieee/math_complex-body.vhdl",
+            "4f2f523002822b27a721d93f62d4220d3f0f75bc980fdc62c2642de03926029f" },
         PackageSource {
             "fixed_float_types",
             "ieee/fixed_float_types.vhdl",
@@ -295,6 +338,34 @@ end package vital_memory;
             "",
             "" },
     };
+
+    std::string governed_package_digest(
+        const std::string_view declaration,
+        const std::string_view body = { })
+    {
+        if (body.empty()) {
+            return std::string { declaration };
+        }
+        std::string material { "fsim-vhdl-package-sources-v1\n" };
+        material += declaration;
+        material.push_back('\n');
+        material += body;
+        return support::Sha256::hex(support::Sha256::digest(material));
+    }
+
+    const PackageSource* ieee_package_source(const std::string_view name)
+    {
+        const auto found = std::ranges::find(kPackages, name,
+            &PackageSource::name);
+        return found == kPackages.end() ? nullptr : &*found;
+    }
+
+    const StdPackageSource* std_package_source(const std::string_view name)
+    {
+        const auto found = std::ranges::find(kStdPackages, name,
+            &StdPackageSource::name);
+        return found == kStdPackages.end() ? nullptr : &*found;
+    }
 
     bool is_synopsys_package(const std::string_view package)
     {
@@ -662,6 +733,13 @@ end package vital_memory;
         std::string dependency;
         if (package == "numeric_std" || package == "std_logic_textio") {
             dependency = "library ieee;\nuse ieee.std_logic_1164.all;\n";
+        } else if (package == "numeric_bit_unsigned") {
+            dependency = "library ieee;\nuse ieee.numeric_bit.all;\n";
+        } else if (package == "numeric_std_unsigned") {
+            dependency = "library ieee;\nuse ieee.std_logic_1164.all;\n"
+                         "use ieee.numeric_std.all;\n";
+        } else if (package == "math_complex") {
+            dependency = "library ieee;\nuse ieee.math_real.all;\n";
         } else if (package == "std_logic_arith" || package == "std_logic_misc") {
             dependency = "library ieee;\nuse ieee.std_logic_1164.all;\n";
         } else if (package == "std_logic_signed"
@@ -888,6 +966,26 @@ end package vital_memory;
                     "le",
                     "gt",
                     "ge",
+                };
+            } else if (unit.primary_name.empty()
+                && (package == "numeric_bit_unsigned"
+                    || package == "numeric_std_unsigned")) {
+                unit.standard_package_declarations = {
+                    "abs", "+", "-", "*", "/", "mod", "rem", "**",
+                    "=", "/=", "<", "<=", ">", ">=", "sll", "srl",
+                    "rol", "ror", "shift_left", "shift_right",
+                    "rotate_left", "rotate_right", "to_integer",
+                    "to_unsigned", "to_01", "find_leftmost",
+                    "find_rightmost", "minimum", "maximum",
+                };
+            } else if (unit.primary_name.empty()
+                && package == "math_complex") {
+                unit.standard_package_declarations = {
+                    "complex", "complex_polar", "positive_real",
+                    "principal_value", "math_cbase_1", "math_cbase_j",
+                    "math_czero", "cmplx", "get_principal_value", "arg",
+                    "abs", "conj", "sqrt", "exp", "log", "sin", "cos",
+                    "tan", "sinh", "cosh", "tanh", "+", "-", "*", "/",
                 };
             } else if (unit.primary_name.empty() && package == "vital_timing") {
                 unit.standard_package_declarations = {
@@ -1166,6 +1264,26 @@ end package vital_memory;
                             "find_leftmost(unsigned,std_ulogic)->integer",
                             "find_rightmost(unsigned,std_ulogic)->integer" });
                 }
+            } else if (unit.primary_name.empty()
+                && (package == "numeric_bit_unsigned"
+                    || package == "numeric_std_unsigned")) {
+                const auto vector_type = package == "numeric_bit_unsigned"
+                    ? std::string { "bit_vector" }
+                    : std::string { "std_ulogic_vector" };
+                unit.standard_package_operator_profiles = {
+                    "+(" + vector_type + "," + vector_type + ")->" + vector_type,
+                    "-(" + vector_type + "," + vector_type + ")->" + vector_type,
+                    "*(" + vector_type + "," + vector_type + ")->" + vector_type,
+                    "=(" + vector_type + "," + vector_type + ")->boolean",
+                    "sll(" + vector_type + ",integer)->" + vector_type,
+                    "srl(" + vector_type + ",integer)->" + vector_type,
+                    "rol(" + vector_type + ",integer)->" + vector_type,
+                    "ror(" + vector_type + ",integer)->" + vector_type,
+                    "minimum(" + vector_type + "," + vector_type + ")->"
+                        + vector_type,
+                    "maximum(" + vector_type + "," + vector_type + ")->"
+                        + vector_type,
+                };
             }
             units.push_back(std::move(unit));
         }
@@ -1856,6 +1974,67 @@ end package vital_memory;
         }
     }
 
+    struct GovernedPackageIdentity {
+        std::string revision;
+        std::string source_digest;
+    };
+
+    std::optional<GovernedPackageIdentity> governed_package_identity(
+        const std::string_view qualified_name,
+        const frontend::VhdlStandard standard)
+    {
+        if (qualified_name.starts_with("std.")) {
+            if (standard != frontend::VhdlStandard::Vhdl2019) {
+                return std::nullopt;
+            }
+            const auto* source = std_package_source(qualified_name.substr(4U));
+            if (source == nullptr) {
+                return std::nullopt;
+            }
+            return GovernedPackageIdentity {
+                std::string { kIeeePackageRevision },
+                std::string { source->hash }
+            };
+        }
+        if (!qualified_name.starts_with("ieee.")) {
+            return std::nullopt;
+        }
+        const auto package = qualified_name.substr(5U);
+        if (const auto* source = ieee_package_source(package)) {
+            if (standard < ieee_package_minimum_standard(package)) {
+                return std::nullopt;
+            }
+            return GovernedPackageIdentity {
+                std::string { kIeeePackageRevision },
+                governed_package_digest(
+                    source->declaration_hash, source->body_hash)
+            };
+        }
+        if (is_synopsys_package(package)) {
+            const auto source = synopsys_declaration_source(package);
+            return GovernedPackageIdentity {
+                synopsys_package_revision(package, standard),
+                support::Sha256::hex(support::Sha256::digest(source))
+            };
+        }
+        const auto vital_source = package == "vital_timing"
+            ? kVitalTimingSource
+            : package == "vital_primitives"
+                ? kVitalPrimitivesSource
+                : package == "vital_memory" ? kVitalMemorySource
+                                             : std::string_view { };
+        if (vital_source.empty()) {
+            return std::nullopt;
+        }
+        if (standard < frontend::VhdlStandard::Vhdl1993) {
+            return std::nullopt;
+        }
+        return GovernedPackageIdentity {
+            std::string { kVitalPackageRevision },
+            support::Sha256::hex(support::Sha256::digest(vital_source))
+        };
+    }
+
 } // namespace
 
 std::string_view vhdl_compatibility_profile() noexcept
@@ -1871,6 +2050,41 @@ void inject_vhdl_standard_libraries(
     diagnostic::Engine& diagnostics)
 {
     stamp_predefined_environments(checked.parsed);
+    const auto root = library_root();
+    const bool has_vhdl_2019 = std::ranges::any_of(
+        checked.parsed.units, [](const frontend::DesignUnit& unit) {
+            return unit.language == frontend::Language::Vhdl2008
+                && unit.vhdl_standard == frontend::VhdlStandard::Vhdl2019;
+        });
+    if (has_vhdl_2019) {
+        for (const auto& package : kStdPackages) {
+            const bool conflict = std::ranges::any_of(
+                checked.parsed.units,
+                [&](const frontend::DesignUnit& unit) {
+                    return unit.language == frontend::Language::Vhdl2008
+                        && unit.kind == frontend::UnitKind::VhdlPackage
+                        && unit.library == "std" && unit.name == package.name;
+                });
+            if (conflict) {
+                diagnostics.error(
+                    "FSIM-FE-VHSTD-004",
+                    "the compiler-supplied std."
+                        + std::string { package.name }
+                        + " package cannot be redeclared by a project source");
+                return;
+            }
+            const auto backing_path = root / std::filesystem::path { package.path };
+            const auto source = checked_source_text(
+                backing_path, package.hash, diagnostics);
+            if (!source) {
+                return;
+            }
+            checked.standard_sources.push_back(checked_source(
+                std::filesystem::path { "fsim-standard" }
+                    / std::filesystem::path { package.path },
+                *source, backing_path));
+        }
+    }
     const auto diagnostic_count = diagnostics.diagnostics().size();
     const auto requested_standard = requested_ieee_standard(checked.parsed, diagnostics);
     if (!requested_standard
@@ -1882,7 +2096,13 @@ void inject_vhdl_standard_libraries(
         || uses_package(checked.parsed, "vital_primitives");
     const bool vital_timing = vital_primitives
         || uses_package(checked.parsed, "vital_timing");
-    const bool numeric_bit = uses_package(checked.parsed, "numeric_bit");
+    const bool numeric_bit_unsigned = uses_package(
+        checked.parsed, "numeric_bit_unsigned");
+    const bool numeric_bit = numeric_bit_unsigned
+        || uses_package(checked.parsed, "numeric_bit");
+    const bool numeric_std_unsigned = uses_package(
+        checked.parsed, "numeric_std_unsigned");
+    const bool math_complex = uses_package(checked.parsed, "math_complex");
     const bool float_pkg = uses_package(checked.parsed, "float_pkg");
     const bool float_generic = float_pkg
         || uses_package(checked.parsed, "float_generic_pkg");
@@ -1891,9 +2111,9 @@ void inject_vhdl_standard_libraries(
         || uses_package(checked.parsed, "fixed_generic_pkg");
     const bool fixed_types = fixed_generic
         || uses_package(checked.parsed, "fixed_float_types");
-    const bool math_real = fixed_generic
+    const bool math_real = fixed_generic || math_complex
         || uses_package(checked.parsed, "math_real");
-    const bool numeric_std = fixed_generic
+    const bool numeric_std = fixed_generic || numeric_std_unsigned
         || uses_package(checked.parsed, "numeric_std");
     const bool logic_textio = uses_package(checked.parsed, "std_logic_textio");
     const bool std_logic_signed = uses_package(checked.parsed, "std_logic_signed");
@@ -1901,11 +2121,13 @@ void inject_vhdl_standard_libraries(
     const bool std_logic_misc = uses_package(checked.parsed, "std_logic_misc");
     const bool std_logic_arith = std_logic_signed || std_logic_unsigned
         || uses_package(checked.parsed, "std_logic_arith");
-    const bool std_logic = vital_timing || numeric_std || logic_textio
+    const bool std_logic = vital_timing || numeric_std || numeric_std_unsigned
+        || logic_textio
         || std_logic_arith || std_logic_misc
         || uses_package(checked.parsed, "std_logic_1164");
-    if (!std_logic && !logic_textio && !numeric_bit && !numeric_std
-        && !math_real && !fixed_types && !fixed_generic && !fixed_pkg
+    if (!std_logic && !logic_textio && !numeric_bit && !numeric_bit_unsigned
+        && !numeric_std && !numeric_std_unsigned && !math_real && !math_complex
+        && !fixed_types && !fixed_generic && !fixed_pkg
         && !float_generic && !float_pkg && !std_logic_arith
         && !std_logic_signed && !std_logic_unsigned && !std_logic_misc && !vital_timing
         && !vital_primitives && !vital_memory) {
@@ -1913,15 +2135,17 @@ void inject_vhdl_standard_libraries(
     }
     const auto standard = requested_standard.value_or(
         frontend::VhdlStandard::Vhdl2008);
-    const auto root = library_root();
     std::vector<CheckedSource> sources;
     std::vector<frontend::DesignUnit> units;
     for (const auto& package : kPackages) {
         const bool requested = package.name == "std_logic_1164" ? std_logic
             : package.name == "std_logic_textio"                ? logic_textio
             : package.name == "numeric_bit"                     ? numeric_bit
+            : package.name == "numeric_bit_unsigned"            ? numeric_bit_unsigned
             : package.name == "numeric_std"                     ? numeric_std
+            : package.name == "numeric_std_unsigned"            ? numeric_std_unsigned
             : package.name == "math_real"                       ? math_real
+            : package.name == "math_complex"                    ? math_complex
             : package.name == "fixed_float_types"               ? fixed_types
             : package.name == "fixed_generic_pkg"               ? fixed_generic
             : package.name == "fixed_pkg"                       ? fixed_pkg || float_generic
@@ -2090,32 +2314,52 @@ std::vector<library::VhdlPackageDependency>
 vhdl_package_dependencies(const CheckedProject& checked)
 {
     std::vector<library::VhdlPackageDependency> result;
+    const auto append = [&](const frontend::VhdlStandard standard,
+                            const std::string& package,
+                            const std::string& revision,
+                            const std::string& source_digest) {
+        result.push_back({
+            std::string { frontend::to_string(standard) },
+            predefined_environment(standard, package.starts_with("std.")
+                    ? std::string_view { "std" }
+                    : std::string_view { "ieee" })
+                .identity,
+            package,
+            revision,
+            source_digest });
+    };
+    for (const auto& source : checked.standard_sources) {
+        if (source.path.parent_path().filename() != "std"
+            || source.path.extension() != ".vhdl") {
+            continue;
+        }
+        const auto package = "std." + source.path.stem().string();
+        const auto identity = governed_package_identity(
+            package, frontend::VhdlStandard::Vhdl2019);
+        if (identity) {
+            append(frontend::VhdlStandard::Vhdl2019, package,
+                identity->revision, identity->source_digest);
+        }
+    }
     for (const auto& unit : checked.parsed.units) {
         if (unit.language != frontend::Language::Vhdl2008
             || unit.kind != frontend::UnitKind::VhdlPackage
             || !unit.primary_name.empty()
-            || !unit.standard_package_revision.starts_with(
-                "synopsys-legacy-ieee:")) {
+            || unit.standard_package_revision.empty()) {
             continue;
         }
-        const auto filename = unit.name + ".vhdl";
-        const auto source = std::ranges::find_if(
-            checked.standard_sources,
-            [&](const CheckedSource& candidate) {
-                return candidate.path.filename() == filename
-                    && candidate.path.parent_path().filename() == "synopsys";
-            });
-        if (source == checked.standard_sources.end()) {
+        const auto package = unit.library + "." + unit.name;
+        const auto identity = governed_package_identity(
+            package, unit.vhdl_standard);
+        if (!identity || identity->revision != unit.standard_package_revision) {
             continue;
         }
-        result.push_back({
-            std::string { frontend::to_string(unit.vhdl_standard) },
-            unit.vhdl_predefined_environment.identity,
-            "ieee." + unit.name,
-            unit.standard_package_revision,
-            source->content_digest });
+        append(unit.vhdl_standard, package,
+            identity->revision, identity->source_digest);
     }
     std::ranges::sort(result, {}, &library::VhdlPackageDependency::package);
+    result.erase(std::ranges::unique(result, {},
+        &library::VhdlPackageDependency::package).begin(), result.end());
     return result;
 }
 
@@ -2126,25 +2370,26 @@ bool validate_vhdl_package_dependencies(
 {
     for (const auto& dependency : archived) {
         const auto standard = project::parse_vhdl_standard(dependency.standard);
-        const auto package = dependency.package.starts_with("ieee.")
-            ? std::string_view { dependency.package }.substr(5)
-            : std::string_view { };
         const auto current_standard = standard
             ? frontend_vhdl_standard(*standard)
             : frontend::VhdlStandard::Vhdl2008;
-        const std::string current_source = package.empty()
-            ? std::string { }
-            : synopsys_declaration_source(package);
-        const auto current_digest = support::Sha256::hex(
-            support::Sha256::digest(current_source));
-        if (standard && is_synopsys_package(package)
-            && dependency.revision
-                == synopsys_package_revision(package, current_standard)
+        const auto current = governed_package_identity(
+            dependency.package, current_standard);
+        if (standard && current
+            && dependency.revision == current->revision
             && dependency.predefined_environment
-                == predefined_environment(current_standard, "ieee").identity
-            && dependency.source_digest == current_digest) {
+                == predefined_environment(current_standard,
+                    dependency.package.starts_with("std.")
+                        ? std::string_view { "std" }
+                        : std::string_view { "ieee" })
+                    .identity
+            && dependency.source_digest == current->source_digest) {
             continue;
         }
+        const auto current_revision = current
+            ? current->revision : std::string { "unavailable" };
+        const auto current_digest = current
+            ? current->source_digest : std::string { "unavailable" };
         diagnostics.error(
             "FSIM-ART-VHDEP-001",
             std::string { artifact }
@@ -2152,10 +2397,13 @@ bool validate_vhdl_package_dependencies(
                 + dependency.package + "' revision '" + dependency.revision
                 + "' for " + dependency.standard
                 + "; this build provides revision '"
-                + std::string { synopsys_package_revision(
-                    package, current_standard) }
+                + current_revision
                 + "', predefined environment '"
-                + predefined_environment(current_standard, "ieee").identity
+                + predefined_environment(current_standard,
+                    dependency.package.starts_with("std.")
+                        ? std::string_view { "std" }
+                        : std::string_view { "ieee" })
+                    .identity
                 + "', and source digest '" + current_digest
                 + "'; recompile the artifact with this fsim build");
         return false;

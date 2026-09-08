@@ -2306,6 +2306,16 @@ int run_built_project(
                    << " native_await_ms=" << milliseconds(native_await_elapsed)
                    << '\n';
         }
+        if (result.simulator_status) {
+            if (*result.simulator_status < 0
+                || *result.simulator_status > 255) {
+                diagnostics.error(
+                    "FSIM-RUN-VHENV-001",
+                    "STD.ENV simulator status must be in the portable range 0 through 255");
+                return 1;
+            }
+            return static_cast<int>(*result.simulator_status);
+        }
         return 0;
     } catch (const runtime::DeltaCycleLimitError& error) {
         std::ostringstream message;

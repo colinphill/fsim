@@ -171,6 +171,43 @@ namespace {
         if (declaration.form == Form::subtype) {
             return runtime::VhdlVhpiObjectKind::Subtype;
         }
+        if (declaration.form == Form::mode_view) {
+            return runtime::VhdlVhpiObjectKind::InterfaceView;
+        }
+        if (declaration.form == Form::port) {
+            return runtime::VhdlVhpiObjectKind::Port;
+        }
+        if (declaration.form == Form::alias) {
+            return runtime::VhdlVhpiObjectKind::Alias;
+        }
+        if (declaration.form == Form::attribute_declaration
+            || declaration.form == Form::attribute_specification) {
+            return runtime::VhdlVhpiObjectKind::Attribute;
+        }
+        if (declaration.form == Form::enumeration_literal) {
+            return runtime::VhdlVhpiObjectKind::EnumerationLiteral;
+        }
+        if (declaration.form == Form::function
+            || declaration.form == Form::procedure
+            || declaration.form == Form::generic_function_template
+            || declaration.form == Form::generic_procedure_template
+            || declaration.form == Form::generic_function_instance
+            || declaration.form == Form::generic_procedure_instance) {
+            return runtime::VhdlVhpiObjectKind::Subprogram;
+        }
+        if (declaration.form == Form::component) {
+            return runtime::VhdlVhpiObjectKind::Component;
+        }
+        if (declaration.form == Form::package_instance) {
+            return runtime::VhdlVhpiObjectKind::Package;
+        }
+        if (declaration.form == Form::generic_constant
+            || declaration.form == Form::generic_type
+            || declaration.form == Form::generic_function
+            || declaration.form == Form::generic_procedure
+            || declaration.form == Form::generic_package) {
+            return runtime::VhdlVhpiObjectKind::Generic;
+        }
         switch (declaration.object_class) {
         case Object::signal:
             return runtime::VhdlVhpiObjectKind::Signal;
@@ -457,6 +494,39 @@ namespace application_detail {
             }
             return parent;
         };
+        std::size_t published_view_elements { };
+        const auto publish_view_elements = [&]<typename Self>(Self&& self,
+                                               const fsim_vhpi_handle_v1 parent,
+                                               const std::span<const semantic::vhdl::ModeViewElement> elements,
+                                               const std::string_view parent_path)
+            -> void {
+            for (const auto& element : elements) {
+                if (++published_view_elements > 65'536U) {
+                    throw VhdlDebugError {
+                        "VHDL VHPI interface-view element ceiling exceeded"
+                    };
+                }
+                runtime::VhdlVhpiObjectDescriptor descriptor;
+                descriptor.kind = runtime::VhdlVhpiObjectKind::ViewElement;
+                descriptor.parent = parent;
+                const auto name = vhpi_name(element.element.spelling.empty()
+                        ? element.element.canonical
+                        : element.element.spelling);
+                descriptor.name = name;
+                descriptor.source = source_location(
+                    project.semantics, element.element.source);
+                const auto created = registry->create_object(descriptor);
+                if (!created) {
+                    throw VhdlDebugError {
+                        "failed to publish VHDL VHPI interface-view element '"
+                        + std::string { parent_path } + '.' + name + "'"
+                    };
+                }
+                const auto path = std::string { parent_path } + '.' + name;
+                handles.emplace(path, created.value);
+                self(self, created.value, element.elements, path);
+            }
+        };
         std::set<std::uint32_t> vhdl_specializations;
         for (const auto& specialization : project.design_ir.specializations()) {
             if (specialization.language != semantic::Language::vhdl) {
@@ -470,31 +540,57 @@ namespace application_detail {
             if (!unit) {
                 continue;
             }
-            for (const auto declaration_id : unit->declarations) {
-                const auto* declaration = declaration_for(
-                    project.vhdl_hir, declaration_id);
-                if (!declaration || declaration->name.empty()) {
-                    continue;
+            const auto publish_declarations
+                = [&](const semantic::vhdl::Unit& declaration_unit) {
+                for (const auto declaration_id : declaration_unit.declarations) {
+                    const auto* declaration = declaration_for(
+                        project.vhdl_hir, declaration_id);
+                    if (!declaration || declaration->name.empty()) {
+                        continue;
+                    }
+                    const auto path = instance.path + "." + declaration->name;
+                    if (handles.contains(path)) {
+                        continue;
+                    }
+                    runtime::VhdlVhpiObjectDescriptor descriptor;
+                    descriptor.kind = declaration_kind(*declaration);
+                    descriptor.parent = parent;
+                    const auto name = vhpi_name(declaration->name);
+                    descriptor.name = name;
+                    descriptor.source = source_location(
+                        project.semantics, declaration->source);
+                    const auto created = registry->create_object(descriptor);
+                    if (!created) {
+                        throw VhdlDebugError {
+                            "failed to publish VHDL VHPI declaration '" + path
+                            + "'"
+                        };
+                    }
+                    handles.emplace(path, created.value);
+                    if (declaration->mode_view) {
+                        publish_view_elements(publish_view_elements,
+                            created.value, declaration->mode_view->elements,
+                            path);
+                    } else if (declaration->interface_view) {
+                        publish_view_elements(publish_view_elements,
+                            created.value,
+                            declaration->interface_view->elements, path);
+                    }
                 }
-                const auto path = instance.path + "." + declaration->name;
-                if (handles.contains(path)) {
-                    continue;
+            };
+            if (unit->kind == semantic::vhdl::UnitKind::architecture) {
+                const auto entity = std::ranges::find_if(
+                    project.vhdl_hir.units(), [&](const auto& candidate) {
+                        return candidate.kind
+                                == semantic::vhdl::UnitKind::entity
+                            && candidate.library == unit->library
+                            && candidate.name == unit->primary_name;
+                    });
+                if (entity != project.vhdl_hir.units().end()) {
+                    publish_declarations(*entity);
                 }
-                runtime::VhdlVhpiObjectDescriptor descriptor;
-                descriptor.kind = declaration_kind(*declaration);
-                descriptor.parent = parent;
-                const auto name = vhpi_name(declaration->name);
-                descriptor.name = name;
-                descriptor.source = source_location(
-                    project.semantics, declaration->source);
-                const auto created = registry->create_object(descriptor);
-                if (!created) {
-                    throw VhdlDebugError {
-                        "failed to publish VHDL VHPI declaration '" + path + "'"
-                    };
-                }
-                handles.emplace(path, created.value);
             }
+            publish_declarations(*unit);
         }
         for (const auto& object : project.design_ir.objects()) {
             if (!vhdl_specializations.contains(object.specialization.value())) {
