@@ -167,7 +167,7 @@ void test_simir_containers()
                 == value(1, 1)
             && compare_container_values(strings, string_copy, false)
                 == value(1, 0),
-        "string container copies own strict UTF-8 values independently");
+        "string container copies own bounded byte values independently");
 
     ContainerType nested_string_type;
     nested_string_type.element_kind = ContainerElementKind::Container;
@@ -1348,10 +1348,16 @@ void test_simir_containers()
     unordered_string_keys.string_keys = { "beta", "alpha" };
     unordered_string_keys.elements = { value(8, 2), value(8, 1) };
     require_invalid_string_keys(std::move(unordered_string_keys));
-    auto invalid_utf8_key = default_container_value(string_associative_type);
-    invalid_utf8_key.string_keys = { std::string { "\xc0\x80", 2 } };
-    invalid_utf8_key.elements = { value(8, 1) };
-    require_invalid_string_keys(std::move(invalid_utf8_key));
+    auto arbitrary_byte_key = default_container_value(string_associative_type);
+    arbitrary_byte_key.string_keys = { std::string { "\xc0\x80", 2 } };
+    arbitrary_byte_key.elements = { value(8, 1) };
+    Interpreter byte_key_interpreter;
+    const auto byte_key_object = byte_key_interpreter.add_container_object(
+        { "arbitrary_byte_key", std::move(arbitrary_byte_key), std::nullopt });
+    require(
+        byte_key_interpreter.container_object_value(byte_key_object).string_keys
+            == std::vector<std::string> { std::string { "\xc0\x80", 2 } },
+        "associative string keys preserve arbitrary bytes");
     auto oversized_string_key = default_container_value(string_associative_type);
     oversized_string_key.string_keys = {
         std::string(maximum_string_bytes + 1U, 'x')
@@ -1447,7 +1453,7 @@ void test_simir_containers()
         LoadConstant { 0, value(32, 1) },
         LoadConstant { 1, value(8, 0xaa) },
         WriteContainerObjectElement {
-            bridged_object, 0, 1, true, false, std::nullopt },
+            bridged_object, 0, 1, true, false, false, std::nullopt },
         Halt { }
     };
     (void)bridged.add_process(std::move(bridged_process));
@@ -1470,6 +1476,43 @@ void test_simir_containers()
                 == value(8, 0x77),
         "signal-backed container materialization refreshes after a backing "
         "signal revision and remains coherent on repeated reads");
+
+    Interpreter nonblocking;
+    ContainerType dynamic_type = static_type;
+    dynamic_type.fixed = false;
+    dynamic_type.index_left = 0;
+    dynamic_type.index_right = 0;
+    dynamic_type.dimensions.clear();
+    const auto dynamic_object = nonblocking.add_container_object(
+        { "dynamic", ContainerValue {
+              dynamic_type, { value(8, 0x11) }, { } }, std::nullopt });
+    Process nonblocking_process;
+    nonblocking_process.id = 0;
+    nonblocking_process.name = "nonblocking_element_write";
+    nonblocking_process.register_count = 3;
+    nonblocking_process.container_register_count = 1;
+    nonblocking_process.container_register_types = { dynamic_type };
+    nonblocking_process.debug_locals = {
+        { "active_value", "byte", 2, 8, { }, std::nullopt,
+            std::nullopt, ValueKind::logic4, { } }
+    };
+    nonblocking_process.operations = {
+        LoadConstant { 0, value(32, 0) },
+        LoadConstant { 1, value(8, 0xaa) },
+        WriteContainerObjectElement {
+            dynamic_object, 0, 1, true, false, true, std::nullopt },
+        ReadContainerObject { 0, dynamic_object },
+        ContainerRead { 2, 0, 0, true, false, false },
+        Halt { }
+    };
+    (void)nonblocking.add_process(std::move(nonblocking_process));
+    require(
+        nonblocking.run().status == RunStatus::completed
+            && nonblocking.read_debug_local(0, 0) == value(8, 0x11)
+            && nonblocking.container_object_value(dynamic_object).elements[0]
+                == value(8, 0xaa),
+        "nonblocking container-element writes capture their operands and "
+        "publish only after active execution completes");
 
     ContainerType slice_parent_type = static_type;
     slice_parent_type.index_left = 5;

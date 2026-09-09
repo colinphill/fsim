@@ -290,6 +290,117 @@ endmodule
             == fsim::runtime::RunStatus::completed
         && bounded_task_frame_result.time == 1);
 
+    const auto function_background = fsim::frontend::parse_verilog(
+        fsim::frontend::SourceText {
+            "function_background.sv",
+            R"(
+module function_background;
+  logic [15:0] result;
+  logic launched;
+  function automatic logic launch(
+      input logic [7:0] value,
+      input logic upper);
+    fork
+      begin
+        #1;
+        if (upper)
+          result[15:8] = value;
+        else
+          result[7:0] = value;
+      end
+    join_none
+    return 1'b1;
+  endfunction
+  initial begin
+    result = 0;
+    launched = launch(8'h3c, 1'b0);
+    launched = launch(8'ha5, 1'b1);
+    #2;
+  end
+endmodule
+)" },
+        fsim::frontend::StandardRevision::SystemVerilog2023);
+    assert(function_background.ok());
+    const auto function_background_elaborated = fsim::elaboration::elaborate(
+        function_background.design, "function_background");
+    if (!function_background_elaborated.ok()) {
+        for (const auto& diagnostic :
+            function_background_elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(function_background_elaborated.ok());
+    const auto function_result
+        = function_background_elaborated.design->find_signal("result");
+    assert(function_result);
+    auto function_interpreter
+        = function_background_elaborated.design->create_interpreter();
+    const auto function_run = function_interpreter->run();
+    assert(
+        function_run.status == fsim::runtime::RunStatus::completed
+        && function_run.time == 2
+        && function_interpreter->signal_value(*function_result).to_msb_string()
+            == "1010010100111100");
+
+    const auto legacy_function_background = fsim::frontend::parse_verilog(
+        fsim::frontend::SourceText {
+            "legacy_function_background.sv",
+            R"(
+module legacy_function_background;
+  function automatic logic launch();
+    fork #1; join_none
+    return 1'b1;
+  endfunction
+endmodule
+)" },
+        fsim::frontend::StandardRevision::SystemVerilog2017);
+    assert(!legacy_function_background.ok());
+    assert(std::ranges::any_of(
+        legacy_function_background.diagnostics,
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-246";
+        }));
+
+    const auto noninitial_function_background = fsim::frontend::parse_verilog(
+        fsim::frontend::SourceText {
+            "noninitial_function_background.sv",
+            R"(
+module noninitial_function_background(output logic value);
+  function automatic logic launch();
+    fork #1; join_none
+    return 1'b1;
+  endfunction
+  always_comb value = launch();
+endmodule
+)" },
+        fsim::frontend::StandardRevision::SystemVerilog2023);
+    assert(noninitial_function_background.ok());
+    const auto noninitial_rejected = fsim::elaboration::elaborate(
+        noninitial_function_background.design,
+        "noninitial_function_background");
+    assert(!noninitial_rejected.ok());
+    assert(has_diagnostic(noninitial_rejected, "FSIM-ELAB-107"));
+
+    const auto fork_return = fsim::frontend::parse_verilog(
+        fsim::frontend::SourceText {
+            "fork_return.sv",
+            R"(
+module fork_return;
+  function automatic logic launch();
+    fork return 1'b1; join_none
+    return 1'b0;
+  endfunction
+endmodule
+)" },
+        fsim::frontend::StandardRevision::SystemVerilog2023);
+    assert(!fork_return.ok());
+    assert(std::ranges::any_of(
+        fork_return.diagnostics,
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-247";
+        }));
+
     const auto callable = fsim::frontend::parse_text(
         "callable_fork.sv",
         R"(

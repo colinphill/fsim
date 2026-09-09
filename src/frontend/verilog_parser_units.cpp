@@ -1209,13 +1209,18 @@ Type VerilogParser::parse_parameter_type() {
         "parameter type '" + later_type.text + "'",
         *declaration_word_standard(later_type.text),
         later_type);
-    Type type{
-        later_type.text == "string" ? ValueDomain::String
-                                    : ValueDomain::Logic4,
-        later_type.text,
-        std::nullopt,
-        later_type.text != "unsigned"};
-    parse_optional_range(type);
+    Type type;
+    if (!apply_systemverilog_integral_type(type, later_type.text)) {
+      type = Type{
+          later_type.text == "string" ? ValueDomain::String
+                                      : ValueDomain::Logic4,
+          later_type.text,
+          std::nullopt,
+          later_type.text != "unsigned"};
+    }
+    const auto descriptor =
+        systemverilog_integral_type_descriptor(later_type.text);
+    if (!descriptor || !descriptor->fixed_width) parse_optional_range(type);
     return type;
   }
   if (keyword("struct") || keyword("union")) {
@@ -1265,43 +1270,11 @@ Type VerilogParser::parse_parameter_type() {
             : SystemVerilogScalarKind::Realtime;
     return type;
   }
-  if (keyword("byte") || keyword("shortint")
-      || keyword("longint") || keyword("time")) {
+  if (keyword("bit") || keyword("logic") || keyword("reg")
+      || keyword("byte") || keyword("shortint") || keyword("int")
+      || keyword("longint") || keyword("integer") || keyword("time")) {
     const auto token = advance();
-    type.spelling = token.text;
-    type.domain =
-        token.text == "time"
-            ? ValueDomain::Logic4
-            : ValueDomain::Bit2;
-    type.is_signed = token.text != "time";
-    const auto width =
-        token.text == "byte"
-            ? std::int64_t{8}
-        : token.text == "shortint"
-            ? std::int64_t{16}
-            : std::int64_t{64};
-    type.packed_range = PackedRange{
-        width - 1, 0, true};
-    if (token.text == "time") {
-      type.systemverilog_scalar = SystemVerilogScalarKind::Time;
-    }
-  } else if (keyword("integer") || keyword("int")) {
-    const auto token = advance();
-    type.spelling = token.text;
-    type.domain = token.text == "int"
-        ? ValueDomain::Bit2
-        : ValueDomain::Logic4;
-    type.is_signed = true;
-    type.packed_range = PackedRange { 31, 0, true };
-  } else if (
-      keyword("logic") || keyword("reg") || keyword("bit")) {
-    const auto token = advance();
-    type.spelling = token.text;
-    type.domain =
-        token.text == "bit"
-            ? ValueDomain::Bit2
-            : ValueDomain::Logic4;
-    type.is_signed = false;
+    (void)apply_systemverilog_integral_type(type, token.text);
   } else if (
       keyword("signed") || keyword("unsigned")
       || at(TokenKind::LeftBracket)) {

@@ -1910,9 +1910,6 @@ struct Simulation::Impl {
     bool concurrent_assertion_failure_actions_enabled { true };
     ClassPropertyChangeHook class_property_change_hook;
     ClassStaticPropertyChangeHook class_static_property_change_hook;
-    std::map<std::string, ConstructorEnvironment> source_static_locals_;
-    std::map<std::string, SourceStringEnvironment>
-        source_static_string_locals_;
     std::size_t source_method_depth_ { };
     Lifecycle lifecycle { Lifecycle::ready };
     bool systemc_start_attempted { };

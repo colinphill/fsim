@@ -155,15 +155,16 @@ void test_systemverilog_dpi_real_string_chandle_marshalling()
                 == unicode,
         "DPI strings preserve valid UTF-8 bytes through ref writeback");
     const std::string embedded_nul { "a\0b", 3 };
+    const std::string arbitrary_bytes { "\xC0\x80", 2 };
     require(
         marshal_systemverilog_dpi_string(
             embedded_nul, Mode::Input)
                     .error
                 == Error::EmbeddedNul
             && marshal_systemverilog_dpi_string(
-                   std::string { "\xC0\x80", 2 }, Mode::Input)
-                    .error
-                == Error::InvalidUtf8
+                   arbitrary_bytes, Mode::Input)
+                    .value.bytes
+                == arbitrary_bytes
             && marshal_systemverilog_dpi_string(
                    "bounded", Mode::Input, 3)
                     .error
@@ -172,7 +173,7 @@ void test_systemverilog_dpi_real_string_chandle_marshalling()
                    string_value.value, Mode::Input)
                     .error
                 == Error::DirectionMismatch,
-        "DPI strings reject NUL, malformed UTF-8, resource excess, and input writeback");
+        "DPI strings preserve bytes and reject NUL, resource excess, and input writeback");
 
     SystemVerilogChandleRegistry registry;
     const auto handle = registry.create({ "dpi-object", "fixture", { } });

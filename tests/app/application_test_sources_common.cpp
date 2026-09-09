@@ -61,7 +61,19 @@ interface class_view_if #(parameter int WIDTH = 4);
   modport view(input value);
 endinterface
 
-class AppBase;
+interface class AppReadable #(type VALUE_T = int);
+  pure virtual function int bump(input int amount);
+endclass
+
+interface class AppLifecycle;
+  pure virtual function void post_randomize();
+endclass
+
+interface class AppContract #(type VALUE_T = int)
+    extends AppReadable #(VALUE_T), AppLifecycle;
+endclass
+
+class AppBase implements AppContract #(int);
   static int shared = 2;
   static AppBase shared_peer;
   AppBase peer;
@@ -102,7 +114,7 @@ class AppBase;
     transformed = "instance-inout";
     return 1;
   endfunction
-  function static int transfer_retained_text(output string produced);
+  function automatic int transfer_retained_text(output string produced);
     string retained = "retained-first";
     produced = retained;
     retained = "retained-next";
@@ -190,7 +202,7 @@ class AppDerived extends AppBase;
     if (count == 0) return retained;
     return wide_recurse(count - 1, retained);
   endfunction
-  function static logic [136:0] wide_remember(
+  function automatic logic [136:0] wide_remember(
       input logic [136:0] candidate);
     logic initialized = 0;
     logic [136:0] retained = 0;
@@ -200,7 +212,7 @@ class AppDerived extends AppBase;
     end
     return retained;
   endfunction
-  function static int next_count();
+  function automatic int next_count();
     int calls = 0;
     calls = calls + 1;
     return calls;
@@ -679,7 +691,7 @@ module class_top;
         source_retained_text_output);
     source_retained_text_copyout_ok = source_retained_text_copyout_ok
         && source_retained_text_result == 1
-        && source_retained_text_output == "retained-next";
+        && source_retained_text_output == "retained-first";
     source_static_text_inout = "static-before";
     source_static_text_result = AppBase::transfer_static_text(
         source_static_text_output, source_static_text_inout);

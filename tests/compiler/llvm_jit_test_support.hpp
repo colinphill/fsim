@@ -1110,7 +1110,7 @@ namespace {
         return 0;
     }
 
-    extern "C" inline std::uint32_t string_replace_code_point(
+    extern "C" inline std::uint32_t string_replace_byte(
         void* opaque,
         const std::uint32_t process,
         const std::uint32_t instruction,
@@ -1246,7 +1246,7 @@ namespace {
         result.compare_strings = &compare_strings;
         result.string_length = &string_length;
         result.string_index = &string_index;
-        result.string_replace_code_point = &string_replace_code_point;
+        result.string_replace_byte = &string_replace_byte;
         result.write_string_output = &write_string_output;
         result.force_driver_signal_slice = &write_signal_slice;
         result.force_driver_signal_slice_logic9 = &write_signal_slice_logic9;

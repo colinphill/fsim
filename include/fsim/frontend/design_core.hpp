@@ -619,6 +619,43 @@ struct Type {
     [[nodiscard]] std::optional<std::uint64_t> width() const noexcept;
 };
 
+/// Canonical representation defaults for a built-in SystemVerilog integral
+/// type. Flexible-width types accept a following packed range; fixed-width
+/// types always retain the width listed here.
+struct SystemVerilogIntegralTypeDescriptor {
+    ValueDomain domain { ValueDomain::Unknown };
+    std::uint8_t default_width { };
+    bool fixed_width { };
+    bool default_signed { };
+    SystemVerilogScalarKind scalar_kind { SystemVerilogScalarKind::None };
+};
+
+[[nodiscard]] std::optional<SystemVerilogIntegralTypeDescriptor>
+systemverilog_integral_type_descriptor(std::string_view spelling) noexcept;
+
+/// Apply one built-in integral type to an otherwise unqualified Type. Returns
+/// false without modifying type when spelling is not a built-in integral type.
+[[nodiscard]] bool apply_systemverilog_integral_type(
+    Type& type, std::string_view spelling);
+
+/// True only for a resolved, non-nominal SystemVerilog integral bit-vector.
+/// Enums, packed aggregates, containers, handles, and unresolved aliases are
+/// deliberately excluded.
+[[nodiscard]] bool is_systemverilog_simple_integral_type(
+    const Type& type) noexcept;
+
+/// Compare the representation-relevant shape of two simple integral types.
+/// Source spelling and packed-range direction do not affect equivalence.
+[[nodiscard]] bool systemverilog_integral_types_equivalent(
+    const Type& left, const Type& right) noexcept;
+
+/// Compare resolved SystemVerilog type shapes using the language's nominal
+/// boundaries for typedef aggregates and enums and structural rules for
+/// anonymous packed/unpacked aggregates and containers. Source spelling,
+/// locations, and initializers do not participate.
+[[nodiscard]] bool systemverilog_types_equivalent(
+    const Type& left, const Type& right) noexcept;
+
 [[nodiscard]] constexpr std::uint8_t vhdl_predefined_integer_storage_width(
     const VhdlStandard standard) noexcept
 {
@@ -853,6 +890,11 @@ struct FunctionArgument {
     PortDirection direction { PortDirection::Input };
     SourceSpan span;
     bool reference { };
+    // A const reference aliases its actual for reads without copy-out. A
+    // static reference additionally requires an actual whose storage outlives
+    // the current automatic activation (SystemVerilog-2023).
+    bool const_reference { };
+    bool static_reference { };
     std::optional<Expression> default_value;
     bool vhdl_file { };
 
@@ -861,12 +903,16 @@ struct FunctionArgument {
         PortDirection argument_direction, SourceSpan argument_span,
         bool argument_reference = false,
         std::optional<Expression> argument_default = std::nullopt,
-        bool argument_vhdl_file = false)
+        bool argument_vhdl_file = false,
+        bool argument_const_reference = false,
+        bool argument_static_reference = false)
         : name(std::move(argument_name))
         , type(std::move(argument_type))
         , direction(argument_direction)
         , span(std::move(argument_span))
         , reference(argument_reference)
+        , const_reference(argument_const_reference)
+        , static_reference(argument_static_reference)
         , default_value(std::move(argument_default))
         , vhdl_file(argument_vhdl_file)
     {
@@ -1665,18 +1711,24 @@ struct TaskArgument {
     PortDirection direction { PortDirection::Input };
     SourceSpan span;
     bool reference { };
+    bool const_reference { };
+    bool static_reference { };
     std::optional<Expression> default_value;
 
     TaskArgument() = default;
     TaskArgument(std::string argument_name, Type argument_type,
         PortDirection argument_direction, SourceSpan argument_span,
         bool argument_reference = false,
-        std::optional<Expression> argument_default = std::nullopt)
+        std::optional<Expression> argument_default = std::nullopt,
+        bool argument_const_reference = false,
+        bool argument_static_reference = false)
         : name(std::move(argument_name))
         , type(std::move(argument_type))
         , direction(argument_direction)
         , span(std::move(argument_span))
         , reference(argument_reference)
+        , const_reference(argument_const_reference)
+        , static_reference(argument_static_reference)
         , default_value(std::move(argument_default))
     {
     }
@@ -1743,6 +1795,7 @@ struct SystemVerilogClassProperty {
     SystemVerilogClassVisibility visibility { SystemVerilogClassVisibility::Public };
     bool is_static { };
     bool is_const { };
+    bool is_parameter { };
     bool is_rand { };
     bool is_randc { };
     SourceSpan span;

@@ -67,6 +67,7 @@ cmake/CheckSystemCAccelleraInventory.cmake
 cmake/CheckSystemCAccelleraPortabilityContract.cmake
 cmake/CheckSystemCPortabilityContract.cmake
 cmake/CheckSystemCSharedRuntime.cmake
+cmake/CheckSystemVerilog2023Inventory.cmake
 cmake/CheckSystemVerilogClosureAudit.cmake
 cmake/CheckSystemVerilogGapInventory.cmake
 cmake/CheckTclVersionSelection.cmake
@@ -957,6 +958,7 @@ src/runtime/sdf_vital_scheduling.cpp
 src/runtime/sdf_vital_timing_checks.cpp
 src/runtime/simir.cpp
 src/runtime/simir_arithmetic.cpp
+src/runtime/simir_callable_context.cpp
 src/runtime/simir_container_algorithms.cpp
 src/runtime/simir_container_bridge.cpp
 src/runtime/simir_container_values.cpp
@@ -1444,6 +1446,7 @@ tests/feature_matrix/sdf_vital_inventory.tsv
 tests/feature_matrix/source_hidden_relocation_contract.tsv
 tests/feature_matrix/systemc_abi_contract.tsv
 tests/feature_matrix/systemc_accellera_inventory.tsv
+tests/feature_matrix/systemverilog_2023_inventory.tsv
 tests/feature_matrix/systemverilog_gap_inventory.tsv
 tests/feature_matrix/systemverilog_literal_width_inventory.tsv
 tests/feature_matrix/systemverilog_release_closure.tsv
@@ -1502,6 +1505,7 @@ tests/frontend/frontend_generate_output_tests.cpp
 tests/frontend/frontend_hierarchy_tests.cpp
 tests/frontend/frontend_interface_tests.cpp
 tests/frontend/frontend_package_tests.cpp
+tests/frontend/frontend_parameter_tests.cpp
 tests/frontend/frontend_preprocessing_tests.cpp
 tests/frontend/frontend_specify_tests.cpp
 tests/frontend/frontend_statement_tests.cpp

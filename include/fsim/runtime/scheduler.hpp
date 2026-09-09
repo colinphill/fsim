@@ -32,6 +32,19 @@ enum class SchedulerPhase : std::uint8_t {
 
 [[nodiscard]] const char *phase_name(SchedulerPhase phase) noexcept;
 
+// Return the scheduler region owned by an elaborated process declaration.
+// Elaboration guarantees that at most one of these region flags is set.
+[[nodiscard]] constexpr SchedulerPhase process_execution_phase(
+    const bool observed,
+    const bool reactive,
+    const bool postponed) noexcept
+{
+    return postponed ? SchedulerPhase::postponed
+        : reactive ? SchedulerPhase::reactive
+        : observed ? SchedulerPhase::observed
+        : SchedulerPhase::active;
+}
+
 struct SchedulerOptions {
   std::uint64_t max_delta_cycles = 100'000;
   std::size_t recent_signal_capacity = 32;

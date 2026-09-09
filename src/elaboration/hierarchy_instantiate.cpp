@@ -725,6 +725,7 @@ void HierarchyBuilder::rollback_hierarchy(
     erase_path_map(systemverilog_interface_handles_);
     erase_path_map(systemverilog_interface_parameter_identities_);
     erase_path_map(systemverilog_interface_modport_views_);
+    erase_path_map(systemverilog_clocking_event_signals_);
     std::erase_if(udp_table_by_identity_, [&](const auto& entry) {
         return static_cast<std::size_t>(entry.second) >= checkpoint.udp_tables;
     });

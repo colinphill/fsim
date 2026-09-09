@@ -42,6 +42,7 @@ enum class SystemVerilogStandard : std::uint8_t {
     systemverilog_2009,
     systemverilog_2012,
     systemverilog_2017,
+    systemverilog_2023,
 };
 
 enum class Optimization : std::uint8_t {

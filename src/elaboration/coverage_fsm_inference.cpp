@@ -166,6 +166,7 @@ namespace {
         case frontend::StandardRevision::SystemVerilog2009:
         case frontend::StandardRevision::SystemVerilog2012:
         case frontend::StandardRevision::SystemVerilog2017:
+        case frontend::StandardRevision::SystemVerilog2023:
             return true;
         case frontend::StandardRevision::Vhdl1987:
         case frontend::StandardRevision::Vhdl1993:

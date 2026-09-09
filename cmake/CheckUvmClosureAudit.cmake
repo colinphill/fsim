@@ -134,10 +134,10 @@ foreach(FSIM_GATE IN ITEMS
     "${FSIM_GATE_OUTPUT}${FSIM_GATE_ERROR}\n")
 endforeach()
 foreach(FSIM_TOKEN IN ITEMS
-    "diagnostic catalog covers 2661 production codes"
-    "Checked 1428 authored sources against the 2500-line hard limit with a 2000-line refactor target"
-    "final inventory audit: 2661 diagnostics, 1428 bounded sources, 1728 SPDX-owned files"
-    "v1 conformance audit: 534 authored test/control files")
+    "diagnostic catalog covers 2693 production codes"
+    "Checked 1430 authored sources against the 2500-line hard limit with a 2000-line refactor target"
+    "final inventory audit: 2693 diagnostics, 1430 bounded sources, 1732 SPDX-owned files"
+    "v1 conformance audit: 535 authored test/control files")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)
   if(FSIM_TOKEN_INDEX EQUAL -1)
     message(FATAL_ERROR "UVM closure lost composed evidence: ${FSIM_TOKEN}")

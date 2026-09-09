@@ -188,8 +188,8 @@ for (const auto& operation : process.operations) {
                     "signed-index",
                     value.signed_index ? 1U : 0U);
             } else if constexpr (
-                std::is_same_v<OperationType, StringReplaceCodePoint>) {
-                builder.add("operation", "StringReplaceCodePoint");
+                std::is_same_v<OperationType, StringReplaceByte>) {
+                builder.add("operation", "StringReplaceByte");
                 add_key_u64(builder, "target", value.target);
                 add_key_u64(builder, "index", value.index);
                 add_key_u64(builder, "source", value.source);
@@ -526,6 +526,9 @@ for (const auto& operation : process.operations) {
                 add_key_u64(
                     builder, "signed-index",
                     value.signed_index ? 1U : 0U);
+                add_key_u64(
+                    builder, "nonblocking",
+                    value.nonblocking ? 1U : 0U);
                 add_key_u64(
                     builder, "has-transaction-signal",
                     value.transaction_signal.has_value() ? 1U : 0U);

@@ -88,7 +88,7 @@ fsim_require_portable_object_tokens("${FSIM_OBJECT_HEADER}"
 fsim_require_portable_object_tokens("${FSIM_LIBRARY_HEADER}"
   "kPortableSchemaVersion = 11")
 fsim_require_portable_object_tokens("${FSIM_PORTABLE_HEADER}"
-  "kOwningUnitSchemaVersion = 27"
+  "kOwningUnitSchemaVersion = 28"
   "kUdpDeclarationSchemaVersion = 1"
   "Unknown schemas, truncation, trailing bytes, and out-of-range values reject")
 
@@ -123,7 +123,7 @@ fsim_require_portable_object_tokens("${FSIM_OBJECT_TEST}"
   "kCodeCoverageArtifactDiagnostic"
   "stale-coverage"
   "kPortableSchemaVersion == 11U"
-  "kOwningUnitSchemaVersion == 27U"
+  "kOwningUnitSchemaVersion == 28U"
   "corrupt-magic"
   "stale-format"
   "future-format"

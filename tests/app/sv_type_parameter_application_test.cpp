@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <chrono>
@@ -27,7 +28,8 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 4> values;
+  std::array<std::string, 6> values;
+  std::array<std::string, 3> class_relations;
   std::vector<std::string> keys;
   std::size_t compiled_processes{};
   std::size_t compiled_modules{};
@@ -54,7 +56,7 @@ fsim::project::Config make_config(
   fsim::project::SourceSet sources;
   sources.language =
       fsim::project::Language::system_verilog;
-  sources.standard = "2017";
+  sources.standard = "2023";
   sources.library = "work";
   sources.compilation_unit = "file";
   sources.files = {child_source, top_source};
@@ -77,6 +79,31 @@ Capture run_once(
   assert(project->design.specializations().size() == 4);
   Capture capture;
   capture.keys = project->specialization_cache_keys;
+  const auto find_class = [&](const std::string_view suffix) {
+    return std::ranges::find_if(
+        project->systemverilog_class_specializations,
+        [&](const auto& specialization) {
+          return specialization.declaration_identity.ends_with(suffix);
+        });
+  };
+  const auto logic_contract = find_class("::LogicContract");
+  const auto reg_contract = find_class("::RegContract");
+  const auto diamond_contract = find_class("::DiamondContract");
+  assert(
+      logic_contract
+              != project->systemverilog_class_specializations.end()
+          && reg_contract
+              != project->systemverilog_class_specializations.end()
+          && diamond_contract
+              != project->systemverilog_class_specializations.end()
+          && logic_contract->base_specialization_identity
+              == reg_contract->base_specialization_identity
+          && diamond_contract->interface_specialization_identities.size()
+              == 1);
+  capture.class_relations = {
+      logic_contract->base_specialization_identity,
+      reg_contract->base_specialization_identity,
+      diamond_contract->interface_specialization_identities.front()};
   fsim::app::Simulation simulation{
       std::move(*project), config.run.max_deltas, engine};
   capture.compiled_processes =
@@ -84,11 +111,13 @@ Capture run_once(
   capture.compiled_modules =
       simulation.compiled_module_count();
   capture.cache = simulation.native_cache_statistics();
-  constexpr std::array<std::string_view, 4> paths {
+  constexpr std::array<std::string_view, 6> paths {
       "type_parameter_top.default_value",
       "type_parameter_top.selected_value",
       "type_parameter_top.unrelated_value",
-      "type_parameter_top.type_results"
+      "type_parameter_top.type_results",
+      "type_parameter_top.two_state_conversion",
+      "type_parameter_top.four_state_conversion"
   };
   std::array<fsim::runtime::simir::SignalId, paths.size()> signals{};
   for (std::size_t index = 0; index < paths.size(); ++index) {
@@ -113,6 +142,8 @@ void verify(
   assert(capture.values[1] == selected);
   assert(capture.values[2] == "1");
   assert(capture.values[3] == "1111111111111");
+  assert(capture.values[4] == "0100");
+  assert(capture.values[5] == "X1Z0");
 }
 
 } // namespace
@@ -141,6 +172,20 @@ endmodule
 module unrelated_value(output logic value);
   initial value = 1'b1;
 endmodule
+
+interface class TypedContract #(type T = logic [3:0]);
+endclass
+
+interface class LogicContract
+    extends TypedContract #(logic [3:0]);
+endclass
+
+interface class RegContract
+    extends TypedContract #(reg [3:0]);
+endclass
+
+interface class DiamondContract extends LogicContract, RegContract;
+endclass
 )";
     assert(output.good());
   }
@@ -172,6 +217,8 @@ endmodule
                << "  other_four_t other_four_value;\n"
                << "  wide_two_t wide_two_value;\n"
                << "  wide_record_t wide_record_value;\n"
+               << "  bit [3:0] two_state_conversion;\n"
+               << "  logic [3:0] four_state_conversion;\n"
                << "  logic [12:0] type_results;\n"
                << "  typed_value defaults(default_value);\n"
                << "  typed_value #(.T(logic " << range
@@ -179,6 +226,8 @@ endmodule
                << ")) selected(selected_value);\n"
                << "  unrelated_value stable(unrelated_value);\n"
                << "  initial begin\n"
+               << "    two_state_conversion = 4'bx1z0;\n"
+               << "    four_state_conversion = 4'bx1z0;\n"
                << "    type_results = {\n"
                << "      type(logic_value) == type(reg_value),\n"
                << "      type(logic_value) != type(bit_value),\n"
@@ -221,6 +270,8 @@ endmodule
     verify(warm, wide_expected);
     assert(reference.values == cold.values);
     assert(cold.values == warm.values);
+    assert(reference.class_relations == cold.class_relations);
+    assert(cold.class_relations == warm.class_relations);
     assert(reference.keys == cold.keys);
     assert(cold.keys == warm.keys);
     if (optimization == fsim::project::Optimization::o2) {

@@ -279,6 +279,7 @@ int main()
         test_systemverilog_preprocessor();
         test_systemverilog_uvm_macro_surface();
         test_systemverilog_public_conformance_frontend();
+        test_systemverilog_2023_profile_isolation();
         test_verilog_systemverilog_compatibility_defaults();
         test_msvc_debug_frontend_portability();
         test_systemverilog_line_directive();

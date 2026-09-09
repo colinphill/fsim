@@ -246,6 +246,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
             std::vector<std::string> strings;
             std::vector<SharedContainerValue> containers;
             std::size_t storage_bytes { };
+            // Non-null only when a SystemVerilog-2023 function activation
+            // spawned background processes. The activation owns one context;
+            // every spawned process shares it until the final child exits.
+            std::shared_ptr<CallableFrameState> escaping_context;
         };
 
         Process program;
@@ -277,6 +281,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::vector<InstructionIndex> dynamic_call_stack;
         std::vector<CallableFrameState> callable_frames;
         std::size_t callable_frame_storage_bytes { };
+        std::vector<std::shared_ptr<CallableFrameState>>
+            escaping_callable_contexts;
         std::optional<CallableFrameState> suspended_callable_context;
         std::size_t callable_context_storage_bytes { };
         std::uint32_t generation { };
@@ -340,11 +346,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     struct SemaphoreWaiter {
         ProcessId process { };
-        std::uint32_t keys { };
+        std::int32_t keys { };
     };
 
     struct SemaphoreState {
-        std::uint32_t keys { };
+        std::int64_t keys { };
         std::deque<SemaphoreWaiter> waiters;
     };
 
@@ -1083,6 +1089,17 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void pop_callable_frame(
         ProcessState& process,
         const CallableFramePop& operation);
+
+    void capture_callable_values(
+        ProcessState& process,
+        ProcessState::CallableFrameState& context,
+        const std::set<RegisterId>& excluded_packed = { },
+        const std::set<StringRegisterId>& excluded_strings = { },
+        const std::set<ContainerRegisterId>& excluded_containers = { });
+
+    void restore_callable_values(
+        ProcessState& process,
+        const ProcessState::CallableFrameState& context);
 
     void snapshot_callable_context(ProcessState& process);
 

@@ -287,9 +287,14 @@ module type_operator_top;
   enum_two_t enum_two;
   word_t word_value;
   logic [7:0] vector_value;
+  bit signed [7:0] signed_byte_vector;
+  bit signed [0:7] reversed_signed_byte_vector;
+  bit signed [31:0] signed_int_vector;
+  logic signed [31:0] signed_integer_vector;
+  logic [63:0] time_vector;
   bit values[1:0][2:1][0:1][3:2][4:3][5:4];
   bit values_copy[1:0][2:1][0:1][3:2][4:3][5:4];
-  logic [6:0] type_results;
+  logic [11:0] type_results;
   initial begin
     type_results[0] = type(logic_value) == type(reg_value);
     type_results[1] = type(bit_value) != type(logic_value);
@@ -298,6 +303,12 @@ module type_operator_top;
     type_results[4] = type(enum_a_one) == type(enum_a_two);
     type_results[5] = type(enum_a_one) != type(enum_b_one);
     type_results[6] = type(values) == type(values_copy);
+    type_results[7] = type(byte_value) == type(signed_byte_vector);
+    type_results[8] = type(signed_byte_vector)
+        == type(reversed_signed_byte_vector);
+    type_results[9] = type(int_value) == type(signed_int_vector);
+    type_results[10] = type(integer_value) == type(signed_integer_vector);
+    type_results[11] = type(time_value) == type(time_vector);
   end
 endmodule
 )",
@@ -349,7 +360,7 @@ endmodule
     const auto results = type_operator.design->find_signal("type_results");
     assert(results);
     assert(type_interpreter->signal_value(*results).to_msb_string()
-        == "1111111");
+        == "111111111111");
 
     const auto invalid_type_operator_parsed = fsim::frontend::parse_text(
         "sv-invalid-type-operator.sv",

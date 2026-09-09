@@ -531,7 +531,7 @@ private:
         void*, std::uint32_t, std::uint32_t, std::uint32_t,
         std::uint64_t, std::uint64_t, std::uint32_t,
         std::uint32_t*) noexcept;
-    static std::uint32_t string_replace_code_point(
+    static std::uint32_t string_replace_byte(
         void*, std::uint32_t, std::uint32_t, std::uint32_t,
         std::uint64_t, std::uint64_t, std::uint32_t,
         std::uint64_t, std::uint64_t) noexcept;

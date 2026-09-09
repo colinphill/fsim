@@ -34,6 +34,61 @@
         bool observed { };
     };
     std::vector<ClockingEventProcess> clocking_event_processes;
+    const auto constant_clocking_delay =
+        [&](const frontend::SystemVerilogClockingSkew* skew,
+            const std::string_view clockvar)
+        -> std::pair<bool, std::optional<frontend::Delay>> {
+        if (skew == nullptr || !skew->delay) {
+            return { true, std::nullopt };
+        }
+        auto delay = *skew->delay;
+        if (!delay.expression) {
+            return { true, std::move(delay) };
+        }
+        if (unit.standard_revision
+            != frontend::StandardRevision::SystemVerilog2023) {
+            return { true, std::move(delay) };
+        }
+        std::string error;
+        const auto value =
+            evaluate_systemverilog_constant_function_expression(
+                *delay.expression,
+                parameter_integral_environment,
+                parameter_environment,
+                unit.functions,
+                error);
+        const auto integer = value
+            ? value->integer_value()
+            : std::optional<std::int64_t> { };
+        if (!integer || *integer < 0) {
+            report(
+                "FSIM-ELAB-CLOCK-008",
+                "clocking skew for '" + path + "."
+                    + std::string { clockvar }
+                    + "' must be a known nonnegative elaboration-time "
+                      "constant"
+                    + (error.empty() ? std::string { }
+                                     : ": " + error),
+                delay.expression->span);
+            return { false, std::nullopt };
+        }
+        const auto magnitude = static_cast<std::uint64_t>(*integer);
+        if (magnitude != 0
+            && delay.magnitude
+                > std::numeric_limits<std::uint64_t>::max()
+                    / magnitude) {
+            report(
+                "FSIM-ELAB-CLOCK-009",
+                "clocking skew for '" + path + "."
+                    + std::string { clockvar }
+                    + "' overflows the 64-bit simulation time range",
+                delay.expression->span);
+            return { false, std::nullopt };
+        }
+        delay.magnitude *= magnitude;
+        delay.expression.reset();
+        return { true, std::move(delay) };
+    };
     for (const auto& block : unit.systemverilog_clocking_blocks) {
         if (block.event.size() != 1
             || block.event.front().signal.empty()) {
@@ -56,9 +111,7 @@
             continue;
         }
         local.insert_or_assign(block.name, event->second);
-        local.insert_or_assign(
-            path + "." + block.name, event->second);
-        design_.signal_by_name_.emplace(
+        systemverilog_clocking_event_signals_.insert_or_assign(
             path + "." + block.name, event->second);
 
         for (const auto& member : block.signals) {
@@ -101,9 +154,10 @@
                     && block.default_output_skew
                 ? &*block.default_output_skew
                 : nullptr;
-            std::optional<frontend::Delay> skew_delay;
-            if (selected_skew && selected_skew->delay) {
-                skew_delay = selected_skew->delay;
+            auto [skew_valid, skew_delay] = constant_clocking_delay(
+                selected_skew, block.name + "." + member.name);
+            if (!skew_valid) {
+                continue;
             }
             if (member.direction
                     == frontend::PortDirection::Input
@@ -281,8 +335,12 @@
         throw std::length_error(
             "too many elaborated design-unit specializations");
     }
+    const auto reactive_unit = unit.systemverilog_scheduling_declaration
+        ? unit.systemverilog_scheduling_declaration->process_region
+            == frontend::SystemVerilogProcessRegion::Reactive
+        : unit.kind == frontend::UnitKind::SystemVerilogProgram;
     const auto program_owner
-        = unit.kind == frontend::UnitKind::SystemVerilogProgram
+        = reactive_unit
         ? std::optional<std::uint32_t> { specialization_id }
         : std::nullopt;
     SpecializationInfo specialization;
@@ -381,6 +439,7 @@
         diagnostics_
     };
     lowerer.set_systemverilog_program_owner(program_owner);
+    lowerer.set_systemverilog_standard(unit.standard_revision);
     lowerer.set_vhdl_standard(unit.vhdl_standard);
     const auto uses_synopsys_package = [&](const std::string_view package) {
         const auto prefix = "ieee." + std::string { package };
@@ -404,6 +463,12 @@
             if (unit.language == frontend::Language::Vhdl2008) {
                 process.language_standard = frontend::to_string(unit.vhdl_standard);
                 process.compatibility_profile = unit.vhdl_compatibility_profile;
+            } else if (unit.language
+                == frontend::Language::SystemVerilog2017) {
+                process.language_standard
+                    = frontend::to_string(unit.standard_revision);
+                process.compatibility_profile
+                    = unit.verilog_compatibility_profile;
             }
             canonicalize_process_operations(process);
             specialization.processes.push_back(process.id);

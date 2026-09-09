@@ -740,7 +740,15 @@ class Lexer {
         }
         return;
       case '+':
-        if (!is_vhdl() && consume_if(':')) {
+        if (!is_vhdl() && peek() == '/' && peek(1) == '-') {
+          advance();
+          advance();
+          emit(TokenKind::AbsoluteTolerance, begin);
+        } else if (!is_vhdl() && peek() == '%' && peek(1) == '-') {
+          advance();
+          advance();
+          emit(TokenKind::RelativeTolerance, begin);
+        } else if (!is_vhdl() && consume_if(':')) {
           emit(TokenKind::PlusColon, begin);
         } else if (!is_vhdl() && consume_if('+')) {
           emit(TokenKind::PlusPlus, begin);
@@ -936,6 +944,10 @@ const char* to_string(TokenKind kind) noexcept {
       return "'||'";
     case TokenKind::Plus:
       return "'+'";
+    case TokenKind::AbsoluteTolerance:
+      return "'+/-'";
+    case TokenKind::RelativeTolerance:
+      return "'+%-'";
     case TokenKind::PlusColon:
       return "'+:'";
     case TokenKind::PlusPlus:

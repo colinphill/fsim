@@ -299,6 +299,8 @@ frontend::StandardRevision frontend_standard_revision(
             return frontend::StandardRevision::SystemVerilog2012;
         case project::SystemVerilogStandard::systemverilog_2017:
             return frontend::StandardRevision::SystemVerilog2017;
+        case project::SystemVerilogStandard::systemverilog_2023:
+            return frontend::StandardRevision::SystemVerilog2023;
         }
     }
     return frontend::StandardRevision::SystemVerilog2017;

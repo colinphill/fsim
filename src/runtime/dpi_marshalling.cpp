@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/dpi_marshalling.hpp"
-#include "fsim/runtime/systemverilog_string.hpp"
 
 #include <bit>
 #include <cmath>
@@ -193,9 +192,6 @@ SystemVerilogDpiStringResult marshal_systemverilog_dpi_string(
   }
   if (value.find('\0') != std::string_view::npos) {
     return {{}, SystemVerilogDpiMarshallingError::EmbeddedNul};
-  }
-  if (!systemverilog_string_is_valid(value)) {
-    return {{}, SystemVerilogDpiMarshallingError::InvalidUtf8};
   }
   return {SystemVerilogDpiStringPayload{mode, std::string{value}}, {}};
 }

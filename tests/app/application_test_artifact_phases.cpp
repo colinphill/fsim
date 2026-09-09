@@ -28,7 +28,7 @@ void ApplicationTestFixture::test_artifact_phase_semantics()
     static_assert(app::kRuntimeStateSchema == 59);
     static_assert(app::kSemanticStateSchema == 4);
     static_assert(app::kDesignIrStateSchema == 4);
-    static_assert(app::kClassStateSchema == 11);
+    static_assert(app::kClassStateSchema == 12);
     static_assert(app::kSystemVerilogConstraintHirStateSchema == 7);
     static_assert(app::kSystemVerilogCoverageStateSchema == 5);
     static_assert(app::kSystemVerilogUvmStateSchema == 3);

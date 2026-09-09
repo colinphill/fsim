@@ -300,28 +300,6 @@
       }
       string_environment[variable.name] = *value;
     }
-    if (method.lifetime == frontend::SystemVerilogClassLifetime::Static) {
-      auto& retained = source_static_locals_[method.canonical_identity];
-      for (const auto& variable : method.variables) {
-        if (const auto found = retained.find(variable.name);
-            found != retained.end()) {
-          environment[variable.name] = found->second;
-        } else {
-          retained[variable.name] = environment.at(variable.name);
-        }
-      }
-      auto& retained_strings =
-          source_static_string_locals_[method.canonical_identity];
-      for (const auto& variable : method.variables) {
-        if (variable.type.domain != frontend::ValueDomain::String) continue;
-        if (const auto found = retained_strings.find(variable.name);
-            found != retained_strings.end()) {
-          string_environment[variable.name] = found->second;
-        } else {
-          retained_strings[variable.name] = string_environment.at(variable.name);
-        }
-      }
-    }
     const auto result = execute_source_function_statements(
         method.statements, handle, environment, string_environment);
     const auto void_result = method.return_type.spelling == "void";
@@ -329,21 +307,6 @@
       throw std::invalid_argument{
           "class function completed without returning a value"};
     }
-    if (method.lifetime == frontend::SystemVerilogClassLifetime::Static) {
-      auto& retained = source_static_locals_.at(method.canonical_identity);
-      for (const auto& variable : method.variables) {
-        retained[variable.name] = environment.at(variable.name);
-      }
-      auto& retained_strings =
-          source_static_string_locals_.at(method.canonical_identity);
-      for (const auto& variable : method.variables) {
-        if (variable.type.domain == frontend::ValueDomain::String) {
-          retained_strings[variable.name] =
-              string_environment.at(variable.name);
-        }
-      }
-    }
-
     for (std::size_t index = 0; index < actuals.size(); ++index) {
       const auto formal = actual_formals[index];
       const auto direction = method.arguments[formal].direction;
@@ -427,27 +390,10 @@
       }
       string_environment[variable.name] = *value;
     }
-    if (method.lifetime == frontend::SystemVerilogClassLifetime::Static) {
-      auto& retained = source_static_locals_[method.canonical_identity];
-      for (const auto& variable : method.variables) {
-        if (const auto found = retained.find(variable.name);
-            found != retained.end()) {
-          environment[variable.name] = found->second;
-        } else {
-          retained[variable.name] = environment.at(variable.name);
-        }
-      }
-    }
     const auto result = execute_source_function_statements(
         method.statements, handle, environment, string_environment);
     if (result.returned) {
       throw std::invalid_argument{"SystemVerilog class task returned a value"};
-    }
-    if (method.lifetime == frontend::SystemVerilogClassLifetime::Static) {
-      auto& retained = source_static_locals_.at(method.canonical_identity);
-      for (const auto& variable : method.variables) {
-        retained[variable.name] = environment.at(variable.name);
-      }
     }
   }
 

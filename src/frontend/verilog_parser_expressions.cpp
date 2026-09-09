@@ -338,10 +338,25 @@ Expression VerilogParser::parse_expression(int minimum_precedence)
                     if (match(TokenKind::LeftBracket)) {
                         const auto range_start = previous();
                         auto low = parse_expression();
-                        expect(
-                            TokenKind::Colon,
-                            "':' in inside range",
-                            "FSIM-SV-PARSE-178");
+                        std::string range_kind { "@inside-range" };
+                        if (at(TokenKind::AbsoluteTolerance)
+                            || at(TokenKind::RelativeTolerance)) {
+                            const auto tolerance = advance();
+                            (void)require_standard(
+                                "inside tolerance ranges",
+                                StandardRevision::SystemVerilog2023,
+                                tolerance,
+                                "FSIM-SV-PARSE-347");
+                            range_kind = tolerance.kind
+                                    == TokenKind::AbsoluteTolerance
+                                ? "@inside-absolute-tolerance"
+                                : "@inside-relative-tolerance";
+                        } else {
+                            expect(
+                                TokenKind::Colon,
+                                "':' or a tolerance operator in inside range",
+                                "FSIM-SV-PARSE-178");
+                        }
                         auto high = parse_expression();
                         expect(
                             TokenKind::RightBracket,
@@ -349,7 +364,7 @@ Expression VerilogParser::parse_expression(int minimum_precedence)
                             "FSIM-SV-PARSE-179");
                         operands.push_back(Expression {
                             ExpressionKind::Call,
-                            "@inside-range",
+                            std::move(range_kind),
                             { std::move(low), std::move(high) },
                             cover(range_start.span, previous().span) });
                     } else {

@@ -77,8 +77,8 @@ virtual class automatic Worker #(parameter int WIDTH = 8)
   Box #(.T(logic [3:0]), .COUNT(3)) boxes;
   Box #(.T(DispatchBase)) dispatch_box;
   function new(int seed = 0);
-    this.count = seed;
     super.new();
+    this.count = seed;
   endfunction : new
   virtual function int get_count();
     return this.count;
@@ -324,13 +324,13 @@ endmodule : class_owner
       "overrides must retain stable virtual slots while new methods append");
   require(
       worker.methods.front().statements.size() == 2
-          && worker.methods.front().statements.front().target.text
+          && worker.methods.front().statements.back().target.text
               == "@sv-property:work::$unit::Worker::count"
-          && worker.methods.front().statements.front().target.operands.front()
+          && worker.methods.front().statements.back().target.operands.front()
                  .text == "this"
-          && worker.methods.front().statements.back().task_name
+          && worker.methods.front().statements.front().task_name
               == "@sv-base-constructor:work::base_pkg::Base::new"
-          && worker.methods.front().statements.back().task_arguments.front()
+          && worker.methods.front().statements.front().task_arguments.front()
                  .text == "super",
       "this and super selections must bind to canonical class members");
 
@@ -1534,6 +1534,178 @@ endclass
           && has_inheritance_code("FSIM-SV-CLASS-INHERIT-007")
           && has_inheritance_code("FSIM-SV-CLASS-INHERIT-009"),
       "cycle, interface, final override, and pure obligations must be stable");
+
+  auto interface_inheritance = parse_verilog(
+      SourceText { "interface_inheritance_2023.sv",
+      R"(
+interface class RootContract;
+  parameter int ID = 1;
+  typedef int item_t;
+  pure virtual function int apply(input int value);
+endclass
+interface class LeftContract extends RootContract;
+  pure virtual function int left(input int value);
+endclass
+interface class RightContract;
+  pure virtual function int right(input int value);
+endclass
+interface class CombinedContract extends LeftContract, RightContract;
+endclass
+class ConcreteContract implements CombinedContract;
+  function int apply(input int value);
+    return value;
+  endfunction
+  function int left(input int value);
+    return value;
+  endfunction
+  function int right(input int value);
+    return value;
+  endfunction
+endclass
+)" },
+      StandardRevision::SystemVerilog2023);
+  require(
+      interface_inheritance.ok(),
+      "2023 interface-class multiple inheritance must parse");
+  std::vector<Diagnostic> interface_resolution;
+  require(
+      resolve_systemverilog_classes(
+          interface_inheritance.design, interface_resolution),
+      "2023 interface-class multiple inheritance must resolve");
+  std::vector<Diagnostic> interface_legality;
+  require(
+      validate_systemverilog_class_inheritance(
+          interface_inheritance.design, interface_legality),
+      "compatible interface inheritance and implementation must be legal");
+  const auto& combined = interface_inheritance.design
+      .systemverilog_classes[3];
+  const auto& root_contract = interface_inheritance.design
+      .systemverilog_classes.front();
+  require(
+      combined.is_interface && combined.base
+          && combined.base->name == "LeftContract"
+          && combined.extended_interfaces.size() == 1
+          && combined.extended_interfaces.front().name == "RightContract"
+          && root_contract.properties.size() == 1
+          && root_contract.properties.front().is_parameter,
+      "interface bases and body parameters must remain explicit");
+
+  auto revised_inheritance_negatives = parse_verilog(
+      SourceText { "invalid_interface_inheritance_2023.sv",
+      R"(
+class Plain;
+endclass
+interface class Contract;
+  pure virtual function int apply(input int value);
+endclass
+interface class BadExtends extends Plain;
+endclass
+interface class BadImplements implements Contract;
+endclass
+class BadClassExtends extends Contract;
+endclass
+interface class BadMembers;
+  int value;
+  function int body(input int value);
+    return value;
+  endfunction
+  constraint invalid_constraint { value > 0; }
+endclass
+class StaticVirtual;
+  static virtual function int invalid(input int value);
+    return value;
+  endfunction
+endclass
+class VirtualBase;
+  virtual function int transform(input int value);
+    return value;
+  endfunction
+endclass
+class BadOverride extends VirtualBase;
+  function int transform(input int renamed);
+    return renamed;
+  endfunction
+endclass
+class DuplicateMethods;
+  function int duplicate(input int value);
+    return value;
+  endfunction
+  function int duplicate(input byte value);
+    return value;
+  endfunction
+endclass
+interface class FirstConflict;
+  pure virtual function int collide(input int value);
+endclass
+interface class SecondConflict;
+  pure virtual function int collide(input int value);
+endclass
+interface class UnresolvedConflict extends FirstConflict, SecondConflict;
+endclass
+interface class FirstDeclarations;
+  typedef int item_t;
+  parameter int ID = 1;
+endclass
+interface class SecondDeclarations;
+  typedef int item_t;
+  parameter int ID = 2;
+endclass
+interface class UnresolvedDeclarations
+    extends FirstDeclarations, SecondDeclarations;
+endclass
+interface class ResolvedDeclarations
+    extends FirstDeclarations, SecondDeclarations;
+  typedef int item_t;
+  parameter int ID = 3;
+endclass
+)" },
+      StandardRevision::SystemVerilog2023);
+  require(
+      revised_inheritance_negatives.ok(),
+      "2023 inheritance legality negatives must parse before validation");
+  std::vector<Diagnostic> revised_resolution;
+  require(
+      resolve_systemverilog_classes(
+          revised_inheritance_negatives.design, revised_resolution),
+      "2023 inheritance legality negatives must resolve names");
+  std::vector<Diagnostic> revised_legality;
+  require(
+      !validate_systemverilog_class_inheritance(
+          revised_inheritance_negatives.design, revised_legality),
+      "2023 inheritance legality negatives must reject transactionally");
+  for (const auto code : {
+           "FSIM-SV-CLASS-INHERIT-002",
+           "FSIM-SV-CLASS-INHERIT-004",
+           "FSIM-SV-CLASS-INHERIT-008",
+           "FSIM-SV-CLASS-INHERIT-010",
+           "FSIM-SV-CLASS-INHERIT-011",
+           "FSIM-SV-CLASS-INHERIT-012",
+           "FSIM-SV-CLASS-INHERIT-013" }) {
+    require(
+        std::ranges::any_of(
+            revised_legality,
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            }),
+        "2023 class and interface inheritance diagnostic must be stable");
+  }
+
+  const auto nested_interface = parse_verilog(
+      SourceText { "nested_interface_class_2023.sv",
+      R"(
+class Outer;
+  interface class Nested;
+  endclass
+endclass
+)" },
+      StandardRevision::SystemVerilog2023);
+  require(
+      std::ranges::any_of(
+          nested_interface.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-245";
+          }),
+      "an interface class nested in a class must reject at its declaration");
 
   auto covariant = parse_text(
       "covariant_classes.sv",

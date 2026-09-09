@@ -790,29 +790,10 @@ void VerilogParser::parse_optional_net_type(Type& type)
         return;
     }
     type.spelling = keyword_token.text;
-    if (keyword_token.text == "bit") {
-        type.domain = ValueDomain::Bit2;
-    } else if (
-        keyword_token.text == "byte"
-        || keyword_token.text == "shortint"
-        || keyword_token.text == "int"
-        || keyword_token.text == "longint"
-        || keyword_token.text == "integer") {
-        type.domain = keyword_token.text == "integer"
-            ? ValueDomain::Logic4
-            : ValueDomain::Bit2;
-        type.is_signed = true;
-        const auto width = keyword_token.text == "byte"
-            ? std::int64_t { 8 }
-            : keyword_token.text == "shortint"
-            ? std::int64_t { 16 }
-            : keyword_token.text == "longint"
-            ? std::int64_t { 64 }
-            : std::int64_t { 32 };
-        type.packed_range = PackedRange {
-            width - 1, 0, true
-        };
-    } else if (keyword_token.text == "shortreal"
+    if (apply_systemverilog_integral_type(type, keyword_token.text)) {
+        return;
+    }
+    if (keyword_token.text == "shortreal"
         || keyword_token.text == "real"
         || keyword_token.text == "realtime") {
         type.domain = ValueDomain::Bit2;
@@ -822,11 +803,6 @@ void VerilogParser::parse_optional_net_type(Type& type)
             : keyword_token.text == "real"
             ? SystemVerilogScalarKind::Real
             : SystemVerilogScalarKind::Realtime;
-    } else if (keyword_token.text == "time") {
-        type.domain = ValueDomain::Logic4;
-        type.is_signed = false;
-        type.packed_range = PackedRange { 63, 0, true };
-        type.systemverilog_scalar = SystemVerilogScalarKind::Time;
     } else {
         type.domain = ValueDomain::Logic4;
     }

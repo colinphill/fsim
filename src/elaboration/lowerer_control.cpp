@@ -11,6 +11,11 @@ using namespace elaboration_detail;
 void Lowerer::lower_loop(const Statement& statement)
 {
     if (statement.loop_runtime) {
+        if (statement.condition.kind == ExpressionKind::Call
+            && statement.condition.text == "@sv-foreach") {
+            lower_runtime_foreach(statement);
+            return;
+        }
         if (!statement.loop_variable.empty()
             && statement.target.valid()
             && statement.value.valid()) {
@@ -284,6 +289,144 @@ void Lowerer::lower_loop(const Statement& statement)
     for (const auto jump : loop_control.break_jumps) {
         process_.operations[jump] = Jump { end };
     }
+}
+
+void Lowerer::lower_runtime_foreach(const Statement& statement)
+{
+    const auto& operands = statement.condition.operands;
+    if (operands.size() != 2U
+        || operands[1].kind != ExpressionKind::Identifier
+        || operands[1].text.empty()) {
+        report(
+            "FSIM-ELAB-SVFOREACH-001",
+            "executable foreach currently requires exactly one named index",
+            statement.condition.span);
+        return;
+    }
+    const auto& collection = operands.front();
+    const auto& index_expression = operands[1];
+    if (!is_string_expression(collection)) {
+        report(
+            "FSIM-ELAB-SVFOREACH-001",
+            "executable foreach collection is not a supported string",
+            collection.span);
+        return;
+    }
+    if (systemverilog_standard_
+        != frontend::StandardRevision::SystemVerilog2023) {
+        report(
+            "FSIM-ELAB-SVFOREACH-002",
+            "foreach iteration over a string requires SystemVerilog-2023",
+            collection.span);
+        return;
+    }
+    if (locals_.contains(index_expression.text)
+        || string_locals_.contains(index_expression.text)
+        || container_locals_.contains(index_expression.text)
+        || (collection.kind == ExpressionKind::Identifier
+            && collection.text == index_expression.text)) {
+        report(
+            "FSIM-ELAB-SVFOREACH-003",
+            "foreach index must be a fresh name distinct from its collection",
+            index_expression.span);
+        return;
+    }
+    const auto assigns_index =
+        [&](const auto& self,
+            const std::vector<Statement>& statements) -> bool {
+        for (const auto& child : statements) {
+            if (child.kind == StatementKind::Assignment
+                || child.kind == StatementKind::ProceduralAssign
+                || child.kind == StatementKind::Force) {
+                const Expression* target = &child.target;
+                while ((target->kind == ExpressionKind::Index
+                           || target->kind == ExpressionKind::Slice)
+                    && !target->operands.empty()) {
+                    target = &target->operands.front();
+                }
+                if (target->kind == ExpressionKind::Identifier
+                    && target->text == index_expression.text) {
+                    return true;
+                }
+            }
+            if (self(self, child.statements)
+                || self(self, child.else_statements)) {
+                return true;
+            }
+            for (const auto& alternative : child.case_alternatives) {
+                if (self(self, alternative.statements)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    if (assigns_index(assigns_index, statement.statements)) {
+        report(
+            "FSIM-ELAB-SVFOREACH-004",
+            "foreach index is read-only within the loop body",
+            index_expression.span);
+        return;
+    }
+
+    const auto source = lower_string_expression(collection);
+    if (!source) {
+        return;
+    }
+    const auto limit = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(StringLength { limit, *source });
+    const auto index = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(
+        LoadConstant { index, unsigned_value(0U, 32U) });
+    locals_.emplace(index_expression.text, index);
+    local_signed_.emplace(index_expression.text, true);
+    local_ranges_.emplace(index_expression.text, std::nullopt);
+    local_integer_ranges_.emplace(index_expression.text, std::nullopt);
+    local_members_.emplace(
+        index_expression.text, std::vector<frontend::PackedMember> { });
+
+    const auto loop_start = static_cast<InstructionIndex>(
+        process_.operations.size());
+    emit_debug_point(DebugPointKind::statement, statement.span);
+    const auto condition = allocate_register(1U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::less_unsigned, condition, index, limit });
+    const auto branch_index = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Branch {
+        condition, 0, 0, UnknownBranchPolicy::when_false });
+    const auto body_start = static_cast<InstructionIndex>(
+        process_.operations.size());
+    loop_controls_.push_back(LoopControlContext {
+        std::nullopt, { }, { }, statement.loop_label });
+    lower_statements(statement.statements);
+    auto loop_control = std::move(loop_controls_.back());
+    loop_controls_.pop_back();
+    const auto increment_start = static_cast<InstructionIndex>(
+        process_.operations.size());
+    for (const auto jump : loop_control.continue_jumps) {
+        process_.operations[jump] = Jump { increment_start };
+    }
+    const auto one = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(
+        LoadConstant { one, unsigned_value(1U, 32U) });
+    const auto next = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::add_signed, next, index, one });
+    process_.operations.emplace_back(CopyRegister { index, next });
+    process_.operations.emplace_back(Jump { loop_start });
+    const auto end = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations[branch_index] = Branch {
+        condition, body_start, end, UnknownBranchPolicy::when_false };
+    for (const auto jump : loop_control.break_jumps) {
+        process_.operations[jump] = Jump { end };
+    }
+    locals_.erase(index_expression.text);
+    local_signed_.erase(index_expression.text);
+    local_ranges_.erase(index_expression.text);
+    local_integer_ranges_.erase(index_expression.text);
+    local_members_.erase(index_expression.text);
 }
 
     void Lowerer::lower_runtime_for(const Statement& statement) {

@@ -1471,6 +1471,7 @@ std::optional<Statement> VerilogParser::parse_statement()
     if (at(TokenKind::Identifier)
         || at(TokenKind::PlusPlus)
         || at(TokenKind::MinusMinus)
+        || at(TokenKind::Apostrophe)
         || at(TokenKind::LeftBrace)) {
         const auto before = position();
         const auto start = current();
@@ -1482,8 +1483,25 @@ std::optional<Statement> VerilogParser::parse_statement()
                 "an increment or decrement statement", *prefix_update);
         }
         Expression target = at(TokenKind::LeftBrace)
+                || at(TokenKind::Apostrophe)
             ? parse_expression()
             : parse_lvalue();
+        if (target.kind == ExpressionKind::Call
+            && (target.text == "@stream-left"
+                || target.text == "@stream-right")) {
+            (void)require_standard(
+                "a streaming concatenation assignment target",
+                StandardRevision::SystemVerilog2023,
+                start,
+                "FSIM-SV-PARSE-370");
+        } else if (target.kind == ExpressionKind::Aggregate
+            && target.text == "sv-pattern") {
+            (void)require_standard(
+                "an assignment-pattern target",
+                StandardRevision::SystemVerilog2023,
+                start,
+                "FSIM-SV-PARSE-370");
+        }
         AssignmentKind assignment_kind { AssignmentKind::Blocking };
         std::optional<std::string> update_operation;
         bool unit_update = prefix_update.has_value();

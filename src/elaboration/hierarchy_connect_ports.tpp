@@ -245,7 +245,11 @@ HierarchyBuilder::PortAliases HierarchyBuilder::connect_ports(
                     const frontend::SourceSpan& member_span) {
                     const auto signal_name = actual_path + "." + member;
                     const auto signal = design_.signal_by_name_.find(signal_name);
-                    if (signal == design_.signal_by_name_.end()) {
+                    const auto clocking_event =
+                        systemverilog_clocking_event_signals_.find(signal_name);
+                    if (signal == design_.signal_by_name_.end()
+                        && clocking_event
+                            == systemverilog_clocking_event_signals_.end()) {
                         report(
                             "FSIM-ELAB-SVIFACE-005",
                             "interface member signal '" + signal_name
@@ -253,22 +257,26 @@ HierarchyBuilder::PortAliases HierarchyBuilder::connect_ports(
                             member_span);
                         return;
                     }
+                    const auto signal_id =
+                        signal != design_.signal_by_name_.end()
+                        ? signal->second
+                        : clocking_event->second;
                     const auto local_name = port.name + "." + member;
                     const auto qualified_name = path + "." + local_name;
-                    aliases.emplace(local_name, signal->second);
-                    aliases.emplace(qualified_name, signal->second);
+                    aliases.emplace(local_name, signal_id);
+                    aliases.emplace(qualified_name, signal_id);
                     const auto member_path = actual_path + "." + member;
                     const bool inherited_read_only = systemverilog_read_only_interface_member_paths_
                                                          .contains(member_path);
                     if (direction
                             == frontend::PortDirection::Input
                         || inherited_read_only) {
-                        result.read_only_signals.insert(signal->second);
+                        result.read_only_signals.insert(signal_id);
                         systemverilog_read_only_interface_member_paths_
                             .insert(qualified_name);
                     }
                     design_.signal_by_name_.emplace(
-                        qualified_name, signal->second);
+                        qualified_name, signal_id);
                     if (!forwarded_interface_port
                         && (direction
                                 == frontend::PortDirection::Output
@@ -277,7 +285,7 @@ HierarchyBuilder::PortAliases HierarchyBuilder::connect_ports(
                             || direction
                                 == frontend::PortDirection::Buffer)) {
                         note_boundary_driver(
-                            signal->second,
+                            signal_id,
                             binding,
                             qualified_name,
                             connection.span);

@@ -2,6 +2,7 @@
 
 #include "simir_internal.hpp"
 
+#include <bit>
 #include <limits>
 
 namespace fsim::runtime::simir {
@@ -41,6 +42,16 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
       fail(process, std::string{purpose} + " must be a known 32-bit value");
     }
     return static_cast<std::uint32_t>(value.aval);
+  };
+  const auto known_i32 = [&](const RegisterId id,
+                             const std::string_view purpose) {
+    const auto value = read_register(id, 32U).low_word();
+    if (value.bval != 0 || value.aval > UINT32_MAX) {
+      process.pc = instruction;
+      fail(process, std::string{purpose} + " must be a known 32-bit value");
+    }
+    return std::bit_cast<std::int32_t>(
+        static_cast<std::uint32_t>(value.aval));
   };
   const auto receiver_handle = [&](const RegisterId id) {
     const auto value = read_register(id, 64U).low_word();
@@ -220,7 +231,7 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
       fail(process, "semaphore object limit is exhausted");
     }
     semaphores.push_back(
-        SemaphoreState{known_u32(create->keys, "semaphore key count"), {}});
+        SemaphoreState{known_i32(create->keys, "semaphore key count"), {}});
     const auto handle = semaphore_handle_tag | semaphores.size();
     write_process_register(
         process,
@@ -232,10 +243,10 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
 
   if (const auto* get = operation_get_if<SemaphoreGet>(&operation)) {
     auto& semaphore = semaphore_from_handle(get->receiver);
-    const auto requested = known_u32(get->keys, "semaphore get count");
-    if (requested == 0) {
+    const auto requested = known_i32(get->keys, "semaphore get count");
+    if (requested < 0) {
       process.pc = instruction;
-      fail(process, "semaphore get count must be positive");
+      fail(process, "semaphore get count cannot be negative");
     }
     const auto available = semaphore.waiters.empty()
         && semaphore.keys >= requested;
@@ -258,12 +269,14 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
 
   if (const auto* put = operation_get_if<SemaphorePut>(&operation)) {
     auto& semaphore = semaphore_from_handle(put->receiver);
-    const auto returned = known_u32(put->keys, "semaphore put count");
-    if (returned == 0) {
+    const auto returned = known_i32(put->keys, "semaphore put count");
+    if (returned < 0) {
       process.pc = instruction;
-      fail(process, "semaphore put count must be positive");
+      fail(process, "semaphore put count cannot be negative");
     }
-    if (returned > UINT32_MAX - semaphore.keys) {
+    if (semaphore.keys
+        > std::numeric_limits<std::int64_t>::max()
+            - static_cast<std::int64_t>(returned)) {
       process.pc = instruction;
       fail(process, "semaphore key count overflow");
     }

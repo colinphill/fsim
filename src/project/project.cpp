@@ -1918,6 +1918,8 @@ std::string_view to_string(const SystemVerilogStandard standard) noexcept
         return "2012";
     case SystemVerilogStandard::systemverilog_2017:
         return "2017";
+    case SystemVerilogStandard::systemverilog_2023:
+        return "2023";
     }
     return "2017";
 }
@@ -2101,6 +2103,11 @@ std::optional<SystemVerilogStandard> parse_systemverilog_standard(
         || normalized == "sv-17" || normalized == "sv-2017"
         || normalized == "systemverilog-2017") {
         return SystemVerilogStandard::systemverilog_2017;
+    }
+    if (normalized == "23" || normalized == "2023"
+        || normalized == "sv-23" || normalized == "sv-2023"
+        || normalized == "systemverilog-2023") {
+        return SystemVerilogStandard::systemverilog_2023;
     }
     return std::nullopt;
 }

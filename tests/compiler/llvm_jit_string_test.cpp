@@ -27,11 +27,11 @@ void test_strings_at_level(
                 0, PackedLogic4::from_aval_bval(32, 1, 0) },
             LoadConstant {
                 1, PackedLogic4::from_aval_bval(32, 0x1f642, 0) },
-            StringReplaceCodePoint { 2, 0, 1, true },
+            StringReplaceByte { 2, 0, 1, true },
             StringLength { 2, 2 },
             StringIndex { 0, 2, 0, true },
             LoadStringConstant {
-                3, "A\xf0\x9f\x99\x82\xf0\x9f\x98\x80" },
+                3, "AB\x80\xf0\x9f\x98\x80" },
             CompareStrings { 3, 2, 3, false },
             WriteStringObject { 0, 2 },
             ReadStringObject { 0, 0 },
@@ -68,28 +68,28 @@ void test_strings_at_level(
     assert(jit.execute(handle, runtime) == JitExecutionStatus::completed);
     assert(
         state.string_objects[0]
-        == "A\xf0\x9f\x99\x82\xf0\x9f\x98\x80");
+        == "AB\x80\xf0\x9f\x98\x80");
     assert(state.strings[0] == state.string_objects[0]);
     assert(
         state.output
         == std::vector<std::string> {
-            "[A\xf0\x9f\x99\x82\xf0\x9f\x98\x80]" });
+            "[AB\x80\xf0\x9f\x98\x80]" });
 
-    Process invalid;
-    invalid.id = 1;
-    invalid.name = "invalid_utf8";
-    invalid.string_register_count = 1;
-    invalid.operations = {
+    Process arbitrary_bytes;
+    arbitrary_bytes.id = 1;
+    arbitrary_bytes.name = "arbitrary_bytes";
+    arbitrary_bytes.string_register_count = 1;
+    arbitrary_bytes.operations = {
         LoadStringConstant { 0, "\xc0\x80" }, Halt { }
     };
-    try {
-        jit.add_process(std::string { symbol } + "_invalid", invalid, { });
-        assert(false && "invalid UTF-8 JIT literal was accepted");
-    } catch (const LlvmJitError& error) {
-        assert(
-            std::string_view { error.what() }.find("strict UTF-8")
-            != std::string_view::npos);
-    }
+    const auto byte_symbol = std::string { symbol } + "_bytes";
+    jit.add_process(byte_symbol, arbitrary_bytes, { });
+    TestRuntime byte_state;
+    auto byte_runtime = abi(byte_state);
+    assert(
+        jit.execute(jit.lookup(byte_symbol), byte_runtime)
+            == JitExecutionStatus::completed
+        && byte_state.strings[0] == "\xc0\x80");
 
     Process malformed_file;
     malformed_file.id = 2;

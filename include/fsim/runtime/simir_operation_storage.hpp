@@ -50,7 +50,7 @@ using SignalOperationGroup = OperationGroup<ReadSignal, SignalEvent, SignalLastV
 
 using StringOperationGroup = OperationGroup<LoadStringConstant, CopyStringRegister, ReadStringObject,
     WriteStringObject, ConcatenateStrings, CompareStrings,
-    StringLength, StringIndex, StringReplaceCodePoint,
+    StringLength, StringIndex, StringReplaceByte,
     StringMethod, PlusArgSelect, SystemCommand, VcdControl,
     CoverageDatabaseControl, CoverageAccess, VhdlEnvironmentTimeToString,
     VhdlEnvironmentGetenv, VhdlEnvironmentCallPath>;

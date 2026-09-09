@@ -31,6 +31,7 @@ struct Capture {
     std::string value;
     std::string lifecycle;
     std::string local;
+    std::string automatic_capture;
     std::string vcd;
     std::vector<fsim::runtime::simir::ExecutionPoint> points;
     bool child_debug_safe { };
@@ -56,7 +57,7 @@ fsim::project::Config make_config(
     config.run.max_deltas = 1000;
     fsim::project::SourceSet sources;
     sources.language = fsim::project::Language::system_verilog;
-    sources.standard = "2017";
+    sources.standard = "2023";
     sources.library = "work";
     sources.files.push_back(source);
     config.source_sets.push_back(std::move(sources));
@@ -118,6 +119,9 @@ Capture execute(
     assert(result);
     const auto lifecycle = simulation.find_signal("fork_processes.lifecycle");
     assert(lifecycle);
+    const auto automatic_capture = simulation.find_signal(
+        "fork_processes.automatic_capture");
+    assert(automatic_capture);
     const auto& process = simulation.process_program(0U);
     const auto local = std::find_if(
         process.debug_locals.begin(), process.debug_locals.end(),
@@ -162,6 +166,8 @@ Capture execute(
     capture.value = simulation.read_signal(*result).to_msb_string();
     capture.lifecycle = simulation.read_signal(*lifecycle).to_msb_string();
     capture.local = simulation.read_process_local(0, local_index).to_msb_string();
+    capture.automatic_capture
+        = simulation.read_signal(*automatic_capture).to_msb_string();
     vcd.flush();
     capture.vcd = vcd_text.str();
     return capture;
@@ -183,6 +189,7 @@ void test_optimization(
             && capture->value == "10111111"
             && capture->lifecycle == "01111100011111110010000011"
             && capture->local == "10111111"
+            && capture->automatic_capture == "1010010100111100"
             && capture->child_debug_safe);
         assert(std::any_of(
             capture->points.begin(), capture->points.end(),
@@ -216,14 +223,33 @@ int main()
 module fork_processes;
   logic [7:0] result;
   logic [25:0] lifecycle;
+  logic [15:0] automatic_capture;
   logic shadow_regression;
+  logic launch_result;
   process handle;
   process killed_handle;
   process suspended_handle;
   string random_state;
+  function automatic logic launch_capture(
+      input logic [7:0] value,
+      input logic upper);
+    fork
+      begin
+        #1;
+        if (upper)
+          automatic_capture[15:8] = value;
+        else
+          automatic_capture[7:0] = value;
+      end
+    join_none
+    return 1'b1;
+  endfunction
   initial begin : root
     logic [7:0] shared = 0;
     result = 0;
+    automatic_capture = 0;
+    launch_result = launch_capture(8'h3c, 1'b0);
+    launch_result = launch_capture(8'ha5, 1'b1);
     shadow_regression = 1'b1;
     shadow_regression <= 1'b0;
     fork

@@ -231,7 +231,10 @@ SystemVerilogClassMethod VerilogParser::parse_class_method(
           argument.direction,
           std::move(argument.span),
           argument.reference,
-          std::move(argument.default_value)};
+          std::move(argument.default_value),
+          false,
+          argument.const_reference,
+          argument.static_reference};
       method.arguments.push_back(std::move(retained));
     }
     method.span = std::move(task.span);
@@ -629,6 +632,16 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
 
   if (match_keyword("extends")) {
     declaration.base = parse_base();
+    if (interface_class) {
+      while (match(TokenKind::Comma)) {
+        (void)require_standard(
+            "multiple interface-class inheritance",
+            StandardRevision::SystemVerilog2023,
+            previous(),
+            "FSIM-SV-PARSE-369");
+        declaration.extended_interfaces.push_back(parse_base());
+      }
+    }
   }
   if (match_keyword("implements")
       || (at(TokenKind::Identifier)
@@ -648,8 +661,8 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
       "FSIM-SV-PARSE-258");
 
   while (!at_end() && !keyword("endclass")) {
-    if (match_keyword("localparam")) {
-      const auto parameter_start = previous();
+    if (keyword("localparam") || keyword("parameter")) {
+      const auto parameter_start = advance();
       DesignUnit parameter_owner;
       parse_parameter_group(
           parameter_owner, true, false, parameter_start, false);
@@ -676,6 +689,7 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
             parameter.span};
         property.is_static = true;
         property.is_const = true;
+        property.is_parameter = true;
         property.span = parameter.span;
         declaration.properties.push_back(std::move(property));
       }
@@ -720,6 +734,10 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
     if (match_keyword("interface")) {
       const auto qualifier = previous();
       if (match_keyword("class")) {
+        error(
+            qualifier,
+            "FSIM-SV-SEM-245",
+            "an interface class cannot be nested in another class");
         add_class_declaration(
             declaration.nested_classes,
             parse_class(

@@ -41,6 +41,7 @@ enum class StandardRevision {
     // Appended to preserve the serialized numeric identities of every
     // retained v3 standard revision.
     Vhdl2019,
+    SystemVerilog2023,
 };
 
 [[nodiscard]] constexpr std::string_view to_string(
@@ -75,6 +76,8 @@ enum class StandardRevision {
         return "systemverilog-2012";
     case StandardRevision::SystemVerilog2017:
         return "systemverilog-2017";
+    case StandardRevision::SystemVerilog2023:
+        return "systemverilog-2023";
     }
     return "systemverilog-2017";
 }
@@ -110,6 +113,8 @@ enum class StandardRevision {
         return "2012";
     case StandardRevision::SystemVerilog2017:
         return "2017";
+    case StandardRevision::SystemVerilog2023:
+        return "2023";
     }
     return "2017";
 }
@@ -186,6 +191,8 @@ enum class TokenKind {
   AndAnd,
   OrOr,
   Plus,
+  AbsoluteTolerance,
+  RelativeTolerance,
   PlusColon,
   PlusPlus,
   PlusAssign,

@@ -225,7 +225,7 @@ std::uint32_t LlvmProcessExecutor::string_index(
             throw runtime::simir::InterpreterError(
                 state.process->id,
                 instruction,
-                "string index is outside the current code-point range");
+                "string index is outside the current byte range");
         }
         *result = runtime::systemverilog_string_at(
             value, static_cast<std::size_t>(index));
@@ -236,7 +236,7 @@ std::uint32_t LlvmProcessExecutor::string_index(
     }
 }
 
-std::uint32_t LlvmProcessExecutor::string_replace_code_point(
+std::uint32_t LlvmProcessExecutor::string_replace_byte(
     void* context,
     const std::uint32_t process,
     const std::uint32_t instruction,
@@ -270,13 +270,13 @@ std::uint32_t LlvmProcessExecutor::string_replace_code_point(
             throw runtime::simir::InterpreterError(
                 state.process->id,
                 instruction,
-                "string index is outside the current code-point range");
+                "string index is outside the current byte range");
         }
         if (source_bval != 0) {
             throw runtime::simir::InterpreterError(
                 state.process->id,
                 instruction,
-                "string replacement code point contains X or Z");
+                "string replacement byte contains X or Z");
         }
         runtime::systemverilog_string_replace(
             value,

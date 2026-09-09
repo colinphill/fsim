@@ -861,6 +861,10 @@ void test_verilog_systemverilog_standard_values()
             SystemVerilogStandard::systemverilog_2017 },
         std::tuple { "sv-2017", "2017",
             SystemVerilogStandard::systemverilog_2017 },
+        std::tuple { "23", "2023",
+            SystemVerilogStandard::systemverilog_2023 },
+        std::tuple { "systemverilog-2023", "2023",
+            SystemVerilogStandard::systemverilog_2023 },
     };
     for (const auto& [spelling, canonical, identity] : systemverilog_aliases) {
         fsim::diagnostic::Engine diagnostics;

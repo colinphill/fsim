@@ -286,7 +286,7 @@ private:
             runtime.compare_strings = compare_strings;
             runtime.string_length = string_length;
             runtime.string_index = string_index;
-            runtime.string_replace_code_point = string_replace_code_point;
+            runtime.string_replace_byte = string_replace_byte;
             runtime.write_string_output = write_string_output;
             runtime.file_open = file_open;
             runtime.file_close = file_close;

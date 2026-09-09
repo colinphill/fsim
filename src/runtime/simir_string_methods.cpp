@@ -42,20 +42,19 @@ std::int32_t string_compare(
 {
     if (!case_insensitive)
         return systemverilog_string_compare(lhs, rhs);
-    const auto left_points = systemverilog_string_code_points(lhs);
-    const auto right_points = systemverilog_string_code_points(rhs);
-    const auto count = std::min(left_points.size(), right_points.size());
+    const auto count = std::min(lhs.size(), rhs.size());
     for (std::size_t index = 0; index < count; ++index) {
-        const auto left = fold_ascii(left_points[index].value, true);
-        const auto right = fold_ascii(right_points[index].value, true);
+        const auto left = fold_ascii(
+            static_cast<unsigned char>(lhs[index]), true);
+        const auto right = fold_ascii(
+            static_cast<unsigned char>(rhs[index]), true);
         if (left != right) {
             return left < right ? -1 : 1;
         }
     }
-    return left_points.size() == right_points.size()
+    return lhs.size() == rhs.size()
         ? 0
-        : left_points.size() < right_points.size() ? -1
-                                                   : 1;
+        : lhs.size() < rhs.size() ? -1 : 1;
 }
 
 std::string string_change_case(
@@ -113,8 +112,8 @@ std::int32_t string_to_integer(
     std::uint32_t result { };
     bool negative { };
     bool started { };
-    for (const auto& point : systemverilog_string_code_points(value)) {
-        const auto character = point.value;
+    for (const auto stored : value) {
+        const auto character = static_cast<unsigned char>(stored);
         if (character == '_') {
             continue;
         }
@@ -163,13 +162,14 @@ std::string string_from_integer(
 {
     std::string compact;
     compact.reserve(value.size());
-    for (const auto& point : systemverilog_string_code_points(value)) {
-        if (point.value == '_')
+    for (const auto stored : value) {
+        const auto byte = static_cast<unsigned char>(stored);
+        if (byte == '_')
             continue;
-        if (point.value > 0x7fU) {
+        if (byte > 0x7fU) {
             return SystemVerilogScalarValue::real(0.0).bits;
         }
-        compact.push_back(static_cast<char>(point.value));
+        compact.push_back(static_cast<char>(byte));
     }
     const auto parsed = scan_systemverilog_scalar(
         compact, SystemVerilogScalarKind::Real);

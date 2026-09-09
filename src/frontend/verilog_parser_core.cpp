@@ -1444,6 +1444,16 @@ DesignUnit VerilogParser::parse_module(
     unit.default_nettype = current_default_nettype_;
     unit.is_cell = current_cell_define_;
     unit.systemverilog_extern = extern_declaration;
+    if (language_ == Language::SystemVerilog2017) {
+        unit.systemverilog_scheduling_declaration
+            = SystemVerilogDesignSchedulingDeclaration {
+                program_unit
+                    ? SystemVerilogProcessRegion::Reactive
+                    : SystemVerilogProcessRegion::Active,
+                extern_declaration,
+                start.span
+            };
+    }
     update_unit_time(unit);
     if (keyword("automatic") || keyword("static")
         || (at(TokenKind::Identifier)

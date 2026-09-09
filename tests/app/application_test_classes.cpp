@@ -52,7 +52,7 @@ void ApplicationTestFixture::test_class_simulation_integration()
     config.source_sets.clear();
     fsim::project::SourceSet sources;
     sources.language = fsim::project::Language::system_verilog;
-    sources.standard = "2017";
+    sources.standard = "2023";
     sources.library = "work";
     sources.files.push_back(class_source);
     config.source_sets.push_back(std::move(sources));
@@ -88,7 +88,24 @@ void ApplicationTestFixture::test_class_simulation_integration()
             [](const auto& specialization) {
                 return specialization.declaration_identity.ends_with("::AppBase");
             });
-        assert(base != built->systemverilog_class_specializations.end());
+        const auto contract = std::ranges::find_if(
+            built->systemverilog_class_specializations,
+            [](const auto& specialization) {
+                return specialization.declaration_identity.ends_with(
+                    "::AppContract");
+            });
+        assert(
+            base != built->systemverilog_class_specializations.end()
+                && contract
+                    != built->systemverilog_class_specializations.end());
+        assert(!contract->base_specialization_identity.empty());
+        assert(contract->interface_specialization_identities.size() == 1);
+        assert(std::ranges::any_of(
+            contract->parameter_identity_values,
+            [](const auto& parameter) {
+                return parameter.first == "VALUE_T"
+                    && !parameter.second.empty();
+            }));
         const auto uvm_item = std::ranges::find_if(
             built->systemverilog_class_specializations,
             [](const auto& specialization) {
@@ -134,6 +151,11 @@ void ApplicationTestFixture::test_class_simulation_integration()
             base->methods, std::string { "bump" },
             &fsim::frontend::SystemVerilogClassMethodProfile::name);
         assert(base_method_profile != base->methods.end());
+        assert(std::ranges::all_of(
+            derived->methods, [](const auto& method) {
+                return method.lifetime
+                    == fsim::frontend::SystemVerilogClassLifetime::Automatic;
+            }));
         const auto derived_specialization = derived->specialization_identity;
         const auto derived_identity = derived->declaration_identity;
         const auto base_identity = base->declaration_identity;
@@ -1406,8 +1428,11 @@ void ApplicationTestFixture::test_class_simulation_integration()
                  "class_top.source_module_wide_task_accumulator" }) {
             assert_wide_signal(path, wide_amount);
         }
-        for (const auto path : { "class_top.source_wide_static_first",
-                 "class_top.source_wide_static_second",
+        assert_wide_signal(
+            "class_top.source_wide_static_first", wide_seed);
+        assert_wide_signal(
+            "class_top.source_wide_static_second", wide_amount);
+        for (const auto path : {
                  "class_top.source_module_wide_static_first",
                  "class_top.source_module_wide_static_second" }) {
             assert_wide_signal(path, wide_seed);
@@ -1432,7 +1457,7 @@ void ApplicationTestFixture::test_class_simulation_integration()
         assert_string_object(
             "class_top.source_text_inout", "instance-inout");
         assert_string_object(
-            "class_top.source_retained_text_output", "retained-next");
+            "class_top.source_retained_text_output", "retained-first");
         assert_string_object(
             "class_top.source_static_text_output", "static-output");
         assert_string_object(
@@ -1451,7 +1476,7 @@ void ApplicationTestFixture::test_class_simulation_integration()
                 { "class_top.source_static_text_copyout_ok", 1 },
                 { "class_top.source_recursive", 12 },
                 { "class_top.source_static_first", 1 },
-                { "class_top.source_static_second", 2 },
+                { "class_top.source_static_second", 1 },
                 { "class_top.source_base_result", 5 },
                 { "class_top.source_task_observed", 16 },
                 { "class_top.source_task_accumulator", 17 },
@@ -1805,7 +1830,7 @@ void ApplicationTestFixture::test_class_simulation_integration()
     fsim::diagnostic::Engine standalone_diagnostics;
     auto standalone = fsim::app::load_design_artifact(relocated_design, standalone_diagnostics);
     assert(standalone);
-    assert(standalone->systemverilog_class_specializations.size() == 15);
+    assert(standalone->systemverilog_class_specializations.size() == 18);
     assert(std::ranges::any_of(standalone->systemverilog_class_specializations,
         [](const auto& specialization) {
             return std::ranges::any_of(
@@ -1814,7 +1839,19 @@ void ApplicationTestFixture::test_class_simulation_integration()
                     return property.name == "wide_value" && property.bit_width == 137 && property.type.width() == 137;
                 });
         }));
-    assert(standalone->systemverilog_hir.classes().size() == 15);
+    assert(standalone->systemverilog_hir.classes().size() == 18);
+    const auto standalone_contract = std::ranges::find_if(
+        standalone->systemverilog_class_specializations,
+        [](const auto& specialization) {
+            return specialization.declaration_identity.ends_with(
+                "::AppContract");
+        });
+    assert(
+        standalone_contract
+            != standalone->systemverilog_class_specializations.end()
+            && !standalone_contract->base_specialization_identity.empty()
+            && standalone_contract->interface_specialization_identities.size()
+                == 1);
     assert(std::ranges::any_of(
         standalone->systemverilog_hir.classes(), [](const auto& declaration) {
             return declaration.canonical_identity.ends_with("::AppDerived") && !declaration.constraints.empty() && !declaration.composed_constraints.empty();
@@ -1895,7 +1932,7 @@ void ApplicationTestFixture::test_class_simulation_integration()
     fsim::diagnostic::Engine mapped_diagnostics;
     auto mapped = fsim::app::build_project(mapped_config, mapped_diagnostics);
     assert(mapped);
-    assert(mapped->systemverilog_class_specializations.size() == 15);
+    assert(mapped->systemverilog_class_specializations.size() == 18);
     assert(std::ranges::any_of(mapped->systemverilog_class_specializations,
         [](const auto& specialization) {
             return std::ranges::any_of(

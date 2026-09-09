@@ -416,7 +416,9 @@ Lowerer::ExpressionAttempt Lowerer::lower_membership_expression(
     const auto& item = expression.operands[item_index];
     std::optional<RegisterId> matched;
     if (item.kind == ExpressionKind::Call
-        && item.text == "@inside-range") {
+        && (item.text == "@inside-range"
+            || item.text == "@inside-absolute-tolerance"
+            || item.text == "@inside-relative-tolerance")) {
       if (item.operands.size() != 2) {
         report(
             "FSIM-ELAB-SVMEMBER-006",
@@ -424,16 +426,85 @@ Lowerer::ExpressionAttempt Lowerer::lower_membership_expression(
             item.span);
         return std::nullopt;
       }
-      const auto low = lower_inside_integral_operand(
+      const bool tolerance_range = item.text != "@inside-range";
+      if (tolerance_range
+          && systemverilog_standard_
+              != frontend::StandardRevision::SystemVerilog2023) {
+        report(
+            "FSIM-ELAB-SVTOLERANCE-001",
+            "inside tolerance ranges require the exact SystemVerilog-2023 profile",
+            item.span);
+        return std::nullopt;
+      }
+      auto low = lower_inside_integral_operand(
           item.operands[0],
           "FSIM-ELAB-SVMEMBER-004",
           "inside range bounds must be integral expressions");
-      const auto high = lower_inside_integral_operand(
+      auto high = lower_inside_integral_operand(
           item.operands[1],
           "FSIM-ELAB-SVMEMBER-004",
           "inside range bounds must be integral expressions");
       if (!low || !high) {
         return std::nullopt;
+      }
+      if (tolerance_range) {
+        auto tolerance = high->value;
+        if (register_width(tolerance) != low->width) {
+          tolerance = resize_register(
+              tolerance, low->width, high->signed_value);
+        }
+        if (item.text == "@inside-relative-tolerance") {
+          const auto arithmetic_width = std::max<std::size_t>(
+              64U, low->width > std::numeric_limits<std::size_t>::max() / 2U
+                  ? low->width : low->width * 2U);
+          auto center = low->value;
+          if (register_width(center) != arithmetic_width) {
+            center = resize_register(
+                center, arithmetic_width, low->signed_value);
+          }
+          if (register_width(tolerance) != arithmetic_width) {
+            tolerance = resize_register(
+                tolerance, arithmetic_width, low->signed_value);
+          }
+          const auto product = allocate_register(
+              arithmetic_width, register_domain(center));
+          process_.operations.emplace_back(Binary {
+              low->signed_value
+                  ? BinaryOperator::multiply_signed
+                  : BinaryOperator::multiply_unsigned,
+              product, center, tolerance });
+          const auto hundred = allocate_register(
+              arithmetic_width, register_domain(center));
+          process_.operations.emplace_back(LoadConstant {
+              hundred, unsigned_value(100U, arithmetic_width) });
+          const auto quotient = allocate_register(
+              arithmetic_width, register_domain(center));
+          process_.operations.emplace_back(Binary {
+              low->signed_value
+                  ? BinaryOperator::divide_signed
+                  : BinaryOperator::divide_unsigned,
+              quotient, product, hundred });
+          tolerance = resize_register(
+              quotient, low->width, low->signed_value);
+        }
+        const auto lower = allocate_register(
+            low->width, register_domain(low->value));
+        const auto upper = allocate_register(
+            low->width, register_domain(low->value));
+        process_.operations.emplace_back(Binary {
+            low->signed_value
+                ? BinaryOperator::subtract_signed
+                : BinaryOperator::subtract_unsigned,
+            lower, low->value, tolerance });
+        process_.operations.emplace_back(Binary {
+            low->signed_value
+                ? BinaryOperator::add_signed
+                : BinaryOperator::add_unsigned,
+            upper, low->value, tolerance });
+        low = InsideIntegralOperand {
+            lower, low->width, low->signed_value };
+        high = InsideIntegralOperand {
+            upper, low->width, low->signed_value };
       }
       const auto valid_operands = size_integral_comparison(*low, *high);
       const auto low_operands = size_integral_comparison(lhs_operand, *low);
@@ -464,6 +535,29 @@ Lowerer::ExpressionAttempt Lowerer::lower_membership_expression(
       process_.operations.emplace_back(LogicalBinary{
           LogicalBinaryOperator::logical_and,
           *matched, within_lower, below_high});
+      if (tolerance_range) {
+        const auto above_swapped = allocate_register(1, result_domain);
+        const auto below_swapped = allocate_register(1, result_domain);
+        const auto within_swapped = allocate_register(1, result_domain);
+        const auto swapped = allocate_register(1, result_domain);
+        process_.operations.emplace_back(Binary {
+            high_operands.signed_value
+                ? BinaryOperator::greater_equal_signed
+                : BinaryOperator::greater_equal_unsigned,
+            above_swapped, high_operands.lhs, high_operands.rhs });
+        process_.operations.emplace_back(Binary {
+            low_operands.signed_value
+                ? BinaryOperator::less_equal_signed
+                : BinaryOperator::less_equal_unsigned,
+            below_swapped, low_operands.lhs, low_operands.rhs });
+        process_.operations.emplace_back(LogicalBinary {
+            LogicalBinaryOperator::logical_and,
+            within_swapped, above_swapped, below_swapped });
+        process_.operations.emplace_back(LogicalBinary {
+            LogicalBinaryOperator::logical_or,
+            swapped, *matched, within_swapped });
+        matched = swapped;
+      }
     } else {
         const auto value = lower_inside_integral_operand(
             item,

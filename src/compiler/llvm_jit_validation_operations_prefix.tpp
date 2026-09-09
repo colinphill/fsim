@@ -430,8 +430,6 @@
                         operation.destination, index, "destination");
                     if (operation.value.size() > maximum_string_bytes)
                         reject(process, index, "LoadStringConstant exceeds the byte limit");
-                    if (!runtime::systemverilog_string_is_valid(operation.value))
-                        reject(process, index, "LoadStringConstant is not strict UTF-8");
                 } else if constexpr (std::is_same_v<OperationType, CopyStringRegister>) {
                     result.uses_strings = true;
                     validate_string_register(
@@ -471,7 +469,7 @@
                     record_definition(operation.destination, index);
                     constrain_width(operation.destination, 32U, index);
                 } else if constexpr (
-                    std::is_same_v<OperationType, StringReplaceCodePoint>) {
+                    std::is_same_v<OperationType, StringReplaceByte>) {
                     result.uses_strings = true;
                     validate_string_register(
                         operation.target, index, "target");

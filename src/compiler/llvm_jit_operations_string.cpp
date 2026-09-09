@@ -247,7 +247,7 @@ void StringOperationLowerer::lower(
 }
 
 void StringOperationLowerer::lower(
-    const runtime::simir::StringReplaceCodePoint& operation) {
+    const runtime::simir::StringReplaceByte& operation) {
   const auto index = load_register(builder, registers, operation.index);
   const auto source = load_register(builder, registers, operation.source);
   check(

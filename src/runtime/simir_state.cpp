@@ -640,13 +640,10 @@ void Interpreter::Impl::queue_at(ProcessId id, SimulationTick time)
         return;
     }
     process.queued = true;
-    const auto phase = process.program.postponed
-        ? SchedulerPhase::postponed
-        : process.program.reactive
-        ? SchedulerPhase::reactive
-        : process.program.observed
-        ? SchedulerPhase::observed
-        : SchedulerPhase::active;
+    const auto phase = process_execution_phase(
+        process.program.observed,
+        process.program.reactive,
+        process.program.postponed);
     scheduler.schedule_at(
         time, phase, id,
         [this, id](Scheduler&) {
@@ -665,13 +662,10 @@ void Interpreter::Impl::queue_next_delta(ProcessId id)
         return;
     }
     process.queued = true;
-    const auto phase = process.program.postponed
-        ? SchedulerPhase::postponed
-        : process.program.reactive
-        ? SchedulerPhase::reactive
-        : process.program.observed
-        ? SchedulerPhase::observed
-        : SchedulerPhase::active;
+    const auto phase = process_execution_phase(
+        process.program.observed,
+        process.program.reactive,
+        process.program.postponed);
     scheduler.schedule_next_delta(
         phase, id,
         [this, id](Scheduler&) {
@@ -747,13 +741,10 @@ void Interpreter::Impl::queue_static_cohort_next_delta(
         return;
     }
     const auto& process = get_process(cohort.ready.front());
-    const auto phase = process.program.postponed
-        ? SchedulerPhase::postponed
-        : process.program.reactive
-        ? SchedulerPhase::reactive
-        : process.program.observed
-        ? SchedulerPhase::observed
-        : SchedulerPhase::active;
+    const auto phase = process_execution_phase(
+        process.program.observed,
+        process.program.reactive,
+        process.program.postponed);
     const auto order = cohort.ready.front();
     const auto execute_one = [this, cohort_id](Scheduler&) {
         auto& scheduled_cohort
@@ -811,13 +802,10 @@ void Interpreter::Impl::queue_active_current(ProcessId id)
         return;
     }
     process.queued = true;
-    const auto phase = process.program.postponed
-        ? SchedulerPhase::postponed
-        : process.program.reactive
-        ? SchedulerPhase::reactive
-        : process.program.observed
-        ? SchedulerPhase::observed
-        : SchedulerPhase::active;
+    const auto phase = process_execution_phase(
+        process.program.observed,
+        process.program.reactive,
+        process.program.postponed);
     scheduler.schedule(
         phase, id,
         [this, id](Scheduler&) {
@@ -859,13 +847,10 @@ void Interpreter::Impl::queue_static_active_current(const ProcessId id)
     if (ready.empty()) {
         return;
     }
-    const auto phase = process.program.postponed
-        ? SchedulerPhase::postponed
-        : process.program.reactive
-        ? SchedulerPhase::reactive
-        : process.program.observed
-        ? SchedulerPhase::observed
-        : SchedulerPhase::active;
+    const auto phase = process_execution_phase(
+        process.program.observed,
+        process.program.reactive,
+        process.program.postponed);
     const auto order = ready.front();
     scheduler.schedule(
         phase, order,

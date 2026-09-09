@@ -350,6 +350,7 @@ enum class KeywordSet {
   SystemVerilog2009,
   SystemVerilog2012,
   SystemVerilog2017,
+  SystemVerilog2023,
 };
 
 [[nodiscard]] inline Language language_for_standard_revision(
@@ -364,6 +365,7 @@ enum class KeywordSet {
     case StandardRevision::SystemVerilog2009:
     case StandardRevision::SystemVerilog2012:
     case StandardRevision::SystemVerilog2017:
+    case StandardRevision::SystemVerilog2023:
       return Language::SystemVerilog2017;
     default:
       return Language::Vhdl2008;
@@ -389,6 +391,8 @@ enum class KeywordSet {
       return KeywordSet::SystemVerilog2012;
     case StandardRevision::SystemVerilog2017:
       return KeywordSet::SystemVerilog2017;
+    case StandardRevision::SystemVerilog2023:
+      return KeywordSet::SystemVerilog2023;
     default:
       return KeywordSet::SystemVerilog2017;
   }
@@ -411,6 +415,8 @@ enum class KeywordSet {
       return 5;
     case KeywordSet::SystemVerilog2017:
       return 6;
+    case KeywordSet::SystemVerilog2023:
+      return 7;
   }
   return 6;
 }
@@ -555,6 +561,7 @@ declaration_word_standard(const std::string_view word) {
       return is_system_verilog_2009_keyword(word);
     case KeywordSet::SystemVerilog2012:
     case KeywordSet::SystemVerilog2017:
+    case KeywordSet::SystemVerilog2023:
       return is_system_verilog_2012_keyword(word);
   }
   return false;
@@ -585,6 +592,9 @@ declaration_word_standard(const std::string_view word) {
   }
   if (spelling == "1800-2017") {
     return KeywordSet::SystemVerilog2017;
+  }
+  if (spelling == "1800-2023") {
+    return KeywordSet::SystemVerilog2023;
   }
   return std::nullopt;
 }

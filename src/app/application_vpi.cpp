@@ -49,6 +49,7 @@ namespace {
         case frontend::StandardRevision::SystemVerilog2012:
             return runtime::SystemVerilogVpiLanguage::SystemVerilog2012;
         case frontend::StandardRevision::SystemVerilog2017:
+        case frontend::StandardRevision::SystemVerilog2023:
             return runtime::SystemVerilogVpiLanguage::SystemVerilog2017;
         case frontend::StandardRevision::Vhdl1987:
         case frontend::StandardRevision::Vhdl1993:

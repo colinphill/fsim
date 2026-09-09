@@ -1640,7 +1640,7 @@ bool Lowerer::lower_string_method_statement(
         if (!character) {
             report(
                 "FSIM-ELAB-SVSTRING-018",
-                "putc character must be a 32-bit Unicode scalar value",
+                "putc character must be a 32-bit integral byte value",
                 call.operands[2].span);
             return true;
         }

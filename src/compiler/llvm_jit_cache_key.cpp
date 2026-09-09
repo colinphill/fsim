@@ -154,7 +154,7 @@ using runtime::simir::StringDisplay;
 using runtime::simir::StringIndex;
 using runtime::simir::StringLength;
 using runtime::simir::StringMethod;
-using runtime::simir::StringReplaceCodePoint;
+using runtime::simir::StringReplaceByte;
 using runtime::simir::StringReport;
 using runtime::simir::SystemCommand;
 using runtime::simir::TimeDisplay;

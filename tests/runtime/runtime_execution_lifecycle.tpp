@@ -40,7 +40,7 @@ void test_simir_mutable_strings()
         StringIndex { 3, 3, 2, true },
         LoadConstant {
             4, PackedLogic4::from_aval_bval(32, 0x1f642, 0) },
-        StringReplaceCodePoint { 3, 2, 4, true },
+        StringReplaceByte { 3, 2, 4, true },
         WriteStringObject { object, 3 },
         Halt { },
     };
@@ -49,15 +49,15 @@ void test_simir_mutable_strings()
     require(
         result.status == RunStatus::completed
             && interpreter.string_object_value(object)
-                == "f\xf0\x9f\x99\x82\xf0\x9f\x98\x80",
+                == "fB\x80\xf0\x9f\x98\x80",
         "mutable string object read, value-copy, concatenation, index, and "
         "replacement");
     require(
         interpreter.read_debug_local(0, 0).to_msb_string() == "1"
-            && interpreter.read_debug_local(0, 1).low_word().aval == 3
-            && interpreter.read_debug_local(0, 2).low_word().aval == 0x03c0
+            && interpreter.read_debug_local(0, 1).low_word().aval == 7
+            && interpreter.read_debug_local(0, 2).low_word().aval == 0xcf
             && interpreter.read_debug_string_local(0, 0)
-                == "f\xf0\x9f\x99\x82\xf0\x9f\x98\x80",
+                == "fB\x80\xf0\x9f\x98\x80",
         "mutable string comparison, length, indexing, and debugger values");
 
     try {
@@ -93,7 +93,7 @@ void test_simir_mutable_strings()
         throw std::runtime_error { "out-of-range string index was accepted" };
     } catch (const InterpreterError& error) {
         require(
-            std::string_view { error.what() }.find("outside the code-point range")
+            std::string_view { error.what() }.find("outside the byte range")
                 != std::string_view::npos,
             "out-of-range string index diagnostic");
     }

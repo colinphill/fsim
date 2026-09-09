@@ -1298,7 +1298,9 @@ namespace codec_detail {
             }
             for (const auto& method : specialization.methods) {
                 if (method.name.empty() || method.canonical_identity.empty()
-                    || method.profile_identity.empty()) {
+                    || method.profile_identity.empty()
+                    || method.lifetime
+                        != frontend::SystemVerilogClassLifetime::Automatic) {
                     return false;
                 }
             }
@@ -1311,9 +1313,19 @@ namespace codec_detail {
             }
         }
         return std::ranges::all_of(classes, [&](const auto& specialization) {
-            return specialization.base_specialization_identity.empty()
-                || identities.contains(
-                    specialization.base_specialization_identity);
+            if (!specialization.base_specialization_identity.empty()
+                && !identities.contains(
+                    specialization.base_specialization_identity)) {
+                return false;
+            }
+            std::set<std::string> interfaces;
+            return std::ranges::all_of(
+                specialization.interface_specialization_identities,
+                [&](const std::string& identity) {
+                    return !identity.empty()
+                        && identities.contains(identity)
+                        && interfaces.insert(identity).second;
+                });
         });
     }
 

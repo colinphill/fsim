@@ -51,6 +51,7 @@ struct SystemVerilogClassSpecialization {
   std::vector<std::pair<std::string, std::string>>
       parameter_identity_values;
   std::string base_specialization_identity;
+  std::vector<std::string> interface_specialization_identities;
   std::vector<SystemVerilogClassPropertyLayout> properties;
   std::vector<SystemVerilogClassMethodProfile> methods;
   std::vector<std::pair<std::string, bool>> constraint_modes;

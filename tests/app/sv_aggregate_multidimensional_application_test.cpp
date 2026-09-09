@@ -1028,6 +1028,71 @@ void verify(
           != std::string::npos);
 }
 
+void test_systemverilog_2023_aggregate_equivalence(
+    const std::filesystem::path& directory) {
+  const auto source = directory / "aggregate-equivalence-2023.sv";
+  std::ofstream output(source, std::ios::binary | std::ios::trunc);
+  output << R"(
+module aggregate_equivalence_2023;
+  struct packed { logic [3:0] code; logic valid; } packed_left;
+  struct packed { logic [3:0] code; logic valid; } packed_right;
+  struct packed { logic [3:0] other; logic valid; } packed_mismatch;
+  struct { logic [7:0] code; int count; } rows_left[0:1];
+  struct { logic [7:0] code; int count; } rows_right[0:1];
+  logic [46:0] observed;
+  initial begin
+    packed_left = '{code: 4'ha, valid: 1'b1};
+    packed_right = packed_left;
+    rows_left = '{
+      '{code: 8'h12, count: 5},
+      '{code: 8'h34, count: 9}
+    };
+    rows_right = rows_left;
+    observed = {
+      type(packed_left) == type(packed_right),
+      type(packed_left) != type(packed_mismatch),
+      packed_right.code,
+      packed_right.valid,
+      rows_right[1].code,
+      rows_right[1].count
+    };
+    #1 $finish;
+  end
+endmodule
+)";
+  assert(output.good());
+  output.close();
+
+  auto config = make_config(
+      directory, source, fsim::project::Optimization::o0);
+  config.project.name = "sv-aggregate-equivalence-2023";
+  config.project.top = "sv:work.aggregate_equivalence_2023";
+  config.source_sets.front().standard = "2023";
+  const auto run = [&](const fsim::app::SimulationEngine engine) {
+    fsim::diagnostic::Engine diagnostics;
+    auto project = fsim::app::build_project(config, diagnostics);
+    if (!project) {
+      for (const auto& diagnostic : diagnostics.diagnostics()) {
+        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+      }
+    }
+    assert(project);
+    fsim::app::Simulation simulation{
+        std::move(*project), config.run.max_deltas, engine};
+    const auto observed = simulation.find_signal(
+        "aggregate_equivalence_2023.observed");
+    assert(observed);
+    const auto result = simulation.run();
+    assert(result.status == fsim::runtime::RunStatus::stopped);
+    assert(result.time == 1);
+    return simulation.read_signal(*observed).to_msb_string();
+  };
+  const auto expected =
+      std::string{"11101010011010000000000000000000000000000001001"};
+  assert(run(fsim::app::SimulationEngine::interpreter) == expected);
+  assert(run(fsim::app::SimulationEngine::compiled) == expected);
+}
+
 void test_declaration_revision_gates(
     const std::filesystem::path& directory) {
   const auto write = [](const std::filesystem::path& path,
@@ -1088,6 +1153,7 @@ int main() {
          + std::to_string(nonce))};
   std::filesystem::create_directories(directory.path);
   test_declaration_revision_gates(directory.path);
+  test_systemverilog_2023_aggregate_equivalence(directory.path);
   const auto source = directory.path / "aggregate_multidimensional.sv";
   write_source(source, '9');
   for (const auto optimization : {

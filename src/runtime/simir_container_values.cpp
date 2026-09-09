@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
-#include "fsim/runtime/systemverilog_string.hpp"
 
 #include <algorithm>
 
@@ -244,8 +243,7 @@ void validate_container_value(const ContainerValue& value) {
       for (std::size_t index = 0;
            index < value.string_keys.size(); ++index) {
         const auto& key = value.string_keys[index];
-        if (key.size() > maximum_string_bytes
-            || !runtime::systemverilog_string_is_valid(key)) {
+        if (key.size() > maximum_string_bytes) {
           throw std::invalid_argument{
               "SimIR associative-array string key is invalid"};
         }
@@ -313,10 +311,9 @@ void validate_container_value(const ContainerValue& value) {
     }
   }
   for (const auto& element : value.string_elements) {
-    if (element.size() > maximum_string_bytes
-        || !systemverilog_string_is_valid(element)) {
+    if (element.size() > maximum_string_bytes) {
       throw std::invalid_argument{
-          "SimIR container string element is not bounded strict UTF-8"};
+          "SimIR container string element exceeds the byte limit"};
     }
   }
   if (aggregate_box(value.type)

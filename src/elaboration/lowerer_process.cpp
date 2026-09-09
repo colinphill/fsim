@@ -12,6 +12,12 @@ void Lowerer::set_systemverilog_program_owner(
     systemverilog_program_owner_ = owner;
 }
 
+void Lowerer::set_systemverilog_standard(
+    const frontend::StandardRevision standard) noexcept
+{
+    systemverilog_standard_ = standard;
+}
+
 void Lowerer::set_vhdl_standard(
     const frontend::VhdlStandard standard) noexcept
 {
@@ -1256,7 +1262,17 @@ void Lowerer::lower_statement(const Statement& statement)
         }
         break;
     case StatementKind::WaitOn: {
-        (void)emit_event_control_wait(statement);
+        if (emit_event_control_wait(statement)
+            && statement.clocking_cycle_delay
+            && !systemverilog_program_owner_) {
+            // A clocking-cycle wait synchronizes module code with the
+            // clocking block's observed input sample. Program processes are
+            // already resumed in the reactive region; other processes need
+            // an explicit region handoff before consuming clocking inputs or
+            // scheduling clocking outputs.
+            process_.operations.emplace_back(
+                WaitRegion { runtime::SchedulerPhase::reactive });
+        }
         lower_statements(statement.statements);
         break;
     }

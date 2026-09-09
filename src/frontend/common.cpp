@@ -265,6 +265,319 @@ std::optional<std::uint64_t> Type::width() const noexcept
     return std::nullopt;
 }
 
+std::optional<SystemVerilogIntegralTypeDescriptor>
+systemverilog_integral_type_descriptor(
+    const std::string_view spelling) noexcept
+{
+    using Descriptor = SystemVerilogIntegralTypeDescriptor;
+    using Entry = std::pair<std::string_view, Descriptor>;
+    static constexpr std::array<Entry, 9> descriptors { {
+        { "bit", { ValueDomain::Bit2, 1U, false, false,
+                     SystemVerilogScalarKind::None } },
+        { "logic", { ValueDomain::Logic4, 1U, false, false,
+                       SystemVerilogScalarKind::None } },
+        { "reg", { ValueDomain::Logic4, 1U, false, false,
+                     SystemVerilogScalarKind::None } },
+        { "byte", { ValueDomain::Bit2, 8U, true, true,
+                      SystemVerilogScalarKind::None } },
+        { "shortint", { ValueDomain::Bit2, 16U, true, true,
+                          SystemVerilogScalarKind::None } },
+        { "int", { ValueDomain::Bit2, 32U, true, true,
+                     SystemVerilogScalarKind::None } },
+        { "longint", { ValueDomain::Bit2, 64U, true, true,
+                         SystemVerilogScalarKind::None } },
+        { "integer", { ValueDomain::Logic4, 32U, true, true,
+                         SystemVerilogScalarKind::None } },
+        { "time", { ValueDomain::Logic4, 64U, true, false,
+                      SystemVerilogScalarKind::Time } },
+    } };
+    for (const auto& [name, descriptor] : descriptors) {
+        if (spelling == name) {
+            return descriptor;
+        }
+    }
+    return std::nullopt;
+}
+
+bool apply_systemverilog_integral_type(
+    Type& type, const std::string_view spelling)
+{
+    const auto descriptor = systemverilog_integral_type_descriptor(spelling);
+    if (!descriptor) {
+        return false;
+    }
+    type.spelling = spelling;
+    type.domain = descriptor->domain;
+    type.is_signed = descriptor->default_signed;
+    type.systemverilog_scalar = descriptor->scalar_kind;
+    type.packed_range = descriptor->fixed_width
+        ? std::optional<PackedRange> { PackedRange {
+              static_cast<std::int64_t>(descriptor->default_width) - 1,
+              0,
+              true } }
+        : std::nullopt;
+    return true;
+}
+
+bool is_systemverilog_simple_integral_type(const Type& type) noexcept
+{
+    const bool builtin =
+        systemverilog_integral_type_descriptor(type.spelling).has_value();
+    const bool integral_domain = type.domain == ValueDomain::Bit2
+        || type.domain == ValueDomain::Logic4;
+    const bool integral_scalar =
+        type.systemverilog_scalar == SystemVerilogScalarKind::None
+        || type.systemverilog_scalar == SystemVerilogScalarKind::Time;
+    return builtin && integral_domain && integral_scalar
+        && type.named_type.empty() && type.nominal_type.empty()
+        && type.enumeration_literals.empty()
+        && type.systemverilog_enumeration_values.empty()
+        && type.packed_aggregate == PackedAggregateKind::None
+        && type.packed_members.empty()
+        && type.systemverilog_packed_dimensions.empty()
+        && !type.systemverilog_container
+        && type.systemverilog_class_declaration.empty()
+        && !type.systemverilog_virtual_interface
+        && type.systemverilog_interface_type.empty()
+        && !type.vhdl_array && !type.vhdl_access && !type.vhdl_file
+        && !type.vhdl_physical && !type.vhdl_protected
+        && !type.vhdl_unspecified && type.width().has_value();
+}
+
+bool systemverilog_integral_types_equivalent(
+    const Type& left, const Type& right) noexcept
+{
+    if (!is_systemverilog_simple_integral_type(left)
+        || !is_systemverilog_simple_integral_type(right)) {
+        return false;
+    }
+    return left.domain == right.domain
+        && left.is_signed == right.is_signed
+        && left.width() == right.width();
+}
+
+namespace {
+
+[[nodiscard]] bool same_systemverilog_expression_shape(
+    const Expression& left, const Expression& right) noexcept
+{
+    if (left.kind != right.kind || left.text != right.text
+        || left.operands.size() != right.operands.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < left.operands.size(); ++index) {
+        if (!same_systemverilog_expression_shape(
+                left.operands[index], right.operands[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool same_systemverilog_range(
+    const std::optional<PackedRange>& left,
+    const std::optional<PackedRange>& right) noexcept
+{
+    return (!left && !right)
+        || (left && right && left->left == right->left
+            && left->right == right->right
+            && left->descending == right->descending);
+}
+
+[[nodiscard]] bool same_systemverilog_range_expression(
+    const PackedRangeExpression& left,
+    const PackedRangeExpression& right) noexcept
+{
+    return same_systemverilog_expression_shape(left.left, right.left)
+        && same_systemverilog_expression_shape(left.right, right.right)
+        && left.descending == right.descending;
+}
+
+[[nodiscard]] bool same_systemverilog_optional_range_expression(
+    const std::optional<PackedRangeExpression>& left,
+    const std::optional<PackedRangeExpression>& right) noexcept
+{
+    return (!left && !right)
+        || (left && right
+            && same_systemverilog_range_expression(*left, *right));
+}
+
+[[nodiscard]] bool is_systemverilog_nominal_type(
+    const Type& type) noexcept
+{
+    return !type.nominal_type.empty()
+        && (type.packed_aggregate != PackedAggregateKind::None
+            || !type.enumeration_literals.empty());
+}
+
+} // namespace
+
+bool systemverilog_types_equivalent(
+    const Type& left, const Type& right) noexcept
+{
+    const bool left_nominal = is_systemverilog_nominal_type(left);
+    const bool right_nominal = is_systemverilog_nominal_type(right);
+    if (left_nominal || right_nominal) {
+        return left_nominal && right_nominal
+            && left.nominal_type == right.nominal_type;
+    }
+    const bool left_integral = is_systemverilog_simple_integral_type(left);
+    const bool right_integral = is_systemverilog_simple_integral_type(right);
+    if (left_integral || right_integral) {
+        return systemverilog_integral_types_equivalent(left, right);
+    }
+    const bool left_unresolved = left.domain == ValueDomain::Unknown
+        && !left.named_type.empty() && !left.width();
+    const bool right_unresolved = right.domain == ValueDomain::Unknown
+        && !right.named_type.empty() && !right.width();
+    if (left_unresolved || right_unresolved) {
+        return left_unresolved && right_unresolved
+            && left.named_type == right.named_type;
+    }
+    if (left.domain != right.domain
+        || left.systemverilog_scalar != right.systemverilog_scalar
+        || left.is_signed != right.is_signed
+        || left.packed_aggregate != right.packed_aggregate
+        || !same_systemverilog_range(left.packed_range, right.packed_range)
+        || !same_systemverilog_optional_range_expression(
+            left.packed_range_expression,
+            right.packed_range_expression)
+        || left.systemverilog_virtual_interface
+            != right.systemverilog_virtual_interface
+        || left.systemverilog_interface_type
+            != right.systemverilog_interface_type
+        || left.systemverilog_interface_modport
+            != right.systemverilog_interface_modport
+        || left.systemverilog_class_declaration
+            != right.systemverilog_class_declaration
+        || left.systemverilog_class_parameter_actuals.size()
+            != right.systemverilog_class_parameter_actuals.size()
+        || left.enumeration_literals != right.enumeration_literals
+        || left.systemverilog_enumeration_values.size()
+            != right.systemverilog_enumeration_values.size()
+        || left.systemverilog_packed_dimensions.size()
+            != right.systemverilog_packed_dimensions.size()
+        || left.packed_members.size() != right.packed_members.size()
+        || left.systemverilog_container.has_value()
+            != right.systemverilog_container.has_value()
+        || static_cast<bool>(left.vhdl_array)
+            != static_cast<bool>(right.vhdl_array)
+        || static_cast<bool>(left.vhdl_access)
+            != static_cast<bool>(right.vhdl_access)
+        || static_cast<bool>(left.vhdl_file)
+            != static_cast<bool>(right.vhdl_file)
+        || static_cast<bool>(left.vhdl_physical)
+            != static_cast<bool>(right.vhdl_physical)
+        || static_cast<bool>(left.vhdl_protected)
+            != static_cast<bool>(right.vhdl_protected)
+        || static_cast<bool>(left.vhdl_unspecified)
+            != static_cast<bool>(right.vhdl_unspecified)) {
+        return false;
+    }
+    for (std::size_t index = 0;
+        index < left.systemverilog_enumeration_values.size(); ++index) {
+        if (!same_systemverilog_expression_shape(
+                left.systemverilog_enumeration_values[index],
+                right.systemverilog_enumeration_values[index])) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0;
+        index < left.systemverilog_class_parameter_actuals.size(); ++index) {
+        const auto& left_actual =
+            left.systemverilog_class_parameter_actuals[index];
+        const auto& right_actual =
+            right.systemverilog_class_parameter_actuals[index];
+        if (left_actual.name != right_actual.name
+            || static_cast<bool>(left_actual.type_actual)
+                != static_cast<bool>(right_actual.type_actual)) {
+            return false;
+        }
+        if (left_actual.type_actual) {
+            if (!systemverilog_types_equivalent(
+                    *left_actual.type_actual, *right_actual.type_actual)) {
+                return false;
+            }
+        } else if (!same_systemverilog_expression_shape(
+                       left_actual.value, right_actual.value)) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0;
+        index < left.systemverilog_packed_dimensions.size(); ++index) {
+        if (!same_systemverilog_range_expression(
+                left.systemverilog_packed_dimensions[index],
+                right.systemverilog_packed_dimensions[index])) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0; index < left.packed_members.size(); ++index) {
+        const auto& left_member = left.packed_members[index];
+        const auto& right_member = right.packed_members[index];
+        if (left_member.name != right_member.name
+            || left_member.domain != right_member.domain
+            || left_member.is_signed != right_member.is_signed
+            || left_member.lsb_offset != right_member.lsb_offset
+            || !same_systemverilog_range(
+                left_member.packed_range, right_member.packed_range)
+            || !same_systemverilog_optional_range_expression(
+                left_member.packed_range_expression,
+                right_member.packed_range_expression)
+            || left_member.nested_types.size()
+                != right_member.nested_types.size()) {
+            return false;
+        }
+        for (std::size_t nested = 0;
+            nested < left_member.nested_types.size(); ++nested) {
+            if (!systemverilog_types_equivalent(
+                    left_member.nested_types[nested],
+                    right_member.nested_types[nested])) {
+                return false;
+            }
+        }
+    }
+    if (!left.systemverilog_container) {
+        return true;
+    }
+    const auto& left_container = *left.systemverilog_container;
+    const auto& right_container = *right.systemverilog_container;
+    if (left_container.kind != right_container.kind
+        || !same_systemverilog_range(
+            left_container.static_range,
+            right_container.static_range)
+        || left_container.static_range_expressions.size()
+            != right_container.static_range_expressions.size()
+        || left_container.element_types.size()
+            != right_container.element_types.size()
+        || static_cast<bool>(left_container.associative_index_type)
+            != static_cast<bool>(right_container.associative_index_type)) {
+        return false;
+    }
+    if (left_container.associative_index_type
+        && !systemverilog_types_equivalent(
+            *left_container.associative_index_type,
+            *right_container.associative_index_type)) {
+        return false;
+    }
+    for (std::size_t index = 0;
+        index < left_container.static_range_expressions.size(); ++index) {
+        if (!same_systemverilog_range_expression(
+                left_container.static_range_expressions[index],
+                right_container.static_range_expressions[index])) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0;
+        index < left_container.element_types.size(); ++index) {
+        if (!systemverilog_types_equivalent(
+                left_container.element_types[index],
+                right_container.element_types[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 namespace {
 
 std::string_view vhdl_simple_type_name(const std::string_view spelling) {

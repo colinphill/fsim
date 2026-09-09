@@ -141,19 +141,62 @@ FunctionDeclaration VerilogParser::parse_function(
         header_open,
         "FSIM-SV-PARSE-347");
     Type inherited_type;
-    bool have_inherited_type = false;
+    PortDirection inherited_direction { PortDirection::Input };
+    bool inherited_reference = false;
+    bool inherited_const_reference = false;
+    bool inherited_static_reference = false;
+    bool have_inherited_formal = false;
     while (!at_end() && !at(TokenKind::RightParen)) {
-      PortDirection direction = PortDirection::Input;
+      auto direction = inherited_direction;
       bool explicit_direction = false;
-      bool reference = false;
-      (void)match_keyword("const");
+      bool reference = inherited_reference;
+      bool const_reference = inherited_const_reference;
+      bool static_reference = inherited_static_reference;
+      const bool const_qualifier = match_keyword("const");
       if (is_direction_keyword()) {
+        if (const_qualifier) {
+          error(
+              previous(),
+              "FSIM-SV-SEM-248",
+              "const is permitted only before a ref formal");
+        }
         direction = parse_direction();
+        reference = false;
+        const_reference = false;
+        static_reference = false;
         explicit_direction = true;
       } else if (match_keyword("ref")) {
         explicit_direction = true;
-        direction = PortDirection::Inout;
+        direction = const_qualifier
+            ? PortDirection::Input
+            : PortDirection::Inout;
         reference = true;
+        const_reference = const_qualifier;
+        static_reference = match_keyword("static");
+        if (static_reference) {
+          (void)require_standard(
+              "a ref static function formal",
+              StandardRevision::SystemVerilog2023,
+              previous(),
+              "FSIM-SV-PARSE-368");
+        }
+      } else if (const_qualifier) {
+        error(
+            previous(),
+            "FSIM-SV-SEM-248",
+            "const is permitted only before a ref formal");
+      }
+
+      if (explicit_direction) {
+        inherited_direction = direction;
+        inherited_reference = reference;
+        inherited_const_reference = const_reference;
+        inherited_static_reference = static_reference;
+      } else if (!have_inherited_formal) {
+        direction = PortDirection::Input;
+        reference = false;
+        const_reference = false;
+        static_reference = false;
       }
 
       const bool explicit_type =
@@ -170,13 +213,13 @@ FunctionDeclaration VerilogParser::parse_function(
           || is_named_type_reference_start();
       Type type;
       if (explicit_direction || explicit_type
-          || !have_inherited_type) {
+          || !have_inherited_formal) {
         type = parse_parameter_type();
         inherited_type = type;
-        have_inherited_type = true;
       } else {
         type = inherited_type;
       }
+      have_inherited_formal = true;
       const auto argument_name =
           expect_identifier("function argument name");
       if (!current_function_arguments_.insert(
@@ -197,6 +240,8 @@ FunctionDeclaration VerilogParser::parse_function(
           direction,
           argument_name.span});
       function.arguments.back().reference = reference;
+      function.arguments.back().const_reference = const_reference;
+      function.arguments.back().static_reference = static_reference;
       if (match(TokenKind::Assign)) {
         function.arguments.back().default_value = parse_expression();
       }
@@ -239,14 +284,31 @@ FunctionDeclaration VerilogParser::parse_function(
         const auto& alias = local_declarations.type_aliases.back();
         current_procedural_types_.insert_or_assign(alias.name, alias.type);
       }
-    } else if (is_direction_keyword() || keyword("ref")) {
-      const auto declaration_start = advance();
-      const bool reference = declaration_start.text == "ref";
+    } else if (is_direction_keyword() || keyword("ref")
+               || keyword("const")) {
+      const auto declaration_start = current();
+      const bool const_reference = match_keyword("const");
+      if (const_reference && !keyword("ref")) {
+        error(
+            declaration_start,
+            "FSIM-SV-SEM-248",
+            "const is permitted only before a ref formal");
+      }
+      const auto direction_token = advance();
+      const bool reference = direction_token.text == "ref";
+      const bool static_reference = reference && match_keyword("static");
+      if (static_reference) {
+        (void)require_standard(
+            "a ref static function formal",
+            StandardRevision::SystemVerilog2023,
+            previous(),
+            "FSIM-SV-PARSE-368");
+      }
       const auto direction = reference
-          ? PortDirection::Inout
-          : declaration_start.text == "output"
+          ? const_reference ? PortDirection::Input : PortDirection::Inout
+          : direction_token.text == "output"
               ? PortDirection::Output
-          : declaration_start.text == "inout"
+          : direction_token.text == "inout"
               ? PortDirection::Inout
               : PortDirection::Input;
       Type type;
@@ -281,6 +343,8 @@ FunctionDeclaration VerilogParser::parse_function(
             direction,
             argument_name.span});
         function.arguments.back().reference = reference;
+        function.arguments.back().const_reference = const_reference;
+        function.arguments.back().static_reference = static_reference;
         if (match(TokenKind::Assign)) {
           function.arguments.back().default_value = parse_expression();
         }
@@ -371,9 +435,13 @@ void VerilogParser::validate_function_body(
       ? function.name
       : function.name.substr(result_separator + 2U);
   std::unordered_set<std::string> locals;
+  std::unordered_set<std::string> const_references;
   locals.insert(result_name);
   for (const auto& argument : function.arguments) {
     locals.insert(argument.name);
+    if (argument.const_reference) {
+      const_references.insert(argument.name);
+    }
     if (argument.default_value
         && (argument.direction != PortDirection::Input
             || argument.reference)) {
@@ -433,6 +501,11 @@ void VerilogParser::validate_function_body(
                   "FSIM-SV-SEM-061",
                   "a function assignment target must have an identifier "
                   "root");
+            } else if (const_references.contains(root->text)) {
+              error(
+                  start,
+                  "FSIM-SV-SEM-249",
+                  "a const ref function formal is read-only");
             }
             if (statement.assignment_kind
                     != AssignmentKind::Blocking
@@ -458,12 +531,29 @@ void VerilogParser::validate_function_body(
               || statement.kind == StatementKind::DisableFork
               || statement.kind == StatementKind::Pause
               || statement.kind == StatementKind::Finish;
+          if (statement.kind == StatementKind::Fork
+              && statement.fork_join_kind == ForkJoinKind::None
+              && standard_revision_
+                  != StandardRevision::SystemVerilog2023) {
+            error(
+                start,
+                "FSIM-SV-SEM-246",
+                "a function may spawn fork...join_none background "
+                "processes only in SystemVerilog-2023");
+          }
           if (forbidden) {
             error(
                 start,
                 "FSIM-SV-SEM-064",
                 "functions cannot contain timing controls, event or task "
                 "statements");
+          }
+          if (statement.kind == StatementKind::Fork
+              && statement.fork_join_kind == ForkJoinKind::None) {
+            // SystemVerilog-2023 gives the spawned background processes task
+            // statement semantics. Their timing controls do not make the
+            // calling function itself time-consuming.
+            continue;
           }
           self(self, statement.statements);
           self(self, statement.else_statements);
@@ -543,24 +633,60 @@ TaskDeclaration VerilogParser::parse_task(
         "FSIM-SV-PARSE-347");
     Type inherited_type;
     PortDirection inherited_direction{PortDirection::Input};
+    bool inherited_reference = false;
+    bool inherited_const_reference = false;
+    bool inherited_static_reference = false;
     bool have_inherited_formal = false;
     while (!at_end() && !at(TokenKind::RightParen)) {
       auto direction = inherited_direction;
       bool explicit_direction = false;
-      bool reference = false;
-      (void)match_keyword("const");
+      bool reference = inherited_reference;
+      bool const_reference = inherited_const_reference;
+      bool static_reference = inherited_static_reference;
+      const bool const_qualifier = match_keyword("const");
       if (is_direction_keyword()) {
+        if (const_qualifier) {
+          error(
+              previous(),
+              "FSIM-SV-SEM-248",
+              "const is permitted only before a ref formal");
+        }
         direction = parse_direction();
-        inherited_direction = direction;
+        reference = false;
+        const_reference = false;
+        static_reference = false;
         explicit_direction = true;
       } else if (match_keyword("ref")) {
-        direction = PortDirection::Inout;
-        inherited_direction = direction;
+        direction = const_qualifier
+            ? PortDirection::Input
+            : PortDirection::Inout;
         explicit_direction = true;
         reference = true;
+        const_reference = const_qualifier;
+        static_reference = match_keyword("static");
+        if (static_reference) {
+          (void)require_standard(
+              "a ref static task formal",
+              StandardRevision::SystemVerilog2023,
+              previous(),
+              "FSIM-SV-PARSE-368");
+        }
+      } else if (const_qualifier) {
+        error(
+            previous(),
+            "FSIM-SV-SEM-248",
+            "const is permitted only before a ref formal");
       } else if (!have_inherited_formal) {
-        inherited_direction = PortDirection::Input;
         direction = PortDirection::Input;
+        reference = false;
+        const_reference = false;
+        static_reference = false;
+      }
+      if (explicit_direction) {
+        inherited_direction = direction;
+        inherited_reference = reference;
+        inherited_const_reference = const_reference;
+        inherited_static_reference = static_reference;
       }
 
       const bool explicit_type =
@@ -588,6 +714,8 @@ TaskDeclaration VerilogParser::parse_task(
       task.arguments.push_back(TaskArgument{argument_name.text, std::move(type),
                                             direction, argument_name.span});
       task.arguments.back().reference = reference;
+      task.arguments.back().const_reference = const_reference;
+      task.arguments.back().static_reference = static_reference;
       if (match(TokenKind::Assign)) {
         task.arguments.back().default_value = parse_expression();
       }
@@ -621,14 +749,31 @@ TaskDeclaration VerilogParser::parse_task(
         const auto& alias = local_declarations.type_aliases.back();
         current_procedural_types_.insert_or_assign(alias.name, alias.type);
       }
-    } else if (is_direction_keyword() || keyword("ref")) {
-      const auto declaration_start = advance();
-      const bool reference = declaration_start.text == "ref";
+    } else if (is_direction_keyword() || keyword("ref")
+               || keyword("const")) {
+      const auto declaration_start = current();
+      const bool const_reference = match_keyword("const");
+      if (const_reference && !keyword("ref")) {
+        error(
+            declaration_start,
+            "FSIM-SV-SEM-248",
+            "const is permitted only before a ref formal");
+      }
+      const auto direction_token = advance();
+      const bool reference = direction_token.text == "ref";
+      const bool static_reference = reference && match_keyword("static");
+      if (static_reference) {
+        (void)require_standard(
+            "a ref static task formal",
+            StandardRevision::SystemVerilog2023,
+            previous(),
+            "FSIM-SV-PARSE-368");
+      }
       const auto direction = reference
-          ? PortDirection::Inout
-          : declaration_start.text == "output"
+          ? const_reference ? PortDirection::Input : PortDirection::Inout
+          : direction_token.text == "output"
               ? PortDirection::Output
-          : declaration_start.text == "inout"
+          : direction_token.text == "inout"
               ? PortDirection::Inout
               : PortDirection::Input;
       Type type;
@@ -660,6 +805,8 @@ TaskDeclaration VerilogParser::parse_task(
             direction,
             argument_name.span});
         task.arguments.back().reference = reference;
+        task.arguments.back().const_reference = const_reference;
+        task.arguments.back().static_reference = static_reference;
         if (match(TokenKind::Assign)) {
           task.arguments.back().default_value = parse_expression();
         }
@@ -733,8 +880,12 @@ void VerilogParser::validate_task_body(
     const TaskDeclaration& task,
     const Token& start) {
   std::unordered_set<std::string> names;
+  std::unordered_set<std::string> const_references;
   for (const auto& argument : task.arguments) {
     names.insert(argument.name);
+    if (argument.const_reference) {
+      const_references.insert(argument.name);
+    }
     if (argument.default_value
         && (argument.direction != PortDirection::Input
             || argument.reference)) {
@@ -756,6 +907,33 @@ void VerilogParser::validate_task_body(
             "duplicate or conflicting task local '" + variable.name + "'");
     }
   }
+  const auto inspect =
+      [&](const auto& self,
+          const std::vector<Statement>& statements) -> void {
+        for (const auto& statement : statements) {
+          if (statement.kind == StatementKind::Assignment) {
+            const Expression* root = &statement.target;
+            while ((root->kind == ExpressionKind::Index
+                    || root->kind == ExpressionKind::Slice)
+                   && !root->operands.empty()) {
+              root = &root->operands.front();
+            }
+            if (root->kind == ExpressionKind::Identifier
+                && const_references.contains(root->text)) {
+              error(
+                  start,
+                  "FSIM-SV-SEM-249",
+                  "a const ref task formal is read-only");
+            }
+          }
+          self(self, statement.statements);
+          self(self, statement.else_statements);
+          for (const auto& alternative : statement.case_alternatives) {
+            self(self, alternative.statements);
+          }
+        }
+      };
+  inspect(inspect, task.statements);
 }
 
 }  // namespace fsim::frontend

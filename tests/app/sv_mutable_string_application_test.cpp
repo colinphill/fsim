@@ -53,7 +53,7 @@ fsim::project::Config config_for(
     config.run.max_deltas = 1000;
     fsim::project::SourceSet sources;
     sources.language = fsim::project::Language::system_verilog;
-    sources.standard = "2017";
+    sources.standard = "2023";
     sources.library = "work";
     sources.compilation_unit = "file";
     sources.files = { stable, mutable_source };
@@ -263,7 +263,7 @@ module mutable_child;
     string written_hexadecimal;
     string written_octal;
     string functional;
-    string unicode;
+    string bytes;
     real parsed_real;
     string real_text;
     string static_first;
@@ -290,8 +290,8 @@ module mutable_child;
     $swriteh(written_hexadecimal, 8'ha5, 8'hxz);
     $swriteo(written_octal, 8'ha5, 3'b101);
     functional = $sformatf("%-5s|%b|%%", middle, 4'b0011);
-    unicode = "Aπ😀";
-    unicode[1] = "🙂";
+    bytes = "ABC";
+    bytes.putc(1, 8'hff);
     parsed_real = "1_2.5".atoreal();
     real_text.realtoa(parsed_real);
     static_first = accumulate("A");
@@ -309,8 +309,8 @@ module mutable_child;
     $display("|%s|%s|%s", written_binary, written_hexadecimal, written_octal);
     $display("|%s|%s", port_sink, port_shared);
     $display(
-      "%s|%0d|%0d|%s",
-      unicode, unicode.len(), unicode[1], unicode.substr(1, 2));
+      "%0d|%0d|%0d|%0d",
+      bytes.len(), bytes.getc(1), bytes[2], bytes.getc(99));
     $display("|%s", real_text);
     $display("|%s|%s", static_first, static_second);
     $display("|%s|%s", task_first, task_second);
@@ -346,7 +346,7 @@ endmodule
             "|fsim-v1!:0a", "|sim  |0011|%",
             "|011110xz", "|a5xz", "|2455",
             "|input:port", "|Shared",
-            "A🙂😀", "|3", "|128578", "|🙂😀", "|12.5",
+            "3", "|255", "|67", "|0", "|12.5",
             "|seedA", "|seedAB", "|taskA", "|taskAB"
         };
         expected.insert(
@@ -390,7 +390,7 @@ endmodule
             mutable_source,
             fsim::project::Optimization::o2),
         fsim::app::SimulationEngine::compiled);
-    assert(changed.output == std::vector<std::string>({ "stable", "Fsim-v2!", "|FSIM-V2!", "|fsim-v2!", "|sim", "|Sim", "|-42", "|ff", "|11", "|101", "|0", "|0", "|70", "|0", "|123", "|255", "|15", "|5", "|fmt=42/Sim/mutable_top.worker/0001", "|fsim-v2!:0a", "|sim  |0011|%", "|011110xz", "|a5xz", "|2455", "|input:port", "|Shared", "A🙂😀", "|3", "|128578", "|🙂😀", "|12.5", "|seedA", "|seedAB", "|taskA", "|taskAB" }));
+    assert(changed.output == std::vector<std::string>({ "stable", "Fsim-v2!", "|FSIM-V2!", "|fsim-v2!", "|sim", "|Sim", "|-42", "|ff", "|11", "|101", "|0", "|0", "|70", "|0", "|123", "|255", "|15", "|5", "|fmt=42/Sim/mutable_top.worker/0001", "|fsim-v2!:0a", "|sim  |0011|%", "|011110xz", "|a5xz", "|2455", "|input:port", "|Shared", "3", "|255", "|67", "|0", "|12.5", "|seedA", "|seedAB", "|taskA", "|taskAB" }));
     assert(changed.keys != baseline.keys);
 #if defined(FSIM_HAS_LLVM)
     assert(changed.cache.hits == 1);

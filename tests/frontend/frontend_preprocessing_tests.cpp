@@ -363,16 +363,144 @@ endmodule
             "future-keyword-region.sv",
             "`begin_keywords \"1800-2012\"\nmodule ordinary; endmodule\n`end_keywords\n" },
         StandardRevision::SystemVerilog2009);
+    const auto keyword_2023 = parse_verilog(
+        SourceText {
+            "keyword-2023.sv",
+            "`begin_keywords \"1800-2023\"\nmodule ordinary; endmodule\n`end_keywords\n" },
+        StandardRevision::SystemVerilog2023);
+    const auto keyword_2023_from_2017 = parse_verilog(
+        SourceText {
+            "keyword-2023-from-2017.sv",
+            "`begin_keywords \"1800-2023\"\nmodule ordinary; endmodule\n`end_keywords\n" },
+        StandardRevision::SystemVerilog2017);
     require(
         keyword_2005.ok() && !keyword_2009.ok() && keyword_region.ok()
-            && !future_keyword_region.ok()
+            && !future_keyword_region.ok() && keyword_2023.ok()
+            && !keyword_2023_from_2017.ok()
             && std::ranges::any_of(
                 future_keyword_region.diagnostics,
                 [](const Diagnostic& diagnostic) {
                     return diagnostic.code == "FSIM-SV-PP-052"
                         && diagnostic.span.begin.line == 1;
+                })
+            && std::ranges::any_of(
+                keyword_2023_from_2017.diagnostics,
+                [](const Diagnostic& diagnostic) {
+                    return diagnostic.code == "FSIM-SV-PP-052"
+                        && diagnostic.span.begin.line == 1;
                 }),
         "selected and scoped keyword sets admit only revision-correct identifiers");
+
+    const auto preprocess_revision = [](SourceText source,
+        const StandardRevision revision) {
+        PreprocessorOptions options;
+        options.standard_revision = revision;
+        auto preprocessed = preprocess_verilog(
+            std::move(source), Language::SystemVerilog2017, options);
+        return parse_verilog(std::move(preprocessed.lexed), true);
+    };
+    const auto boolean_conditionals = preprocess_revision(
+        SourceText {
+            "boolean-conditionals-2023.sv",
+            R"(`define A
+`define C
+`ifdef (A && B)
+module wrong_and; endmodule
+`elsif (A && (B || C))
+module selected_and_or; endmodule
+`else
+module wrong_else; endmodule
+`endif
+`ifdef (B || C)
+module selected_or; endmodule
+`endif
+`ifdef (!B && A)
+module selected_not; endmodule
+`endif
+`ifdef (B -> C)
+module selected_implication; endmodule
+`endif
+`ifdef (A <-> C)
+module selected_equivalence; endmodule
+`endif
+)" },
+        StandardRevision::SystemVerilog2023);
+    const auto boolean_conditionals_2017 = preprocess_revision(
+        SourceText {
+            "boolean-conditionals-2017.sv",
+            "`define A\n`ifdef (A && A)\nmodule leaked; endmodule\n`endif\n" },
+        StandardRevision::SystemVerilog2017);
+    const auto malformed_boolean_condition = preprocess_revision(
+        SourceText {
+            "malformed-boolean-conditional-2023.sv",
+            "`define A\n`ifdef (A &&)\nmodule malformed; endmodule\n`endif\n" },
+        StandardRevision::SystemVerilog2023);
+    require(
+        boolean_conditionals.ok()
+            && boolean_conditionals.design.units.size() == 5
+            && boolean_conditionals.design.units[0].name == "selected_and_or"
+            && boolean_conditionals.design.units[1].name == "selected_or"
+            && boolean_conditionals.design.units[2].name == "selected_not"
+            && boolean_conditionals.design.units[3].name
+                == "selected_implication"
+            && boolean_conditionals.design.units[4].name
+                == "selected_equivalence",
+        "2023 conditional compilation evaluates the complete nested identifier Boolean operator set");
+    require(
+        !boolean_conditionals_2017.ok()
+            && std::ranges::any_of(
+                boolean_conditionals_2017.diagnostics,
+                [](const Diagnostic& diagnostic) {
+                    return diagnostic.code == "FSIM-SV-PP-052"
+                        && diagnostic.span.begin.line == 2;
+                }),
+        "conditional-compilation Boolean expressions remain unavailable before 2023");
+    require(
+        !malformed_boolean_condition.ok()
+            && std::ranges::any_of(
+                malformed_boolean_condition.diagnostics,
+                [](const Diagnostic& diagnostic) {
+                    return diagnostic.code == "FSIM-SV-PP-053"
+                        && diagnostic.span.begin.line == 2;
+                }),
+        "malformed 2023 conditional-compilation expressions are diagnosed");
+
+    const auto replacement_boolean_condition = preprocess_revision(
+        SourceText {
+            "replacement-boolean-conditional-2023.sv",
+            R"(`define A
+`define C
+`define SELECTED_MODULE \
+`ifdef ((!B && A) <-> (A -> C)) module selected_replacement; endmodule \
+`else module wrong_replacement; endmodule \
+`endif
+`SELECTED_MODULE
+)" },
+        StandardRevision::SystemVerilog2023);
+    const auto replacement_boolean_condition_2017 = preprocess_revision(
+        SourceText {
+            "replacement-boolean-conditional-2017.sv",
+            R"(`define A
+`define SELECTED_MODULE \
+`ifdef (A && A) module leaked_replacement; endmodule \
+`endif
+`SELECTED_MODULE
+)" },
+        StandardRevision::SystemVerilog2017);
+    require(
+        replacement_boolean_condition.ok()
+            && replacement_boolean_condition.design.units.size() == 1
+            && replacement_boolean_condition.design.units.front().name
+                == "selected_replacement",
+        "2023 Boolean conditional compilation is preserved inside macro replacement bodies");
+    require(
+        !replacement_boolean_condition_2017.ok()
+            && std::ranges::any_of(
+                replacement_boolean_condition_2017.diagnostics,
+                [](const Diagnostic& diagnostic) {
+                    return diagnostic.code == "FSIM-SV-PP-052";
+                }),
+        "macro replacement Boolean conditions remain unavailable before 2023");
 
     PreprocessorOptions verilog_2005_options;
     verilog_2005_options.standard_revision = StandardRevision::Verilog2005;

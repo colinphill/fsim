@@ -5,7 +5,6 @@
 #include "fsim/runtime/file_binary.hpp"
 #include "fsim/runtime/file_scanning.hpp"
 #include "fsim/runtime/string_methods.hpp"
-#include "fsim/runtime/systemverilog_string.hpp"
 
 #include <algorithm>
 
@@ -647,11 +646,10 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 };
             }
             const auto& value = state.executor->string_registers_.at(index_register);
-            if (value.size() > runtime::simir::maximum_string_bytes
-                || !runtime::systemverilog_string_is_valid(value)) {
+            if (value.size() > runtime::simir::maximum_string_bytes) {
                 throw runtime::simir::InterpreterError {
                     process, instruction,
-                    "associative-array string index must be bounded strict UTF-8"
+                    "associative-array string index exceeds the byte limit"
                 };
             }
             return value;
@@ -863,7 +861,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 packed_input(
                     write_element->source, input1_aval, input1_bval),
                 state.generated_process,
-                instruction);
+                instruction,
+                write_element->nonblocking);
             if (write_element->transaction_signal) {
                 state.context->write_update_word(
                     *write_element->transaction_signal,

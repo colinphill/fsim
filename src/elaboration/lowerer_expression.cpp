@@ -481,6 +481,18 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 expression.span);
             return std::nullopt;
         }
+        if (expression.operands.front().kind
+                == ExpressionKind::Aggregate
+            && expression.operands.front().text == "sv-pattern"
+            && systemverilog_standard_
+                != frontend::StandardRevision::SystemVerilog2023) {
+            report(
+                "FSIM-ELAB-SVCAST-005",
+                "a static cast does not provide assignment-pattern context "
+                "before SystemVerilog-2023",
+                expression.span);
+            return std::nullopt;
+        }
         const auto type_name = std::string_view { expression.text }
                                    .substr(std::string_view { "@sv-cast:" }.size());
         const auto* cast_type = visible_type_mark(type_name);

@@ -224,7 +224,7 @@ void test_named_events(
 
   fsim::project::SourceSet sources;
   sources.language = fsim::project::Language::system_verilog;
-  sources.standard = "2017";
+  sources.standard = "2023";
   sources.library = "work";
   sources.files.push_back(source);
   config.source_sets.push_back(std::move(sources));

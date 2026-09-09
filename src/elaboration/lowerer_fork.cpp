@@ -206,12 +206,22 @@ bool Lowerer::lower_process_method_statement(
 
 void Lowerer::lower_fork(const Statement& statement)
 {
-    if (active_function_
+    const bool legal_function_background_process
+        = active_function_
+        && systemverilog_standard_
+            == frontend::StandardRevision::SystemVerilog2023
+        && process_kind_ == frontend::ProcessKind::Initial
+        && statement.fork_join_kind == frontend::ForkJoinKind::None;
+    if ((active_function_ && !legal_function_background_process)
         || ((active_task_ || active_procedure_)
             && statement.fork_join_kind != frontend::ForkJoinKind::All)) {
         report(
             "FSIM-ELAB-107",
-            "fork branches cannot escape a callable frame",
+            active_function_
+                ? "a function may spawn fork...join_none background "
+                    "processes only in SystemVerilog-2023 procedural code "
+                    "originating in an initial block"
+                : "fork branches cannot escape a callable frame",
             statement.span);
         return;
     }

@@ -576,8 +576,8 @@ endmodule
 
 void test_systemverilog_procedural_for_loops()
 {
-    const auto foreach_result = parse_text(
-        "procedural_foreach.sv",
+    const auto foreach_result = parse_verilog(
+        SourceText { "procedural_foreach.sv",
         R"(
 module procedural_foreach;
   string text;
@@ -594,8 +594,8 @@ module procedural_foreach;
     end
   end
 endmodule
-)",
-        Language::SystemVerilog2017);
+)" },
+        StandardRevision::SystemVerilog2023);
     require(
         foreach_result.ok(),
         "SystemVerilog procedural foreach loops parse with single and block bodies");
@@ -618,8 +618,8 @@ endmodule
             && foreach_statements.back().statements.size() == 2,
         "foreach collection, index, and bodies remain explicit runtime-loop HIR");
 
-    const auto selected_foreach = parse_text(
-        "selected_foreach.sv",
+    const auto selected_foreach = parse_verilog(
+        SourceText { "selected_foreach.sv",
         R"(
 class selected_foreach;
   enum {STANDARD, NON_STANDARD, ILLEGAL} source;
@@ -658,8 +658,8 @@ class selected_foreach;
       return;
   endfunction
 endclass
-)",
-        Language::SystemVerilog2017);
+)" },
+        StandardRevision::SystemVerilog2023);
     const auto& inline_randomize = selected_foreach.design
                                        .systemverilog_classes.front()
                                        .methods.back()

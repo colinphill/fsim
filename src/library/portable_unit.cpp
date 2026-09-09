@@ -56,7 +56,8 @@ constexpr bool valid_archive_enum(const T value) noexcept
     } else if constexpr (std::same_as<T, frontend::StandardRevision>) {
         return (value >= frontend::StandardRevision::Vhdl1987
                    && value <= frontend::StandardRevision::SystemVerilog2017)
-            || value == frontend::StandardRevision::Vhdl2019;
+            || value == frontend::StandardRevision::Vhdl2019
+            || value == frontend::StandardRevision::SystemVerilog2023;
     } else if constexpr (
         std::same_as<T, frontend::SystemVerilogConfigurationRuleKind>) {
         return value >= frontend::SystemVerilogConfigurationRuleKind::Instance
@@ -67,6 +68,10 @@ constexpr bool valid_archive_enum(const T value) noexcept
             >= frontend::SystemVerilogConfigurationSelectionKind::Use
             && value
             <= frontend::SystemVerilogConfigurationSelectionKind::Liblist;
+    } else if constexpr (
+        std::same_as<T, frontend::SystemVerilogProcessRegion>) {
+        return value >= frontend::SystemVerilogProcessRegion::Active
+            && value <= frontend::SystemVerilogProcessRegion::Reactive;
     } else if constexpr (std::same_as<T, frontend::SystemVerilogScalarKind>) {
         return value >= frontend::SystemVerilogScalarKind::None
             && value <= frontend::SystemVerilogScalarKind::Chandle;
@@ -176,7 +181,8 @@ template <typename T>
 auto archive_fields(T& value) {
   return std::tie(
       value.name, value.type, value.direction, value.span, value.reference,
-      value.default_value, value.vhdl_file);
+      value.const_reference, value.static_reference, value.default_value,
+      value.vhdl_file);
 }
 
 template <typename T>
@@ -203,7 +209,7 @@ template <typename T>
 auto archive_fields(T& value) {
   return std::tie(
       value.name, value.type, value.direction, value.span, value.reference,
-      value.default_value);
+      value.const_reference, value.static_reference, value.default_value);
 }
 
 class Writer final {
@@ -676,6 +682,19 @@ bool valid_unit_hierarchy(const frontend::DesignUnit& unit)
         || unit.kind == frontend::UnitKind::SystemVerilogProgram;
     if (unit.systemverilog_extern && !extern_kind) {
         return false;
+    }
+    if (unit.systemverilog_scheduling_declaration) {
+        const auto& scheduling = *unit.systemverilog_scheduling_declaration;
+        const auto expected_region
+            = unit.kind == frontend::UnitKind::SystemVerilogProgram
+            ? frontend::SystemVerilogProcessRegion::Reactive
+            : frontend::SystemVerilogProcessRegion::Active;
+        if (unit.language != frontend::Language::SystemVerilog2017
+            || !extern_kind
+            || scheduling.process_region != expected_region
+            || scheduling.prototype != unit.systemverilog_extern) {
+            return false;
+        }
     }
     if (unit.kind == frontend::UnitKind::SystemVerilogConfiguration) {
         if (!unit.systemverilog_configuration

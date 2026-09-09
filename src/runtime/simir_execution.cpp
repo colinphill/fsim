@@ -792,6 +792,10 @@ void Interpreter::Impl::pop_callable_frame(
         || process.callable_frames.back().identity != operation.identity) {
         fail(process, "automatic callable frame stack mismatch");
     }
+    if (process.callable_frames.back().escaping_context) {
+        capture_callable_values(
+            process, *process.callable_frames.back().escaping_context);
+    }
     std::vector<PackedLogic4> preserved_packed;
     std::vector<std::string> preserved_strings;
     std::vector<SharedContainerValue> preserved_containers;
@@ -906,6 +910,34 @@ void Interpreter::Impl::pop_callable_frame(
 
 void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
 {
+    std::set<RegisterId> shadowed_packed;
+    std::set<StringRegisterId> shadowed_strings;
+    std::set<ContainerRegisterId> shadowed_containers;
+    for (const auto& frame : process.callable_frames) {
+        shadowed_packed.insert(
+            frame.packed_ids.begin(), frame.packed_ids.end());
+        shadowed_strings.insert(
+            frame.string_ids.begin(), frame.string_ids.end());
+        shadowed_containers.insert(
+            frame.container_ids.begin(), frame.container_ids.end());
+    }
+    for (auto context = process.escaping_callable_contexts.rbegin();
+        context != process.escaping_callable_contexts.rend(); ++context) {
+        if (!*context) {
+            fail(process, "escaping automatic callable context is null");
+        }
+        capture_callable_values(
+            process, **context,
+            shadowed_packed, shadowed_strings, shadowed_containers);
+        shadowed_packed.insert(
+            (*context)->packed_ids.begin(), (*context)->packed_ids.end());
+        shadowed_strings.insert(
+            (*context)->string_ids.begin(), (*context)->string_ids.end());
+        shadowed_containers.insert(
+            (*context)->container_ids.begin(),
+            (*context)->container_ids.end());
+    }
+
     process.suspended_callable_context.reset();
     process.callable_context_storage_bytes = 0;
     if (process.halted || process.callable_frames.empty()) {
@@ -974,6 +1006,12 @@ void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
 
 void Interpreter::Impl::restore_callable_context(ProcessState& process)
 {
+    for (const auto& context : process.escaping_callable_contexts) {
+        if (!context) {
+            fail(process, "escaping automatic callable context is null");
+        }
+        restore_callable_values(process, *context);
+    }
     if (!process.suspended_callable_context) {
         return;
     }

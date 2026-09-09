@@ -972,10 +972,16 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
     }
     if (expression.kind == ExpressionKind::Call
         && (expression.text == "@stream-left"
-            || expression.text == "@stream-right")) {
+            || expression.text == "@stream-right"
+            || expression.text == "@stream-target-left"
+            || expression.text == "@stream-target-right")) {
+        const bool assignment_target
+            = expression.text == "@stream-target-left"
+            || expression.text == "@stream-target-right";
         if (language_
                 != frontend::Language::SystemVerilog2017
-            || expression.operands.size() < 2) {
+            || expression.operands.size() < 2
+            || (assignment_target && expression.operands.size() != 2U)) {
             report(
                 "FSIM-ELAB-SVEXPR-001",
                 "streaming concatenation requires SystemVerilog and "
@@ -1017,8 +1023,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
             std::move(stream_operands),
             expression.span
         };
-        const auto width = infer_width(ordinary_stream);
-        if (!width || *width == 0) {
+        const auto inferred_width = infer_width(ordinary_stream);
+        if (!inferred_width || *inferred_width == 0
+            || *inferred_width
+                > std::numeric_limits<std::uint32_t>::max()) {
             report(
                 "FSIM-ELAB-SVEXPR-003",
                 "streaming concatenation requires a statically known "
@@ -1026,20 +1034,40 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
                 expression.span);
             return std::nullopt;
         }
-        const auto source = lower_expression(
-            ordinary_stream, *width);
+        auto width = *inferred_width;
+        auto source = lower_expression(ordinary_stream, width);
         if (!source) {
             return std::nullopt;
         }
+        if (assignment_target) {
+            if (width < expected_width) {
+                report(
+                    "FSIM-ELAB-SVSTREAM-002",
+                    "a streaming assignment source does not contain enough bits for its target",
+                    expression.span);
+                return std::nullopt;
+            }
+            if (width > expected_width) {
+                const auto consumed = allocate_register(
+                    expected_width, register_domain(*source));
+                process_.operations.emplace_back(Extract {
+                    consumed, *source,
+                    static_cast<std::uint32_t>(width - expected_width),
+                    static_cast<std::uint32_t>(expected_width) });
+                source = consumed;
+                width = expected_width;
+            }
+        }
         if (expression.text == "@stream-right"
-            || static_cast<std::size_t>(*slice_size) >= *width) {
+            || expression.text == "@stream-target-right"
+            || static_cast<std::size_t>(*slice_size) >= width) {
             return *source;
         }
         std::vector<RegisterId> slices;
-        for (std::size_t offset = 0; offset < *width;) {
+        for (std::size_t offset = 0; offset < width;) {
             const auto chunk = std::min(
                 static_cast<std::size_t>(*slice_size),
-                *width - offset);
+                width - offset);
             const auto slice = allocate_register(
                 chunk, register_domain(*source));
             process_.operations.emplace_back(Extract {
@@ -1051,11 +1079,11 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
             offset += chunk;
         }
         const auto destination = allocate_register(
-            *width, register_domain(*source));
+            width, register_domain(*source));
         process_.operations.emplace_back(Concatenate {
             destination,
             std::move(slices),
-            static_cast<std::uint32_t>(*width) });
+            static_cast<std::uint32_t>(width) });
         return destination;
     }
     if (language_ == frontend::Language::Vhdl2008

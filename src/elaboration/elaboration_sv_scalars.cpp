@@ -237,15 +237,7 @@ bool contains_systemverilog_scalar(const frontend::Expression& expression) {
 bool callable_type_matches(
     const frontend::Type& left,
     const frontend::Type& right) {
-  const bool scalar =
-      left.systemverilog_scalar != frontend::SystemVerilogScalarKind::None
-      || right.systemverilog_scalar != frontend::SystemVerilogScalarKind::None;
-  if (scalar) return left.systemverilog_scalar == right.systemverilog_scalar;
-  return left.domain == right.domain
-      && left.is_signed == right.is_signed
-      && left.spelling == right.spelling
-      && left.named_type == right.named_type
-      && left.width() == right.width();
+  return frontend::systemverilog_types_equivalent(left, right);
 }
 
 template <typename Argument>

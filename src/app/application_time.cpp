@@ -150,6 +150,30 @@ void visit_specify_delays(
 }
 
 template <typename Function>
+void visit_clocking_delays(
+    std::vector<frontend::SystemVerilogClockingBlock>& blocks,
+    Function& function) {
+  const auto visit_skew = [&](frontend::SystemVerilogClockingSkew& skew) {
+    if (skew.delay) {
+      visit_delay(*skew.delay, function);
+    }
+  };
+  for (auto& block : blocks) {
+    if (block.default_input_skew) {
+      visit_skew(*block.default_input_skew);
+    }
+    if (block.default_output_skew) {
+      visit_skew(*block.default_output_skew);
+    }
+    for (auto& signal : block.signals) {
+      if (signal.skew) {
+        visit_skew(*signal.skew);
+      }
+    }
+  }
+}
+
+template <typename Function>
 void visit_procedure_delays(
     frontend::ProcedureDeclaration& procedure,
     Function& function) {
@@ -313,6 +337,8 @@ std::string effective_resolution(
     visit_signal_delays(unit.ports, consider);
     visit_signal_delays(unit.signals, consider);
     visit_instance_delays(unit.instances, consider);
+    visit_clocking_delays(
+        unit.systemverilog_clocking_blocks, consider);
     visit_delays(unit.concurrent_statements, consider);
     for (auto& process : unit.processes) {
       visit_delays(process.statements, consider);
@@ -759,6 +785,8 @@ bool normalize_delays(
     visit_signal_delays(unit.signals, normalize);
     visit_instance_delays(unit.instances, normalize);
     visit_specify_delays(unit.verilog_specify_blocks, normalize);
+    visit_clocking_delays(
+        unit.systemverilog_clocking_blocks, normalize);
     visit_delays(unit.concurrent_statements, normalize);
     for (auto& process : unit.processes) {
       visit_delays(process.statements, normalize);

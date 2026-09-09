@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
 
-#include "fsim/runtime/systemverilog_string.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -278,11 +277,10 @@ namespace {
                 process, instruction,
                 "integral-indexed associative array requires an integral index");
         }
-        if (value.size() > maximum_string_bytes
-            || !runtime::systemverilog_string_is_valid(value)) {
+        if (value.size() > maximum_string_bytes) {
             container_error(
                 process, instruction,
-                "associative-array string index must be bounded strict UTF-8");
+                "associative-array string index exceeds the byte limit");
         }
         return value;
     }
@@ -1124,14 +1122,27 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const WriteContainerObjectElement& operation)
 {
-    write_container_object_element_value(
-        operation.object,
-        get_register(process, operation.index),
-        operation.signed_index,
-        operation.linear_index,
-        get_register(process, operation.source),
-        process.program.id,
-        process.pc);
+    const auto index = get_register(process, operation.index);
+    const auto value = get_register(process, operation.source);
+    if (operation.nonblocking) {
+        scheduler.schedule(
+            SchedulerPhase::update,
+            process.program.id,
+            [this, object = operation.object, index,
+                signed_index = operation.signed_index,
+                linear_index = operation.linear_index, value,
+                driver = process.program.id,
+                instruction = process.pc](Scheduler&) {
+                write_container_object_element_value(
+                    object, index, signed_index, linear_index, value,
+                    driver, instruction);
+            });
+    } else {
+        write_container_object_element_value(
+            operation.object, index, operation.signed_index,
+            operation.linear_index, value,
+            process.program.id, process.pc);
+    }
     if (operation.transaction_signal) {
         stage_update(
             process.program.id,

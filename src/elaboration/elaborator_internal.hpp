@@ -921,6 +921,8 @@ public:
 
     void set_systemverilog_program_owner(
         std::optional<std::uint32_t> owner) noexcept;
+    void set_systemverilog_standard(
+        frontend::StandardRevision standard) noexcept;
     void set_vhdl_standard(frontend::VhdlStandard standard) noexcept;
     void set_vhdl_synopsys_numeric_context(
         bool signed_visible, bool unsigned_visible) noexcept;
@@ -1122,6 +1124,8 @@ private:
         const Expression& expression) const;
     void lower_loop(const Statement& statement);
     void lower_runtime_loop(const Statement& statement);
+
+    void lower_runtime_foreach(const Statement& statement);
 
     void lower_runtime_for(const Statement& statement);
 
@@ -1520,6 +1524,9 @@ private:
         const frontend::FunctionDeclaration& function,
         const std::vector<const Expression*>& actuals);
 
+    [[nodiscard]] bool static_reference_actual(
+        const Expression& expression) const;
+
     void lower_pending_functions();
 
     void lower_function_body(std::size_t function_index);
@@ -1827,6 +1834,9 @@ private:
         frontend::ProcessKind::VhdlProcess
     };
     frontend::Language language_ { frontend::Language::Vhdl2008 };
+    frontend::StandardRevision systemverilog_standard_ {
+        frontend::StandardRevision::SystemVerilog2017
+    };
     frontend::VhdlStandard vhdl_standard_ {
         frontend::VhdlStandard::Vhdl2008
     };
@@ -2447,6 +2457,11 @@ private:
     // rather than the complete concrete interface instance.
     std::unordered_map<std::string, std::string>
         systemverilog_interface_modport_views_;
+    // A clocking block is a scope/object, not a signal. Modport clocking
+    // members nevertheless alias its event signal through this separate map
+    // so the signal and VPI clocking-block namespaces do not collide.
+    std::unordered_map<std::string, SignalId>
+        systemverilog_clocking_event_signals_;
     std::unordered_set<std::string>
         systemverilog_read_only_interface_member_paths_;
     std::vector<std::string> stack_;

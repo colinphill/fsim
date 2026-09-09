@@ -304,6 +304,96 @@ Lowerer::static_integer_value(const Expression& expression)
 
 void Lowerer::lower_assignment(const Statement& statement)
 {
+    const auto normalize_aggregate_target =
+        [&](const auto& self, Expression& target) -> bool {
+        if (target.kind == ExpressionKind::Call
+            && (target.text == "@stream-left"
+                || target.text == "@stream-right")) {
+            report(
+                "FSIM-ELAB-SVSTREAM-001",
+                "a streaming assignment target cannot be nested inside another target",
+                target.span);
+            return false;
+        }
+        if (target.kind == ExpressionKind::Aggregate
+            && target.text == "sv-pattern") {
+            if (language_ != frontend::Language::SystemVerilog2017
+                || target.operands.empty()
+                || target.aggregate_choices.size() != target.operands.size()
+                || target.aggregate_choice_expressions.size()
+                    != target.operands.size()
+                || std::ranges::any_of(
+                    target.aggregate_choices,
+                    [](const std::string& choice) {
+                        return !choice.empty();
+                    })
+                || std::ranges::any_of(
+                    target.aggregate_choice_expressions,
+                    [](const auto& choices) { return !choices.empty(); })) {
+                report(
+                    "FSIM-ELAB-SVASSIGN-002",
+                    "an assignment-pattern target requires one or more positional lvalues",
+                    target.span);
+                return false;
+            }
+            target.kind = ExpressionKind::Concatenation;
+            target.text = "concat";
+            target.aggregate_choices.clear();
+            target.aggregate_choice_expressions.clear();
+        }
+        if (target.kind == ExpressionKind::Concatenation) {
+            for (auto& operand : target.operands) {
+                if (!self(self, operand)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+    if (statement.target.kind == ExpressionKind::Aggregate
+        && statement.target.text == "sv-pattern") {
+        Statement normalized = statement;
+        if (!normalize_aggregate_target(
+                normalize_aggregate_target, normalized.target)) {
+            return;
+        }
+        lower_concatenated_assignment(normalized);
+        return;
+    }
+    if (statement.target.kind == ExpressionKind::Call
+        && (statement.target.text == "@stream-left"
+            || statement.target.text == "@stream-right")) {
+        if (language_ != frontend::Language::SystemVerilog2017
+            || statement.target.operands.size() < 2U) {
+            report(
+                "FSIM-ELAB-SVSTREAM-001",
+                "a streaming assignment target requires SystemVerilog and at least one lvalue",
+                statement.target.span);
+            return;
+        }
+        Statement normalized = statement;
+        const auto slice = normalized.target.operands.front();
+        std::vector<Expression> targets(
+            std::next(normalized.target.operands.begin()),
+            normalized.target.operands.end());
+        for (auto& target : targets) {
+            if (!normalize_aggregate_target(
+                    normalize_aggregate_target, target)) {
+                return;
+            }
+        }
+        normalized.target = Expression {
+            ExpressionKind::Concatenation, "concat",
+            std::move(targets), statement.target.span };
+        normalized.value = Expression {
+            ExpressionKind::Call,
+            statement.target.text == "@stream-left"
+                ? "@stream-target-left"
+                : "@stream-target-right",
+            { slice, statement.value }, statement.value.span };
+        lower_concatenated_assignment(normalized);
+        return;
+    }
     if (statement.target.kind == ExpressionKind::Identifier) {
         const auto* target_type = object_type(statement.target.text);
         const bool null_event = statement.value.kind == ExpressionKind::Call
@@ -431,6 +521,25 @@ void Lowerer::lower_assignment(const Statement& statement)
                     == ContainerElementKind::Scalar
             ? runtime_type->element_width
             : 0U;
+        const bool indexed_dynamic_object
+            = targets_container_object
+            && !runtime_type->fixed
+            && !runtime_type->associative
+            && statement.target.kind == ExpressionKind::Index
+            && statement.target.operands.size() == 2U
+            && packed_selections.size() == 1U;
+        if (indexed_dynamic_object
+            && statement.assignment_kind
+                == AssignmentKind::NonBlocking
+            && systemverilog_standard_
+                == frontend::StandardRevision::SystemVerilog2023) {
+            report(
+                "FSIM-ELAB-SVASSIGN-001",
+                "SystemVerilog-2023 prohibits a nonblocking assignment to "
+                "an element of a dynamically sized array",
+                statement.span);
+            return;
+        }
         if (targets_container_object
             && runtime_type->fixed
             && runtime_type->dimensions.size() == 1U
@@ -574,13 +683,17 @@ void Lowerer::lower_assignment(const Statement& statement)
             }
         }
         if (targets_container_object
-            && runtime_type->fixed
-            && runtime_type->dimensions.size() <= 1U
+            && (!runtime_type->fixed
+                || runtime_type->dimensions.size() <= 1U)
+            && !runtime_type->associative
             && element_width != 0U
             && statement.target.kind == ExpressionKind::Index
             && statement.target.operands.size() == 2U
             && packed_selections.size() == 1U
-            && statement.assignment_kind == AssignmentKind::Blocking
+            && (statement.assignment_kind == AssignmentKind::Blocking
+                || (indexed_dynamic_object
+                    && statement.assignment_kind
+                        == AssignmentKind::NonBlocking))
             && statement.procedural_update_kind
                 == frontend::ProceduralUpdateKind::None
             && statement.procedural_assignment_control
@@ -618,6 +731,8 @@ void Lowerer::lower_assignment(const Statement& statement)
                     *value,
                     true,
                     false,
+                    statement.assignment_kind
+                        == AssignmentKind::NonBlocking,
                     std::nullopt });
             return;
         }
@@ -1211,32 +1326,33 @@ void Lowerer::lower_assignment(const Statement& statement)
         const auto index = lower_expression(
             statement.target.operands[1],
             index_width);
-        std::optional<RegisterId> code_point;
+        std::optional<RegisterId> byte;
         if (statement.value.kind
                 == ExpressionKind::StringLiteral
             && statement.value.decoded_string) {
-            const auto points = runtime::systemverilog_string_code_points(
-                *statement.value.decoded_string);
-            if (points.size() == 1) {
-                code_point = allocate_register(
+            if (statement.value.decoded_string->size() == 1) {
+                byte = allocate_register(
                     32, frontend::ValueDomain::Bit2);
                 process_.operations.emplace_back(
                     LoadConstant {
-                        *code_point,
-                        unsigned_value(points.front().value, 32) });
+                        *byte,
+                        unsigned_value(
+                            static_cast<unsigned char>(
+                                statement.value.decoded_string->front()),
+                            32) });
             }
         }
-        if (!code_point) {
-            code_point = lower_expression(statement.value, 32);
+        if (!byte) {
+            byte = lower_expression(statement.value, 32);
         }
-        if (!index || !code_point) {
+        if (!index || !byte) {
             return;
         }
         process_.operations.emplace_back(
-            StringReplaceCodePoint {
+            StringReplaceByte {
                 target,
                 *index,
-                *code_point,
+                *byte,
                 is_signed_expression(
                     statement.target.operands[1]) });
         if (string_object != string_objects_.end()) {

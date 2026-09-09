@@ -657,6 +657,7 @@ add_library(
     src/runtime/simir.cpp
     src/runtime/simir_coverage.cpp
     src/runtime/simir_arithmetic.cpp
+    src/runtime/simir_callable_context.cpp
     src/runtime/simir_container_algorithms.cpp
     src/runtime/simir_container_bridge.cpp
     src/runtime/simir_containers.cpp

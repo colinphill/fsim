@@ -226,6 +226,36 @@ void test_semaphore_operations_and_fairness() {
           && debug_value(try_interpreter, 4) == 0
           && debug_value(try_interpreter, 5) == 1,
       "counting semaphore try_get reports success without blocking");
+
+  Interpreter signed_interpreter;
+  Process signed_process;
+  signed_process.id = 0;
+  signed_process.name = "semaphore_signed_counts";
+  signed_process.register_count = 5;
+  for (RegisterId id = 0; id < signed_process.register_count; ++id) {
+    signed_process.debug_locals.push_back(
+        debug_local("register_" + std::to_string(id), id, id == 1 ? 64U : 32U));
+  }
+  signed_process.operations = {
+      LoadConstant{0, PackedLogic4::from_aval_bval(32, UINT32_MAX, 0)},
+      SemaphoreCreate{1, 0},
+      LoadConstant{2, PackedLogic4::from_aval_bval(32, 0, 0)},
+      SemaphorePut{1, 2},
+      LoadConstant{2, PackedLogic4::from_aval_bval(32, 2, 0)},
+      SemaphorePut{1, 2},
+      LoadConstant{2, PackedLogic4::from_aval_bval(32, 1, 0)},
+      SemaphoreGet{1, 2, 3},
+      LoadConstant{2, PackedLogic4::from_aval_bval(32, 0, 0)},
+      SemaphoreGet{1, 2, 4},
+      Halt{},
+  };
+  (void)signed_interpreter.add_process(std::move(signed_process));
+  const auto signed_result = signed_interpreter.run();
+  require(
+      signed_result.status == RunStatus::completed
+          && debug_value(signed_interpreter, 3) == 1
+          && debug_value(signed_interpreter, 4) == 1,
+      "counting semaphore accepts negative initial and zero operation counts");
 }
 
 }  // namespace

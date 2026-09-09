@@ -217,11 +217,24 @@ struct Interpreter::Impl::ExecutionContext final
         const bool linear_index,
         const PackedLogic4& value,
         const ProcessId generated_process,
-        const InstructionIndex instruction) override
+        const InstructionIndex instruction,
+        const bool nonblocking) override
     {
-        owner.write_container_object_element_value(
-            object, index, signed_index, linear_index, value,
-            generated_process, instruction);
+        if (nonblocking) {
+            owner.scheduler.schedule(
+                SchedulerPhase::update,
+                generated_process,
+                [&owner = owner, object, index, signed_index, linear_index,
+                    value, generated_process, instruction](Scheduler&) {
+                    owner.write_container_object_element_value(
+                        object, index, signed_index, linear_index, value,
+                        generated_process, instruction);
+                });
+        } else {
+            owner.write_container_object_element_value(
+                object, index, signed_index, linear_index, value,
+                generated_process, instruction);
+        }
     }
     [[nodiscard]] FileHandle open_file(
         const std::string_view path,

@@ -67,6 +67,7 @@ namespace {
         notify_execution_point(
             process, instruction, ExecutionPointKind::process_suspend,
             process.current_source);
+        snapshot_callable_context(process);
         complete_fork_child(process);
         return true;
     }
@@ -245,6 +246,7 @@ void Interpreter::Impl::complete_process(
         waiter.status = ProcessStatus::running;
         queue_active_current(waiter_id);
     }
+    process.escaping_callable_contexts.clear();
 }
 
 [[nodiscard]] bool Interpreter::Impl::handle_process_boundary(
@@ -410,6 +412,9 @@ void Interpreter::Impl::complete_process(
     clear_wait_timeout(process);
     if (kill != nullptr && !target.halted) {
         cancel_fork_descendants(target);
+        if (target.program.id == process.program.id) {
+            snapshot_callable_context(target);
+        }
         if (target.fork_parent) {
             complete_fork_child(target, ProcessStatus::killed);
         } else {
@@ -488,6 +493,26 @@ void Interpreter::Impl::spawn_fork(
     const auto program = parent.program;
     const auto design_process = parent.design_process;
     auto* const executor = parent.executor.get();
+    auto inherited_contexts = parent.escaping_callable_contexts;
+    if (operation.join == ForkJoinKind::none
+        && !parent.callable_frames.empty()) {
+        auto& callable = parent.callable_frames.back();
+        if (!callable.escaping_context) {
+            auto context
+                = std::make_shared<ProcessState::CallableFrameState>();
+            context->identity = callable.identity;
+            context->packed_ids = callable.packed_ids;
+            context->string_ids = callable.string_ids;
+            context->container_ids = callable.container_ids;
+            capture_callable_values(parent, *context);
+            callable.escaping_context = std::move(context);
+        }
+        if (std::ranges::find(
+                inherited_contexts, callable.escaping_context)
+            == inherited_contexts.end()) {
+            inherited_contexts.push_back(callable.escaping_context);
+        }
+    }
 
     std::set<ProcessId> children;
     for (const auto branch : operation.branches) {
@@ -509,6 +534,7 @@ void Interpreter::Impl::spawn_fork(
         child.program.final = false;
         child.pc = branch;
         child.frame = shared_frame;
+        child.escaping_callable_contexts = inherited_contexts;
         if (executor != nullptr) {
             child.executor = executor->fork_clone(branch);
             if (!child.executor) {

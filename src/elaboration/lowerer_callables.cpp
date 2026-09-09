@@ -4,6 +4,74 @@
 #include <unordered_set>
 
 namespace fsim::elaboration {
+
+bool Lowerer::static_reference_actual(
+    const Expression& expression) const {
+    const auto static_identifier = [&](const std::string_view name) {
+        if (signals_.contains(std::string { name })
+            || string_objects_.contains(std::string { name })
+            || container_objects_.contains(std::string { name })) {
+            return true;
+        }
+        const bool local = locals_.contains(std::string { name })
+            || string_locals_.contains(std::string { name })
+            || container_locals_.contains(std::string { name });
+        if (!local || active_procedure_) {
+            return false;
+        }
+        if (active_function_) {
+            const auto* source = function_frames_[*active_function_].source;
+            if (source == nullptr) {
+                return false;
+            }
+            const auto formal = std::ranges::find(
+                source->arguments, name,
+                &frontend::FunctionArgument::name);
+            return formal != source->arguments.end()
+                ? formal->static_reference
+                : !source->automatic;
+        }
+        if (active_task_) {
+            const auto* source = task_frames_[*active_task_].source;
+            if (source == nullptr) {
+                return false;
+            }
+            const auto formal = std::ranges::find(
+                source->arguments, name,
+                &frontend::TaskArgument::name);
+            return formal != source->arguments.end()
+                ? formal->static_reference
+                : !source->automatic;
+        }
+        // Variables declared by a module procedural thread have static
+        // lifetime unless they are inside an automatic callable activation.
+        return true;
+    };
+    const auto visit = [&](const auto& self,
+                           const Expression& candidate) -> bool {
+        if (candidate.kind == ExpressionKind::Identifier) {
+            return static_identifier(candidate.text);
+        }
+        if ((candidate.kind != ExpressionKind::Index
+                && candidate.kind != ExpressionKind::Slice)
+            || candidate.operands.empty()) {
+            return false;
+        }
+        const auto& base = candidate.operands.front();
+        if (base.kind == ExpressionKind::Identifier
+            && (string_locals_.contains(base.text)
+                || string_objects_.contains(base.text)
+                || container_locals_.contains(base.text)
+                || container_objects_.contains(base.text))) {
+            // Elements of strings and dynamic containers do not themselves
+            // have static lifetime. Fixed unpacked storage is not represented
+            // by these dynamic-object maps.
+            return false;
+        }
+        return self(self, base);
+    };
+    return visit(visit, expression);
+}
 using namespace runtime::simir;
 using namespace elaboration_detail;
 
@@ -116,6 +184,15 @@ bool Lowerer::validate_function_reference_actuals(
                 "FSIM-ELAB-SVFUNC-012",
                 "ref function arguments require an automatic function and "
                 "a writable variable actual",
+                actual.span);
+            return false;
+        }
+        if (function.arguments[index].static_reference
+            && !static_reference_actual(actual)) {
+            report(
+                "FSIM-ELAB-SVFUNC-013",
+                "ref static function arguments require an actual with "
+                "static storage lifetime",
                 actual.span);
             return false;
         }

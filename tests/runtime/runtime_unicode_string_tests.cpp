@@ -29,100 +29,82 @@ void require_throws(Callback&& callback, const char* message) {
 
 }  // namespace
 
-void test_systemverilog_unicode_strings() {
+void test_systemverilog_byte_strings() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
 
   const std::string original{"A\xcf\x80\xf0\x9f\x98\x80"};
-  const auto points = systemverilog_string_code_points(original);
   require(
-      points.size() == 3
-          && points[0].value == 'A'
-          && points[0].byte_offset == 0
-          && points[1].value == 0x03c0
-          && points[1].byte_offset == 1
-          && points[2].value == 0x1f600
-          && points[2].byte_offset == 3,
-      "UTF-8 iteration yields deterministic Unicode scalar offsets");
-  require(
-      systemverilog_string_length(original) == 3
-          && systemverilog_string_at(original, 1) == 0x03c0
-          && systemverilog_string_slice(original, 1, 2)
-              == "\xcf\x80\xf0\x9f\x98\x80",
-      "length, indexing, and inclusive slicing use code points");
+      systemverilog_string_length(original) == 7
+          && systemverilog_string_at(original, 1) == 0xcf
+          && systemverilog_string_at(original, 6) == 0x80
+          && systemverilog_string_slice(original, 1, 2) == "\xcf\x80",
+      "length, indexing, and inclusive slicing use stored bytes");
 
   auto replaced = original;
   systemverilog_string_replace(
       replaced, 1, 0x1f642, maximum_string_bytes);
   require(
-      replaced == "A\xf0\x9f\x99\x82\xf0\x9f\x98\x80"
-          && systemverilog_string_length(replaced) == 3,
-      "assignment replaces one complete code point transactionally");
-  const auto before_invalid = replaced;
-  require_throws<std::invalid_argument>(
-      [&] {
-        systemverilog_string_replace(
-            replaced, 1, 0xd800, maximum_string_bytes);
-      },
-      "surrogate replacement must reject");
-  require(
-      replaced == before_invalid,
-      "invalid replacement leaves the original string unchanged");
+      replaced == "AB\x80\xf0\x9f\x98\x80"
+          && systemverilog_string_length(replaced) == 7,
+      "assignment stores the low eight bits without changing length");
   auto bounded = std::string(maximum_string_bytes, 'a');
-  const auto before_expansion = bounded;
+  systemverilog_string_replace(
+      bounded, 0, 0x1f642, maximum_string_bytes);
+  require(
+      bounded.size() == maximum_string_bytes && bounded.front() == 'B',
+      "same-size byte replacement is valid at the resource bound");
+  auto oversized = std::string(maximum_string_bytes + 1, 'a');
+  const auto before_rejection = oversized;
   require_throws<std::length_error>(
       [&] {
         systemverilog_string_replace(
-            bounded, 0, 0x1f642, maximum_string_bytes);
+            oversized, 0, 'B', maximum_string_bytes);
       },
-      "expanding replacement must honor the byte resource bound");
+      "replacement rejects an already oversized string");
   require(
-      bounded == before_expansion,
+      oversized == before_rejection,
       "resource-rejected replacement leaves the original string unchanged");
 
   require(
-      systemverilog_string_compare("\xc3\xa9", "\xc4\x80") < 0
+      systemverilog_string_compare("\x7f", "\x80") < 0
+          && systemverilog_string_compare("\xff", "\x80") > 0
           && systemverilog_string_compare(original, original) == 0,
-      "comparison follows Unicode scalar order and exact equality");
-  require_throws<std::invalid_argument>(
-      [] { (void)systemverilog_string_length("\xc0\x80"); },
-      "overlong UTF-8 must reject");
-  require_throws<std::invalid_argument>(
-      [] { (void)systemverilog_string_length("\xed\xa0\x80"); },
-      "UTF-8 surrogate encoding must reject");
-  require_throws<std::invalid_argument>(
-      [] { (void)systemverilog_string_length("\xf4\x90\x80\x80"); },
-      "UTF-8 above U+10FFFF must reject");
-  require_throws<std::invalid_argument>(
-      [] { (void)systemverilog_string_length("\xe2\x82"); },
-      "truncated UTF-8 must reject");
+      "comparison follows unsigned byte order and exact equality");
+  const std::string arbitrary_bytes { "\xc0\x80\xed\xa0\x80\xe2\x82", 7 };
+  require(
+      systemverilog_string_length(arbitrary_bytes) == 7,
+      "all bounded eight-bit sequences are valid string values");
 
-  Interpreter invalid_interpreter;
-  Process invalid_process;
-  invalid_process.id = 0;
-  invalid_process.name = "invalid_utf8";
-  invalid_process.string_register_count = 1;
-  invalid_process.operations = {
+  Interpreter byte_interpreter;
+  Process byte_process;
+  byte_process.id = 0;
+  byte_process.name = "arbitrary_bytes";
+  byte_process.string_register_count = 1;
+  byte_process.debug_string_locals = {
+      DebugStringLocal { "bytes", 0, { } },
+  };
+  byte_process.operations = {
       LoadStringConstant{0, "\xc0\x80"}, Halt{}};
-  (void)invalid_interpreter.add_process(std::move(invalid_process));
-  require_throws<InterpreterError>(
-      [&] { (void)invalid_interpreter.run(); },
-      "interpreter string ingress rejects invalid UTF-8");
+  (void)byte_interpreter.add_process(std::move(byte_process));
+  require(
+      byte_interpreter.run().status == RunStatus::completed
+          && byte_interpreter.read_debug_string_local(0, 0) == "\xc0\x80",
+      "interpreter string ingress preserves arbitrary bytes");
 
   auto methods = original;
   require(
-      string_getc(methods, 2) == 0x1f600
+      string_getc(methods, 2) == 0x80
           && string_getc(methods, 99) == 0
-          && string_substr(methods, 1, 2)
-              == "\xcf\x80\xf0\x9f\x98\x80",
-      "getc and substr share code-point indexing");
+          && string_substr(methods, 1, 2) == "\xcf\x80",
+      "getc and substr share byte indexing");
   string_putc(methods, 0, 0x1f642);
   require(
-      methods == "\xf0\x9f\x99\x82\xcf\x80\xf0\x9f\x98\x80"
+      methods == "B\xcf\x80\xf0\x9f\x98\x80"
           && string_compare("A\xcf\x80", "a\xcf\x80", true) == 0
           && string_change_case("\xc3\xa9z", true) == "\xc3\xa9Z"
           && string_to_integer("12\xcf\x80", 10) == 12,
-      "method mutation, comparison, and conversion remain deterministic");
+      "method mutation, ASCII folding, and conversion use byte semantics");
 
   std::string real_source{"1_2.5"};
   const auto parsed_real = execute_string_method(

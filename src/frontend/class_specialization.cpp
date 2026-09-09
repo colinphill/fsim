@@ -170,47 +170,147 @@ void diagnose(
 [[nodiscard]] std::string type_identity(const Type& type) {
   const auto expression_identity =
       [](const auto& self, const Expression& expression) -> std::string {
-    if (expression.operands.empty()) {
-      return expression.text;
+    std::string retained = std::to_string(
+        static_cast<unsigned>(expression.kind));
+    retained += ':' + std::to_string(expression.text.size())
+        + ':' + expression.text;
+    retained += '[';
+    for (const auto& operand : expression.operands) {
+      const auto nested = self(self, operand);
+      retained += std::to_string(nested.size()) + ':' + nested;
     }
-    if (expression.operands.size() == 1U) {
-      return expression.text
-          + self(self, expression.operands.front());
-    }
-    std::string retained{"("};
-    for (std::size_t index = 0;
-         index < expression.operands.size(); ++index) {
-      if (index != 0U) retained += expression.text;
-      retained += self(self, expression.operands[index]);
-    }
-    retained += ')';
+    retained += ']';
     return retained;
   };
   std::ostringstream identity;
-  if (!type.systemverilog_class_declaration.empty()) {
-    identity << "class:" << type.systemverilog_class_declaration;
-  } else if (!type.named_type.empty()) {
-    identity << "named:" << type.named_type;
-  } else {
-    identity << "domain:" << static_cast<unsigned>(type.domain)
-             << ':' << type.spelling;
-  }
-  identity << ':' << (type.is_signed ? 's' : 'u');
-  if (!type.systemverilog_packed_dimensions.empty()) {
-    for (const auto& dimension :
-         type.systemverilog_packed_dimensions) {
-      identity << '['
-               << expression_identity(
-                      expression_identity, dimension.left)
-               << ':'
-               << expression_identity(
-                      expression_identity, dimension.right)
-               << ']';
+  const auto append_expression = [&](const Expression& expression) {
+    const auto retained = expression_identity(
+        expression_identity, expression);
+    identity << retained.size() << ':' << retained;
+  };
+  const auto append_range = [&](const std::optional<PackedRange>& range) {
+    if (!range) {
+      identity << "none";
+      return;
     }
-  } else if (type.packed_range) {
-    identity << '[' << type.packed_range->left
-             << ':' << type.packed_range->right << ']';
-  }
+    identity << range->left << ':' << range->right << ':'
+             << (range->descending ? 'd' : 'a');
+  };
+  const auto append_range_expression =
+      [&](const std::optional<PackedRangeExpression>& range) {
+        if (!range) {
+          identity << "none";
+          return;
+        }
+        append_expression(range->left);
+        identity << ':';
+        append_expression(range->right);
+        identity << ':';
+        if (range->descending) {
+          identity << (*range->descending ? 'd' : 'a');
+        } else {
+          identity << 'i';
+        }
+      };
+  const auto append_type = [&](const auto& self, const Type& current) -> void {
+    if (!current.nominal_type.empty()
+        && (current.packed_aggregate != PackedAggregateKind::None
+            || !current.enumeration_literals.empty())) {
+      identity << "nominal:" << current.nominal_type;
+      return;
+    }
+    if (is_systemverilog_simple_integral_type(current)) {
+      identity << "integral:" << static_cast<unsigned>(current.domain)
+               << ':' << current.width().value_or(0U) << ':'
+               << (current.is_signed ? 's' : 'u');
+      return;
+    }
+    if (current.domain == ValueDomain::Unknown
+        && !current.named_type.empty() && !current.width()) {
+      identity << "named:" << current.named_type;
+      return;
+    }
+    identity << "type:" << static_cast<unsigned>(current.domain)
+             << ':' << static_cast<unsigned>(current.systemverilog_scalar)
+             << ':' << (current.is_signed ? 's' : 'u')
+             << ':' << static_cast<unsigned>(current.packed_aggregate);
+    if (!current.systemverilog_class_declaration.empty()) {
+      identity << ":class=" << current.systemverilog_class_declaration;
+      for (const auto& actual :
+           current.systemverilog_class_parameter_actuals) {
+        identity << ":actual=";
+        if (actual.name) identity << *actual.name;
+        identity << '=';
+        if (actual.type_actual) {
+          identity << 't' << '{';
+          self(self, *actual.type_actual);
+          identity << '}';
+        } else {
+          identity << 'v';
+          append_expression(actual.value);
+        }
+      }
+    }
+    if (current.systemverilog_virtual_interface) {
+      identity << ":virtual-interface="
+               << current.systemverilog_interface_type << ':'
+               << current.systemverilog_interface_modport;
+    }
+    identity << ":range=";
+    append_range(current.packed_range);
+    identity << ":range-expression=";
+    append_range_expression(current.packed_range_expression);
+    for (const auto& dimension :
+         current.systemverilog_packed_dimensions) {
+      identity << ":dimension=";
+      append_range_expression(dimension);
+    }
+    for (std::size_t index = 0;
+         index < current.enumeration_literals.size(); ++index) {
+      identity << ":enum=" << current.enumeration_literals[index];
+      if (index < current.systemverilog_enumeration_values.size()) {
+        identity << '=';
+        append_expression(
+            current.systemverilog_enumeration_values[index]);
+      }
+    }
+    for (const auto& member : current.packed_members) {
+      identity << ":member=" << member.name << ':'
+               << static_cast<unsigned>(member.domain) << ':'
+               << (member.is_signed ? 's' : 'u') << ':'
+               << member.lsb_offset << ':';
+      append_range(member.packed_range);
+      identity << ':';
+      append_range_expression(member.packed_range_expression);
+      for (const auto& nested : member.nested_types) {
+        identity << '{';
+        self(self, nested);
+        identity << '}';
+      }
+    }
+    if (current.systemverilog_container) {
+      const auto& container = *current.systemverilog_container;
+      identity << ":container="
+               << static_cast<unsigned>(container.kind) << ':';
+      append_range(container.static_range);
+      for (const auto& dimension :
+           container.static_range_expressions) {
+        identity << ':';
+        append_range_expression(dimension);
+      }
+      if (container.associative_index_type) {
+        identity << ":index={";
+        self(self, *container.associative_index_type);
+        identity << '}';
+      }
+      for (const auto& element : container.element_types) {
+        identity << ":element={";
+        self(self, element);
+        identity << '}';
+      }
+    }
+  };
+  append_type(append_type, type);
   return identity.str();
 }
 
@@ -784,37 +884,79 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
       retained.source_dependencies.push_back(source);
     }
 
-    if (declaration.base
-        && !declaration.base->declaration_identity.empty()) {
-      const auto base = declarations.find(
-          declaration.base->declaration_identity);
-      if (base != declarations.end()) {
-        std::vector<Actual> base_actuals;
-        for (const auto& actual : declaration.base->parameter_actuals) {
-          Actual converted;
-          if (!actual.name.empty()) converted.name = actual.name;
-          converted.value = actual.value;
-          if (const auto value = evaluate(actual.value, values)) {
-            converted.value = Expression{
-                ExpressionKind::IntegerLiteral,
-                std::to_string(*value),
-                {},
-                actual.value.span};
-          }
-          if (actual.type_actual) {
-            auto type = *actual.type_actual;
-            if (const auto replacement = types.find(type.named_type);
-                replacement != types.end()) {
-              type = replacement->second;
-            }
-            converted.type_actual = std::make_shared<Type>(
-                specialize_type(std::move(type), values, types));
-          }
-          converted.span = actual.span;
-          base_actuals.push_back(std::move(converted));
+    const auto specialize_relation =
+        [&](const SystemVerilogClassBase& relation)
+            -> std::optional<std::string> {
+      const SystemVerilogClassDeclaration* related_declaration = nullptr;
+      if (!relation.declaration_identity.empty()) {
+        if (const auto related = declarations.find(
+                relation.declaration_identity);
+            related != declarations.end()) {
+          related_declaration = related->second;
         }
-        if (const auto base_identity = specialize(
-                *base->second, base_actuals, declaration.base->span)) {
+      } else if (const auto dependent = types.find(relation.name);
+                 dependent != types.end()
+                 && !dependent->second.systemverilog_class_declaration
+                         .empty()) {
+        if (const auto related = declarations.find(
+                dependent->second.systemverilog_class_declaration);
+            related != declarations.end()) {
+          related_declaration = related->second;
+        }
+      } else {
+        for (const auto& [candidate_identity, candidate] : declarations) {
+          (void)candidate_identity;
+          if (candidate->name != relation.name) continue;
+          if (related_declaration != nullptr
+              && related_declaration != candidate) {
+            related_declaration = nullptr;
+            break;
+          }
+          related_declaration = candidate;
+        }
+      }
+      if (related_declaration == nullptr) {
+        return std::nullopt;
+      }
+      std::vector<Actual> related_actuals;
+      for (const auto& actual : relation.parameter_actuals) {
+        Actual converted;
+        if (!actual.name.empty()) converted.name = actual.name;
+        converted.value = actual.value;
+        if (!actual.type_actual
+            && actual.value.kind == ExpressionKind::Identifier
+            && actual.value.operands.empty()
+            && types.contains(actual.value.text)) {
+          converted.type_actual = std::make_shared<Type>(
+              types.at(actual.value.text));
+        } else if (const auto value = evaluate(actual.value, values)) {
+          converted.value = Expression{
+              ExpressionKind::IntegerLiteral,
+              std::to_string(*value),
+              {},
+              actual.value.span};
+        }
+        if (actual.type_actual) {
+          auto actual_type = *actual.type_actual;
+          if (const auto replacement = types.find(
+                  actual_type.named_type);
+              replacement != types.end()) {
+            actual_type = replacement->second;
+          }
+          converted.type_actual = std::make_shared<Type>(
+              specialize_type(
+                  std::move(actual_type), values, types));
+        }
+        converted.span = actual.span;
+        related_actuals.push_back(std::move(converted));
+      }
+      return specialize(
+          *related_declaration, related_actuals, relation.span);
+    };
+
+    if (declaration.base) {
+      if (const auto base_identity = specialize_relation(
+              *declaration.base)) {
           retained.base_specialization_identity = *base_identity;
           const auto existing = materialized.find(*base_identity);
           if (existing != materialized.end()) {
@@ -832,8 +974,62 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
                 base_specialization.source_dependencies.begin(),
                 base_specialization.source_dependencies.end());
           }
-        }
       }
+    }
+    const auto retain_interface_relation =
+        [&](const SystemVerilogClassBase& relation) {
+          if (const auto interface_identity =
+                  specialize_relation(relation)) {
+            retained.interface_specialization_identities.push_back(
+                *interface_identity);
+          }
+        };
+    for (const auto& relation : declaration.extended_interfaces) {
+      retain_interface_relation(relation);
+    }
+    for (const auto& relation : declaration.implemented_interfaces) {
+      retain_interface_relation(relation);
+    }
+    std::map<std::string, std::string> inherited_interfaces;
+    std::set<std::string> visited_interface_specializations;
+    std::function<void(const std::string&)> collect_interface_specialization;
+    collect_interface_specialization = [&](const std::string& related_identity) {
+      if (!visited_interface_specializations.insert(
+              related_identity).second) {
+        return;
+      }
+      const auto related_index = materialized.find(related_identity);
+      if (related_index == materialized.end()) return;
+      const auto& related = result.specializations[related_index->second];
+      if (const auto [existing, inserted] = inherited_interfaces.emplace(
+              related.declaration_identity,
+              related.specialization_identity);
+          !inserted && existing->second != related.specialization_identity) {
+        diagnose(
+            result,
+            "FSIM-SV-CLASS-SPEC-012",
+            "class '" + specialization_identity
+                + "' inherits distinct specializations of interface class '"
+                + related.declaration_identity + "'",
+            reference_span);
+      }
+      if (!related.base_specialization_identity.empty()) {
+        collect_interface_specialization(
+            related.base_specialization_identity);
+      }
+      for (const auto& interface_identity :
+           related.interface_specialization_identities) {
+        collect_interface_specialization(interface_identity);
+      }
+    };
+    if (declaration.is_interface
+        && !retained.base_specialization_identity.empty()) {
+      collect_interface_specialization(
+          retained.base_specialization_identity);
+    }
+    for (const auto& interface_identity :
+         retained.interface_specialization_identities) {
+      collect_interface_specialization(interface_identity);
     }
 
     std::map<std::string, Type> aliases;
@@ -1020,7 +1216,10 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
       profile.kind = method.kind;
       profile.return_type = expand_type_aliases(
           method.return_type, {});
-      profile.lifetime = method.lifetime;
+      // Class methods always have per-invocation storage. The leading
+      // `static` class-member qualifier controls callability without an
+      // object; it does not grant static storage lifetime to method locals.
+      profile.lifetime = SystemVerilogClassLifetime::Automatic;
       profile.is_static = method.is_static;
       profile.is_virtual = method.is_virtual;
       profile.is_pure = method.is_pure;

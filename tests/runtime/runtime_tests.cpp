@@ -64,7 +64,7 @@ int main()
         test_systemverilog_scalar_text_and_time();
         test_systemverilog_scalar_execution_surfaces();
         test_systemverilog_chandle_registry();
-        test_systemverilog_unicode_strings();
+        test_systemverilog_byte_strings();
         test_vhdl_psl_attempt_engine();
         test_vhdl_psl_attempt_limits();
         test_scheduler_phase_order();

@@ -539,7 +539,8 @@ MixedCapture run_mixed(
     simulation.set_execution_point_hook(
         [&](fsim::runtime::Scheduler&,
             const fsim::runtime::simir::ExecutionPoint& point) {
-            if (point.language_standard.empty()) {
+            if (point.compatibility_profile
+                != "fsim-synopsys-ieee-compat-v2") {
                 return;
             }
             assert(point.language_standard == expected_standard->standard);

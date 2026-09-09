@@ -566,7 +566,7 @@ namespace {
             << "      --standard VERSION   Standard for direct source files\n"
             << "                           VHDL: 87/1987, 93/1993, 00/2000, 02/2002, 08/2008, 19/2019\n"
             << "                           Verilog: 95/1995, 01/2001, 2001-noconfig, 05/2005\n"
-            << "                           SystemVerilog: 05/2005, 09/2009, 12/2012, 17/2017\n"
+            << "                           SystemVerilog: 05/2005, 09/2009, 12/2012, 17/2017, 23/2023\n"
             << "      --compatibility NAME Explicit compatibility switch; repeatable\n"
             << "                           keyword-profile, implicit-net, port-connection, sizing,\n"
             << "                           lifetime, scheduler-assertion, configuration\n"

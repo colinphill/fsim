@@ -153,7 +153,7 @@ void Interpreter::Impl::execute(ProcessId id)
                 fail(process, "string index is negative");
             }
             if (word.aval >= size) {
-                fail(process, "string index is outside the code-point range");
+                fail(process, "string index is outside the byte range");
             }
             return static_cast<std::size_t>(word.aval);
         };
@@ -487,17 +487,17 @@ void Interpreter::Impl::execute(ProcessId id)
                     }
                     const auto index = known_string_index(
                         op.index, op.signed_index, size);
-                    std::uint32_t code_point { };
+                    std::uint32_t byte { };
                     try {
-                        code_point = systemverilog_string_at(source, index);
+                        byte = systemverilog_string_at(source, index);
                     } catch (const std::invalid_argument& error) {
                         fail(process, error.what());
                     }
                     get_register(process, op.destination) = PackedLogic4::from_aval_bval(
-                        32, code_point, 0);
+                        32, byte, 0);
                     ++process.pc;
                 } else if constexpr (
-                    std::is_same_v<OperationType, StringReplaceCodePoint>) {
+                    std::is_same_v<OperationType, StringReplaceByte>) {
                     auto& target = get_string_register(process, op.target);
                     std::size_t size { };
                     try {
@@ -507,14 +507,14 @@ void Interpreter::Impl::execute(ProcessId id)
                     }
                     const auto index = known_string_index(
                         op.index, op.signed_index, size);
-                    const auto code_point = get_register(process, op.source).low_word();
-                    if (code_point.bval != 0) {
-                        fail(process, "string replacement code point contains X or Z");
+                    const auto byte = get_register(process, op.source).low_word();
+                    if (byte.bval != 0) {
+                        fail(process, "string replacement byte contains X or Z");
                     }
                     try {
                         systemverilog_string_replace(
                             target, index,
-                            static_cast<std::uint32_t>(code_point.aval),
+                            static_cast<std::uint32_t>(byte.aval),
                             maximum_string_bytes);
                     } catch (const std::exception& error) {
                         fail(process, error.what());

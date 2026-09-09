@@ -246,7 +246,7 @@ struct StringOperationLowerer {
     void lower(const runtime::simir::CompareStrings& operation);
     void lower(const runtime::simir::StringLength& operation);
     void lower(const runtime::simir::StringIndex& operation);
-    void lower(const runtime::simir::StringReplaceCodePoint& operation);
+    void lower(const runtime::simir::StringReplaceByte& operation);
     void lower(const runtime::simir::StringDisplay& operation);
 
 private:

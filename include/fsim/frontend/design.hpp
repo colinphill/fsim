@@ -339,6 +339,7 @@ struct SystemVerilogClassDeclaration {
     std::string verilog_compatibility_profile { "none" };
     std::vector<ParameterDeclaration> parameters;
     std::optional<SystemVerilogClassBase> base;
+    std::vector<SystemVerilogClassBase> extended_interfaces;
     std::vector<SystemVerilogClassBase> implemented_interfaces;
     std::vector<TypeAliasDeclaration> type_aliases;
     std::vector<SystemVerilogClassProperty> properties;
@@ -1399,6 +1400,23 @@ struct SystemVerilogFsmPragma {
     SourceSpan span;
 };
 
+enum class SystemVerilogProcessRegion : std::uint8_t {
+    Active,
+    Reactive,
+};
+
+// Scheduling identity established by a SystemVerilog design-unit declaration.
+// Modules and interfaces own Active-region processes, while programs own
+// Reactive-region processes. Extern declarations retain the same identity as
+// their eventual body but remain non-elaboratable prototypes.
+struct SystemVerilogDesignSchedulingDeclaration {
+    SystemVerilogProcessRegion process_region {
+        SystemVerilogProcessRegion::Active
+    };
+    bool prototype { };
+    SourceSpan span;
+};
+
 // The implicit environment attached to every VHDL design unit. Keeping this
 // data on the owning unit avoids sharing a VHDL-2008 namespace with an older
 // source in a mixed-revision project and gives portable libraries an explicit
@@ -1450,6 +1468,8 @@ struct DesignUnit {
     // Extern module/interface/program declarations are prototypes and never
     // participate in top or instance target selection until matched to a body.
     bool systemverilog_extern { };
+    std::optional<SystemVerilogDesignSchedulingDeclaration>
+        systemverilog_scheduling_declaration;
     std::optional<SystemVerilogConfigurationDeclaration>
         systemverilog_configuration;
     std::vector<SystemVerilogBindDirective> systemverilog_binds;

@@ -987,6 +987,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-PP-050` | error | A macro replacement contains an unterminated conditional directive. |
 | `FSIM-SV-PP-051` | error | A special macro string contains a backtick that does not introduce an identifier. |
 | `FSIM-SV-PP-052` | error | A compiler directive, macro form, lexical token, or keyword region requires a later Verilog/SystemVerilog revision, or the selected revision belongs to the wrong language family. |
+| `FSIM-SV-PP-053` | error | A SystemVerilog-2023 conditional-compilation expression contains an unsupported operand or operator. |
 
 ### Verilog/SystemVerilog syntax
 
@@ -1257,6 +1258,9 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-PARSE-365` | error | A `wait_order` statement has no named event. |
 | `FSIM-SV-PARSE-366` | error | A `wait_order` event list is missing its closing parenthesis. |
 | `FSIM-SV-PARSE-367` | error | A `wait_order` success or failure action statement is missing. |
+| `FSIM-SV-PARSE-368` | error | A `ref static` task or function formal is used before the SystemVerilog-2023 profile. |
+| `FSIM-SV-PARSE-369` | error | Multiple interface-class inheritance is used before the SystemVerilog-2023 profile. |
+| `FSIM-SV-PARSE-370` | error | A streaming-concatenation or assignment-pattern target is used before the SystemVerilog-2023 profile. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -1523,6 +1527,11 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-SEM-242` | error | An ordinary packed union declares members with different widths. |
 | `FSIM-SV-SEM-243` | error | A `wait_order` operand is not a named-event identifier. |
 | `FSIM-SV-SEM-244` | error | An executable explicit/event covergroup sample uses a compound event or coverpoint expression outside the direct-owner-object execution slice. |
+| `FSIM-SV-SEM-245` | error | An interface class is nested inside another class. |
+| `FSIM-SV-SEM-246` | error | A function uses `fork...join_none` before the SystemVerilog-2023 profile. |
+| `FSIM-SV-SEM-247` | error | A return statement is nested in a `fork...join` branch. |
+| `FSIM-SV-SEM-248` | error | A task or function formal uses `const` without the required following `ref` direction. |
+| `FSIM-SV-SEM-249` | error | A task or function body assigns to a read-only `const ref` formal. |
 | `FSIM-SV-SEM-217` | error | A coverpoint or cross `weight`, `goal`, or `at_least` option is not a bounded integer in its permitted range. |
 | `FSIM-SV-SEM-218` | error | A covergroup-level weight, goal, `per_instance`, or `merge_instances` literal is outside its permitted bounded range. |
 | `FSIM-SV-SEM-219` | error | A covergroup constructor or sample formal uses a real, string, chandle, event, void, or other type outside the bounded integral coverage model. |
@@ -1550,13 +1559,21 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-CLASS-020` | error | A randomization mode call has invalid arity or selects no random property or constraint block. |
 | `FSIM-SV-CLASS-021` | error | A randomization mode call violates local or protected class-member access. |
 | `FSIM-SV-CLASS-INHERIT-001` | error | The class inheritance graph contains a cycle. |
-| `FSIM-SV-CLASS-INHERIT-002` | error | A class contains duplicate method profiles. |
+| `FSIM-SV-CLASS-INHERIT-002` | error | A class contains duplicate method names. |
 | `FSIM-SV-CLASS-INHERIT-003` | error | A concrete class contains a pure method declaration. |
-| `FSIM-SV-CLASS-INHERIT-004` | error | A final class method is not virtual. |
+| `FSIM-SV-CLASS-INHERIT-004` | error | A class method combines incompatible static, virtual, pure, or final qualifiers. |
 | `FSIM-SV-CLASS-INHERIT-005` | error | An `implements` selection does not name an interface class. |
 | `FSIM-SV-CLASS-INHERIT-006` | error | An overriding method has an incompatible result type, including a noncovariant class-handle result. |
 | `FSIM-SV-CLASS-INHERIT-007` | error | A class overrides an inherited final method. |
+| `FSIM-SV-CLASS-INHERIT-008` | error | A virtual override changes an inherited argument name, type, direction, reference qualifier, visibility, or static qualifier. |
 | `FSIM-SV-CLASS-INHERIT-009` | error | A concrete class leaves an inherited pure method unimplemented. |
+| `FSIM-SV-CLASS-INHERIT-010` | error | A class uses `extends` or `implements` with an incompatible class kind. |
+| `FSIM-SV-CLASS-INHERIT-011` | error | An interface class contains a member other than a parameter, type declaration, or public pure virtual method prototype. |
+| `FSIM-SV-CLASS-INHERIT-012` | error | A class leaves a multiple-interface method-name conflict unresolved. |
+| `FSIM-SV-CLASS-INHERIT-013` | error | A class leaves a multiple-interface type or parameter declaration-name conflict unresolved. |
+| `FSIM-SV-CLASS-INHERIT-014` | error | A class constructor has an explicit result type, an incompatible method qualifier, or a duplicate declaration. |
+| `FSIM-SV-CLASS-INHERIT-015` | error | A class method requests static storage lifetime rather than the required per-invocation automatic lifetime. |
+| `FSIM-SV-CLASS-INHERIT-016` | error | A base-constructor invocation is repeated, outside a constructor, nested, or not the constructor's first executable statement. |
 | `FSIM-SV-CLASS-SPEC-001` | error | A class parameter actual names no formal or exceeds the positional formal count. |
 | `FSIM-SV-CLASS-SPEC-002` | error | A class parameter formal receives more than one actual. |
 | `FSIM-SV-CLASS-SPEC-003` | error | A class type parameter receives a value rather than a data-type actual. |
@@ -1568,6 +1585,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-CLASS-SPEC-009` | error | A specialized class property has no finite materializable layout. |
 | `FSIM-SV-CLASS-SPEC-010` | error | A class instance layout exceeds host-addressable storage. |
 | `FSIM-SV-CLASS-SPEC-011` | error | The stable virtual-method slot domain is exhausted. |
+| `FSIM-SV-CLASS-SPEC-012` | error | One class inherits distinct specializations of the same interface class. |
 | `FSIM-ELAB-SVCLASS-001` | error | `null` has no executable contextual class-handle type. |
 | `FSIM-ELAB-SVCLASS-002` | error | A class allocation result is incompatible with its destination handle type. |
 | `FSIM-ELAB-SVCLASS-003` | error | A constructor actual has no executable packed width. |
@@ -1595,6 +1613,8 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-ELAB-CLOCK-005` | error | A procedural `##` cycle delay has no default clocking block. |
 | `FSIM-ELAB-CLOCK-006` | error | A `#1step` input skew has no concrete design-unit time precision. |
 | `FSIM-ELAB-CLOCK-007` | error | A modport clocking member is absent from its retained interface HIR. |
+| `FSIM-ELAB-CLOCK-008` | error | A clocking skew is not a known nonnegative elaboration-time constant after parameter and constant-function evaluation. |
+| `FSIM-ELAB-CLOCK-009` | error | A folded clocking skew exceeds the 64-bit simulation-time range. |
 | `FSIM-ELAB-SVRAND-001` | error | `std::randomize` has no arguments or appears outside SystemVerilog execution. |
 | `FSIM-ELAB-SVRAND-002` | error | A `std::randomize` argument is not a writable local identifier. |
 | `FSIM-ELAB-SVRAND-003` | error | A `std::randomize` argument is not a supported packed scalar local. |
@@ -1797,7 +1817,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-ELAB-104` | error | A random system function is used in an unsupported language or with an invalid argument count. |
 | `FSIM-ELAB-105` | error | Procedural assignment timing-control HIR has an inconsistent control kind, delay, or event payload. |
 | `FSIM-ELAB-106` | error | Procedural update metadata is inconsistent with its normalized expression or captured lvalue. |
-| `FSIM-ELAB-107` | error | A bounded fork appears inside a callable whose shared call frame cannot safely outlive the caller. |
+| `FSIM-ELAB-107` | error | A callable fork would escape its frame, or a SystemVerilog-2023 function background process originates outside procedural code rooted in an `initial` block. |
 | `FSIM-ELAB-108` | error | A postponed `$strobe` operand is not yet a direct packed-signal reference. |
 | `FSIM-ELAB-DRV-001` | error | An unresolved variable has multiple process drivers. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
@@ -1882,6 +1902,10 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-ELAB-SVSYNC-004` | error | A semaphore operation has an unsupported method or key-count argument profile. |
 | `FSIM-ELAB-SVLOOP-001` | error | A runtime procedural for-loop inline variable shadows an active local. |
 | `FSIM-ELAB-SVLOOP-002` | error | A runtime procedural for-loop condition is not executable as a packed truth value. |
+| `FSIM-ELAB-SVFOREACH-001` | error | An executable `foreach` loop does not have one named index over a supported string collection. |
+| `FSIM-ELAB-SVFOREACH-002` | error | String `foreach` iteration is used outside the exact SystemVerilog-2023 profile. |
+| `FSIM-ELAB-SVFOREACH-003` | error | A `foreach` index is not a fresh name distinct from the collection. |
+| `FSIM-ELAB-SVFOREACH-004` | error | A `foreach` loop body attempts to assign its implicit read-only index. |
 | `FSIM-ELAB-SVEVENT-001` | error | A packed event expression has no readable signal dependencies. |
 | `FSIM-ELAB-SVEVENT-002` | error | Packed event-expression HIR is mixed with another event or timeout. |
 | `FSIM-ELAB-SVEVENT-003` | error | A packed event expression does not have an executable width from 1 through 64 bits. |
@@ -1912,6 +1936,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-ELAB-SVFUNC-010` | error | Function actual association metadata is inconsistent, positional ordering is illegal, a name is unknown or duplicated, or a required actual/default is missing. |
 | `FSIM-ELAB-SVFUNC-011` | error | Malformed HIR presents a nonintegral writable function formal to the bounded execution path. |
 | `FSIM-ELAB-SVFUNC-012` | error | A bounded `ref` function actual is not a writable variable target or the function is not automatic. |
+| `FSIM-ELAB-SVFUNC-013` | error | A `ref static` function actual lacks static storage lifetime. |
 | `FSIM-ELAB-VHFUNC-001` | error | An interface-function generic has no retained profile in HIR. |
 | `FSIM-ELAB-VHFUNC-002` | error | An interface-function association or selected actual is not same-language VHDL. |
 | `FSIM-ELAB-VHFUNC-003` | error | An interface-function actual is not a simple visible function name. |
@@ -2065,6 +2090,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-ELAB-SVTASK-012` | error | Task actual association metadata is inconsistent, positional ordering is illegal, a name is unknown or duplicated, or a required actual/default is missing. |
 | `FSIM-ELAB-SVTASK-013` | error | A bounded `ref` task actual is not a writable variable target or the task is not automatic. |
 | `FSIM-ELAB-SVTASK-014` | error | A resolved covergroup sampling actual does not have a positive packed width representable by the runtime register ABI. |
+| `FSIM-ELAB-SVTASK-015` | error | A `ref static` task actual lacks static storage lifetime. |
 | `FSIM-ELAB-VHTYPE-001` | error | A bounded VHDL named type is not visible in the design unit where it is used. |
 | `FSIM-ELAB-VHTYPE-002` | error | Bounded VHDL named type aliases contain a cycle. |
 | `FSIM-ELAB-VHTYPE-003` | error | The same VHDL type name is directly visible from multiple packages. |
@@ -2447,6 +2473,12 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-ELAB-SVCAST-002` | error | A SystemVerilog cast names a type that is not visible. |
 | `FSIM-ELAB-SVCAST-003` | error | A SystemVerilog cast type has zero width or exceeds the host-addressable executable-width domain. |
 | `FSIM-ELAB-SVCAST-004` | error | Reserved non-emitting identity formerly used for four-state-to-two-state cast rejection. |
+| `FSIM-ELAB-SVCAST-005` | error | An assignment pattern relies on static-cast contextual typing before the SystemVerilog-2023 profile. |
+| `FSIM-ELAB-SVASSIGN-001` | error | A SystemVerilog-2023 nonblocking assignment targets an element of a dynamically sized array variable. |
+| `FSIM-ELAB-SVASSIGN-002` | error | An assignment-pattern target is empty, malformed, or contains a keyed association instead of positional lvalues. |
+| `FSIM-ELAB-SVSTREAM-001` | error | A streaming assignment target is malformed, uses the wrong language, or is nested inside another assignment target. |
+| `FSIM-ELAB-SVSTREAM-002` | error | The source of a streaming assignment contains fewer bits than its target requires. |
+| `FSIM-ELAB-SVTOLERANCE-001` | error | An inside tolerance range is used outside the exact SystemVerilog-2023 profile. |
 | `FSIM-ELAB-SVMDARRAY-001` | error | A multidimensional static-array access does not supply exactly one index per declared unpacked dimension. |
 | `FSIM-ELAB-SVMDARRAY-002` | error | A runtime multidimensional static-array index cannot lower to a signed 32-bit integral value. |
 | `FSIM-ELAB-SVMDARRAY-003` | error | A multidimensional static-array index is outside its declared range or cannot be flattened within the bounded capacity. |

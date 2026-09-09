@@ -13,6 +13,9 @@ starts on branch codex/v3 from clean v2 checkpoint
   warnings-as-errors Debug builds and tests. Change 20 alone owns clean full
   Debug and Release qualification, documentation, one implementation commit,
   and one push.
+- At Change 20, compile the clean Release configuration before running the
+  Debug suite. Resolve any Release compiler error first so the subsequent
+  Debug qualification applies to the final corrected tree.
 - Sanitizers and hosted Linux and Windows qualification run only at every
   tenth batch: Batch 180 and Batch 190. Release-closing Change 20s outside
   those boundaries do not add sanitizer or hosted-CI runs; they still own
@@ -4195,26 +4198,529 @@ starts on branch codex/v3 from clean v2 checkpoint
 
 ### Batch 185 - SystemVerilog-2023 frontend, data model, classes, and processes
 
-1. Build a private-reference-derived, independently worded 2017-to-2023 clause inventory.
-2. Add SystemVerilog-2023 enum, manifest, CLI, artifact, and cache identities.
-3. Implement keyword, tokenization, preprocessing, and lexical changes.
-4. Implement revised design-unit and scheduling declarations.
-5. Implement scalar, integral, literal, and type-system changes.
-6. Implement packed and unpacked aggregate changes.
-7. Implement string, event, handle, and dynamic-object changes.
-8. Implement class declaration and inheritance changes.
-9. Implement parameterized-class and specialization changes.
-10. Implement constructor, method, virtual, and lifetime changes.
-11. Implement process, fork/join, and process-control changes.
-12. Implement assignment and assignment-pattern changes.
-13. Implement streaming and aggregate assignment changes.
-14. Implement operator and expression changes.
-15. Implement procedural statement changes.
-16. Implement task, function, and argument changes.
-17. Implement clocking and interprocess synchronization changes.
-18. Prevent 2023 semantics from leaking into older profiles.
-19. Prove new forms through semantic, artifact, and cache round trips.
-20. Run standard batch closure and freeze the SystemVerilog-2023 core frontend.
+1. **Complete.** Built the independently worded 56-row SystemVerilog-2023
+   obligation ledger without copying reference text. Changes 2-19 in Batch 185
+   and Changes 1-19 in Batches 186-187 each own one active row spanning profile
+   identity, frontend and data semantics, classes and processes, verification,
+   hierarchy and timing, DPI/VPI and related standardized APIs, engine/artifact
+   integration, and final closure. Each row records only standard identities,
+   clause numbers, a project-authored obligation, and existing planned parser,
+   semantic, elaboration, runtime, evidence, and resource owners. The checker
+   freezes 56 unique IDs, domains, and closure assignments; validates every
+   repository owner; rejects private-reference tokens; and requires test,
+   authoring-contract, source-manifest, and resource-governance integration.
+   The initial ledger has 56 active and zero preserved rows at normalized
+   SHA-256
+   `99439b5a02b980aaabcb037757f09d6c2d490b5173193839cb97123733de5063`.
+   Adding the ledger and checker advances the deterministic source manifest to
+   1,795 paths at SHA-256
+   `817c592908e7bb0f0929d6f819bf14f13a08d19869f0abcbbd7ab15c17832174`.
+   Exact Clang warnings-as-errors Debug regeneration and relinking completes
+   with eight workers. The inventory, resource, source-package, and source-line
+   slice passes 4/4 in 6.16 seconds; `git diff --check` is clean. No Release,
+   clean-first, sanitizer, hosted-CI, commit, or push action ran.
+2. **Complete.** Appended SystemVerilog-2023 to the project and durable
+   frontend standard enums without renumbering retained identities. Manifest
+   spellings `23`, `2023`, `sv-23`, `sv-2023`, and
+   `systemverilog-2023` canonicalize to `2023`; CLI help advertises the short
+   and full spellings while SystemVerilog-2017 remains the default. The
+   frontend keeps one SystemVerilog language-family discriminator and carries
+   the exact 2023 revision separately through preprocessing, parsing, semantic
+   units, library/object serialization, design provenance, and VPI/TF profile
+   routing. Portable-unit validation accepts the appended value while retaining
+   the v3 schema's direct rejection of v2 inputs. Elaborated SystemVerilog
+   processes now carry their exact standard and compatibility profile, making
+   native object cache keys distinguish 2017 from 2023. Project alias,
+   frontend identity, portable-library round-trip, and cold/warm native-cache
+   tests freeze the behavior. S23-B185-C02 is preserved, leaving 55 active and
+   one preserved row at normalized SHA-256
+   `04a14f353c734e6ea985a0f4b014f7bff9fb2d6a4759180990aaff512d3a0c6f`.
+   Exact Clang warnings-as-errors Debug project, frontend, library, LLVM,
+   elaboration, CLI, application, TF, and VPI targets build with eight workers.
+   The focused functional/governance slice passes 10/10 in 30.88 seconds, and
+   direct CLI help verification passes. No Release, clean-first, sanitizer,
+   hosted-CI, commit, or push action ran.
+3. **Complete.** Added an explicit 2023 keyword-set identity and rank while
+   retaining the 2012/2017 reserved-word membership where the 2023 edition
+   introduces no additional reserved word. `begin_keywords` accepts
+   `1800-2023` only when the selected compilation profile is 2023 or later;
+   selecting it inside a 2017 source fails at the directive coordinate with
+   the established later-keyword-profile diagnostic. Nested older keyword
+   regions continue to restore their exact enclosing set. Preprocessing and
+   parser construction both preserve the appended standard revision while
+   continuing to tokenize through the common SystemVerilog language family.
+   Parenthesized 2023 conditional-compilation expressions now accept nested
+   macro identifiers with `!`, `&&`, `||`, `->`, and `<->` for `ifdef and `elsif,
+   both at source scope and inside multiline macro replacement bodies. Bare
+   identifier behavior is unchanged, older profiles reject the Boolean form,
+   malformed expressions receive a stable diagnostic, and the preprocessor's
+   standard rank now orders 2023 after 2017 instead of falling through to the
+   oldest rank. Focused positive and negative tests cover direct 2023 parsing,
+   explicit 2023 keyword regions, source and replacement-body Boolean
+   conditions, malformed expressions, and 2017 rejection. S23-B185-C03 is preserved,
+   leaving 54 active and two preserved rows at normalized SHA-256
+   `3cc0237c3a729095aa5ef65eeaf7a54399cb26d8bc6adca8392d2acbf1f49511`.
+   Exact Clang warnings-as-errors Debug frontend targets build with eight
+   workers. The frontend, inventory, resource, source-package, and source-line
+   slice passes 5/5 in 6.04 seconds. No Release, clean-first, sanitizer,
+   hosted-CI, commit, or push action ran.
+4. **Complete.** Added an explicit SystemVerilog design-unit scheduling
+   declaration to the frontend model. Parsed modules and interfaces retain
+   Active-region ownership, parsed programs retain Reactive-region ownership,
+   and extern declarations retain prototype status and their declaration
+   coordinate. Verilog units do not acquire SystemVerilog scheduling metadata.
+   Portable-unit decoding bounds the new enum and rejects language, unit-kind,
+   region, or prototype inconsistencies transactionally. Elaboration consumes
+   the retained region when assigning program ownership, with a unit-kind
+   fallback only for existing handcrafted frontend objects. Runtime process
+   scheduling now uses one constexpr mapping for Active, Observed, Reactive,
+   and Postponed ownership instead of five duplicated ternaries, without
+   changing the established event-region order. A SystemVerilog-2023
+   application witness checks module, interface, and program declarations,
+   then elaborates module and program roots to prove Active versus Reactive
+   process ownership. S23-B185-C04 is preserved, leaving 53 active and three
+   preserved rows at normalized SHA-256
+   `de9138c7c5a0bf6be78cde75f516df87e466b8dd110ca71f729f0f635f3686e8`.
+   The exact Clang warnings-as-errors Debug application target and its 792-step
+   dependency rebuild complete with eight workers. The application, inventory,
+   resource, source-package, and source-line slice passes 5/5 in 6.23 seconds.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+5. **Complete.** Centralized the nine built-in SystemVerilog integral types in
+   one descriptor table carrying their exact two-state/four-state domain,
+   default or fixed width, signedness, and `time` scalar identity. Net/object
+   declarations and parameter/type parsing now consume that same table rather
+   than maintaining divergent cases. Resolved non-nominal simple integral
+   types compare structurally by domain, width, and signedness, so equivalent
+   spellings such as `byte` and `bit signed [7:0]`, opposite range directions,
+   `int` and a signed 32-bit two-state vector, `integer` and a signed 32-bit
+   four-state vector, and `time` and an unsigned 64-bit four-state vector agree.
+   Enums, packed aggregates, containers, unresolved aliases, classes,
+   interfaces, real types, and handles remain outside that equivalence rule.
+   The same rule governs callable profiles. A direct 2023 frontend witness
+   freezes every descriptor, elaboration type operators freeze structural and
+   nominal boundaries, and the interpreter plus compiled O0/O2 application
+   witness proves X/Z collapse in two-state storage while four-state storage
+   retains them. S23-B185-C05 is preserved, leaving 52 active and four
+   preserved rows at normalized SHA-256
+   `a54e6b3e74e80b717c78b402c0d169aa4c387ffb2ba0bcca894e01ced8d73499`.
+   Exact Clang warnings-as-errors Debug frontend, elaboration, and merged
+   application targets build with eight workers. The three focused functional
+   tests pass. Moving the parameter witness into its own source brings the
+   prior 2,504-line declaration test down to 1,617 lines and leaves the new
+   focused file at 914 lines. The additional source advances the deterministic
+   source manifest to 1,796 paths at SHA-256
+   `9c1ce4b07aa47c56a0da800bad811171affcfb28f310812c380f15e7980369a9`.
+   The inventory, resource, source-package, and source-line gates then pass. No
+   Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+6. **Complete.** Consolidated SystemVerilog type equivalence into one recursive
+   frontend rule shared by expression type operators and callable-profile
+   conformance. Typedef aggregates and enums retain nominal identity, while
+   anonymous packed and unpacked aggregates compare their kind, member names,
+   representation, nested member types, packed dimensions, container bounds,
+   element types, and associative index types without admitting source spans
+   or initializers into type identity. This removes the prior shallow
+   width/spelling callable comparison and the duplicated elaboration-only
+   aggregate comparator. A direct 2023 frontend witness distinguishes matching
+   anonymous structures from member and bound mismatches. The application
+   witness now copies structurally matching anonymous packed structures and
+   arrays of unpacked structures, selects nested members, and proves anonymous
+   structural equality and inequality under both interpreter and compiled O0;
+   the retained multidimensional corpus continues to exercise compiled O2,
+   assignment patterns, unions, selections, and nested containers. S23-B185-C06
+   is preserved, leaving 51 active and five preserved rows at normalized
+   SHA-256
+   `f25bee00314bc72f88a9333100c730683d9c46664777f4803adf7522cbf1e08d`.
+   Exact Clang warnings-as-errors Debug frontend and merged application targets
+   build with eight workers. The frontend, aggregate application, inventory,
+   resource, source-package, and source-line slice passes 6/6 in 7.18 seconds.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+7. **Complete.** Corrected the string model to the language-defined ordered
+   sequence of eight-bit characters rather than interpreting stored bytes as
+   Unicode scalar values. Length, indexing, inclusive slicing, case-insensitive
+   comparison, numeric conversion, indexed assignment, and `getc`/`putc` now
+   operate directly on unsigned bytes; mutation stores the low eight bits and
+   preserves string length. This removes UTF-8 rejection and transient decoded
+   vectors, so arbitrary bounded byte sequences survive interpreter, compiled,
+   DPI, container-element, and associative-key paths. Renaming the shared
+   SimIR/JIT mutation operation to `StringReplaceByte` also gives the corrected
+   lowering an explicit native-cache identity. The 2023 container witness now
+   proves independent dynamic-array assignment, self-resizing initialization,
+   deletion lifetime, and source preservation. The retained 2023 aggregate
+   corpus covers copied chandle values, while the named-event corpus now runs
+   under the 2023 profile and preserves event alias, null, trigger, scheduling,
+   interpreter, and compiled behavior. S23-B185-C07 is preserved, leaving 50
+   active and six preserved rows at normalized SHA-256
+   `101bc55af062dde949e089574c64d019b60726c901f3df9a5264debff845999e`.
+   Exact Clang warnings-as-errors Debug runtime, LLVM, and merged application
+   targets build with eight workers. The runtime, LLVM, mutable-string,
+   container, named-event, aggregate, inventory, resource, source-package, and
+   source-line slice passes 10/10 in 24.67 seconds. The source manifest remains
+   1,796 paths at SHA-256
+   `9c1ce4b07aa47c56a0da800bad811171affcfb28f310812c380f15e7980369a9`.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+8. **Complete.** Added explicit multiple-interface inheritance to interface
+   classes while retaining a single ordinary class base and the existing
+   `implements` list. Interface bodies now preserve parameter declarations,
+   reject nested interface classes, and enforce the permitted type,
+   parameter, and public pure-virtual prototype surface. Inheritance validation
+   rejects incompatible `extends`/`implements` class kinds, duplicate method
+   names, invalid static/virtual/pure/final combinations, and overrides that
+   change argument names, types, directions, reference qualifiers, visibility,
+   static qualification, or non-covariant result types. Multiple-interface
+   method, type, and parameter conflicts require a local resolving declaration;
+   diamond paths to the same declaration remain unambiguous. Class resolution,
+   cycle detection, type-actual resolution, pure-method fulfillment, and
+   artifact/runtime integration traverse the expanded interface graph. The
+   independently authored application witness runs a concrete implementation
+   of a three-interface graph under the 2023 profile through interpreter,
+   compiled O0/O2, native cache, object/design artifacts, and relocated-library
+   loading. S23-B185-C08 is preserved, leaving 49 active and seven preserved
+   rows at normalized SHA-256
+   `8cfa14332f7120468b50636bcdb474aaea3a705785619dfdfaf6de8acabe20b6`.
+   Exact Clang warnings-as-errors Debug frontend and merged application targets
+   build with eight workers. The focused frontend, class application,
+   inventory, resource, source-package, and source-line gates pass. No Release,
+   clean-first, sanitizer, hosted-CI, commit, or push action ran.
+9. **Complete.** Made parameterized class identity recursive and
+   representation-aware. Equivalent built-in integral actuals such as `logic`
+   and `reg` now select one specialization, while two-state/four-state,
+   aggregate-member, container-bound, nested class-actual, and value-expression
+   differences remain distinct. Class-handle type equivalence now includes
+   every type/value actual instead of comparing only the generic declaration.
+   Base and interface relation actuals substitute the enclosing value/type
+   environment, including a dependent base selected through a type parameter.
+   Every direct interface-specialization edge is retained explicitly, diamond
+   paths to the same specialization coalesce, and paths to distinct
+   specializations of one interface class reject transactionally. Standalone
+   class-state schema 12 persists and validates those edges. Independently
+   authored frontend positives/negatives cover canonical and conflicting
+   parameterized diamonds; the 2023 application witnesses preserve equivalent
+   identities across interpreter, compiled O0/O2, native-cache rebuilds, class
+   artifacts, and relocated libraries. S23-B185-C09 is preserved, leaving 48
+   active and eight preserved rows at normalized SHA-256
+   `58fe41bbd69cf872a1523fc44eaae51c4deec6c2bd65cad9b23a5f28ff51052c`.
+   Exact Clang warnings-as-errors Debug frontend and application targets build
+   with eight workers. The focused functional, artifact-schema, inventory,
+   resource, source-package, and source-line gates pass. No Release,
+   clean-first, sanitizer, hosted-CI, commit, or push action ran.
+10. **Complete.** Tightened class callable semantics around the constructor and
+    automatic-frame contract. Each class can declare at most one constructor;
+    constructors reject an explicit result type and incompatible static,
+    virtual, pure, or final method qualifiers. An explicit base-constructor
+    invocation must occur exactly once, directly as the constructor's first
+    executable statement; repeated, nested, late, and non-constructor uses
+    reject with stable diagnostics. Static class-member methods remain callable
+    without an object but, like instance methods and constructors, materialize
+    an automatic per-invocation frame. Explicit `function static` or `task
+    static` storage lifetime inside a class now rejects, and the obsolete
+    simulation-owned maps that retained such locals across calls are removed.
+    Class specialization resolves inherited and explicit-automatic source forms
+    to one exact Automatic profile identity, while standalone class artifacts
+    reject any nonautomatic callable profile. The independently authored
+    application witness proves base-before-derived construction, virtual
+    override dispatch, recursive automatic calls, fresh integral/string/wide
+    local state on repeated calls, static-member access, interpreter, compiled,
+    Debug, native-cache, and artifact behavior. S23-B185-C10 is preserved,
+    leaving 47 active and nine preserved rows at normalized SHA-256
+    `c1bd1097a8b7ef842c1a8d9691692f045b4292c8918e27164e4773b4692fb652`.
+    Exact Clang warnings-as-errors Debug frontend and application targets build
+    with eight workers. The focused frontend, class application,
+    artifact-phase, nested-schema, inventory, resource, source-package, and
+    source-line slice passes 8/8 in 4.40 seconds. The source manifest remains
+    1,796 paths at SHA-256
+    `9c1ce4b07aa47c56a0da800bad811171affcfb28f310812c380f15e7980369a9`.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+11. **Complete.** Implemented the SystemVerilog-2023 function-background
+    process rule without extending it into older profiles or nonprocedural
+    origins. A function may execute `fork...join_none` only when its calling
+    process is procedural code rooted in an `initial` block; the spawned
+    branch may contain task-legal timing controls while the function itself
+    still returns in the same simulation time. Older profiles diagnose the
+    form, non-`initial` origins reject during lowering, and every `return`
+    nested in a fork branch rejects independently of join kind.
+
+    Automatic function activations that escape now own a bounded, shared
+    callable-register context. Spawned siblings share that one activation,
+    overlapping calls retain distinct contexts, recursive/nested contexts are
+    restored from outermost to innermost, and active inner frames shield outer
+    values during suspension. The scheduler swaps only captured packed,
+    string, and container registers at existing SimIR boundaries, so ordinary
+    module/process storage remains shared and LLVM fork children stay compiled;
+    no whole process-frame or whole-container snapshot was introduced. Normal
+    completion and kill release each terminated process's ownership promptly.
+
+    Independently authored positive and negative witnesses cover two
+    overlapping automatic activations, delayed background branches, legacy
+    rejection, non-`initial` rejection, illegal forked return, interpreter,
+    compiled LLVM O0/O2 cold and warm execution, cache reuse, Debug observation,
+    and unchanged fork/process lifecycle behavior. The dedicated callable
+    context translation unit keeps `simir_execution.cpp` beneath its hard line
+    ceiling. S23-B185-C11 is preserved, leaving 46 active and ten preserved
+    rows at normalized SHA-256
+    `5af437644431606439ac2acce0f39e2062804328b9bbba322806822cd5a4ded6`.
+    The deterministic source manifest now has 1,797 paths at SHA-256
+    `d2e888f0152c9d216a39c20c594e2fcd509833852ad7de7a29cc23d04b022d97`.
+    Exact Clang warnings-as-errors Debug frontend, elaboration, runtime, and
+    application targets build with eight workers. The focused frontend,
+    elaboration, fork application, runtime, inventory, resource,
+    source-package, and source-line slice passes 8/8. No Release, clean-first,
+    sanitizer, hosted-CI, commit, or push action ran.
+12. **Complete.** Implement assignment and assignment-pattern changes.
+
+    Static casts are assignment-like contexts for untyped assignment patterns
+    only in the exact 2023 profile; retained profiles reject that semantic leak
+    with `FSIM-ELAB-SVCAST-005`. SystemVerilog-2023 also rejects nonblocking
+    writes to elements of dynamically sized array variables with
+    `FSIM-ELAB-SVASSIGN-001`. Retained profiles continue to support their
+    prior indexed-container extension, now with correct NBA semantics: the
+    index and value are captured in the active phase and only the element
+    update is published in the update phase. This avoids whole-container
+    snapshots and uses the same scheduler operation for interpreted and LLVM
+    execution. Existing generated procedural-continuous drivers continue to
+    re-evaluate their right-hand side when dependencies change.
+
+    Independently authored witnesses cover 2023 contextual pattern casts,
+    retained-profile rejection, procedural-continuous re-evaluation,
+    dynamically sized-array NBA capture and deferred visibility, 2023
+    rejection, and interpreter/LLVM O0/O2 equivalence. S23-B185-C12 is
+    preserved, leaving 45 active and eleven preserved rows at normalized
+    SHA-256
+    `96136b33d90f67592e85d6f60e2eef4618282590402408fbf30bab97287aa5b6`.
+    The deterministic source manifest remains at 1,797 paths with SHA-256
+    `d2e888f0152c9d216a39c20c594e2fcd509833852ad7de7a29cc23d04b022d97`.
+    Exact Clang warnings-as-errors Debug runtime and application targets build
+    with eight workers, and the focused runtime, conformance, inventory,
+    resource, source-package, and source-line slice passes 6/6. No Release,
+    clean-first, sanitizer, hosted-CI, commit, or push action ran.
+13. **Complete.** Implement streaming and aggregate assignment changes.
+
+    Streaming concatenations now operate as first-class assignment targets.
+    The unpack path validates a positive constant slice, consumes the required
+    most-significant source bits, diagnoses an undersized source, applies the
+    selected block order, and then publishes each target through the existing
+    concatenated-assignment machinery. Positional assignment patterns now
+    deconstruct into lvalues using the same ordered path; empty, keyed,
+    malformed, and illegally nested streaming targets reject before any write.
+    Dynamic target indices remain captured once before source evaluation, and
+    blocking/nonblocking timing continues to be owned by the existing
+    transactional assignment lowering.
+
+    Independently authored witnesses cover left-stream byte ordering,
+    right-stream unpack from an oversized source, positional pattern
+    deconstruction, undersized-source rejection, keyed-target rejection, and
+    interpreter/LLVM O0/O2 equivalence. S23-B185-C13 is preserved, leaving 44
+    active and twelve preserved rows at normalized SHA-256
+    `c2a23ca42cda4bfb196890080885cb67753258c5ad329f4425ebe0d64662b79e`.
+    The deterministic source manifest remains at 1,797 paths with SHA-256
+    `d2e888f0152c9d216a39c20c594e2fcd509833852ad7de7a29cc23d04b022d97`.
+    Exact Clang warnings-as-errors Debug application compilation uses eight
+    workers; the focused conformance, inventory, resource, source-package, and
+    source-line slice passes. No Release, clean-first, sanitizer, hosted-CI,
+    commit, or push action ran.
+14. **Complete.** Implement operator and expression changes.
+
+    The exact 2023 profile now recognizes absolute and relative tolerance
+    tokens in `inside` ranges. The HIR keeps the two forms distinct. Lowering
+    evaluates the center and tolerance once, converts the tolerance to the
+    center width, computes absolute or percentage-derived bounds, and tests
+    both bound orders so negative tolerances, negative centers, and wrapped
+    fixed-width bounds retain ordered-range behavior. Relative integral
+    tolerances use a widened multiply/divide intermediate before truncation
+    back to the center type. Older profiles reject both tokens at parse time,
+    and direct non-2023 HIR rejects again during lowering.
+
+    Independently authored witnesses cover inclusive and exclusive absolute
+    boundaries, positive and negative relative ranges, exact-profile
+    rejection, and interpreter/LLVM O0/O2 equivalence. The diagnostic catalog
+    also now records the pre-existing 2023 conditional-compilation expression
+    diagnostic introduced by Change 3. S23-B185-C14 is preserved, leaving 43
+    active and thirteen preserved rows at normalized SHA-256
+    `a5145e9a395419ccf7bdc1ef08b515e521a01b8df9013bf22fc33f6e62e9bc2d`.
+    The deterministic source manifest remains at 1,797 paths with SHA-256
+    `d2e888f0152c9d216a39c20c594e2fcd509833852ad7de7a29cc23d04b022d97`.
+    Exact Clang warnings-as-errors Debug frontend and application targets build
+    with eight workers. The focused frontend, conformance, diagnostic,
+    inventory, resource, source-package, and source-line slice passes after
+    catalog repair. No Release, clean-first, sanitizer, hosted-CI, commit, or
+    push action ran.
+15. **Complete.** Implement procedural statement changes.
+
+    The exact 2023 profile now executes `foreach` over a string as an ordered
+    one-dimensional byte collection. Lowering evaluates the collection and
+    captures its length once before entering the loop, creates a fresh signed
+    implicit index, tests the bound before each iteration, and routes
+    `continue` through the increment while routing `break` directly to the
+    loop exit. The implicit index is read-only, must be distinct from its
+    collection, and is removed from the enclosing local environment after the
+    loop. Unsupported shapes and unnamed or multiple indices reject before
+    emitting partial control flow; retained profiles reject string iteration
+    explicitly instead of accepting 2023 behavior.
+
+    The independent application witness covers byte indexing, skipped and
+    terminating iterations, interpreter and LLVM O0/O2 equivalence, older
+    profile rejection, unsupported index cardinality, and read-only-index
+    enforcement. Focused qualification also exposed and repaired two
+    accumulated defects before freezing this change: apostrophe-led positional
+    assignment-pattern statements now reach the Change 13 parser path, and
+    associative-array writes remain on their insertion-capable container path
+    rather than the Change 12 direct existing-element path. S23-B185-C15 is
+    preserved, leaving 42 active and fourteen preserved rows at normalized
+    SHA-256
+    `77fbc15f63dea96824e2c131f4f6f53c56c712e165781e493e89a2d792897410`.
+    The deterministic source manifest remains at 1,797 paths with SHA-256
+    `d2e888f0152c9d216a39c20c594e2fcd509833852ad7de7a29cc23d04b022d97`.
+    Exact Clang warnings-as-errors Debug application and dependency targets
+    build with eight workers. The frontend, elaboration, runtime, conformance,
+    diagnostic, inventory, resource, source-package, and source-line slice
+    passes 9/9. No Release, clean-first, sanitizer, hosted-CI, commit, or push
+    action ran.
+16. **Complete.** Implement task, function, and argument changes.
+
+    SystemVerilog-2023 task and function formals now retain `const ref` and
+    `ref static` as independent semantic properties. An omitted direction
+    inherits the complete preceding direction, reference, const, and static
+    profile rather than only its data type. `const ref` is input-only and
+    assignments to it reject during frontend validation; ordinary `ref`
+    remains writable. The new `static` qualifier is accepted only in the exact
+    2023 profile. At each call, a static reference accepts module/process
+    static storage or another `ref static` formal and rejects automatic
+    callable locals, VHDL procedure storage, string elements, and dynamic
+    container elements before any partial call is emitted. Function and task
+    pass-through calls exercise that lifetime decision rather than merely
+    parsing it.
+
+    Class method profile comparison includes both new qualifiers, and class
+    tasks preserve them when converted to executable callable declarations.
+    Portable owning-unit schema 28 serializes both fields for functions and
+    tasks and directly rejects schema 27; the serialized frontend state also
+    participates in the established object and native-cache identities.
+    Independently authored frontend and application witnesses cover qualifier
+    inheritance, const read-only enforcement, 2017 rejection, automatic-local
+    rejection, static-formal pass-through, interpreter execution, compiled
+    LLVM O0/O2 equivalence, and portable round trips. S23-B185-C16 is
+    preserved, leaving 41 active and fifteen preserved rows at normalized
+    SHA-256
+    `ec0fb360b82f4d86883993e409cae6b5f109aff80e27af5e09fe69b8ef822d90`.
+    The deterministic source manifest remains at 1,797 paths with SHA-256
+    `d2e888f0152c9d216a39c20c594e2fcd509833852ad7de7a29cc23d04b022d97`.
+    Exact Clang warnings-as-errors Debug frontend, library, and application
+    targets build with eight workers. The frontend, library artifact,
+    conformance, diagnostic, inventory, resource, source-package, and
+    source-line slice passes 8/8. No Release, clean-first, sanitizer,
+    hosted-CI, commit, or push action ran.
+17. **Complete.** Implement clocking and interprocess synchronization changes.
+
+    Clocking-block input and output skews now participate in automatic project
+    time-resolution discovery and in the single normalization pass used by all
+    executable delays. Parameter substitution reaches every default and
+    member skew before elaboration; each residual expression must fold to a
+    known nonnegative constant, and multiplication by its normalized time unit
+    is checked against the 64-bit simulation-time limit. A clocking-cycle wait
+    in module code now crosses from the raw event wakeup into the Reactive
+    region after Observed-region sampling, matching the already-reactive
+    program path. The clocking-block event alias remains an internal lowering
+    name rather than colliding with the public VPI hierarchy.
+
+    Counting semaphores now retain a signed initial key balance. Zero-key
+    `get`, `try_get`, and `put` operations complete without changing the
+    balance; negative operation counts reject; queued positive requests keep
+    FIFO ordering; and key return uses checked signed arithmetic. Mailbox FIFO
+    behavior remains covered by the same interpreter and compiled matrix. The
+    independently authored application witness exercises parameter-derived
+    input/output skews, delayed sampling and driving, module-region handoff,
+    invalid dynamic skews, signed and zero-count semaphores, 2017/2023
+    profiles, interpreter execution, compiled LLVM O0/O2, cold/warm cache
+    reuse, and runtime-state round trips. S23-B185-C17 is preserved, leaving
+    40 active and sixteen preserved rows at normalized SHA-256
+    `0f1cb80eee9c1da6bcf3f1559594c973fcdff2e7f75a992aa1802470e07834b4`.
+    The deterministic source manifest remains at 1,797 paths with SHA-256
+    `d2e888f0152c9d216a39c20c594e2fcd509833852ad7de7a29cc23d04b022d97`.
+    Exact Clang warnings-as-errors Debug runtime and application targets build
+    with eight workers. The runtime, synchronization, time, diagnostic,
+    inventory, resource, source-package, and source-line slice passes 8/8. No
+    Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+18. **Complete.** Prevent 2023 semantics from leaking into older profiles.
+
+    Multiple interface-class inheritance, streaming-concatenation assignment
+    targets, and assignment-pattern targets now require the exact 2023
+    profile, with stable parse diagnostics. Existing gates for tolerance
+    ranges, `ref static` formals, and function-spawned background processes
+    remain exact-profile checks. Conversely, the 2023 constant-expression
+    requirement for clocking skews is explicitly confined to 2023, preserving
+    the established 2017 acceptance of dynamic skews instead of accidentally
+    narrowing the retained profile.
+
+    One paired profile-differential frontend witness parses each revised form
+    under both 2017 and 2023 and also freezes a positive 2017 baseline. Focused
+    qualification exposed five older tests whose filenames claimed 2023 while
+    their parser helper silently selected 2017; those tests now request the
+    exact 2023 revision and therefore exercise the intended contract. The
+    application witness separately proves that a dynamic clocking skew still
+    builds under 2017 while 2023 rejects it with the established elaboration
+    diagnostic. S23-B185-C18 is preserved, leaving 39 active and seventeen
+    preserved rows at normalized SHA-256
+    `ca8c7655aff39a3645a8ba60fd2d78260163ac3c2bff5594459718ca13a30ebe`.
+    The deterministic source manifest remains at 1,797 paths with SHA-256
+    `d2e888f0152c9d216a39c20c594e2fcd509833852ad7de7a29cc23d04b022d97`.
+    Exact Clang warnings-as-errors Debug frontend and application targets build
+    with eight workers. The frontend, synchronization, diagnostic, inventory,
+    resource, source-package, and source-line slice passes 7/7. No Release,
+    clean-first, sanitizer, hosted-CI, commit, or push action ran.
+19. **Complete.** Prove new forms through semantic, artifact, and cache round
+    trips.
+
+    One independently authored exact-2023 design combines multiple
+    interface-class inheritance, a concrete implementation, nominal packed
+    data and pattern casting, streaming and assignment-pattern targets,
+    tolerance ranges, string `foreach`, `ref static` callables, a
+    function-spawned background process, and a clocking block. The test first
+    compiles the design to a v3 `.fsimobj`, reloads its portable semantic
+    units and class declarations, elaborates a v3 `.fsimdesign`, and verifies
+    exact 2023 object metadata, unit revisions, design provenance, and class
+    specialization identity.
+
+    The producer source and object are then hidden. Interpreter and compiled
+    LLVM O2 execution load only the design artifact and produce the same
+    result and specialization-cache identities. The first compiled run stores
+    each miss, the warm run serves every compiled process from cache, and a
+    relocated design reuses those same entries. Mutated prior object portable-
+    schema and design-format headers reject transactionally with the stable v3
+    artifact diagnostics. S23-B185-C19 is preserved, leaving 38 active and
+    eighteen preserved rows at normalized SHA-256
+    `f9563a7227c58207c6414804756c22376cbb8e4038ec9e8dd2c34dcd0ac82aeb`.
+    The source manifest remains at 1,797 paths with SHA-256
+    `d2e888f0152c9d216a39c20c594e2fcd509833852ad7de7a29cc23d04b022d97`.
+    Exact Clang warnings-as-errors Debug application, library, object, and
+    design-artifact targets build with eight workers. The application,
+    library, object, design, diagnostic, inventory, resource, source-package,
+    and source-line slice passes 9/9. No Release, clean-first, sanitizer,
+    hosted-CI, commit, or push action ran.
+20. **Complete.** Closed the SystemVerilog-2023 core frontend with clean
+    Clang 22 and LLVM 22.1.8 warnings-as-errors builds using eight workers.
+    The clean Release configuration compiled all 2,939 build steps before any
+    Debug qualification, then the complete Release suite passed 406/406 in
+    145.44 seconds. Only after that Release lane was green, the clean Debug
+    configuration compiled all 2,939 build steps and its complete suite passed
+    406/406 in 144.92 seconds.
+
+    Qualification exposed and repaired one public-object collision: clocking
+    event signals are now held in an elaborator-private lookup rather than the
+    public signal namespace, while modport forwarding still creates the
+    required module-port alias. This preserves the VPI clocking-block object
+    and makes interface clocking members executable without publishing a
+    conflicting pseudo-signal. The mixed VHDL regression now selects its
+    compatibility execution points by their exact governed profile rather
+    than assuming a language prefix in the stored standard spelling.
+
+    Frozen governance reflects the measured 2,693 production diagnostics,
+    1,430 bounded sources, 1,732 SPDX-owned files, and 749 release
+    test/control files. The independently worded SystemVerilog-2023 inventory
+    remains at 38 active and eighteen preserved rows with normalized SHA-256
+    `f9563a7227c58207c6414804756c22376cbb8e4038ec9e8dd2c34dcd0ac82aeb`;
+    the deterministic source manifest remains at 1,797 paths with SHA-256
+    `d2e888f0152c9d216a39c20c594e2fcd509833852ad7de7a29cc23d04b022d97`.
+    Sanitizers and hosted-CI monitoring did not run and remain reserved
+    exclusively for Batch 190.
 
 ### Batch 186 - SystemVerilog-2023 verification, hierarchy, and timing
 

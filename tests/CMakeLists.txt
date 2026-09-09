@@ -44,6 +44,7 @@ add_executable(
   frontend/frontend_vhdl_time_file_tests.cpp
   frontend/frontend_vhdl_psl_tests.cpp
   frontend/frontend_declaration_tests.cpp
+  frontend/frontend_parameter_tests.cpp
   frontend/frontend_chandle_tests.cpp
   frontend/frontend_coverage_tests.cpp
   frontend/frontend_dpi_tests.cpp
@@ -1715,6 +1716,18 @@ set_tests_properties(
   fsim.vhdl-2019-inventory
   PROPERTIES
     LABELS "vhdl;vhdl2019;inventory;documentation;positive;negative;fast"
+)
+add_test(
+  NAME fsim.systemverilog-2023-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSystemVerilog2023Inventory.cmake"
+)
+set_tests_properties(
+  fsim.systemverilog-2023-inventory
+  PROPERTIES
+    LABELS "systemverilog;systemverilog2023;inventory;documentation;positive;negative;fast"
 )
 add_test(
   NAME fsim.verilog-systemverilog-standard-mode-inventory

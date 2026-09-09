@@ -39,7 +39,9 @@ void Lowerer::collect_class_tasks(
                     argument.direction,
                     argument.span,
                     argument.reference,
-                    argument.default_value);
+                    argument.default_value,
+                    argument.const_reference,
+                    argument.static_reference);
             }
             task.variables = statement.declarations;
             task.statements = statement.statements;
@@ -962,6 +964,15 @@ void Lowerer::lower_task_call(const Statement& statement)
                 "FSIM-ELAB-SVTASK-013",
                 "ref task arguments require an automatic task and a "
                 "writable variable actual",
+                actual.span);
+            return;
+        }
+        if (task.arguments[index].static_reference
+            && !static_reference_actual(actual)) {
+            report(
+                "FSIM-ELAB-SVTASK-015",
+                "ref static task arguments require an actual with static "
+                "storage lifetime",
                 actual.span);
             return;
         }

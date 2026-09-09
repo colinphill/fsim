@@ -356,6 +356,38 @@ void resolve_declaration_types(
       }
     }
   }
+  for (auto& extended : declaration.extended_interfaces) {
+    auto candidates = resolve_name(extended.name, owner, entries);
+    if (candidates.empty()) {
+      diagnose(
+          diagnostics,
+          "FSIM-SV-CLASS-009",
+          "extended interface class '" + extended.name
+              + "' is not visible from '"
+              + declaration.canonical_identity + "'",
+          extended.span);
+    } else if (candidates.size() != 1U) {
+      diagnose(
+          diagnostics,
+          "FSIM-SV-CLASS-010",
+          "extended interface class '" + extended.name
+              + "' is ambiguous in lexical/import scope",
+          extended.span);
+    } else {
+      extended.declaration_identity =
+          candidates.front()->declaration->canonical_identity;
+    }
+    for (auto& actual : extended.parameter_actuals) {
+      if (actual.type_actual) {
+        resolve_type(
+            *actual.type_actual,
+            owner,
+            entries,
+            shadowed_types,
+            diagnostics);
+      }
+    }
+  }
   for (auto& implemented : declaration.implemented_interfaces) {
     auto candidates = resolve_name(implemented.name, owner, entries);
     if (candidates.empty()) {
@@ -376,6 +408,16 @@ void resolve_declaration_types(
     } else {
       implemented.declaration_identity =
           candidates.front()->declaration->canonical_identity;
+    }
+    for (auto& actual : implemented.parameter_actuals) {
+      if (actual.type_actual) {
+        resolve_type(
+            *actual.type_actual,
+            owner,
+            entries,
+            shadowed_types,
+            diagnostics);
+      }
     }
   }
 }

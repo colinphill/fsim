@@ -558,6 +558,18 @@ void substitute_systemverilog_parameters(
     for (auto& task : unit.tasks) {
         substitute_sv_task(task, environment);
     }
+    const auto substitute_clocking_skew = [&](auto& skew) {
+        if (skew && skew->delay) {
+            substitute_sv_delay_parameters(*skew->delay, environment);
+        }
+    };
+    for (auto& block : unit.systemverilog_clocking_blocks) {
+        substitute_clocking_skew(block.default_input_skew);
+        substitute_clocking_skew(block.default_output_skew);
+        for (auto& signal : block.signals) {
+            substitute_clocking_skew(signal.skew);
+        }
+    }
     substitute_sv_statements(
         unit.concurrent_statements, environment);
     for (auto& process : unit.processes) {

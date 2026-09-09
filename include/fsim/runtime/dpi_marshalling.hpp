@@ -40,7 +40,6 @@ enum class SystemVerilogDpiMarshallingError {
     KindMismatch,
     DirectionMismatch,
     Nonfinite,
-    InvalidUtf8,
     EmbeddedNul,
     StringLimit,
     StaleHandle,

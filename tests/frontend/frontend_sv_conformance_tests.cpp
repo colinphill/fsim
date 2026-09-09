@@ -62,7 +62,10 @@ void test_systemverilog_public_conformance_frontend()
                 == "verilog-2001-noconfig"
             && to_string(StandardRevision::SystemVerilog2009)
                 == "systemverilog-2009"
-            && revision_string(StandardRevision::SystemVerilog2012) == "2012",
+            && revision_string(StandardRevision::SystemVerilog2012) == "2012"
+            && to_string(StandardRevision::SystemVerilog2023)
+                == "systemverilog-2023"
+            && revision_string(StandardRevision::SystemVerilog2023) == "2023",
         "older Verilog/SystemVerilog revisions have distinct typed identities");
     // FSIM-CONFORMANCE CF-SV-PP-001 source=SRC-SV-TESTS expectation=accept
     auto preprocessed = preprocess_verilog(
@@ -944,6 +947,101 @@ endmodule
         !reserved_identifier.ok()
             && has_code(reserved_identifier, "FSIM-SV-PARSE-001"),
         "CF-SV-DECL-N02 unescaped reserved identifier is rejected");
+}
+
+void test_systemverilog_2023_profile_isolation()
+{
+    const auto require_isolated = [](
+                                      const std::string_view name,
+                                      const std::string_view source,
+                                      const std::string_view diagnostic) {
+        const auto retained = parse_verilog(
+            SourceText {
+                std::string { name } + "-2017.sv",
+                std::string { source } },
+            StandardRevision::SystemVerilog2017);
+        const auto revised = parse_verilog(
+            SourceText {
+                std::string { name } + "-2023.sv",
+                std::string { source } },
+            StandardRevision::SystemVerilog2023);
+        require(
+            revised.ok() && !retained.ok()
+                && has_code(retained, diagnostic),
+            std::string { name }
+                + " must remain isolated to the exact 2023 profile");
+    };
+
+    require_isolated(
+        "multiple-interface-class-inheritance",
+        R"(interface class LeftContract; endclass
+interface class RightContract; endclass
+interface class CombinedContract extends LeftContract, RightContract;
+endclass
+)",
+        "FSIM-SV-PARSE-369");
+    require_isolated(
+        "streaming-assignment-target",
+        R"(module streaming_assignment_target;
+  logic [7:0] left;
+  logic [7:0] right;
+  initial {<<8{left, right}} = 16'h1234;
+endmodule
+)",
+        "FSIM-SV-PARSE-370");
+    require_isolated(
+        "pattern-assignment-target",
+        R"(module pattern_assignment_target;
+  logic [7:0] left;
+  logic [7:0] right;
+  initial '{left, right} = 16'h1234;
+endmodule
+)",
+        "FSIM-SV-PARSE-370");
+    require_isolated(
+        "inside-tolerance-range",
+        R"(module inside_tolerance_range;
+  logic selected;
+  initial selected = 107 inside {[100 +/- 7]};
+endmodule
+)",
+        "FSIM-SV-PARSE-347");
+    require_isolated(
+        "static-reference-formal",
+        R"(module static_reference_formal;
+  function automatic int observe(ref static int value);
+    return value;
+  endfunction
+endmodule
+)",
+        "FSIM-SV-PARSE-368");
+    require_isolated(
+        "function-background-process",
+        R"(module function_background_process;
+  function automatic bit launch();
+    fork
+      begin #1; end
+    join_none
+    return 1'b1;
+  endfunction
+endmodule
+)",
+        "FSIM-SV-SEM-246");
+
+    const auto retained_baseline = parse_verilog(
+        SourceText {
+            "retained-2017-baseline.sv",
+            R"(interface class RetainedContract; endclass
+module retained_2017_baseline;
+  logic [7:0] left;
+  logic [7:0] right;
+  initial {left, right} = 16'h1234;
+endmodule
+)" },
+        StandardRevision::SystemVerilog2017);
+    require(
+        retained_baseline.ok(),
+        "2023 profile gates must not narrow established 2017 forms");
 }
 
 void test_verilog_systemverilog_compatibility_defaults()

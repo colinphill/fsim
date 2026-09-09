@@ -906,6 +906,7 @@ void Lowerer::materialize_procedural_continuous_assignments()
             functions_, tasks_, procedures_, scalar_context_, diagnostics_);
         driver_lowerer.set_systemverilog_program_owner(
             systemverilog_program_owner_);
+        driver_lowerer.set_systemverilog_standard(systemverilog_standard_);
         driver_lowerer.set_vhdl_standard(vhdl_standard_);
         driver_lowerer.set_vhdl_synopsys_numeric_context(
             vhdl_synopsys_signed_visible_,

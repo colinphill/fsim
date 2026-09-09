@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <optional>
@@ -44,7 +45,8 @@ namespace {
         return standard == StandardRevision::SystemVerilog2005
             || standard == StandardRevision::SystemVerilog2009
             || standard == StandardRevision::SystemVerilog2012
-            || standard == StandardRevision::SystemVerilog2017;
+            || standard == StandardRevision::SystemVerilog2017
+            || standard == StandardRevision::SystemVerilog2023;
     }
 
     [[nodiscard]] unsigned standard_rank(const StandardRevision standard)
@@ -65,6 +67,8 @@ namespace {
             return 5;
         case StandardRevision::SystemVerilog2017:
             return 6;
+        case StandardRevision::SystemVerilog2023:
+            return 7;
         default:
             return 0;
         }
@@ -993,10 +997,11 @@ namespace {
             const auto arguments = begin + 2;
 
             if (name == "ifdef" || name == "ifndef") {
-                const auto macro_name = directive_macro_name(tokens, arguments, end, name_token);
+                const auto condition = directive_condition(
+                    tokens, arguments, end, name_token);
                 const bool parent = active();
-                const bool defined = macro_name && macros_.contains(*macro_name);
-                const bool take = macro_name && (name == "ifdef" ? defined : !defined);
+                const bool take = condition
+                    && (name == "ifdef" ? *condition : !*condition);
                 conditionals_.push_back(
                     { parent, parent && take, parent && take, false,
                         cover(tick.span, name_token.span) });
@@ -1017,9 +1022,10 @@ namespace {
                         "`elsif cannot follow `else in one conditional block",
                         name_token.span);
                 }
-                const auto macro_name = directive_macro_name(tokens, arguments, end, name_token);
+                const auto condition = directive_condition(
+                    tokens, arguments, end, name_token);
                 const bool take = conditional.parent_active && !conditional.branch_taken
-                    && macro_name && macros_.contains(*macro_name);
+                    && condition && *condition;
                 conditional.active = take;
                 conditional.branch_taken = conditional.branch_taken || take;
                 return;
@@ -1192,6 +1198,142 @@ namespace {
                     tokens[begin + 1].span);
             }
             return tokens[begin].text;
+        }
+
+        [[nodiscard]] std::optional<bool> directive_condition(
+            const std::vector<Token>& tokens,
+            const std::size_t begin,
+            const std::size_t end,
+            const Token& directive)
+        {
+            if (begin >= end
+                || tokens[begin].kind != TokenKind::LeftParen) {
+                const auto macro_name = directive_macro_name(
+                    tokens, begin, end, directive);
+                return macro_name
+                    ? std::optional<bool> { macros_.contains(*macro_name) }
+                    : std::nullopt;
+            }
+            if (!require_standard(
+                    "parenthesized conditional-compilation expression",
+                    StandardRevision::SystemVerilog2023,
+                    tokens[begin])) {
+                return std::nullopt;
+            }
+
+            auto position = begin;
+            bool malformed = false;
+            const auto reject = [&](const Token& token) {
+                if (!malformed) {
+                    diagnose(
+                        "FSIM-SV-PP-053",
+                        "conditional-compilation expression requires macro "
+                        "identifiers joined by !, &&, ||, ->, or <->",
+                        token.span,
+                        token.expansion_stack);
+                }
+                malformed = true;
+            };
+            std::function<std::optional<bool>()> parse_or;
+            std::function<std::optional<bool>()> parse_implication;
+            std::function<std::optional<bool>()> parse_primary;
+            std::function<std::optional<bool>()> parse_and;
+            parse_primary = [&]() -> std::optional<bool> {
+                if (position >= end) {
+                    reject(directive);
+                    return std::nullopt;
+                }
+                if (tokens[position].kind == TokenKind::Identifier) {
+                    return macros_.contains(tokens[position++].text);
+                }
+                if (tokens[position].kind == TokenKind::Bang) {
+                    ++position;
+                    auto value = parse_primary();
+                    if (value) {
+                        *value = !*value;
+                    }
+                    return value;
+                }
+                if (tokens[position].kind == TokenKind::LeftParen) {
+                    ++position;
+                    auto value = parse_implication();
+                    if (position >= end
+                        || tokens[position].kind
+                            != TokenKind::RightParen) {
+                        reject(position < end ? tokens[position] : directive);
+                        return std::nullopt;
+                    }
+                    ++position;
+                    return value;
+                }
+                reject(tokens[position++]);
+                return std::nullopt;
+            };
+            parse_and = [&]() -> std::optional<bool> {
+                auto value = parse_primary();
+                while (position < end
+                    && tokens[position].kind == TokenKind::AndAnd) {
+                    ++position;
+                    const auto rhs = parse_primary();
+                    if (!value || !rhs) {
+                        value.reset();
+                    } else {
+                        *value = *value && *rhs;
+                    }
+                }
+                return value;
+            };
+            parse_or = [&]() -> std::optional<bool> {
+                auto value = parse_and();
+                while (position < end
+                    && tokens[position].kind == TokenKind::OrOr) {
+                    ++position;
+                    const auto rhs = parse_and();
+                    if (!value || !rhs) {
+                        value.reset();
+                    } else {
+                        *value = *value || *rhs;
+                    }
+                }
+                return value;
+            };
+            parse_implication = [&]() -> std::optional<bool> {
+                auto value = parse_or();
+                while (position < end) {
+                    bool implication = false;
+                    bool equivalence = false;
+                    if (tokens[position].kind == TokenKind::ThinArrow) {
+                        implication = true;
+                        ++position;
+                    } else if (position + 1 < end
+                        && tokens[position].kind == TokenKind::Less
+                        && tokens[position + 1].kind == TokenKind::ThinArrow
+                        && tokens[position].span.source_name
+                            == tokens[position + 1].span.source_name
+                        && tokens[position].span.end.offset
+                            == tokens[position + 1].span.begin.offset) {
+                        equivalence = true;
+                        position += 2;
+                    } else {
+                        break;
+                    }
+                    const auto rhs = parse_or();
+                    if (!value || !rhs) {
+                        value.reset();
+                    } else if (implication) {
+                        *value = !*value || *rhs;
+                    } else if (equivalence) {
+                        *value = *value == *rhs;
+                    }
+                }
+                return value;
+            };
+
+            auto value = parse_implication();
+            if (position != end) {
+                reject(tokens[position]);
+            }
+            return malformed ? std::nullopt : value;
         }
 
         void reject_extra_directive_tokens(
@@ -1646,6 +1788,49 @@ namespace {
             const auto active_replacement = [&]() {
                 return conditionals.empty() || conditionals.back().active;
             };
+            const auto replacement_condition = [&](const std::size_t begin,
+                                                   const std::size_t line,
+                                                   const Token& directive)
+                -> std::pair<std::optional<bool>, std::size_t> {
+                if (begin >= macro.replacement.size()
+                    || macro.replacement[begin].span.begin.line != line) {
+                    return { std::nullopt, begin };
+                }
+                if (macro.replacement[begin].kind == TokenKind::Identifier) {
+                    return {
+                        macros_.contains(macro.replacement[begin].text), begin + 1
+                    };
+                }
+                if (macro.replacement[begin].kind != TokenKind::LeftParen) {
+                    return { std::nullopt, begin };
+                }
+
+                std::size_t depth = 0;
+                auto end = begin;
+                for (; end < macro.replacement.size(); ++end) {
+                    const auto& token = macro.replacement[end];
+                    if (token.span.begin.line != line) {
+                        break;
+                    }
+                    if (token.kind == TokenKind::LeftParen) {
+                        ++depth;
+                    } else if (token.kind == TokenKind::RightParen) {
+                        if (depth == 0) {
+                            break;
+                        }
+                        --depth;
+                        if (depth == 0) {
+                            ++end;
+                            return {
+                                directive_condition(
+                                    macro.replacement, begin, end, directive),
+                                end
+                            };
+                        }
+                    }
+                }
+                return { std::nullopt, begin };
+            };
             for (std::size_t index = 0; index < macro.replacement.size();) {
                 const auto directive = macro.replacement[index].kind == TokenKind::Backtick
                         && index + 1 < macro.replacement.size()
@@ -1671,46 +1856,43 @@ namespace {
                         expansion_stack);
                 };
                 if (directive == "ifdef" || directive == "ifndef") {
-                    if (index + 2 >= macro.replacement.size()
-                        || macro.replacement[index + 2].kind
-                            != TokenKind::Identifier
-                        || macro.replacement[index + 2].span.begin.line
-                            != directive_line) {
+                    const auto [condition, next] = replacement_condition(
+                        index + 2, directive_line,
+                        macro.replacement[index + 1]);
+                    if (!condition) {
                         malformed(
                             "conditional directive inside macro `" + macro.name
-                            + "' requires exactly one identifier");
+                            + "' requires an identifier or a valid 2023 Boolean expression");
                         index += 2;
                         continue;
                     }
                     const bool parent = active_replacement();
-                    const bool defined = macros_.contains(
-                        macro.replacement[index + 2].text);
-                    const bool take = directive == "ifdef" ? defined : !defined;
+                    const bool take = directive == "ifdef" ? *condition : !*condition;
                     conditionals.push_back(
                         { parent, parent && take, parent && take, false });
-                    index += 3;
+                    index = next;
                     continue;
                 } else if (directive == "elsif") {
+                    const auto [condition, next] = replacement_condition(
+                        index + 2, directive_line,
+                        macro.replacement[index + 1]);
                     if (conditionals.empty()) {
                         malformed("`elsif inside a macro has no matching conditional");
-                    } else if (
-                        index + 2 >= macro.replacement.size()
-                        || macro.replacement[index + 2].kind
-                            != TokenKind::Identifier
-                        || macro.replacement[index + 2].span.begin.line
-                            != directive_line) {
-                        malformed("`elsif inside a macro requires exactly one identifier");
+                    } else if (!condition) {
+                        malformed(
+                            "`elsif inside a macro requires an identifier or a valid "
+                            "2023 Boolean expression");
                     } else {
                         auto& conditional = conditionals.back();
                         if (conditional.saw_else) {
                             malformed("`elsif inside a macro cannot follow `else");
                         }
                         const bool take = conditional.parent_active && !conditional.branch_taken
-                            && macros_.contains(macro.replacement[index + 2].text);
+                            && *condition;
                         conditional.active = take;
                         conditional.branch_taken = conditional.branch_taken || take;
                     }
-                    index += 3;
+                    index = condition ? next : index + 2;
                     continue;
                 } else if (directive == "else") {
                     if (conditionals.empty()) {

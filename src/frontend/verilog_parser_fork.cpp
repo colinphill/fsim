@@ -72,6 +72,37 @@ Statement VerilogParser::parse_fork_statement(const Token& start) {
               + "' does not match fork label '" + statement.label + "'");
     }
   }
+  const auto contains_return = [](const auto& self,
+                                  const Statement& candidate) -> bool {
+    if (candidate.kind == StatementKind::Return) {
+      return true;
+    }
+    const auto any_return = [&](const std::vector<Statement>& statements) {
+      return std::ranges::any_of(
+          statements,
+          [&](const Statement& nested) { return self(self, nested); });
+    };
+    if (any_return(candidate.statements)
+        || any_return(candidate.else_statements)) {
+      return true;
+    }
+    return std::ranges::any_of(
+        candidate.case_alternatives,
+        [&](const CaseAlternative& alternative) {
+          return any_return(alternative.statements);
+        });
+  };
+  if ((in_function_ || in_task_)
+      && std::ranges::any_of(
+          statement.statements,
+          [&](const Statement& branch) {
+            return contains_return(contains_return, branch);
+          })) {
+    error(
+        start,
+        "FSIM-SV-SEM-247",
+        "a return statement cannot be nested in fork...join");
+  }
   statement.span = span_from(start, previous());
   return statement;
 }

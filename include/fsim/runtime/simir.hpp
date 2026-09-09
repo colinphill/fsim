@@ -152,7 +152,7 @@ struct StringIndex {
     bool signed_index { true };
 };
 
-struct StringReplaceCodePoint {
+struct StringReplaceByte {
     StringRegisterId target { };
     RegisterId index { };
     RegisterId source { };
@@ -382,6 +382,9 @@ struct WriteContainerObjectElement {
     RegisterId source { };
     bool signed_index { true };
     bool linear_index { };
+    /// Capture the index and value now, then publish the element write in the
+    /// current time slot's nonblocking-update phase.
+    bool nonblocking { };
     std::optional<SignalId> transaction_signal;
 };
 

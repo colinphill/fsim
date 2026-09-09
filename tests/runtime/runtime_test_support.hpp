@@ -54,7 +54,7 @@ void test_systemverilog_vpi_system_registration_lifecycle();
 void test_systemverilog_scalar_text_and_time();
 void test_systemverilog_scalar_execution_surfaces();
 void test_systemverilog_chandle_registry();
-void test_systemverilog_unicode_strings();
+void test_systemverilog_byte_strings();
 void test_vhdl_psl_attempt_engine();
 void test_vhdl_psl_attempt_limits();
 void test_scheduler_phase_order();

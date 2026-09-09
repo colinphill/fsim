@@ -150,7 +150,8 @@ public:
         bool,
         const PackedLogic4&,
         ProcessId,
-        InstructionIndex)
+        InstructionIndex,
+        bool)
     {
         throw std::logic_error {
             "alternate process executor does not support direct container-object element writes"
