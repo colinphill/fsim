@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "elaborator_internal.hpp"
+#include "hierarchy_builder_internal.hpp"
+#include "fsim/frontend/class_inheritance.hpp"
+#include "fsim/frontend/class_resolution.hpp"
 #include "fsim/support/sha256.hpp"
+#include "hierarchy_port_support.hpp"
 namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
@@ -8,6 +11,8 @@ namespace {
 
 constexpr std::size_t specialization_cache_limit = 4U;
 constexpr std::size_t maximum_vhdl_mode_view_endpoints = 65'536U;
+
+} // namespace
 
 frontend::Type mode_view_member_type(
     const frontend::PackedMember& member)
@@ -216,6 +221,8 @@ bool materialize_vhdl_mode_view_endpoints(
     }
     return true;
 }
+
+namespace {
 
 void append_specialization_key_component(
     std::string& key,
@@ -1081,7 +1088,41 @@ SpecializedUnit HierarchyBuilder::specialize_selected_unit(
     materialize_vhdl_local_declarations(specialized);
     instantiate_vhdl_local_packages(
         specialized, interface_packages);
+    const auto source_class_count =
+        specialized.unit.systemverilog_classes.size();
     expand_vhdl_block_generates(specialized);
+    if (specialized.unit.language
+            == frontend::Language::SystemVerilog2017
+        && specialized.unit.systemverilog_classes.size()
+            != source_class_count) {
+        frontend::ParsedDesign expanded_design;
+        expanded_design.systemverilog_classes =
+            parsed_.systemverilog_classes;
+        expanded_design.systemverilog_class_method_definitions =
+            parsed_.systemverilog_class_method_definitions;
+        for (const auto& candidate : parsed_.units) {
+            if (candidate.kind
+                == frontend::UnitKind::SystemVerilogPackage) {
+                expanded_design.units.push_back(candidate);
+            }
+        }
+        expanded_design.units.push_back(std::move(specialized.unit));
+        std::vector<frontend::Diagnostic> class_diagnostics;
+        const bool classes_resolved =
+            frontend::resolve_systemverilog_classes(
+                expanded_design, class_diagnostics);
+        if (classes_resolved) {
+            (void)frontend::validate_systemverilog_class_inheritance(
+                expanded_design, class_diagnostics);
+        }
+        specialized.unit = std::move(expanded_design.units.back());
+        for (auto& diagnostic : class_diagnostics) {
+            diagnostics_.push_back({
+                std::move(diagnostic.code),
+                std::move(diagnostic.message),
+                std::move(diagnostic.span)});
+        }
+    }
     if (diagnostics_.size() == diagnostics_before) {
         // A one-use specialization only bloats the retained frontend model.
         // Admit entries on reuse and keep a small working set for every HDL;
@@ -1523,5 +1564,4 @@ const DesignUnit* HierarchyBuilder::bound_target(
     return selected;
 }
 
-#include "hierarchy_connect_ports.tpp"
 } // namespace fsim::elaboration

@@ -3,10 +3,17 @@
 
 #include "fsim/compiler/llvm_jit.hpp"
 
+#include <llvm/ExecutionEngine/ObjectCache.h>
 #include <llvm/IR/DataLayout.h>
+#include <llvm/IR/Module.h>
+#include <llvm/Support/Error.h>
+#include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Triple.h>
 
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -18,6 +25,93 @@ class Module;
 }
 
 namespace fsim::compiler::llvm_detail {
+
+inline constexpr auto kJitRuntimeV1PrefixSize
+    = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, write_update));
+inline constexpr auto kJitFrameV1PrefixSize
+    = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_frame_v1, register_logic9_plane2));
+inline constexpr auto kJitRuntimeLogic9Size
+    = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, load_string));
+inline constexpr auto kJitRuntimeStringSize
+    = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, file_open));
+inline constexpr auto kJitRuntimeFileSize
+    = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, container_operation));
+inline constexpr auto kJitRuntimeForceSize
+    = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, read_simulation_time));
+inline constexpr auto kJitRuntimeDriverForceSize
+    = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, execute_signal_operation));
+inline constexpr auto kJitRuntimeContainerWordSize
+    = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, container_read_packed));
+inline constexpr auto kJitRuntimeExactSignalSize
+    = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, read_signal_packed));
+inline constexpr auto kJitRuntimeWideSignalReadSize
+    = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, write_signal_packed));
+
+class LlvmObjectCache : public llvm::ObjectCache {
+public:
+    ~LlvmObjectCache() override = default;
+
+    [[nodiscard]] virtual std::unique_ptr<llvm::MemoryBuffer> preflight(
+        std::string_view key,
+        std::vector<std::byte>* metadata = nullptr) = 0;
+    virtual void stage_metadata(
+        std::string key,
+        std::vector<std::byte> metadata) = 0;
+    virtual void discard_staged_metadata(std::string_view key) = 0;
+    [[nodiscard]] virtual LlvmJitCacheStatistics statistics() const noexcept = 0;
+};
+
+struct IrShape {
+    std::size_t functions { };
+    std::size_t blocks { };
+    std::size_t instructions { };
+    std::size_t allocas { };
+    std::size_t loads { };
+    std::size_t stores { };
+    std::size_t calls { };
+    std::size_t branches { };
+    std::size_t switches { };
+    std::size_t phis { };
+};
+
+[[nodiscard]] std::vector<runtime::simir::SignalId> direct_update_signals(
+    const runtime::simir::Process& process,
+    std::span<const std::uint32_t> signal_widths,
+    std::span<const runtime::simir::ValueKind> signal_value_kinds);
+[[nodiscard]] std::vector<runtime::simir::SignalId> direct_read_signals(
+    const runtime::simir::Process& process,
+    std::span<const std::uint32_t> signal_widths,
+    std::span<const runtime::simir::ValueKind> signal_value_kinds);
+[[nodiscard]] IrShape ir_shape(const llvm::Module& module);
+void dump_ir(const llvm::Module& module, const char* path);
+void print_ir_shape(
+    llvm::raw_ostream& stream,
+    const char* phase,
+    const IrShape& shape);
+[[nodiscard]] std::string llvm_error(llvm::Error error);
+
+template <typename T>
+[[nodiscard]] T unwrap(
+    llvm::Expected<T> expected,
+    const std::string_view action)
+{
+    if (!expected) {
+        throw LlvmJitError(
+            std::string { action } + ": "
+            + llvm_error(expected.takeError()));
+    }
+    return std::move(*expected);
+}
 
 struct ValidatedProcess {
     std::vector<std::uint32_t> register_widths;

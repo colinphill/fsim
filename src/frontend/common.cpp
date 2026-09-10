@@ -578,6 +578,63 @@ bool systemverilog_types_equivalent(
     return true;
 }
 
+bool systemverilog_virtual_interface_assignment_compatible(
+    const Type& target, const Type& source) noexcept
+{
+    if (!target.systemverilog_virtual_interface
+        || !source.systemverilog_virtual_interface
+        || target.systemverilog_interface_type
+            != source.systemverilog_interface_type
+        || target.systemverilog_class_parameter_actuals.size()
+            != source.systemverilog_class_parameter_actuals.size()) {
+        return false;
+    }
+    const auto same_actual = [](const auto& target_actual,
+                                const auto& source_actual) {
+        if (static_cast<bool>(target_actual.type_actual)
+            != static_cast<bool>(source_actual.type_actual)) {
+            return false;
+        }
+        return target_actual.type_actual
+            ? systemverilog_types_equivalent(
+                  *target_actual.type_actual,
+                  *source_actual.type_actual)
+            : same_systemverilog_expression_shape(
+                  target_actual.value, source_actual.value);
+    };
+    const bool named_actuals = std::ranges::all_of(
+            target.systemverilog_class_parameter_actuals,
+            [](const auto& actual) { return actual.name.has_value(); })
+        && std::ranges::all_of(
+            source.systemverilog_class_parameter_actuals,
+            [](const auto& actual) { return actual.name.has_value(); });
+    for (std::size_t index = 0;
+        index < target.systemverilog_class_parameter_actuals.size();
+        ++index) {
+        const auto& target_actual =
+            target.systemverilog_class_parameter_actuals[index];
+        const auto source_actual = named_actuals
+            ? std::ranges::find(
+                  source.systemverilog_class_parameter_actuals,
+                  target_actual.name,
+                  &SystemVerilogClassTypeActual::name)
+            : std::next(
+                  source.systemverilog_class_parameter_actuals.begin(),
+                  static_cast<std::ptrdiff_t>(index));
+        if (source_actual
+                == source.systemverilog_class_parameter_actuals.end()
+            || !same_actual(target_actual, *source_actual)) {
+            return false;
+        }
+    }
+    const auto& source_modport =
+        source.systemverilog_interface_modport;
+    return source_modport.empty()
+        || (!target.systemverilog_interface_modport.empty()
+            && target.systemverilog_interface_modport
+                == source_modport);
+}
+
 namespace {
 
 std::string_view vhdl_simple_type_name(const std::string_view spelling) {

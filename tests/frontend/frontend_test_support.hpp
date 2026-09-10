@@ -6,6 +6,7 @@ namespace fsim::tests::frontend {
 void test_systemverilog_preprocessor();
 void test_systemverilog_uvm_macro_surface();
 void test_systemverilog_public_conformance_frontend();
+void test_systemverilog_checker_revisions();
 void test_systemverilog_2023_profile_isolation();
 void test_verilog_systemverilog_compatibility_defaults();
 void test_msvc_debug_frontend_portability();
@@ -114,6 +115,7 @@ void test_systemverilog_select_and_concatenation_expressions();
 void test_conditional_statement_trees();
 void test_conditional_generate_hierarchy();
 void test_verilog_defparam_declarations();
+void test_systemverilog_generate_scope_revision();
 void test_systemverilog_named_events();
 void test_verilog_literal_display();
 void test_systemverilog_random_functions();

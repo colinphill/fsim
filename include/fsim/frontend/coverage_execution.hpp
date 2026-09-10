@@ -42,6 +42,8 @@ struct SystemVerilogCoverageCallbackEvent {
   std::string runtime_identity;
   std::optional<std::string> bin_identity;
   std::optional<std::int64_t> value;
+  SystemVerilogScalarKind scalar_kind { SystemVerilogScalarKind::None };
+  std::uint64_t scalar_bits { };
 };
 
 using SystemVerilogCoverageCallback =

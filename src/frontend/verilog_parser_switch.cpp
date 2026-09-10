@@ -47,6 +47,12 @@ void VerilogParser::parse_switch_primitive(
     const std::vector<SignalDeclaration>& ports) {
   const auto start = advance();
   const auto operation = detail::ascii_lower(start.text);
+  if (program_generate_context_) {
+    error(
+        start,
+        "FSIM-SV-SEM-390",
+        "a program block cannot contain a built-in primitive instance");
+  }
   const bool pull = operation == "pullup" || operation == "pulldown";
   const bool bidirectional = operation == "tran" || operation == "rtran"
       || operation == "tranif0" || operation == "tranif1"
@@ -102,8 +108,10 @@ void VerilogParser::parse_switch_primitive(
             || at(TokenKind::LeftBracket, 1))) {
       instance_name = advance().text;
     }
-    std::optional<std::uint64_t> array_count;
+    bool array_declared = false;
+    std::vector<std::int64_t> instance_indices;
     if (match(TokenKind::LeftBracket)) {
+      array_declared = true;
       const auto range = previous();
       const auto left = parse_expression();
       expect(
@@ -115,16 +123,33 @@ void VerilogParser::parse_switch_primitive(
           TokenKind::RightBracket,
           "']' after switch-instance array range",
           "FSIM-SV-PARSE-253");
-      const auto literal = [](const Expression& expression)
+      const auto literal = [&](const auto& self,
+                               const Expression& expression)
           -> std::optional<std::int64_t> {
         if (expression.kind != ExpressionKind::IntegerLiteral) {
+          if (expression.kind == ExpressionKind::Unary
+              && expression.operands.size() == 1
+              && (expression.text == "+" || expression.text == "-")) {
+            const auto operand = self(self, expression.operands.front());
+            if (!operand) return std::nullopt;
+            if (expression.text == "+") return operand;
+            if (*operand == std::numeric_limits<std::int64_t>::min()) {
+              return std::nullopt;
+            }
+            return -*operand;
+          }
           return std::nullopt;
         }
         return detail::decimal_i64(expression.text);
       };
-      const auto left_value = literal(left);
-      const auto right_value = literal(right);
-      if (!left_value || !right_value) {
+      const auto left_value = literal(literal, left);
+      const auto right_value = literal(literal, right);
+      if (instance_name.empty()) {
+        error(
+            range,
+            "FSIM-SV-SEM-389",
+            "a switch-instance array requires an instance name");
+      } else if (!left_value || !right_value) {
         error(
             range,
             "FSIM-SV-SEM-156",
@@ -143,7 +168,13 @@ void VerilogParser::parse_switch_primitive(
               "materializing the switch-instance array would exceed the "
               "256 MiB frontend owning-storage budget");
         } else {
-          array_count = distance + 1;
+          const auto count = distance + 1;
+          for (std::uint64_t ordinal = 0; ordinal < count; ++ordinal) {
+            instance_indices.push_back(
+                *left_value >= *right_value
+                    ? *left_value - static_cast<std::int64_t>(ordinal)
+                    : *left_value + static_cast<std::int64_t>(ordinal));
+          }
         }
       }
     }
@@ -179,40 +210,61 @@ void VerilogParser::parse_switch_primitive(
               + " terminals");
       continue;
     }
-    if (array_count) {
-      const auto terminal_width = [&](const Expression& terminal)
-          -> std::optional<std::uint64_t> {
-        if (terminal.kind == ExpressionKind::LogicLiteral
-            && terminal.text.starts_with("1'")) {
-          return 1;
-        }
-        if (terminal.kind != ExpressionKind::Identifier) {
-          return std::nullopt;
-        }
+    if (array_declared && instance_indices.empty()) continue;
+
+    const auto terminal_for =
+        [&](Expression terminal,
+            const std::size_t ordinal,
+            const std::int64_t instance_index) {
+      auto terminal_index = instance_index;
+      const SignalDeclaration* declaration = nullptr;
+      if (terminal.kind == ExpressionKind::Identifier) {
         const auto find = [&](const auto& declarations) {
           return std::ranges::find_if(
               declarations,
-              [&](const SignalDeclaration& declaration) {
-                return declaration.name == terminal.text;
+              [&](const SignalDeclaration& candidate) {
+                return candidate.name == terminal.text;
               });
         };
         const auto signal = find(signals);
-        if (signal != signals.end()) return signal->type.width();
-        const auto port = find(ports);
-        return port != ports.end() ? port->type.width() : std::nullopt;
-      };
-      for (const auto& terminal : terminals) {
-        const auto width = terminal_width(terminal);
-        if (width && *width != 1 && *width != *array_count) {
+        if (signal != signals.end()) {
+          declaration = &*signal;
+        } else {
+          const auto port = find(ports);
+          if (port != ports.end()) declaration = &*port;
+        }
+      }
+      if (declaration) {
+        const auto width = declaration->type.width();
+        if (width && *width == 1) return terminal;
+        if (!width || *width != instance_indices.size()) {
           error(
               instance_start,
               "FSIM-SV-SEM-158",
               "a switch-array terminal must be scalar or match the "
               "instance count");
-          break;
+          return terminal;
         }
+        if (declaration->type.packed_range) {
+          const auto& range = *declaration->type.packed_range;
+          terminal_index = range.left
+              + (range.descending
+                     ? -static_cast<std::int64_t>(ordinal)
+                     : static_cast<std::int64_t>(ordinal));
+        }
+      } else if (terminal.kind == ExpressionKind::LogicLiteral
+                 && terminal.text.starts_with("1'")) {
+        return terminal;
       }
-    }
+      const auto terminal_span = terminal.span;
+      return Expression{
+          ExpressionKind::Index,
+          "index",
+          {std::move(terminal),
+           Expression{ExpressionKind::IntegerLiteral,
+                      std::to_string(terminal_index), {}, terminal_span}},
+          terminal_span};
+    };
 
     const auto default_strength = VerilogDriveStrength{
         resistive ? VerilogStrength::Pull
@@ -256,64 +308,80 @@ void VerilogParser::parse_switch_primitive(
       statements.push_back(std::move(statement));
     };
 
-    if (pull) {
-      emit(
-          std::move(terminals[0]),
-          Expression{
-              ExpressionKind::LogicLiteral,
-              operation == "pullup" ? "1'b1" : "1'b0",
-              {}, start.span},
-          {});
-      continue;
-    }
-
-    if (bidirectional) {
-      auto left_value = terminals[1];
-      auto right_value = terminals[0];
-      std::optional<Expression> left_switch_control;
-      std::optional<Expression> right_switch_control;
-      const bool active_high = operation == "tranif1"
-          || operation == "rtranif1";
-      if (required == 3) {
-        auto left_control = terminals[2];
-        auto right_control = terminals[2];
-        left_switch_control = terminals[2];
-        right_switch_control = terminals[2];
-        if (operation == "tranif0" || operation == "rtranif0") {
-          left_control = inverted(std::move(left_control), start.span);
-          right_control = inverted(std::move(right_control), start.span);
-        }
-        left_value = conditional(
-            std::move(left_control), std::move(left_value), start.span);
-        right_value = conditional(
-            std::move(right_control), std::move(right_value), start.span);
+    const bool switch_array = !instance_indices.empty();
+    if (!switch_array) instance_indices.push_back(0);
+    for (std::size_t ordinal = 0;
+         ordinal < instance_indices.size(); ++ordinal) {
+      std::vector<Expression> mapped;
+      mapped.reserve(terminals.size());
+      for (const auto& terminal : terminals) {
+        mapped.push_back(
+            !switch_array
+                ? terminal
+                : terminal_for(
+                    terminal, ordinal, instance_indices[ordinal]));
       }
-      emit(
-          terminals[0], std::move(left_value), "$left", terminals[1],
-          std::move(left_switch_control), active_high);
-      emit(
-          terminals[1], std::move(right_value), "$right", terminals[0],
-          std::move(right_switch_control), active_high);
-      continue;
+      const auto saved_name = instance_name;
+      if (switch_array) {
+        instance_name += "[" + std::to_string(instance_indices[ordinal])
+            + "]";
+      }
+      if (pull) {
+        emit(
+            std::move(mapped[0]),
+            Expression{
+                ExpressionKind::LogicLiteral,
+                operation == "pullup" ? "1'b1" : "1'b0",
+                {}, start.span},
+            {});
+      } else if (bidirectional) {
+        auto left_value = mapped[1];
+        auto right_value = mapped[0];
+        std::optional<Expression> left_switch_control;
+        std::optional<Expression> right_switch_control;
+        const bool active_high = operation == "tranif1"
+            || operation == "rtranif1";
+        if (required == 3) {
+          auto left_control = mapped[2];
+          auto right_control = mapped[2];
+          left_switch_control = mapped[2];
+          right_switch_control = mapped[2];
+          if (operation == "tranif0" || operation == "rtranif0") {
+            left_control = inverted(std::move(left_control), start.span);
+            right_control = inverted(std::move(right_control), start.span);
+          }
+          left_value = conditional(
+              std::move(left_control), std::move(left_value), start.span);
+          right_value = conditional(
+              std::move(right_control), std::move(right_value), start.span);
+        }
+        emit(
+            mapped[0], std::move(left_value), "$left", mapped[1],
+            std::move(left_switch_control), active_high);
+        emit(
+            mapped[1], std::move(right_value), "$right", mapped[0],
+            std::move(right_switch_control), active_high);
+      } else {
+        auto control = mapped[2];
+        if (operation == "pmos" || operation == "rpmos") {
+          control = inverted(std::move(control), start.span);
+        } else if (operation == "cmos" || operation == "rcmos") {
+          auto pcontrol = inverted(mapped[3], start.span);
+          control = Expression{
+              ExpressionKind::Binary,
+              "&",
+              {std::move(control), std::move(pcontrol)},
+              start.span};
+        }
+        auto switch_source = mapped[1];
+        emit(
+            std::move(mapped[0]),
+            conditional(
+                std::move(control), std::move(mapped[1]), start.span),
+            {}, std::move(switch_source));
+      }
+      instance_name = saved_name;
     }
-
-    auto control = terminals[2];
-    if (operation == "pmos" || operation == "rpmos") {
-      control = inverted(std::move(control), start.span);
-    } else if (operation == "cmos" || operation == "rcmos") {
-      auto pcontrol = inverted(terminals[3], start.span);
-      control = Expression{
-          ExpressionKind::Binary,
-          "&",
-          {std::move(control), std::move(pcontrol)},
-          start.span};
-    }
-    auto switch_source = terminals[1];
-    emit(
-        std::move(terminals[0]),
-        conditional(
-            std::move(control), std::move(terminals[1]), start.span),
-        {}, std::move(switch_source));
   } while (match(TokenKind::Comma));
 
   expect(

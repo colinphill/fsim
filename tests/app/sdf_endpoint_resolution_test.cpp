@@ -131,8 +131,42 @@ fsim::elaboration::ElaboratedDesign make_design()
     path.instance = "top";
     path.sources.push_back({ 0U, 0U, 1U });
     path.destinations.push_back({ 1U, 0U, 1U });
+    path.source_edge = fsim::frontend::VerilogSpecifyEdge::Posedge;
     path.delays.push_back(1U);
-    state.verilog_specify_paths.push_back(std::move(path));
+    state.verilog_specify_paths.push_back(path);
+    auto wrong_edge_path = path;
+    wrong_edge_path.id = 1U;
+    wrong_edge_path.identity = "sdf:iopath:top:A[0]:Z:negedge";
+    wrong_edge_path.source_edge
+        = fsim::frontend::VerilogSpecifyEdge::Negedge;
+    state.verilog_specify_paths.push_back(std::move(wrong_edge_path));
+    auto wrong_select_path = path;
+    wrong_select_path.id = 2U;
+    wrong_select_path.identity = "sdf:iopath:top:A[1]:Z";
+    wrong_select_path.sources.front().offset = 1U;
+    state.verilog_specify_paths.push_back(std::move(wrong_select_path));
+    auto conditional_path = path;
+    conditional_path.id = 3U;
+    conditional_path.identity = "sdf:iopath:top:A[1]:Z:conditional";
+    conditional_path.sources.front().offset = 1U;
+    conditional_path.source_edge = fsim::frontend::VerilogSpecifyEdge::None;
+    conditional_path.conditional = true;
+    conditional_path.condition_program.nodes.push_back(
+        fsim::runtime::simir::ModulePathExpressionNode {
+            fsim::runtime::simir::ModulePathExpressionOperator::terminal,
+            { }, fsim::runtime::PackedLogic4 { }, { 4U, 0U, 1U },
+            fsim::runtime::simir::BinaryOperator::bit_and,
+            fsim::runtime::simir::LogicalBinaryOperator::logical_and,
+            fsim::runtime::simir::ShiftOperator::logical_left,
+            fsim::runtime::simir::ReductionOperator::bit_and, 1U, false });
+    state.verilog_specify_paths.push_back(std::move(conditional_path));
+    auto ifnone_path = path;
+    ifnone_path.id = 4U;
+    ifnone_path.identity = "sdf:iopath:top:A[2]:Z:ifnone";
+    ifnone_path.sources.front().offset = 2U;
+    ifnone_path.source_edge = fsim::frontend::VerilogSpecifyEdge::None;
+    ifnone_path.ifnone = true;
+    state.verilog_specify_paths.push_back(std::move(ifnone_path));
 
     fsim::runtime::simir::ModuleTimingCheck check;
     check.id = 0U;
@@ -145,7 +179,20 @@ fsim::elaboration::ElaboratedDesign make_design()
     data.terminal.width = 1U;
     check.data = std::move(data);
     check.limits.push_back(1);
-    state.verilog_timing_checks.push_back(std::move(check));
+    state.verilog_timing_checks.push_back(check);
+    auto wrong_edge_check = check;
+    wrong_edge_check.id = 1U;
+    wrong_edge_check.identity
+        = "sdf:timingcheck:top:setup:A:posedge-CLK";
+    wrong_edge_check.reference.edge
+        = fsim::runtime::simir::ModulePathEdge::posedge;
+    state.verilog_timing_checks.push_back(std::move(wrong_edge_check));
+    auto wrong_role_check = check;
+    wrong_role_check.id = 2U;
+    wrong_role_check.identity = "sdf:timingcheck:top:setup:CLK:A";
+    wrong_role_check.reference.terminal.signal = 0U;
+    wrong_role_check.data->terminal.signal = 3U;
+    state.verilog_timing_checks.push_back(std::move(wrong_role_check));
 
     SystemCInstanceInfo native;
     native.id = 0U;
@@ -201,14 +248,14 @@ std::string sdf_source(const std::string_view revision)
       ")";
 }
 
-fsim::app::SdfEndpointResolutionResult resolve_revision(
-    const std::string_view revision,
+fsim::app::SdfEndpointResolutionResult resolve_source(
+    const std::string_view source_name, const std::string_view source,
     const fsim::elaboration::ElaboratedDesign& design,
     const fsim::app::SdfEndpointResolutionLimits limits = { })
 {
     using namespace fsim::app;
     const auto parsed = fsim::frontend::parse_sdf(
-        { "endpoints.sdf", sdf_source(revision) });
+        { std::string { source_name }, std::string { source } });
     if (!parsed.ok()) {
         std::string message = "endpoint SDF fixture must parse; observed";
         for (const auto& diagnostic : parsed.diagnostics) {
@@ -228,6 +275,15 @@ fsim::app::SdfEndpointResolutionResult resolve_revision(
     const auto cells = resolve_sdf_cells(scope.scope, design);
     require(cells.ok(), "endpoint cell selectors must resolve");
     return resolve_sdf_endpoints(cells.resolution, design, limits);
+}
+
+fsim::app::SdfEndpointResolutionResult resolve_revision(
+    const std::string_view revision,
+    const fsim::elaboration::ElaboratedDesign& design,
+    const fsim::app::SdfEndpointResolutionLimits limits = { })
+{
+    return resolve_source(
+        "endpoints.sdf", sdf_source(revision), design, limits);
 }
 
 const fsim::app::SdfResolvedNodeEndpoints& find_mapping(
@@ -283,13 +339,26 @@ void test_mixed_language_endpoints_and_links()
 
     const auto& conditional = find_mapping(
         *result.resolution, SdfConstructKind::Iopath, "top", 1U);
-    require(!conditional.condition_identity.empty()
+    require(conditional.specify_path == 3U
+            && !conditional.condition_identity.empty()
             && std::ranges::any_of(conditional.endpoints,
                 [](const SdfResolvedEndpoint& endpoint) {
                     return endpoint.role == SdfEndpointRole::Condition
                         && endpoint.object_path == "top.EN";
                 }),
         "conditional IOPATH must retain and resolve its condition signal");
+
+    const auto conditional_else = resolve_source("conditional-else.sdf",
+        "(DELAYFILE (SDFVERSION \"4.0\") "
+        "(CELL (CELLTYPE \"top\") (INSTANCE top) "
+        "(DELAY (ABSOLUTE (CONDELSE (IOPATH A[2] Z (3)))))))",
+        design);
+    require(conditional_else.ok(),
+        "CONDELSE endpoint resolution must succeed");
+    const auto& ifnone = find_mapping(*conditional_else.resolution,
+        SdfConstructKind::Iopath, "top");
+    require(ifnone.specify_path == 4U && !ifnone.condition_identity.empty(),
+        "CONDELSE must bind only the exact elaborated ifnone path");
 
     const auto& interconnect = find_mapping(
         *result.resolution, SdfConstructKind::Interconnect, "top");
@@ -321,6 +390,24 @@ void test_mixed_language_endpoints_and_links()
                         && endpoint.signal == 0U;
                 }),
         "SETUP endpoints must link to the stable elaborated timing-check ID");
+
+    const auto edge_setup = resolve_source("edge-setup.sdf",
+        "(DELAYFILE (SDFVERSION \"4.0\") "
+        "(CELL (CELLTYPE \"top\") (INSTANCE top) "
+        "(TIMINGCHECK (SETUP A[0] (posedge CLK) (1)))))",
+        design);
+    require(edge_setup.ok(),
+        "edge-qualified timing-check endpoint resolution must succeed");
+    const auto& edge_setup_mapping = find_mapping(
+        *edge_setup.resolution, SdfConstructKind::Setup, "top");
+    require(edge_setup_mapping.timing_check == 1U
+            && std::ranges::any_of(edge_setup_mapping.endpoints,
+                [](const SdfResolvedEndpoint& endpoint) {
+                    return endpoint.role == SdfEndpointRole::TimingReference
+                        && endpoint.signal == 3U
+                        && !endpoint.edge_identity.empty();
+                }),
+        "edge-qualified SETUP must bind and re-role the exact elaborated check");
 
     const auto& vhdl
         = find_mapping(*result.resolution, SdfConstructKind::Iopath, "vhdl");
@@ -428,6 +515,25 @@ void test_missing_ambiguous_and_stale_rejection()
 
     const auto valid = resolve_revision("4.0", design);
     require(valid.ok(), "valid fixture must resolve before stale-state checks");
+
+    auto path_ambiguous_state = design.state();
+    auto duplicate_path = path_ambiguous_state.verilog_specify_paths.front();
+    duplicate_path.id = static_cast<fsim::elaboration::VerilogSpecifyPathId>(
+        path_ambiguous_state.verilog_specify_paths.size());
+    duplicate_path.identity = "sdf:iopath:top:A[0]:Z:duplicate";
+    path_ambiguous_state.verilog_specify_paths.push_back(
+        std::move(duplicate_path));
+    const auto path_ambiguous_design
+        = fsim::elaboration::ElaboratedDesign::from_state(
+            std::move(path_ambiguous_state));
+    require(path_ambiguous_design.has_value(),
+        "ambiguous specify-path fixture must remain structurally loadable");
+    const auto path_ambiguous
+        = resolve_revision("4.0", *path_ambiguous_design);
+    require(!path_ambiguous.resolution,
+        "ambiguous exact specify-path link must reject transactionally");
+    require_diagnostic(
+        path_ambiguous.diagnostics, "FSIM-SDF-ENDPOINT-006");
 
     auto ambiguous_state = design.state();
     fsim::elaboration::SystemCNamedObjectInfo duplicate;

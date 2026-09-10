@@ -365,6 +365,57 @@ class Lowerer final {
       foreach_element_ = saved_element;
       return builder_.conjunction(predicates);
     }
+    if (expression.kind == sv::ConstraintExpressionKind::unique_constraint) {
+      std::vector<ExpressionId> values;
+      for (const auto& item : expression.operands) {
+        if (item.kind != sv::ConstraintExpressionKind::name
+            && item.kind != sv::ConstraintExpressionKind::index) {
+          error_ = "unique constraint items must be variables or selected "
+              "container elements";
+          return std::nullopt;
+        }
+        if (item.kind == sv::ConstraintExpressionKind::name) {
+          const auto binding = std::ranges::find(
+              item.bindings, specialization_,
+              &sv::ConstraintBinding::specialization_identity);
+          if (binding == item.bindings.end()) {
+            error_ = "unique constraint item has no exact binding";
+            return std::nullopt;
+          }
+          if (const auto elements = container_variables_.find(
+                  binding->canonical_identity);
+              elements != container_variables_.end()) {
+            const auto profile = systemverilog_constraint_profile(*binding);
+            for (const auto element : elements->second) {
+              if (std::ranges::find(dependencies_, element)
+                  == dependencies_.end()) {
+                dependencies_.push_back(element);
+              }
+              values.push_back(builder_.variable(element, profile));
+            }
+            continue;
+          }
+        }
+        const auto value = lower(item);
+        if (!value) return std::nullopt;
+        values.push_back(*value);
+      }
+      if (values.size() < 2U) {
+        return builder_.constant(
+            low_value(1, 1),
+            runtime::SystemVerilogConstraintVariableProfile{
+                runtime::SystemVerilogConstraintDomainKind::BitVector,
+                1, false, "$unique-result", false});
+      }
+      std::vector<ExpressionId> comparisons;
+      for (std::size_t left = 0; left < values.size(); ++left) {
+        for (std::size_t right = left + 1U; right < values.size(); ++right) {
+          comparisons.push_back(builder_.binary(
+              Operator::NotEqual, values[left], values[right]));
+        }
+      }
+      return builder_.conjunction(comparisons);
+    }
     std::vector<ExpressionId> operands;
     operands.reserve(expression.operands.size());
     for (const auto& operand : expression.operands) {

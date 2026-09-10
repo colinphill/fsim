@@ -104,13 +104,14 @@ endmodule
       !excessive_delays.ok(),
       "a nonstandard module-path delay arity rejects transactionally");
 
-  const auto paths = parse_text(
-      "module-paths.v",
-      R"(
+  const auto paths = parse_verilog(
+      SourceText{
+          "module-paths-2023.sv",
+          R"(
 module module_paths(input a, b, data, enable, output z, q);
   specify
-    (a => z) = 1;
-    (a, b *> z, q) = (1, 2, 3, 4, 5, 6);
+    (a + => z) = 1;
+    (a, b - *> z, q) = (1, 2, 3, 4, 5, 6);
     (posedge a => (z +: data)) = (1:2:3, 4);
     if (enable) (negedge a *> (z -: data)) = 2;
     ifnone (a *> z) = 3;
@@ -134,15 +135,17 @@ module module_paths(input a, b, data, enable, output z, q);
     $nochange(posedge a, posedge data, 1, 2, notifier);
   endspecify
 endmodule
-)",
-      Language::Verilog2005);
+)"},
+      StandardRevision::SystemVerilog2023);
   require(paths.ok(), "parallel, full, edge, and conditional paths must parse");
   const auto& declarations =
       paths.design.units.front().verilog_specify_blocks.front().module_paths;
   require(
       declarations.size() == 5
           && declarations[0].kind == VerilogModulePathKind::Parallel
+          && declarations[0].polarity == VerilogPathPolarity::Positive
           && declarations[1].kind == VerilogModulePathKind::Full
+          && declarations[1].polarity == VerilogPathPolarity::Negative
           && declarations[1].sources.size() == 2
           && declarations[1].destinations.size() == 2
           && declarations[1].delays.size() == 6
@@ -157,6 +160,40 @@ endmodule
           && declarations[3].polarity == VerilogPathPolarity::Negative
           && declarations[4].ifnone,
       "module-path HIR retains topology, conditions, transforms, and delays");
+
+  const auto invalid_path_topology = parse_verilog(
+      SourceText{
+          "invalid-module-paths-2023.sv",
+          R"(
+module invalid_module_paths(input a, b, data, output z, q);
+  specify
+    (a, b => z) = 1;
+    (a => z, q) = 1;
+    (a => + z) = 1;
+    (posedge a => z) = 1;
+    ifnone (posedge a => (z +: data)) = 1;
+    (a => (z)) = 1;
+  endspecify
+endmodule
+)"},
+      StandardRevision::SystemVerilog2023);
+  require(
+      !invalid_path_topology.ok()
+          && std::ranges::count_if(
+                 invalid_path_topology.diagnostics,
+                 [](const Diagnostic& diagnostic) {
+                   return diagnostic.code == "FSIM-SV-SEM-391";
+                 })
+              == 3
+          && std::ranges::count_if(
+                 invalid_path_topology.diagnostics,
+                 [](const Diagnostic& diagnostic) {
+                   return diagnostic.code == "FSIM-SV-SEM-392";
+                 })
+              == 3,
+      "2023 module paths reject parallel lists, misplaced polarity, simple "
+      "grouping, incomplete edge-sensitive forms, and edge-sensitive "
+      "ifnone");
   const auto& pulses =
       paths.design.units.front().verilog_specify_blocks.front()
           .pulse_declarations;

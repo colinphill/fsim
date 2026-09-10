@@ -226,6 +226,61 @@ endmodule
         }));
 }
 
+void verify_real_coverpoint(
+    const std::filesystem::path& directory,
+    const fsim::project::Optimization optimization,
+    const fsim::app::SimulationEngine engine,
+    const std::string_view suffix)
+{
+    const auto source = directory
+        / ("real_coverage_" + std::string { suffix } + ".sv");
+    {
+        std::ofstream output(source, std::ios::binary);
+        output << R"(module real_coverage_query;
+  covergroup real_group with function sample(input real value);
+    value_point: coverpoint value {
+      bins exact = {1.5};
+      bins tolerance = {[2.0 +/- 0.25]};
+    }
+  endgroup
+  real_group group = new;
+  real observed_coverage;
+  initial begin
+    group.sample(1.5);
+    group.sample(2.1);
+    observed_coverage = $get_coverage();
+    $finish;
+  end
+endmodule
+)";
+        assert(output.good());
+    }
+    auto config = make_config(
+        directory, source, optimization,
+        "real-cache-" + std::string { suffix });
+    config.project.top = "sv:work.real_coverage_query";
+    config.source_sets.front().standard = "2023";
+    fsim::diagnostic::Engine diagnostics;
+    auto project = fsim::app::build_project(config, diagnostics);
+    if (!project) {
+        for (const auto& diagnostic : diagnostics.diagnostics()) {
+            std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+        }
+    }
+    assert(project && !diagnostics.has_error());
+    fsim::app::Simulation simulation {
+        std::move(*project), config.run.max_deltas, engine
+    };
+    const auto signal = simulation.find_signal(
+        "real_coverage_query.observed_coverage");
+    assert(signal);
+    const auto result = simulation.run();
+    assert(result.status == fsim::runtime::RunStatus::stopped);
+    const auto value = simulation.read_scalar_signal(*signal);
+    assert(value.kind == fsim::runtime::SystemVerilogScalarKind::Real);
+    assert(value.as_real() && *value.as_real() == 100.0);
+}
+
 void write_database_source(
     const std::filesystem::path& source,
     const bool load,
@@ -383,6 +438,9 @@ int main()
         std::filesystem::temp_directory_path()
         / "fsim-coverage-application-test"
     };
+    std::error_code cleanup_error;
+    std::filesystem::remove_all(directory.path, cleanup_error);
+    assert(!cleanup_error);
     std::filesystem::create_directories(directory.path);
     const auto source = directory.path / "coverage_query.sv";
     {
@@ -439,6 +497,15 @@ endmodule
         fsim::project::Optimization::o2, "cache-o2");
     verify_invalid_arity(
         directory.path, directory.path / "invalid_coverage_query.sv");
+    verify_real_coverpoint(
+        directory.path, fsim::project::Optimization::o0,
+        fsim::app::SimulationEngine::interpreter, "interpreter");
+    verify_real_coverpoint(
+        directory.path, fsim::project::Optimization::o0,
+        fsim::app::SimulationEngine::compiled, "compiled_o0");
+    verify_real_coverpoint(
+        directory.path, fsim::project::Optimization::o2,
+        fsim::app::SimulationEngine::compiled, "compiled_o2");
     verify_coverage_database(
         directory.path, fsim::project::Optimization::o0,
         fsim::app::SimulationEngine::interpreter, "interpreter");

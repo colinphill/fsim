@@ -201,6 +201,8 @@ enum class OutputFormat : std::uint8_t {
     real_general,
     hierarchy,
     time,
+    unformatted2,
+    unformatted4,
 };
 enum class EdgeKind : std::uint8_t { any,
     positive,
@@ -402,7 +404,7 @@ enum class ClassRandomKind : std::uint8_t {
 };
 
 /// Source-normalized expression forms admitted by the executable
-/// SystemVerilog-2017 constraint subset. Name and type bindings remain empty
+/// SystemVerilog constraint subset. Name and type bindings remain empty
 /// until specialization-aware constraint resolution.
 enum class ConstraintExpressionKind : std::uint8_t {
     invalid,
@@ -431,6 +433,7 @@ enum class ConstraintExpressionKind : std::uint8_t {
     foreach_constraint,
     solve_before,
     solve_list,
+    unique_constraint,
 };
 
 enum class ConstraintReferenceKind : std::uint8_t {
@@ -675,6 +678,11 @@ enum class ConcurrentAssertionKind : std::uint8_t {
     restriction,
 };
 
+enum class ConcurrentAssertionForm : std::uint8_t {
+    property,
+    sequence,
+};
+
 enum class AssertionRegion : std::uint8_t {
     preponed,
     observed,
@@ -690,6 +698,7 @@ struct AssertionObserverPolicy {
 
 struct ConcurrentAssertion {
     ConcurrentAssertionKind kind { ConcurrentAssertionKind::assertion };
+    ConcurrentAssertionForm form { ConcurrentAssertionForm::property };
     std::string name;
     bool explicit_label { };
     std::vector<std::string> property_tokens;

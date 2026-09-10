@@ -17,8 +17,6 @@
 
 namespace fsim::runtime::simir {
 
-#include "simir_interpreter_profiles.tpp"
-
 void Interpreter::set_file_root(std::filesystem::path root)
 {
     impl_->set_file_root(std::move(root));

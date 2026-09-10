@@ -292,12 +292,17 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             if (file->kind == runtime::simir::FileReadKind::character) {
                 result = state.context->read_file_character(handle);
             } else {
-                result = input1_bval == 0
-                    ? state.context->unread_file_character(
-                          handle,
-                          static_cast<std::int32_t>(
-                              static_cast<std::uint32_t>(input1_aval)))
-                    : -1;
+                if (input1_bval == 0) {
+                    const auto requested = static_cast<std::int32_t>(
+                        static_cast<std::uint32_t>(input1_aval));
+                    result = state.context->unread_file_character(
+                                 handle, requested)
+                            == requested
+                        ? 0
+                        : -1;
+                } else {
+                    result = -1;
+                }
             }
             *result_aval = static_cast<std::uint32_t>(result);
             return 0;

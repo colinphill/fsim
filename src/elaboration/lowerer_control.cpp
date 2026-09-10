@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "elaborator_internal.hpp"
+#include "lowerer_internal.hpp"
 
 namespace fsim::elaboration {
 using namespace runtime::simir;
@@ -1484,13 +1484,15 @@ void Lowerer::lower_runtime_foreach(const Statement& statement)
 
 void Lowerer::lower_if(const Statement& statement)
 {
+    const bool sampled_reads = sample_concurrent_assertion_reads_;
     if (const auto static_condition =
             static_integer_value(statement.condition)) {
-            lower_statements(
-                *static_condition != 0
-                    ? statement.statements
-                    : statement.else_statements);
-            return;
+        lower_statements(
+            *static_condition != 0
+                ? statement.statements
+                : statement.else_statements);
+        sample_concurrent_assertion_reads_ = sampled_reads;
+        return;
         }
         const auto condition = lower_condition(
             statement.condition,
@@ -1511,10 +1513,12 @@ void Lowerer::lower_if(const Statement& statement)
             Branch { *condition, 0, 0, unknown_policy });
         const auto true_start = static_cast<InstructionIndex>(process_.operations.size());
         lower_statements(statement.statements);
+        sample_concurrent_assertion_reads_ = sampled_reads;
         const auto jump_index = static_cast<InstructionIndex>(process_.operations.size());
         process_.operations.emplace_back(Jump { 0 });
         const auto false_start = static_cast<InstructionIndex>(process_.operations.size());
         lower_statements(statement.else_statements);
+        sample_concurrent_assertion_reads_ = sampled_reads;
         const auto end = static_cast<InstructionIndex>(process_.operations.size());
         process_.operations[branch_index] = Branch {
             *condition, true_start, false_start, unknown_policy

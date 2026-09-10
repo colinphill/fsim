@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "elaborator_internal.hpp"
+#include "hierarchy_builder_internal.hpp"
 #include "fsim/support/sha256.hpp"
 
 namespace fsim::elaboration {
@@ -282,6 +282,9 @@ frontend::DesignUnit udp_profile(
     frontend::DesignUnit result;
     result.kind = frontend::UnitKind::VerilogModule;
     result.language = declaration.language;
+    result.standard_revision = declaration.standard_revision;
+    result.verilog_compatibility_profile =
+        declaration.verilog_compatibility_profile;
     result.library = declaration.library;
     result.name = declaration.name;
     result.time_unit = declaration.time_unit;

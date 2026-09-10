@@ -282,6 +282,9 @@ class SystemVerilogHirBuilder final {
         }
         if (input.text == "@solve-before") return HirKind::solve_before;
         if (input.text == "@solve-list") return HirKind::solve_list;
+        if (input.text == "@constraint-unique") {
+          return HirKind::unique_constraint;
+        }
         return HirKind::call;
     }
     return HirKind::invalid;
@@ -516,7 +519,10 @@ class SystemVerilogHirBuilder final {
 
   void add_class(const frontend::SystemVerilogClassDeclaration& input) {
     sv::ClassDeclaration output;
-    output.name = input.name;
+    const auto generate_separator = input.name.rfind('.');
+    output.name = generate_separator == std::string::npos
+        ? input.name
+        : input.name.substr(generate_separator + 1U);
     output.canonical_identity = input.canonical_identity;
     if (const auto separator = input.canonical_identity.rfind("::");
         separator != std::string::npos) {
@@ -1319,7 +1325,8 @@ class SystemVerilogHirBuilder final {
       const frontend::GenerateRegion& input,
       const semantic::ScopeId parent_scope,
       const semantic::OriginId parent_origin) {
-    const auto label = !input.then_scope.empty()
+    const bool owns_scope = !input.then_scope.empty();
+    const auto label = owns_scope
         ? input.then_scope
         : "<generate>";
     const auto declaration_id = add_declaration_record(
@@ -1333,8 +1340,10 @@ class SystemVerilogHirBuilder final {
     const auto declaration_origin = declaration(declaration_id).origin;
     sv::GenerateRegion output;
     output.declaration = declaration_id;
-    output.scope = nested_scope(
-        parent_scope, label, declaration_source, declaration_origin);
+    output.scope = owns_scope
+        ? nested_scope(
+              parent_scope, label, declaration_source, declaration_origin)
+        : parent_scope;
     switch (input.kind) {
       case frontend::GenerateKind::StaticBlock:
         output.kind = sv::GenerateKind::block;
@@ -1360,7 +1369,9 @@ class SystemVerilogHirBuilder final {
         input.iteration, output.scope, declaration_origin);
     output.source = declaration_source;
     output.origin = declaration_origin;
-    declaration(declaration_id).nested_scope = output.scope;
+    if (owns_scope) {
+      declaration(declaration_id).nested_scope = output.scope;
+    }
     add_generate_body(input.then_body, output);
     if (!input.else_scope.empty()
         || !input.else_body.constants.empty()
@@ -1369,30 +1380,45 @@ class SystemVerilogHirBuilder final {
         || !input.else_body.variables.empty()
         || !input.else_body.functions.empty()
         || !input.else_body.tasks.empty()
+        || !input.else_body.systemverilog_classes.empty()
         || !input.else_body.concurrent_statements.empty()
         || !input.else_body.processes.empty()
         || !input.else_body.instances.empty()
         || !input.else_body.generate_regions.empty()) {
       frontend::GenerateRegion synthetic;
       synthetic.kind = frontend::GenerateKind::StaticBlock;
-      synthetic.then_scope = input.else_scope.empty()
+      const auto alternative_scope = input.else_scope.empty()
           ? label + ".else"
           : input.else_scope;
+      const bool shares_scope = owns_scope
+          && alternative_scope == input.then_scope;
+      synthetic.then_scope = shares_scope
+          ? std::string { }
+          : alternative_scope;
       synthetic.then_body = input.else_body;
       synthetic.span = input.span;
       output.nested.push_back(add_generate(
-          synthetic, output.scope, declaration_origin));
+          synthetic,
+          shares_scope ? output.scope : parent_scope,
+          declaration_origin));
     }
     for (const auto& alternative : input.alternatives) {
       frontend::GenerateRegion synthetic;
       synthetic.kind = frontend::GenerateKind::StaticBlock;
-      synthetic.then_scope = alternative.scope.empty()
+      const auto alternative_scope = alternative.scope.empty()
           ? label + ".alternative"
           : alternative.scope;
+      const bool shares_scope = owns_scope
+          && alternative_scope == input.then_scope;
+      synthetic.then_scope = shares_scope
+          ? std::string { }
+          : alternative_scope;
       synthetic.then_body = alternative.body;
       synthetic.span = alternative.span;
       output.nested.push_back(add_generate(
-          synthetic, output.scope, declaration_origin));
+          synthetic,
+          shares_scope ? output.scope : parent_scope,
+          declaration_origin));
     }
     declaration(declaration_id).children = output.declarations;
     return output;
@@ -1610,6 +1636,10 @@ class SystemVerilogHirBuilder final {
           input.systemverilog_concurrent_assertions[index];
       sv::ConcurrentAssertion assertion;
       assertion.kind = concurrent_assertion_kind(input_assertion.kind);
+      assertion.form = input_assertion.form
+              == frontend::SystemVerilogConcurrentAssertionForm::Sequence
+          ? sv::ConcurrentAssertionForm::sequence
+          : sv::ConcurrentAssertionForm::property;
       assertion.explicit_label = !input_assertion.label.empty();
       assertion.name = assertion.explicit_label
           ? input_assertion.label

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "elaborator_internal.hpp"
+#include "lowerer_internal.hpp"
 
 namespace fsim::elaboration {
 using namespace runtime::simir;
@@ -101,6 +101,9 @@ Lowerer::lower_inline_constraints(const Expression& expression)
             }
             if (input.text == "@solve-list") {
                 return TemplateKind::SolveList;
+            }
+            if (input.text == "@constraint-unique") {
+                return TemplateKind::Unique;
             }
             return std::nullopt;
         }();

@@ -707,6 +707,28 @@ void test_systemverilog_constraint_solver()
     SystemVerilogClassHeap replay_right { { }, 177 };
     const auto replay_left_handle = replay_left.allocate(random_descriptor);
     const auto replay_right_handle = replay_right.allocate(random_descriptor);
+    SystemVerilogClassRandomizeRequest checker_request;
+    checker_request.selection =
+        SystemVerilogClassRandomizeSelection::NoProperties;
+    checker_request.call_identity = "work::Packet::randomize@checker";
+    checker_request.limits.maximum_domain_values = 8;
+    checker_request.class_constraints = [&](auto& configured, const auto& ids) {
+        configured.add_clause(equal_clause(
+            "checker-a", ids.at("work::Packet::a"), 3));
+        configured.add_clause(equal_clause(
+            "checker-b", ids.at("work::Packet::b"), 2));
+    };
+    const auto checker_result = randomize_systemverilog_class_object(
+        replay_left, replay_left_handle, checker_request);
+    require(
+        checker_result.language_result() == 1
+            && replay_left.property(replay_left_handle, "a").packed
+                == value(2, 3)
+            && replay_left.property(replay_left_handle, "b").packed
+                == value(2, 2)
+            && replay_left.random_state(replay_left_handle, "a").revision == 0
+            && replay_left.random_state(replay_left_handle, "b").revision == 0,
+        "randomize(null) checker mode must evaluate fixed state without publishing properties or revisions");
     SystemVerilogClassRandomizeRequest replay_request;
     replay_request.call_identity = "work::Packet::randomize@replay";
     replay_request.limits.maximum_domain_values = 32;
@@ -721,7 +743,24 @@ void test_systemverilog_constraint_solver()
                 == replay_right.property(replay_right_handle, "a").packed
             && replay_left.property(replay_left_handle, "b").packed
                 == replay_right.property(replay_right_handle, "b").packed,
-        "equal object and call streams must replay the same unconstrained randomize assignment");
+        "a checker-only call must not perturb the stable stream used by a later randomize assignment");
+
+    SystemVerilogClassHeap failing_checker_heap { { }, 177 };
+    const auto failing_checker_handle =
+        failing_checker_heap.allocate(random_descriptor);
+    failing_checker_heap.property(failing_checker_handle, "a").packed
+        = value(2, 2);
+    const auto failing_checker_result = randomize_systemverilog_class_object(
+        failing_checker_heap, failing_checker_handle, checker_request);
+    require(
+        failing_checker_result.status
+                == SystemVerilogConstraintSolveStatus::Unsatisfiable
+            && failing_checker_result.language_result() == 0
+            && failing_checker_heap.property(
+                   failing_checker_handle, "a").packed == value(2, 2)
+            && failing_checker_heap.random_state(
+                   failing_checker_handle, "a").revision == 0,
+        "a failed randomize(null) check must return zero without changing fixed state");
 
     SystemVerilogClassDescriptor randc_descriptor;
     randc_descriptor.declared_type = "work::Cycle";

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "elaborator_internal.hpp"
+#include "hierarchy_builder_internal.hpp"
 
 namespace fsim::elaboration {
 namespace {
@@ -202,7 +202,8 @@ HierarchyBuilder::ConfiguredSystemVerilogInstance
 HierarchyBuilder::configure_systemverilog_instance(
     const DesignUnit& unit,
     const frontend::Instance& instance,
-    const std::string& path)
+    const std::string& path,
+    const bool allow_instance_rules)
 {
     ConfiguredSystemVerilogInstance result;
     if (unit.language != frontend::Language::SystemVerilog2017
@@ -240,12 +241,14 @@ HierarchyBuilder::configure_systemverilog_instance(
     }
 
     const frontend::SystemVerilogConfigurationRule* selected_rule = nullptr;
-    for (const auto& rule : declaration.rules) {
-        if (rule.kind
-                == frontend::SystemVerilogConfigurationRuleKind::Instance
-            && rule.selector == logical_path) {
-            selected_rule = &rule;
-            break;
+    if (allow_instance_rules) {
+        for (const auto& rule : declaration.rules) {
+            if (rule.kind
+                    == frontend::SystemVerilogConfigurationRuleKind::Instance
+                && rule.selector == logical_path) {
+                selected_rule = &rule;
+                break;
+            }
         }
     }
     if (selected_rule == nullptr) {
@@ -364,18 +367,139 @@ HierarchyBuilder::systemverilog_bound_instances(
     }
     std::vector<frontend::Instance> result;
     for (const auto* directive : compilation_unit_systemverilog_binds_) {
-        if (directive == nullptr
-            || (directive->target != unit.name
-                && directive->target != path
-                && directive->target != logical_path)) {
+        if (directive == nullptr) {
+            continue;
+        }
+        const bool instance_target = directive->target == path
+            || directive->target == logical_path;
+        bool scope_target = directive->target == unit.name;
+        const auto revision = systemverilog_bind_revisions_.find(directive);
+        const auto owner = systemverilog_bind_libraries_.find(directive);
+        if (!instance_target && scope_target
+            && revision != systemverilog_bind_revisions_.end()
+            && revision->second
+                == frontend::StandardRevision::SystemVerilog2023
+            && owner != systemverilog_bind_libraries_.end()) {
+            auto selected_library = owner->second;
+            auto selected_cell = directive->target;
+            const DesignUnit* configuration =
+                active_systemverilog_configuration_;
+            std::string base_path = active_root_;
+            for (const auto& [configured_path, candidate] :
+                systemverilog_configurations_by_path_) {
+                if ((path == configured_path
+                        || (path.size() > configured_path.size()
+                            && path.starts_with(configured_path)
+                            && path[configured_path.size()] == '.'))
+                    && configured_path.size() >= base_path.size()) {
+                    configuration = candidate;
+                    base_path = configured_path;
+                }
+            }
+            const auto selectable_cell = [&](const std::string_view library,
+                                             const std::string_view cell) {
+                return std::ranges::any_of(
+                    parsed_.units,
+                    [&](const DesignUnit& candidate) {
+                        return selectable_systemverilog_unit(candidate)
+                            && normalized_library(candidate) == library
+                            && candidate.name == cell;
+                    });
+            };
+            if (configuration != nullptr
+                && configuration->systemverilog_configuration) {
+                const auto& declaration =
+                    *configuration->systemverilog_configuration;
+                const frontend::SystemVerilogConfigurationRule*
+                    selected_rule = nullptr;
+                for (const auto& rule : declaration.rules) {
+                    if (rule.kind
+                            != frontend::SystemVerilogConfigurationRuleKind::Cell) {
+                        continue;
+                    }
+                    const auto [rule_library, rule_cell] =
+                        qualified_cell(rule.selector);
+                    if (rule_cell == directive->target
+                        && (rule_library.empty()
+                            || rule_library == owner->second)) {
+                        selected_rule = &rule;
+                        break;
+                    }
+                }
+                const auto select_from_liblist = [&](const auto& libraries) {
+                    for (const auto& library : libraries) {
+                        if (selectable_cell(library, directive->target)) {
+                            selected_library = library;
+                            selected_cell = directive->target;
+                            return;
+                        }
+                    }
+                    if (!libraries.empty()) {
+                        selected_library = libraries.front();
+                        selected_cell = directive->target;
+                    }
+                };
+                if (selected_rule != nullptr
+                    && selected_rule->selection
+                        == frontend::SystemVerilogConfigurationSelectionKind::Use) {
+                    selected_library = selected_rule->use_library.empty()
+                        ? std::string { normalized_library(*configuration) }
+                        : selected_rule->use_library;
+                    selected_cell = selected_rule->use_cell;
+                    if (selected_rule->use_configuration) {
+                        const auto selected_configuration =
+                            std::ranges::find_if(
+                                parsed_.units,
+                                [&](const DesignUnit& candidate) {
+                                    return candidate.kind
+                                            == frontend::UnitKind::SystemVerilogConfiguration
+                                        && normalized_library(candidate)
+                                            == selected_library
+                                        && candidate.name == selected_cell;
+                                });
+                        if (selected_configuration != parsed_.units.end()
+                            && selected_configuration
+                                ->systemverilog_configuration
+                            && selected_configuration
+                                   ->systemverilog_configuration
+                                   ->designs.size() == 1U) {
+                            const auto& design = selected_configuration
+                                ->systemverilog_configuration->designs.front();
+                            selected_library = design.library.empty()
+                                ? std::string {
+                                      normalized_library(
+                                          *selected_configuration) }
+                                : design.library;
+                            selected_cell = design.cell;
+                        }
+                    }
+                } else if (selected_rule != nullptr) {
+                    select_from_liblist(selected_rule->liblist);
+                } else {
+                    select_from_liblist(declaration.default_liblist);
+                }
+            }
+            scope_target =
+                (unit.kind == frontend::UnitKind::VerilogModule
+                    || unit.kind
+                        == frontend::UnitKind::SystemVerilogInterface)
+                && normalized_library(unit) == selected_library
+                && unit.name == selected_cell;
+        }
+        if (!instance_target && !scope_target) {
             continue;
         }
         used_compilation_unit_systemverilog_binds_.insert(directive);
-        const auto owner = systemverilog_bind_libraries_.find(directive);
         for (const auto& instance : directive->instances) {
             if (owner != systemverilog_bind_libraries_.end()) {
                 systemverilog_bound_instance_libraries_.insert_or_assign(
                     path + "." + instance.name, owner->second);
+            }
+            if (revision != systemverilog_bind_revisions_.end()
+                && revision->second
+                    == frontend::StandardRevision::SystemVerilog2023) {
+                systemverilog2023_bound_instances_.insert(
+                    path + "." + instance.name);
             }
         }
         result.insert(

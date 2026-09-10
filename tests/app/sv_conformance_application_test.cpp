@@ -1196,6 +1196,249 @@ endmodule
 #endif
 }
 
+void test_constant_function_severity_messages(
+    const std::filesystem::path& root)
+{
+    const auto source = root / "constant-function-severity.sv";
+    write_text(source, R"(
+module constant_function_severity;
+  function automatic int announce(input int value);
+    $info("selected=%0d", value);
+    $warning("checked");
+    return value;
+  endfunction
+  localparam int SELECTED = announce(7);
+endmodule
+)" );
+
+    fsim::project::Config config;
+    config.base_directory = root;
+    config.project.name = "constant-function-severity";
+    config.project.top = "constant_function_severity";
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2023";
+    sources.library = "work";
+    sources.files = { source };
+    config.source_sets.push_back(std::move(sources));
+
+    fsim::diagnostic::Engine diagnostics;
+    const auto project = fsim::app::build_project(config, diagnostics);
+    assert(project && !diagnostics.has_error());
+    const auto& entries = diagnostics.diagnostics();
+    assert(std::ranges::count_if(entries, [](const auto& diagnostic) {
+        return diagnostic.code == "FSIM-ELAB-SVCONST-002"
+            && diagnostic.severity == fsim::diagnostic::Severity::note
+            && diagnostic.message.find("selected=7") != std::string::npos;
+    }) == 1);
+    assert(std::ranges::count_if(entries, [](const auto& diagnostic) {
+        return diagnostic.code == "FSIM-ELAB-SVCONST-002"
+            && diagnostic.severity == fsim::diagnostic::Severity::warning
+            && diagnostic.message.find("checked") != std::string::npos;
+    }) == 1);
+}
+
+void test_program_elaboration_severity_messages(
+    const std::filesystem::path& root)
+{
+    const auto source = root / "program-elaboration-severity.sv";
+    write_text(source, R"(
+program program_elaboration_severity;
+  localparam int VALUE = 9;
+  $warning("direct=%0d", VALUE);
+  if (VALUE == 9) $info("selected=%0d", VALUE);
+  else $error("unselected");
+endprogram
+)" );
+
+    fsim::project::Config config;
+    config.base_directory = root;
+    config.project.name = "program-elaboration-severity";
+    config.project.top = "program_elaboration_severity";
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2023";
+    sources.library = "work";
+    sources.files = { source };
+    config.source_sets.push_back(std::move(sources));
+
+    const auto require_messages = [&](const std::string_view phase) {
+        fsim::diagnostic::Engine diagnostics;
+        const auto project = fsim::app::build_project(config, diagnostics);
+        assert(project && !diagnostics.has_error());
+        assert(project->design.processes().empty());
+        const auto& entries = diagnostics.diagnostics();
+        assert(std::ranges::count_if(entries, [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ELAB-SVPROGRAM-002"
+                && diagnostic.severity == fsim::diagnostic::Severity::warning
+                && diagnostic.message.find("direct=9") != std::string::npos;
+        }) == 1);
+        assert(std::ranges::count_if(entries, [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ELAB-SVPROGRAM-002"
+                && diagnostic.severity == fsim::diagnostic::Severity::note
+                && diagnostic.message.find("selected=9") != std::string::npos;
+        }) == 1);
+        assert(std::ranges::none_of(entries, [](const auto& diagnostic) {
+            return diagnostic.message.find("unselected")
+                != std::string::npos;
+        }));
+        (void)phase;
+    };
+    require_messages("cold");
+    require_messages("warm");
+
+    const auto failing_source = root / "program-elaboration-error.sv";
+    write_text(failing_source, R"(
+program program_elaboration_error;
+  if (1) $error("selected failure");
+endprogram
+)" );
+    config.project.name = "program-elaboration-error";
+    config.project.top = "program_elaboration_error";
+    config.source_sets.front().files = { failing_source };
+    fsim::diagnostic::Engine failing_diagnostics;
+    assert(!fsim::app::build_project(config, failing_diagnostics));
+    assert(std::ranges::any_of(
+        failing_diagnostics.diagnostics(), [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ELAB-SVPROGRAM-002"
+                && diagnostic.severity == fsim::diagnostic::Severity::error
+                && diagnostic.message.find("selected failure")
+                    != std::string::npos;
+        }));
+}
+
+void test_package_lookup_revision_rules(
+    const std::filesystem::path& directory)
+{
+    const auto root = directory / "package-lookup-revision";
+    std::filesystem::create_directories(root);
+    const auto source = root / "package-lookup.sv";
+    write_text(source, R"(
+package base_lookup;
+  parameter int VALUE = 9;
+  typedef logic [7:0] word_t;
+  function automatic int bump(input int value);
+    return value + 3;
+  endfunction
+  let adjust(value) = value + 2;
+  interface class observer;
+    pure virtual function int sample();
+  endclass
+endpackage
+
+package selected_lookup;
+  import base_lookup::*;
+  export base_lookup::VALUE, base_lookup::word_t, base_lookup::bump,
+         base_lookup::adjust, base_lookup::observer;
+endpackage
+
+package public_lookup;
+  import base_lookup::*;
+  import selected_lookup::*;
+  export base_lookup::*;
+  export selected_lookup::*;
+endpackage
+
+module assignment_revision
+    import public_lookup::VALUE, public_lookup::word_t,
+           public_lookup::bump, public_lookup::adjust,
+           public_lookup::observer;
+    #(parameter int INITIAL = VALUE)
+    (output logic [31:0] result);
+  word_t retained_type;
+  observer retained_contract;
+  initial begin
+    retained_type = INITIAL;
+    result = bump(adjust(retained_type));
+  end
+endmodule
+)");
+
+    fsim::project::Config config;
+    config.base_directory = root;
+    config.project.name = "sv-2023-package-lookup-revision";
+    config.project.top = "sv:work.assignment_revision";
+    config.run.max_deltas = 1000;
+    config.source_sets = { identity_source_set(
+        fsim::project::Language::system_verilog, "2023", source) };
+
+    const auto interpreted = run_assignment_result(
+        config, fsim::app::SimulationEngine::interpreter);
+    assert(interpreted == 14U);
+    for (const auto optimization : {
+             fsim::project::Optimization::o0,
+             fsim::project::Optimization::o2 }) {
+        config.build.optimization = optimization;
+        config.build.cache_path = root
+            / (optimization == fsim::project::Optimization::o0
+                    ? "cache-o0" : "cache-o2");
+        const auto cold = run_assignment_result(
+            config, fsim::app::SimulationEngine::compiled);
+        const auto warm = run_assignment_result(
+            config, fsim::app::SimulationEngine::compiled);
+        assert(cold == interpreted);
+        assert(warm == interpreted);
+    }
+
+    const auto shadow_source = root / "package-wildcard-shadow.sv";
+    write_text(shadow_source, R"(
+package first_lookup;
+  parameter int VALUE = 1;
+endpackage
+package second_lookup;
+  parameter int VALUE = 2;
+endpackage
+module assignment_revision import first_lookup::*, second_lookup::*;
+    (output logic [31:0] result);
+  localparam int VALUE = 7;
+  initial result = VALUE;
+endmodule
+)");
+    config.project.name = "sv-2023-package-wildcard-shadow";
+    config.source_sets.front().files = { shadow_source };
+    config.build.cache_path.clear();
+    assert(run_assignment_result(
+               config, fsim::app::SimulationEngine::interpreter)
+        == 7U);
+
+    const auto unused_source = root / "package-wildcard-unused.sv";
+    write_text(unused_source, R"(
+package first_lookup;
+  parameter int VALUE = 1;
+endpackage
+package second_lookup;
+  parameter int VALUE = 2;
+endpackage
+module assignment_revision import first_lookup::*, second_lookup::*;
+    (output logic [31:0] result);
+  initial result = 5;
+endmodule
+)");
+    config.project.name = "sv-2023-package-wildcard-unused";
+    config.source_sets.front().files = { unused_source };
+    assert(run_assignment_result(
+               config, fsim::app::SimulationEngine::interpreter)
+        == 5U);
+
+    const auto conflict_source = root / "package-explicit-conflict.sv";
+    write_text(conflict_source, R"(
+package conflict_lookup;
+  parameter int VALUE = 1;
+endpackage
+module assignment_revision import conflict_lookup::VALUE;
+    (output logic [31:0] result);
+  localparam int VALUE = 7;
+  initial result = VALUE;
+endmodule
+)");
+    config.project.name = "sv-2023-package-explicit-conflict";
+    config.source_sets.front().files = { conflict_source };
+    fsim::diagnostic::Engine conflict_diagnostics;
+    assert(!fsim::app::build_project(config, conflict_diagnostics));
+    assert(has_diagnostic(
+        conflict_diagnostics, "FSIM-ELAB-SVPKG-009"));
+}
+
 } // namespace
 
 int main()
@@ -1215,6 +1458,9 @@ int main()
     test_operator_and_expression_revision_rules(directory.path);
     test_procedural_statement_revision_rules(directory.path);
     test_callable_argument_revision_rules(directory.path);
+    test_constant_function_severity_messages(directory.path);
+    test_program_elaboration_severity_messages(directory.path);
+    test_package_lookup_revision_rules(directory.path);
     test_2023_artifact_and_cache_round_trip(directory.path);
     const auto source = directory.path / "conformance.sv";
 

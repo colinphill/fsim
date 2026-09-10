@@ -431,6 +431,43 @@ std::vector<Expression> VerilogParser::parse_constraint_block_expressions(
         };
     };
     parse_constraint_item = [&]() {
+        if (match_keyword("unique")) {
+            const auto unique_token = previous();
+            (void)require_standard(
+                "a unique constraint",
+                StandardRevision::SystemVerilog2012,
+                unique_token,
+                "FSIM-SV-PARSE-349");
+            expect(
+                TokenKind::LeftBrace,
+                "'{' after unique",
+                "FSIM-SV-PARSE-377");
+            std::vector<Expression> operands;
+            if (at(TokenKind::RightBrace)) {
+                error(
+                    current(),
+                    "FSIM-SV-PARSE-378",
+                    "a unique constraint requires at least one item");
+            } else {
+                do {
+                    operands.push_back(parse_expression());
+                } while (match(TokenKind::Comma));
+            }
+            expect(
+                TokenKind::RightBrace,
+                "'}' after unique constraint items",
+                "FSIM-SV-PARSE-379");
+            expect(
+                TokenKind::Semicolon,
+                "';' after unique constraint",
+                "FSIM-SV-PARSE-380");
+            return Expression {
+                ExpressionKind::Call,
+                "@constraint-unique",
+                std::move(operands),
+                cover(unique_token.span, previous().span)
+            };
+        }
         if (match_keyword("solve")) {
             const auto solve_token = previous();
             std::vector<Expression> earlier;

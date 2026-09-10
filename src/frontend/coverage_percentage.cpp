@@ -133,6 +133,22 @@ namespace {
                     result.covered_weight = saturating_add(result.covered_weight, bin.weight);
                 }
             }
+            if (declaration.effective_cross_retain_auto_bins) {
+                for (const auto& state : instance.cross_bin_state) {
+                    if (state.coverage_declaration_index
+                            != item.declaration_index
+                        || state.bin_declaration_index || state.excluded
+                        || state.weight == 0U) {
+                        continue;
+                    }
+                    result.eligible_weight = saturating_add(
+                        result.eligible_weight, state.weight);
+                    if (state.covered) {
+                        result.covered_weight = saturating_add(
+                            result.covered_weight, state.weight);
+                    }
+                }
+            }
         }
         result.coverage = percentage(
             result.covered_weight, result.eligible_weight, item.effective_goal);

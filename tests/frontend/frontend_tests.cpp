@@ -279,6 +279,7 @@ int main()
         test_systemverilog_preprocessor();
         test_systemverilog_uvm_macro_surface();
         test_systemverilog_public_conformance_frontend();
+        test_systemverilog_checker_revisions();
         test_systemverilog_2023_profile_isolation();
         test_verilog_systemverilog_compatibility_defaults();
         test_msvc_debug_frontend_portability();
@@ -340,6 +341,7 @@ int main()
         test_conditional_statement_trees();
         test_conditional_generate_hierarchy();
         test_verilog_defparam_declarations();
+        test_systemverilog_generate_scope_revision();
         test_systemverilog_named_events();
         test_verilog_literal_display();
         test_systemverilog_random_functions();

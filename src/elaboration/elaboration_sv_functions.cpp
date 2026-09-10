@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "elaborator_internal.hpp"
+#include "elaboration_sv_function_evaluator_internal.hpp"
 
 #include "fsim/support/sha256.hpp"
 
 #include <set>
 
 namespace fsim::elaboration::elaboration_detail {
-namespace {
-
-using Value = SystemVerilogConstantValue;
-using CallCache = std::unordered_map<std::string, Value>;
-
 thread_local CallCache* active_fold_call_cache { };
 thread_local std::vector<std::unique_ptr<CallCache>>
     active_elaboration_call_caches;
+thread_local std::vector<Diagnostic>*
+    active_constant_function_diagnostics { };
+thread_local std::vector<frontend::Diagnostic>*
+    active_constant_function_messages { };
 
 void append_key_component(
     std::string& key,
@@ -58,6 +57,21 @@ void append_statement_behavior(
     append_key_component(identity, statement.label);
     append_key_component(identity, statement.task_name);
     append_key_component(identity, statement.procedure_name);
+    append_key_component(identity, statement.output_text);
+    append_key_component(identity, statement.output_prefix);
+    append_key_component(identity, statement.output_suffix);
+    append_key_component(identity, statement.output_trailing_text);
+    append_key_component(identity,
+        std::to_string(static_cast<unsigned>(
+            statement.assertion_severity)));
+    append_key_component(identity,
+        std::to_string(statement.output_suppress_leading_zero));
+    append_key_component(identity,
+        std::to_string(statement.output_minimum_width));
+    append_key_component(identity,
+        std::to_string(statement.output_left_justify));
+    append_key_component(identity,
+        std::to_string(statement.output_zero_pad));
     append_key_component(identity, statement.loop_variable);
     append_key_component(identity,
         std::to_string(statement.loop_descending));
@@ -72,6 +86,20 @@ void append_statement_behavior(
         identity, statement.loop_limit, identifiers);
     for (const auto& argument : statement.task_arguments) {
         append_expression_behavior(identity, argument, identifiers);
+    }
+    for (const auto& output : statement.output_values) {
+        append_expression_behavior(identity, output.value, identifiers);
+        append_key_component(identity,
+            std::to_string(static_cast<unsigned>(output.format)));
+        append_key_component(identity, output.prefix);
+        append_key_component(identity,
+            std::to_string(output.suppress_leading_zero));
+        append_key_component(identity,
+            std::to_string(output.minimum_width));
+        append_key_component(identity,
+            std::to_string(output.left_justify));
+        append_key_component(identity,
+            std::to_string(output.zero_pad));
     }
     for (const auto& association : statement.procedure_arguments) {
         append_expression_behavior(
@@ -100,11 +128,6 @@ void append_statement_behavior(
         append_statement_behavior(identity, nested, identifiers);
     }
 }
-
-struct CallableBehaviorIdentity {
-    std::string digest;
-    std::set<std::string> identifiers;
-};
 
 CallableBehaviorIdentity callable_behavior_identity(
     const frontend::FunctionDeclaration& function)
@@ -175,25 +198,19 @@ private:
     CallCache* previous_ { };
 };
 
-enum class Flow {
-    normal,
-    returned,
-    broken,
-    continued,
-    failed,
-};
-
 [[nodiscard]] bool callable_name_matches(
     const std::string_view declared,
     const std::string_view referenced,
-    const frontend::Language language) {
+    const frontend::Language language)
+{
     if (declared == referenced) {
         return true;
     }
     const auto leaf_name = [](const std::string_view name) {
         const auto separator = name.find_last_of(".:");
         return separator == std::string_view::npos
-            ? name : name.substr(separator + 1U);
+            ? name
+            : name.substr(separator + 1U);
     };
     return language != frontend::Language::Vhdl2008
         && leaf_name(declared) == leaf_name(referenced)
@@ -201,20 +218,18 @@ enum class Flow {
             || referenced.find_first_of(".[") != std::string_view::npos);
 }
 
-#include "elaboration_sv_function_evaluator_expression.tpp"
-#include "elaboration_sv_function_evaluator_execution.tpp"
-
 void fold_expression(
     Expression& expression,
     const std::vector<frontend::FunctionDeclaration>& functions,
     const SystemVerilogConstantEnvironment& environment,
-    const ConstantEnvironment& fallback) {
+    const ConstantEnvironment& fallback)
+{
     for (auto& operand : expression.operands) {
         fold_expression(
             operand, functions, environment, fallback);
     }
     for (auto& association :
-         expression.aggregate_choice_expressions) {
+        expression.aggregate_choice_expressions) {
         for (auto& choice : association) {
             fold_expression(
                 choice, functions, environment, fallback);
@@ -225,18 +240,19 @@ void fold_expression(
             functions,
             [&](const auto& function) {
                 return (function.language == frontend::Language::Vhdl2008
-                            ? function.name == expression.text
-                            : callable_name_matches(
-                                  function.name,
-                                  expression.text,
-                                  function.language))
+                               ? function.name == expression.text
+                               : callable_name_matches(
+                                     function.name,
+                                     expression.text,
+                                     function.language))
                     && !function.return_type.systemverilog_container;
             })) {
         return;
     }
     std::string error;
-    ConstantFunctionEvaluator evaluator{
-        functions, environment, fallback};
+    ConstantFunctionEvaluator evaluator {
+        functions, environment, fallback
+    };
     if (const auto value = evaluator.evaluate(expression, error)) {
         expression = value->expression(expression.span);
     }
@@ -246,7 +262,8 @@ void fold_type(
     frontend::Type& type,
     const std::vector<frontend::FunctionDeclaration>& functions,
     const SystemVerilogConstantEnvironment& environment,
-    const ConstantEnvironment& fallback) {
+    const ConstantEnvironment& fallback)
+{
     const auto fold_range = [&](auto& range) {
         if (range) {
             fold_expression(
@@ -277,7 +294,8 @@ void fold_statements(
     std::vector<Statement>& statements,
     const std::vector<frontend::FunctionDeclaration>& functions,
     const SystemVerilogConstantEnvironment& environment,
-    const ConstantEnvironment& fallback) {
+    const ConstantEnvironment& fallback)
+{
     for (auto& statement : statements) {
         fold_expression(
             statement.target, functions, environment, fallback);
@@ -290,7 +308,7 @@ void fold_statements(
                 argument, functions, environment, fallback);
         }
         for (auto& association :
-             statement.procedure_arguments) {
+            statement.procedure_arguments) {
             fold_expression(
                 association.value,
                 functions,
@@ -316,7 +334,7 @@ void fold_statements(
             }
         }
         for (auto& alternative :
-             statement.case_alternatives) {
+            statement.case_alternatives) {
             for (auto& choice : alternative.choices) {
                 fold_expression(
                     choice, functions, environment, fallback);
@@ -350,7 +368,8 @@ void fold_generate_body(
     frontend::GenerateBody& body,
     const std::vector<frontend::FunctionDeclaration>& functions,
     const SystemVerilogConstantEnvironment& environment,
-    const ConstantEnvironment& fallback) {
+    const ConstantEnvironment& fallback)
+{
     std::optional<std::vector<frontend::FunctionDeclaration>>
         owned_visible_functions;
     const auto* visible_functions = &functions;
@@ -518,7 +537,8 @@ void fold_generate_regions(
     std::vector<frontend::GenerateRegion>& regions,
     const std::vector<frontend::FunctionDeclaration>& functions,
     const SystemVerilogConstantEnvironment& environment,
-    const ConstantEnvironment& fallback) {
+    const ConstantEnvironment& fallback)
+{
     for (auto& region : regions) {
         fold_expression(
             region.initial, functions, environment, fallback);
@@ -529,7 +549,8 @@ void fold_generate_regions(
         if (region.kind == frontend::GenerateKind::Conditional) {
             std::string error;
             ConstantFunctionEvaluator evaluator {
-                functions, environment, fallback };
+                functions, environment, fallback
+            };
             if (const auto condition = evaluator.evaluate(
                     region.condition, error)) {
                 if (const auto truth = condition->truth_value()) {
@@ -567,17 +588,23 @@ void fold_generate_regions(
     }
 }
 
-} // namespace
-
-ConstantFunctionMemoizationScope::ConstantFunctionMemoizationScope()
+ConstantFunctionMemoizationScope::ConstantFunctionMemoizationScope(
+    std::vector<Diagnostic>& diagnostics,
+    std::vector<frontend::Diagnostic>& messages)
+    : previous_diagnostics_ { active_constant_function_diagnostics }
+    , previous_messages_ { active_constant_function_messages }
 {
     active_elaboration_call_caches.push_back(
         std::make_unique<CallCache>());
+    active_constant_function_diagnostics = &diagnostics;
+    active_constant_function_messages = &messages;
 }
 
 ConstantFunctionMemoizationScope::~ConstantFunctionMemoizationScope()
 {
     active_elaboration_call_caches.pop_back();
+    active_constant_function_diagnostics = previous_diagnostics_;
+    active_constant_function_messages = previous_messages_;
 }
 
 std::optional<SystemVerilogConstantValue>
@@ -586,17 +613,33 @@ evaluate_systemverilog_constant_function_expression(
     const SystemVerilogConstantEnvironment& environment,
     const ConstantEnvironment& fallback_environment,
     const std::vector<frontend::FunctionDeclaration>& functions,
-    std::string& error) {
-    ConstantFunctionEvaluator evaluator{
-        functions, environment, fallback_environment};
+    std::string& error)
+{
+    ConstantFunctionEvaluator evaluator {
+        functions, environment, fallback_environment
+    };
     return evaluator.evaluate(expression, error);
+}
+
+bool evaluate_systemverilog_elaboration_report(
+    const Statement& statement,
+    const SystemVerilogConstantEnvironment& environment,
+    const ConstantEnvironment& fallback_environment,
+    const std::vector<frontend::FunctionDeclaration>& functions,
+    std::string& error)
+{
+    ConstantFunctionEvaluator evaluator {
+        functions, environment, fallback_environment
+    };
+    return evaluator.evaluate_elaboration_report(statement, error);
 }
 
 void fold_systemverilog_constant_functions(
     frontend::GenerateBody& body,
     const std::vector<frontend::FunctionDeclaration>& functions,
     const SystemVerilogConstantEnvironment& environment,
-    const ConstantEnvironment& fallback_environment) {
+    const ConstantEnvironment& fallback_environment)
+{
     CallCache call_cache;
     const FoldCallCacheScope cache_scope { call_cache };
     fold_generate_body(
@@ -607,7 +650,8 @@ void fold_systemverilog_constant_functions(
     DesignUnit& unit,
     const SystemVerilogConstantEnvironment& environment,
     const ConstantEnvironment& fallback_environment,
-    std::vector<Diagnostic>&) {
+    std::vector<Diagnostic>&)
+{
     CallCache call_cache;
     const FoldCallCacheScope cache_scope { call_cache };
     const auto& functions = unit.functions;

@@ -22,6 +22,8 @@ set(FSIM_PORTABLE_TEST
   "${FSIM_SOURCE_DIR}/tests/library/library_artifact_test.cpp")
 set(FSIM_PHASE_TEST
   "${FSIM_SOURCE_DIR}/tests/app/application_test_artifact_phases.cpp")
+set(FSIM_PHASE_VERILOG_TEST
+  "${FSIM_SOURCE_DIR}/tests/app/application_test_artifact_verilog.cpp")
 set(FSIM_TEST_BUILD "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
 foreach(FSIM_INPUT IN ITEMS
     "${FSIM_CONTRACT}"
@@ -33,6 +35,7 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_OBJECT_TEST}"
     "${FSIM_PORTABLE_TEST}"
     "${FSIM_PHASE_TEST}"
+    "${FSIM_PHASE_VERILOG_TEST}"
     "${FSIM_TEST_BUILD}")
   if(NOT EXISTS "${FSIM_INPUT}")
     message(FATAL_ERROR "portable object freeze input is missing: ${FSIM_INPUT}")
@@ -86,9 +89,9 @@ fsim_require_portable_object_tokens("${FSIM_OBJECT_HEADER}"
   "Canonical little-endian metadata codec"
   "installed .fsimobj tree is read-only")
 fsim_require_portable_object_tokens("${FSIM_LIBRARY_HEADER}"
-  "kPortableSchemaVersion = 11")
+  "kPortableSchemaVersion = 14")
 fsim_require_portable_object_tokens("${FSIM_PORTABLE_HEADER}"
-  "kOwningUnitSchemaVersion = 28"
+  "kOwningUnitSchemaVersion = 31"
   "kUdpDeclarationSchemaVersion = 1"
   "Unknown schemas, truncation, trailing bytes, and out-of-range values reject")
 
@@ -122,8 +125,8 @@ fsim_require_portable_object_tokens("${FSIM_OBJECT_TEST}"
   "kObjectFormatVersion == 7U"
   "kCodeCoverageArtifactDiagnostic"
   "stale-coverage"
-  "kPortableSchemaVersion == 11U"
-  "kOwningUnitSchemaVersion == 28U"
+  "kPortableSchemaVersion == 14U"
+  "kOwningUnitSchemaVersion == 31U"
   "corrupt-magic"
   "stale-format"
   "future-format"
@@ -147,7 +150,8 @@ fsim_require_portable_object_tokens("${FSIM_PORTABLE_TEST}"
 fsim_require_portable_object_tokens("${FSIM_PHASE_TEST}"
   ".fsimobj"
   "artifact-vhdl-stale.fsimobj"
-  "artifact-vhdl-2019.fsimobj.producer-hidden"
+  "artifact-vhdl-2019.fsimobj.producer-hidden")
+fsim_require_portable_object_tokens("${FSIM_PHASE_VERILOG_TEST}"
   "stages=compile/object/elaborate/design/simulate")
 fsim_require_portable_object_tokens("${FSIM_TEST_BUILD}"
   "NAME fsim.portable-object-schema-freeze"

@@ -22,18 +22,12 @@ namespace {
         }
     }
 
-    bool has_code(
-        const fsim::frontend::ParseResult& result,
-        const std::string_view code)
-    {
-        return std::ranges::any_of(
-            result.diagnostics,
-            [&](const fsim::frontend::Diagnostic& diagnostic) {
-                return diagnostic.code == code;
-            });
-    }
-
 } // namespace
+
+void test_systemverilog_coverage_resources_and_persistence(
+    const fsim::frontend::SystemVerilogCovergroupDeclaration& explicit_group,
+    const std::vector<fsim::frontend::SystemVerilogCovergroupSampleInput>&
+        execution_input);
 
 void test_systemverilog_covergroup_declarations()
 {
@@ -852,14 +846,12 @@ endmodule
             && std::ranges::any_of(
                 wide_cross_sample.hit_cross_bin_identities,
                 [](const std::string& identity) {
-                    return identity.find("wide_pair.exact_pair<")
-                        != std::string::npos;
+                    return identity.ends_with("wide_pair.exact_pair");
                 })
             && std::ranges::any_of(
                 wide_cross_sample.hit_cross_bin_identities,
                 [](const std::string& identity) {
-                    return identity.find("wide_equal.equal<")
-                        != std::string::npos;
+                    return identity.ends_with("wide_equal.equal");
                 })
             && wide_cross_diagnostics.empty(),
         "cross intersect and wildcard domains compare all 137 sample bits without scalar truncation");
@@ -876,10 +868,17 @@ endmodule
                 { 0, 0U, 137U, wide_value(0x11U), known_wide, false } } },
         wide_cross_diagnostics);
     require(
-        wide_cross_with_sample.hit_cross_bin_identities.size() == 1U
-            && wide_cross_with_sample.hit_cross_bin_identities.front().find(
-                   "wide_equal.equal<")
-                != std::string::npos
+        wide_cross_with_sample.hit_cross_bin_identities.size() == 2U
+            && std::ranges::any_of(
+                wide_cross_with_sample.hit_cross_bin_identities,
+                [](const std::string& identity) {
+                    return identity.ends_with("wide_equal.equal");
+                })
+            && std::ranges::any_of(
+                wide_cross_with_sample.hit_cross_bin_identities,
+                [](const std::string& identity) {
+                    return identity.find("wide_pair<") != std::string::npos;
+                })
             && wide_cross_diagnostics.empty(),
         "cross with cardinality compares arbitrary-width value tuples exactly");
 
@@ -1150,46 +1149,49 @@ endmodule
     const auto invalid_cross_transaction = sample_systemverilog_covergroup(
         cross_instance, cross_group, duplicate_inputs,
         cross_sample_diagnostics);
+    auto selected_state = std::ranges::find_if(
+        cross_instance.cross_bin_state,
+        [](const auto& state) {
+            return state.identity.ends_with("pair.selected");
+        });
+    const auto complement_state = std::ranges::find_if(
+        cross_instance.cross_bin_state,
+        [](const auto& state) {
+            return state.identity.ends_with("pair.complement");
+        });
     require(
         included_cross_first.coverpoints.size() == 2
             && included_cross_first.hit_cross_bin_identities.size() == 1
             && included_cross_first.hit_cross_bin_identities.front()
-                    .find("pair.selected<")
-                != std::string::npos
+                    .ends_with("pair.selected")
             && included_cross_second.hit_cross_bin_identities
                 == included_cross_first.hit_cross_bin_identities
             && excluded_cross.excluded_cross_bin_identities.size() == 1
             && cross_instance.cross_bin_state.size() == 2
-            && cross_instance.cross_bin_state[0].hit_count == 2
-            && cross_instance.cross_bin_state[0].weight == 2
-            && cross_instance.cross_bin_state[0].goal == 80
-            && cross_instance.cross_bin_state[0].at_least == 2
-            && cross_instance.cross_bin_state[0].covered
-            && !cross_instance.cross_bin_state[0].excluded
-            && cross_instance.cross_bin_state[0]
-                    .operand_bin_identities.size()
-                == 2
-            && cross_instance.cross_bin_state[0]
-                .operand_bin_identities[0]
-                .ends_with(".low")
-            && cross_instance.cross_bin_state[0]
-                .operand_bin_identities[1]
-                .ends_with(".high")
-            && cross_instance.cross_bin_state[1].excluded
-            && cross_instance.cross_bin_state[1].exclusion_count == 1
+            && selected_state != cross_instance.cross_bin_state.end()
+            && selected_state->hit_count == 2
+            && selected_state->weight == 2
+            && selected_state->goal == 80
+            && selected_state->at_least == 2
+            && selected_state->covered
+            && !selected_state->excluded
+            && selected_state->operand_bin_identities.empty()
+            && complement_state != cross_instance.cross_bin_state.end()
+            && complement_state->excluded
+            && complement_state->exclusion_count == 1
             && invalid_cross_transaction.coverpoints.empty()
             && cross_instance.cross_bin_state.size()
                 == cross_state_before_invalid.size()
             && cross_sample_diagnostics.empty(),
         "automatic cross tuples sample transactionally with stable hit/exclusion state");
 
-    cross_instance.cross_bin_state[0].hit_count = std::numeric_limits<std::uint64_t>::max();
+    selected_state->hit_count = std::numeric_limits<std::uint64_t>::max();
     const auto cross_overflow = sample_systemverilog_covergroup(
         cross_instance, cross_group, included_inputs,
         cross_sample_diagnostics);
     require(
         cross_overflow.hit_cross_bin_identities.empty()
-            && cross_instance.cross_bin_state[0].hit_count
+            && selected_state->hit_count
                 == std::numeric_limits<std::uint64_t>::max()
             && cross_sample_diagnostics.size() == 1
             && cross_sample_diagnostics.front().code == "FSIM-SV-COV-002",
@@ -1236,23 +1238,26 @@ endmodule
         cross_with_inputs,
         cross_with_sample_diagnostics);
     require(
-        cross_with_sample.hit_cross_bin_identities.size() == 2U
+        cross_with_sample.hit_cross_bin_identities.size() == 3U
             && std::ranges::any_of(
                 cross_with_sample.hit_cross_bin_identities,
                 [](const std::string& identity) {
-                    return identity.find("enough_pair.enough<")
-                        != std::string::npos;
+                    return identity.ends_with("enough_pair.enough");
                 })
             && std::ranges::any_of(
                 cross_with_sample.hit_cross_bin_identities,
                 [](const std::string& identity) {
-                    return identity.find("all_pair.all_values<")
-                        != std::string::npos;
+                    return identity.ends_with("all_pair.all_values");
                 })
             && std::ranges::none_of(
                 cross_with_sample.hit_cross_bin_identities,
                 [](const std::string& identity) {
-                    return identity.find("too_many_pair.too_many<")
+                    return identity.ends_with("too_many_pair.too_many");
+                })
+            && std::ranges::any_of(
+                cross_with_sample.hit_cross_bin_identities,
+                [](const std::string& identity) {
+                    return identity.find("too_many_pair<")
                         != std::string::npos;
                 })
             && cross_with_sample_diagnostics.empty(),
@@ -1297,9 +1302,8 @@ endmodule
         default_cross_sample_diagnostics);
     require(
         default_cross_sample.hit_cross_bin_identities.size() == 1U
-            && default_cross_sample.hit_cross_bin_identities.front().find(
-                   "pair.ordered<")
-                != std::string::npos
+            && default_cross_sample.hit_cross_bin_identities.front().ends_with(
+                "pair.ordered")
             && default_cross_sample_diagnostics.empty(),
         "cross with enumerates governed default-bin complements exactly");
 
@@ -1956,531 +1960,8 @@ endmodule
             && trigger_diagnostics.front().code == "FSIM-SV-COV-004",
         "sampling-profile mismatches reject before callbacks or mutation");
 
-    const auto require_static_budget_rejection = [](
-                                                     const SystemVerilogCovergroupDeclaration& declaration,
-                                                     const std::string_view description) {
-        std::vector<Diagnostic> diagnostics;
-        require(
-            !validate_systemverilog_coverage_resources(
-                declaration, diagnostics)
-                && diagnostics.size() == 1
-                && diagnostics.front().code == "FSIM-SV-SEM-221",
-            std::string { description });
-    };
-    SystemVerilogCovergroupDeclaration declaration_budget;
-    declaration_budget.coverage_declarations.resize(
-        kSystemVerilogCoverageMaximumDeclarations + 1U);
-    require_static_budget_rejection(
-        declaration_budget,
-        "coverage declaration overflow rejects exactly");
-
-    SystemVerilogCovergroupDeclaration bin_budget;
-    bin_budget.coverage_declarations.resize(1);
-    bin_budget.coverage_declarations.front().bins.resize(
-        kSystemVerilogCoverageMaximumBins + 1U);
-    require_static_budget_rejection(
-        bin_budget, "coverage bin inventory overflow rejects exactly");
-
-    SystemVerilogCovergroupDeclaration transition_work_budget;
-    transition_work_budget.coverage_declarations.resize(1);
-    auto& work_bin = transition_work_budget.coverage_declarations.front()
-                         .bins.emplace_back();
-    auto& work_sequence = work_bin.transitions.emplace_back();
-    auto& work_step = work_sequence.steps.emplace_back();
-    work_step.repetition.maximum = static_cast<std::uint32_t>(
-        kSystemVerilogCoverageMaximumWork + 1U);
-    require_static_budget_rejection(
-        transition_work_budget,
-        "coverage transition work overflow rejects exactly");
-
-    SystemVerilogCovergroupDeclaration cross_product_budget;
-    cross_product_budget.coverage_declarations.resize(3);
-    cross_product_budget.coverage_declarations[0].bins.resize(1025);
-    cross_product_budget.coverage_declarations[1].bins.resize(1025);
-    auto& product_cross = cross_product_budget.coverage_declarations[2];
-    product_cross.kind = SystemVerilogCoverageDeclarationKind::Cross;
-    product_cross.cross_operands.resize(2);
-    product_cross.cross_operands[0].resolved_declaration_index = 0;
-    product_cross.cross_operands[1].resolved_declaration_index = 1;
-    require_static_budget_rejection(
-        cross_product_budget,
-        "coverage cross-product overflow rejects exactly");
-
-    SystemVerilogCovergroupInstance storage_budget_instance;
-    storage_budget_instance.declaration_identity = explicit_group.canonical_identity;
-    storage_budget_instance.runtime_identity = "storage-budget";
-    storage_budget_instance.bin_hits.resize(
-        kSystemVerilogCoverageMaximumStateRecords);
-    SystemVerilogCoverageExecutionState storage_budget_state;
-    std::vector<Diagnostic> storage_budget_diagnostics;
-    const auto rejected_storage = execute_systemverilog_covergroup_sample(
-        storage_budget_instance,
-        explicit_group,
-        SystemVerilogCoverageSampleTrigger::Explicit,
-        SystemVerilogCoverageExecutionMode::Interpreter,
-        execution_input,
-        std::span<const SystemVerilogCoverageCallback> { },
-        storage_budget_state,
-        storage_budget_diagnostics);
-    require(
-        !rejected_storage.accepted
-            && rejected_storage.events.empty()
-            && storage_budget_instance.bin_hits.size()
-                == kSystemVerilogCoverageMaximumStateRecords
-            && storage_budget_diagnostics.size() == 1
-            && storage_budget_diagnostics.front().code == "FSIM-SV-COV-005",
-        "coverage state storage overflow rejects transactionally");
-
-    std::vector<SystemVerilogCovergroupSampleInput> transaction_budget_inputs(
-        kSystemVerilogCoverageMaximumTransactionInputs + 1U,
-        execution_input.front());
-    SystemVerilogCovergroupInstance transaction_budget_instance;
-    transaction_budget_instance.declaration_identity = explicit_group.canonical_identity;
-    transaction_budget_instance.runtime_identity = "transaction-budget";
-    SystemVerilogCoverageExecutionState transaction_budget_state;
-    std::vector<Diagnostic> transaction_budget_diagnostics;
-    const auto rejected_transaction = execute_systemverilog_covergroup_sample(
-        transaction_budget_instance,
-        explicit_group,
-        SystemVerilogCoverageSampleTrigger::Explicit,
-        SystemVerilogCoverageExecutionMode::LlvmO2,
-        transaction_budget_inputs,
-        std::span<const SystemVerilogCoverageCallback> { },
-        transaction_budget_state,
-        transaction_budget_diagnostics);
-    require(
-        !rejected_transaction.accepted
-            && rejected_transaction.events.empty()
-            && transaction_budget_instance.bin_hits.empty()
-            && transaction_budget_diagnostics.size() == 1
-            && transaction_budget_diagnostics.front().code
-                == "FSIM-SV-COV-005",
-        "coverage transaction input/work overflow rejects before mutation");
-
-    const auto malformed_bin = parse_text(
-        "covergroup-bin-malformed.sv",
-        "module bad; covergroup cg; coverpoint value { bins = {1}; } "
-        "endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto duplicate_bin = parse_text(
-        "covergroup-bin-duplicate.sv",
-        "module bad; covergroup cg; coverpoint value { bins same = {1}; "
-        "bins same = {2}; } endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto malformed_bin_value = parse_text(
-        "covergroup-bin-value-malformed.sv",
-        "module bad; covergroup cg; coverpoint value { bins bad = {[1:]}; } "
-        "endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto excessive_bin_array = parse_text(
-        "covergroup-bin-array-excessive.sv",
-        "module bad; covergroup cg; coverpoint value { bins huge[65537] = "
-        "{[0:65536]}; } endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto malformed_transition = parse_text(
-        "covergroup-transition-malformed.sv",
-        "module bad; covergroup cg; coverpoint value { bins bad = (1 =>); } "
-        "endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto invalid_transition_array = parse_text(
-        "covergroup-transition-array-invalid.sv",
-        "module bad; covergroup cg; coverpoint value { bins bad[2] = (1 => 2); } "
-        "endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto malformed_bin_iff = parse_text(
-        "covergroup-bin-iff-malformed.sv",
-        "module bad; covergroup cg; coverpoint value { bins bad = {1} iff (); } "
-        "endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto malformed_cross_bin = parse_text(
-        "covergroup-cross-bin-malformed.sv",
-        "module bad; covergroup cg; a: coverpoint x; b: coverpoint y; "
-        "c: cross a, b { bins = binsof(a); } endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto duplicate_cross_bin = parse_text(
-        "covergroup-cross-bin-duplicate.sv",
-        "module bad; covergroup cg; a: coverpoint x; b: coverpoint y; "
-        "c: cross a, b { bins same = binsof(a); "
-        "bins same = binsof(b); } endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto invalid_coverage_option = parse_text(
-        "covergroup-option-bounds.sv",
-        "module bad; covergroup cg; coverpoint value { option.goal = 101; "
-        "option.at_least = 0; } endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto invalid_percentage_option = parse_text(
-        "covergroup-percentage-option-bounds.sv",
-        "module bad; covergroup cg; option.goal = 101; "
-        "type_option.merge_instances = 2; endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto unsupported_option = parse_text(
-        "covergroup-option-unsupported.sv",
-        "module bad; covergroup cg; coverpoint value { "
-        "option.auto_bin_max = 8; } endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto unsupported_type = parse_text(
-        "covergroup-type-unsupported.sv",
-        "module bad; covergroup cg with function sample(input real value); "
-        "coverpoint value; endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto with_selection = parse_text(
-        "covergroup-selection-with.sv",
-        "module bad; covergroup cg; coverpoint value { "
-        "bins filtered = {1} with (item > 0); } endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto cross_with_selection = parse_text(
-        "covergroup-cross-selection-with.sv",
-        "module bad; covergroup cg; a: coverpoint x; b: coverpoint y; "
-        "c: cross a, b { bins filtered = binsof(a) with (item > 0); } "
-        "endgroup endmodule",
-        Language::SystemVerilog2017);
-    auto empty_cross_selection = parse_text(
-        "covergroup-cross-bin-empty.sv",
-        "module bad; covergroup cg; a: coverpoint x { bins good = {1}; } "
-        "b: coverpoint y; c: cross a, b { bins bad = binsof(a.missing); } "
-        "endgroup endmodule",
-        Language::SystemVerilog2017);
-    std::vector<Diagnostic> empty_cross_diagnostics;
-    (void)resolve_systemverilog_covergroups(
-        empty_cross_selection.design, empty_cross_diagnostics);
-    auto ambiguous_type = parse_text(
-        "covergroup-type-ambiguous.sv",
-        R"(package first;
-  class Owner;
-    covergroup shared; endgroup
-  endclass
-endpackage
-package second;
-  class Owner;
-    covergroup shared; endgroup
-  endclass
-endpackage
-module bad;
-  Owner::shared ambiguous;
-endmodule
-)",
-        Language::SystemVerilog2017);
-    const auto ambiguous_owner = std::ranges::find(
-        ambiguous_type.design.units,
-        std::string { "bad" },
-        &DesignUnit::name);
-    require(
-        ambiguous_owner != ambiguous_type.design.units.end(),
-        "the ambiguous covergroup fixture retains its owner module");
-    ambiguous_owner->variables.clear();
-    VariableDeclaration ambiguous_variable;
-    ambiguous_variable.name = "ambiguous";
-    ambiguous_variable.type.named_type = "Owner::shared";
-    ambiguous_variable.span = ambiguous_owner->span;
-    ambiguous_owner->variables.push_back(std::move(ambiguous_variable));
-    std::vector<Diagnostic> ambiguous_type_diagnostics;
-    (void)resolve_systemverilog_covergroups(
-        ambiguous_type.design, ambiguous_type_diagnostics);
-    std::string ambiguous_type_failure;
-    for (const auto& diagnostic : ambiguous_type.diagnostics) {
-        ambiguous_type_failure += " parse:" + diagnostic.code;
-    }
-    for (const auto& diagnostic : ambiguous_type_diagnostics) {
-        ambiguous_type_failure += " resolve:" + diagnostic.code;
-    }
-
-    const auto missing_name = parse_text(
-        "covergroup-missing-name.sv",
-        "module bad; covergroup ; endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto missing_header = parse_text(
-        "covergroup-missing-header.sv",
-        "module bad; covergroup cg endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto missing_end = parse_text(
-        "covergroup-missing-end.sv",
-        "module bad; covergroup cg; endmodule",
-        Language::SystemVerilog2017);
-    const auto missing_end_name = parse_text(
-        "covergroup-missing-end-name.sv",
-        "module bad; covergroup cg; endgroup : endmodule",
-        Language::SystemVerilog2017);
-    const auto mismatched_end_name = parse_text(
-        "covergroup-mismatched-end-name.sv",
-        "module bad; covergroup cg; endgroup : other endmodule",
-        Language::SystemVerilog2017);
-    const auto duplicate = parse_text(
-        "covergroup-duplicate.sv",
-        "module bad; covergroup cg; endgroup covergroup cg; endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto wrong_language = parse_text(
-        "covergroup-verilog.v",
-        "module bad; covergroup cg; endgroup endmodule",
-        Language::Verilog2005);
-    const auto malformed_formal_balance = parse_text(
-        "covergroup-formal-balance.sv",
-        "module bad; covergroup cg (int value; endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto malformed_formal = parse_text(
-        "covergroup-formal-empty.sv",
-        "module bad; covergroup cg (int first,, bit second); "
-        "endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto duplicate_formal = parse_text(
-        "covergroup-formal-duplicate.sv",
-        "module bad; covergroup cg (int value, bit value); "
-        "endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto malformed_sampling = parse_text(
-        "covergroup-sampling-malformed.sv",
-        "module bad; covergroup cg with function wrong(); "
-        "endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto malformed_option = parse_text(
-        "covergroup-option-malformed.sv",
-        "module bad; covergroup cg; option = 1; endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto malformed_coverage_items = parse_text(
-        "covergroup-items-malformed.sv",
-        "module bad; covergroup cg; coverpoint ; cross only_one; "
-        "endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto malformed_coverage_iff = parse_text(
-        "covergroup-iff-malformed.sv",
-        "module bad; covergroup cg; coverpoint value iff (); "
-        "endgroup endmodule",
-        Language::SystemVerilog2017);
-    const auto duplicate_coverage_name = parse_text(
-        "covergroup-item-duplicate.sv",
-        "module bad; covergroup cg; point: coverpoint first; "
-        "point: cross first, second; endgroup endmodule",
-        Language::SystemVerilog2017);
-    auto unresolved_coverage = parse_text(
-        "covergroup-resolution-negative.sv",
-        R"(module bad;
-  covergroup cg;
-    point: coverpoint missing_name;
-    bad_cross: cross point, absent_operand;
-  endgroup
-  cg bad_instance = new(1);
-  initial bad_instance.sample(1);
-endmodule
-)",
-        Language::SystemVerilog2017);
-    std::vector<Diagnostic> unresolved_diagnostics;
-    (void)resolve_systemverilog_covergroups(
-        unresolved_coverage.design, unresolved_diagnostics);
-    std::string unresolved_failure_codes;
-    for (const auto& diagnostic : unresolved_coverage.diagnostics) {
-        unresolved_failure_codes += " parse:" + diagnostic.code + "="
-            + diagnostic.message;
-    }
-    for (const auto& diagnostic : unresolved_diagnostics) {
-        unresolved_failure_codes += " resolve:" + diagnostic.code;
-    }
-    unresolved_failure_codes += " variables="
-        + std::to_string(unresolved_coverage.design.units.front().variables.size())
-        + " instances="
-        + std::to_string(
-            unresolved_coverage.design.systemverilog_covergroup_instances.size());
-    require(
-        has_code(missing_name, "FSIM-SV-PARSE-309"),
-        "a missing covergroup name has an exact diagnostic");
-    require(
-        has_code(missing_header, "FSIM-SV-PARSE-310"),
-        "a missing covergroup header terminator has an exact diagnostic");
-    require(
-        has_code(missing_end, "FSIM-SV-PARSE-311"),
-        "a missing endgroup has an exact diagnostic");
-    require(
-        has_code(missing_end_name, "FSIM-SV-PARSE-312"),
-        "a missing endgroup label name has an exact diagnostic");
-    require(
-        has_code(mismatched_end_name, "FSIM-SV-SEM-204"),
-        "a mismatched endgroup name has an exact diagnostic");
-    require(
-        has_code(duplicate, "FSIM-SV-SEM-205"),
-        "a duplicate covergroup name has an exact diagnostic");
-    require(
-        has_code(wrong_language, "FSIM-SV-SEM-203"),
-        "non-SystemVerilog covergroup use has an exact diagnostic");
-    require(
-        has_code(malformed_formal_balance, "FSIM-SV-PARSE-313"),
-        "an unbalanced constructor profile has an exact diagnostic");
-    require(
-        has_code(malformed_formal, "FSIM-SV-PARSE-314"),
-        "an empty constructor formal has an exact diagnostic");
-    require(
-        has_code(duplicate_formal, "FSIM-SV-SEM-206"),
-        "a duplicate constructor formal has an exact diagnostic");
-    require(
-        has_code(malformed_sampling, "FSIM-SV-PARSE-315"),
-        "a malformed sampling profile has an exact diagnostic");
-    require(
-        has_code(malformed_option, "FSIM-SV-PARSE-316"),
-        "a malformed covergroup option has an exact diagnostic");
-    require(
-        std::ranges::count_if(
-            malformed_coverage_items.diagnostics,
-            [](const Diagnostic& diagnostic) {
-                return diagnostic.code == "FSIM-SV-PARSE-317";
-            })
-            == 2,
-        "missing coverpoint expressions and short crosses reject exactly");
-    require(
-        has_code(malformed_coverage_iff, "FSIM-SV-PARSE-318"),
-        "an empty coverpoint iff guard has an exact diagnostic");
-    require(
-        has_code(duplicate_coverage_name, "FSIM-SV-SEM-207"),
-        "duplicate coverpoint/cross names have an exact diagnostic");
-    require(
-        has_code(malformed_bin, "FSIM-SV-PARSE-319"),
-        "a malformed explicit bin has an exact diagnostic");
-    require(
-        has_code(duplicate_bin, "FSIM-SV-SEM-212"),
-        "a duplicate explicit bin has an exact diagnostic");
-    require(
-        has_code(malformed_bin_value, "FSIM-SV-PARSE-320"),
-        "a malformed ranged bin has an exact diagnostic");
-    require(
-        has_code(excessive_bin_array, "FSIM-SV-SEM-213"),
-        "an excessive bin-array expansion has an exact diagnostic");
-    require(
-        has_code(malformed_transition, "FSIM-SV-PARSE-321"),
-        "a malformed transition sequence has an exact diagnostic");
-    require(
-        has_code(invalid_transition_array, "FSIM-SV-SEM-214"),
-        "an empty transition-array expansion has an exact diagnostic");
-    require(
-        has_code(malformed_bin_iff, "FSIM-SV-PARSE-322"),
-        "a malformed bin iff guard has an exact diagnostic");
-    require(
-        has_code(malformed_cross_bin, "FSIM-SV-PARSE-323"),
-        "a malformed explicit cross bin has an exact diagnostic");
-    require(
-        std::ranges::count_if(
-            duplicate_cross_bin.diagnostics,
-            [](const Diagnostic& diagnostic) {
-                return diagnostic.code == "FSIM-SV-SEM-215";
-            })
-            == 1,
-        "a duplicate explicit cross bin has one exact diagnostic");
-    require(
-        std::ranges::count_if(
-            invalid_coverage_option.diagnostics,
-            [](const Diagnostic& diagnostic) {
-                return diagnostic.code == "FSIM-SV-SEM-217";
-            })
-            == 2,
-        "out-of-range goal and at_least options reject exactly");
-    require(
-        std::ranges::count_if(
-            invalid_percentage_option.diagnostics,
-            [](const Diagnostic& diagnostic) {
-                return diagnostic.code == "FSIM-SV-SEM-218";
-            })
-            == 2,
-        "out-of-range covergroup goals and Boolean merge options reject exactly");
-    require(
-        std::ranges::count_if(
-            unsupported_option.diagnostics,
-            [](const Diagnostic& diagnostic) {
-                return diagnostic.code == "FSIM-SV-SEM-217";
-            })
-            == 1,
-        "an unsupported coverage option has one exact diagnostic");
-    require(
-        std::ranges::count_if(
-            unsupported_type.diagnostics,
-            [](const Diagnostic& diagnostic) {
-                return diagnostic.code == "FSIM-SV-SEM-219";
-            })
-            == 1,
-        "a non-integral coverage formal has one exact diagnostic");
-    require(
-        with_selection.ok()
-            && with_selection.design.units.front()
-                    .systemverilog_covergroups.front()
-                    .coverage_declarations.front()
-                    .bins.front()
-                    .with_tokens.size()
-                == 3U,
-        "a coverpoint with selection retains its executable item predicate");
-    require(
-        cross_with_selection.ok()
-            && std::ranges::any_of(
-                cross_with_selection.design.units.front()
-                    .systemverilog_covergroups.front()
-                    .coverage_declarations.back()
-                    .bins.front()
-                    .cross_selection_tokens,
-                [](const Token& token) { return token.text == "with"; }),
-        "a cross with selection retains its complete select expression");
-    require(
-        std::ranges::any_of(
-            empty_cross_diagnostics,
-            [](const Diagnostic& diagnostic) {
-                return diagnostic.code == "FSIM-SV-SEM-216";
-            }),
-        "an empty named cross selection has an exact diagnostic");
-    require(
-        std::ranges::count_if(
-            ambiguous_type_diagnostics,
-            [](const Diagnostic& diagnostic) {
-                return diagnostic.code == "FSIM-SV-SEM-211";
-            })
-            == 1,
-        "an ambiguous class-qualified covergroup type has one exact diagnostic:"
-            + ambiguous_type_failure);
-    require(
-        std::ranges::any_of(
-            unresolved_diagnostics,
-            [](const Diagnostic& diagnostic) {
-                return diagnostic.code == "FSIM-SV-SEM-208";
-            })
-            && std::ranges::any_of(
-                unresolved_diagnostics,
-                [](const Diagnostic& diagnostic) {
-                    return diagnostic.code == "FSIM-SV-SEM-209";
-                })
-            && std::ranges::count_if(
-                   unresolved_diagnostics,
-                   [](const Diagnostic& diagnostic) {
-                       return diagnostic.code == "FSIM-SV-SEM-210";
-                   })
-                == 2,
-        "resolution and constructor/sample profile failures reject exactly:"
-            + unresolved_failure_codes);
-
-    SystemVerilogCoverageState live_state;
-    SystemVerilogCovergroupDeclaration live_declaration;
-    live_declaration.canonical_identity = "work.coverage::group";
-    live_state.declarations.push_back(std::move(live_declaration));
-    SystemVerilogCovergroupInstance live_instance;
-    live_instance.declaration_identity = "work.coverage::group";
-    live_instance.runtime_identity = "coverage.group";
-    SystemVerilogCoverageBinHit live_hit;
-    live_hit.identity = "coverage.group::value.zero";
-    live_hit.hit_count = 2U;
-    live_hit.at_least = 1U;
-    live_hit.covered = true;
-    live_instance.bin_hits.push_back(std::move(live_hit));
-    live_state.instances.push_back(std::move(live_instance));
-    auto persisted_state = live_state;
-    persisted_state.instances.front().bin_hits.front().hit_count = 3U;
-    std::string merge_error;
-    require(
-        merge_systemverilog_coverage_state(
-            live_state, persisted_state, merge_error)
-            && merge_error.empty()
-            && live_state.instances.front().bin_hits.front().hit_count == 5U,
-        "coverage databases accumulate matching stable bin identities");
-    auto mismatched_state = persisted_state;
-    mismatched_state.declarations.front().canonical_identity
-        = "work.other::group";
-    const auto before_rejection = live_state;
-    require(
-        !merge_systemverilog_coverage_state(
-            live_state, mismatched_state, merge_error)
-            && !merge_error.empty()
-            && live_state.instances.front().bin_hits.front().hit_count
-                == before_rejection.instances.front().bin_hits.front().hit_count,
-        "coverage database model mismatches reject transactionally");
+    test_systemverilog_coverage_resources_and_persistence(
+        explicit_group, execution_input);
 }
 
 } // namespace fsim::tests::frontend

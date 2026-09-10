@@ -17,11 +17,21 @@ using SystemVerilogClassConstraintConfigurator = std::function<void(
     SystemVerilogConstraintSolver&,
     const SystemVerilogClassRandomizeVariables&)>;
 
+enum class SystemVerilogClassRandomizeSelection : std::uint8_t {
+  EnabledProperties,
+  NoProperties,
+};
+
 struct SystemVerilogClassRandomizeRequest {
   /// Empty selects every enabled rand/randc property. A nonempty list selects
   /// only the named enabled random properties; every other packed property is
   /// still visible to constraints as its current singleton value.
   std::vector<std::string> variable_list;
+  /// The explicit no-properties mode implements randomize(null): all packed
+  /// members are fixed state variables, constraints are checked, and neither
+  /// object state nor its random stream is advanced.
+  SystemVerilogClassRandomizeSelection selection{
+      SystemVerilogClassRandomizeSelection::EnabledProperties};
   /// Optional exact finite domains keyed by canonical identity or unique
   /// property suffix. This carries enum/restricted profiles without folding
   /// them into host integers and invalidates an incompatible randc cycle.

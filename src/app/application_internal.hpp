@@ -245,6 +245,11 @@ systemverilog_randomize_callback(
     runtime::SystemVerilogClassHandle handle,
     std::string_view name);
 
+void configure_systemverilog_randomize_selection(
+    runtime::SystemVerilogClassRandomizeRequest& request,
+    std::span<const std::string> selected_names);
+
+
 [[nodiscard]] runtime::PackedLogic4
 invoke_systemverilog_randomization_mode(
     runtime::SystemVerilogClassHeap& heap,
@@ -493,21 +498,7 @@ private:
     [[nodiscard]] static std::uint32_t mapped_signal_sparse(
         const CallbackState& state, std::uint32_t signal);
     [[nodiscard]] static std::uint32_t mapped_signal(
-        const CallbackState& state, const std::uint32_t signal)
-    {
-        if (!state.dense_signal_remap.empty()) {
-            if (signal < state.dense_signal_remap_base) {
-                return signal;
-            }
-            const auto offset = signal - state.dense_signal_remap_base;
-            return offset < state.dense_signal_remap.size()
-                ? state.dense_signal_remap[offset]
-                : signal;
-        }
-        return state.signal_remap.empty()
-            ? signal
-            : mapped_signal_sparse(state, signal);
-    }
+        const CallbackState& state, std::uint32_t signal);
     static void capture_file_failure(
         CallbackState&, std::uint32_t, std::uint32_t) noexcept;
 

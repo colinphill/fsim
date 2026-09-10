@@ -427,6 +427,10 @@ file(GENERATE
 
 function(fsim_configure_test target)
   fsim_configure_executable(${target})
+  if(TARGET fsim_common_test_support)
+    target_link_libraries(
+      ${target} PRIVATE fsim_common_test_support)
+  endif()
   # Several small, dependency-free tests intentionally use assert(). Keep
   # those assertions live in multi-config and Release test builds. A forced
   # header avoids the MSVC D9025 command-line warning produced by pairing
@@ -443,13 +447,18 @@ function(fsim_configure_test target)
   fsim_configure_test_platform(${target})
 endfunction()
 
-add_library(fsim_diagnostic STATIC src/diagnostic/diagnostic.cpp)
+add_library(
+  fsim_diagnostic STATIC
+  src/diagnostic/artifact_identity.cpp
+  src/diagnostic/diagnostic.cpp
+)
 add_library(fsim::diagnostic ALIAS fsim_diagnostic)
 fsim_configure_library(fsim_diagnostic)
 
 add_library(
   fsim_project STATIC
   src/project/project.cpp
+  src/project/project_language.cpp
 )
 add_library(fsim::project ALIAS fsim_project)
 fsim_configure_library(fsim_project)
@@ -466,12 +475,18 @@ fsim_configure_library(fsim_semantic)
 set(
   FSIM_FRONTEND_SOURCES
   "${PROJECT_SOURCE_DIR}/src/frontend/common.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/input_format.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/output_format.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/parser_support.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/class_expression_resolution.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/class_expression_resolution_core.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/class_expression_resolution_calls.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/class_resolution.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/class_inheritance.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/class_specialization.cpp"
-  "${PROJECT_SOURCE_DIR}/src/frontend/coverage_execution.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/coverage_cross_inventory.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_database_systemverilog.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/coverage_execution.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_limits.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_observation.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_persistence.cpp"
@@ -492,12 +507,22 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/sdf_parser.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/parser.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_preprocessor.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_preprocessor_support.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_standard_support.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_core.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_core_part2.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_hierarchy.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_classes.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_assertions.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_assertion_formals.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_assertion_locals.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_assertion_resolution.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_assertion_resolution_support.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_checker_resolution.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_coverage.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_coverage_bins.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_coverage_2023.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_dpi.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_declarations.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_types.cpp"
@@ -505,6 +530,7 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_specify.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_strength.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_expressions.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_expressions_part2.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_functions.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_process_helpers.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_processes.cpp"
@@ -512,6 +538,7 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_events.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_fork.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_units.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_generate_names.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/systemverilog_scalar_folding.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_udp.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_conditional_analysis.cpp"
@@ -527,6 +554,7 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_psl.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_psl_analysis.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_statements.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_support.cpp"
 )
 add_library(fsim_frontend STATIC ${FSIM_FRONTEND_SOURCES})
 add_library(fsim::frontend ALIAS fsim_frontend)
@@ -540,6 +568,7 @@ target_link_libraries(
 add_library(
   fsim_runtime
   STATIC
+    src/runtime/code_coverage.cpp
     src/runtime/class_heap.cpp
     src/runtime/class_randomize.cpp
     src/runtime/class_containers.cpp
@@ -573,6 +602,7 @@ add_library(
   src/runtime/uvm_test_runner.cpp
     src/runtime/uvm_component.cpp
     src/runtime/uvm_phase.cpp
+    src/runtime/uvm_phase_quiescence.cpp
     src/runtime/uvm_activity.cpp
     src/runtime/uvm_callback.cpp
     src/runtime/uvm_register_model.cpp
@@ -655,14 +685,21 @@ add_library(
     src/runtime/systemverilog_chandle.cpp
     src/runtime/systemverilog_string.cpp
     src/runtime/simir.cpp
+    src/runtime/simir_process_execution_context.cpp
     src/runtime/simir_coverage.cpp
     src/runtime/simir_arithmetic.cpp
     src/runtime/simir_callable_context.cpp
     src/runtime/simir_container_algorithms.cpp
     src/runtime/simir_container_bridge.cpp
     src/runtime/simir_containers.cpp
+    src/runtime/simir_containers_part2.cpp
     src/runtime/simir_container_values.cpp
     src/runtime/simir_execution.cpp
+    src/runtime/simir_execution_part2.cpp
+    src/runtime/simir_execution_context.cpp
+    src/runtime/simir_execution_boundaries.cpp
+    src/runtime/simir_execution_interpreter.cpp
+    src/runtime/simir_execution_shared.cpp
     src/runtime/simir_sampled_values.cpp
     src/runtime/simir_file_binary.cpp
     src/runtime/simir_file_scanning.cpp
@@ -670,10 +707,13 @@ add_library(
     src/runtime/simir_files.cpp
     src/runtime/simir_format.cpp
     src/runtime/simir_interpreter.cpp
+    src/runtime/simir_interpreter_profiles.cpp
     src/runtime/simir_logic.cpp
       src/runtime/simir_random_distribution.cpp
       src/runtime/simir_module_path.cpp
     src/runtime/simir_scheduling.cpp
+    src/runtime/simir_scheduling_commit.cpp
+    src/runtime/simir_scheduling_stage.cpp
     src/runtime/simir_synchronization.cpp
       src/runtime/simir_string_methods.cpp
       src/runtime/simir_vital.cpp
@@ -716,35 +756,46 @@ target_link_libraries(fsim_runtime PRIVATE fsim_tf)
       src/elaboration/vhdl_coverage_points.cpp
       src/elaboration/vhdl_toggle_inventory.cpp
       src/elaboration/elaboration_analysis.cpp
+      src/elaboration/elaboration_generated_constants.cpp
+      src/elaboration/elaboration_generated_declarations.cpp
       src/elaboration/elaboration_generate_substitution.cpp
       src/elaboration/elaboration_constants.cpp
+      src/elaboration/elaboration_constant_types.cpp
       src/elaboration/elaboration_defaults.cpp
       src/elaboration/elaboration_vhdl_array_layout.cpp
       src/elaboration/elaboration_literals.cpp
   src/elaboration/elaboration_specialization.cpp
+  src/elaboration/elaboration_specialization_support.cpp
   src/elaboration/elaboration_systemc_specialization.cpp
       src/elaboration/elaboration_vhdl_static.cpp
       src/elaboration/elaboration_vhdl_values.cpp
       src/elaboration/elaboration_vhdl_blocks.cpp
       src/elaboration/elaboration_vhdl_generate_choice.cpp
       src/elaboration/elaboration_vhdl_local.cpp
-  src/elaboration/elaboration_sv_constants.cpp
+      src/elaboration/elaboration_sv_constants.cpp
+      src/elaboration/elaboration_sv_constant_evaluator.cpp
+      src/elaboration/elaboration_sv_constant_support.cpp
   src/elaboration/elaboration_sv_constant_services.cpp
   src/elaboration/elaboration_sv_lets.cpp
   src/elaboration/elaboration_sv_scalars.cpp
       src/elaboration/elaboration_sv_functions.cpp
+      src/elaboration/elaboration_sv_function_evaluator_execution.cpp
+      src/elaboration/elaboration_sv_function_evaluator_expression.cpp
       src/elaboration/elaboration_sv_generate.cpp
       src/elaboration/elaboration_sv_strings.cpp
       src/elaboration/elaboration_sv_container_type.cpp
       src/elaboration/elaboration_sv_type_parameters.cpp
       src/elaboration/elaboration_type_generics.cpp
       src/elaboration/elaboration_vhdl_components.cpp
+      src/elaboration/vhdl_component_profiles.cpp
+      src/elaboration/vhdl_array_boundary.cpp
       src/elaboration/elaboration_vhdl_configurations.cpp
       src/elaboration/elaboration_vhdl_packages.cpp
       src/elaboration/elaboration_vhdl_subprograms.cpp
       src/elaboration/elaboration_targets.cpp
       src/elaboration/hierarchy_generic_interfaces.cpp
       src/elaboration/hierarchy_packages.cpp
+      src/elaboration/hierarchy_package_imports.cpp
       src/elaboration/hierarchy_root_globals.cpp
       src/elaboration/hierarchy_builder.cpp
       src/elaboration/hierarchy_vhdl_protected.cpp
@@ -759,11 +810,15 @@ target_link_libraries(fsim_runtime PRIVATE fsim_tf)
   src/elaboration/hierarchy_sv_configuration.cpp
       src/elaboration/hierarchy_sv_ports.cpp
       src/elaboration/hierarchy_instantiate.cpp
+      src/elaboration/hierarchy_instantiate_processes_and_children.cpp
       src/elaboration/hierarchy_systemc.cpp
       src/elaboration/hierarchy_udp.cpp
       src/elaboration/hierarchy_type_resolution.cpp
       src/elaboration/hierarchy_types.cpp
+      src/elaboration/hierarchy_connect_ports.cpp
       src/elaboration/lowerer_assignment.cpp
+      src/elaboration/lowerer_assignment_support.cpp
+      src/elaboration/lowerer_driver_regions.cpp
       src/elaboration/lowerer_assert.cpp
       src/elaboration/lowerer_condition.cpp
       src/elaboration/lowerer_procedural_updates.cpp
@@ -787,29 +842,34 @@ target_link_libraries(fsim_runtime PRIVATE fsim_tf)
       src/elaboration/lowerer_vhdl_protected.cpp
       src/elaboration/lowerer_control.cpp
       src/elaboration/lowerer_expression.cpp
+      src/elaboration/lowerer_expression_support.cpp
       src/elaboration/lowerer_sv_classes.cpp
       src/elaboration/lowerer_expression_binary.cpp
       src/elaboration/lowerer_expression_membership.cpp
       src/elaboration/lowerer_expression_system.cpp
       src/elaboration/lowerer_expression_unary.cpp
       src/elaboration/lowerer_functions.cpp
+      src/elaboration/lowerer_functions_part2.cpp
       src/elaboration/lowerer_callables.cpp
       src/elaboration/lowerer_overloads.cpp
       src/elaboration/lowerer_procedures.cpp
       src/elaboration/lowerer_vhdl_textio.cpp
       src/elaboration/lowerer_concurrent.cpp
       src/elaboration/lowerer_process.cpp
+      src/elaboration/lowerer_process_part2.cpp
       src/elaboration/lowerer_fork.cpp
       src/elaboration/lowerer_pla.cpp
       src/elaboration/lowerer_sv_synchronization.cpp
       src/elaboration/lowerer_events.cpp
       src/elaboration/lowerer_tasks.cpp
       src/elaboration/lowerer_types.cpp
+      src/elaboration/lowerer_types_part2.cpp
       src/elaboration/lowerer_sv_string_format.cpp
       src/elaboration/lowerer_sv_strings.cpp
       src/elaboration/lowerer_sv_container_slices.cpp
       src/elaboration/lowerer_sv_container_types.cpp
       src/elaboration/lowerer_sv_containers.cpp
+      src/elaboration/lowerer_sv_containers_part2.cpp
       src/elaboration/lowerer_sv_file_binary.cpp
       src/elaboration/lowerer_sv_file_scan.cpp
       src/elaboration/lowerer_sv_multidimensional.cpp
@@ -844,6 +904,7 @@ add_library(
   src/artifact/coverage_report_render.cpp
   src/artifact/coverage_report_render_html.cpp
   src/artifact/coverage_report_render_json.cpp
+  src/artifact/coverage_report_render_support.cpp
   src/artifact/coverage_report_render_text.cpp
   src/artifact/coverage_database_merge.cpp
   src/artifact/coverage_database_model.cpp
@@ -1054,9 +1115,17 @@ if(FSIM_WITH_LLVM)
     fsim_llvm
     STATIC
       src/compiler/llvm_jit.cpp
+      src/compiler/llvm_jit_execution.cpp
+      src/compiler/llvm_jit_process_modules.cpp
       src/compiler/llvm_jit_cache_key.cpp
+    src/compiler/llvm_jit_cache_key_operations.cpp
+    src/compiler/llvm_jit_cache_key_operations_primary.cpp
+    src/compiler/llvm_jit_cache_key_operations_secondary.cpp
       src/compiler/llvm_jit_coverage.cpp
-      src/compiler/llvm_jit_lowering.cpp
+    src/compiler/llvm_jit_lowering.cpp
+    src/compiler/llvm_jit_lowering_planning.cpp
+    src/compiler/llvm_jit_lowering_operations_prefix.cpp
+    src/compiler/llvm_jit_lowering_operations_suffix.cpp
       src/compiler/llvm_jit_dynamic_part.cpp
       src/compiler/llvm_jit_module.cpp
       src/compiler/llvm_jit_operations_control.cpp
@@ -1067,7 +1136,9 @@ if(FSIM_WITH_LLVM)
       src/compiler/llvm_jit_operations_string.cpp
       src/compiler/llvm_jit_operations_container.cpp
       src/compiler/llvm_jit_operations_value.cpp
-      src/compiler/llvm_jit_validation.cpp
+    src/compiler/llvm_jit_validation.cpp
+    src/compiler/llvm_jit_validation_class.cpp
+    src/compiler/llvm_jit_validation_operations_prefix.cpp
       src/compiler/llvm_jit_validation_selection.cpp
       src/compiler/llvm_jit_validation_support.cpp
       src/compiler/llvm_jit_value_lowering.cpp
@@ -1160,6 +1231,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_coverage_control.cpp
       src/app/application_check.cpp
       src/app/application_standard_library.cpp
+      src/app/application_standard_library_vital.cpp
       src/app/application_vhdl_analysis.cpp
       src/app/application_debug_control.cpp
       src/app/application_debug_coverage.cpp
@@ -1167,22 +1239,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_uvm_inspection.cpp
       src/app/application_design_ir.cpp
       src/app/application_design_artifact_codec.cpp
-      src/app/application_design_artifact_codec_class.cpp
-      src/app/application_design_artifact_codec_sv_hir.cpp
-      src/app/application_design_artifact_codec_coverage_uvm.cpp
-      src/app/application_design_artifact_codec_vhdl_hir.cpp
-      src/app/application_design_artifact_codec_semantic.cpp
-      src/app/application_design_artifact_codec_design_ir.cpp
-      src/app/application_design_artifact_codec_operations.cpp
-      src/app/application_design_artifact_codec_operation_value.cpp
-      src/app/application_design_artifact_codec_operation_signal.cpp
-      src/app/application_design_artifact_codec_operation_string.cpp
-      src/app/application_design_artifact_codec_operation_container.cpp
-      src/app/application_design_artifact_codec_operation_file.cpp
-      src/app/application_design_artifact_codec_operation_scheduling.cpp
-      src/app/application_design_artifact_codec_operation_control.cpp
-      src/app/application_design_artifact_codec_operation_output.cpp
-      src/app/application_design_artifact_codec_operation_class.cpp
+      src/app/application_design_artifact_codec_validation.cpp
       src/app/application_executor_frame.cpp
       src/app/application_executors.cpp
       src/app/application_executor_vital.cpp
@@ -1205,12 +1262,18 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_scv_trace.cpp
       src/app/application_systemc_trace.cpp
       src/app/application_run.cpp
+      src/app/application_run_commands.cpp
       src/app/application_semantic.cpp
       src/app/application_constraint_lowering.cpp
       src/app/application_class_randomization.cpp
+      src/app/application_class_execution.cpp
       src/app/application_systemverilog_hir.cpp
       src/app/application_systemverilog_executable_hir.cpp
       src/app/application_vhdl_hir.cpp
+      src/app/application_vhdl_hir_builder.cpp
+      src/app/application_vhdl_hir_callables.cpp
+      src/app/application_vhdl_hir_statements.cpp
+      src/app/application_vhdl_hir_types.cpp
       src/app/application_vhdl_mode_view.cpp
   src/app/application_vhdl_psl.cpp
   src/app/application_vhdl_debug.cpp
@@ -1219,6 +1282,14 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_services.cpp
       src/app/application_class_inspection.cpp
       src/app/application_simulation.cpp
+      src/app/application_simulation_accessors.cpp
+      src/app/application_simulation_impl_core.cpp
+      src/app/application_simulation_impl_coverage.cpp
+      src/app/application_simulation_impl_setup.cpp
+      src/app/application_simulation_impl_setup_execution.cpp
+      src/app/application_simulation_impl_source.cpp
+      src/app/application_simulation_impl_uvm.cpp
+      src/app/application_simulation_scalar.cpp
       src/app/application_uvm_registry.cpp
       src/app/application_uvm_command_line.cpp
       src/app/application_time.cpp
@@ -1226,6 +1297,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
   src/app/application_acc_scheduler.cpp
   src/app/application_tf_scheduler.cpp
       src/app/tcl.cpp
+      src/app/tcl_commands.cpp
   )
   add_library(fsim::application ALIAS fsim_application)
   fsim_configure_library(fsim_application)

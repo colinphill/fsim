@@ -468,6 +468,58 @@ endmodule
       "packed aggregate members retain fixed/indexed selects and "
       "replication/shift expressions");
 
+  const auto header_imports = parse_verilog(
+      SourceText{
+          "package_header_imports.sv",
+          R"(
+package header_types;
+  parameter int WIDTH = 6;
+  typedef logic [WIDTH-1:0] word_t;
+endpackage
+module header_consumer import header_types::word_t, header_types::WIDTH;
+    #(parameter int LOCAL_WIDTH = WIDTH)
+    (input word_t source, output word_t result);
+  assign result = source;
+endmodule
+interface header_interface import header_types::*; (input word_t source);
+endinterface
+program header_program import header_types::word_t; (input word_t source);
+endprogram
+)"},
+      StandardRevision::SystemVerilog2023);
+  require(
+      header_imports.ok()
+          && header_imports.design.units.size() == 4,
+      "package imports in design-unit headers parse in the 2023 profile");
+  for (std::size_t index = 1; index < header_imports.design.units.size();
+       ++index) {
+    require(
+        !header_imports.design.units[index].systemverilog_imports.empty(),
+        "header imports retain package visibility metadata");
+  }
+  const auto& header_module = header_imports.design.units[1];
+  require(
+      header_module.systemverilog_imports.size() == 2
+          && header_module.parameters.front().default_value.text == "WIDTH"
+          && header_module.ports.size() == 2
+          && header_module.ports.front().type.named_type == "word_t",
+      "header imports precede parameter and port parsing");
+
+  const auto missing_header_surface = parse_verilog(
+      SourceText{
+          "missing_package_header_surface.sv",
+          "package p; typedef int value_t; endpackage "
+          "module invalid import p::*; ; endmodule"},
+      StandardRevision::SystemVerilog2023);
+  require(
+      !missing_header_surface.ok()
+          && std::ranges::any_of(
+              missing_header_surface.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-385";
+              }),
+      "a header import requires a following parameter or port surface");
+
   const auto invalid = parse_text(
       "invalid_packages.sv",
       R"(

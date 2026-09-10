@@ -6,22 +6,8 @@
 
 namespace fsim::diagnostic {
 
-inline std::string unsupported_artifact_identity(
-    const std::string_view family,
-    const std::string_view found,
-    const std::string_view required,
-    const std::string_view artifact)
-{
-    std::string message { "unsupported " };
-    message.append(family);
-    message.append(" identity: found ");
-    message.append(found);
-    message.append("; required ");
-    message.append(required);
-    message.append("; regenerate ");
-    message.append(artifact);
-    message.append(" with this fsim build");
-    return message;
-}
+[[nodiscard]] std::string unsupported_artifact_identity(
+    std::string_view family, std::string_view found,
+    std::string_view required, std::string_view artifact);
 
 } // namespace fsim::diagnostic

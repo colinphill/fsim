@@ -5,6 +5,28 @@
 #include <unordered_set>
 
 namespace fsim::frontend {
+namespace {
+
+[[nodiscard]] bool udp_language_revision_matches(
+    const Language language,
+    const StandardRevision revision) noexcept {
+  if (language == Language::Verilog2005) {
+    return revision == StandardRevision::Verilog1995
+        || revision == StandardRevision::Verilog2001
+        || revision == StandardRevision::Verilog2001NoConfig
+        || revision == StandardRevision::Verilog2005;
+  }
+  if (language == Language::SystemVerilog2017) {
+    return revision == StandardRevision::SystemVerilog2005
+        || revision == StandardRevision::SystemVerilog2009
+        || revision == StandardRevision::SystemVerilog2012
+        || revision == StandardRevision::SystemVerilog2017
+        || revision == StandardRevision::SystemVerilog2023;
+  }
+  return false;
+}
+
+}  // namespace
 
 bool verilog_udp_table_within_resource_budget(
     const std::size_t input_count,
@@ -57,8 +79,9 @@ bool verilog_udp_declaration_well_formed(
     }
     return false;
   };
-  if ((declaration.language != Language::Verilog2005
-       && declaration.language != Language::SystemVerilog2017)
+  if (!udp_language_revision_matches(
+          declaration.language, declaration.standard_revision)
+      || declaration.verilog_compatibility_profile.empty()
       || declaration.name.empty() || declaration.output.empty()
       || declaration.inputs.empty() || declaration.rows.empty()
       || declaration.sequential != declaration.output_reg

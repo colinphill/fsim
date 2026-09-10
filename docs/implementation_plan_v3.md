@@ -4724,26 +4724,716 @@ starts on branch codex/v3 from clean v2 checkpoint
 
 ### Batch 186 - SystemVerilog-2023 verification, hierarchy, and timing
 
-1. Implement immediate-assertion revisions.
-2. Implement concurrent-assertion revisions.
-3. Update the formal concurrent-assertion execution model.
-4. Implement checker revisions.
-5. Implement constrained-random and solver revisions.
-6. Implement functional-coverage revisions.
-7. Implement utility system-task/function revisions.
-8. Implement file and input/output task revisions.
-9. Implement compiler-directive revisions.
-10. Implement module and hierarchy revisions.
-11. Implement program-block revisions.
-12. Implement interface, modport, and virtual-interface revisions.
-13. Implement package, import, export, and lookup revisions.
-14. Implement generate-construct revisions.
-15. Implement gate, switch, and UDP revisions.
-16. Implement specify-block and timing-check revisions.
-17. Implement SDF backannotation revisions.
-18. Implement configuration and protected-envelope revisions.
-19. Prove verification and timing behavior across interpreter and LLVM engines.
-20. Run standard batch closure and freeze the design/verification surface.
+1. **Complete.** Implement immediate-assertion revisions.
+
+   The procedural parser now retains observed-deferred `#0` and final-
+   deferred qualifiers without changing the v3 statement schema. Observed
+   deferral is available from the 2009 profile, final deferral from the 2012
+   profile, and both remain available in the exact 2023 profile. Nonzero
+   observed delays and action forms outside null, severity-system-task, or
+   permitted observed user-subroutine calls reject with stable diagnostics;
+   older profiles retain their existing immediate-assertion boundary.
+
+   Elaboration samples each condition in its originating procedural
+   execution and captures selected user-task input arguments before forking
+   the action. Per-site cancellation coalesces repeated executions without a
+   source-visible process suspension, then observed actions resume in the
+   Reactive region and final actions in the Postponed region. Null actions,
+   explicit null failure actions, default failures, and outcome changes keep
+   separate pass/failure ownership. Independently authored tests cover
+   cross-process sampling, last-execution cancellation, argument capture,
+   scheduler regions, invalid syntax/actions, retained profiles, interpreter
+   and LLVM O0/O2 equivalence, and cold/warm native-cache reuse.
+
+   S23-B186-C01 is preserved, leaving 37 active and nineteen preserved rows
+   at normalized SHA-256
+   `9103f36fdc342e57b1747ac53af68770975235c83ec2debeeda8358a1de499d2`.
+   The deterministic source manifest remains at 1,797 paths with SHA-256
+   `d2e888f0152c9d216a39c20c594e2fcd509833852ad7de7a29cc23d04b022d97`.
+   Exact Clang warnings-as-errors Debug frontend and application targets build
+   with eight workers. The frontend, assertion application, diagnostic,
+   inventory, resource, source-package, source-line, and CTest-command slice
+   passes 8/8. No Release, clean-first, sanitizer, hosted-CI, commit, or push
+   action ran.
+2. **Complete.** Implement concurrent-assertion revisions.
+
+   Concurrent directives now retain whether their standardized operand is a
+   property or a sequence. `cover sequence` accepts both named declarations
+   and inline sequence expressions, while `assert`, `assume`, and `restrict`
+   reject the sequence form with `FSIM-SV-SEM-251`. The semantic
+   SystemVerilog HIR preserves the distinction without changing the
+   executable process model used by existing property directives.
+
+   Resolution applies sequence formal substitutions before selecting the
+   effective clock and `disable iff` condition. A named sequence may supply
+   its clock, while an inline sequence may carry its own clock and disable
+   condition; both lower through the established bounded attempt, completion,
+   action, coverage, callback, and assertion-control machinery. Change 3
+   retains ownership of formal scheduler-region execution revisions.
+
+   Independently authored tests cover named and inline two-cycle sequences,
+   effective clock and disable structure, illegal directive combinations,
+   SystemVerilog/Verilog profile isolation, semantic-HIR retention,
+   `$assertoff` suppression with in-flight completion, interpreter and LLVM
+   O0/O2 equivalence, and cold/warm native-cache behavior. S23-B186-C02 is
+   preserved, leaving 36 active and twenty preserved rows at normalized
+   SHA-256
+   `92abe22b169c604a5cb66581e6dd6cf88a673c55d348653c512f1ce5d90c0cf8`.
+   The source manifest remains at 1,797 paths with SHA-256
+   `d2e888f0152c9d216a39c20c594e2fcd509833852ad7de7a29cc23d04b022d97`.
+   Exact Clang warnings-as-errors Debug frontend, HIR, and assertion targets
+   build with eight workers, and the focused nine-test slice passes. No
+   Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+3. **Complete.** Update the formal concurrent-assertion execution model.
+
+   Generated concurrent-assertion processes now carry an explicit frontend
+   role instead of relying on statement-shape inference during elaboration.
+   Elaboration assigns that role to the Observed scheduler region and lowers
+   its design-signal reads against the time slot's Preponed sample. This
+   removes Active-region races without changing ordinary procedural reads or
+   the established bounded temporal-attempt progression.
+
+   Outcome accounting and callbacks are published while the assertion is in
+   Observed. A private, non-source action boundary then advances pass,
+   failure, and sequence match actions into Reactive. Lowering restores the
+   sampled-read mode independently across control-flow branches, and pending
+   end-of-run action serialization omits all private scheduler markers.
+
+   Independently authored tests exercise a same-slot clock/data race,
+   observed-before-reactive ordering, sampled versus current SimIR reads,
+   ordinary-process isolation, pending-attempt ordering, interpreter and LLVM
+   O0/O2 equivalence, artifact execution, and cold/warm native-cache reuse.
+   S23-B186-C03 is preserved, leaving 35 active and 21 preserved rows at
+   normalized SHA-256
+   `3bb269559140d189aa9f877d568690c98156fdec9105e92b1cf33fcee925ebc6`.
+   The source manifest remains at 1,797 paths with SHA-256
+   `d2e888f0152c9d216a39c20c594e2fcd509833852ad7de7a29cc23d04b022d97`.
+   Exact Clang warnings-as-errors Debug targets build with eight workers, and
+   the focused ten-test slice passes. No Release, clean-first, sanitizer,
+   hosted-CI, commit, or push action ran.
+4. **Complete.** Implement checker revisions.
+
+   Checker declarations are now retained at compilation-unit or design-unit
+   scope. Their owned sequence/property declarations and concurrent directives
+   remain structured instead of being reduced to an inert body-token stream.
+   A distinct checker-instance model preserves ordered, named, implicit,
+   wildcard, open, and defaulted connections with exact source ownership.
+   Explicit connections take precedence over wildcard matching, including an
+   explicit open connection that selects its formal default.
+
+   Before ordinary assertion resolution, each instance receives a private
+   specialization of its checker declarations and directives. Formal actuals,
+   including defaults that refer to earlier formals, are substituted into
+   clocks, predicates, and actions; instance-qualified assertion identities
+   prevent collisions. Specialized assertions then use the same Preponed,
+   Observed, and Reactive execution contract as direct concurrent assertions.
+   Mixed connection forms, unknown or duplicate formals, excess actuals,
+   missing required actuals, and duplicate instance names have stable
+   diagnostics.
+
+   Independently authored frontend tests cover compilation-unit declarations,
+   nested semantic ownership, ordered/named connection retention, per-instance
+   specialization, defaults, and every connection-error class. Runtime tests
+   place the checker declaration and consuming design in separate files of one
+   explicit source-set compilation unit, then execute two differently connected
+   named, ordered, and wildcard/open/default instances through interpreter and
+   LLVM O0/O2 cold/warm paths and prove
+   identical outcomes, instance-qualified coverage, sampled reads, and
+   native-cache reuse. S23-B186-C04 is preserved,
+   leaving 34 active and 22 preserved rows at normalized SHA-256
+   `f73af7699738eb952ba19e9996451d82880b4bc2c047e75e8820e7aed2eb81e4`.
+   The source manifest has 1,799 paths at normalized SHA-256
+   `91dfe9e67e2fb955e953e7eaf863c0bca8060dea0f288a41ddf65b7bf638c50b`.
+   Exact Clang warnings-as-errors Debug targets build with eight workers. No
+   Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+5. [completed] Implement constrained-random and solver revisions.
+
+   The exact SystemVerilog-2023 profile now retains `unique` constraint blocks
+   in typed HIR and lowers named random variables and materialized container
+   elements into bounded pairwise inequality clauses. The same versioned
+   template form supports source-retained inline constraints, is validated at
+   the LLVM boundary, and round-trips through the native v3 design codec.
+   Malformed delimiters, empty lists, unsupported item expressions, and
+   pre-2012 profile use have stable diagnostics. Pair construction avoids an
+   unchecked quadratic reserve calculation and remains governed by the
+   existing expression and solver resource ceilings.
+
+   `object.randomize(null)` is now a checker-only request: every eligible
+   property contributes its current singleton value to class and inline
+   constraints, but no property, revision, `randc` cycle, or object random
+   stream is advanced. A null marker mixed with selected properties is rejected
+   before runtime dispatch. Independently authored runtime and application
+   tests prove satisfied and unsatisfied checks, state and stream stability,
+   ordinary unique solving, impossible inline uniqueness, interpreter/LLVM
+   O0/O2 equivalence, and cold/warm native-cache reuse. Array-expanding HIR
+   tests prove pairwise dependencies and duplicate-value rejection.
+
+   The source-line gate exposed the application dispatcher at 2,505 physical
+   lines, and a follow-up translation-unit audit showed that textual
+   implementation fragments had hidden a 7,907-line compilation unit.
+   Randomize-selection decoding moved to its existing class-randomization
+   owner. The cohesive class specialization, object, property, and constructor
+   block now builds independently as the 787-line
+   `application_class_execution.cpp` component behind a narrow private
+   interface; it is not an included implementation fragment. Checker parsing
+   and its application witness likewise moved from non-template `.tpp` files
+   into real compiled sources.
+
+   The same remediation converted the 3,965-line SimIR boundary and
+   interpreter fragments into independent 1,993- and 1,972-line sources with a
+   268-line shared implementation owner. Default virtual process-execution
+   methods and code-coverage validation moved out of two high-fanout public
+   headers into compiled runtime sources, reducing those headers to 447 and
+   192 lines. The follow-up remediation removes all 36 `.tpp` files, converts
+   the 54 oversized implementation and test units into independently compiled
+   components, and deletes the legacy allowlist and non-increasing-baseline
+   escape hatch. The source contract now rejects every `.tpp` file, every
+   authored C/C++ source or header above 2,000 lines, and every implementation
+   unit above the same target; its current debt result is zero in each
+   category.
+
+   The same debt pass moves substantial non-template implementations out of
+   shared headers, including parser primitives, coverage render support,
+   artifact-identity diagnostics, SimIR execution context construction,
+   application signal remapping, and common application/elaboration test
+   helpers. Header-resident bodies are now limited to genuine templates,
+   compile-time `constexpr` mappings and truth tables, trivial accessors/value
+   constructors, and SystemC SDK adapters whose definitions are required by
+   template instantiation. The former 2,533-line monolithic elaborator header
+   is now an 864-line shared-detail surface plus 1,005-line lowering and
+   692-line hierarchy interfaces; 110-plus implementation files include only
+   their owning interface, with both included only at the two true
+   lowerer/hierarchy crossing points. The last oversized public interface,
+   `simir.hpp`, is 1,997 lines after its non-template execution-point
+   constructor moved to the compiled runtime owner. Callbacks, rollback, solver
+   configuration, and result publication retain their established order.
+   S23-B186-C05 is preserved, leaving 33 active and 23 preserved rows at
+   normalized SHA-256
+   `58e4aae68ba7f4ccd9502c658d04106279c6ce9e9edf21afdf13d2e7a1033c86`.
+   Path-only VHDL inventory ownership updates produce normalized SHA-256
+   `1e2cbef28c69d4612cd731b72d719f72c1eada48fcb8f4ce0061a14a175bf6d4`.
+   The refreshed source manifest has 1,870 paths at SHA-256
+   `f85251f5e07ed00c347e98c00ac4c40edc86291a5cea3642eb0e6e00faf59510`.
+   Exact Clang warnings-as-errors Debug frontend, runtime, application, and
+   merged application/runtime test targets build with eight workers. The final
+   focused 14/14 slice completes in 28.95 wall seconds at 151,888 KiB peak RSS
+   with zero swaps; the post-documentation rerun passes the same 14/14 in 28.66
+   wall seconds at 151,868 KiB peak RSS with zero swaps. The structural-debt
+   follow-up rebuilds the affected frontend, elaboration, runtime, artifact,
+   application, LLVM, and test targets under the same Clang warnings-as-errors
+   Debug contract. Its final focused slice passes 16/16 in 50.96 wall seconds,
+   including both source-structure gates and the elaboration, runtime, LLVM,
+   artifact, VHDL, mixed-language, and coverage-point owners. No Release,
+   clean-first, sanitizer, hosted-CI, commit, or push action ran.
+6. **Complete.** Implement functional-coverage revisions.
+
+   The exact SystemVerilog-2023 profile adds covergroup inheritance through a
+   parent class, real and shortreal coverpoints, absolute and relative real-bin
+   tolerances, immutable `type_option.real_interval`, and immutable instance
+   `option.cross_retain_auto_bins`. Older profiles reject the new syntax and
+   options with stable diagnostics. Resolution composes inherited sampling
+   profiles and declarations without mutating their parent, preserves origin
+   identities, rebinds local shadows and inherited cross operands, and remains
+   idempotent.
+
+   Functional-coverage samples now retain their scalar kind and exact IEEE
+   payload through SimIR, interpreter, LLVM O0-O3 lowering, callbacks, illegal-
+   bin reports, design artifacts, and native-cache identity. Real intervals
+   and tolerance ranges use deterministic bit-level persistence and half-open
+   partitioning. Cross state is initialized before the first sample for finite
+   explicit coverpoint inventories, so retained automatic tuples contribute
+   zero-hit denominator entries; the 2023 option can remove those residual
+   tuples while preserving declared cross bins. The unified `.fsimcov`
+   projection likewise emits unsampled static coverpoint and cross bins with
+   exclusions and zero counts intact.
+
+   The versioned runtime, functional-coverage, owning-unit, and portable
+   schemas advance to 60, 7, 30, and 13 respectively, with strict stale and
+   future rejection. Independently authored frontend, database, artifact,
+   cache, application, and LLVM tests cover inheritance, option legality,
+   exact pre-sample denominators, real interval/tolerance matching, exclusion
+   persistence, interpreter/compiled equivalence, and cold/warm cache reuse.
+   The parser coverage-bin implementation was also split into a separately
+   compiled 500-line owner; all authored units remain within the 2,000-line
+   structural contract and no `.tpp` debt was reintroduced.
+
+   S23-B186-C06 is preserved, leaving 32 active and 24 preserved rows at
+   normalized SHA-256
+   `00ab93ec0544f7e8d863fd49c19262be5bf6cf28057862a85da2a136df88dd8f`.
+   The refreshed source manifest has 1,875 paths at SHA-256
+   `e61fb3d76659dcc645bc67a2c5206d5b0ac30b1bfe692ef72333deda0793d5b5`.
+   Exact Clang warnings-as-errors Debug targets build with eight workers. The
+   complete coverage-named slice passes 51/51, and the focused schema,
+   artifact, LLVM, inventory, diagnostics, portability, source-package, and
+   source-structure slice passes after correcting two relocated width-audit
+   owners. `git diff --check` is clean. No Release, clean-first, sanitizer,
+   hosted-CI, commit, or push action ran.
+7. **Complete.** Implement utility system-task/function revisions.
+
+   Retained SystemVerilog profiles now execute the clarified severity system
+   tasks during constant-function evaluation. `$info` and `$warning` publish
+   non-failing elaboration messages, while `$error` and `$fatal` publish stable
+   `FSIM-ELAB-SVCONST-002` diagnostics that reject the build. The evaluator
+   supports the existing bounded output-format vocabulary, limits one
+   evaluation to 4,096 effects, and keeps inactive branches silent.
+
+   Constant-call memoization stores transitive effects with the value and
+   replays them once for each distinct full source call-site chain. This avoids
+   duplicate messages from internal reevaluation without collapsing two real
+   source calls that happen to use identical arguments. Statement behavior
+   identity includes the complete report payload, severity, and formatting
+   flags, and the application layer imports elaboration notes and warnings
+   without turning them into build failures. The shared formatter declarations
+   now have a narrow public runtime header rather than being duplicated in the
+   SimIR implementation header.
+
+   Independently authored tests cover the 2017 and exact 2023 profiles,
+   repeated identical calls, inactive branches, bounded formatting, error
+   rejection, and application diagnostic propagation. S23-B186-C07 is
+   preserved, leaving 31 active and 25 preserved rows at normalized SHA-256
+   `843bcde265248ebf3f5781c258a84ec3cb51509c05c12420e1fd13ebffea2025`.
+   The refreshed source manifest has 1,877 paths at SHA-256
+   `92726d614f9d1fcf10b36eea73cd4962504245e6b1ba71f02a5c9f1067f82a7c`.
+   Exact Clang warnings-as-errors Debug targets build with eight workers. The
+   final focused frontend, elaboration, application, runtime-format consumer,
+   LLVM, library, artifact, diagnostics, inventory, portability, source-
+   package, and source-structure slice passes 12/12. No Release, clean-first,
+   sanitizer, hosted-CI, commit, or push action ran.
+8. **Complete.** Implement file and input/output task revisions.
+
+   SystemVerilog formatted file I/O now distinguishes the standard native
+   unformatted transfers from text conversion. `%u` writes and reads the
+   packed two-state byte representation in host byte order, collapsing X/Z
+   source bits to zero on output. `%z` writes and reads ordered native
+   `aval`/`bval` word pairs and preserves all four logic states. Transfers
+   use exact width-derived sizes, reject text field modifiers, fail
+   transactionally on incomplete input, and are bounded to 4,096 bytes before
+   execution or LLVM lowering.
+
+   Raw conversions are accepted only by `$fwrite` and `$fscanf`; display,
+   strobe, monitor, string-format, severity, and `$value$plusargs` paths reject
+   them before execution. `$ungetc` now returns zero after a successful
+   pushback and minus one on failure while the private scanner primitive still
+   retains the character for lookahead verification. Interpreter and compiled
+   callback paths share the corrected status contract.
+
+   Runtime and semantic validation recognize the new bounded enum identities.
+   The runtime, owning-unit, and portable schemas advance to 61, 31, and 14,
+   respectively, with stale/future rejection and synchronized object, library,
+   nested-state, producer-diagnostic, and ABI-reference contracts. The ABI
+   reference also corrects the previously stale class-schema description to
+   the already-active schema 12.
+
+   Independently authored tests cover parser identity and context rejection,
+   lowering, native two-state/four-state round trips including X/Z retention,
+   incomplete-input transactionality, standard pushback results, interpreter
+   execution, compiled LLVM O0/O2 cold/warm execution, and artifact/cache
+   reuse. S23-B186-C08 is preserved, leaving 30 active and 26 preserved rows
+   at normalized SHA-256
+   `8e6f76d3d929008e2991c61adbbbd9c558fc2fb327da20e91b476be40ee1cf2a`.
+   No source path was added, so the source manifest remains at 1,877 paths and
+   SHA-256
+   `92726d614f9d1fcf10b36eea73cd4962504245e6b1ba71f02a5c9f1067f82a7c`.
+   Exact Clang warnings-as-errors Debug targets build with eight workers, and
+   the focused frontend, elaboration, runtime, LLVM, application, artifact,
+   schema, inventory, and portability slice passes 16/16. No Release,
+   clean-first, sanitizer, hosted-CI, commit, or push action ran.
+9. **Complete.** Implement compiler-directive revisions.
+
+   SystemVerilog-2023 conditional-compilation expressions now apply the
+   ordinary logical precedence ladder and the required right association for
+   implication and equivalence. This fixes chained implication cases that a
+   left fold evaluated incorrectly while preserving the existing 2023-only
+   revision gate, `ifndef` inversion, nested grouping, and deterministic
+   malformed-expression recovery.
+
+   The `begin_keywords "1800-2023"` selector remains accepted only by the
+   exact 2023 source profile; nested regions restore the prior keyword set and
+   older revisions retain the stable later-revision diagnostic. Application
+   evidence proves that directive and macro state crosses ordered files only
+   when they form one explicit source-set compilation unit. File-scoped units
+   remain isolated and receive distinct compilation-unit identities.
+
+   Preprocessing output can change for identical source after the association
+   correction, so the design/native cache input advances to preprocessor
+   identity v7. No persisted HIR, object, design, checkpoint, runtime, native
+   ABI, or plugin schema changed. The documentation and cache-identity test
+   record that boundary explicitly.
+
+   Independently authored tests cover Boolean precedence, right-associated
+   implication, `ifdef`/`ifndef`/`elsif`, nested expressions, malformed input,
+   macro-replacement bodies, 2017 rejection, exact 2023 keyword selection,
+   source-set state sharing, file-unit isolation, and compilation-unit digest
+   separation. Two portability contracts were also redirected from deleted
+   `.tpp` and split API-test owners to their compiled `.cpp` owners.
+
+   S23-B186-C09 is preserved, leaving 29 active and 27 preserved rows at
+   normalized SHA-256
+   `16b453755ace27e206299bff04882cbff6dc068105a20c505ff85d039cb2e277`.
+   No source path was added, so the source manifest remains at 1,877 paths and
+   SHA-256
+   `92726d614f9d1fcf10b36eea73cd4962504245e6b1ba71f02a5c9f1067f82a7c`.
+   Exact Clang warnings-as-errors Debug targets build with eight workers, and
+   the final frontend, application, standard-mode, LLVM, API, artifact,
+   diagnostics, inventory, source, and portability closure passes 23/23 in
+   126.81 wall seconds. No Release, clean-first, sanitizer, hosted-CI, commit,
+   or push action ran.
+10. **Complete.** Implement module and hierarchy revisions.
+
+    Module parsing now preserves the retained parameter-locality rules without
+    extending them to programs or interfaces. In every SystemVerilog profile,
+    a module parameter-port list makes directly contained body `parameter`
+    declarations local, including an empty list. Verilog-2001/2005 applies the
+    corresponding rule only when the parameter-port list contains assignments.
+    Attempts to override those local body declarations are rejected through the
+    existing parameter diagnostic.
+
+    SystemVerilog bind elaboration now records the source revision and logical
+    library of each directive. An exact instance target takes precedence over a
+    same-named scope. Retained profiles preserve type-wide name matching across
+    configured logical-library instances and continue to apply ordinary cell and
+    instance configuration rules to generated bound instances. In the 2023
+    profile, the controlling configuration instead selects the bind target scope
+    and the bound module instance through its cell or default-library mapping.
+    Instance rules aimed at a generated 2023 bound instance are deliberately
+    ignored, while cell rules remain active; bound-instance library ownership is
+    carried into normal specialization and child elaboration.
+
+    Independently authored frontend and application tests cover SystemVerilog
+    and Verilog parameter locality, invalid overrides, retained multi-library
+    name matching, exact configured scope and bound-instance selection, ignored
+    2023 target-instance mappings, hierarchy presence, specialization libraries,
+    137-bit values, interpreter execution, LLVM O0/O2 execution, and cold/warm
+    native-cache reuse. No persisted model, object, design, checkpoint, runtime,
+    native ABI, plug-in ABI, or cache schema changed.
+
+    S23-B186-C10 is preserved, leaving 28 active and 28 preserved rows at
+    normalized SHA-256
+    `6edbbed5338c9b15ee88947b85c6668630db152a29eb9112bdf789facb38d840`.
+    The source manifest remains at 1,877 paths and SHA-256
+    `92726d614f9d1fcf10b36eea73cd4962504245e6b1ba71f02a5c9f1067f82a7c`.
+    Exact Clang warnings-as-errors Debug frontend and application targets build
+    with eight workers. The focused hierarchy test passes after the final O0/O2
+    expansion, and the frontend, hierarchy, diagnostics, inventory, standard-
+    mode, source, resource, portability, artifact, API, runtime, and CTest
+    dependency closure passes 23/23 in 105.48 wall seconds. No Release, clean-
+    first, sanitizer, hosted-CI, commit, or push action ran.
+11. **Complete.** Implement program-block revisions.
+
+    Anonymous programs retain their compilation-unit task, function, and class
+    declarations in established profiles. The SystemVerilog-2023 profile adds
+    interface-class items in the same namespace, while older profiles reject
+    only that revised item. Anonymous-program end labels, duplicate callables,
+    malformed interface items, and unsupported declarations have stable
+    recovery diagnostics.
+
+    Direct and generated `$info`, `$warning`, `$error`, and `$fatal` items in a
+    2023 named program are retained as elaboration-only report statements.
+    Generate selection occurs first; each selected report then uses the common
+    bounded constant-expression and formatting evaluator exactly once during
+    hierarchy construction. Notes and warnings are published in deterministic
+    order, errors and fatal reports reject the design, and no report process is
+    left for reactive simulation. Earlier profiles reject the revised grammar
+    without changing their established program scheduling or bind semantics.
+
+    Independently authored frontend and application tests cover retained
+    anonymous-program items, exact 2017/2023 profile isolation, source-owned
+    direct and conditional-generate HIR, parameter formatting, unselected branch
+    suppression, repeated-build identity, error rejection, and zero runtime
+    process materialization. No persisted model, object, design, checkpoint,
+    runtime, native ABI, plug-in ABI, or cache schema changed.
+
+    S23-B186-C11 is preserved, leaving 27 active and 29 preserved rows at
+    normalized SHA-256
+    `dc748cea606ccbba0c4bb27a5120c50b032581cd9591636c658c3cee3214e3cc`.
+    The source manifest remains at 1,877 paths and SHA-256
+    `92726d614f9d1fcf10b36eea73cd4962504245e6b1ba71f02a5c9f1067f82a7c`.
+12. **Complete.** Implement interface, modport, and virtual-interface revisions.
+
+    Virtual-interface assignment now validates its source rather than treating
+    every 64-bit handle-shaped expression as compatible. Declaration
+    initialization and procedural blocking assignment accept null, another
+    virtual interface of the same canonical interface specialization, or a
+    direct scalar/statically indexed interface instance of that specialization.
+    An unrestricted source may narrow to a selected modport; a selected source
+    cannot widen or rebind. Canonical elaboration identities compare default,
+    positional, named, value, and type parameter actuals independently of their
+    spelling.
+
+    Direct interface-instance sources are planned before process lowering and
+    become ordinary pointer-free 64-bit constant loads, so interpreter and LLVM
+    use the existing scalar operation set without a new runtime callback,
+    persisted schema, native ABI, plug-in ABI, or cache identity. Independently
+    authored tests cover virtual-to-virtual and concrete-to-virtual assignment,
+    null transitions, legal modport narrowing, illegal widening/rebinding,
+    parameter mismatches, static interface arrays, interpreter execution, and
+    LLVM O0/O2 cold/warm cache reuse under the 2023 profile while retaining a
+    2017 elaboration differential.
+
+    S23-B186-C12 is preserved, leaving 26 active and 30 preserved rows at
+    normalized SHA-256
+    `8635427a970f990287622c888545dac3fba4e479fb676ef94ae08cf829034b72`.
+    The source manifest remains at 1,877 paths and SHA-256
+    `92726d614f9d1fcf10b36eea73cd4962504245e6b1ba71f02a5c9f1067f82a7c`.
+    Exact Clang warnings-as-errors Debug elaboration and application targets
+    build with eight workers. The focused frontend, elaboration, interface,
+    diagnostics, inventory, standard-mode, source, resource, portability,
+    artifact, API, runtime, LLVM, and CTest dependency closure passes 28/28 in
+    101.45 wall seconds. No Release, clean-first, sanitizer, hosted-CI, commit,
+    or push action ran.
+13. **Complete.** Implement package, import, export, and lookup revisions.
+
+    Module, interface, and program headers now accept one or more package
+    import declarations before their parameter-port and port lists. The parser
+    retains those imports early enough for parameter defaults, type parameters,
+    and port types to use them, and rejects a header import that is not followed
+    by a legal parameter or port surface with `FSIM-SV-PARSE-385`.
+
+    Package lookup now keeps wildcard imports potential until an unqualified
+    name is actually referenced or explicitly re-exported. A declaration in the
+    importing scope takes precedence over a wildcard candidate, while a
+    selective import that conflicts with that declaration reports
+    `FSIM-ELAB-SVPKG-009`. Required parameter and type dependencies are expanded
+    before materialization, and declaration identity rather than import path
+    owns duplicate re-export resolution. The effective package surface includes
+    constants, types, lets, functions, tasks, ordinary classes, and interface
+    classes, so the same declaration may arrive through multiple re-export
+    paths without a false ambiguity. Two legacy fixtures whose parameter
+    defaults preceded body imports were corrected to use standard header
+    imports; an ambiguity fixture now references the conflicting wildcard name.
+
+    Independently authored frontend, elaboration, and application tests cover
+    header visibility, malformed header recovery, local shadowing, unused
+    duplicate wildcard candidates, explicit conflicts, transitive re-exports,
+    interface classes, interpreter execution, and LLVM O0/O2 cold/warm cache
+    reuse. S23-B186-C13 is preserved, leaving 25 active and 31 preserved rows
+    at normalized SHA-256
+    `4ba2d4fcd448073a2734478636d05efd614f6726f1771bd184021ffde5c4c4e1`.
+    The source manifest remains at 1,877 paths and SHA-256
+    `92726d614f9d1fcf10b36eea73cd4962504245e6b1ba71f02a5c9f1067f82a7c`.
+    Exact Clang warnings-as-errors Debug frontend, elaboration, and application
+    targets build with eight workers. The focused frontend, elaboration,
+    application, diagnostics, inventory, portability, source, schema, artifact,
+    API, runtime, and LLVM closure passes 22/22 in 24.97 wall seconds. No
+    Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+14. **Complete.** Implement generate-construct revisions.
+
+    Generate block names are normalized per enclosing scope after parsing.
+    Every construct consumes one ordinal, all alternatives share its implicit
+    name, direct nested conditionals do not create an extra hierarchy level,
+    nested scopes restart their ordinal sequence, and declaration/future-label
+    collisions are avoided with leading zeroes or diagnosed by
+    `FSIM-SV-SEM-386`. Loop elaboration now detects repeated genvar values, not
+    only immediate non-advancement, with `FSIM-ELAB-GEN-014`.
+
+    Generate bodies retain ordinary and SystemVerilog-2023 interface classes.
+    Only selected declarations are resolved, inherited, specialized, lowered,
+    and returned across the elaboration/application boundary; an invalid class
+    in an inactive branch cannot poison the design. The selected classes join
+    the existing durable class-specialization/HIR/artifact surface, and VPI
+    publishes them beneath the owning instance and generated scope. Class
+    method delays now participate in delay-mode selection and normalization.
+
+    Independently authored frontend, elaboration, semantic-HIR, and application
+    tests cover scoped ordinals, collisions, direct nesting, shared
+    alternatives, generated interface/ordinary classes, inactive invalid
+    declarations, repeated genvar cycles, VPI publication, interpreter
+    execution, and LLVM O0/O2 cold/warm cache reuse. S23-B186-C14 is preserved,
+    leaving 24 active and 32 preserved rows at normalized SHA-256
+    `f30c8f1c41522325eafb2a0941629de6db0e6e8270e2fb0a253fe300d9c6d6f2`.
+    The source manifest advances to 1,878 paths and SHA-256
+    `598f08c43cbb314411b132a2e29f8f2d3f8e0f74f2b36f171b71a52958949b1f`.
+    Exact Clang warnings-as-errors Debug frontend, elaboration, application,
+    semantic-HIR, LLVM, runtime, API, and artifact targets build with eight
+    workers. The focused diagnostics, source-line, source-manifest, inventory,
+    portability, schema, artifact, API, runtime, elaboration, application, and
+    LLVM closure passes 26/26 in 28.12 wall seconds. No Release, clean-first,
+    sanitizer, hosted-CI, commit, or push action ran.
+15. **Complete.** Implement gate, switch, and UDP revisions.
+
+    Built-in gate arity now follows the complete normalized forms: `buf` and
+    `not` emit an independent continuous driver for every output before their
+    final input, while n-input logic gates accept the one-input boundary.
+    Additional outputs require net-lvalue shapes. Named switch arrays now
+    materialize every declared index, broadcast scalar terminals, map matching
+    packed terminals by declared direction, and publish stable indexed driver
+    identities. Unnamed arrays are rejected rather than collapsed into a
+    misleading scalar primitive.
+
+    Built-in and user-defined primitive instances are rejected in programs,
+    including generated regions. UDP validation accepts only coherent Verilog
+    or SystemVerilog language/revision pairs and nonempty compatibility
+    profiles; generated UDP execution units retain the declaration's exact
+    revision and profile instead of silently falling back to a generic unit.
+
+    Independently authored frontend and application evidence covers positive
+    and negative gate arity, multiple output lvalues, exact switch-array
+    indices and terminal direction, program exclusions, cross-language UDP
+    metadata rejection, sequential 2023 UDP execution, portable object
+    inspection, and interpreter/LLVM O0/O2 cold/warm equality. S23-B186-C15 is
+    preserved, leaving 23 active and 33 preserved rows at normalized SHA-256
+    `1405423db36a5effa8344daf705930a4eac449bef346f4ff504525a7b2fabb66`.
+    The source manifest remains at 1,878 paths and SHA-256
+    `598f08c43cbb314411b132a2e29f8f2d3f8e0f74f2b36f171b71a52958949b1f`.
+    Exact Clang warnings-as-errors Debug frontend, elaboration, library,
+    application, runtime, LLVM, and API targets build with eight workers. The
+    focused diagnostics, source-line, source-manifest, inventory, portability,
+    schema, artifact, API, runtime, elaboration, application, and LLVM closure
+    passes 26/26 in 24.80 wall seconds. The legacy SystemVerilog closure audit
+    now follows its split artifact witness and refreshed owner inventories. No
+    Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+16. **Complete.** Implement specify-block and timing-check revisions.
+
+    Module-path grammar now places simple-path polarity before `=>` or `*>`,
+    limits parallel paths to one source and destination, and keeps full-path
+    terminal lists. Edge-sensitive paths require a grouped destination data
+    source, reject source polarity, and cannot follow `ifnone`; simple paths
+    reject the edge-sensitive grouped form. Stable diagnostics own misplaced
+    polarity and topology recovery.
+
+    Timing-check events now resolve only scalar module terminals rather than
+    arbitrary internal signals. Notifiers must be scalar variables, so a net
+    can no longer enter scheduler-owned notifier state. The retained optional
+    `$width` threshold and bracketed `edge` descriptor grammar remain unchanged.
+
+    Independently authored exact-2023 frontend, elaboration, and mixed-language
+    application evidence covers both polarity locations, parallel/full
+    cardinality, grouped data forms, `ifnone`, internal-event and net-notifier
+    rejection, all twelve checks, report/notifier ordering, runtime-state and
+    mapped-library replay, VCD, and interpreter/LLVM O0/O2 cold/warm/edit cache
+    equality. S23-B186-C16 is preserved, leaving 22 active and 34 preserved
+    rows at normalized SHA-256
+    `3adacaa9f83fb009f431cbe006640672c3261bde4b850600ba5523a3de538e54`.
+    The source manifest remains at 1,878 paths and SHA-256
+    `598f08c43cbb314411b132a2e29f8f2d3f8e0f74f2b36f171b71a52958949b1f`.
+    Exact Clang warnings-as-errors Debug frontend, elaboration, library,
+    application, runtime, LLVM, and API targets build with eight workers. The
+    focused diagnostics, source-line, source-manifest, inventory, portability,
+    schema, artifact, API, runtime, elaboration, application, and LLVM closure
+    passes 28/28 in 40.35 wall seconds. No Release, clean-first, sanitizer,
+    hosted-CI, commit, or push action ran.
+17. **Complete.** Implement SDF backannotation revisions.
+
+    SDF endpoint resolution now binds an `IOPATH` only after exact instance,
+    packed selection, source edge, destination, and unconditional,
+    conditional, or `CONDELSE` disposition filtering. Timing checks require
+    the exact instance prefix plus reference/data terminal selections and
+    edge transitions. Edge-wrapped SDF atoms no longer inherit roles from
+    their normalized storage order; the unique elaborated owner determines
+    and republishes the endpoint roles.
+
+    Multiple exact specify paths or timing checks reject the complete mapping
+    transaction with `FSIM-SDF-ENDPOINT-006`. Independently authored tests
+    cover wrong-edge, wrong-select, swapped-role, conditional, `CONDELSE`,
+    edge-qualified timing-check, stale-state, resource, and exact-owner
+    ambiguity behavior. The drive/timing application differential now selects
+    the exact SystemVerilog-2023 profile and retains interpreter/LLVM behavior.
+
+    S23-B186-C17 is preserved, leaving 21 active and 35 preserved rows at
+    normalized SHA-256
+    `d59d593bf6d4a25199ba15eb685c4137af253d2af28e743b3a573cb6e1287cd0`.
+    The source manifest remains at 1,878 paths and SHA-256
+    `598f08c43cbb314411b132a2e29f8f2d3f8e0f74f2b36f171b71a52958949b1f`.
+    Exact Clang warnings-as-errors Debug application and SDF targets build
+    with eight workers. The focused diagnostics, source-line,
+    source-manifest, inventory, portability, schema, artifact, API, runtime,
+    SDF, specify, and LLVM closure passes 30/30 in 31.69 wall seconds. No
+    Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+18. **Complete.** Implement configuration and protected-envelope revisions.
+
+    Nested `use ... : config` resolution is now proven across logical-library
+    boundaries: the referenced configuration selects its own design root and
+    remains active for exact descendant instance rules. An unavailable nested
+    configuration rejects elaboration at the selected instance with the stable
+    configuration diagnostic. Independently authored application evidence
+    preserves exact specialization ownership and interpreter/LLVM O0/O2 result
+    equality.
+
+    Protected envelopes are now opaque at the physical-source boundary.
+    Diagnostics produced by lexing encrypted payload bytes are filtered before
+    source remapping, payload text never appears in output tokens or diagnostic
+    messages, and visible declarations before and after a closed envelope remain
+    available. A missing `end_protected` reports at the saved opening span while
+    the existing unavailable-provider and nested-envelope diagnostics remain
+    deterministic. The preprocessor cache identity advances so no cached
+    pre-opaque diagnostic stream can survive the semantic change.
+
+    S23-B186-C18 is preserved, leaving 20 active and 36 preserved rows at
+    normalized SHA-256
+    `3d595f0dcb409c4a6bae9090295f2951944ed6d2ecf334d616ecd319f30b4455`.
+    The source manifest remains at 1,878 paths and SHA-256
+    `598f08c43cbb314411b132a2e29f8f2d3f8e0f74f2b36f171b71a52958949b1f`.
+    Exact Clang warnings-as-errors Debug frontend and application targets build
+    with eight workers. The focused configuration, preprocessing, diagnostics,
+    source-budget, manifest, inventory, portability, schema, and Windows/LLVM
+    closure passes 14/14 in 39.14 wall seconds. Relevant authored files remain
+    at or below 2,000 lines and `git diff --check` is clean. No Release,
+    clean-first, sanitizer, hosted-CI, commit, or push action ran.
+19. **Complete.** Prove verification and timing behavior across interpreter and
+    LLVM engines.
+
+    The retained serial SystemVerilog closure matrix expands from fourteen to
+    26 executable witnesses. In addition to its existing semantic, frontend,
+    LLVM, artifact, VPI, UVM, and runtime lanes, it now owns the complete Batch
+    186 surface: elaboration utilities, assertions/checkers, constrained random,
+    functional coverage, file I/O, compiler directives, hierarchy and nested
+    configurations, interfaces, programs/packages/generate, gates/UDPs, specify
+    timing, and exact SDF endpoint and drive behavior. Full CTest uses matching
+    fixture ownership to avoid recursive duplicate execution; direct matrix
+    runs retain one log per witness under the unchanged 1,200-second timeout.
+
+    The inventory checker freezes all thirteen new witness names, the 26/26
+    count, fixture registration, and timeout. During the cross-surface build it
+    exposed a split-test link defect: the container elaboration target called
+    the shared diagnostic helper without compiling its implementation. The
+    target now owns `elaborator_test_support.cpp`, and the exact Clang
+    warnings-as-errors Debug tree builds successfully with eight workers.
+
+    The direct matrix passes 26/26 in 74.18 wall seconds; the inventory,
+    source-line, source-manifest, and resource governance slice passes 4/4 in
+    15.47 wall seconds. S23-B186-C19 is preserved, leaving 19 active and 37
+    preserved rows at normalized SHA-256
+    `ca4193e587e93d48ac90bc8d63c5085d5a7b79a7b8e160e2074324a5994e974e`.
+    The source manifest remains at 1,878 paths and SHA-256
+    `598f08c43cbb314411b132a2e29f8f2d3f8e0f74f2b36f171b71a52958949b1f`.
+    `git diff --check` is clean. No Release, clean-first, sanitizer, hosted-CI,
+    commit, or push action ran.
+20. **Complete.** Closed the SystemVerilog-2023 design and verification
+    surface with clean Clang 22 and LLVM 22.1.8 warnings-as-errors builds using
+    eight workers. The clean Release configuration compiled all 3,131 build
+    steps before any Debug qualification, then the complete Release suite
+    passed 406/406 in 149.90 seconds. Only after that Release lane was green,
+    the clean Debug configuration compiled all 3,131 build steps and its
+    complete suite passed 406/406 in 172.42 seconds.
+
+    Qualification exposed and repaired a reference-sensitive package-import
+    regression. Type references now carry their actual use occurrence,
+    parameter default types participate in import dependency discovery, and
+    parser-created implicit-net placeholders no longer masquerade as explicit
+    local declarations when deciding whether a wildcard import is shadowed.
+    The repaired behavior covers both ordinary callable argument types and
+    multidimensional aggregate type defaults; the focused failures and both
+    complete suites pass.
+
+    Batch closure also completed the requested translation-unit remediation,
+    including legacy debt. Non-template implementation bodies were moved out
+    of `.tpp` and oversized header seams into ordinary compiled translation
+    units. The structure gate now measures 1,510 authored sources, finds zero
+    `.tpp` files and zero files over the 2,000-line ceiling, and remains green
+    in both complete configurations. Frozen governance reflects 2,746
+    production diagnostics, 1,878 ordered source-package paths with 23
+    governed exclusions, 1,813 SPDX-owned files, 775 release test/control
+    files, and 565 v1 conformance records.
+
+    The independently worded SystemVerilog-2023 inventory remains at nineteen
+    active and 37 preserved rows with normalized SHA-256
+    `ca4193e587e93d48ac90bc8d63c5085d5a7b79a7b8e160e2074324a5994e974e`;
+    the deterministic source manifest remains at 1,878 paths with SHA-256
+    `598f08c43cbb314411b132a2e29f8f2d3f8e0f74f2b36f171b71a52958949b1f`,
+    and the release feature matrix is frozen at SHA-256
+    `72ffbd202b8f0d995de037bed421f2164bc09e3b6c11d40924bb72be5de38331`.
+    Sanitizers and hosted-CI monitoring did not run and remain reserved for
+    Batch 188 under the active release goal.
 
 ### Batch 187 - SystemVerilog-2023 foreign APIs and complete closure
 

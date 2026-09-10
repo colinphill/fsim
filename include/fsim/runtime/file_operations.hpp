@@ -102,7 +102,9 @@ enum class InputScanFormat : std::uint8_t {
     character,
     string,
     boolean_value,
-    real
+    real,
+    unformatted2,
+    unformatted4
 };
 enum class InputScanTargetKind : std::uint8_t {
     packed_register,

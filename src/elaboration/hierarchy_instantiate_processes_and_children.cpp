@@ -1,0 +1,1685 @@
+// SPDX-License-Identifier: Apache-2.0
+#include "hierarchy_builder_internal.hpp"
+#include "lowerer_internal.hpp"
+
+#include "vhdl_array_boundary.hpp"
+
+namespace fsim::elaboration {
+
+namespace {
+
+    template <typename Callback>
+    class ScopeExit final {
+    public:
+        explicit ScopeExit(Callback callback)
+            : callback_ { std::move(callback) }
+        {
+        }
+
+        ScopeExit(const ScopeExit&) = delete;
+        ScopeExit& operator=(const ScopeExit&) = delete;
+
+        ~ScopeExit() { callback_(); }
+
+    private:
+        Callback callback_;
+    };
+
+    template <typename Callback>
+    ScopeExit(Callback) -> ScopeExit<Callback>;
+
+    template <typename SignalMap>
+    void adapt_vhdl_unspecified_port_types(
+        DesignUnit& unit,
+        const frontend::Instance& instance,
+        const SignalMap& parent_signals,
+        const std::span<const SignalInfo> signal_info,
+        std::vector<std::pair<std::string, std::string>>& identities,
+        std::vector<Diagnostic>& diagnostics)
+    {
+        if (unit.language != frontend::Language::Vhdl2008
+            || std::ranges::none_of(
+                unit.ports, [](const auto& port) {
+                    return port.type.vhdl_unspecified != nullptr;
+                })) {
+            return;
+        }
+        const auto actual_type = [](const SignalInfo& info) {
+            frontend::Type type;
+            type.domain = info.source_domain;
+            type.spelling = info.type_name;
+            type.is_signed = info.is_signed;
+            type.packed_range = info.packed_range;
+            if (info.vhdl_array) {
+                type.vhdl_array = *info.vhdl_array;
+            }
+            if (info.vhdl_access) {
+                type.vhdl_access = *info.vhdl_access;
+            }
+            if (info.vhdl_physical) {
+                type.vhdl_physical = *info.vhdl_physical;
+            }
+            type.packed_members = info.packed_members;
+            type.integer_range = info.integer_range;
+            if (info.source_domain == frontend::ValueDomain::Integer
+                && (info.width == 32U || info.width == 64U)) {
+                type.vhdl_integer_storage_width = static_cast<std::uint8_t>(info.width);
+            }
+            type.nominal_type = info.nominal_type;
+            type.enumeration_literals = info.enumeration_literals;
+            type.enumeration_range = info.enumeration_range;
+            return type;
+        };
+        struct Inference {
+            frontend::Type type;
+            std::string identity;
+        };
+        std::unordered_map<std::string, Inference> inferred;
+        std::vector<bool> connected(unit.ports.size());
+        std::size_t positional = 0;
+        for (const auto& connection : instance.connections) {
+            std::size_t port_index = unit.ports.size();
+            if (connection.port) {
+                const auto found = std::ranges::find_if(
+                    unit.ports, [&](const auto& port) {
+                        return port.name == *connection.port;
+                    });
+                if (found != unit.ports.end()) {
+                    port_index = static_cast<std::size_t>(
+                        std::distance(unit.ports.begin(), found));
+                }
+            } else {
+                while (positional < unit.ports.size()
+                    && connected[positional]) {
+                    ++positional;
+                }
+                port_index = positional++;
+            }
+            if (port_index >= unit.ports.size()
+                || connected[port_index]) {
+                continue;
+            }
+            connected[port_index] = true;
+            const auto& formal = unit.ports[port_index];
+            if (!formal.type.vhdl_unspecified) {
+                continue;
+            }
+            if (connection.kind != frontend::PortActualKind::Expression
+                || connection.value.kind
+                    != frontend::ExpressionKind::Identifier) {
+                diagnostics.push_back({ "FSIM-ELAB-VHUNSPEC-001",
+                    "port association for unspecified formal '"
+                        + formal.name
+                        + "' does not determine one concrete actual subtype",
+                    connection.span });
+                continue;
+            }
+            const auto actual = parent_signals.find(connection.value.text);
+            if (actual == parent_signals.end()
+                || actual->second >= signal_info.size()) {
+                continue;
+            }
+            auto type = actual_type(signal_info[actual->second]);
+            if (!frontend::vhdl_unspecified_type_accepts(
+                    formal.type, type)) {
+                diagnostics.push_back({ "FSIM-ELAB-VHUNSPEC-001",
+                    "actual subtype for port '" + formal.name
+                        + "' does not satisfy its VHDL-2019 unspecified "
+                          "type category",
+                    connection.span });
+                continue;
+            }
+            const auto& profile = *formal.type.vhdl_unspecified;
+            const auto key = profile.inference_identity.empty()
+                ? formal.name
+                : profile.inference_identity;
+            auto identity = frontend::vhdl_inferred_type_identity(type);
+            const auto [existing, inserted] = inferred.emplace(
+                key, Inference { type, identity });
+            if (!inserted && existing->second.identity != identity) {
+                diagnostics.push_back({ "FSIM-ELAB-VHUNSPEC-001",
+                    "port associations sharing one unspecified formal type "
+                    "infer conflicting concrete subtypes",
+                    connection.span });
+            }
+        }
+        for (auto& port : unit.ports) {
+            if (!port.type.vhdl_unspecified) {
+                continue;
+            }
+            const auto& profile = *port.type.vhdl_unspecified;
+            const auto key = profile.inference_identity.empty()
+                ? port.name
+                : profile.inference_identity;
+            const auto actual = inferred.find(key);
+            if (actual == inferred.end()) {
+                diagnostics.push_back({ "FSIM-ELAB-VHUNSPEC-001",
+                    "port '" + port.name
+                        + "' does not determine one unique legal actual type "
+                          "for its unspecified formal",
+                    port.span });
+                continue;
+            }
+            port.type = actual->second.type;
+            const auto identity_name = "__vhdl_unspecified_port_type." + key;
+            if (std::ranges::none_of(
+                    identities, [&](const auto& item) {
+                        return item.first == identity_name;
+                    })) {
+                identities.emplace_back(
+                    identity_name, actual->second.identity);
+            }
+        }
+    }
+
+    template <typename SignalMap>
+    void adapt_vhdl_array_port_shapes(
+        DesignUnit& unit,
+        const frontend::Instance& instance,
+        const SignalMap& parent_signals,
+        const std::span<const SignalInfo> signal_info,
+        std::vector<std::pair<std::string, std::string>>& identities)
+    {
+        if (unit.language != frontend::Language::Vhdl2008
+            || unit.ports.empty()) {
+            return;
+        }
+        std::vector<bool> connected(unit.ports.size());
+        std::size_t positional = 0;
+        for (const auto& connection : instance.connections) {
+            std::size_t port_index = unit.ports.size();
+            if (connection.port) {
+                const auto found = std::ranges::find_if(
+                    unit.ports,
+                    [&](const auto& port) {
+                        return port.name == *connection.port;
+                    });
+                if (found != unit.ports.end()) {
+                    port_index = static_cast<std::size_t>(
+                        std::distance(unit.ports.begin(), found));
+                }
+            } else {
+                while (positional < unit.ports.size()
+                    && connected[positional]) {
+                    ++positional;
+                }
+                port_index = positional++;
+            }
+            if (port_index >= unit.ports.size()
+                || connected[port_index]
+                || connection.kind != frontend::PortActualKind::Expression
+                || connection.value.kind
+                    != frontend::ExpressionKind::Identifier) {
+                continue;
+            }
+            connected[port_index] = true;
+            auto& formal = unit.ports[port_index];
+            if (!formal.type.vhdl_array) {
+                continue;
+            }
+            const auto actual = parent_signals.find(connection.value.text);
+            if (actual == parent_signals.end()
+                || actual->second >= signal_info.size()) {
+                continue;
+            }
+            const auto& info = signal_info[actual->second];
+            const bool indefinite = !formal.type.vhdl_array->flat_width
+                || std::ranges::any_of(
+                    formal.type.vhdl_array->dimensions,
+                    [](const auto& dimension) {
+                        return dimension.unconstrained;
+                    });
+            if (!indefinite || !info.vhdl_array
+                || formal.type.nominal_type != info.nominal_type) {
+                continue;
+            }
+            formal.type.vhdl_array = *info.vhdl_array;
+            formal.type.vhdl_array_constraints.clear();
+            formal.type.packed_range = info.packed_range;
+            formal.type.packed_range_expression.reset();
+            formal.type.domain = info.source_domain;
+            formal.type.is_signed = info.is_signed;
+            identities.emplace_back(
+                "__vhdl_port_shape." + formal.name,
+                vhdl_array_shape_identity(formal.type));
+        }
+    }
+
+    std::optional<std::size_t> defparam_instance_prefix(
+        const std::span<const std::string> segments,
+        const std::string_view instance_name)
+    {
+        std::string candidate;
+        for (std::size_t index = 0; index + 1U < segments.size(); ++index) {
+            if (!candidate.empty()) {
+                candidate += '.';
+            }
+            candidate += segments[index];
+            if (candidate == instance_name) {
+                return index + 1U;
+            }
+            if (candidate.size() >= instance_name.size()
+                && !instance_name.starts_with(candidate)) {
+                break;
+            }
+        }
+        return std::nullopt;
+    }
+} // namespace
+
+void HierarchyBuilder::instantiate_processes_and_children(
+    DesignUnit& unit,
+    const std::string& path,
+    SignalMap& local,
+    StringMap& local_string_objects,
+    ContainerMap& local_container_objects,
+    std::unordered_set<SignalId>& read_only_signals,
+    std::unordered_set<StringObjectId>& read_only_strings,
+    std::unordered_set<std::string>& read_only_container_objects,
+    ConstantEnvironment& parameter_environment,
+    SystemVerilogConstantEnvironment& parameter_integral_environment,
+    std::vector<std::pair<std::string, std::string>>& parameter_values,
+    std::vector<std::pair<std::string, std::string>>&
+        parameter_identity_values,
+    PackageEnvironment& package_environment,
+    const NamedTypeEnvironment& parent_types,
+    const ConstantDomainEnvironment& parent_domains,
+    std::vector<ResolvedVerilogDefparam>& resolved_defparams,
+    std::unordered_map<std::string, const frontend::Type*>& visible_types,
+    std::unordered_map<std::string, const frontend::Type*>& visible_type_marks,
+    const std::string& identity,
+    const SystemVerilogAliasPlan& systemverilog_alias_plan)
+{
+    const auto clocking_one_step_delay =
+        [&](const frontend::SourceSpan& span)
+        -> std::optional<frontend::Delay> {
+        std::uint64_t magnitude = 0;
+        std::size_t split = 0;
+        while (split < unit.time_precision.size()
+            && unit.time_precision[split] >= '0'
+            && unit.time_precision[split] <= '9') {
+            magnitude = magnitude * 10
+                + static_cast<std::uint64_t>(
+                    unit.time_precision[split] - '0');
+            ++split;
+        }
+        if (magnitude == 0
+            || split == unit.time_precision.size()) {
+            report(
+                "FSIM-ELAB-CLOCK-006",
+                "clocking #1step requires a concrete design-unit "
+                "time precision",
+                span);
+            return std::nullopt;
+        }
+        frontend::Delay delay;
+        delay.magnitude = magnitude;
+        delay.unit = unit.time_precision.substr(split);
+        delay.span = span;
+        return delay;
+    };
+    std::vector<frontend::Statement> clocking_skew_statements;
+    struct ClockingEventProcess {
+        frontend::Process process;
+        bool observed { };
+    };
+    std::vector<ClockingEventProcess> clocking_event_processes;
+    const auto constant_clocking_delay =
+        [&](const frontend::SystemVerilogClockingSkew* skew,
+            const std::string_view clockvar)
+        -> std::pair<bool, std::optional<frontend::Delay>> {
+        if (skew == nullptr || !skew->delay) {
+            return { true, std::nullopt };
+        }
+        auto delay = *skew->delay;
+        if (!delay.expression) {
+            return { true, std::move(delay) };
+        }
+        if (unit.standard_revision
+            != frontend::StandardRevision::SystemVerilog2023) {
+            return { true, std::move(delay) };
+        }
+        std::string error;
+        const auto value = evaluate_systemverilog_constant_function_expression(
+            *delay.expression,
+            parameter_integral_environment,
+            parameter_environment,
+            unit.functions,
+            error);
+        const auto integer = value
+            ? value->integer_value()
+            : std::optional<std::int64_t> { };
+        if (!integer || *integer < 0) {
+            report(
+                "FSIM-ELAB-CLOCK-008",
+                "clocking skew for '" + path + "."
+                    + std::string { clockvar }
+                    + "' must be a known nonnegative elaboration-time "
+                      "constant"
+                    + (error.empty() ? std::string { }
+                                     : ": " + error),
+                delay.expression->span);
+            return { false, std::nullopt };
+        }
+        const auto magnitude = static_cast<std::uint64_t>(*integer);
+        if (magnitude != 0
+            && delay.magnitude
+                > std::numeric_limits<std::uint64_t>::max()
+                    / magnitude) {
+            report(
+                "FSIM-ELAB-CLOCK-009",
+                "clocking skew for '" + path + "."
+                    + std::string { clockvar }
+                    + "' overflows the 64-bit simulation time range",
+                delay.expression->span);
+            return { false, std::nullopt };
+        }
+        delay.magnitude *= magnitude;
+        delay.expression.reset();
+        return { true, std::move(delay) };
+    };
+    for (const auto& block : unit.systemverilog_clocking_blocks) {
+        if (block.event.size() != 1
+            || block.event.front().signal.empty()) {
+            report(
+                "FSIM-ELAB-CLOCK-001",
+                "clocking block '" + path + "." + block.name
+                    + "' requires one signal event",
+                block.span);
+            continue;
+        }
+        const auto event = local.find(block.event.front().signal);
+        if (event == local.end()) {
+            report(
+                "FSIM-ELAB-CLOCK-002",
+                "unknown event signal '"
+                    + block.event.front().signal
+                    + "' for clocking block '" + path + "."
+                    + block.name + "'",
+                block.event.front().span);
+            continue;
+        }
+        local.insert_or_assign(block.name, event->second);
+        systemverilog_clocking_event_signals_.insert_or_assign(
+            path + "." + block.name, event->second);
+
+        for (const auto& member : block.signals) {
+            const auto actual_name = member.expression
+                ? member.expression->text
+                : member.name;
+            if (member.expression
+                && member.expression->kind
+                    != frontend::ExpressionKind::Identifier) {
+                report(
+                    "FSIM-ELAB-CLOCK-003",
+                    "clocking member '" + block.name + "."
+                        + member.name
+                        + "' requires a signal identifier expression",
+                    member.expression->span);
+                continue;
+            }
+            const auto actual = local.find(actual_name);
+            const auto type = visible_types.find(actual_name);
+            if (actual == local.end()
+                || type == visible_types.end()) {
+                report(
+                    "FSIM-ELAB-CLOCK-004",
+                    "unknown signal '" + actual_name
+                        + "' for clocking member '" + block.name + "."
+                        + member.name + "'",
+                    member.span);
+                continue;
+            }
+            const auto member_name = block.name + "." + member.name;
+            const auto* selected_skew = member.skew
+                ? &*member.skew
+                : member.direction
+                    == frontend::PortDirection::Input
+                ? block.default_input_skew
+                    ? &*block.default_input_skew
+                    : nullptr
+                : member.direction
+                        == frontend::PortDirection::Output
+                    && block.default_output_skew
+                ? &*block.default_output_skew
+                : nullptr;
+            auto [skew_valid, skew_delay] = constant_clocking_delay(
+                selected_skew, block.name + "." + member.name);
+            if (!skew_valid) {
+                continue;
+            }
+            if (member.direction
+                    == frontend::PortDirection::Input
+                && ((!selected_skew)
+                    || selected_skew->one_step
+                    || !selected_skew->delay)) {
+                skew_delay = clocking_one_step_delay(member.span);
+            }
+            if (member.direction
+                    == frontend::PortDirection::Output
+                && skew_delay && skew_delay->magnitude != 0) {
+                const frontend::SignalDeclaration request {
+                    member_name,
+                    *type->second,
+                    frontend::PortDirection::Unknown,
+                    false,
+                    member.span
+                };
+                const auto request_signal = add_owned_signal(request, path, local);
+                if (!request_signal)
+                    continue;
+                visible_types.insert_or_assign(
+                    member_name, type->second);
+                visible_types.insert_or_assign(
+                    path + "." + member_name, type->second);
+
+                frontend::Statement drive;
+                drive.kind = frontend::StatementKind::Assignment;
+                drive.assignment_kind = frontend::AssignmentKind::Blocking;
+                drive.label = "$clocking$" + block.name + "$"
+                    + member.name + "$drive";
+                drive.target = frontend::Expression {
+                    frontend::ExpressionKind::Identifier,
+                    actual_name,
+                    { },
+                    member.span
+                };
+                drive.value = frontend::Expression {
+                    frontend::ExpressionKind::Identifier,
+                    member_name,
+                    { },
+                    member.span
+                };
+                drive.delay = std::move(skew_delay);
+                drive.span = member.span;
+                if (selected_skew->edge
+                    != frontend::EdgeKind::Any) {
+                    frontend::Process driver;
+                    driver.kind = frontend::ProcessKind::VerilogAlways;
+                    driver.name = "$clocking$" + block.name
+                        + "$" + member.name + "$drive";
+                    driver.sensitivities = block.event;
+                    driver.sensitivities.front().edge = selected_skew->edge;
+                    driver.statements.push_back(std::move(drive));
+                    driver.span = member.span;
+                    clocking_event_processes.push_back(
+                        { std::move(driver), false });
+                } else {
+                    clocking_skew_statements.push_back(
+                        std::move(drive));
+                }
+                continue;
+            }
+            if (member.direction
+                != frontend::PortDirection::Input) {
+                local.insert_or_assign(
+                    member_name, actual->second);
+                local.insert_or_assign(
+                    path + "." + member_name, actual->second);
+                visible_types.insert_or_assign(
+                    member_name, type->second);
+                visible_types.insert_or_assign(
+                    path + "." + member_name, type->second);
+                design_.signal_by_name_.emplace(
+                    path + "." + member_name, actual->second);
+            }
+            if (member.direction
+                == frontend::PortDirection::Output) {
+                continue;
+            }
+
+            const frontend::SignalDeclaration sampled {
+                member_name,
+                *type->second,
+                frontend::PortDirection::Unknown,
+                false,
+                member.span
+            };
+            const auto sample = add_owned_signal(sampled, path, local);
+            if (!sample)
+                continue;
+            visible_types.insert_or_assign(
+                member_name, type->second);
+            visible_types.insert_or_assign(
+                path + "." + member_name, type->second);
+
+            std::string sample_source = actual_name;
+            if (skew_delay && skew_delay->magnitude != 0) {
+                const auto skew_name = "$clocking$"
+                    + block.name + "$" + member.name + "$skew";
+                const frontend::SignalDeclaration delayed {
+                    skew_name,
+                    *type->second,
+                    frontend::PortDirection::Unknown,
+                    false,
+                    member.span
+                };
+                const auto delayed_signal = add_owned_signal(delayed, path, local);
+                if (!delayed_signal)
+                    continue;
+                visible_types.insert_or_assign(
+                    skew_name, type->second);
+                visible_types.insert_or_assign(
+                    path + "." + skew_name, type->second);
+                frontend::Statement history;
+                history.kind = frontend::StatementKind::Assignment;
+                history.assignment_kind = frontend::AssignmentKind::Blocking;
+                history.label = "$clocking$" + block.name + "$"
+                    + member.name + "$history";
+                history.target = frontend::Expression {
+                    frontend::ExpressionKind::Identifier,
+                    skew_name,
+                    { },
+                    member.span
+                };
+                history.value = member.expression.value_or(
+                    frontend::Expression {
+                        frontend::ExpressionKind::Identifier,
+                        member.name,
+                        { },
+                        member.span });
+                history.delay = std::move(skew_delay);
+                history.span = member.span;
+                clocking_skew_statements.push_back(
+                    std::move(history));
+                sample_source = skew_name;
+            }
+            frontend::Statement assignment;
+            assignment.kind = frontend::StatementKind::Assignment;
+            assignment.assignment_kind = frontend::AssignmentKind::Blocking;
+            assignment.target = frontend::Expression {
+                frontend::ExpressionKind::Identifier,
+                member_name,
+                { },
+                member.span
+            };
+            assignment.value = frontend::Expression {
+                frontend::ExpressionKind::Identifier,
+                std::move(sample_source),
+                { },
+                member.span
+            };
+            assignment.span = member.span;
+            frontend::Process sampler;
+            sampler.kind = frontend::ProcessKind::VerilogAlways;
+            sampler.name = "$clocking$" + block.name + "$"
+                + member.name + "$sample";
+            sampler.sensitivities = block.event;
+            if (selected_skew
+                && selected_skew->edge
+                    != frontend::EdgeKind::Any) {
+                sampler.sensitivities.front().edge = selected_skew->edge;
+            }
+            sampler.statements.push_back(std::move(assignment));
+            sampler.span = member.span;
+            clocking_event_processes.push_back(
+                { std::move(sampler), true });
+        }
+    }
+
+    const auto specialization_index = design_.specializations_.size();
+    const auto specialization_id = static_cast<SpecializationId>(specialization_index);
+    if (static_cast<std::size_t>(specialization_id)
+        != specialization_index) {
+        throw std::length_error(
+            "too many elaborated design-unit specializations");
+    }
+    const auto reactive_unit = unit.systemverilog_scheduling_declaration
+        ? unit.systemverilog_scheduling_declaration->process_region
+            == frontend::SystemVerilogProcessRegion::Reactive
+        : unit.kind == frontend::UnitKind::SystemVerilogProgram;
+    const auto program_owner
+        = reactive_unit
+        ? std::optional<std::uint32_t> { specialization_id }
+        : std::nullopt;
+    SpecializationInfo specialization;
+    specialization.id = specialization_id;
+    specialization.unit = identity;
+    specialization.instance = path;
+    specialization.source = std::string { frontend::physical_source(unit.span) };
+    if (unit.kind == frontend::UnitKind::VhdlArchitecture) {
+        if (const auto* entity = find_vhdl_entity(parsed_, unit);
+            entity != nullptr
+            && frontend::physical_source(entity->span)
+                != specialization.source) {
+            specialization.source_dependencies.push_back(
+                std::string {
+                    frontend::physical_source(entity->span) });
+        }
+    }
+    for (const auto& dependency : unit.source_dependencies) {
+        if (dependency != specialization.source
+            && std::find(
+                   specialization.source_dependencies.begin(),
+                   specialization.source_dependencies.end(),
+                   dependency)
+                == specialization.source_dependencies.end()) {
+            specialization.source_dependencies.push_back(
+                dependency);
+        }
+    }
+    specialization.language = unit.language;
+    specialization.library = unit.library.empty() ? "work" : unit.library;
+    specialization.is_cell = unit.is_cell;
+    specialization.parameter_values = std::move(parameter_values);
+    specialization.parameter_identity_values = std::move(parameter_identity_values);
+    const auto original_unit = std::ranges::find_if(
+        parsed_.units,
+        [&](const auto& candidate) {
+          return candidate.name == unit.name
+              && candidate.library == unit.library
+              && candidate.kind == unit.kind;
+        });
+    for (const auto& declaration : unit.systemverilog_classes) {
+        const bool source_declaration = original_unit != parsed_.units.end()
+            && std::ranges::any_of(
+                original_unit->systemverilog_classes,
+                [&](const auto& candidate) {
+                  return candidate.canonical_identity
+                      == declaration.canonical_identity;
+                });
+        if (!source_declaration
+            && std::ranges::none_of(
+                selected_systemverilog_classes_,
+                [&](const auto& candidate) {
+                  return candidate.canonical_identity
+                      == declaration.canonical_identity;
+                })) {
+            selected_systemverilog_classes_.push_back(declaration);
+        }
+    }
+    add_systemverilog_alias_connections(
+        systemverilog_alias_plan,
+        path,
+        local,
+        specialization);
+
+    const auto specify_path_begin = design_.verilog_specify_paths_.size();
+    validate_verilog_specify(
+        unit, path, local, parameter_environment);
+
+    const frontend::SystemVerilogClockingBlock*
+        default_clocking = nullptr;
+    if (unit.systemverilog_default_clocking_block) {
+        const auto selected = std::ranges::find(
+            unit.systemverilog_clocking_blocks,
+            *unit.systemverilog_default_clocking_block,
+            &frontend::SystemVerilogClockingBlock::name);
+        if (selected
+            != unit.systemverilog_clocking_blocks.end()) {
+            default_clocking = &*selected;
+        }
+    }
+    const auto prepare_clocking_cycle_waits =
+        [&](auto&& self,
+            std::vector<frontend::Statement>& statements) -> void {
+        for (auto& statement : statements) {
+            if (statement.clocking_cycle_delay) {
+                if (default_clocking == nullptr) {
+                    report(
+                        "FSIM-ELAB-CLOCK-005",
+                        "a ## cycle delay requires a default "
+                        "clocking block",
+                        statement.span);
+                } else {
+                    statement.sensitivities = default_clocking->event;
+                    statement.procedural_assignment_repeat = true;
+                    statement.loop_limit = statement.clocking_cycle_count;
+                }
+            }
+            self(self, statement.statements);
+            self(self, statement.else_statements);
+            for (auto& alternative :
+                statement.case_alternatives) {
+                self(self, alternative.statements);
+            }
+        }
+    };
+
+    std::unordered_map<std::string,
+        SystemVerilogInterfaceLiteral>
+        systemverilog_interface_literals;
+    std::unordered_map<const frontend::Type*,
+        std::vector<std::pair<std::string, std::string>>>
+        systemverilog_interface_type_identities;
+    const auto interface_specialization_identity =
+        [&](const frontend::DesignUnit& declaration,
+            const std::vector<frontend::ParameterOverride>& overrides) {
+        return specialize_selected_unit(
+                   declaration,
+                   overrides,
+                   parameter_environment,
+                   parameter_integral_environment,
+                   parent_domains,
+                   parent_types,
+                   unit.functions,
+                   unit.procedures,
+                   package_environment,
+                   unit.language)
+            .identity_values;
+    };
+    if (unit.language
+        == frontend::Language::SystemVerilog2017) {
+        for (const auto& instance : unit.instances) {
+            if (instance.name.empty() || instance.anonymous) {
+                continue;
+            }
+            const auto target = std::ranges::find_if(
+                parsed_.units,
+                [&](const frontend::DesignUnit& candidate) {
+                    return candidate.kind
+                            == frontend::UnitKind::SystemVerilogInterface
+                        && candidate.name == instance.unit_name
+                        && (candidate.library.empty()
+                            || unit.library.empty()
+                            || candidate.library == unit.library);
+                });
+            if (target == parsed_.units.end()) {
+                continue;
+            }
+            const auto child_path = path + "." + instance.name;
+            if (const auto* binding = binding_for(child_path);
+                binding != nullptr && binding->target.has_value()) {
+                continue;
+            }
+            auto [owned_handle, inserted]
+                = systemverilog_interface_handles_.try_emplace(
+                    child_path, 0);
+            if (inserted) {
+                owned_handle->second
+                    = next_systemverilog_interface_handle_++;
+            }
+            frontend::Type source_type;
+            source_type.domain = frontend::ValueDomain::Bit2;
+            source_type.systemverilog_scalar
+                = frontend::SystemVerilogScalarKind::Chandle;
+            source_type.systemverilog_virtual_interface = true;
+            source_type.systemverilog_interface_type = target->name;
+            source_type.spelling = "virtual interface " + target->name;
+            source_type.systemverilog_class_parameter_actuals.reserve(
+                instance.parameter_overrides.size());
+            for (const auto& override : instance.parameter_overrides) {
+                frontend::SystemVerilogClassTypeActual actual;
+                actual.name = override.name;
+                actual.value = override.value;
+                if (override.type_value) {
+                    actual.type_actual =
+                        std::make_shared<frontend::Type>(
+                            *override.type_value);
+                }
+                actual.span = override.span;
+                source_type.systemverilog_class_parameter_actuals.push_back(
+                    std::move(actual));
+            }
+            const auto source_identity
+                = interface_specialization_identity(
+                    *target, instance.parameter_overrides);
+            const auto add_literal = [&](const std::string& name,
+                                         frontend::Type type) {
+                systemverilog_interface_literals.insert_or_assign(
+                    name,
+                    SystemVerilogInterfaceLiteral {
+                        owned_handle->second,
+                        std::move(type),
+                        source_identity });
+            };
+            add_literal(instance.name, source_type);
+            add_literal(child_path, source_type);
+            for (const auto& modport :
+                target->systemverilog_modports) {
+                auto selected = source_type;
+                selected.systemverilog_interface_modport
+                    = modport.name;
+                selected.spelling += "." + modport.name;
+                add_literal(
+                    instance.name + "." + modport.name,
+                    selected);
+                add_literal(
+                    child_path + "." + modport.name,
+                    std::move(selected));
+            }
+        }
+        for (const auto& variable : unit.variables) {
+            if (!variable.type.systemverilog_virtual_interface) {
+                continue;
+            }
+            const auto declaration = std::ranges::find_if(
+                parsed_.units,
+                [&](const frontend::DesignUnit& candidate) {
+                    return candidate.kind
+                            == frontend::UnitKind::SystemVerilogInterface
+                        && candidate.name
+                            == variable.type.systemverilog_interface_type;
+                });
+            if (declaration == parsed_.units.end()) {
+                continue;
+            }
+            std::vector<frontend::ParameterOverride> overrides;
+            overrides.reserve(
+                variable.type.systemverilog_class_parameter_actuals.size());
+            for (const auto& retained :
+                variable.type.systemverilog_class_parameter_actuals) {
+                frontend::ParameterOverride override;
+                override.name = retained.name;
+                override.value = retained.value;
+                if (retained.type_actual) {
+                    override.type_value = *retained.type_actual;
+                }
+                override.span = retained.span;
+                overrides.push_back(std::move(override));
+            }
+            systemverilog_interface_type_identities.insert_or_assign(
+                &variable.type,
+                interface_specialization_identity(
+                    *declaration, overrides));
+        }
+    }
+
+    Lowerer lowerer {
+        design_,
+        local,
+        read_only_signals,
+        local_string_objects,
+        read_only_strings,
+        local_container_objects,
+        read_only_container_objects,
+        visible_types,
+        visible_type_marks,
+        unit.functions,
+        unit.tasks,
+        unit.procedures,
+        systemverilog_scalar_evaluation_context(unit),
+        diagnostics_
+    };
+    lowerer.set_systemverilog_program_owner(program_owner);
+    lowerer.set_systemverilog_standard(unit.standard_revision);
+    lowerer.set_vhdl_standard(unit.vhdl_standard);
+    const auto uses_synopsys_package = [&](const std::string_view package) {
+        const auto prefix = "ieee." + std::string { package };
+        return std::ranges::any_of(
+            unit.vhdl_context,
+            [&](const frontend::VhdlContextItem& item) {
+                return item.kind == frontend::VhdlContextItemKind::UseClause
+                    && std::ranges::any_of(
+                        item.selected_names,
+                        [&](const std::string& selected) {
+                            return selected == prefix
+                                || selected.starts_with(prefix + ".");
+                        });
+            });
+    };
+    lowerer.set_vhdl_synopsys_numeric_context(
+        uses_synopsys_package("std_logic_signed"),
+        uses_synopsys_package("std_logic_unsigned"));
+    lowerer.set_systemverilog_interface_literals(
+        std::move(systemverilog_interface_literals));
+    lowerer.set_systemverilog_interface_type_identities(
+        std::move(systemverilog_interface_type_identities));
+    const auto append_profiled_process =
+        [&](Process process) {
+            if (unit.language == frontend::Language::Vhdl2008) {
+                process.language_standard = frontend::to_string(unit.vhdl_standard);
+                process.compatibility_profile = unit.vhdl_compatibility_profile;
+            } else if (unit.language
+                == frontend::Language::SystemVerilog2017) {
+                process.language_standard
+                    = frontend::to_string(unit.standard_revision);
+                process.compatibility_profile
+                    = unit.verilog_compatibility_profile;
+            }
+            canonicalize_process_operations(process);
+            specialization.processes.push_back(process.id);
+            design_.processes_.push_back(std::move(process));
+        };
+    for (std::size_t index = 0;
+        index < clocking_skew_statements.size(); ++index) {
+        auto process = lowerer.lower_concurrent(
+            clocking_skew_statements[index],
+            unit.language,
+            path,
+            unit.concurrent_statements.size() + index);
+        append_profiled_process(std::move(process));
+        for (auto& generated :
+            lowerer.take_generated_processes()) {
+            generated.reactive = program_owner.has_value();
+            generated.program_owner = program_owner;
+            append_profiled_process(std::move(generated));
+        }
+    }
+    for (const auto& event_process : clocking_event_processes) {
+        auto lowered = lowerer.lower_process(
+            event_process.process, unit.language, path);
+        lowered.observed = event_process.observed;
+        append_profiled_process(std::move(lowered));
+        for (auto& generated : lowerer.take_generated_processes()) {
+            generated.reactive = program_owner.has_value();
+            generated.program_owner = program_owner;
+            append_profiled_process(std::move(generated));
+        }
+    }
+    const auto append_generated_processes = [&] {
+        for (auto& generated : lowerer.take_generated_processes()) {
+            generated.reactive = program_owner.has_value();
+            generated.program_owner = program_owner;
+            append_profiled_process(std::move(generated));
+        }
+    };
+    const auto fusion_eligible = [&](const frontend::Statement& statement) {
+        return statement.kind == frontend::StatementKind::Assignment
+            && statement.assignment_kind
+            == frontend::AssignmentKind::Continuous
+            && statement.label != "$port_input_driver"
+            && !statement.delay
+            && (unit.language != frontend::Language::Vhdl2008
+                || (statement.vhdl_waveform.size() == 1U
+                    && !statement.vhdl_waveform.front().disconnect
+                    && !statement.vhdl_unaffected))
+            && !statement.verilog_drive_strength
+            && !statement.verilog_switch_driver
+            && !statement.vhdl_guarded_assignment
+            && !statement.vhdl_postponed;
+    };
+    const auto exact_conditional_fusion_eligible
+        = [&](const auto& self, const frontend::Statement& statement)
+        -> bool {
+        if (fusion_eligible(statement)) {
+            return true;
+        }
+        if (unit.language != frontend::Language::Vhdl2008
+            || statement.kind != frontend::StatementKind::If
+            || !statement.vhdl_conditional_assignment
+            || statement.vhdl_guarded_assignment
+            || statement.vhdl_postponed
+            || statement.statements.empty()
+            || statement.else_statements.empty()) {
+            return false;
+        }
+        return std::ranges::all_of(
+                   statement.statements,
+                   [&](const frontend::Statement& nested) {
+                       return self(self, nested);
+                   })
+            && std::ranges::all_of(
+                statement.else_statements,
+                [&](const frontend::Statement& nested) {
+                    return self(self, nested);
+                });
+    };
+    const auto fusion_assignment = [&](const auto& self,
+                                       const frontend::Statement& statement)
+        -> const frontend::Statement* {
+        if (statement.kind == frontend::StatementKind::Assignment) {
+            return &statement;
+        }
+        for (const auto& nested : statement.statements) {
+            if (const auto* assignment = self(self, nested)) {
+                return assignment;
+            }
+        }
+        for (const auto& nested : statement.else_statements) {
+            if (const auto* assignment = self(self, nested)) {
+                return assignment;
+            }
+        }
+        return nullptr;
+    };
+    const auto fusion_target = [&](const frontend::Statement& statement)
+        -> std::optional<SignalId> {
+        const auto* assignment = fusion_assignment(
+            fusion_assignment, statement);
+        if (assignment == nullptr) {
+            return std::nullopt;
+        }
+        const auto* target = &assignment->target;
+        while ((target->kind == frontend::ExpressionKind::Index
+                   || target->kind == frontend::ExpressionKind::Slice)
+            && !target->operands.empty()) {
+            target = &target->operands.front();
+        }
+        if (target->kind != frontend::ExpressionKind::Identifier) {
+            return std::nullopt;
+        }
+        const auto found = local.find(target->text);
+        return found == local.end()
+            ? std::nullopt
+            : std::optional<SignalId> { found->second };
+    };
+    if (unit.kind == frontend::UnitKind::SystemVerilogProgram) {
+        std::vector<frontend::Statement> runtime_statements;
+        runtime_statements.reserve(unit.concurrent_statements.size());
+        for (auto& statement : unit.concurrent_statements) {
+            if (statement.kind != frontend::StatementKind::Report) {
+                runtime_statements.push_back(std::move(statement));
+                continue;
+            }
+            std::string error;
+            if (!evaluate_systemverilog_elaboration_report(
+                    statement,
+                    parameter_integral_environment,
+                    parameter_environment,
+                    unit.functions,
+                    error)) {
+                report(
+                    "FSIM-ELAB-SVPROGRAM-001",
+                    "program elaboration severity system task in '" + path
+                        + "' is not constant"
+                        + (error.empty() ? std::string { }
+                                         : ": " + error),
+                    statement.span);
+            }
+        }
+        unit.concurrent_statements = std::move(runtime_statements);
+    }
+
+    constexpr std::size_t minimum_fused_group_size = 8U;
+    const std::span<const frontend::Statement> concurrent_statements {
+        unit.concurrent_statements
+    };
+
+    struct VhdlFusionBank {
+        std::vector<std::size_t> members;
+        std::unordered_set<SignalId> targets;
+        std::vector<SignalId> sensitivity;
+        bool exact_sensitivity { };
+    };
+    std::vector<VhdlFusionBank> vhdl_fusion_banks;
+    std::vector<std::optional<std::size_t>> vhdl_fusion_bank_by_statement(
+        concurrent_statements.size());
+    if (unit.language == frontend::Language::Vhdl2008
+        && std::getenv("FSIM_DISABLE_CONTINUOUS_FUSION") == nullptr) {
+        constexpr std::size_t maximum_bank_members = 64U;
+        constexpr std::size_t maximum_bank_sensitivity = 63U;
+        for (std::size_t statement = 0U;
+            statement < concurrent_statements.size(); ++statement) {
+            const auto& source = concurrent_statements[statement];
+            const bool eligible = fusion_eligible(source);
+            const bool exact_conditional
+                = !eligible
+                && exact_conditional_fusion_eligible(
+                    exact_conditional_fusion_eligible, source);
+            const bool trigger_safe = (eligible || exact_conditional)
+                && lowerer.concurrent_trigger_fusion_safe(source);
+            if ((!eligible && !exact_conditional) || !trigger_safe) {
+                continue;
+            }
+            const auto target = fusion_target(source);
+            const auto sensitivity = lowerer.concurrent_sensitivity(source);
+            if (!target || sensitivity.empty()) {
+                continue;
+            }
+            std::optional<std::size_t> selected_bank;
+            std::vector<SignalId> selected_sensitivity;
+            for (std::size_t bank = 0U;
+                bank < vhdl_fusion_banks.size(); ++bank) {
+                const auto& candidate = vhdl_fusion_banks[bank];
+                if (candidate.members.size() >= maximum_bank_members
+                    || candidate.targets.contains(*target)
+                    || candidate.exact_sensitivity
+                        != exact_conditional) {
+                    continue;
+                }
+                if (exact_conditional
+                    && candidate.sensitivity != sensitivity) {
+                    continue;
+                }
+                std::vector<SignalId> combined;
+                if (exact_conditional) {
+                    combined = sensitivity;
+                } else {
+                    std::ranges::set_union(
+                        candidate.sensitivity, sensitivity,
+                        std::back_inserter(combined));
+                }
+                if (combined.size() > maximum_bank_sensitivity) {
+                    continue;
+                }
+                selected_bank = bank;
+                selected_sensitivity = std::move(combined);
+                break;
+            }
+            if (!selected_bank) {
+                vhdl_fusion_banks.push_back(VhdlFusionBank {
+                    { }, { }, sensitivity, exact_conditional });
+                selected_bank = vhdl_fusion_banks.size() - 1U;
+            } else {
+                vhdl_fusion_banks[*selected_bank].sensitivity
+                    = std::move(selected_sensitivity);
+            }
+            auto& bank = vhdl_fusion_banks[*selected_bank];
+            bank.targets.insert(*target);
+            bank.members.push_back(statement);
+            vhdl_fusion_bank_by_statement[statement]
+                = *selected_bank;
+        }
+        for (std::size_t bank = 0U; bank < vhdl_fusion_banks.size(); ++bank) {
+            if (vhdl_fusion_banks[bank].members.size()
+                >= minimum_fused_group_size) {
+                continue;
+            }
+            for (const auto statement : vhdl_fusion_banks[bank].members) {
+                vhdl_fusion_bank_by_statement[statement].reset();
+            }
+        }
+    }
+
+    if (unit.language == frontend::Language::Vhdl2008) {
+        for (std::size_t index = 0U;
+            index < concurrent_statements.size(); ++index) {
+            const auto bank_id = vhdl_fusion_bank_by_statement[index];
+            if (!bank_id) {
+                append_profiled_process(lowerer.lower_concurrent(
+                    concurrent_statements[index], unit.language, path, index));
+                append_generated_processes();
+                continue;
+            }
+            const auto& bank = vhdl_fusion_banks[*bank_id];
+            if (bank.members.front() == index) {
+                std::vector<frontend::Statement> statements;
+                statements.reserve(bank.members.size());
+                for (const auto member : bank.members) {
+                    statements.push_back(concurrent_statements[member]);
+                }
+                auto lowered = lowerer.lower_concurrent_group(
+                    statements, unit.language, path, index);
+                if (bank.exact_sensitivity) {
+                    lowered.static_trigger_regions.clear();
+                }
+                append_profiled_process(std::move(lowered));
+                append_generated_processes();
+                continue;
+            }
+            // Retain the vacated process identity so later process handles and
+            // per-process random streams are invariant under banking.
+            Process placeholder;
+            placeholder.id = static_cast<ProcessId>(design_.processes_.size());
+            placeholder.name = path + ".concurrent_fused_slot_"
+                + std::to_string(index);
+            placeholder.operations.emplace_back(Halt { });
+            append_profiled_process(std::move(placeholder));
+        }
+    } else {
+
+        for (std::size_t index = 0; index < concurrent_statements.size();) {
+            std::size_t end = index;
+            while (end < concurrent_statements.size()
+                && fusion_eligible(concurrent_statements[end])) {
+                ++end;
+            }
+            if (end - index >= minimum_fused_group_size
+                && std::getenv("FSIM_DISABLE_CONTINUOUS_FUSION") == nullptr) {
+                const auto run
+                    = concurrent_statements.subspan(index, end - index);
+                append_profiled_process(lowerer.lower_concurrent_group(
+                    run, unit.language, path, index));
+                append_generated_processes();
+                index = end;
+                continue;
+            }
+            const auto individual_end = end == index ? index + 1U : end;
+            for (; index < individual_end; ++index) {
+                auto process = lowerer.lower_concurrent(
+                    concurrent_statements[index],
+                    unit.language,
+                    path,
+                    index);
+                append_profiled_process(std::move(process));
+                append_generated_processes();
+            }
+        }
+    }
+    for (const auto& source_process : unit.processes) {
+        auto process = source_process;
+        const bool concurrent_assertion
+            = process.systemverilog_concurrent_assertion;
+        prepare_clocking_cycle_waits(
+            prepare_clocking_cycle_waits, process.statements);
+        auto lowered = lowerer.lower_process(process, unit.language, path);
+        lowered.observed = concurrent_assertion;
+        lowered.reactive = !concurrent_assertion
+            && unit.kind == frontend::UnitKind::SystemVerilogProgram;
+        lowered.program_owner = program_owner;
+        append_profiled_process(std::move(lowered));
+        for (auto& generated : lowerer.take_generated_processes()) {
+            generated.reactive = program_owner.has_value();
+            generated.program_owner = program_owner;
+            append_profiled_process(std::move(generated));
+        }
+    }
+    // These frontend bodies have been fully lowered.  Child binding still
+    // needs the unit's declarations, callables, configurations, and instance
+    // inventory, but retaining consumed process syntax only overlaps it with
+    // the growing runtime design.
+    {
+        decltype(unit.concurrent_statements) empty;
+        unit.concurrent_statements.swap(empty);
+    }
+    {
+        decltype(unit.processes) empty;
+        unit.processes.swap(empty);
+    }
+    const auto regions_overlap = [](
+                                     const Process::DriverRegion& region,
+                                     const VerilogSpecifyTerminalInfo& terminal) {
+        if (region.signal != terminal.signal)
+            return false;
+        if (region.whole)
+            return true;
+        const auto region_end = static_cast<std::uint64_t>(region.offset) + region.width;
+        const auto terminal_end = static_cast<std::uint64_t>(terminal.offset)
+            + terminal.width;
+        return region.offset < terminal_end
+            && terminal.offset < region_end;
+    };
+    for (auto path_index = specify_path_begin;
+        path_index < design_.verilog_specify_paths_.size();
+        ++path_index) {
+        auto& specify_path = design_.verilog_specify_paths_[path_index];
+        for (const auto process_id : specialization.processes) {
+            const auto& process = design_.processes_.at(process_id);
+            if (std::ranges::any_of(
+                    process.driver_regions,
+                    [&](const auto& region) {
+                        return std::ranges::any_of(
+                            specify_path.destinations,
+                            [&](const auto& terminal) {
+                                return regions_overlap(region, terminal);
+                            });
+                    })) {
+                specify_path.drivers.push_back(process_id);
+            }
+        }
+    }
+    design_.specializations_.push_back(std::move(specialization));
+
+    validate_vhdl_component_configurations(unit, path);
+    auto effective_instances = unit.instances;
+    auto bound_instances = systemverilog_bound_instances(
+        unit, path, parameter_environment, parent_domains);
+    for (auto& bound_instance : bound_instances) {
+        if (std::ranges::any_of(
+                effective_instances,
+                [&](const frontend::Instance& existing) {
+                    return existing.name == bound_instance.name;
+                })) {
+            report(
+                "FSIM-ELAB-SVBIND-001",
+                "bound instance name '" + bound_instance.name
+                    + "' collides in scope '" + path + "'",
+                bound_instance.span);
+            continue;
+        }
+        effective_instances.push_back(std::move(bound_instance));
+    }
+    for (const auto& instance : effective_instances) {
+        const auto child_path = path + "." + instance.name;
+        std::vector<std::pair<ResolvedVerilogDefparam*, std::size_t>>
+            child_defparams;
+        for (auto& declaration : resolved_defparams) {
+            const auto prefix = defparam_instance_prefix(
+                declaration.segments, instance.name);
+            if (!prefix) {
+                continue;
+            }
+            declaration.matched = true;
+            child_defparams.emplace_back(
+                &declaration, *prefix);
+        }
+        const auto checkpoint = hierarchy_checkpoint(child_path);
+        const ScopeExit rollback_failed_child { [&, checkpoint] {
+            if (diagnostics_.size() != checkpoint.diagnostics) {
+                rollback_hierarchy(checkpoint);
+            }
+        } };
+        const auto* binding = binding_for(child_path);
+        const auto build_systemc =
+            [&](const frontend::Instance& selected_instance,
+                const std::string_view selected_target) {
+                const auto* description = construct_systemc_description(
+                    selected_instance,
+                    child_path,
+                    selected_target,
+                    parameter_environment,
+                    unit.language);
+                if (description == nullptr) {
+                    return;
+                }
+                auto [child_aliases, child_objects] = connect_systemc_instance(
+                    selected_instance,
+                    *description,
+                    child_path,
+                    local,
+                    binding);
+                instantiate_systemc(
+                    *description,
+                    child_path,
+                    std::move(child_aliases),
+                    std::move(child_objects));
+            };
+        if (binding != nullptr && binding->target.has_value()) {
+            const auto target = parse_target(*binding->target);
+            if (target
+                && target->language == "systemc") {
+                if (!child_defparams.empty()) {
+                    report(
+                        "FSIM-ELAB-DEFPARAM-004",
+                        "defparam cannot target SystemC instance '"
+                            + child_path + "'",
+                        child_defparams.front()
+                            .first->declaration->span);
+                    continue;
+                }
+                build_systemc(instance, *binding->target);
+                continue;
+            }
+        }
+        ConfiguredVhdlInstance configured;
+        ConfiguredSystemVerilogInstance systemverilog_configured;
+        const frontend::Instance* selected_instance = &instance;
+        const DesignUnit* target = nullptr;
+        if (binding == nullptr || !binding->target.has_value()) {
+            configured = instance.vhdl_configuration_instance
+                ? bind_vhdl_direct_configuration_instance(
+                      unit, instance, child_path)
+                : bind_vhdl_component_instance(
+                      unit,
+                      instance,
+                      child_path,
+                      parameter_environment,
+                      parent_domains,
+                      parent_types,
+                      unit.functions,
+                      unit.procedures,
+                      package_environment);
+            if (!configured.valid) {
+                continue;
+            }
+            if (configured.applied) {
+                selected_instance = &configured.instance;
+                if (configured.systemc_target.has_value()) {
+                    if (!child_defparams.empty()) {
+                        report(
+                            "FSIM-ELAB-DEFPARAM-004",
+                            "defparam cannot target SystemC instance '"
+                                + child_path + "'",
+                            child_defparams.front()
+                                .first->declaration->span);
+                        continue;
+                    }
+                    build_systemc(
+                        *selected_instance,
+                        *configured.systemc_target);
+                    continue;
+                }
+                target = configured.target
+                    ? &*configured.target
+                    : nullptr;
+                if (target == nullptr) {
+                    continue;
+                }
+            }
+        }
+        const bool systemverilog2023_bound_instance =
+            systemverilog2023_bound_instances_.contains(child_path);
+        if (target == nullptr
+            && (binding == nullptr || !binding->target.has_value())) {
+            systemverilog_configured = configure_systemverilog_instance(
+                unit,
+                *selected_instance,
+                child_path,
+                !systemverilog2023_bound_instance);
+            if (!systemverilog_configured.valid) {
+                continue;
+            }
+            if (systemverilog_configured.applied) {
+                target = systemverilog_configured.target;
+            }
+        }
+        if (target == nullptr) {
+            if ((binding == nullptr
+                    || !binding->target.has_value())
+                && selected_instance->unit_name.find_first_of(".(")
+                    == std::string::npos) {
+                const auto bound_library = systemverilog_bound_instance_libraries_.find(child_path);
+                const auto library = bound_library
+                        != systemverilog_bound_instance_libraries_.end()
+                    ? bound_library->second
+                    : (unit.library.empty() ? std::string { "work" }
+                                            : unit.library);
+                const auto inferred = inferred_target(
+                    library,
+                    selected_instance->unit_name,
+                    child_path,
+                    selected_instance->span);
+                if (!inferred.has_value()) {
+                    continue;
+                }
+                if (inferred->systemc_target.has_value()) {
+                    if (!child_defparams.empty()) {
+                        report(
+                            "FSIM-ELAB-DEFPARAM-004",
+                            "defparam cannot target SystemC instance '"
+                                + child_path + "'",
+                            child_defparams.front()
+                                .first->declaration->span);
+                        continue;
+                    }
+                    build_systemc(
+                        *selected_instance,
+                        *inferred->systemc_target);
+                    continue;
+                }
+                if (inferred->udp != nullptr) {
+                    if (!child_defparams.empty()) {
+                        report(
+                            "FSIM-ELAB-DEFPARAM-004",
+                            "defparam cannot target UDP instance '"
+                                + child_path + "'",
+                            child_defparams.front()
+                                .first->declaration->span);
+                        continue;
+                    }
+                    instantiate_udp(
+                        *inferred->udp,
+                        *selected_instance,
+                        child_path,
+                        local,
+                        local_string_objects,
+                        read_only_strings,
+                        local_container_objects,
+                        read_only_container_objects,
+                        binding);
+                    continue;
+                }
+                target = inferred->unit;
+            } else {
+                target = bound_target(
+                    *selected_instance,
+                    unit,
+                    child_path,
+                    binding);
+            }
+        }
+        if (target == nullptr)
+            continue;
+        if (selected_instance->anonymous) {
+            report("FSIM-ELAB-BIND-062", "module instance '" + child_path + "' requires an explicit instance name", selected_instance->span);
+            continue;
+        }
+        if (selected_instance->udp_delay
+            || selected_instance->drive_strength) {
+            const bool delay = selected_instance->udp_delay.has_value();
+            report(delay ? "FSIM-ELAB-BIND-063" : "FSIM-ELAB-BIND-065",
+                "module instance '" + child_path + "' cannot use UDP "
+                    + (delay ? "propagation-delay" : "drive-strength")
+                    + " syntax",
+                selected_instance->span);
+            continue;
+        }
+        if (!child_defparams.empty()
+            && target->language != frontend::Language::Verilog2005
+            && target->language
+                != frontend::Language::SystemVerilog2017) {
+            report(
+                "FSIM-ELAB-DEFPARAM-004",
+                "defparam cannot cross into non-Verilog instance '"
+                    + child_path + "'",
+                child_defparams.front().first->declaration->span);
+            continue;
+        }
+        auto defparam_instance = *selected_instance;
+        std::vector<frontend::VerilogDefparamDeclaration>
+            descendant_defparams;
+        bool valid_defparams = true;
+        for (const auto& [resolved, consumed] : child_defparams) {
+            if (consumed + 1U == resolved->segments.size()) {
+                const auto& parameter_name = resolved->segments.back();
+                const bool duplicate = std::ranges::any_of(
+                    defparam_instance.parameter_overrides,
+                    [&](const auto& override) {
+                        return override.name
+                            && *override.name == parameter_name;
+                    });
+                if (duplicate) {
+                    report(
+                        "FSIM-ELAB-DEFPARAM-003",
+                        "duplicate or conflicting override for defparam "
+                        "target '"
+                            + instance.name + "." + parameter_name
+                            + "'",
+                        resolved->declaration->span);
+                    valid_defparams = false;
+                    continue;
+                }
+                defparam_instance.parameter_overrides.emplace_back(
+                    parameter_name,
+                    resolved->declaration->value,
+                    resolved->declaration->span);
+                continue;
+            }
+            frontend::VerilogDefparamDeclaration descendant;
+            descendant.value = resolved->declaration->value;
+            descendant.span = resolved->declaration->span;
+            for (std::size_t index = consumed;
+                index < resolved->segments.size(); ++index) {
+                frontend::VerilogDefparamPathSegment segment;
+                segment.name = resolved->segments[index];
+                segment.span = resolved->declaration->span;
+                descendant.path.push_back(std::move(segment));
+            }
+            descendant_defparams.push_back(std::move(descendant));
+        }
+        if (!valid_defparams) {
+            continue;
+        }
+        selected_instance = &defparam_instance;
+        auto child_specialized = specialize_selected_unit(
+            *target,
+            selected_instance->parameter_overrides,
+            parameter_environment,
+            parameter_integral_environment,
+            parent_domains,
+            parent_types,
+            unit.functions,
+            unit.procedures,
+            package_environment,
+            unit.language);
+        child_specialized.unit.verilog_defparams.insert(
+            child_specialized.unit.verilog_defparams.end(),
+            std::make_move_iterator(descendant_defparams.begin()),
+            std::make_move_iterator(descendant_defparams.end()));
+        adapt_vhdl_unspecified_port_types(
+            child_specialized.unit,
+            *selected_instance,
+            local,
+            design_.signals(),
+            child_specialized.identity_values,
+            diagnostics_);
+        adapt_vhdl_array_port_shapes(
+            child_specialized.unit,
+            *selected_instance,
+            local,
+            design_.signals(),
+            child_specialized.identity_values);
+        if (!configured.component_identity.empty()) {
+            if (child_specialized.identity_values.empty()) {
+                child_specialized.identity_values = child_specialized.values;
+            }
+            child_specialized.values.emplace_back(
+                "__component",
+                configured.component_name);
+            child_specialized.identity_values.emplace_back(
+                "__component",
+                configured.component_identity);
+        }
+        if (!configured.configuration_identity.empty()
+            && configured.component_identity.empty()) {
+            child_specialized.identity_values.emplace_back(
+                "__configuration",
+                configured.configuration_identity);
+        }
+        if (!systemverilog_configured.configuration_identity.empty()) {
+            child_specialized.identity_values.emplace_back(
+                "__configuration",
+                systemverilog_configured.configuration_identity);
+        }
+        auto child_aliases = connect_instance(
+            *selected_instance,
+            child_specialized.unit,
+            child_path,
+            local,
+            local_string_objects,
+            read_only_strings,
+            local_container_objects,
+            read_only_container_objects,
+            binding,
+            target->language != unit.language);
+        for (auto& alias : child_aliases.vhdl_input_aliases) {
+            child_specialized.unit.signals.push_back(std::move(alias));
+        }
+        for (auto& driver : child_aliases.vhdl_input_drivers) {
+            child_specialized.unit.concurrent_statements.push_back(
+                std::move(driver));
+        }
+        if (configured.referenced_configuration != nullptr) {
+            vhdl_configurations_by_path_[child_path] = configured.referenced_configuration;
+        }
+        if (systemverilog_configured.referenced_configuration != nullptr) {
+            systemverilog_configurations_by_path_[child_path] = systemverilog_configured.referenced_configuration;
+        }
+        auto interface_parameter_identities = target->kind
+                == frontend::UnitKind::SystemVerilogInterface
+            ? child_specialized.identity_values
+            : std::vector<
+                  std::pair<std::string, std::string>> { };
+        instantiate(
+            child_specialized.unit,
+            child_path,
+            std::move(child_aliases.signals),
+            std::move(child_aliases.strings),
+            std::move(child_aliases.containers),
+            std::move(child_aliases.read_only_signals),
+            std::move(child_aliases.read_only_strings),
+            std::move(child_specialized.environment),
+            std::move(child_specialized.integral_environment),
+            std::move(child_specialized.values),
+            std::move(child_specialized.identity_values),
+            std::move(child_specialized.packages));
+        if (target->kind
+            == frontend::UnitKind::SystemVerilogInterface) {
+            systemverilog_interface_instances_.insert_or_assign(
+                child_path, child_specialized.unit);
+            auto [owned_handle, inserted]
+                = systemverilog_interface_handles_.try_emplace(
+                    child_path, 0);
+            if (inserted) {
+                owned_handle->second
+                    = next_systemverilog_interface_handle_++;
+            }
+            systemverilog_interface_parameter_identities_
+                .insert_or_assign(
+                    child_path, std::move(interface_parameter_identities));
+        }
+    }
+}
+
+} // namespace fsim::elaboration

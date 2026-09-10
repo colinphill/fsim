@@ -159,11 +159,15 @@ namespace {
     }
     if (!process.halted) {
         process.status = ProcessStatus::running;
-        queue_current(process.program.id);
+        if (!disable.site) {
+            queue_current(process.program.id);
+        }
     }
-    notify_execution_point(
-        process, instruction, ExecutionPointKind::process_suspend,
-        process.current_source);
+    if (!disable.site) {
+        notify_execution_point(
+            process, instruction, ExecutionPointKind::process_suspend,
+            process.current_source);
+    }
     return true;
 }
 

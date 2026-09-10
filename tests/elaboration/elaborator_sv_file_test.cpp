@@ -49,6 +49,8 @@ module file_lowering;
     $fwrite(handle, " fixed=%f", real_value);
     $fwrite(handle, "/%t", time_value);
     $fwrite(handle, "/%0h", handle_value);
+    $fwrite(handle, "%u", bits);
+    $fwrite(handle, "%z", bits);
     $fwrite(handle, "%s", path);
     $fdisplay(handle, " pair=%0d/%s", 8, path);
     $fwrite(handle, path);
@@ -58,6 +60,8 @@ module file_lowering;
     status = $feof(handle);
     status = $ferror(handle, error);
     status = $fscanf(handle, "%d", count);
+    status = $fscanf(handle, "%u", bits);
+    status = $fscanf(handle, "%z", bits);
     status = $sscanf("value=2a name=ok", "value=%h name=%s", count, line);
     status = $sscanf("real=1.25 time=17 handle=0",
                      "real=%g time=%d handle=%h",
@@ -106,12 +110,12 @@ endmodule
                 });
         };
     assert(count(FileOpen { }) == 1);
-    assert(count(FileWriteFormatted { }) == 7);
+    assert(count(FileWriteFormatted { }) == 9);
     assert(count(FileWriteString { }) == 3);
     assert(count(FileReadLine { }) == 3);
     assert(count(FileEndOfFile { }) == 1);
     assert(count(FileErrorStatus { }) == 1);
-    assert(count(FileScan { }) == 4);
+    assert(count(FileScan { }) == 6);
     assert(count(FileBinaryRead { }) == 6);
     assert(count(FilePosition { }) == 3);
     assert(count(FileFlush { }) == 2);
@@ -145,6 +149,28 @@ endmodule
                        && value->scalar_kind == fsim::runtime::SystemVerilogScalarKind::Real;
                })
         == 3);
+    assert(std::ranges::count_if(
+               operations,
+               [](const auto& operation) {
+                   const auto* value = operation_get_if<FileWriteFormatted>(
+                       &operation);
+                   return value != nullptr
+                       && (value->format == OutputFormat::unformatted2
+                           || value->format == OutputFormat::unformatted4);
+               })
+        == 2);
+    assert(std::ranges::count_if(
+               operations,
+               [](const auto& operation) {
+                   const auto* value = operation_get_if<FileScan>(&operation);
+                   return value != nullptr && !value->string_source
+                       && value->conversions.size() == 1U
+                       && (value->conversions.front().format
+                               == InputScanFormat::unformatted2
+                           || value->conversions.front().format
+                               == InputScanFormat::unformatted4);
+               })
+        == 2);
 
     const auto verilog = fsim::frontend::parse_text(
         "file-lowering.v",
@@ -317,6 +343,8 @@ module file_invalid;
     result = $fscanf(value, "%d", result);
     result = $sscanf(value, "%d", value);
     result = $sscanf(value, "%q", result);
+    value = $sformatf("%u", bits);
+    result = $value$plusargs("RAW=%z", bits);
     $fdisplay(handle, "%g", result);
     result = $sscanf("1", "%d", real_value);
     result = $fread(value, handle);
@@ -346,6 +374,8 @@ endmodule
     assert(has_diagnostic(rejected, "FSIM-ELAB-SVFILE-015"));
     assert(has_diagnostic(rejected, "FSIM-ELAB-SVFILE-016"));
     assert(has_diagnostic(rejected, "FSIM-ELAB-SVMEMORY-003"));
+    assert(has_diagnostic(rejected, "FSIM-ELAB-SVSTRING-019"));
+    assert(has_diagnostic(rejected, "FSIM-ELAB-SVCLI-002"));
 }
 
 } // namespace fsim::tests::elaboration

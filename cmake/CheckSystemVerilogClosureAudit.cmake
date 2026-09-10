@@ -24,6 +24,8 @@ set(FSIM_TYPED
   "${FSIM_SOURCE_DIR}/tests/app/typed_boundary_application_test.cpp")
 set(FSIM_ARTIFACT
   "${FSIM_SOURCE_DIR}/tests/app/application_test_artifact_phases.cpp")
+set(FSIM_ARTIFACT_VERILOG
+  "${FSIM_SOURCE_DIR}/tests/app/application_test_artifact_verilog.cpp")
 set(FSIM_RUNNER "${FSIM_SOURCE_DIR}/cmake/RunSystemVerilogClosureMatrix.cmake")
 set(FSIM_TEST_CMAKE "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
 set(FSIM_RUNTIME_CMAKE "${FSIM_SOURCE_DIR}/tests/runtime/CMakeLists.txt")
@@ -39,7 +41,8 @@ set(FSIM_EVIDENCE_README
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/README.md")
 foreach(FSIM_INPUT IN ITEMS
     "${FSIM_MATRIX}" "${FSIM_GAPS}" "${FSIM_WIDTHS}" "${FSIM_TYPED}"
-    "${FSIM_ARTIFACT}" "${FSIM_RUNNER}" "${FSIM_TEST_CMAKE}"
+    "${FSIM_ARTIFACT}" "${FSIM_ARTIFACT_VERILOG}" "${FSIM_RUNNER}"
+    "${FSIM_TEST_CMAKE}"
     "${FSIM_RUNTIME_CMAKE}" "${FSIM_RELEASE_AUDIT}"
     "${FSIM_LANGUAGE_SUPPORT}" "${FSIM_FEATURE_MATRIX}"
     "${FSIM_ARCHITECTURE}" "${FSIM_VPI_GUIDE}" "${FSIM_DPI_GUIDE}"
@@ -162,6 +165,9 @@ endforeach()
 
 file(READ "${FSIM_TYPED}" FSIM_TYPED_CONTENTS)
 file(READ "${FSIM_ARTIFACT}" FSIM_ARTIFACT_CONTENTS)
+file(READ "${FSIM_ARTIFACT_VERILOG}" FSIM_ARTIFACT_VERILOG_CONTENTS)
+string(APPEND FSIM_ARTIFACT_CONTENTS
+  "\n${FSIM_ARTIFACT_VERILOG_CONTENTS}")
 foreach(FSIM_TOKEN IN ITEMS
     "FSIM-SYSTEMVERILOG-2017-PASS"
     "debug/vcd/multiple-root/uvm/mixed-vhdl/mixed-systemc/public-api"

@@ -21,6 +21,23 @@ std::array<InternedStringBucket, 64>& interned_string_buckets()
 
 } // namespace
 
+ExecutionPoint::ExecutionPoint(const ProcessId execution_process,
+    const ProcessId source_process,
+    const InstructionIndex execution_instruction,
+    const ExecutionPointKind execution_kind, SourceLocation execution_source,
+    std::string execution_scope, std::string execution_language_standard,
+    std::string execution_compatibility_profile)
+    : process(execution_process)
+    , design_process(source_process)
+    , instruction(execution_instruction)
+    , kind(execution_kind)
+    , source(std::move(execution_source))
+    , scope(std::move(execution_scope))
+    , language_standard(std::move(execution_language_standard))
+    , compatibility_profile(std::move(execution_compatibility_profile))
+{
+}
+
 std::shared_ptr<const std::string> InternedString::intern(std::string value)
 {
     if (value.empty()) {

@@ -33,7 +33,7 @@ void emit(
     const SystemVerilogCoverageExecutionMode mode,
     const SystemVerilogCoverageCallbackKind kind,
     std::optional<std::string> identity,
-    const std::optional<std::int64_t> value,
+    const SystemVerilogCoverageSampleValue* value,
     const std::span<const SystemVerilogCoverageCallback> callbacks) {
   SystemVerilogCoverageCallbackEvent event;
   event.sequence = state.next_callback_sequence++;
@@ -42,7 +42,11 @@ void emit(
   event.mode = mode;
   event.runtime_identity = instance.runtime_identity;
   event.bin_identity = std::move(identity);
-  event.value = value;
+  if (value != nullptr) {
+    if (!value->is_real()) event.value = value->value;
+    event.scalar_kind = value->scalar_kind;
+    event.scalar_bits = value->scalar_bits;
+  }
   result.events.push_back(event);
   for (const auto& callback : callbacks) callback(event);
 }
@@ -108,7 +112,7 @@ execute_systemverilog_covergroup_sample(
   emit(
       result, state, instance, trigger, mode,
       SystemVerilogCoverageCallbackKind::PreSample,
-      std::nullopt, std::nullopt, callbacks);
+      std::nullopt, nullptr, callbacks);
   result.sample = sample_systemverilog_covergroup(
       instance, declaration, inputs, diagnostics);
   for (const auto& sampled : result.sample.coverpoints) {
@@ -116,9 +120,7 @@ execute_systemverilog_covergroup_sample(
         inputs,
         sampled.coverage_declaration_index,
         &SystemVerilogCovergroupSampleInput::coverage_declaration_index);
-    const auto value = input == inputs.end()
-        ? std::optional<std::int64_t>{}
-        : std::optional<std::int64_t>{input->value.value};
+    const auto* value = input == inputs.end() ? nullptr : &input->value;
     for (const auto& identity : sampled.result.hit_bin_identities) {
       emit(
           result, state, instance, trigger, mode,
@@ -137,12 +139,12 @@ execute_systemverilog_covergroup_sample(
     emit(
         result, state, instance, trigger, mode,
         SystemVerilogCoverageCallbackKind::Hit,
-        identity, std::nullopt, callbacks);
+        identity, nullptr, callbacks);
   }
   emit(
       result, state, instance, trigger, mode,
       SystemVerilogCoverageCallbackKind::PostSample,
-      std::nullopt, std::nullopt, callbacks);
+      std::nullopt, nullptr, callbacks);
   return result;
 }
 

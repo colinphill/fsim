@@ -1068,6 +1068,26 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         packages.emplace(unit.library + "::" + unit.name, package);
     }
 
+    std::map<
+        std::string,
+        std::vector<std::pair<std::string, fsim_vpi_handle_v1>>,
+        std::less<>> unit_instances;
+    for (const auto& specialization : project.design_ir.specializations()) {
+        if (!relevant_specializations.contains(specialization.id.value())) {
+            continue;
+        }
+        const auto owner = instances.find(specialization.instance.value());
+        if (owner == instances.end()) {
+            continue;
+        }
+        const auto& unit = project.semantics.units().at(
+            specialization.unit.value());
+        const auto& occurrence = project.design_ir.instances().at(
+            specialization.instance.value());
+        unit_instances[unit.library + "::" + unit.name].push_back(
+            {occurrence.path, owner->second});
+    }
+
     for (const auto& source : project.systemverilog_hir.classes()) {
         auto class_profile
             = runtime::SystemVerilogVpiLanguage::SystemVerilog2017;
@@ -1091,32 +1111,87 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             class_descriptor.member_names.push_back(property.name);
         }
 
-        runtime::SystemVerilogVpiObjectDescriptor descriptor;
-        descriptor.kind = runtime::SystemVerilogVpiObjectKind::Class;
-        descriptor.name = source.name;
+        const auto publish_class = [&](fsim_vpi_handle_v1 parent) {
+            runtime::SystemVerilogVpiObjectDescriptor descriptor;
+            descriptor.kind = runtime::SystemVerilogVpiObjectKind::Class;
+            descriptor.name = source.name;
+            descriptor.parent = parent;
+            descriptor.type = vpi_descriptor_type(class_descriptor);
+            descriptor.type->language = class_profile;
+            apply_vpi_unit_provenance(
+                *descriptor.type, project, source.enclosing_identity);
+            const auto class_handle = create_checked(*result.registry,
+                std::move(descriptor), class_descriptor.nominal_name);
+            for (std::size_t index = 0;
+                index < source.properties.size(); ++index) {
+                runtime::SystemVerilogVpiObjectDescriptor property;
+                property.kind
+                    = runtime::SystemVerilogVpiObjectKind::ClassProperty;
+                property.parent = class_handle;
+                property.name = source.properties[index].name;
+                property.type = vpi_descriptor_type(
+                    class_descriptor.children[index]);
+                property.type->language = class_profile;
+                (void)create_checked(*result.registry, std::move(property),
+                    class_descriptor.nominal_name + "::"
+                        + source.properties[index].name);
+            }
+        };
         if (const auto package = packages.find(source.enclosing_identity);
             package != packages.end()) {
-            descriptor.parent = package->second;
+            publish_class(package->second);
+            continue;
         }
-        descriptor.type = vpi_descriptor_type(class_descriptor);
-        descriptor.type->language = class_profile;
-        apply_vpi_unit_provenance(
-            *descriptor.type, project, source.enclosing_identity);
-        const auto class_handle = create_checked(*result.registry,
-            std::move(descriptor), class_descriptor.nominal_name);
-        for (std::size_t index = 0;
-            index < source.properties.size(); ++index) {
-            runtime::SystemVerilogVpiObjectDescriptor property;
-            property.kind
-                = runtime::SystemVerilogVpiObjectKind::ClassProperty;
-            property.parent = class_handle;
-            property.name = source.properties[index].name;
-            property.type = vpi_descriptor_type(
-                class_descriptor.children[index]);
-            property.type->language = class_profile;
-            (void)create_checked(*result.registry, std::move(property),
-                class_descriptor.nominal_name + "::"
-                    + source.properties[index].name);
+        const auto owners = unit_instances.find(source.enclosing_identity);
+        if (owners == unit_instances.end()) {
+            publish_class({ });
+            continue;
+        }
+        auto relative_name = source.canonical_identity;
+        const auto unit_prefix = source.enclosing_identity + "::";
+        if (relative_name.starts_with(unit_prefix)) {
+            relative_name.erase(0U, unit_prefix.size());
+        }
+        const auto class_separator = relative_name.rfind('.');
+        const auto generate_scope = class_separator == std::string::npos
+            ? std::string { }
+            : relative_name.substr(0U, class_separator);
+        for (const auto& [instance_path, instance_handle] : owners->second) {
+            auto parent = instance_handle;
+            auto scope_path = instance_path;
+            std::size_t begin = 0U;
+            while (begin < generate_scope.size()) {
+                const auto separator = generate_scope.find('.', begin);
+                const auto end = separator == std::string::npos
+                    ? generate_scope.size()
+                    : separator;
+                const auto component = generate_scope.substr(
+                    begin, end - begin);
+                scope_path += "." + component;
+                if (const auto existing = published_scopes.find(scope_path);
+                    existing != published_scopes.end()) {
+                    parent = existing->second;
+                } else {
+                    runtime::SystemVerilogVpiObjectDescriptor scope;
+                    scope.kind =
+                        runtime::SystemVerilogVpiObjectKind::GenerateScope;
+                    scope.parent = parent;
+                    scope.name = component;
+                    runtime::SystemVerilogVpiTypeInfo scope_type;
+                    scope_type.language = class_profile;
+                    apply_vpi_unit_provenance(
+                        scope_type, project, source.enclosing_identity);
+                    scope.type = scope_type;
+                    parent = create_checked(
+                        *result.registry, std::move(scope), scope_path);
+                    published_scopes.emplace(scope_path, parent);
+                }
+                if (separator == std::string::npos) {
+                    break;
+                }
+                begin = separator + 1U;
+            }
+            publish_class(parent);
         }
     }
     for (const auto& specialization : project.design_ir.specializations()) {

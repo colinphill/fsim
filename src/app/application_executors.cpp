@@ -1894,6 +1894,23 @@ std::uint32_t LlvmProcessExecutor::mapped_signal_sparse(
     return found->second;
 }
 
+std::uint32_t LlvmProcessExecutor::mapped_signal(
+    const CallbackState& state, const std::uint32_t signal)
+{
+    if (!state.dense_signal_remap.empty()) {
+        if (signal < state.dense_signal_remap_base) {
+            return signal;
+        }
+        const auto offset = signal - state.dense_signal_remap_base;
+        return offset < state.dense_signal_remap.size()
+            ? state.dense_signal_remap[offset]
+            : signal;
+    }
+    return state.signal_remap.empty()
+        ? signal
+        : mapped_signal_sparse(state, signal);
+}
+
 
 
 

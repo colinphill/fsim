@@ -20,6 +20,8 @@ set(FSIM_ENV "${FSIM_SOURCE_DIR}/src/support/environment.cpp")
 set(FSIM_FILES "${FSIM_SOURCE_DIR}/src/runtime/simir_files.cpp")
 set(FSIM_TCL "${FSIM_SOURCE_DIR}/src/app/tcl.cpp")
 set(FSIM_API_TEST "${FSIM_SOURCE_DIR}/tests/api/api_test.cpp")
+set(FSIM_API_SYSTEMC_TEST
+  "${FSIM_SOURCE_DIR}/tests/api/api_systemc_test.cpp")
 set(FSIM_CLI_TEST "${FSIM_SOURCE_DIR}/tests/app/application_test_cli.cpp")
 foreach(FSIM_INPUT IN ITEMS
     "${FSIM_TEST_CMAKE}"
@@ -35,6 +37,7 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_FILES}"
     "${FSIM_TCL}"
     "${FSIM_API_TEST}"
+    "${FSIM_API_SYSTEMC_TEST}"
     "${FSIM_CLI_TEST}")
   if(NOT EXISTS "${FSIM_INPUT}")
     message(FATAL_ERROR "tool portability input is missing: ${FSIM_INPUT}")
@@ -56,6 +59,9 @@ file(READ "${FSIM_ENV}" FSIM_ENV_CONTENTS)
 file(READ "${FSIM_FILES}" FSIM_FILE_CONTENTS)
 file(READ "${FSIM_TCL}" FSIM_TCL_CONTENTS)
 file(READ "${FSIM_API_TEST}" FSIM_API_TEST_CONTENTS)
+file(READ "${FSIM_API_SYSTEMC_TEST}" FSIM_API_SYSTEMC_TEST_CONTENTS)
+string(APPEND FSIM_API_TEST_CONTENTS
+  "\n${FSIM_API_SYSTEMC_TEST_CONTENTS}")
 file(READ "${FSIM_CLI_TEST}" FSIM_CLI_TEST_CONTENTS)
 
 foreach(FSIM_PATH_POLICY IN ITEMS

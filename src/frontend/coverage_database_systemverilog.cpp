@@ -89,6 +89,17 @@ namespace {
         return found == declaration.bins.end() ? nullptr : &*found;
     }
 
+    std::string coverpoint_bin_identity(
+        const SystemVerilogCovergroupDeclaration& declaration,
+        const SystemVerilogCoverageDeclaration& coverpoint,
+        const SystemVerilogCoverageBin& bin)
+    {
+        const auto& origin = coverpoint.origin_covergroup_identity.empty()
+            ? declaration.canonical_identity
+            : coverpoint.origin_covergroup_identity;
+        return origin + "::" + coverpoint.name + "." + bin.name;
+    }
+
     SystemVerilogCoverageDatabaseResult fail(
         const SystemVerilogCoverageDatabaseError error,
         const std::size_t index = 0U) noexcept
@@ -292,6 +303,42 @@ SystemVerilogCoverageDatabaseResult project_systemverilog_coverage_namespace(
                     return std::move(*error);
                 }
             }
+            for (const auto& item : declaration.coverage_declarations) {
+                if (item.kind
+                    != SystemVerilogCoverageDeclarationKind::Coverpoint) {
+                    continue;
+                }
+                for (const auto& bin : item.bins) {
+                    if (bin.selection
+                        == SystemVerilogCoverageBinSelection::Automatic) {
+                        continue;
+                    }
+                    const auto identity = coverpoint_bin_identity(
+                        declaration, item, bin);
+                    if (std::ranges::any_of(
+                            instance.bin_hits,
+                            [&](const SystemVerilogCoverageBinHit& hit) {
+                                return hit.identity == identity;
+                            })) {
+                        continue;
+                    }
+                    if (bin_count >= limits.maximum_bins) {
+                        return fail(
+                            SystemVerilogCoverageDatabaseError::ResourceLimit,
+                            bin.declaration_index);
+                    }
+                    ++bin_count;
+                    const auto excluded
+                        = bin.kind != SystemVerilogCoverageBinKind::Regular
+                        || bin.weight == 0U;
+                    if (auto error = append_metric(identity,
+                            item.declaration_index,
+                            CoverageDatabaseMetricFamily::SystemVerilogCoverpoint,
+                            0U, 0U, excluded, bin.declaration_index)) {
+                        return std::move(*error);
+                    }
+                }
+            }
             for (std::size_t index = 0;
                 index < instance.cross_bin_state.size(); ++index) {
                 const auto& cross = instance.cross_bin_state[index];
@@ -304,8 +351,9 @@ SystemVerilogCoverageDatabaseResult project_systemverilog_coverage_namespace(
                 if (item == nullptr
                     || (cross.bin_declaration_index
                         && (bin == nullptr
-                            || bin->kind
-                                != SystemVerilogCoverageBinKind::Regular))
+                            || (bin->kind
+                                    != SystemVerilogCoverageBinKind::Regular
+                                && !cross.excluded)))
                     || cross.at_least == 0U
                     || cross.covered
                         != (!cross.excluded

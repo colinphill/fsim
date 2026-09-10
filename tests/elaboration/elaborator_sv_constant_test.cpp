@@ -120,7 +120,7 @@ module wide_constant_child #(
 ) ();
 endmodule
 
-module typed_constant_top #(
+module typed_constant_top import wide_constant_values::*; #(
   parameter longint unsigned MAX_VALUE = 64'hffffffffffffffff,
   parameter longint unsigned MAX_MINUS_ONE = MAX_VALUE - 1,
   parameter longint unsigned LOGICAL_SHIFT = MAX_VALUE >> 60,
@@ -304,7 +304,6 @@ module typed_constant_top #(
       $isunknown(WIDE_INTEGER_UNKNOWN_CAST),
   parameter int CAST_WIDTH = 3
 ) ();
-  import wide_constant_values::*;
   typedef logic [127:0] local_wide_t;
   localparam local_wide_t WIDE_NAMED_CAST =
       local_wide_t'(64'h0123456789abcdef);
@@ -1053,13 +1052,12 @@ module scalar_parameter_child #(
 ) ();
 endmodule
 
-module scalar_parameter_top #(
+module scalar_parameter_top import scalar_values::*; #(
   parameter real BASE = PACKAGE_BASE,
   localparam real DERIVED = BASE + 2.0,
   parameter realtime PERIOD = PACKAGE_PERIOD,
   localparam time TICKS = PERIOD
 ) ();
-  import scalar_values::*;
   scalar_parameter_child #(.VALUE(DERIVED), .TICKS(TICKS)) inherited();
   scalar_parameter_child #(.VALUE(4.5), .TICKS(1.5)) override();
 endmodule

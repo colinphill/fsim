@@ -459,55 +459,7 @@ std::optional<Statement> VerilogParser::parse_statement()
             && match_keyword("assert"))
         || (at(TokenKind::Identifier)
             && current().text == "assert" && (advance(), true))) {
-        const auto start = previous();
-        (void)require_standard(
-            "an immediate assertion",
-            StandardRevision::SystemVerilog2005,
-            start,
-            "FSIM-SV-PARSE-348");
-        Statement statement;
-        statement.kind = StatementKind::Assert;
-        expect(TokenKind::LeftParen, "'(' after assert",
-            "FSIM-SV-PARSE-137");
-        statement.condition = parse_expression();
-        expect(TokenKind::RightParen, "')' after assertion condition",
-            "FSIM-SV-PARSE-138");
-        if (match_keyword("else")) {
-            statement.assertion_has_failure_action = true;
-            if (auto action = parse_statement()) {
-                statement.else_statements.push_back(
-                    std::move(*action));
-            } else {
-                error(
-                    current(),
-                    "FSIM-SV-PARSE-044",
-                    "expected an immediate-assertion failure action");
-            }
-        } else {
-            statement.assertion_has_pass_action = true;
-            if (auto action = parse_statement()) {
-                statement.statements.push_back(std::move(*action));
-            } else {
-                error(
-                    current(),
-                    "FSIM-SV-PARSE-044",
-                    "expected an immediate-assertion pass action");
-            }
-            if (match_keyword("else")) {
-                statement.assertion_has_failure_action = true;
-                if (auto action = parse_statement()) {
-                    statement.else_statements.push_back(
-                        std::move(*action));
-                } else {
-                    error(
-                        current(),
-                        "FSIM-SV-PARSE-044",
-                        "expected an immediate-assertion failure action");
-                }
-            }
-        }
-        statement.span = span_from(start, previous());
-        return statement;
+        return parse_immediate_assertion(previous());
     }
     if (keyword("$fatal") || keyword("$error")
         || keyword("$warning") || keyword("$info")) {
@@ -823,6 +775,12 @@ std::optional<Statement> VerilogParser::parse_statement()
             const auto format_token = advance();
             auto parsed_format = parse_output_format(
                 decoded_string_literal_text(format_token));
+            const bool has_unformatted = std::ranges::any_of(
+                parsed_format.conversions,
+                [](const auto& conversion) {
+                    return conversion.format == OutputFormat::Unformatted2
+                        || conversion.format == OutputFormat::Unformatted4;
+                });
             std::vector<Expression> values;
             while (match(TokenKind::Comma)) {
                 values.push_back(parse_expression());
@@ -836,7 +794,8 @@ std::optional<Statement> VerilogParser::parse_statement()
                 [&consumes_value](const auto& conversion) {
                     return consumes_value(conversion.format);
                 }));
-            if (!parsed_format.valid) {
+            if (!parsed_format.valid
+                || (has_unformatted && task_name != "$fwrite")) {
                 error(
                     format_token,
                     "FSIM-SV-SEM-076",
@@ -970,6 +929,14 @@ std::optional<Statement> VerilogParser::parse_statement()
                     const auto format_token = advance();
                     auto parsed_format = parse_output_format(
                         decoded_string_literal_text(format_token));
+                    const bool has_unformatted = std::ranges::any_of(
+                        parsed_format.conversions,
+                        [](const auto& conversion) {
+                            return conversion.format
+                                    == OutputFormat::Unformatted2
+                                || conversion.format
+                                    == OutputFormat::Unformatted4;
+                        });
                     std::vector<Expression> values;
                     while (match(TokenKind::Comma)) {
                         values.push_back(parse_expression());
@@ -996,7 +963,7 @@ std::optional<Statement> VerilogParser::parse_statement()
                               time_conversions,
                               values.size() - required_values)
                         : std::size_t { 0 };
-                    if (!parsed_format.valid) {
+                    if (!parsed_format.valid || has_unformatted) {
                         error(
                             format_token,
                             "FSIM-SV-SEM-042",

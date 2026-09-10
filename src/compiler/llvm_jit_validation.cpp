@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/systemverilog_string.hpp"
 #include "llvm_jit_internal.hpp"
+#include "llvm_jit_validation_operation.hpp"
 #include "llvm_jit_validation_class.hpp"
 #include "llvm_jit_validation_signal.hpp"
 #include <algorithm>
@@ -268,7 +269,14 @@ using namespace runtime::simir;
                         validate_dynamic_part_selection)) {
                     return;
                 }
-#include "llvm_jit_validation_operations_prefix.tpp"
+                const OperationValidationContext operation_context {
+                    process, result, signal_widths, signal_value_kinds,
+                    exact_signal_width, referenced_signal_width, signal_width,
+                    record_use, constrain_width, record_definition,
+                    unify_registers, validate_string_register,
+                    validate_container_register
+                };
+                validate_prefix_operation(operation_context, operation, index);
                 if constexpr (std::is_same_v<OperationType, FileFlush>) {
                     result.uses_files = true;
                     if (!operation.all) {

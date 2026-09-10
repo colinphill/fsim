@@ -48,6 +48,9 @@ struct SystemVerilogCovergroupOptionAssignment {
     std::optional<Token> name_token;
     SourceSpan name_span;
     std::vector<Token> value_tokens;
+    std::optional<std::uint64_t> evaluated_value;
+    std::optional<std::uint64_t> evaluated_real_bits;
+    bool inherited { };
     SourceSpan span;
 };
 
@@ -113,6 +116,11 @@ struct SystemVerilogCoverageBinValue {
     bool exact_signed { };
     bool range_left_signed { };
     bool range_right_signed { };
+    std::optional<std::uint64_t> exact_real_bits;
+    std::optional<std::uint64_t> range_left_real_bits;
+    std::optional<std::uint64_t> range_right_real_bits;
+    bool range_left_inclusive { true };
+    bool range_right_inclusive { true };
 };
 
 enum class SystemVerilogCoverageTransitionRepetitionKind {
@@ -186,6 +194,12 @@ struct SystemVerilogCoverageDeclaration {
     SourceSpan name_span;
     bool explicit_name { };
     std::size_t declaration_index { };
+    std::string origin_covergroup_identity;
+    bool inherited { };
+    SystemVerilogScalarKind sampled_scalar_kind {
+        SystemVerilogScalarKind::None
+    };
+    std::optional<std::uint64_t> effective_real_interval_bits;
     std::vector<Token> expression_tokens;
     SourceSpan expression_span;
     std::vector<SystemVerilogCoverageCrossOperand> cross_operands;
@@ -209,7 +223,12 @@ struct SystemVerilogCovergroupDeclaration {
     SystemVerilogCovergroupOwnerKind owner_kind {
         SystemVerilogCovergroupOwnerKind::DesignUnit
     };
+    StandardRevision standard_revision {
+        StandardRevision::SystemVerilog2017
+    };
     std::string name;
+    bool extends_parent { };
+    std::string resolved_base_identity;
     std::string owner_identity;
     std::string canonical_identity;
     std::string specialization_identity;
@@ -229,6 +248,8 @@ struct SystemVerilogCovergroupDeclaration {
     std::uint32_t effective_type_goal { 100U };
     bool effective_per_instance { };
     bool effective_merge_instances { };
+    bool effective_cross_retain_auto_bins { true };
+    std::optional<std::uint64_t> effective_real_interval_bits;
     std::vector<SystemVerilogCoverageDeclaration> coverage_declarations;
     std::optional<std::string> end_name;
     std::optional<Token> end_name_token;
@@ -298,6 +319,10 @@ struct SystemVerilogCoverageIllegalBinReport {
     std::string sampled_value_bits;
     std::string sampled_unknown_bits;
     bool sampled_signed { };
+    SystemVerilogScalarKind sampled_scalar_kind {
+        SystemVerilogScalarKind::None
+    };
+    std::uint64_t sampled_scalar_bits { };
     SourceSpan span;
 };
 
@@ -316,6 +341,7 @@ struct SystemVerilogCovergroupInstance {
     std::vector<SystemVerilogCoverageCrossBinState> cross_bin_state;
     std::vector<SystemVerilogCoverageIllegalBinReport> illegal_bin_reports;
     bool class_member_template { };
+    bool cross_inventory_initialized { };
     SourceSpan span;
 };
 
@@ -480,6 +506,7 @@ struct GenerateBody {
     std::vector<SignalAliasDeclaration> signal_aliases;
     std::vector<SystemVerilogAliasDeclaration> systemverilog_aliases;
     std::vector<SystemVerilogLetDeclaration> systemverilog_lets;
+    std::vector<SystemVerilogClassDeclaration> systemverilog_classes;
     std::vector<VariableDeclaration> variables;
     std::vector<FunctionDeclaration> functions;
     std::vector<TaskDeclaration> tasks;
@@ -846,6 +873,8 @@ struct SystemVerilogPropertyExpression {
     SourceSpan span;
 };
 
+struct SystemVerilogConcurrentAssertion;
+
 // Sequence, property, and checker declarations are source-owned independently
 // of parser storage. Change 1 retains the exact header/body token stream so
 // later Batch 154 changes can add formal, clock, disable, and expression HIR
@@ -870,6 +899,11 @@ struct SystemVerilogAssertionDeclaration {
     std::optional<SystemVerilogSequenceExpression> sequence_expression;
     std::optional<SystemVerilogPropertyExpression> property_expression;
     std::vector<SystemVerilogSequenceEndpoint> sequence_endpoints;
+    // Checker bodies retain their assertion declarations and directives as
+    // owned semantic forms. Instantiation specializes these records into the
+    // containing design-unit scope before ordinary assertion resolution.
+    std::vector<SystemVerilogAssertionDeclaration> checker_declarations;
+    std::vector<SystemVerilogConcurrentAssertion> checker_assertions;
     SourceSpan span;
 };
 
@@ -878,6 +912,11 @@ enum class SystemVerilogConcurrentAssertionKind {
     Assume,
     Cover,
     Restrict,
+};
+
+enum class SystemVerilogConcurrentAssertionForm {
+    Property,
+    Sequence,
 };
 
 enum class SystemVerilogAssertionRegion {
@@ -890,9 +929,13 @@ struct SystemVerilogConcurrentAssertion {
     SystemVerilogConcurrentAssertionKind kind {
         SystemVerilogConcurrentAssertionKind::Assert
     };
+    SystemVerilogConcurrentAssertionForm form {
+        SystemVerilogConcurrentAssertionForm::Property
+    };
     std::string label;
     SourceSpan label_span;
     std::vector<Token> property_tokens;
+    std::optional<SystemVerilogAssertionDeclaration> inline_sequence;
     bool has_pass_action { };
     std::vector<Token> pass_action_tokens;
     SourceSpan pass_action_span;
@@ -908,6 +951,22 @@ struct SystemVerilogConcurrentAssertion {
     SystemVerilogAssertionRegion action_region {
         SystemVerilogAssertionRegion::Reactive
     };
+    SourceSpan span;
+};
+
+struct SystemVerilogCheckerConnection {
+    // Empty for an ordered connection. A named open connection has no actual
+    // tokens and is distinguished from an omitted formal during validation.
+    std::string formal_name;
+    std::vector<Token> actual_tokens;
+    bool open { };
+    SourceSpan span;
+};
+
+struct SystemVerilogCheckerInstance {
+    std::string declaration_name;
+    std::string name;
+    std::vector<SystemVerilogCheckerConnection> connections;
     SourceSpan span;
 };
 
@@ -1495,6 +1554,8 @@ struct DesignUnit {
         systemverilog_assertion_declarations;
     std::vector<SystemVerilogConcurrentAssertion>
         systemverilog_concurrent_assertions;
+    std::vector<SystemVerilogCheckerInstance>
+        systemverilog_checker_instances;
     std::vector<SystemVerilogCovergroupDeclaration> systemverilog_covergroups;
     // Package, module, and interface class declarations in lexical order.
     // Compilation-unit declarations instead live on ParsedDesign.

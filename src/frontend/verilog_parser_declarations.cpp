@@ -1213,6 +1213,12 @@ void VerilogParser::parse_gate_primitive(
     const std::vector<SignalDeclaration>& ports) {
   const auto start = advance();
   const auto operation = detail::ascii_lower(start.text);
+  if (program_generate_context_) {
+    error(
+        start,
+        "FSIM-SV-SEM-390",
+        "a program block cannot contain a built-in primitive instance");
+  }
   auto strength = parse_verilog_drive_strength("gate primitive");
   std::optional<Delay> delay;
   if (match(TokenKind::Hash)) {
@@ -1314,7 +1320,7 @@ void VerilogParser::parse_gate_primitive(
         TokenKind::LeftParen,
         "'(' after gate primitive name",
         "FSIM-SV-PARSE-091");
-    if (!at(TokenKind::Identifier)) {
+    if (at(TokenKind::RightParen)) {
       error(
           current(),
           "FSIM-SV-PARSE-092",
@@ -1332,19 +1338,55 @@ void VerilogParser::parse_gate_primitive(
         "')' after gate primitive terminals",
         "FSIM-SV-PARSE-093");
 
-    if ((unary && inputs.size() != 1)
+    if ((unary && inputs.empty())
         || (tristate && inputs.size() != 2)
-        || (!unary && !tristate && inputs.size() < 2)) {
+        || (!unary && !tristate && inputs.empty())) {
       error(
           instance_start,
           "FSIM-SV-SEM-026",
           unary
-              ? "buf/not primitives require exactly one input terminal"
+              ? "buf/not primitives require one or more output terminals "
+                "followed by exactly one input terminal"
           : tristate
               ? "bufif/notif primitives require one data and one control "
                 "input terminal"
-              : "logic gate primitives require at least two input terminals");
+              : "logic gate primitives require at least one input terminal");
       continue;
+    }
+
+    std::vector<Expression> targets;
+    targets.push_back(std::move(target));
+    if (unary) {
+      const auto output_terminal = [&](const auto& self,
+                                       const Expression& expression)
+          -> bool {
+        if (expression.kind == ExpressionKind::Identifier) return true;
+        if ((expression.kind == ExpressionKind::Index
+             || expression.kind == ExpressionKind::Slice)
+            && !expression.operands.empty()) {
+          return self(self, expression.operands.front());
+        }
+        return expression.kind == ExpressionKind::Concatenation
+            && !expression.operands.empty()
+            && std::ranges::all_of(
+                expression.operands,
+                [&](const Expression& operand) {
+                  return self(self, operand);
+                });
+      };
+      for (std::size_t index = 0; index + 1 < inputs.size(); ++index) {
+        if (!output_terminal(output_terminal, inputs[index])) {
+          error(
+              instance_start,
+              "FSIM-SV-SEM-388",
+              "every buf/not terminal except the final input must be a "
+              "net lvalue");
+        }
+        targets.push_back(std::move(inputs[index]));
+      }
+      auto input = std::move(inputs.back());
+      inputs.clear();
+      inputs.push_back(std::move(input));
     }
 
     const auto terminal_for =
@@ -1414,9 +1456,15 @@ void VerilogParser::parse_gate_primitive(
     }
     for (std::size_t ordinal = 0;
          ordinal < instance_indices.size(); ++ordinal) {
-      auto mapped_target = !gate_array
-          ? target
-          : terminal_for(target, ordinal, instance_indices[ordinal]);
+      std::vector<Expression> mapped_targets;
+      mapped_targets.reserve(targets.size());
+      for (const auto& output : targets) {
+        mapped_targets.push_back(
+            !gate_array
+                ? output
+                : terminal_for(
+                    output, ordinal, instance_indices[ordinal]));
+      }
       std::vector<Expression> mapped_inputs;
       mapped_inputs.reserve(inputs.size());
       for (const auto& input : inputs) {
@@ -1493,14 +1541,7 @@ void VerilogParser::parse_gate_primitive(
         }
       }
 
-      Statement statement;
-      statement.kind = StatementKind::Assignment;
-      statement.assignment_kind = AssignmentKind::Continuous;
-      statement.target = std::move(mapped_target);
-      statement.value = std::move(value);
-      statement.delay = delay;
-      statement.verilog_drive_strength = strength;
-      statement.label = instance_name.empty()
+      const auto base_label = instance_name.empty()
           ? std::string{}
           : instance_name
               + (instance_indices.size() == 1
@@ -1508,8 +1549,20 @@ void VerilogParser::parse_gate_primitive(
                      ? std::string{}
                      : "[" + std::to_string(instance_indices[ordinal])
                          + "]");
-      statement.span = cover(start.span, previous().span);
-      statements.push_back(std::move(statement));
+      for (std::size_t output = 0; output < mapped_targets.size(); ++output) {
+        Statement statement;
+        statement.kind = StatementKind::Assignment;
+        statement.assignment_kind = AssignmentKind::Continuous;
+        statement.target = std::move(mapped_targets[output]);
+        statement.value = value;
+        statement.delay = delay;
+        statement.verilog_drive_strength = strength;
+        statement.label = base_label.empty() || mapped_targets.size() == 1
+            ? base_label
+            : base_label + "$output" + std::to_string(output);
+        statement.span = cover(start.span, previous().span);
+        statements.push_back(std::move(statement));
+      }
     }
   } while (match(TokenKind::Comma));
   expect(

@@ -498,7 +498,8 @@ namespace {
             const auto* parent = ir.find_node(parent_id);
             if (!parent)
                 break;
-            if (parent->kind == SdfConstructKind::Conditional) {
+            if (parent->kind == SdfConstructKind::Conditional
+                || parent->kind == SdfConstructKind::ConditionalElse) {
                 auto direct = decoded_specs(*parent);
                 condition_specs.insert(condition_specs.end(),
                     std::make_move_iterator(direct.begin()),
@@ -541,104 +542,318 @@ namespace {
                                     : std::optional { found->second };
     }
 
-    void link_specify_path(SdfResolvedNodeEndpoints& resolved,
-        const SdfResolvedInstance& target,
+    [[nodiscard]] std::optional<std::uint64_t> packed_index_offset(
+        const std::int64_t index, const elaboration::SignalInfo& signal)
+    {
+        if (!signal.packed_range) {
+            return index == 0 && signal.width == 1U
+                ? std::optional<std::uint64_t> { 0U }
+                : std::nullopt;
+        }
+        const auto& range = *signal.packed_range;
+        const auto low = std::min(range.left, range.right);
+        const auto high = std::max(range.left, range.right);
+        if (index < low || index > high)
+            return std::nullopt;
+        return range.descending
+            ? static_cast<std::uint64_t>(index)
+                - static_cast<std::uint64_t>(range.right)
+            : static_cast<std::uint64_t>(range.right)
+                - static_cast<std::uint64_t>(index);
+    }
+
+    template <typename Terminal>
+    [[nodiscard]] bool terminal_matches(
+        const SdfResolvedEndpoint& endpoint,
+        const Terminal& terminal,
         const elaboration::ElaboratedDesign& elaborated)
+    {
+        if (endpoint.signal != terminal.signal)
+            return false;
+        const auto signal = std::ranges::find(elaborated.signals(),
+            endpoint.signal, &elaboration::SignalInfo::id);
+        if (signal == elaborated.signals().end())
+            return false;
+        if (!endpoint.select) {
+            return terminal.offset == 0U && terminal.width == signal->width;
+        }
+        const auto left = packed_index_offset(endpoint.select->left, *signal);
+        const auto right = packed_index_offset(endpoint.select->right, *signal);
+        return left && right
+            && terminal.offset == std::min(*left, *right)
+            && terminal.width == endpoint.select->width;
+    }
+
+    [[nodiscard]] std::optional<std::string_view> edge_token(
+        const std::string_view identity)
+    {
+        constexpr std::string_view prefix = "edge{";
+        if (!identity.starts_with(prefix) || !identity.ends_with('}')
+            || identity.size() <= prefix.size() + 1U) {
+            return std::nullopt;
+        }
+        return identity.substr(
+            prefix.size(), identity.size() - prefix.size() - 1U);
+    }
+
+    [[nodiscard]] bool path_edge_matches(
+        const SdfResolvedNodeEndpoints& resolved,
+        const elaboration::VerilogSpecifyPathInfo& path)
+    {
+        const auto qualified = std::ranges::find_if(resolved.endpoints,
+            [](const SdfResolvedEndpoint& endpoint) {
+                return endpoint.role != SdfEndpointRole::Condition
+                    && !endpoint.edge_identity.empty();
+            });
+        if (qualified == resolved.endpoints.end())
+            return path.source_edge == frontend::VerilogSpecifyEdge::None;
+        const auto token = edge_token(qualified->edge_identity);
+        if (!token)
+            return false;
+        if (*token == "posedge")
+            return path.source_edge == frontend::VerilogSpecifyEdge::Posedge;
+        if (*token == "negedge")
+            return path.source_edge == frontend::VerilogSpecifyEdge::Negedge;
+        return path.source_edge == frontend::VerilogSpecifyEdge::Edge;
+    }
+
+    [[nodiscard]] bool path_condition_matches(
+        const SdfResolvedNodeEndpoints& resolved,
+        const elaboration::VerilogSpecifyPathInfo& path)
+    {
+        if (resolved.condition_identity.empty())
+            return !path.conditional && !path.ifnone;
+        const std::string else_prefix
+            = std::string {
+                  frontend::to_string(SdfConstructKind::ConditionalElse) }
+            + "{";
+        if (resolved.condition_identity.starts_with(else_prefix))
+            return path.ifnone;
+        return path.conditional && !path.ifnone;
+    }
+
+    [[nodiscard]] bool event_edge_matches(
+        const SdfResolvedEndpoint& endpoint,
+        const runtime::simir::ModuleTimingEvent& event)
+    {
+        if (endpoint.edge_identity.empty())
+            return event.edge == runtime::simir::ModulePathEdge::none;
+        const auto token = edge_token(endpoint.edge_identity);
+        if (!token)
+            return false;
+        if (*token == "posedge")
+            return event.edge == runtime::simir::ModulePathEdge::posedge;
+        if (*token == "negedge")
+            return event.edge == runtime::simir::ModulePathEdge::negedge;
+        return event.edge == runtime::simir::ModulePathEdge::edge
+            && std::ranges::any_of(event.edge_descriptors,
+                [&](const std::string_view descriptor) {
+                    return ascii_equal(descriptor, *token,
+                        SdfHierarchyCasePolicy::AsciiInsensitive);
+                });
+    }
+
+    [[nodiscard]] bool event_matches(
+        const SdfResolvedEndpoint& endpoint,
+        const runtime::simir::ModuleTimingEvent& event,
+        const elaboration::ElaboratedDesign& elaborated)
+    {
+        return terminal_matches(endpoint, event.terminal, elaborated)
+            && event_edge_matches(endpoint, event);
+    }
+
+    struct PathEndpointBinding {
+        std::size_t source { };
+        std::size_t destination { };
+        friend bool operator==(
+            const PathEndpointBinding&, const PathEndpointBinding&) = default;
+    };
+
+    [[nodiscard]] std::optional<PathEndpointBinding> path_endpoint_binding(
+        const SdfResolvedNodeEndpoints& resolved,
+        const elaboration::VerilogSpecifyPathInfo& path,
+        const elaboration::ElaboratedDesign& elaborated)
+    {
+        std::optional<PathEndpointBinding> binding;
+        const bool edge_qualified = std::ranges::any_of(resolved.endpoints,
+            [](const SdfResolvedEndpoint& endpoint) {
+                return !endpoint.edge_identity.empty();
+            });
+        for (std::size_t source = 0U; source < resolved.endpoints.size();
+             ++source) {
+            const auto& source_endpoint = resolved.endpoints[source];
+            if (source_endpoint.role == SdfEndpointRole::Condition
+                || (edge_qualified && source_endpoint.edge_identity.empty())
+                || (!edge_qualified
+                    && source_endpoint.role != SdfEndpointRole::Input)
+                || !std::ranges::any_of(path.sources,
+                    [&](const auto& terminal) {
+                        return terminal_matches(
+                            source_endpoint, terminal, elaborated);
+                    })) {
+                continue;
+            }
+            for (std::size_t destination = 0U;
+                 destination < resolved.endpoints.size(); ++destination) {
+                const auto& destination_endpoint = resolved.endpoints[destination];
+                if (source == destination
+                    || destination_endpoint.role == SdfEndpointRole::Condition
+                    || (edge_qualified
+                        && !destination_endpoint.edge_identity.empty())
+                    || (!edge_qualified
+                        && destination_endpoint.role != SdfEndpointRole::Output)
+                    || !std::ranges::any_of(path.destinations,
+                        [&](const auto& terminal) {
+                            return terminal_matches(
+                                destination_endpoint, terminal, elaborated);
+                        })) {
+                    continue;
+                }
+                const PathEndpointBinding candidate { source, destination };
+                if (binding && *binding != candidate)
+                    return std::nullopt;
+                binding = candidate;
+            }
+        }
+        return binding;
+    }
+
+    struct TimingEndpointBinding {
+        std::size_t reference { };
+        std::optional<std::size_t> data;
+        friend bool operator==(const TimingEndpointBinding&,
+            const TimingEndpointBinding&) = default;
+    };
+
+    [[nodiscard]] std::optional<TimingEndpointBinding> timing_endpoint_binding(
+        const SdfResolvedNodeEndpoints& resolved,
+        const runtime::simir::ModuleTimingCheck& check,
+        const elaboration::ElaboratedDesign& elaborated)
+    {
+        std::optional<TimingEndpointBinding> binding;
+        const bool edge_qualified = std::ranges::any_of(resolved.endpoints,
+            [](const SdfResolvedEndpoint& endpoint) {
+                return !endpoint.edge_identity.empty();
+            });
+        for (std::size_t reference = 0U;
+             reference < resolved.endpoints.size(); ++reference) {
+            const auto& reference_endpoint = resolved.endpoints[reference];
+            if (reference_endpoint.role == SdfEndpointRole::Condition
+                || (!edge_qualified
+                    && reference_endpoint.role
+                        != SdfEndpointRole::TimingReference)
+                || !event_matches(
+                    reference_endpoint, check.reference, elaborated)) {
+                continue;
+            }
+            if (!check.data) {
+                const TimingEndpointBinding candidate { reference, std::nullopt };
+                if (binding && *binding != candidate)
+                    return std::nullopt;
+                binding = candidate;
+                continue;
+            }
+            for (std::size_t data = 0U; data < resolved.endpoints.size();
+                 ++data) {
+                const auto& data_endpoint = resolved.endpoints[data];
+                if (reference == data
+                    || data_endpoint.role == SdfEndpointRole::Condition
+                    || (!edge_qualified
+                        && data_endpoint.role != SdfEndpointRole::TimingData)
+                    || !event_matches(data_endpoint, *check.data, elaborated)) {
+                    continue;
+                }
+                const TimingEndpointBinding candidate { reference, data };
+                if (binding && *binding != candidate)
+                    return std::nullopt;
+                binding = candidate;
+            }
+        }
+        return binding;
+    }
+
+    [[nodiscard]] bool link_specify_path(SdfResolvedNodeEndpoints& resolved,
+        const SdfResolvedInstance& target,
+        const elaboration::ElaboratedDesign& elaborated,
+        std::vector<Diagnostic>& diagnostics, const SourceSpan& span)
     {
         if (resolved.construct_kind != SdfConstructKind::Iopath
             && resolved.construct_kind != SdfConstructKind::PathPulse
             && resolved.construct_kind
-                != SdfConstructKind::PathPulsePercent)
-            return;
+                != SdfConstructKind::PathPulsePercent) {
+            return true;
+        }
         const elaboration::VerilogSpecifyPathInfo* match = nullptr;
+        std::optional<PathEndpointBinding> match_binding;
         for (const auto& path : elaborated.verilog_specify_paths()) {
             if (!ascii_equal(
-                    path.instance, target.instance_path, target.case_policy)) {
+                    path.instance, target.instance_path, target.case_policy)
+                || !path_edge_matches(resolved, path)
+                || !path_condition_matches(resolved, path)) {
                 continue;
             }
-            const auto uses = [&](const auto& terminals,
-                                  const runtime::simir::SignalId signal) {
-                return std::ranges::any_of(terminals,
-                    [&](const auto& terminal) {
-                        return terminal.signal == signal;
-                    });
-            };
-            const bool has_source = std::ranges::any_of(resolved.endpoints,
-                [&](const SdfResolvedEndpoint& endpoint) {
-                    return uses(path.sources, endpoint.signal);
-                });
-            const bool has_destination = std::ranges::any_of(resolved.endpoints,
-                [&](const SdfResolvedEndpoint& endpoint) {
-                    return uses(path.destinations, endpoint.signal);
-                });
-            if (!has_source || !has_destination)
+            const auto binding
+                = path_endpoint_binding(resolved, path, elaborated);
+            if (!binding)
                 continue;
-            if (match)
-                return;
+            if (match) {
+                diagnose(diagnostics, "FSIM-SDF-ENDPOINT-006",
+                    "SDF IOPATH matches multiple elaborated specify paths after exact selection, edge, and condition filtering",
+                    span);
+                return false;
+            }
             match = &path;
+            match_binding = binding;
         }
         if (!match)
-            return;
+            return true;
         resolved.specify_path = match->id;
-        for (auto& endpoint : resolved.endpoints) {
-            if (std::ranges::any_of(match->sources,
-                    [&](const auto& terminal) {
-                        return terminal.signal == endpoint.signal;
-                    })) {
-                endpoint.role = SdfEndpointRole::Input;
-            } else if (std::ranges::any_of(match->destinations,
-                           [&](const auto& terminal) {
-                               return terminal.signal == endpoint.signal;
-                           })) {
-                endpoint.role = SdfEndpointRole::Output;
-            }
-        }
+        resolved.endpoints[match_binding->source].role = SdfEndpointRole::Input;
+        resolved.endpoints[match_binding->destination].role
+            = SdfEndpointRole::Output;
+        return true;
     }
 
-    void link_timing_check(SdfResolvedNodeEndpoints& resolved,
+    [[nodiscard]] bool link_timing_check(SdfResolvedNodeEndpoints& resolved,
         const SdfResolvedInstance& target,
-        const elaboration::ElaboratedDesign& elaborated)
+        const elaboration::ElaboratedDesign& elaborated,
+        std::vector<Diagnostic>& diagnostics, const SourceSpan& span)
     {
         const auto expected = timing_kind(resolved.construct_kind);
         if (!expected)
-            return;
+            return true;
         const runtime::simir::ModuleTimingCheck* match = nullptr;
+        std::optional<TimingEndpointBinding> match_binding;
+        const auto identity_prefix
+            = "sdf:timingcheck:" + target.instance_path + ":";
         for (const auto& check : elaborated.verilog_timing_checks()) {
             if (check.kind != *expected
-                || check.identity.find(target.instance_path)
-                    == std::string::npos) {
+                || !check.identity.starts_with(identity_prefix)) {
                 continue;
             }
-            const auto reference = check.reference.terminal.signal;
-            const auto data = check.data
-                ? std::optional { check.data->terminal.signal }
-                : std::nullopt;
-            const bool reference_found = std::ranges::any_of(
-                resolved.endpoints, [&](const SdfResolvedEndpoint& endpoint) {
-                    return endpoint.signal == reference;
-                });
-            const bool data_found = !data || std::ranges::any_of(resolved.endpoints, [&](const SdfResolvedEndpoint& endpoint) {
-                return endpoint.signal == *data;
-            });
-            if (!reference_found || !data_found)
+            const auto binding
+                = timing_endpoint_binding(resolved, check, elaborated);
+            if (!binding)
                 continue;
-            if (match)
-                return;
+            if (match) {
+                diagnose(diagnostics, "FSIM-SDF-ENDPOINT-006",
+                    "SDF timing check matches multiple elaborated checks after exact role, selection, and edge filtering",
+                    span);
+                return false;
+            }
             match = &check;
+            match_binding = binding;
         }
         if (!match)
-            return;
+            return true;
         resolved.timing_check = match->id;
-        for (auto& endpoint : resolved.endpoints) {
-            if (endpoint.role == SdfEndpointRole::Condition)
-                continue;
-            if (endpoint.signal == match->reference.terminal.signal) {
-                endpoint.role = SdfEndpointRole::TimingReference;
-            } else if (match->data
-                && endpoint.signal == match->data->terminal.signal) {
-                endpoint.role = SdfEndpointRole::TimingData;
-            }
+        resolved.endpoints[match_binding->reference].role
+            = SdfEndpointRole::TimingReference;
+        if (match_binding->data) {
+            resolved.endpoints[*match_binding->data].role
+                = SdfEndpointRole::TimingData;
         }
+        return true;
     }
 
     [[nodiscard]] bool resolve_primary_specs(
@@ -824,8 +1039,12 @@ namespace {
                 return false;
             }
         }
-        link_specify_path(resolved, target, context.elaborated);
-        link_timing_check(resolved, target, context.elaborated);
+        if (!link_specify_path(resolved, target, context.elaborated,
+                context.diagnostics, node.span)
+            || !link_timing_check(resolved, target, context.elaborated,
+                context.diagnostics, node.span)) {
+            return false;
+        }
         context.nodes.push_back(std::move(resolved));
         return true;
     }

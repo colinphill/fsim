@@ -18,6 +18,7 @@ set(FSIM_WITNESSES
   fsim.semantic
   fsim.application.systemverilog_hir
   fsim.frontend
+  fsim.elaboration
   fsim.library.artifact
   fsim.llvm
   fsim.application.vpi
@@ -26,6 +27,17 @@ set(FSIM_WITNESSES
   fsim.application.expressions
   fsim.application.sv_containers
   fsim.application.assertions
+  fsim.application.random
+  fsim.application.coverage
+  fsim.application.sv_files
+  fsim.application.sv_preprocessor_generate
+  fsim.application.sv_hierarchy
+  fsim.application.sv_interfaces
+  fsim.application.sv_conformance
+  fsim.application.transition_delays
+  fsim.application.specify
+  fsim.application.sdf_endpoint_resolution
+  fsim.application.sdf_drive_timing
   fsim.application.typed_boundaries
   fsim.uvm-phase-tlm-matrix
   fsim.runtime)
@@ -74,11 +86,11 @@ foreach(FSIM_TRANSCRIPT IN ITEMS
 endforeach()
 
 list(LENGTH FSIM_WITNESSES FSIM_WITNESS_COUNT)
-if(NOT FSIM_WITNESS_COUNT EQUAL 14 OR NOT FSIM_COMPLETED EQUAL 14)
+if(NOT FSIM_WITNESS_COUNT EQUAL 26 OR NOT FSIM_COMPLETED EQUAL 26)
   message(FATAL_ERROR
-    "SystemVerilog closure matrix expected 14 witnesses; completed ${FSIM_COMPLETED}")
+    "SystemVerilog closure matrix expected 26 witnesses; completed ${FSIM_COMPLETED}")
 endif()
 
 message(STATUS
-  "SystemVerilog closure matrix: 14/14 witnesses, 17 governed stages, "
+  "SystemVerilog closure matrix: 26/26 witnesses, 29 governed stages, "
   "1200-second stage timeout, retained evidence ${FSIM_OUTPUT_DIR}")

@@ -73,6 +73,7 @@ struct Capture {
     fsim::app::NativeCacheStatistics cache;
     std::vector<std::string> path_identities;
     std::vector<std::string> timing_check_identities;
+    std::vector<std::string> notifier_values;
 };
 
 fsim::project::Config make_config(
@@ -98,7 +99,7 @@ fsim::project::Config make_config(
 
     fsim::project::SourceSet sv_sources;
     sv_sources.language = fsim::project::Language::system_verilog;
-    sv_sources.standard = "2017";
+    sv_sources.standard = "2023";
     sv_sources.library = "work";
     sv_sources.files = { systemverilog };
     config.source_sets.push_back(std::move(sv_sources));
@@ -134,6 +135,12 @@ Capture execute(
     }
     for (const auto& check : simulation.design().verilog_timing_checks()) {
         capture.timing_check_identities.push_back(check.identity);
+    }
+    std::vector<fsim::runtime::simir::SignalId> notifier_signals;
+    for (const auto& signal : simulation.design().signals()) {
+        if (signal.name.ends_with(".notifier")) {
+            notifier_signals.push_back(signal.id);
+        }
     }
     capture.compiled_processes = simulation.compiled_process_count();
     capture.compiled_modules = simulation.compiled_module_count();
@@ -190,6 +197,11 @@ Capture execute(
     capture.native_result = simulation.read_signal(*native).to_msb_string();
     capture.wide_result = simulation.read_signal(*wide).to_msb_string();
     capture.mixed_result = simulation.read_signal(*mixed).to_msb_string();
+    for (const auto notifier : notifier_signals) {
+        capture.notifier_values.push_back(
+            simulation.design().signals().at(notifier).name + "="
+            + simulation.read_signal(notifier).to_msb_string());
+    }
     vcd.flush();
     capture.vcd = vcd_text.str();
     return capture;
@@ -294,6 +306,7 @@ void compare(const Capture& reference, const Capture& candidate)
     assert(reference.path_identities == candidate.path_identities);
     assert(reference.timing_check_identities
         == candidate.timing_check_identities);
+    assert(reference.notifier_values == candidate.notifier_values);
 }
 
 void replace_source_text(
@@ -338,8 +351,9 @@ module specify_leaf #(
   output wire result
 );
   reg notifier;
+  initial notifier = 0;
   specify
-    if (enable) (source => result) = DELAY;
+    if (enable) (source + => result) = DELAY;
     ifnone (source => result) = 1;
     $setup(posedge source &&& enable, posedge clock, 2, notifier);
   endspecify
@@ -352,7 +366,7 @@ module wide_specify_leaf (
   output wire [136:0] result
 );
   specify
-    (source[136:65] *> result[136:65]) = 3;
+    (source[136:65] + *> result[136:65]) = 3;
   endspecify
   assign result = source;
 endmodule
@@ -471,6 +485,10 @@ end architecture;
         assert(reference.forced_result == "X");
         assert(reference.released_result == "1");
         assert(reference.reports.size() == 3);
+        assert(reference.notifier_values.size() == 3);
+        assert(std::ranges::all_of(
+            reference.notifier_values,
+            [](const std::string& value) { return value.ends_with("=1"); }));
         assert(std::ranges::all_of(
             reference.reports,
             [](const Report& report) {

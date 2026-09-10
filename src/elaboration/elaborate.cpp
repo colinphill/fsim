@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "elaborator_internal.hpp"
+#include "hierarchy_builder_internal.hpp"
+#include "lowerer_internal.hpp"
 
 namespace fsim::elaboration {
 using namespace elaboration_detail;
@@ -98,7 +99,8 @@ ElaborationResult elaborate(
     }
 
     const elaboration_detail::ConstantFunctionMemoizationScope
-        constant_function_memoization;
+        constant_function_memoization {
+            result.diagnostics, result.messages };
 
     std::vector<Root> normalized_roots{roots.begin(), roots.end()};
     std::unordered_set<std::string> aliases;
@@ -362,6 +364,8 @@ ElaborationResult elaborate(
     if (!result.diagnostics.empty()) {
         return result;
     }
+    result.selected_systemverilog_classes =
+        builder.take_selected_systemverilog_classes();
     result.design = std::move(design);
     return result;
 }

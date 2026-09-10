@@ -78,7 +78,7 @@ endmodule
   const auto& statements =
       switches.design.units.front().concurrent_statements;
   require(
-      statements.size() == 22 && statements[0].verilog_drive_strength
+      statements.size() == 24 && statements[0].verilog_drive_strength
           && statements[0].verilog_drive_strength->one
               == VerilogStrength::Weak
           && statements[1].verilog_drive_strength->zero
@@ -96,9 +96,15 @@ endmodule
           && statements[12].verilog_switch_control.text == "ncontrol"
           && !statements[12].verilog_switch_active_high
           && statements[14].verilog_switch_active_high
-          && statements[20].label == "arrayed$left"
-          && statements[21].label == "arrayed$right",
-      "switch primitives lower to strength-qualified directional drivers");
+          && statements[20].label == "arrayed[1]$left"
+          && statements[21].label == "arrayed[1]$right"
+          && statements[22].label == "arrayed[0]$left"
+          && statements[23].label == "arrayed[0]$right"
+          && statements[20].target.kind == ExpressionKind::Index
+          && statements[20].target.operands[1].text == "1"
+          && statements[22].target.operands[1].text == "0",
+      "switch primitives and arrays lower to strength-qualified directional "
+      "drivers");
 
   const auto invalid = parse_text(
       "invalid-strengths.v",
@@ -114,6 +120,7 @@ module invalid_strengths;
   tran symbolic[control:0](a, b);
   tran enormous[2147483647:0](a, b);
   tran mismatched[3:0](narrow, b);
+  tran [1:0](a, b);
 endmodule
 )", Language::SystemVerilog2017);
   const auto has_code = [&](const std::string_view code) {
@@ -130,7 +137,8 @@ endmodule
           && has_code("FSIM-SV-SEM-155")
           && has_code("FSIM-SV-SEM-156")
           && has_code("FSIM-SV-SEM-157")
-          && has_code("FSIM-SV-SEM-158"),
+          && has_code("FSIM-SV-SEM-158")
+          && has_code("FSIM-SV-SEM-389"),
       "invalid strength, charge, pull, switch, and array forms are targeted");
 }
 

@@ -506,7 +506,7 @@ std::optional<std::string> validate_file_scan_metadata(
         || operation.trailing_text.size() > maximum_string_bytes)
         return "FileScan format metadata is empty or oversized";
     for (const auto& conversion : operation.conversions) {
-        if (conversion.format > InputScanFormat::real
+        if (conversion.format > InputScanFormat::unformatted4
             || conversion.prefix.size() > maximum_string_bytes
             || conversion.maximum_characters > maximum_string_bytes)
             return "FileScan conversion metadata is invalid or oversized";
@@ -517,6 +517,9 @@ std::optional<std::string> validate_file_scan_metadata(
             || conversion.target.kind == InputScanTargetKind::string_object;
         const bool text_format = conversion.format == InputScanFormat::character
             || conversion.format == InputScanFormat::string;
+        const bool unformatted = conversion.format
+                == InputScanFormat::unformatted2
+            || conversion.format == InputScanFormat::unformatted4;
         const auto scalar = conversion.target.scalar_kind;
         const bool real_scalar = scalar == runtime::SystemVerilogScalarKind::ShortReal
             || scalar == runtime::SystemVerilogScalarKind::Real
@@ -531,6 +534,7 @@ std::optional<std::string> validate_file_scan_metadata(
             ? conversion.format == InputScanFormat::decimal
                 || conversion.format == InputScanFormat::unsigned_decimal
                 || conversion.format == InputScanFormat::real
+                || unformatted
             : scalar == runtime::SystemVerilogScalarKind::Chandle
                 && conversion.format == InputScanFormat::hexadecimal;
         if (scalar > runtime::SystemVerilogScalarKind::Chandle || !scalar_format
@@ -545,6 +549,19 @@ std::optional<std::string> validate_file_scan_metadata(
         if (conversion.target.kind > InputScanTargetKind::string_object
             || conversion.target.width == 0)
             return "FileScan target metadata is invalid";
+        if (unformatted) {
+            const auto bytes = conversion.format
+                    == InputScanFormat::unformatted2
+                ? (static_cast<std::uint64_t>(conversion.target.width) + 7U)
+                    / 8U
+                : ((static_cast<std::uint64_t>(conversion.target.width) + 31U)
+                      / 32U)
+                    * 8U;
+            if (bytes > maximum_string_bytes
+                || conversion.maximum_characters != 0
+                || conversion.suppress)
+                return "FileScan unformatted transfer metadata is invalid or oversized";
+        }
         if (conversion.target.kind == InputScanTargetKind::packed_register) {
             if (conversion.target.id >= process.register_count)
                 return "FileScan packed target register is out of range";
@@ -628,7 +645,9 @@ std::optional<std::uint32_t> formatted_value_width(
     using runtime::SystemVerilogScalarKind;
     using runtime::simir::OutputFormat;
     if (scalar_kind == SystemVerilogScalarKind::None)
-        return format <= OutputFormat::string
+        return (format <= OutputFormat::string
+                   || format == OutputFormat::unformatted2
+                   || format == OutputFormat::unformatted4)
             ? std::optional<std::uint32_t> { 0U }
             : std::nullopt;
     const bool real_format = format >= OutputFormat::real_scientific
@@ -640,6 +659,8 @@ std::optional<std::uint32_t> formatted_value_width(
         return real_format ? std::optional<std::uint32_t> { 64U } : std::nullopt;
     if (scalar_kind == SystemVerilogScalarKind::Time)
         return format == OutputFormat::decimal || format == OutputFormat::time
+                || format == OutputFormat::unformatted2
+                || format == OutputFormat::unformatted4
             ? std::optional<std::uint32_t> { 64U }
             : std::nullopt;
     if (scalar_kind == SystemVerilogScalarKind::Chandle)
@@ -660,6 +681,21 @@ std::optional<std::string> validate_file_write_metadata(
     if (!scalar_width
         || (*scalar_width != 0 && *scalar_width != operation.width))
         return "FileWriteFormatted scalar metadata is inconsistent";
+    const bool unformatted = operation.format
+            == runtime::simir::OutputFormat::unformatted2
+        || operation.format == runtime::simir::OutputFormat::unformatted4;
+    if (unformatted) {
+        const auto bytes = operation.format
+                == runtime::simir::OutputFormat::unformatted2
+            ? (static_cast<std::uint64_t>(operation.width) + 7U) / 8U
+            : ((static_cast<std::uint64_t>(operation.width) + 31U) / 32U)
+                * 8U;
+        if (bytes > runtime::simir::maximum_string_bytes
+            || operation.suppress_leading_zero
+            || operation.minimum_width != 0 || operation.left_justify
+            || operation.zero_pad)
+            return "FileWriteFormatted unformatted metadata is invalid or oversized";
+    }
     registers.push_back({ operation.handle, 32U, false });
     registers.push_back({ operation.source, operation.width, false });
     return std::nullopt;

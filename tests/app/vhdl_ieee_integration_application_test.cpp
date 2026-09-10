@@ -8,6 +8,7 @@
 #include "fsim/version.hpp"
 
 #include "governed_process_limits.hpp"
+#include "vhdl_ieee_integration_support.hpp"
 
 #include <algorithm>
 #include <array>
@@ -34,47 +35,6 @@ struct TemporaryDirectory {
         std::error_code error;
         std::filesystem::remove_all(path, error);
     }
-};
-
-class ScopedEnvironment final {
-public:
-    ScopedEnvironment(
-        std::string name, const std::optional<std::string>& value)
-        : name_(std::move(name))
-    {
-        previous_ = fsim::support::environment_variable(name_);
-#if defined(_WIN32)
-        assert(::_putenv_s(
-            name_.c_str(), value ? value->c_str() : "") == 0);
-#else
-        if (value) {
-            assert(::setenv(name_.c_str(), value->c_str(), 1) == 0);
-        } else {
-            assert(::unsetenv(name_.c_str()) == 0);
-        }
-#endif
-    }
-
-    ScopedEnvironment(const ScopedEnvironment&) = delete;
-    ScopedEnvironment& operator=(const ScopedEnvironment&) = delete;
-
-    ~ScopedEnvironment()
-    {
-#if defined(_WIN32)
-        (void)::_putenv_s(
-            name_.c_str(), previous_ ? previous_->c_str() : "");
-#else
-        if (previous_) {
-            (void)::setenv(name_.c_str(), previous_->c_str(), 1);
-        } else {
-            (void)::unsetenv(name_.c_str());
-        }
-#endif
-    }
-
-private:
-    std::string name_;
-    std::optional<std::string> previous_;
 };
 
 fsim::project::Config make_config(
@@ -724,8 +684,6 @@ end package std_logic_signed;
             return diagnostic.code == "FSIM-FE-VHSTD-005";
         }));
 }
-
-#include "vhdl_ieee_integration_vhdl2019.tpp"
 
 } // namespace
 

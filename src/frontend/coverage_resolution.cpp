@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/coverage_resolution.hpp"
+#include "fsim/frontend/coverage_cross_inventory.hpp"
 #include "fsim/frontend/coverage_limits.hpp"
 
 #include <algorithm>
@@ -20,7 +21,15 @@ namespace {
         SystemVerilogCovergroupDeclaration* declaration { };
         std::string owner_identity;
         std::string lexical_identity;
+        std::string class_identity;
+        std::string base_class_identity;
         std::set<std::string> owner_objects;
+    };
+
+    struct ClassCoverageEntry {
+        std::string identity;
+        std::string base_identity;
+        std::set<std::string> objects;
     };
 
     void diagnose(
@@ -102,16 +111,9 @@ namespace {
         return result;
     }
 
-    void add_entry(
-        std::vector<CovergroupEntry>& entries,
-        SystemVerilogCovergroupDeclaration& declaration,
-        std::string owner,
-        std::string lexical,
-        std::set<std::string> objects)
+    void refresh_specialization_identity(
+        SystemVerilogCovergroupDeclaration& declaration)
     {
-        declaration.owner_identity = owner;
-        declaration.canonical_identity = owner + "::" + declaration.name;
-        declaration.runtime_identity_prefix = declaration.canonical_identity + "@";
         std::string profile;
         for (const auto& formal : declaration.formals) {
             profile += formal.name + ":"
@@ -132,10 +134,28 @@ namespace {
                 profile += token_spelling(declaration.sampling->tokens);
             }
         }
-        declaration.specialization_identity = declaration.canonical_identity + "<" + profile + ">";
+        declaration.specialization_identity
+            = declaration.canonical_identity + "<" + profile + ">";
+    }
+
+    void add_entry(
+        std::vector<CovergroupEntry>& entries,
+        SystemVerilogCovergroupDeclaration& declaration,
+        std::string owner,
+        std::string lexical,
+        std::set<std::string> objects,
+        std::string class_identity = { },
+        std::string base_class_identity = { })
+    {
+        declaration.owner_identity = owner;
+        declaration.canonical_identity = owner + "::" + declaration.name;
+        declaration.runtime_identity_prefix = declaration.canonical_identity + "@";
+        refresh_specialization_identity(declaration);
         entries.push_back({ &declaration,
             std::move(owner),
             std::move(lexical),
+            std::move(class_identity),
+            std::move(base_class_identity),
             std::move(objects) });
     }
 
@@ -143,7 +163,8 @@ namespace {
         SystemVerilogClassDeclaration& class_declaration,
         const std::string& library,
         const std::set<std::string>& enclosing_objects,
-        std::vector<CovergroupEntry>& entries)
+        std::vector<CovergroupEntry>& entries,
+        std::vector<ClassCoverageEntry>& classes)
     {
         auto objects = enclosing_objects;
         for (const auto& property : class_declaration.properties) {
@@ -153,16 +174,25 @@ namespace {
             objects.insert(method.name);
         }
         const auto owner = library + "." + class_declaration.canonical_identity;
+        const auto class_identity = class_declaration.canonical_identity;
+        const auto base_class_identity = class_declaration.base
+            ? class_declaration.base->declaration_identity
+            : std::string { };
+        classes.push_back(
+            { class_identity, base_class_identity, objects });
         for (auto& covergroup : class_declaration.covergroups) {
             add_entry(
                 entries,
                 covergroup,
                 owner,
                 class_declaration.canonical_identity,
-                objects);
+                objects,
+                class_identity,
+                base_class_identity);
         }
         for (auto& nested : class_declaration.nested_classes) {
-            collect_class_entries(nested, library, objects, entries);
+            collect_class_entries(
+                nested, library, objects, entries, classes);
         }
     }
 
@@ -290,6 +320,10 @@ namespace {
                     diagnostics);
             } else {
                 for (auto& operand : item.cross_operands) {
+                    if (item.inherited
+                        && operand.resolved_declaration_index) {
+                        continue;
+                    }
                     if (const auto found = coverpoints.find(operand.name);
                         found != coverpoints.end()) {
                         operand.resolved_declaration_index = found->second;
@@ -429,6 +463,201 @@ namespace {
         }
     }
 
+    void apply_inherited_covergroup_option(
+        SystemVerilogCovergroupDeclaration& declaration,
+        const SystemVerilogCovergroupOptionAssignment& option)
+    {
+        if (option.name == "real_interval"
+            && option.evaluated_real_bits) {
+            declaration.effective_real_interval_bits
+                = option.evaluated_real_bits;
+            return;
+        }
+        if (!option.evaluated_value) {
+            return;
+        }
+        const auto value = *option.evaluated_value;
+        if (option.name == "weight") {
+            auto& target
+                = option.scope == SystemVerilogCovergroupOptionScope::Type
+                ? declaration.effective_type_weight
+                : declaration.effective_instance_weight;
+            target = static_cast<std::uint32_t>(value);
+        } else if (option.name == "goal") {
+            auto& target
+                = option.scope == SystemVerilogCovergroupOptionScope::Type
+                ? declaration.effective_type_goal
+                : declaration.effective_instance_goal;
+            target = static_cast<std::uint32_t>(value);
+        } else if (option.name == "per_instance") {
+            declaration.effective_per_instance = value != 0U;
+        } else if (option.name == "merge_instances") {
+            declaration.effective_merge_instances = value != 0U;
+        } else if (option.name == "cross_retain_auto_bins") {
+            declaration.effective_cross_retain_auto_bins = value != 0U;
+        }
+    }
+
+    [[nodiscard]] std::optional<std::size_t> find_inherited_covergroup(
+        std::vector<CovergroupEntry>& entries,
+        const std::vector<ClassCoverageEntry>& classes,
+        CovergroupEntry& entry)
+    {
+        auto class_identity = entry.base_class_identity;
+        std::set<std::string> visited;
+        while (!class_identity.empty() && visited.insert(class_identity).second) {
+            const auto class_entry = std::ranges::find(
+                classes, class_identity, &ClassCoverageEntry::identity);
+            if (class_entry == classes.end()) {
+                break;
+            }
+            entry.owner_objects.insert(
+                class_entry->objects.begin(), class_entry->objects.end());
+            if (const auto found = std::ranges::find_if(
+                    entries,
+                    [&](const CovergroupEntry& candidate) {
+                        return candidate.class_identity == class_identity
+                            && candidate.declaration->name
+                                == entry.declaration->name;
+                    });
+                found != entries.end()) {
+                return static_cast<std::size_t>(
+                    std::distance(entries.begin(), found));
+            }
+            class_identity = class_entry->base_identity;
+        }
+        return std::nullopt;
+    }
+
+    bool resolve_entry(
+        const std::size_t index,
+        std::vector<CovergroupEntry>& entries,
+        const std::vector<ClassCoverageEntry>& classes,
+        std::vector<unsigned char>& states,
+        std::vector<Diagnostic>& diagnostics)
+    {
+        if (states[index] == 2U) {
+            return true;
+        }
+        auto& entry = entries[index];
+        auto& declaration = *entry.declaration;
+        if (states[index] == 1U) {
+            diagnose(
+                diagnostics,
+                "FSIM-SV-SEM-263",
+                "covergroup inheritance forms a cycle at '"
+                    + declaration.canonical_identity + "'",
+                declaration.span);
+            return false;
+        }
+        states[index] = 1U;
+
+        std::erase_if(
+            declaration.coverage_declarations,
+            [](const SystemVerilogCoverageDeclaration& item) {
+                return item.inherited;
+            });
+        std::erase_if(
+            declaration.option_assignments,
+            [](const SystemVerilogCovergroupOptionAssignment& option) {
+                return option.inherited;
+            });
+        for (std::size_t item_index = 0U;
+             item_index < declaration.coverage_declarations.size();
+             ++item_index) {
+            auto& item = declaration.coverage_declarations[item_index];
+            item.declaration_index = item_index;
+            if (item.origin_covergroup_identity.empty()) {
+                item.origin_covergroup_identity
+                    = declaration.canonical_identity;
+            }
+        }
+
+        if (declaration.extends_parent) {
+            const auto base_index
+                = find_inherited_covergroup(entries, classes, entry);
+            if (!base_index) {
+                diagnose(
+                    diagnostics,
+                    "FSIM-SV-SEM-262",
+                    "covergroup '" + declaration.name
+                        + "' has no declaration in a parent class",
+                    declaration.name_span);
+                states[index] = 2U;
+                return false;
+            }
+            if (!resolve_entry(
+                    *base_index, entries, classes, states, diagnostics)) {
+                states[index] = 2U;
+                return false;
+            }
+            const auto& base = *entries[*base_index].declaration;
+            declaration.resolved_base_identity = base.canonical_identity;
+            declaration.formals = base.formals;
+            declaration.sampling = base.sampling;
+            declaration.effective_instance_weight
+                = base.effective_instance_weight;
+            declaration.effective_instance_goal
+                = base.effective_instance_goal;
+            declaration.effective_type_weight = base.effective_type_weight;
+            declaration.effective_type_goal = base.effective_type_goal;
+            declaration.effective_per_instance = base.effective_per_instance;
+            declaration.effective_merge_instances
+                = base.effective_merge_instances;
+            declaration.effective_cross_retain_auto_bins
+                = base.effective_cross_retain_auto_bins;
+            declaration.effective_real_interval_bits
+                = base.effective_real_interval_bits;
+
+            auto local_options = std::move(declaration.option_assignments);
+            declaration.option_assignments = base.option_assignments;
+            for (auto& option : declaration.option_assignments) {
+                option.inherited = true;
+            }
+            for (auto& option : local_options) {
+                option.inherited = false;
+                apply_inherited_covergroup_option(declaration, option);
+                declaration.option_assignments.push_back(std::move(option));
+            }
+
+            const auto offset = declaration.coverage_declarations.size();
+            std::map<std::size_t, std::size_t> inherited_indices;
+            for (std::size_t base_item_index = 0U;
+                 base_item_index < base.coverage_declarations.size();
+                 ++base_item_index) {
+                inherited_indices.emplace(
+                    base.coverage_declarations[base_item_index].declaration_index,
+                    offset + base_item_index);
+            }
+            for (const auto& base_item : base.coverage_declarations) {
+                auto inherited = base_item;
+                inherited.inherited = true;
+                inherited.declaration_index
+                    = declaration.coverage_declarations.size();
+                for (auto& operand : inherited.cross_operands) {
+                    if (!operand.resolved_declaration_index) {
+                        continue;
+                    }
+                    const auto remapped = inherited_indices.find(
+                        *operand.resolved_declaration_index);
+                    operand.resolved_declaration_index
+                        = remapped == inherited_indices.end()
+                        ? std::optional<std::size_t> { }
+                        : std::optional<std::size_t> { remapped->second };
+                }
+                declaration.coverage_declarations.push_back(
+                    std::move(inherited));
+            }
+        } else {
+            declaration.resolved_base_identity.clear();
+        }
+
+        refresh_specialization_identity(declaration);
+        resolve_declaration(entry, diagnostics);
+        states[index] = 2U;
+        return true;
+    }
+
     void validate_actuals(
         const SystemVerilogCovergroupDeclaration& declaration,
         const Expression& construction,
@@ -474,6 +703,26 @@ namespace {
         }
     }
 
+    [[nodiscard]] SystemVerilogScalarKind coverage_formal_scalar_kind(
+        const std::span<const Token> tokens)
+    {
+        if (std::ranges::any_of(tokens, [](const Token& token) {
+                return token.text == "shortreal";
+            })) {
+            return SystemVerilogScalarKind::ShortReal;
+        }
+        if (std::ranges::any_of(tokens, [](const Token& token) {
+                return token.text == "realtime";
+            })) {
+            return SystemVerilogScalarKind::Realtime;
+        }
+        return std::ranges::any_of(tokens, [](const Token& token) {
+                   return token.text == "real";
+               })
+            ? SystemVerilogScalarKind::Real
+            : SystemVerilogScalarKind::None;
+    }
+
     void add_instance(
         ParsedDesign& design,
         const std::string& owner,
@@ -513,6 +762,10 @@ namespace {
             + actual_identity + ")";
         instance.runtime_identity = owner + "." + variable.name + "@"
             + instance.specialization_identity;
+        if (!initialize_systemverilog_cross_inventory(
+                instance, *entry.declaration, diagnostics)) {
+            return;
+        }
         design.systemverilog_covergroup_instances.push_back(
             std::move(instance));
     }
@@ -839,6 +1092,10 @@ namespace {
             instance.runtime_identity = covergroup.runtime_identity_prefix + "<object>";
             instance.class_member_template = true;
             instance.span = covergroup.span;
+            if (!initialize_systemverilog_cross_inventory(
+                    instance, covergroup, diagnostics)) {
+                continue;
+            }
             design.systemverilog_covergroup_instances.push_back(
                 std::move(instance));
         }
@@ -935,6 +1192,21 @@ namespace {
                                 "covergroup sample actuals do not match profile '"
                                     + entry->declaration->canonical_identity + "'",
                                 statement.span);
+                        } else if (procedural_sample) {
+                            for (std::size_t index = 0U;
+                                 index < statement.task_arguments.size();
+                                 ++index) {
+                                const auto scalar_kind
+                                    = coverage_formal_scalar_kind(
+                                        entry->declaration->sampling
+                                            ->formals[index].type_tokens);
+                                if (scalar_kind
+                                    != SystemVerilogScalarKind::None) {
+                                    statement.task_arguments[index]
+                                        .systemverilog_scalar_kind
+                                        = scalar_kind;
+                                }
+                            }
                         }
                     }
                     SystemVerilogCovergroupSampleCall call;
@@ -975,6 +1247,7 @@ bool resolve_systemverilog_covergroups(
     const auto initial_diagnostic_count = diagnostics.size();
     design.systemverilog_covergroup_instances.clear();
     std::vector<CovergroupEntry> entries;
+    std::vector<ClassCoverageEntry> classes;
     for (auto& unit : design.units) {
         if (unit.language != Language::SystemVerilog2017)
             continue;
@@ -986,17 +1259,19 @@ bool resolve_systemverilog_covergroups(
         const auto library = unit.library.empty() ? std::string { "work" } : unit.library;
         for (auto& declaration : unit.systemverilog_classes) {
             collect_class_entries(
-                declaration, library, objects, entries);
+                declaration, library, objects, entries, classes);
         }
     }
     for (auto& declaration : design.systemverilog_classes) {
         collect_class_entries(
-            declaration, "work", { }, entries);
+            declaration, "work", { }, entries, classes);
     }
-    for (auto& entry : entries) {
-        resolve_declaration(entry, diagnostics);
+    std::vector<unsigned char> resolution_states(entries.size(), 0U);
+    for (std::size_t index = 0U; index < entries.size(); ++index) {
+        (void)resolve_entry(
+            index, entries, classes, resolution_states, diagnostics);
         (void)validate_systemverilog_coverage_resources(
-            *entry.declaration, diagnostics);
+            *entries[index].declaration, diagnostics);
     }
     for (auto& unit : design.units) {
         if (unit.language != Language::SystemVerilog2017)

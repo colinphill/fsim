@@ -17,17 +17,9 @@
 
 namespace fsim::tests::elaboration {
 
-inline bool has_diagnostic(
+[[nodiscard]] bool has_diagnostic(
     const fsim::elaboration::ElaborationResult& result,
-    const std::string_view code)
-{
-    for (const auto& diagnostic : result.diagnostics) {
-        if (diagnostic.code == code) {
-            return true;
-        }
-    }
-    return false;
-}
+    std::string_view code);
 
 class TestSystemCFactoryProvider final
     : public fsim::elaboration::SystemCFactoryProvider {
@@ -45,36 +37,14 @@ public:
     std::vector<std::string> available_libraries;
 
     std::vector<fsim::elaboration::SystemCFactoryCandidate>
-    candidates() const override
-    {
-        return factory_candidates;
-    }
+    candidates() const override;
 
-    std::vector<std::string> libraries() const override
-    {
-        auto result = available_libraries;
-        for (const auto& candidate : factory_candidates) {
-            if (std::ranges::find(result, candidate.library)
-                == result.end()) {
-                result.push_back(candidate.library);
-            }
-        }
-        return result;
-    }
+    std::vector<std::string> libraries() const override;
 
     std::optional<std::vector<
         fsim::elaboration::SystemCConstructionParameter>>
     schema(
-        std::string_view,
-        std::string& error) override
-    {
-        if (!schema_failure.empty()) {
-            error = schema_failure;
-            return std::nullopt;
-        }
-        error.clear();
-        return parameters;
-    }
+        std::string_view, std::string& error) override;
 
     std::optional<fsim::elaboration::SystemCInstanceDescription>
     instantiate(
@@ -83,43 +53,14 @@ public:
         const std::span<
             const std::pair<std::string, std::int64_t>>
             values,
-        std::string& error) override
-    {
-        if (!construction_failure.empty()) {
-            error = construction_failure;
-            return std::nullopt;
-        }
-        error.clear();
-        auto result = prototype;
-        result.path = path;
-        result.target = target;
-        result.handle = next_handle++;
-        result.construction_values.assign(
-            values.begin(), values.end());
-        last_values = result.construction_values;
-        const auto width = std::find_if(
-            values.begin(),
-            values.end(),
-            [](const auto& value) {
-                return value.first == "WIDTH";
-            });
-        if (width != values.end() && width->second > 0) {
-            for (auto& port : result.ports) {
-                if (port.name == "value" && width->second > 1) {
-                    port.type.packed_range = fsim::frontend::PackedRange {
-                        width->second - 1, 0, true
-                    };
-                }
-            }
-        }
-        return result;
-    }
+        std::string& error) override;
 };
 
 void test_specialization_and_packages();
 void test_verilog_specify_specialization();
 void test_systemverilog_typed_constants();
 void test_systemverilog_constant_function_memoization_dependencies();
+void test_systemverilog_2023_utility_system_callables();
 void test_systemverilog_aliases();
 void test_systemverilog_string_constants();
 void test_systemverilog_type_parameters();

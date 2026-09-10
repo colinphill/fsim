@@ -85,7 +85,7 @@ fsim_require_restart_tokens(tests/app/application_test_non_project_cli.cpp
   "serialize_runtime_state" "producer-hidden" "relocated_read_only_design")
 fsim_require_restart_tokens(tests/app/application_test_cli.cpp
   "\"fsim\", \"run\"" "\"fsim\", \"debug\"" "debug_trace")
-fsim_require_restart_tokens(tests/app/application_test_artifact_phases.cpp
+fsim_require_restart_tokens(tests/app/application_test_artifact_verilog.cpp
   "checkpoint" "relocated_interpreted" "relocated_compiled"
   "provenance" "cache.hits")
 fsim_require_restart_tokens(tests/app/application_test_multiple_roots.cpp

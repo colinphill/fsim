@@ -18,6 +18,8 @@ set(FSIM_INVENTORY
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/systemverilog_2023_inventory.tsv")
 set(FSIM_PLAN "${FSIM_SOURCE_DIR}/docs/implementation_plan_v3.md")
 set(FSIM_TEST_CMAKE "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
+set(FSIM_ENGINE_MATRIX
+  "${FSIM_SOURCE_DIR}/cmake/RunSystemVerilogClosureMatrix.cmake")
 set(FSIM_FEATURE_README
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/README.md")
 set(FSIM_SOURCE_MANIFEST
@@ -26,6 +28,7 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_INVENTORY}"
     "${FSIM_PLAN}"
     "${FSIM_TEST_CMAKE}"
+    "${FSIM_ENGINE_MATRIX}"
     "${FSIM_FEATURE_README}"
     "${FSIM_SOURCE_MANIFEST}")
   if(NOT EXISTS "${FSIM_INPUT}")
@@ -35,7 +38,7 @@ foreach(FSIM_INPUT IN ITEMS
 endforeach()
 
 set(FSIM_EXPECTED_DIGEST
-  "f9563a7227c58207c6414804756c22376cbb8e4038ec9e8dd2c34dcd0ac82aeb")
+  "ca4193e587e93d48ac90bc8d63c5085d5a7b79a7b8e160e2074324a5994e974e")
 fsim_normalized_text_sha256("${FSIM_INVENTORY}" FSIM_ACTUAL_DIGEST)
 if(NOT FSIM_ACTUAL_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
@@ -121,9 +124,9 @@ foreach(FSIM_INDEX RANGE 2 57)
   endforeach()
 endforeach()
 
-if(NOT FSIM_ACTIVE_COUNT EQUAL 38 OR NOT FSIM_PRESERVED_COUNT EQUAL 18)
+if(NOT FSIM_ACTIVE_COUNT EQUAL 19 OR NOT FSIM_PRESERVED_COUNT EQUAL 37)
   message(FATAL_ERROR
-    "SystemVerilog-2023 inventory must contain 38 active and eighteen preserved rows after Batch 185 Change 19")
+    "SystemVerilog-2023 inventory must contain 19 active and 37 preserved rows after Batch 186 Change 19")
 endif()
 foreach(FSIM_BATCH IN ITEMS 185 186 187)
   if(FSIM_BATCH EQUAL 185)
@@ -190,6 +193,42 @@ foreach(FSIM_TOKEN IN ITEMS
   endif()
 endforeach()
 
+file(READ "${FSIM_ENGINE_MATRIX}" FSIM_ENGINE_MATRIX_TEXT)
+foreach(FSIM_WITNESS IN ITEMS
+    fsim.elaboration
+    fsim.application.assertions
+    fsim.application.random
+    fsim.application.coverage
+    fsim.application.sv_files
+    fsim.application.sv_preprocessor_generate
+    fsim.application.sv_hierarchy
+    fsim.application.sv_interfaces
+    fsim.application.sv_conformance
+    fsim.application.transition_delays
+    fsim.application.specify
+    fsim.application.sdf_endpoint_resolution
+    fsim.application.sdf_drive_timing)
+  string(FIND "${FSIM_ENGINE_MATRIX_TEXT}" "${FSIM_WITNESS}"
+    FSIM_MATRIX_OFFSET)
+  string(FIND "${FSIM_TEST_CMAKE_TEXT}" "${FSIM_WITNESS}"
+    FSIM_FIXTURE_OFFSET)
+  if(FSIM_MATRIX_OFFSET EQUAL -1 OR FSIM_FIXTURE_OFFSET EQUAL -1)
+    message(FATAL_ERROR
+      "SystemVerilog-2023 engine matrix lost witness ${FSIM_WITNESS}")
+  endif()
+endforeach()
+foreach(FSIM_TOKEN IN ITEMS
+    "FSIM_WITNESS_COUNT EQUAL 26"
+    "SystemVerilog closure matrix: 26/26 witnesses, 29 governed stages"
+    "FSIM_STAGE_TIMEOUT_SECONDS 1200")
+  string(FIND "${FSIM_ENGINE_MATRIX_TEXT}" "${FSIM_TOKEN}"
+    FSIM_MATRIX_OFFSET)
+  if(FSIM_MATRIX_OFFSET EQUAL -1)
+    message(FATAL_ERROR
+      "SystemVerilog-2023 engine matrix lost contract: ${FSIM_TOKEN}")
+  endif()
+endforeach()
+
 file(READ "${FSIM_FEATURE_README}" FSIM_FEATURE_README_TEXT)
 string(FIND "${FSIM_FEATURE_README_TEXT}"
   "feature_matrix/systemverilog_2023_inventory.tsv" FSIM_README_OFFSET)
@@ -201,6 +240,7 @@ endif()
 file(READ "${FSIM_SOURCE_MANIFEST}" FSIM_SOURCE_MANIFEST_TEXT)
 foreach(FSIM_PATH IN ITEMS
     "cmake/CheckSystemVerilog2023Inventory.cmake"
+    "cmake/RunSystemVerilogClosureMatrix.cmake"
     "tests/feature_matrix/systemverilog_2023_inventory.tsv")
   string(FIND "${FSIM_SOURCE_MANIFEST_TEXT}" "${FSIM_PATH}"
     FSIM_MANIFEST_OFFSET)

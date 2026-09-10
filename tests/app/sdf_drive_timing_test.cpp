@@ -206,7 +206,7 @@ fsim::project::Config make_config(const std::filesystem::path& directory,
     config.run.max_deltas = 1000U;
     fsim::project::SourceSet sources;
     sources.language = fsim::project::Language::system_verilog;
-    sources.standard = "2017";
+    sources.standard = "2023";
     sources.library = "work";
     sources.files = { source };
     config.source_sets.push_back(std::move(sources));

@@ -778,12 +778,17 @@ void Interpreter::Impl::execute_file(
             result = read_file_character(process.program.id, handle);
         } else {
             const auto character = get_register(process, operation.source).low_word();
-            result = character.bval == 0
-                ? unread_file_character(
-                      process.program.id, handle,
-                      static_cast<std::int32_t>(
-                          static_cast<std::uint32_t>(character.aval)))
-                : -1;
+            if (character.bval == 0) {
+                const auto requested = static_cast<std::int32_t>(
+                    static_cast<std::uint32_t>(character.aval));
+                result = unread_file_character(
+                             process.program.id, handle, requested)
+                        == requested
+                    ? 0
+                    : -1;
+            } else {
+                result = -1;
+            }
         }
         get_register(process, operation.destination) = PackedLogic4::from_aval_bval(
             32, static_cast<std::uint32_t>(result), 0);

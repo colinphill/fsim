@@ -349,6 +349,9 @@ std::optional<BuiltProject> build_checked_project(
             "build normalization produced an invalid owning semantic projection");
         return std::nullopt;
     }
+    for (const auto& input : elaborated.messages) {
+        application_detail::import_diagnostic(diagnostics, input);
+    }
     for (const auto& input : elaborated.diagnostics) {
         const auto source = intern_semantic_span(
             checked->semantics, input.span);
@@ -358,6 +361,68 @@ std::optional<BuiltProject> build_checked_project(
             diagnostic_span(checked->semantics, source));
     }
     if (!elaborated.design || diagnostics.has_error()) {
+        return std::nullopt;
+    }
+    const bool has_selected_generated_classes =
+        !elaborated.selected_systemverilog_classes.empty();
+    for (auto& declaration :
+        elaborated.selected_systemverilog_classes) {
+        const auto owner = std::ranges::find_if(
+            lowering_adapter.units,
+            [&](const auto& unit) {
+              const auto unit_library = unit.library.empty()
+                  ? std::string_view { "work" }
+                  : std::string_view { unit.library };
+              const auto declaration_library =
+                  declaration.library.empty()
+                  ? std::string_view { "work" }
+                  : std::string_view { declaration.library };
+              return unit.language
+                      == frontend::Language::SystemVerilog2017
+                  && unit.name == declaration.enclosing_scope
+                  && unit_library == declaration_library;
+            });
+        if (owner == lowering_adapter.units.end()) {
+            diagnostics.error(
+                "FSIM-ELAB-GEN-015",
+                "selected generated class '"
+                    + declaration.canonical_identity
+                    + "' has no owning SystemVerilog design unit");
+            continue;
+        }
+        if (std::ranges::none_of(
+                owner->systemverilog_classes,
+                [&](const auto& existing) {
+                  return existing.canonical_identity
+                      == declaration.canonical_identity;
+                })) {
+            owner->systemverilog_classes.push_back(
+                std::move(declaration));
+        }
+    }
+    if (has_selected_generated_classes && !diagnostics.has_error()) {
+        auto class_specializations =
+            frontend::specialize_systemverilog_classes(
+                lowering_adapter);
+        for (const auto& diagnostic : class_specializations.diagnostics) {
+            application_detail::import_diagnostic(
+                diagnostics, diagnostic);
+        }
+        checked->systemverilog_class_specializations =
+            std::move(class_specializations.specializations);
+        checked->semantics = build_semantic_model(
+            lowering_adapter,
+            checked->hdl_sources,
+            checked->systemc_sources,
+            checked->standard_sources);
+        if (!checked->semantics.valid()) {
+            diagnostics.error(
+                "FSIM-SEM-0001",
+                "generated-class normalization produced an invalid owning "
+                "semantic projection");
+        }
+    }
+    if (diagnostics.has_error()) {
         return std::nullopt;
     }
     auto systemverilog_coverage = frontend::capture_systemverilog_coverage_state(lowering_adapter);

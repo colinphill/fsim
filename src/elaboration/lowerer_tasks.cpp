@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "elaborator_internal.hpp"
+#include "lowerer_internal.hpp"
 
 namespace fsim::elaboration {
 using namespace runtime::simir;
@@ -705,11 +705,27 @@ void Lowerer::lower_task_call(const Statement& statement)
         std::vector<RegisterId> actuals;
         std::vector<std::uint32_t> actual_widths;
         std::vector<std::uint8_t> signed_actuals;
+        std::vector<frontend::SystemVerilogScalarKind> scalar_kinds;
         actuals.reserve(statement.task_arguments.size());
         actual_widths.reserve(statement.task_arguments.size());
         signed_actuals.reserve(statement.task_arguments.size());
+        scalar_kinds.reserve(statement.task_arguments.size());
         for (const auto& expression : statement.task_arguments) {
-            const auto width = infer_width(expression);
+            const auto* actual_type = expression.kind
+                    == frontend::ExpressionKind::Identifier
+                ? object_type(expression.text)
+                : nullptr;
+            const auto scalar_kind = actual_type != nullptr
+                ? actual_type->systemverilog_scalar
+                : expression.systemverilog_scalar_kind;
+            const auto width = scalar_kind
+                    == frontend::SystemVerilogScalarKind::ShortReal
+                ? std::optional<std::size_t> { 32U }
+                : scalar_kind == frontend::SystemVerilogScalarKind::Real
+                        || scalar_kind
+                            == frontend::SystemVerilogScalarKind::Realtime
+                ? std::optional<std::size_t> { 64U }
+                : infer_width(expression);
             if (!width || *width == 0U
                 || *width > std::numeric_limits<std::uint32_t>::max()) {
                 report(
@@ -726,12 +742,13 @@ void Lowerer::lower_task_call(const Statement& statement)
             actual_widths.push_back(static_cast<std::uint32_t>(*width));
             signed_actuals.push_back(
                 is_signed_expression(expression) ? 1U : 0U);
+            scalar_kinds.push_back(scalar_kind);
         }
         process_.operations.emplace_back(CoverageSample {
             statement.task_name.substr(prefix.size()),
             std::move(actuals),
             std::move(actual_widths),
-            std::move(signed_actuals), trigger });
+            std::move(signed_actuals), std::move(scalar_kinds), trigger });
         return;
     }
     if (lower_string_format_task(statement)) {
@@ -1152,6 +1169,8 @@ void Lowerer::lower_task_call(const Statement& statement)
         process_.operations.emplace_back(
             CopyRegister { packed_actuals[index], *actual });
     }
+
+    emit_deferred_assertion_action_handoff();
 
     if (task.automatic) {
         const auto push_site = static_cast<InstructionIndex>(

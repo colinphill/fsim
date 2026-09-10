@@ -3,6 +3,8 @@
 
 #include <boost/multiprecision/cpp_int.hpp>
 
+#include <bit>
+
 namespace fsim::runtime::simir {
 
 [[nodiscard]] std::string error_text(ProcessId process,
@@ -84,6 +86,16 @@ namespace fsim::runtime::simir {
     const bool signed_decimal,
     const bool suppress_leading_zero)
 {
+    const auto append_native_word = [](
+                                        std::string& text,
+                                        const std::uint32_t word) {
+        for (std::size_t byte = 0; byte < 4U; ++byte) {
+            const auto shift = std::endian::native == std::endian::little
+                ? byte * 8U
+                : (3U - byte) * 8U;
+            text.push_back(static_cast<char>((word >> shift) & 0xffU));
+        }
+    };
     const auto maybe_suppress_leading_zero =
         [suppress_leading_zero](std::string text) {
             if (!suppress_leading_zero || text.size() <= 1U) {
@@ -240,6 +252,46 @@ namespace fsim::runtime::simir {
                 text.push_back(static_cast<char>(character));
                 leading_padding = false;
             }
+        }
+        return text;
+    }
+    case OutputFormat::unformatted2: {
+        const auto byte_count = (value.width() + 7U) / 8U;
+        std::string text(byte_count, '\0');
+        for (std::size_t byte = 0; byte < byte_count; ++byte) {
+            const auto logical_byte = std::endian::native
+                    == std::endian::little
+                ? byte
+                : byte_count - byte - 1U;
+            unsigned payload { };
+            for (std::size_t bit = 0;
+                bit < 8U && logical_byte * 8U + bit < value.width();
+                ++bit) {
+                if (value.get(logical_byte * 8U + bit) == Logic4::one)
+                    payload |= 1U << bit;
+            }
+            text[byte] = static_cast<char>(payload);
+        }
+        return text;
+    }
+    case OutputFormat::unformatted4: {
+        const auto word_count = (value.width() + 31U) / 32U;
+        std::string text;
+        text.reserve(word_count * 8U);
+        for (std::size_t word = 0; word < word_count; ++word) {
+            std::uint32_t aval { };
+            std::uint32_t bval { };
+            for (std::size_t bit = 0;
+                bit < 32U && word * 32U + bit < value.width();
+                ++bit) {
+                const auto state = value.get(word * 32U + bit);
+                if (state == Logic4::one || state == Logic4::x)
+                    aval |= UINT32_C(1) << bit;
+                if (state == Logic4::x || state == Logic4::z)
+                    bval |= UINT32_C(1) << bit;
+            }
+            append_native_word(text, aval);
+            append_native_word(text, bval);
         }
         return text;
     }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// Internal execution-context definition shared only by simir_execution.cpp.
+// Internal execution-context declaration shared by the compiled execution units.
+#pragma once
 
 #include "simir_internal.hpp"
 #include "simir_signal_attributes.hpp"
@@ -9,207 +10,72 @@ struct Interpreter::Impl::ExecutionContext final
     : ProcessExecutionContext {
     Impl& owner;
     ProcessId process;
-    ExecutionContext(Impl& owner_value, const ProcessId process_value)
-        : owner(owner_value)
-        , process(process_value)
-    {
-    }
-    [[nodiscard]] std::uint64_t static_trigger_mask() const noexcept override
-    {
-        return owner.processes[process].static_trigger_mask;
-    }
+    ExecutionContext(Impl& owner_value, const ProcessId process_value);
+    [[nodiscard]] std::uint64_t static_trigger_mask() const noexcept override;
     [[nodiscard]] PackedLogic4
-    read_signal(const SignalId signal) const override
-    {
-        return owner.get_signal(signal).initial_value;
-    }
+    read_signal(const SignalId signal) const override;
     [[nodiscard]] Logic4Word
-    read_signal_word(const SignalId signal) const override
-    {
-        // Native lowering selects this callback only for validated nonempty
-        // Logic4 signals no wider than one ABI word. Avoid repeating the
-        // public checked conversion on every generated signal read.
-        return owner.get_signal(signal).initial_value.unchecked_low_word();
-    }
+    read_signal_word(const SignalId signal) const override;
     [[nodiscard]] std::span<const std::uint64_t>
-    direct_signal_aval() const noexcept override
-    {
-        return owner.direct_signal_aval;
-    }
+    direct_signal_aval() const noexcept override;
     [[nodiscard]] std::span<const std::uint64_t>
-    direct_signal_bval() const noexcept override
-    {
-        return owner.direct_signal_bval;
-    }
+    direct_signal_bval() const noexcept override;
     [[nodiscard]] std::span<std::uint64_t>
-    direct_code_coverage_counters() noexcept override
-    {
-        return owner.code_coverage_counters.direct_values();
-    }
+    direct_code_coverage_counters() noexcept override;
     [[nodiscard]] CodeCoverageCounterRuntimeStatus record_code_coverage_counter(
-        const ::fsim::runtime::CodeCoverageCounterId counter) override
-    {
-        const auto update = owner.code_coverage_counters.record(counter);
-        if (update == CodeCoverageCounterUpdate::Unavailable) {
-            return CodeCoverageCounterRuntimeStatus::Unavailable;
-        }
-        if (update == CodeCoverageCounterUpdate::OutOfRange) {
-            return CodeCoverageCounterRuntimeStatus::OutOfRange;
-        }
-        if (update == CodeCoverageCounterUpdate::Ignored) {
-            return CodeCoverageCounterRuntimeStatus::Recorded;
-        }
-        if (update == CodeCoverageCounterUpdate::FirstOverflow
-            && owner.code_coverage_overflow_hook) {
-            owner.code_coverage_overflow_hook(counter);
-        }
-        return CodeCoverageCounterRuntimeStatus::Recorded;
-    }
+        const ::fsim::runtime::CodeCoverageCounterId counter) override;
     [[nodiscard]] std::span<const std::uint64_t>
-    direct_signal_logic9_plane0() const noexcept override
-    {
-        return owner.direct_signal_logic9_plane0;
-    }
+    direct_signal_logic9_plane0() const noexcept override;
     [[nodiscard]] std::span<const std::uint64_t>
-    direct_signal_logic9_plane1() const noexcept override
-    {
-        return owner.direct_signal_logic9_plane1;
-    }
+    direct_signal_logic9_plane1() const noexcept override;
     [[nodiscard]] std::span<const std::uint64_t>
-    direct_signal_logic9_plane2() const noexcept override
-    {
-        return owner.direct_signal_logic9_plane2;
-    }
+    direct_signal_logic9_plane2() const noexcept override;
     [[nodiscard]] std::span<const std::uint64_t>
-    direct_signal_logic9_plane3() const noexcept override
-    {
-        return owner.direct_signal_logic9_plane3;
-    }
+    direct_signal_logic9_plane3() const noexcept override;
     [[nodiscard]] std::span<const std::uint64_t>
-    direct_wide_signal_aval() const noexcept override
-    {
-        return owner.direct_wide_signal_aval;
-    }
+    direct_wide_signal_aval() const noexcept override;
     [[nodiscard]] std::span<const std::uint64_t>
-    direct_wide_signal_bval() const noexcept override
-    {
-        return owner.direct_wide_signal_bval;
-    }
+    direct_wide_signal_bval() const noexcept override;
     [[nodiscard]] std::span<const std::uint64_t>
-    direct_wide_signal_logic9_plane2() const noexcept override
-    {
-        return owner.direct_wide_signal_logic9_plane2;
-    }
+    direct_wide_signal_logic9_plane2() const noexcept override;
     [[nodiscard]] std::span<const std::uint64_t>
-    direct_wide_signal_logic9_plane3() const noexcept override
-    {
-        return owner.direct_wide_signal_logic9_plane3;
-    }
+    direct_wide_signal_logic9_plane3() const noexcept override;
     [[nodiscard]] std::span<const std::uint32_t>
-    direct_wide_signal_offsets() const noexcept override
-    {
-        return owner.direct_wide_signal_offsets;
-    }
+    direct_wide_signal_offsets() const noexcept override;
     [[nodiscard]] std::span<const ProcessId>
-    direct_single_driver_processes() const noexcept override
-    {
-        return owner.direct_single_driver_processes;
-    }
+    direct_single_driver_processes() const noexcept override;
     [[nodiscard]] std::span<const ProcessId>
-    stable_single_writer_processes() const noexcept override
-    {
-        return owner.stable_single_writer_processes;
-    }
+    stable_single_writer_processes() const noexcept override;
     [[nodiscard]] std::uint64_t
-    signal_writer_revision() const noexcept override
-    {
-        return owner.signal_writer_revision;
-    }
+    signal_writer_revision() const noexcept override;
     void read_signal_planes(
         const SignalId signal,
         const std::span<std::uint64_t> aval,
         const std::span<std::uint64_t> bval,
         const std::span<std::uint64_t> logic9_plane2,
-        const std::span<std::uint64_t> logic9_plane3) const override
-    {
-        const auto& value = owner.get_signal(signal).initial_value;
-        const auto expected_words = (value.width() + 63U) / 64U;
-        if (aval.size() != expected_words || bval.size() != expected_words
-            || (!value.is_logic9()
-                && (!logic9_plane2.empty() || !logic9_plane3.empty()))
-            || (value.is_logic9()
-                && (logic9_plane2.size() != expected_words
-                    || logic9_plane3.size() != expected_words))) {
-            throw std::logic_error {
-                "arbitrary-width signal destination planes have an invalid size"
-            };
-        }
-        std::ranges::copy(value.aval_words(), aval.begin());
-        std::ranges::copy(value.bval_words(), bval.begin());
-        if (value.is_logic9()) {
-            std::ranges::copy(
-                value.logic9_plane_words(2), logic9_plane2.begin());
-            std::ranges::copy(
-                value.logic9_plane_words(3), logic9_plane3.begin());
-        }
-    }
+        const std::span<std::uint64_t> logic9_plane3) const override;
     [[nodiscard]] std::string
-    read_string_object(const StringObjectId object) const override
-    {
-        return owner.get_string_object(object).initial_value;
-    }
+    read_string_object(const StringObjectId object) const override;
     void write_string_object(
         const StringObjectId object,
-        const std::string_view value) override
-    {
-        if (value.size() > maximum_string_bytes) {
-            throw std::length_error {
-                "SimIR string object exceeds byte limit"
-            };
-        }
-        (void)systemverilog_string_length(value);
-        owner.get_string_object(object).initial_value = value;
-    }
+        const std::string_view value) override;
     [[nodiscard]] ContainerValue read_container_object(
-        const ContainerObjectId object) const override
-    {
-        return owner.read_container_object_value(object);
-    }
+        const ContainerObjectId object) const override;
     [[nodiscard]] bool copy_container_object(
         const ContainerObjectId object,
-        ContainerValue& destination) const override
-    {
-        const auto& source = owner.read_container_object_value(object);
-        if (destination.type != source.type) {
-            return false;
-        }
-        destination = source;
-        return true;
-    }
+        ContainerValue& destination) const override;
     [[nodiscard]] const ContainerValue* borrow_container_object(
-        const ContainerObjectId object) const override
-    {
-        return &owner.read_container_object_value(object);
-    }
+        const ContainerObjectId object) const override;
     [[nodiscard]] bool container_object_has_type(
         const ContainerObjectId object,
-        const ContainerType& type) const override
-    {
-        return owner.get_container_object(object).initial_value.type == type;
-    }
+        const ContainerType& type) const override;
     [[nodiscard]] bool read_container_object_element(
         const ContainerObjectId object,
         const std::size_t ordinal,
-        PackedLogic4& result) const override
-    {
-        return owner.read_container_object_element(object, ordinal, result);
-    }
+        PackedLogic4& result) const override;
     void write_container_object(
         const ContainerObjectId object,
-        const ContainerValue& value) override
-    {
-        owner.write_container_object_value(object, value);
-    }
+        const ContainerValue& value) override;
     void write_container_object_element(
         const ContainerObjectId object,
         const PackedLogic4& index,
@@ -218,41 +84,15 @@ struct Interpreter::Impl::ExecutionContext final
         const PackedLogic4& value,
         const ProcessId generated_process,
         const InstructionIndex instruction,
-        const bool nonblocking) override
-    {
-        if (nonblocking) {
-            owner.scheduler.schedule(
-                SchedulerPhase::update,
-                generated_process,
-                [&owner = owner, object, index, signed_index, linear_index,
-                    value, generated_process, instruction](Scheduler&) {
-                    owner.write_container_object_element_value(
-                        object, index, signed_index, linear_index, value,
-                        generated_process, instruction);
-                });
-        } else {
-            owner.write_container_object_element_value(
-                object, index, signed_index, linear_index, value,
-                generated_process, instruction);
-        }
-    }
+        const bool nonblocking) override;
     [[nodiscard]] FileHandle open_file(
         const std::string_view path,
-        const std::string_view mode) override
-    {
-        return owner.open_file(process, path, mode);
-    }
-    void close_file(const FileHandle handle) override
-    {
-        owner.close_file(process, handle);
-    }
+        const std::string_view mode) override;
+    void close_file(const FileHandle handle) override;
     void write_file(
         const FileHandle handle,
         const std::string_view text,
-        const bool newline) override
-    {
-        owner.write_file(process, handle, text, newline);
-    }
+        const bool newline) override;
     void write_file_formatted(
         const FileHandle handle,
         const std::string_view prefix,
@@ -264,371 +104,133 @@ struct Interpreter::Impl::ExecutionContext final
         const std::uint32_t minimum_width,
         const bool left_justify,
         const bool zero_pad,
-        const SystemVerilogScalarKind scalar_kind) override
-    {
-        if (format == OutputFormat::time) {
-            const auto decoded = decode_systemverilog_scalar_payload(
-                value, scalar_kind);
-            const auto tick = decoded ? decoded.value.as_time() : std::nullopt;
-            if (!tick) {
-                throw std::runtime_error {
-                    "invalid time payload for formatted file output"
-                };
-            }
-            owner.write_file(
-                process,
-                handle,
-                make_time_output(
-                    prefix,
-                    suffix,
-                    *tick,
-                    owner.time_format,
-                    minimum_width == 0 && !suppress_leading_zero,
-                    minimum_width,
-                    left_justify,
-                    zero_pad),
-                false);
-            return;
-        }
-        owner.write_file(
-            process,
-            handle,
-            make_formatted_output(
-                prefix,
-                suffix,
-                format,
-                value,
-                signed_decimal,
-                suppress_leading_zero,
-                minimum_width,
-                left_justify,
-                zero_pad,
-                scalar_kind),
-            false);
-    }
+        const SystemVerilogScalarKind scalar_kind) override;
     [[nodiscard]] std::string read_file_line(
         const FileHandle handle,
-        std::uint32_t& count) override
-    {
-        return owner.read_file_line(process, handle, count);
-    }
+        std::uint32_t& count) override;
     [[nodiscard]] std::int32_t read_file_character(
-        const FileHandle handle) override
-    {
-        return owner.read_file_character(process, handle);
-    }
+        const FileHandle handle) override;
     [[nodiscard]] std::int32_t unread_file_character(
         const FileHandle handle,
-        const std::int32_t character) override
-    {
-        return owner.unread_file_character(process, handle, character);
-    }
+        const std::int32_t character) override;
     [[nodiscard]] bool file_end_of_file(
-        const FileHandle handle) override
-    {
-        return owner.file_end_of_file(process, handle);
-    }
+        const FileHandle handle) override;
     [[nodiscard]] std::string file_error(
         const FileHandle handle,
-        bool& has_error) override
-    {
-        return owner.file_error(process, handle, has_error);
-    }
+        bool& has_error) override;
     [[nodiscard]] std::int32_t position_file(
         const FileHandle handle,
         const FilePositionKind kind,
         const std::int32_t offset,
-        const std::int32_t origin) override
-    {
-        return owner.position_file(process, handle, kind, offset, origin);
-    }
-    void flush_file(const std::optional<FileHandle> handle) override
-    {
-        owner.flush_file(process, handle);
-    }
+        const std::int32_t origin) override;
+    void flush_file(const std::optional<FileHandle> handle) override;
     [[nodiscard]] Logic9Word
-    read_signal_logic9_word(const SignalId signal) const override
-    {
-        return owner.get_signal(signal).initial_value.logic9_low_word();
-    }
+    read_signal_logic9_word(const SignalId signal) const override;
     void write_blocking(
-        const SignalId signal, PackedLogic4 value) override
-    {
-        owner.commit_driver(process, signal, std::move(value));
-    }
+        const SignalId signal, PackedLogic4 value) override;
     void write_blocking_word(
         const SignalId signal,
-        const Logic4Word value) override
-    {
-        if (owner.can_publish_blocking_word(signal)) {
-            if (owner.signals[signal].initial_value.width()
-                != value.width) {
-                throw std::invalid_argument(
-                    "SimIR signal assignment width mismatch");
-            }
-            owner.publish_native_word(signal, value);
-            return;
-        }
-        owner.commit_driver(
-            process,
-            signal,
-            PackedLogic4::from_aval_bval(
-                value.width, value.aval, value.bval));
-    }
+        const Logic4Word value) override;
     void write_blocking_slice(
         const SignalId signal,
         PackedLogic4 value,
-        const std::size_t offset) override
-    {
-        owner.commit_driver_slice(
-            process, signal, std::move(value), offset);
-    }
+        const std::size_t offset) override;
     void write_blocking_slice_word(
         const SignalId signal,
         const Logic4Word value,
-        const std::uint32_t offset) override
-    {
-        owner.commit_driver_slice(
-            process,
-            signal,
-            PackedLogic4::from_aval_bval(
-                value.width, value.aval, value.bval),
-            offset);
-    }
+        const std::uint32_t offset) override;
     void force_signal_slice(
         const SignalId signal,
         PackedLogic4 value,
-        const std::size_t offset) override
-    {
-        owner.force_slice(signal, std::move(value), offset);
-    }
+        const std::size_t offset) override;
     void release_signal_slice(
         const SignalId signal,
         const std::size_t offset,
-        const std::size_t width) override
-    {
-        owner.release_slice(signal, offset, width);
-    }
+        const std::size_t width) override;
     void force_driver_signal_slice(
         const SignalId signal,
         PackedLogic4 value,
-        const std::size_t offset) override
-    {
-        owner.force_driver_slice(
-            process, signal, std::move(value), offset);
-    }
+        const std::size_t offset) override;
     void release_driver_signal_slice(
         const SignalId signal,
         const std::size_t offset,
-        const std::size_t width) override
-    {
-        owner.release_driver_slice(process, signal, offset, width);
-    }
+        const std::size_t width) override;
 
     void write_update(
-        const SignalId signal, PackedLogic4 value) override
-    {
-        owner.stage_update(process, signal, std::move(value));
-    }
+        const SignalId signal, PackedLogic4 value) override;
 
     void write_update_word(
         const SignalId signal,
-        const Logic4Word value) override
-    {
-        owner.stage_update(
-            process,
-            signal,
-            PackedLogic4::from_aval_bval(
-                value.width, value.aval, value.bval));
-    }
+        const Logic4Word value) override;
 
     void write_update_slice(
         const SignalId signal,
         PackedLogic4 value,
-        const std::size_t offset) override
-    {
-        owner.stage_update_slice(
-            process, signal, std::move(value), offset);
-    }
+        const std::size_t offset) override;
 
     void write_update_slice_word(
         const SignalId signal,
         const Logic4Word value,
-        const std::uint32_t offset) override
-    {
-        owner.stage_update_slice(
-            process,
-            signal,
-            PackedLogic4::from_aval_bval(
-                value.width, value.aval, value.bval),
-            offset);
-    }
+        const std::uint32_t offset) override;
 
     void write_update_words(
-        const std::span<const ProcessUpdateWord> updates) override
-    {
-        owner.stage_update_words(process, updates);
-    }
+        const std::span<const ProcessUpdateWord> updates) override;
 
     void write_validated_update_words(
-        const std::span<const ProcessUpdateWord> updates) override
-    {
-        owner.stage_validated_update_words(process, updates);
-    }
+        const std::span<const ProcessUpdateWord> updates) override;
 
-    [[nodiscard]] const void* direct_update_domain() const noexcept override
-    {
-        return &owner;
-    }
+    [[nodiscard]] const void* direct_update_domain() const noexcept override;
 
     bool write_validated_update_slot_batches(
-        const std::span<const ProcessUpdateSlotBatch> batches) override
-    {
-        return owner.stage_validated_update_slot_batches(batches);
-    }
+        const std::span<const ProcessUpdateSlotBatch> batches) override;
 
     bool write_validated_logic9_update_batch(
-        const ProcessLogic9UpdateBatch& batch) override
-    {
-        return owner.stage_validated_logic9_update_batch(batch);
-    }
+        const ProcessLogic9UpdateBatch& batch) override;
 
     bool write_validated_logic9_update_batches(
-        const std::span<const ProcessLogic9UpdateBatch> batches) override
-    {
-        return owner.stage_validated_logic9_update_batches(batches);
-    }
+        const std::span<const ProcessLogic9UpdateBatch> batches) override;
 
-    [[nodiscard]] bool supports_direct_word_updates() const noexcept override
-    {
-        return owner.module_paths.empty();
-    }
+    [[nodiscard]] bool supports_direct_word_updates() const noexcept override;
 
     void write_after(
         const SignalId signal,
         PackedLogic4 value,
-        const SimulationTick delay) override
-    {
-        if (owner.route_module_path_update(
-                process, signal, value, std::nullopt, nullptr, delay)) {
-            return;
-        }
-        owner.scheduler.schedule_after(
-            delay,
-            SchedulerPhase::update,
-            process,
-            [&owner = owner, driver = process, signal,
-                value = std::move(value)](
-                Scheduler&) mutable {
-                owner.stage_update(
-                    driver, signal, std::move(value));
-            });
-    }
+        const SimulationTick delay) override;
 
     void write_after_word(
         const SignalId signal,
         const Logic4Word value,
-        const SimulationTick delay) override
-    {
-        auto packed = PackedLogic4::from_aval_bval(
-            value.width, value.aval, value.bval);
-        if (owner.route_module_path_update(
-                process, signal, packed, std::nullopt, nullptr, delay)) {
-            return;
-        }
-        owner.scheduler.schedule_after(
-            delay,
-            SchedulerPhase::update,
-            process,
-            [&owner = owner, driver = process, signal,
-                value = std::move(packed)](
-                Scheduler&) mutable {
-                owner.stage_update(
-                    driver, signal, std::move(value));
-            });
-    }
+        const SimulationTick delay) override;
 
     void write_after_slice(
         const SignalId signal,
         PackedLogic4 value,
         const std::size_t offset,
-        const SimulationTick delay) override
-    {
-        if (owner.route_module_path_update(
-                process, signal, value, offset, nullptr, delay)) {
-            return;
-        }
-        owner.scheduler.schedule_after(
-            delay,
-            SchedulerPhase::update,
-            process,
-            [&owner = owner,
-                driver = process,
-                signal,
-                value = std::move(value),
-                offset](Scheduler&) mutable {
-                owner.stage_update_slice(
-                    driver, signal, std::move(value), offset);
-            });
-    }
+        const SimulationTick delay) override;
 
     void write_after_slice_word(
         const SignalId signal,
         const Logic4Word value,
         const std::uint32_t offset,
-        const SimulationTick delay) override
-    {
-        write_after_slice(
-            signal,
-            PackedLogic4::from_aval_bval(
-                value.width, value.aval, value.bval),
-            offset,
-            delay);
-    }
+        const SimulationTick delay) override;
 
     void write_inertial(
         const SignalId signal,
         PackedLogic4 value,
-        const TransitionDelays& delays) override
-    {
-        owner.schedule_inertial(
-            process,
-            signal,
-            std::move(value),
-            std::nullopt,
-            delays);
-    }
+        const TransitionDelays& delays) override;
 
     void write_inertial_slice(
         const SignalId signal,
         PackedLogic4 value,
         const std::size_t offset,
-        const TransitionDelays& delays) override
-    {
-        owner.schedule_inertial(
-            process,
-            signal,
-            std::move(value),
-            offset,
-            delays);
-    }
+        const TransitionDelays& delays) override;
 
     void write_projected(
         const SignalId signal,
         PackedLogic4 value,
         const SimulationTick delay,
         const SimulationTick rejection,
-        const ProjectedDelayMode mode) override
-    {
-        owner.schedule_projected(
-            process,
-            signal,
-            value,
-            std::nullopt,
-            delay,
-            rejection,
-            mode);
-    }
+        const ProjectedDelayMode mode) override;
 
     void write_projected_slice(
         const SignalId signal,
@@ -636,183 +238,67 @@ struct Interpreter::Impl::ExecutionContext final
         const std::size_t offset,
         const SimulationTick delay,
         const SimulationTick rejection,
-        const ProjectedDelayMode mode) override
-    {
-        owner.schedule_projected(
-            process,
-            signal,
-            value,
-            offset,
-            delay,
-            rejection,
-            mode);
-    }
+        const ProjectedDelayMode mode) override;
 
     void write_projected_waveform(
         const SignalId signal,
         std::vector<ProjectedWaveformValue> elements,
         const SimulationTick rejection,
-        const ProjectedDelayMode mode) override
-    {
-        owner.schedule_projected_waveform(
-            process,
-            signal,
-            elements,
-            std::nullopt,
-            rejection,
-            mode);
-    }
+        const ProjectedDelayMode mode) override;
 
     void write_projected_waveform_slice(
         const SignalId signal,
         std::vector<ProjectedWaveformValue> elements,
         const std::size_t offset,
         const SimulationTick rejection,
-        const ProjectedDelayMode mode) override
-    {
-        owner.schedule_projected_waveform(
-            process,
-            signal,
-            elements,
-            offset,
-            rejection,
-            mode);
-    }
+        const ProjectedDelayMode mode) override;
 
     void notify_event(
         const SignalId event,
         const SimulationTick delay,
-        const EventNotificationKind kind) override
-    {
-        owner.notify_event(event, delay, kind, process);
-    }
+        const EventNotificationKind kind) override;
 
-    void cancel_event(const SignalId event) override
-    {
-        owner.cancel_event(event);
-    }
+    void cancel_event(const SignalId event) override;
 
     [[nodiscard]] bool
-    signal_event(const SignalId signal) const override
-    {
-        (void)owner.get_signal(signal);
-        const auto& event = owner.signal_events[signal];
-        return event
-            && event->first == owner.scheduler.now()
-            && event->second == owner.scheduler.delta();
-    }
+    signal_event(const SignalId signal) const override;
 
     [[nodiscard]] Logic4Word
-    signal_last_value_word(const SignalId signal) const override
-    {
-        (void)owner.get_signal(signal);
-        return owner.signal_last_values[signal].low_word();
-    }
+    signal_last_value_word(const SignalId signal) const override;
 
     [[nodiscard]] Logic9Word
     signal_last_value_logic9_word(
-        const SignalId signal) const override
-    {
-        (void)owner.get_signal(signal);
-        return owner.signal_last_values[signal].logic9_low_word();
-    }
+        const SignalId signal) const override;
 
     [[nodiscard]] SimulationTick
-    signal_last_event(const SignalId signal) const override
-    {
-        (void)owner.get_signal(signal);
-        const auto& event = owner.signal_events[signal];
-        return event
-            ? owner.scheduler.now() - event->first
-            : std::numeric_limits<SimulationTick>::max();
-    }
+    signal_last_event(const SignalId signal) const override;
 
     [[nodiscard]] bool
-    signal_active(const SignalId signal) const override
-    {
-        (void)owner.get_signal(signal);
-        const auto& transaction = owner.signal_transactions[signal];
-        return transaction
-            && transaction->first == owner.scheduler.now()
-            && transaction->second == owner.scheduler.delta();
-    }
+    signal_active(const SignalId signal) const override;
 
     [[nodiscard]] SimulationTick signal_last_active(
-        const SignalId signal) const override
-    {
-        return signal_attribute_detail::last_active(owner, signal);
-    }
+        const SignalId signal) const override;
     [[nodiscard]] bool signal_driving(
-        const SignalId signal) const override
-    {
-        return signal_attribute_detail::driving(owner, process, signal);
-    }
+        const SignalId signal) const override;
     [[nodiscard]] Logic4Word signal_driving_value_word(
-        const SignalId signal) const override
-    {
-        return signal_attribute_detail::driving_value(
-            owner, process, signal)
-            .low_word();
-    }
+        const SignalId signal) const override;
     [[nodiscard]] Logic9Word signal_driving_value_logic9_word(
-        const SignalId signal) const override
-    {
-        return signal_attribute_detail::driving_value(
-            owner, process, signal)
-            .logic9_low_word();
-    }
+        const SignalId signal) const override;
 
     void request_channel_update(
-        const std::uint64_t channel) override
-    {
-        owner.request_channel_update(process, channel);
-    }
+        const std::uint64_t channel) override;
 
     void display(
         const std::string_view text,
-        const bool newline) override
-    {
-        if (owner.output_hook) {
-            owner.output_hook(
-                process,
-                text,
-                newline,
-                owner.scheduler.now(),
-                owner.scheduler.delta());
-        }
-    }
+        const bool newline) override;
 
     void postpone_display(
         const std::string_view text,
-        const bool newline) override
-    {
-        owner.scheduler.schedule(
-            SchedulerPhase::postponed,
-            process,
-            [&owner = owner,
-                process = process,
-                text = std::string { text },
-                newline](Scheduler& scheduler) {
-                if (owner.output_hook) {
-                    owner.output_hook(
-                        process,
-                        text,
-                        newline,
-                        scheduler.now(),
-                        scheduler.delta());
-                }
-            });
-    }
+        const bool newline) override;
 
-    [[nodiscard]] SimulationTick current_time() const noexcept override
-    {
-        return owner.scheduler.now();
-    }
+    [[nodiscard]] SimulationTick current_time() const noexcept override;
     [[nodiscard]] SystemVerilogTimeFormat
-    systemverilog_time_format() const override
-    {
-        return owner.time_format;
-    }
+    systemverilog_time_format() const override;
 
     void display_formatted(
         const std::string_view prefix,
@@ -826,45 +312,7 @@ struct Interpreter::Impl::ExecutionContext final
         const std::uint32_t minimum_width,
         const bool left_justify,
         const bool zero_pad,
-        const SystemVerilogScalarKind scalar_kind) override
-    {
-        auto text = make_formatted_output(
-            prefix,
-            suffix,
-            format,
-            value,
-            signed_decimal,
-            suppress_leading_zero,
-            minimum_width,
-            left_justify,
-            zero_pad,
-            scalar_kind);
-        if (postponed) {
-            owner.scheduler.schedule(
-                SchedulerPhase::postponed,
-                process,
-                [&owner = owner,
-                    process = process,
-                    text = std::move(text),
-                    newline](Scheduler& scheduler) {
-                    if (owner.output_hook) {
-                        owner.output_hook(
-                            process,
-                            text,
-                            newline,
-                            scheduler.now(),
-                            scheduler.delta());
-                    }
-                });
-        } else if (owner.output_hook) {
-            owner.output_hook(
-                process,
-                text,
-                newline,
-                owner.scheduler.now(),
-                owner.scheduler.delta());
-        }
-    }
+        const SystemVerilogScalarKind scalar_kind) override;
 
     void display_time(
         const std::string_view prefix,
@@ -874,93 +322,28 @@ struct Interpreter::Impl::ExecutionContext final
         const std::uint32_t minimum_width,
         const bool left_justify,
         const bool zero_pad,
-        const bool use_timeformat_width) override
-    {
-        auto text = make_time_output(
-            prefix,
-            suffix,
-            owner.scheduler.now(),
-            owner.time_format,
-            use_timeformat_width,
-            minimum_width,
-            left_justify,
-            zero_pad);
-        if (postponed) {
-            owner.scheduler.schedule(
-                SchedulerPhase::postponed,
-                process,
-                [&owner = owner,
-                    process = process,
-                    text = std::move(text),
-                    newline](Scheduler& scheduler) {
-                    if (owner.output_hook) {
-                        owner.output_hook(
-                            process,
-                            text,
-                            newline,
-                            scheduler.now(),
-                            scheduler.delta());
-                    }
-                });
-        } else if (owner.output_hook) {
-            owner.output_hook(
-                process,
-                text,
-                newline,
-                owner.scheduler.now(),
-                owner.scheduler.delta());
-        }
-    }
+        const bool use_timeformat_width) override;
 
-    void install_monitor(const MonitorInstall& registration) override
-    {
-        owner.install_monitor(process, registration);
-    }
-    void set_monitor_enabled(const bool enabled) override
-    {
-        owner.set_monitor_enabled(enabled);
-    }
+    void install_monitor(const MonitorInstall& registration) override;
+    void set_monitor_enabled(const bool enabled) override;
     [[nodiscard]] PackedLogic4 random_value(
         const RandomKind kind,
         const std::optional<PackedLogic4>& maximum,
-        const std::optional<PackedLogic4>& minimum) override
-    {
-        return owner.random_value(process, kind, maximum, minimum);
-    }
+        const std::optional<PackedLogic4>& minimum) override;
     void report(const std::string_view message,
         const AssertionSeverity severity,
-        const SourceLocation& source) override
-    {
-        if (!owner.report_hook)
-            return;
-        owner.report_hook(process, message, severity, source,
-            owner.scheduler.now(), owner.scheduler.delta());
-    }
+        const SourceLocation& source) override;
     void vhdl_report(
         const InstructionIndex instruction,
         const std::string_view message,
         const AssertionSeverity severity,
         const SourceLocation& source,
-        const bool standalone) override
-    {
-        owner.execute_vhdl_report(
-            owner.processes[process], instruction, message, severity,
-            source, standalone);
-    }
+        const bool standalone) override;
     [[nodiscard]] Logic9 evaluate_vital_timing_check(
-        const InstructionIndex instruction, const VitalTimingCheck& operation) override
-    {
-        return owner.execute_vital_timing_check(process, instruction, operation);
-    }
+        const InstructionIndex instruction, const VitalTimingCheck& operation) override;
     void execute_vital_delay(const InstructionIndex instruction,
-        const VitalDelay& operation, const VitalDelayRuntimeValues& values) override
-    {
-        owner.execute_vital_delay(process, instruction, operation, values);
-    }
-    [[nodiscard]] bool execution_points_enabled() const noexcept override
-    {
-        return static_cast<bool>(owner.execution_point_hook);
-    }
+        const VitalDelay& operation, const VitalDelayRuntimeValues& values) override;
+    [[nodiscard]] bool execution_points_enabled() const noexcept override;
 };
 
 } // namespace fsim::runtime::simir

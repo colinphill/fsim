@@ -3,68 +3,18 @@
 
 namespace fsim::frontend {
 
-void VerilogParser::parse_import_clause(
-  std::vector<SystemVerilogImport>& imports,
-  const Token& start) {
-    for (;;) {
-    const auto package =
-        expect_identifier("package name in import");
-    expect(
-        TokenKind::Scope,
-        "'::' after imported package name",
-        "FSIM-SV-PARSE-078");
-    std::string name;
-    if (match(TokenKind::Star)) {
-      name.clear();
-    } else {
-      name =
-          expect_identifier("imported package item").text;
-    }
-    imports.push_back({
-        package.text,
-        std::move(name),
-        cover(start.span, previous().span)});
-    if (!match(TokenKind::Comma)) {
-      break;
-    }
-  }
-  expect(
-      TokenKind::Semicolon,
-      "';' after package import",
-      "FSIM-SV-PARSE-079");
+namespace {
+
+constexpr std::string_view implicit_generate_prefix{
+    "@fsim-implicit-genblk:"};
+
+[[nodiscard]] std::string implicit_generate_scope(
+    const std::size_t ordinal) {
+  return std::string{implicit_generate_prefix}
+      + std::to_string(ordinal);
 }
 
-void VerilogParser::parse_export_clause(
-    std::vector<SystemVerilogExport>& exports,
-    const Token& start) {
-  for (;;) {
-    std::string package;
-    if (match(TokenKind::Star)) {
-      package = "*";
-    } else {
-      package = expect_identifier("package name in export").text;
-    }
-    expect(
-        TokenKind::Scope,
-        "'::' after exported package name",
-        "FSIM-SV-PARSE-215");
-    std::string name;
-    if (!match(TokenKind::Star)) {
-      name = expect_identifier("exported package item").text;
-    }
-    exports.push_back({
-        std::move(package),
-        std::move(name),
-        cover(start.span, previous().span)});
-    if (!match(TokenKind::Comma)) {
-      break;
-    }
-  }
-  expect(
-      TokenKind::Semicolon,
-      "';' after package export",
-      "FSIM-SV-PARSE-216");
-}
+} // namespace
 
 DesignUnit VerilogParser::parse_package(const Token& start) {
   non_ansi_ports_.clear();
@@ -440,6 +390,20 @@ void VerilogParser::parse_generate_region(
           parse_static_generate_block());
       continue;
     }
+    if (unit.kind == UnitKind::SystemVerilogProgram
+        && (keyword("$fatal") || keyword("$error")
+            || keyword("$warning") || keyword("$info"))) {
+      (void)require_standard(
+          "a program elaboration severity system task",
+          StandardRevision::SystemVerilog2023,
+          current(),
+          "FSIM-SV-PARSE-381");
+      if (auto statement = parse_statement()) {
+        direct_region.then_body.concurrent_statements.push_back(
+            std::move(*statement));
+      }
+      continue;
+    }
     if (match_keyword("parameter")) {
       parse_generated_parameter_group(
           direct_region.then_body,
@@ -473,10 +437,68 @@ void VerilogParser::parse_generate_region(
       continue;
     }
     if (match_keyword("typedef")) {
-      parse_generate_typedef(
-          direct_region.then_body,
-          direct_local_names,
-          previous());
+      const auto declaration = previous();
+      if (keyword("class")) {
+        add_class_declaration(
+            direct_region.then_body.systemverilog_classes,
+            parse_class_forward_declaration(declaration, unit.name),
+            declaration);
+      } else {
+        parse_generate_typedef(
+            direct_region.then_body,
+            direct_local_names,
+            declaration);
+      }
+      continue;
+    }
+    if (match_keyword("virtual")) {
+      const auto qualifier = previous();
+      if (match_keyword("class")) {
+        add_class_declaration(
+            direct_region.then_body.systemverilog_classes,
+            parse_class(previous(), unit.name, true),
+            qualifier);
+      } else {
+        error(
+            qualifier,
+            "FSIM-SV-PARSE-387",
+            "generated 'virtual' must introduce a class declaration");
+        skip_to_semicolon();
+      }
+      continue;
+    }
+    if (match_keyword("interface")) {
+      const auto qualifier = previous();
+      if (match_keyword("class")) {
+        (void)require_standard(
+            "an interface class in a generate region",
+            StandardRevision::SystemVerilog2023,
+            previous(),
+            "FSIM-SV-PARSE-387");
+        add_class_declaration(
+            direct_region.then_body.systemverilog_classes,
+            parse_class(previous(), unit.name, false, true),
+            qualifier);
+      } else {
+        error(
+            qualifier,
+            "FSIM-SV-PARSE-387",
+            "generated 'interface' must introduce a class declaration");
+        skip_to_semicolon();
+      }
+      continue;
+    }
+    if (match_keyword("class")) {
+      const auto declaration = previous();
+      (void)require_standard(
+          "a class declaration in a generate region",
+          StandardRevision::SystemVerilog2005,
+          declaration,
+          "FSIM-SV-PARSE-348");
+      add_class_declaration(
+          direct_region.then_body.systemverilog_classes,
+          parse_class(declaration, unit.name),
+          declaration);
       continue;
     }
     if (match_keyword("genvar")) {
@@ -550,6 +572,7 @@ void VerilogParser::parse_generate_region(
       || !direct_region.then_body.variables.empty()
       || !direct_region.then_body.functions.empty()
       || !direct_region.then_body.tasks.empty()
+      || !direct_region.then_body.systemverilog_classes.empty()
       || !direct_region.then_body.concurrent_statements.empty()
       || !direct_region.then_body.processes.empty()
       || !direct_region.then_body.instances.empty()
@@ -586,15 +609,24 @@ GenerateRegion VerilogParser::parse_static_generate_block() {
   GenerateRegion result;
   result.kind = GenerateKind::StaticBlock;
   const auto start = current();
+  const auto implicit_scope = implicit_generate_scope(
+      next_implicit_generate_scope_++);
   parse_generate_branch(
-      result.then_scope, result.then_body);
+      result.then_scope,
+      result.then_body,
+      implicit_scope,
+      false);
   result.span = span_from(start, previous());
   return result;
 }
 
 GenerateRegion VerilogParser::parse_conditional_generate(
-  const Token& start) {
+  const Token& start,
+  std::optional<std::string> direct_scope) {
   GenerateRegion result;
+  const auto implicit_scope = direct_scope
+      ? std::move(*direct_scope)
+      : implicit_generate_scope(next_implicit_generate_scope_++);
   expect(
       TokenKind::LeftParen,
       "'(' after generate if",
@@ -606,11 +638,15 @@ GenerateRegion VerilogParser::parse_conditional_generate(
       "FSIM-SV-PARSE-060");
   parse_generate_branch(
       result.then_scope,
-      result.then_body);
+      result.then_body,
+      implicit_scope,
+      true);
   if (match_keyword("else")) {
     parse_generate_branch(
         result.else_scope,
-        result.else_body);
+        result.else_body,
+        implicit_scope,
+        true);
   }
   result.span = span_from(start, previous());
   return result;
@@ -619,6 +655,8 @@ GenerateRegion VerilogParser::parse_conditional_generate(
 GenerateRegion VerilogParser::parse_iterative_generate(const Token& start) {
   GenerateRegion result;
   result.kind = GenerateKind::Iterative;
+  const auto implicit_scope = implicit_generate_scope(
+      next_implicit_generate_scope_++);
   expect(
       TokenKind::LeftParen,
       "'(' after generate for",
@@ -730,7 +768,9 @@ GenerateRegion VerilogParser::parse_iterative_generate(const Token& start) {
       "FSIM-SV-PARSE-072");
   parse_generate_branch(
       result.then_scope,
-      result.then_body);
+      result.then_body,
+      implicit_scope,
+      false);
   const auto generate_name =
       current_generate_names_.find(result.variable);
   if (generate_name != current_generate_names_.end()
@@ -741,9 +781,14 @@ GenerateRegion VerilogParser::parse_iterative_generate(const Token& start) {
   return result;
 }
 
-GenerateRegion VerilogParser::parse_selection_generate(const Token& start) {
+GenerateRegion VerilogParser::parse_selection_generate(
+    const Token& start,
+    std::optional<std::string> direct_scope) {
   GenerateRegion result;
   result.kind = GenerateKind::Selection;
+  const auto implicit_scope = direct_scope
+      ? std::move(*direct_scope)
+      : implicit_generate_scope(next_implicit_generate_scope_++);
   expect(
       TokenKind::LeftParen,
       "'(' after generate case",
@@ -783,7 +828,9 @@ GenerateRegion VerilogParser::parse_selection_generate(const Token& start) {
         "FSIM-SV-PARSE-075");
     parse_generate_branch(
         alternative.scope,
-        alternative.body);
+        alternative.body,
+        implicit_scope,
+        true);
     alternative.span =
         span_from(alternative_start, previous());
     result.alternatives.push_back(std::move(alternative));
@@ -795,14 +842,32 @@ GenerateRegion VerilogParser::parse_selection_generate(const Token& start) {
 
 void VerilogParser::parse_generate_branch(
   std::string& scope,
-  GenerateBody& body) {
+  GenerateBody& body,
+  const std::string_view implicit_scope,
+  const bool allow_direct_conditional_nesting) {
   const bool block = match_keyword("begin");
   if (block && match(TokenKind::Colon)) {
     scope = expect_identifier("generate block label").text;
   } else {
-    scope = "genblk"
-        + std::to_string(next_implicit_generate_scope_++);
+    scope = std::string{implicit_scope};
   }
+  if (!block && allow_direct_conditional_nesting
+      && (keyword("if") || keyword("case"))) {
+    scope.clear();
+    if (match_keyword("if")) {
+      body.generate_regions.push_back(
+          parse_conditional_generate(
+              previous(), std::string{implicit_scope}));
+    } else {
+      (void)match_keyword("case");
+      body.generate_regions.push_back(
+          parse_selection_generate(
+              previous(), std::string{implicit_scope}));
+    }
+    return;
+  }
+  const auto parent_generate_ordinal = next_implicit_generate_scope_;
+  next_implicit_generate_scope_ = 1;
   std::vector<std::string> local_names;
   std::vector<std::string> local_genvars;
   bool parsed_direct_item = false;
@@ -836,7 +901,59 @@ void VerilogParser::parse_generate_branch(
     } else if (match_keyword("task")) {
         body.tasks.push_back(parse_task(previous()));
     } else if (match_keyword("typedef")) {
-        parse_generate_typedef(body, local_names, previous());
+        const auto declaration = previous();
+        if (keyword("class")) {
+          add_class_declaration(
+              body.systemverilog_classes,
+              parse_class_forward_declaration(declaration, scope),
+              declaration);
+        } else {
+          parse_generate_typedef(body, local_names, declaration);
+        }
+    } else if (match_keyword("virtual")) {
+        const auto qualifier = previous();
+        if (match_keyword("class")) {
+          add_class_declaration(
+              body.systemverilog_classes,
+              parse_class(previous(), scope, true),
+              qualifier);
+        } else {
+          error(
+              qualifier,
+              "FSIM-SV-PARSE-387",
+              "generated 'virtual' must introduce a class declaration");
+          skip_to_semicolon();
+        }
+    } else if (match_keyword("interface")) {
+        const auto qualifier = previous();
+        if (match_keyword("class")) {
+          (void)require_standard(
+              "an interface class in a generate block",
+              StandardRevision::SystemVerilog2023,
+              previous(),
+              "FSIM-SV-PARSE-387");
+          add_class_declaration(
+              body.systemverilog_classes,
+              parse_class(previous(), scope, false, true),
+              qualifier);
+        } else {
+          error(
+              qualifier,
+              "FSIM-SV-PARSE-387",
+              "generated 'interface' must introduce a class declaration");
+          skip_to_semicolon();
+        }
+    } else if (match_keyword("class")) {
+        const auto declaration = previous();
+        (void)require_standard(
+            "a class declaration in a generate block",
+            StandardRevision::SystemVerilog2005,
+            declaration,
+            "FSIM-SV-PARSE-348");
+        add_class_declaration(
+            body.systemverilog_classes,
+            parse_class(declaration, scope),
+            declaration);
     } else if (match_keyword("genvar")) {
         parse_generated_genvar_declaration(body, local_genvars);
     } else if (match_keyword("alias")) {
@@ -861,6 +978,17 @@ void VerilogParser::parse_generate_branch(
             body.concurrent_statements.end(),
             std::make_move_iterator(assignments.begin()),
             std::make_move_iterator(assignments.end()));
+    } else if (program_generate_context_
+        && (keyword("$fatal") || keyword("$error")
+            || keyword("$warning") || keyword("$info"))) {
+        (void)require_standard(
+            "a program elaboration severity system task",
+            StandardRevision::SystemVerilog2023,
+            current(),
+            "FSIM-SV-PARSE-381");
+        if (auto statement = parse_statement()) {
+            body.concurrent_statements.push_back(std::move(*statement));
+        }
     } else if (is_gate_primitive()) {
         parse_gate_primitive(
             body.concurrent_statements, body.signals, { });
@@ -930,6 +1058,7 @@ void VerilogParser::parse_generate_branch(
       current_generate_names_.erase(found);
     }
   }
+  next_implicit_generate_scope_ = parent_generate_ordinal;
 }
 
 void VerilogParser::parse_generate_typedef(
@@ -1022,6 +1151,11 @@ void VerilogParser::parse_generate_declaration(
     (void)parse_optional_container_dimension(declaration_type);
     const bool container_declaration =
         declaration_type.systemverilog_container.has_value();
+    const bool class_handle_declaration = std::ranges::any_of(
+        body.systemverilog_classes,
+        [&](const SystemVerilogClassDeclaration& declaration) {
+          return declaration.name == declaration_type.named_type;
+        });
     std::optional<Expression> initializer;
     if (match(TokenKind::Assign)) {
       initializer = parse_expression();
@@ -1076,7 +1210,7 @@ void VerilogParser::parse_generate_declaration(
           "FSIM-SV-SEM-006",
           "duplicate generated signal declaration '"
               + name.text + "'");
-    } else if (container_declaration) {
+    } else if (container_declaration || class_handle_declaration) {
       body.variables.emplace_back(
           name.text,
           std::move(declaration_type),
@@ -1526,6 +1660,117 @@ void VerilogParser::parse_parameter_port_list(
           : "')' after module parameter port list",
       "FSIM-SV-PARSE-054");
   (void)hash;
+}
+
+std::vector<SystemVerilogCheckerInstance>
+VerilogParser::parse_checker_instances()
+{
+  const auto declaration = expect_identifier("instantiated checker name");
+  std::vector<SystemVerilogCheckerInstance> instances;
+  const auto actual_tokens = [&] {
+    std::vector<Token> result;
+    int parentheses { };
+    int brackets { };
+    int braces { };
+    while (!at_end()) {
+      if (parentheses == 0 && brackets == 0 && braces == 0
+          && (at(TokenKind::Comma) || at(TokenKind::RightParen))) {
+        break;
+      }
+      const auto token = advance();
+      if (token.kind == TokenKind::LeftParen) {
+        ++parentheses;
+      } else if (token.kind == TokenKind::RightParen && parentheses != 0) {
+        --parentheses;
+      } else if (token.kind == TokenKind::LeftBracket) {
+        ++brackets;
+      } else if (token.kind == TokenKind::RightBracket && brackets != 0) {
+        --brackets;
+      } else if (token.kind == TokenKind::LeftBrace) {
+        ++braces;
+      } else if (token.kind == TokenKind::RightBrace && braces != 0) {
+        --braces;
+      }
+      result.push_back(token);
+    }
+    return result;
+  };
+
+  do {
+    SystemVerilogCheckerInstance instance;
+    instance.declaration_name = declaration.text;
+    if (!at(TokenKind::Identifier)) {
+      error(
+          current(),
+          "FSIM-SV-PARSE-372",
+          "expected a checker instance name");
+      skip_to_semicolon();
+      break;
+    }
+    const auto instance_name = advance();
+    instance.name = instance_name.text;
+    expect(
+        TokenKind::LeftParen,
+        "'(' after checker instance name",
+        "FSIM-SV-PARSE-373");
+    bool saw_named { };
+    bool saw_ordered { };
+    while (!at_end() && !at(TokenKind::RightParen)) {
+      SystemVerilogCheckerConnection connection;
+      const auto connection_start = current();
+      if (match(TokenKind::Dot)) {
+        saw_named = true;
+        if (match(TokenKind::Star)) {
+          connection.formal_name = "*";
+          connection.span = span_from(connection_start, previous());
+        } else {
+          const auto formal = expect_identifier("checker formal name");
+          connection.formal_name = formal.text;
+          if (match(TokenKind::LeftParen)) {
+            connection.actual_tokens = actual_tokens();
+            connection.open = connection.actual_tokens.empty();
+            expect(
+                TokenKind::RightParen,
+                "')' after named checker connection",
+                "FSIM-SV-PARSE-374");
+          } else {
+            connection.actual_tokens.push_back(formal);
+          }
+          connection.span = span_from(connection_start, previous());
+        }
+      } else {
+        saw_ordered = true;
+        connection.actual_tokens = actual_tokens();
+        connection.open = connection.actual_tokens.empty();
+        connection.span = connection.actual_tokens.empty()
+            ? connection_start.span
+            : span_from(
+                connection.actual_tokens.front(),
+                connection.actual_tokens.back());
+      }
+      if (saw_named && saw_ordered) {
+        error(
+            connection_start,
+            "FSIM-SV-SEM-252",
+            "checker connections cannot mix ordered and named forms");
+      }
+      instance.connections.push_back(std::move(connection));
+      if (!match(TokenKind::Comma)) {
+        break;
+      }
+    }
+    expect(
+        TokenKind::RightParen,
+        "')' after checker connections",
+        "FSIM-SV-PARSE-375");
+    instance.span = span_from(declaration, previous());
+    instances.push_back(std::move(instance));
+  } while (match(TokenKind::Comma));
+  expect(
+      TokenKind::Semicolon,
+      "';' after checker instance",
+      "FSIM-SV-PARSE-376");
+  return instances;
 }
 
 std::vector<Instance> VerilogParser::parse_instances() {

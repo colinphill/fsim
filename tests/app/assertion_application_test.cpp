@@ -3,6 +3,7 @@
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/support/path.hpp"
+#include "assertion_application_support.hpp"
 
 #include <array>
 #include <cassert>
@@ -18,7 +19,7 @@
 #include <utility>
 #include <vector>
 
-namespace {
+namespace fsim::test::assertion_application {
 
 struct TemporaryDirectory {
     std::filesystem::path path;
@@ -28,18 +29,6 @@ struct TemporaryDirectory {
         std::error_code error;
         std::filesystem::remove_all(path, error);
     }
-};
-
-struct ReportCapture {
-    std::string message;
-    fsim::runtime::simir::AssertionSeverity severity { };
-    fsim::runtime::simir::SourceLocation source;
-    fsim::runtime::SimulationTick time { };
-    std::uint64_t delta { };
-
-    friend bool operator==(
-        const ReportCapture&,
-        const ReportCapture&) = default;
 };
 
 bool equivalent_artifact_reports(
@@ -340,17 +329,178 @@ void test_cli_failure_reporting(
         != std::string::npos);
 }
 
-struct ConcurrentCapture {
-    std::vector<std::string> outputs;
+struct DeferredCapture {
+    fsim::runtime::Logic4Word marker { };
     std::vector<ReportCapture> reports;
-    std::vector<std::string> process_names;
-    std::vector<fsim::app::ConcurrentAssertionCoverage> coverage;
-    std::vector<fsim::app::ConcurrentAssertionEvent> events;
-    std::vector<fsim::app::ConcurrentAssertionEvent> callback_events;
     std::vector<fsim::runtime::SchedulerPhase> phases;
+    std::size_t targeted_cancellation_suspends { };
     fsim::app::NativeCacheStatistics native_cache;
-    std::size_t compiled_processes { };
+
+    friend bool operator==(
+        const DeferredCapture& left,
+        const DeferredCapture& right)
+    {
+        return left.marker == right.marker
+            && left.reports == right.reports
+            && left.phases == right.phases
+            && left.targeted_cancellation_suspends
+                == right.targeted_cancellation_suspends;
+    }
 };
+
+DeferredCapture run_deferred_immediate_assertions(
+    const fsim::project::Config& config,
+    const fsim::app::SimulationEngine engine)
+{
+    fsim::diagnostic::Engine diagnostics;
+    auto project = fsim::app::build_project(config, diagnostics);
+    if (!project) {
+        fsim::diagnostic::print_text(std::cerr, diagnostics);
+    }
+    assert(project);
+    fsim::app::Simulation simulation {
+        std::move(*project), config.run.max_deltas, engine
+    };
+    DeferredCapture capture;
+    capture.native_cache = simulation.native_cache_statistics();
+    simulation.set_safe_point_hook(
+        [&capture](auto&, const fsim::runtime::SchedulerPhase phase) {
+            capture.phases.push_back(phase);
+        });
+    simulation.set_execution_point_hook(
+        [&capture, &simulation](
+            auto&,
+            const fsim::runtime::simir::ExecutionPoint& point) {
+            using namespace fsim::runtime::simir;
+            if (point.kind != ExecutionPointKind::process_suspend) {
+                return;
+            }
+            const auto& process = simulation.process_program(
+                point.design_process);
+            if (point.instruction >= process.operations.size()) {
+                return;
+            }
+            const auto* disable = operation_get_if<DisableFork>(
+                &process.operations[point.instruction]);
+            if (disable && disable->site) {
+                ++capture.targeted_cancellation_suspends;
+            }
+        });
+    simulation.set_report_hook(
+        [&capture](
+            const fsim::runtime::simir::ProcessId,
+            const std::string_view message,
+            const fsim::runtime::simir::AssertionSeverity severity,
+            const fsim::runtime::simir::SourceLocation& source,
+            const fsim::runtime::SimulationTick time,
+            const std::uint64_t delta) {
+            capture.reports.push_back(
+                { std::string { message }, severity, source, time, delta });
+        });
+    const auto result = simulation.run();
+    assert(result.status == fsim::runtime::RunStatus::stopped);
+    const auto marker = simulation.find_signal("deferred_assertions.marker");
+    assert(marker);
+    capture.marker = simulation.read_signal(*marker).low_word();
+    return capture;
+}
+
+void test_deferred_immediate_assertions(
+    const std::filesystem::path& directory)
+{
+    const auto source = directory / "deferred_immediate_assertions.sv";
+    {
+        std::ofstream output(source);
+        output << R"(
+module deferred_assertions;
+  logic sample;
+  logic procedural_sample = 1'b0;
+  logic [7:0] marker;
+  event sample_now;
+  task automatic record(input logic passed, input logic captured);
+    marker = marker + {6'b0, passed, captured};
+  endtask
+  initial begin
+    sample = 1'b0;
+    marker = 0;
+    -> sample_now;
+    assert #0 (procedural_sample) record(1'b0, procedural_sample);
+      else record(1'b1, procedural_sample);
+    repeat (2) begin
+      assert #0 (sample) record(1'b1, sample);
+        else record(1'b0, sample);
+      sample = !sample;
+    end
+    #1;
+    assert (marker == 5);
+    assert #0 (1'b1);
+    assert #0 (1'b0) else ;
+    assert #0 (1'b0);
+    sample = 1'b0;
+    assert final (sample) $error("unexpected final pass");
+      else $warning("final failure sampled");
+    sample = 1'b1;
+    #1 $finish;
+  end
+  initial begin
+    @sample_now;
+    procedural_sample = 1'b1;
+  end
+endmodule
+)";
+        assert(output.good());
+    }
+
+    for (const auto optimization : {
+             fsim::project::Optimization::o0,
+             fsim::project::Optimization::o2 }) {
+        auto config = config_for(directory, source, optimization);
+        config.project.name = optimization == fsim::project::Optimization::o0
+            ? "deferred-assertions-o0"
+            : "deferred-assertions-o2";
+        config.project.top = "sv:work.deferred_assertions";
+        config.source_sets.front().standard = "2023";
+        config.build.cache_path = directory
+            / (optimization == fsim::project::Optimization::o0
+                    ? "deferred-cache-o0"
+                    : "deferred-cache-o2");
+        const auto interpreted = run_deferred_immediate_assertions(
+            config, fsim::app::SimulationEngine::interpreter);
+        const auto compiled = run_deferred_immediate_assertions(
+            config, fsim::app::SimulationEngine::compiled);
+        const auto warm = run_deferred_immediate_assertions(
+            config, fsim::app::SimulationEngine::compiled);
+        assert(interpreted == compiled);
+        assert(interpreted == warm);
+        assert(interpreted.marker.bval == 0);
+        assert(interpreted.marker.aval == 5);
+        assert(interpreted.targeted_cancellation_suspends == 0);
+        assert(interpreted.reports.size() == 2);
+        assert(interpreted.reports[0].message == "assertion failed");
+        assert(interpreted.reports[0].severity
+            == fsim::runtime::simir::AssertionSeverity::error);
+        assert(interpreted.reports[0].time == 1);
+        assert(interpreted.reports[1].message
+            == "final failure sampled");
+        assert(interpreted.reports[1].severity
+            == fsim::runtime::simir::AssertionSeverity::warning);
+        assert(interpreted.reports[1].time == 1);
+        assert(std::ranges::find(
+                   interpreted.phases,
+                   fsim::runtime::SchedulerPhase::reactive)
+            != interpreted.phases.end());
+        assert(std::ranges::find(
+                   interpreted.phases,
+                   fsim::runtime::SchedulerPhase::postponed)
+            != interpreted.phases.end());
+#if defined(FSIM_HAS_LLVM)
+        assert(compiled.native_cache.misses == 1);
+        assert(compiled.native_cache.stores == 1);
+        assert(warm.native_cache.hits == 1);
+        assert(warm.native_cache.misses == 0);
+#endif
+    }
+}
 
 ConcurrentCapture capture_concurrent_assertions(
     fsim::app::BuiltProject project,
@@ -372,6 +522,35 @@ ConcurrentCapture capture_concurrent_assertions(
             || process.name.find("$assertion$2") != std::string::npos) {
             capture.process_names.push_back(process.name);
         }
+        const auto& program = simulation.process_program(
+            process.runtime_index);
+        if (!program.observed) {
+            continue;
+        }
+        ++capture.assertion_processes;
+        capture.assertion_processes_observed
+            = capture.assertion_processes_observed && program.observed
+            && !program.reactive && !program.postponed;
+        for (const auto& operation : program.operations) {
+            if (const auto* read
+                = fsim::runtime::simir::operation_get_if<
+                    fsim::runtime::simir::ReadSignal>(&operation)) {
+                if (read->kind
+                    == fsim::runtime::simir::SignalReadKind::sampled) {
+                    ++capture.sampled_signal_reads;
+                } else if (read->kind
+                    == fsim::runtime::simir::SignalReadKind::current) {
+                    ++capture.current_signal_reads;
+                }
+            }
+            if (const auto* wait
+                = fsim::runtime::simir::operation_get_if<
+                    fsim::runtime::simir::WaitRegion>(&operation);
+                wait && wait->phase
+                    == fsim::runtime::SchedulerPhase::reactive) {
+                ++capture.reactive_waits;
+            }
+        }
     }
     simulation.set_output_hook(
         [&capture](
@@ -381,6 +560,7 @@ ConcurrentCapture capture_concurrent_assertions(
             const fsim::runtime::SimulationTick,
             const std::uint64_t) {
             capture.outputs.emplace_back(text);
+            capture.timeline.emplace_back("output:" + std::string { text });
         });
     simulation.set_report_hook(
         [&capture](
@@ -396,6 +576,19 @@ ConcurrentCapture capture_concurrent_assertions(
     simulation.set_concurrent_assertion_hook(
         [&capture](const fsim::app::ConcurrentAssertionEvent& event) {
             capture.callback_events.push_back(event);
+            capture.timeline.emplace_back(
+                event.outcome == fsim::app::ConcurrentAssertionOutcome::pass
+                    ? "event:pass"
+                    : event.outcome
+                            == fsim::app::ConcurrentAssertionOutcome::failure
+                    ? "event:failure"
+                    : event.outcome
+                            == fsim::app::ConcurrentAssertionOutcome::vacuous
+                    ? "event:vacuous"
+                    : event.outcome
+                            == fsim::app::ConcurrentAssertionOutcome::disabled
+                    ? "event:disabled"
+                    : "event:aborted");
         });
     const auto result = simulation.run();
     assert(result.status == fsim::runtime::RunStatus::stopped);
@@ -446,24 +639,32 @@ module concurrent_top;
   initial begin
     clock = 1'b0;
     request = 1'b0;
-    #1 request = 1'b1;
-    clock = 1'b1;
-    #1 clock = 1'b0;
-    $assertoff;
-    #1 request = 1'b0;
-    clock = 1'b1;
-    #1 clock = 1'b0;
-    $asserton;
-    $assertcontrol(7);
-    #1 request = 1'b1;
-    clock = 1'b1;
-    #1 clock = 1'b0;
-    $assertpasson;
-    $assertfailoff;
-    #1 request = 1'b0;
-    clock = 1'b1;
-    #1 clock = 1'b0;
-    $assertfailon;
+    request = 1'b1;
+    #1 clock = 1'b1;
+    #1 begin
+      clock = 1'b0;
+      request = 1'b0;
+      $assertoff;
+    end
+    #1 clock = 1'b1;
+    #1 begin
+      clock = 1'b0;
+      request = 1'b1;
+      $asserton;
+      $assertcontrol(7);
+    end
+    #1 clock = 1'b1;
+    #1 begin
+      clock = 1'b0;
+      request = 1'b0;
+      $assertpasson;
+      $assertfailoff;
+    end
+    #1 clock = 1'b1;
+    #1 begin
+      clock = 1'b0;
+      $assertfailon;
+    end
     #1 clock = 1'b1;
     #1 $finish;
   end
@@ -486,6 +687,18 @@ endmodule
     assert(reference.events == compiled.events);
     assert(reference.callback_events == reference.events);
     assert(compiled.callback_events == compiled.events);
+    assert(reference.assertion_processes == 4);
+    assert(reference.assertion_processes
+        == compiled.assertion_processes);
+    assert(reference.assertion_processes_observed);
+    assert(compiled.assertion_processes_observed);
+    assert(reference.sampled_signal_reads != 0);
+    assert(reference.sampled_signal_reads
+        == compiled.sampled_signal_reads);
+    assert(reference.current_signal_reads == 0);
+    assert(compiled.current_signal_reads == 0);
+    assert(reference.reactive_waits != 0);
+    assert(reference.reactive_waits == compiled.reactive_waits);
     assert(std::ranges::find(
                reference.phases, fsim::runtime::SchedulerPhase::observed)
         != reference.phases.end());
@@ -802,10 +1015,10 @@ endmodule
         == fsim::app::ConcurrentAssertionOutcome::pass);
     assert(interpreted.events[1].time == 5);
     assert(interpreted.events[1].outcome
-        == fsim::app::ConcurrentAssertionOutcome::vacuous);
+        == fsim::app::ConcurrentAssertionOutcome::failure);
     assert(interpreted.events[2].time == 5);
     assert(interpreted.events[2].outcome
-        == fsim::app::ConcurrentAssertionOutcome::failure);
+        == fsim::app::ConcurrentAssertionOutcome::vacuous);
 }
 
 void test_sequence_cycle_delay(const std::filesystem::path& directory)
@@ -1430,463 +1643,11 @@ endmodule
     assert(interpreted_outputs == expected_outputs);
 }
 
-void test_wide_concurrent_predicate(const std::filesystem::path& directory)
-{
-    const auto source = directory / "wide_concurrent_predicate.sv";
-    {
-        std::ofstream output(source);
-        output << R"(
-module wide_concurrent_predicate;
-  logic clock;
-  logic [136:0] observed;
-  property exact_wide_value;
-    @(posedge clock)
-      always observed === 137'h1_0000000000000000_0000000000000000_01;
-  endproperty
-  exact_check: assert property (exact_wide_value)
-    $display("wide pass");
-    else $display("wide fail");
-  initial begin
-    clock = 1'b0;
-    observed = 137'h1_0000000000000000_0000000000000000_01;
-    #1 clock = 1'b1;
-    #1 clock = 1'b0;
-    observed = 137'h0_0000000000000000_0000000000000000_01;
-    #1 clock = 1'b1;
-    #1 $finish;
-  end
-endmodule
-)";
-    }
-    auto config = config_for(
-        directory, source, fsim::project::Optimization::o2);
-    config.project.name = "wide-concurrent-predicate";
-    config.project.top = "sv:work.wide_concurrent_predicate";
-    config.build.cache_path = directory / "wide-concurrent-predicate-cache";
-    const auto interpreted = run_concurrent_assertions(
-        config, fsim::app::SimulationEngine::interpreter);
-    const auto compiled = run_concurrent_assertions(
-        config, fsim::app::SimulationEngine::compiled);
-    const std::vector<std::string> outputs { "wide pass", "wide fail" };
-    assert(interpreted.outputs == outputs);
-    assert(compiled.outputs == outputs);
-    assert(interpreted.coverage == compiled.coverage);
-    assert(interpreted.events == compiled.events);
-    assert(interpreted.coverage.size() == 1);
-    assert(interpreted.coverage.front().attempts == 2);
-    assert(interpreted.coverage.front().passes == 1);
-    assert(interpreted.coverage.front().failures == 1);
-}
-
-void test_scalar_property_operators(const std::filesystem::path& directory)
-{
-    const auto source = directory / "scalar_property_operators.sv";
-    {
-        std::ofstream output(source);
-        output << R"(
-module scalar_property_operators;
-  logic clock;
-  logic request;
-  logic enabled;
-  property combined;
-    @(posedge clock) always (request and enabled);
-  endproperty
-  property inverted;
-    @(posedge clock) not request;
-  endproperty
-  combined_check: assert property (combined)
-    $display("combined pass");
-    else $display("combined fail");
-  inverted_check: assert property (inverted)
-    $display("inverted pass");
-    else $display("inverted fail");
-  initial begin
-    clock = 1'b0;
-    request = 1'b1;
-    enabled = 1'b1;
-    #1 clock = 1'b1;
-    #1 clock = 1'b0;
-    request = 1'b0;
-    #1 clock = 1'b1;
-    #1 $finish;
-  end
-endmodule
-)";
-    }
-    auto config = config_for(
-        directory, source, fsim::project::Optimization::o2);
-    config.project.name = "scalar-property-operators";
-    config.project.top = "sv:work.scalar_property_operators";
-    config.build.cache_path = directory / "scalar-property-operators-cache";
-    const auto interpreted = run_concurrent_assertions(
-        config, fsim::app::SimulationEngine::interpreter);
-    const auto compiled = run_concurrent_assertions(
-        config, fsim::app::SimulationEngine::compiled);
-    const std::vector<std::string> outputs {
-        "combined pass",
-        "inverted fail",
-        "combined fail",
-        "inverted pass"
-    };
-    assert(interpreted.outputs == outputs);
-    assert(compiled.outputs == outputs);
-    assert(interpreted.coverage == compiled.coverage);
-    assert(interpreted.events == compiled.events);
-    assert(interpreted.coverage.size() == 2);
-    for (const auto& coverage : interpreted.coverage) {
-        assert(coverage.attempts == 2);
-        assert(coverage.passes == 1);
-        assert(coverage.failures == 1);
-    }
-}
-
-void test_property_formal_actuals(const std::filesystem::path& directory)
-{
-    const auto source = directory / "property_formal_actuals.sv";
-    {
-        std::ofstream output(source);
-        output << R"(
-module property_formal_actuals;
-  logic clock;
-  logic request;
-  logic enabled;
-  property selected(logic condition = enabled);
-    @(posedge clock) condition;
-  endproperty
-  positional: assert property (selected(request))
-    $display("positional pass");
-    else $display("positional fail");
-  named: assert property (selected(.condition(enabled)))
-    $display("named pass");
-    else $display("named fail");
-  defaulted: assert property (selected())
-    $display("default pass");
-    else $display("default fail");
-  initial begin
-    clock = 1'b0;
-    request = 1'b1;
-    enabled = 1'b0;
-    #1 clock = 1'b1;
-    #1 clock = 1'b0;
-    request = 1'b0;
-    enabled = 1'b1;
-    #1 clock = 1'b1;
-    #1 $finish;
-  end
-endmodule
-)";
-    }
-    auto config = config_for(
-        directory, source, fsim::project::Optimization::o2);
-    config.project.name = "property-formal-actuals";
-    config.project.top = "sv:work.property_formal_actuals";
-    config.build.cache_path = directory / "property-formal-actuals-cache";
-    const auto interpreted = run_concurrent_assertions(
-        config, fsim::app::SimulationEngine::interpreter);
-    const auto compiled = run_concurrent_assertions(
-        config, fsim::app::SimulationEngine::compiled);
-    const std::vector<std::string> outputs {
-        "positional pass", "named fail", "default fail",
-        "positional fail", "named pass", "default pass"
-    };
-    assert(interpreted.outputs == outputs);
-    assert(compiled.outputs == outputs);
-    assert(interpreted.coverage == compiled.coverage);
-    assert(interpreted.events == compiled.events);
-    assert(interpreted.coverage.size() == 3);
-    assert(std::ranges::all_of(
-        interpreted.coverage, [](const auto& coverage) {
-            return coverage.attempts == 2 && coverage.passes == 1
-                && coverage.failures == 1;
-        }));
-}
-
-void test_property_local_variables(const std::filesystem::path& directory)
-{
-    const auto source = directory / "property_local_variables.sv";
-    {
-        std::ofstream output(source);
-        output << R"(
-module property_local_variables;
-  logic clock;
-  logic [136:0] data;
-  int counter;
-  task automatic record_match(input int value);
-    if (value == 4)
-      $display("match item call");
-    else
-      $display("match item bad");
-  endtask
-  property captures_current_value;
-    logic [136:0] saved = data;
-    @(posedge clock) saved == data;
-  endproperty
-  property computes_current_value;
-    int next = counter + 1;
-    @(posedge clock) next > counter;
-  endproperty
-  sequence captures_sequence_value;
-    logic [136:0] sequence_saved = data;
-    sequence_saved == data;
-  endsequence
-  property uses_sequence_local;
-    @(posedge clock) captures_sequence_value;
-  endproperty
-  sequence captures_first_match_value;
-    logic [136:0] matched_value;
-    int match_count = 0;
-    first_match(1'b1, matched_value = data, match_count = 1,
-                match_count += 2, match_count++, record_match(match_count));
-  endsequence
-  property uses_first_match_local;
-    @(posedge clock) captures_first_match_value;
-  endproperty
-  captured: assert property (captures_current_value)
-    $display("captured pass");
-    else $display("captured fail");
-  computed: assert property (computes_current_value)
-    $display("computed pass");
-    else $display("computed fail");
-  sequence_captured: assert property (uses_sequence_local)
-    $display("sequence pass");
-    else $display("sequence fail");
-  first_match_captured: assert property (uses_first_match_local)
-    $display("first_match pass");
-    else $display("first_match fail");
-  initial begin
-    clock = 1'b0;
-    data = 137'h1_0000000000000000_0000000000000000_01;
-    counter = 0;
-    #1 clock = 1'b1;
-    #1 clock = 1'b0;
-    data = 137'h1_0000000000000000_0000000000000000_02;
-    counter = 7;
-    #1 clock = 1'b1;
-    #1 $finish;
-  end
-endmodule
-)";
-    }
-    auto config = config_for(
-        directory, source, fsim::project::Optimization::o2);
-    config.project.name = "property-local-variables";
-    config.project.top = "sv:work.property_local_variables";
-    config.build.cache_path = directory / "property-local-variables-cache";
-    const auto interpreted = run_concurrent_assertions(
-        config, fsim::app::SimulationEngine::interpreter);
-    const auto compiled = run_concurrent_assertions(
-        config, fsim::app::SimulationEngine::compiled);
-    const std::vector<std::string> outputs {
-        "captured pass", "computed pass", "sequence pass", "match item call",
-        "first_match pass", "captured pass", "computed pass", "sequence pass",
-        "match item call", "first_match pass"
-    };
-    assert(interpreted.outputs == outputs);
-    assert(compiled.outputs == outputs);
-    assert(interpreted.coverage == compiled.coverage);
-    assert(interpreted.events == compiled.events);
-    assert(interpreted.coverage.size() == 4U);
-    assert(std::ranges::all_of(
-        interpreted.coverage,
-        [](const auto& coverage) {
-            return coverage.attempts == 2U && coverage.passes == 2U
-                && coverage.failures == 0U;
-        }));
-}
-
-void test_sequence_formal_actuals(const std::filesystem::path& directory)
-{
-    const auto source = directory / "sequence_formal_actuals.sv";
-    {
-        std::ofstream output(source);
-        output << R"(
-module sequence_formal_actuals;
-  logic clock;
-  logic request;
-  logic acknowledge;
-  sequence handshake(logic start = request, logic finish = acknowledge,
-                     int delay = 1);
-    start ##delay finish;
-  endsequence
-  property positional_property;
-    @(posedge clock) handshake(request, acknowledge);
-  endproperty
-  property named_property;
-    @(posedge clock) handshake(.finish(acknowledge), .start(request));
-  endproperty
-  property default_property;
-    @(posedge clock) handshake();
-  endproperty
-  positional: assert property (positional_property)
-    $display("sequence positional pass");
-    else $display("sequence positional fail");
-  named: assert property (named_property)
-    $display("sequence named pass");
-    else $display("sequence named fail");
-  defaulted: assert property (default_property)
-    $display("sequence default pass");
-    else $display("sequence default fail");
-  initial begin
-    clock = 1'b0;
-    request = 1'b1;
-    acknowledge = 1'b0;
-    #1 clock = 1'b1;
-    #1 clock = 1'b0;
-    acknowledge = 1'b1;
-    #1 clock = 1'b1;
-    #1 $finish;
-  end
-endmodule
-)";
-    }
-    auto config = config_for(
-        directory, source, fsim::project::Optimization::o2);
-    config.project.name = "sequence-formal-actuals";
-    config.project.top = "sv:work.sequence_formal_actuals";
-    config.build.cache_path = directory / "sequence-formal-actuals-cache";
-    const auto interpreted = run_concurrent_assertions(
-        config, fsim::app::SimulationEngine::interpreter);
-    const auto compiled = run_concurrent_assertions(
-        config, fsim::app::SimulationEngine::compiled);
-    const std::vector<std::string> outputs {
-        "sequence positional pass", "sequence named pass",
-        "sequence default pass"
-    };
-    assert(interpreted.outputs == outputs);
-    assert(compiled.outputs == outputs);
-    assert(interpreted.coverage == compiled.coverage);
-    assert(interpreted.events == compiled.events);
-    assert(interpreted.coverage.size() == 3);
-    assert(std::ranges::all_of(
-        interpreted.coverage, [](const auto& coverage) {
-            return coverage.attempts == 1 && coverage.passes == 1
-                && coverage.failures == 0;
-        }));
-}
-
-void test_disable_iff_scalar_property(const std::filesystem::path& directory)
-{
-    const auto source = directory / "disable_iff_scalar_property.sv";
-    {
-        std::ofstream output(source);
-        output << R"(
-module disable_iff_scalar_property;
-  logic clock;
-  logic reset;
-  logic request;
-  property enabled_request;
-    @(posedge clock) disable iff (reset) request;
-  endproperty
-  request_check: assert property (enabled_request)
-    $display("enabled pass");
-    else $display("enabled fail");
-  initial begin
-    clock = 1'b0;
-    reset = 1'b1;
-    request = 1'b0;
-    #1 clock = 1'b1;
-    #1 clock = 1'b0;
-    reset = 1'b0;
-    request = 1'b1;
-    #1 clock = 1'b1;
-    #1 clock = 1'b0;
-    request = 1'b0;
-    #1 clock = 1'b1;
-    #1 $finish;
-  end
-endmodule
-)";
-    }
-    auto config = config_for(
-        directory, source, fsim::project::Optimization::o2);
-    config.project.name = "disable-iff-scalar-property";
-    config.project.top = "sv:work.disable_iff_scalar_property";
-    config.build.cache_path = directory / "disable-iff-scalar-cache";
-    const auto interpreted = run_concurrent_assertions(
-        config, fsim::app::SimulationEngine::interpreter);
-    const auto compiled = run_concurrent_assertions(
-        config, fsim::app::SimulationEngine::compiled);
-    const std::vector<std::string> outputs { "enabled pass", "enabled fail" };
-    assert(interpreted.outputs == outputs);
-    assert(compiled.outputs == outputs);
-    assert(interpreted.coverage == compiled.coverage);
-    assert(interpreted.events == compiled.events);
-    assert(interpreted.coverage.size() == 1);
-    assert(interpreted.coverage.front().attempts == 2);
-    assert(interpreted.coverage.front().passes == 1);
-    assert(interpreted.coverage.front().failures == 1);
-    assert(interpreted.coverage.front().vacuous == 0);
-    assert(interpreted.events.size() == 2);
-    assert(interpreted.events.front().time == 3);
-    assert(interpreted.events.back().time == 5);
-}
-
-void test_disable_iff_cancels_attempts(const std::filesystem::path& directory)
-{
-    const auto source = directory / "disable_iff_cancels_attempts.sv";
-    {
-        std::ofstream output(source);
-        output << R"(
-module disable_iff_cancels_attempts;
-  logic clock;
-  logic reset;
-  logic request;
-  logic acknowledge;
-  property delayed_handshake;
-    @(posedge clock) disable iff (reset)
-      request |-> nexttime[2] acknowledge;
-  endproperty
-  handshake_check: assert property (delayed_handshake)
-    $display("pass action");
-    else $display("failure action");
-  initial begin
-    clock = 1'b0;
-    reset = 1'b0;
-    request = 1'b1;
-    acknowledge = 1'b0;
-    $assertvacuousoff;
-    #1 clock = 1'b1;
-    #1 clock = 1'b0;
-    reset = 1'b1;
-    request = 1'b0;
-    #1 clock = 1'b1;
-    #1 clock = 1'b0;
-    reset = 1'b0;
-    #1 clock = 1'b1;
-    #1 $finish;
-  end
-endmodule
-)";
-    }
-    auto config = config_for(
-        directory, source, fsim::project::Optimization::o2);
-    config.project.name = "disable-iff-cancels-attempts";
-    config.project.top = "sv:work.disable_iff_cancels_attempts";
-    config.build.cache_path = directory / "disable-iff-cancels-cache";
-    const auto interpreted = run_concurrent_assertions(
-        config, fsim::app::SimulationEngine::interpreter);
-    const auto compiled = run_concurrent_assertions(
-        config, fsim::app::SimulationEngine::compiled);
-    assert(interpreted.outputs.empty());
-    assert(compiled.outputs.empty());
-    assert(interpreted.coverage == compiled.coverage);
-    assert(interpreted.events == compiled.events);
-    assert(interpreted.coverage.size() == 1);
-    assert(interpreted.coverage.front().attempts == 1);
-    assert(interpreted.coverage.front().passes == 0);
-    assert(interpreted.coverage.front().failures == 0);
-    assert(interpreted.coverage.front().vacuous == 1);
-    assert(interpreted.events.size() == 1);
-    assert(interpreted.events.front().time == 5);
-    assert(interpreted.events.front().outcome
-        == fsim::app::ConcurrentAssertionOutcome::vacuous);
-}
-
-#include "assertion_application_controls_coverage.tpp"
-} // namespace
+} // namespace fsim::test::assertion_application
 
 int main()
 {
+    using namespace fsim::test::assertion_application;
     const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
     TemporaryDirectory directory {
         std::filesystem::temp_directory_path()
@@ -2013,6 +1774,7 @@ endmodule
         source,
         fsim::project::Optimization::o2);
     test_cli_failure_reporting(manifest);
+    test_deferred_immediate_assertions(directory.path);
     test_concurrent_assertions(directory.path);
     test_overlapped_implication(directory.path);
     test_nonoverlapped_implication(directory.path);
@@ -2036,6 +1798,9 @@ endmodule
     test_sequence_formal_actuals(directory.path);
     test_disable_iff_scalar_property(directory.path);
     test_disable_iff_cancels_attempts(directory.path);
+    test_cover_sequence_revisions(directory.path);
+    test_concurrent_assertion_execution_regions(directory.path);
+    test_checker_instances(directory.path);
     test_vacuous_action_controls(directory.path);
     test_concurrent_action_blocks(directory.path);
     test_assertkill_cancels_attempts(directory.path);

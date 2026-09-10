@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "elaborator_internal.hpp"
+#include "lowerer_internal.hpp"
 
 #include "fsim/frontend/output_format.hpp"
 
@@ -30,6 +30,10 @@ namespace {
             return OutputFormat::real_fixed;
         case frontend::OutputFormat::RealGeneral:
             return OutputFormat::real_general;
+        case frontend::OutputFormat::Unformatted2:
+            return OutputFormat::unformatted2;
+        case frontend::OutputFormat::Unformatted4:
+            return OutputFormat::unformatted4;
         case frontend::OutputFormat::Hierarchy:
         case frontend::OutputFormat::Time:
             break;
@@ -77,7 +81,13 @@ std::optional<StringRegisterId> Lowerer::lower_string_format(
             conversion.format = *default_format;
         }
     }
-    if (!parsed.valid || parsed.conversions.size() > 64U
+    const bool has_unformatted = std::ranges::any_of(
+        parsed.conversions,
+        [](const auto& conversion) {
+            return conversion.format == frontend::OutputFormat::Unformatted2
+                || conversion.format == frontend::OutputFormat::Unformatted4;
+        });
+    if (!parsed.valid || has_unformatted || parsed.conversions.size() > 64U
         || arguments.size() - format_index
                 - static_cast<std::size_t>(!default_format)
             > 64U) {

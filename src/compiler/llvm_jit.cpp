@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/compiler/llvm_jit.hpp"
+#include "llvm_jit_impl.hpp"
 #include "llvm_jit_internal.hpp"
 
 #include "fsim/compiler/object_cache.hpp"
@@ -75,7 +76,7 @@ std::string_view to_string(const JitOptimizationLevel optimization) noexcept
     return "O2";
 }
 
-namespace {
+namespace llvm_detail {
 
     constexpr std::array<std::byte, 8> kJitMetadataMagic {
         std::byte { 'F' }, std::byte { 'S' }, std::byte { 'I' },
@@ -393,13 +394,13 @@ namespace {
                         << " rejected_signal=" << signal
                         << " width="
                         << (signal < signal_widths.size()
-                                ? signal_widths[signal]
-                                : 0U)
+                                   ? signal_widths[signal]
+                                   : 0U)
                         << " kind="
                         << (signal < signal_value_kinds.size()
-                                ? static_cast<unsigned>(
-                                      signal_value_kinds[signal])
-                                : 0U)
+                                   ? static_cast<unsigned>(
+                                         signal_value_kinds[signal])
+                                   : 0U)
                         << '\n';
                 }
                 return false;
@@ -591,19 +592,6 @@ namespace {
         return llvm::CodeGenOptLevel::Default;
     }
 
-    struct IrShape {
-        std::size_t functions { };
-        std::size_t blocks { };
-        std::size_t instructions { };
-        std::size_t allocas { };
-        std::size_t loads { };
-        std::size_t stores { };
-        std::size_t calls { };
-        std::size_t branches { };
-        std::size_t switches { };
-        std::size_t phis { };
-    };
-
     [[nodiscard]] IrShape ir_shape(const llvm::Module& module)
     {
         IrShape result;
@@ -763,10 +751,12 @@ namespace {
         offsetof(fsim_jit_runtime_v1, read_signal_dynamic_part) == 760);
     static_assert(
         offsetof(fsim_jit_runtime_v1,
-            direct_wide_signal_logic9_plane2) == 768);
+            direct_wide_signal_logic9_plane2)
+        == 768);
     static_assert(
         offsetof(fsim_jit_runtime_v1,
-            direct_wide_signal_logic9_plane3) == 776);
+            direct_wide_signal_logic9_plane3)
+        == 776);
     static_assert(
         offsetof(fsim_jit_runtime_v1, direct_signal_logic9_plane0) == 784);
     static_assert(
@@ -803,28 +793,7 @@ namespace {
     static_assert(offsetof(fsim_jit_frame_v1, native_return_stack) == 88);
     static_assert(sizeof(fsim_jit_resume_result_v1) == 24);
 
-    constexpr auto kJitRuntimeV1PrefixSize = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, write_update));
-    constexpr auto kJitFrameV1PrefixSize = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_frame_v1, register_logic9_plane2));
-    constexpr auto kJitRuntimeLogic9Size = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, load_string));
-    constexpr auto kJitRuntimeStringSize = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, file_open));
-    constexpr auto kJitRuntimeFileSize = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, container_operation));
-    constexpr auto kJitRuntimeForceSize = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, read_simulation_time));
-    constexpr auto kJitRuntimeDriverForceSize = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, execute_signal_operation));
-    constexpr auto kJitRuntimeContainerWordSize = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, container_read_packed));
-    constexpr auto kJitRuntimeExactSignalSize = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, read_signal_packed));
-    constexpr auto kJitRuntimeWideSignalReadSize = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, write_signal_packed));
-
-    class PersistentLlvmObjectCache final : public llvm::ObjectCache {
+    class PersistentLlvmObjectCache final : public LlvmObjectCache {
     public:
         PersistentLlvmObjectCache(std::filesystem::path root,
             llvm::Triple target_triple,
@@ -905,7 +874,7 @@ namespace {
         [[nodiscard]] std::unique_ptr<llvm::MemoryBuffer>
         preflight(
             const std::string_view key,
-            std::vector<std::byte>* const metadata = nullptr)
+            std::vector<std::byte>* const metadata = nullptr) override
         {
             if (!valid_cache_key(key)) {
                 return nullptr;
@@ -919,20 +888,20 @@ namespace {
         }
 
         void stage_metadata(
-            std::string key, std::vector<std::byte> metadata)
+            std::string key, std::vector<std::byte> metadata) override
         {
             const std::lock_guard lock { metadata_mutex_ };
             pending_metadata_.insert_or_assign(
                 std::move(key), std::move(metadata));
         }
 
-        void discard_staged_metadata(const std::string_view key)
+        void discard_staged_metadata(const std::string_view key) override
         {
             const std::lock_guard lock { metadata_mutex_ };
             pending_metadata_.erase(std::string { key });
         }
 
-        [[nodiscard]] LlvmJitCacheStatistics statistics() const noexcept
+        [[nodiscard]] LlvmJitCacheStatistics statistics() const noexcept override
         {
             return {
                 hits_.load(std::memory_order_relaxed),
@@ -1015,7 +984,7 @@ namespace {
                 && (*parsed)->getBytesInAddress() == sizeof(void*)
                 && (*parsed)->getArch() == target_triple_.getArch()
                 && (*parsed)->getTripleObjectFormat()
-                    == target_triple_.getObjectFormat();
+                == target_triple_.getObjectFormat();
         }
 
         fsim::compiler::ObjectCache storage_;
@@ -1043,16 +1012,6 @@ namespace {
         llvm::logAllUnhandledErrors(std::move(error), stream);
         stream.flush();
         return message;
-    }
-
-    template <typename T>
-    [[nodiscard]] T unwrap(llvm::Expected<T> expected,
-        const std::string_view action)
-    {
-        if (!expected) {
-            throw LlvmJitError(std::string { action } + ": " + llvm_error(expected.takeError()));
-        }
-        return std::move(*expected);
     }
 
     std::once_flag native_target_once;
@@ -1138,7 +1097,7 @@ namespace {
     };
 #endif
 
-} // namespace
+} // namespace llvm_detail
 
 using namespace llvm_detail;
 
@@ -1150,166 +1109,6 @@ LlvmJitGeneratedRuntimeError::LlvmJitGeneratedRuntimeError(
     , reason_(reason)
 {
 }
-
-struct LlvmJit::Impl {
-    struct ProcessInfo {
-        JitProcessFrameLayout frame_layout;
-        std::uint32_t operation_count { };
-        bool uses_native_call_stack { };
-        bool requires_resume { };
-        bool uses_write_update { };
-        bool uses_write_after { };
-        bool uses_write_inertial { };
-        bool uses_write_projected { };
-        bool uses_write_projected_waveform { };
-        bool uses_write_blocking_slice { };
-        bool uses_write_update_slice { };
-        bool uses_write_after_slice { };
-        bool uses_write_inertial_slice { };
-        bool uses_write_projected_slice { };
-        bool uses_write_projected_waveform_slice { };
-        bool uses_force_signal_slice { };
-        bool uses_release_signal_slice { };
-        bool uses_force_driver_signal_slice { };
-        bool uses_release_driver_signal_slice { };
-        bool uses_debug_points { };
-        bool uses_signal_event { };
-        bool uses_signal_last_value { };
-        bool uses_signal_last_event { };
-        bool uses_simulation_time { };
-        bool uses_vital_timing { };
-        bool uses_vital_delay { };
-        bool uses_signal_active { };
-        bool uses_signal_last_active { };
-        bool uses_signal_driving { };
-        bool uses_signal_driving_value { };
-        bool uses_output { };
-        bool uses_postponed_output { };
-        bool uses_report { };
-        bool uses_formatted_output { };
-        bool uses_time_output { };
-        bool uses_monitor_install { };
-        bool uses_monitor_control { };
-        bool uses_random_value { };
-        bool uses_strings { };
-        bool uses_files { };
-        bool uses_containers { };
-        bool uses_wide_container_operation { };
-        bool uses_exact_signal_operation { };
-        bool uses_wide_signal_read { };
-        bool uses_wide_signal_write { };
-        bool uses_code_coverage { };
-        std::vector<runtime::simir::InstructionIndex> entry_points;
-
-        static constexpr std::array flags {
-            &ProcessInfo::uses_native_call_stack,
-            &ProcessInfo::requires_resume,
-            &ProcessInfo::uses_write_update,
-            &ProcessInfo::uses_write_after,
-            &ProcessInfo::uses_write_inertial,
-            &ProcessInfo::uses_write_projected,
-            &ProcessInfo::uses_write_projected_waveform,
-            &ProcessInfo::uses_write_blocking_slice,
-            &ProcessInfo::uses_write_update_slice,
-            &ProcessInfo::uses_write_after_slice,
-            &ProcessInfo::uses_write_inertial_slice,
-            &ProcessInfo::uses_write_projected_slice,
-            &ProcessInfo::uses_write_projected_waveform_slice,
-            &ProcessInfo::uses_force_signal_slice,
-            &ProcessInfo::uses_release_signal_slice,
-            &ProcessInfo::uses_force_driver_signal_slice,
-            &ProcessInfo::uses_release_driver_signal_slice,
-            &ProcessInfo::uses_debug_points,
-            &ProcessInfo::uses_signal_event,
-            &ProcessInfo::uses_signal_last_value,
-            &ProcessInfo::uses_signal_last_event,
-            &ProcessInfo::uses_simulation_time,
-            &ProcessInfo::uses_vital_timing,
-            &ProcessInfo::uses_vital_delay,
-            &ProcessInfo::uses_signal_active,
-            &ProcessInfo::uses_signal_last_active,
-            &ProcessInfo::uses_signal_driving,
-            &ProcessInfo::uses_signal_driving_value,
-            &ProcessInfo::uses_output,
-            &ProcessInfo::uses_postponed_output,
-            &ProcessInfo::uses_report,
-            &ProcessInfo::uses_formatted_output,
-            &ProcessInfo::uses_time_output,
-            &ProcessInfo::uses_monitor_install,
-            &ProcessInfo::uses_monitor_control,
-            &ProcessInfo::uses_random_value,
-            &ProcessInfo::uses_strings,
-            &ProcessInfo::uses_files,
-            &ProcessInfo::uses_containers,
-            &ProcessInfo::uses_wide_container_operation,
-            &ProcessInfo::uses_exact_signal_operation,
-            &ProcessInfo::uses_wide_signal_read,
-            &ProcessInfo::uses_wide_signal_write,
-            &ProcessInfo::uses_code_coverage,
-        };
-    };
-
-    [[nodiscard]] static std::vector<std::byte> encode_module_metadata(
-        std::span<const ProcessInfo> processes);
-    [[nodiscard]] static std::optional<std::vector<ProcessInfo>>
-    decode_module_metadata(
-        std::span<const std::byte> metadata,
-        std::span<const JitProcessModuleEntry> entries,
-        std::span<const std::uint32_t> signal_widths);
-
-    struct NativeEntry {
-        NativeProcess* function { };
-        ProcessInfo info;
-        std::string symbol;
-    };
-
-    struct NativeCohortEntry {
-        NativeCohort* function { };
-        std::vector<const NativeEntry*> members;
-        bool manages_process_state { };
-        bool region_mode { };
-    };
-
-    struct NativeBoundCohortEntry {
-        NativeCohort* function { };
-        std::vector<const NativeEntry*> members;
-        std::vector<const fsim_jit_runtime_v1*> runtimes;
-        std::vector<fsim_jit_frame_v1*> frames;
-        std::vector<fsim_jit_resume_result_v1*> results;
-        std::vector<std::uint32_t> statuses;
-        std::vector<std::uint8_t*> queued;
-        std::vector<std::uint8_t*> waiting;
-        std::vector<std::uint8_t*> process_statuses;
-        std::vector<std::uint8_t*> active;
-        bool manages_process_state { };
-        bool region_mode { };
-    };
-
-    LlvmJitOptions options;
-    std::unique_ptr<PersistentLlvmObjectCache> object_cache;
-    std::unique_ptr<llvm::orc::LLJIT> jit;
-    std::string target_cpu;
-    std::vector<std::string> target_features;
-    std::string immutable_design_identity;
-    std::unordered_set<std::string> module_identities;
-    std::unordered_set<std::string> symbols;
-    std::unordered_set<std::string> pending_module_identities;
-    std::unordered_set<std::string> pending_symbols;
-    std::unordered_map<std::string, ProcessInfo> info_by_symbol;
-    std::unordered_map<std::string, JitProcessHandle> handles_by_symbol;
-    std::unordered_map<std::uint64_t, std::unique_ptr<NativeEntry>> functions;
-    std::unordered_map<std::size_t,
-        std::vector<std::unique_ptr<NativeCohortEntry>>>
-        cohort_functions;
-    std::vector<std::unique_ptr<NativeBoundCohortEntry>> bound_cohorts;
-    std::unordered_map<const Process*, ValidatedProcess>
-        immutable_validated_processes;
-    std::mutex validation_mutex;
-    std::mutex lookup_mutex;
-    std::mutex cohort_mutex;
-    std::uint64_t next_handle = 1;
-    std::uint64_t next_cohort = 1;
-};
 
 std::vector<std::byte> LlvmJit::Impl::encode_module_metadata(
     const std::span<const ProcessInfo> processes)
@@ -1520,11 +1319,9 @@ LlvmJit::LlvmJit(const LlvmJitOptions options)
 #endif
 #if defined(__MINGW32__)
     llvm::orc::SymbolMap mingw_runtime_symbols;
-    mingw_runtime_symbols[
-        impl_->jit->getExecutionSession().intern("___chkstk_ms")] =
-        llvm::orc::ExecutorSymbolDef(
-            llvm::orc::ExecutorAddr::fromPtr(&___chkstk_ms),
-            llvm::JITSymbolFlags::Exported);
+    mingw_runtime_symbols[impl_->jit->getExecutionSession().intern("___chkstk_ms")] = llvm::orc::ExecutorSymbolDef(
+        llvm::orc::ExecutorAddr::fromPtr(&___chkstk_ms),
+        llvm::JITSymbolFlags::Exported);
     if (auto error = impl_->jit->getMainJITDylib().define(
             llvm::orc::absoluteSymbols(std::move(mingw_runtime_symbols)))) {
         throw LlvmJitError(
@@ -1579,10 +1376,6 @@ bool LlvmJit::supports_process(
         return false;
     }
 }
-
-#include "llvm_jit_process_modules.tpp"
-
-#include "llvm_jit_execution.tpp"
 
 LlvmJitCacheStatistics LlvmJit::cache_statistics() const noexcept
 {

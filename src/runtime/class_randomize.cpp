@@ -182,7 +182,13 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
   }
   auto& object = heap.object(handle);
   std::set<std::size_t> selected_indices;
-  if (request.variable_list.empty()) {
+  if (request.selection
+          == SystemVerilogClassRandomizeSelection::NoProperties) {
+    if (!request.variable_list.empty()) {
+      throw std::invalid_argument{
+          "class randomize checker mode cannot select properties"};
+    }
+  } else if (request.variable_list.empty()) {
     for (std::size_t index = 0; index < object.properties.size(); ++index) {
       const auto& random = object.properties[index].random_state;
       if (random && random->enabled) selected_indices.insert(index);
@@ -280,8 +286,10 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
     if (request.inline_constraints) {
       request.inline_constraints(solver, variables);
     }
-    const auto selection = heap.random_stream(
-        handle, request.call_identity).next_u64();
+    const auto selection = request.selection
+            == SystemVerilogClassRandomizeSelection::NoProperties
+        ? std::uint64_t{}
+        : heap.random_stream(handle, request.call_identity).next_u64();
     auto solved = solver.solve(selection);
     if (solved.status == SystemVerilogConstraintSolveStatus::Unsatisfiable
         && std::ranges::any_of(selected, [](const auto& item) {

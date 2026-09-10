@@ -291,6 +291,49 @@ persists the immutable mapping and applies it through the shared runtime
 timing services. See [Standard Delay Format support](sdf.md) for the programmatic and
 portable-format boundary.
 
+Batch 186 Change 16 tightens the exact SystemVerilog-2023 specify boundary.
+Simple-path polarity is accepted only before `=>` or `*>`; parallel paths own
+exactly one source and destination; and edge-sensitive paths require grouped
+destination data while remaining unavailable to `ifnone`. Timing-event
+descriptors resolve only module ports, and notifiers must be scalar variables
+rather than nets. The exact 2023 mixed-language witness preserves these paths,
+checks, reports, notifier transitions, VCD observations, runtime-state replay,
+mapped-library relocation, and interpreter/LLVM O0/O2 cold/warm/edit cache
+equivalence.
+
+Batch 186 Change 17 tightens SystemVerilog-2023 SDF backannotation at the
+elaboration boundary. An `IOPATH` now links only when its instance, packed
+selection, source edge, destination, and unconditional, conditional, or
+`CONDELSE` disposition identify one retained specify path. Timing checks use
+the exact instance prefix, reference/data roles, selections, and transition
+qualifiers. Endpoint order is no longer trusted when an SDF edge wrapper
+reorders serialized atoms; roles are rebound from the unique elaborated
+owner. Multiple exact owners produce `FSIM-SDF-ENDPOINT-006` and reject the
+entire mapping transaction. The exact-2023 application witness retains the
+shared interpreter/LLVM drive and timing behavior.
+
+Batch 186 Change 18 closes the revised configuration and protected-envelope
+boundary. Nested `use ... : config` selections retain their controlling
+configuration at the selected instance, compose through logical-library
+boundaries, and diagnose an unavailable referenced configuration at the exact
+instance. Protected-envelope payload bytes are opaque: lexer fallout and
+payload text cannot escape through tokens or diagnostics, visible source on
+either side remains available, and a missing `end_protected` produces a stable
+opening-site diagnostic. The preprocessor cache identity rejects stale
+pre-opaque results. Independently authored exact-2023 tests cover nested
+interpreter/LLVM O0/O2 selection and malformed encrypted envelopes without
+requiring a decryption provider.
+
+Batch 186 Change 19 freezes cross-engine behavior for the entire revised
+verification, hierarchy, and timing surface. The serial SystemVerilog closure
+matrix now runs 26 witnesses covering frontend and elaboration, assertions and
+checkers, constrained randomization, functional coverage, files and utilities,
+directives, programs, hierarchy/configuration, interfaces/packages/generate,
+gates/UDPs, specify timing, exact SDF, interpreter/LLVM, artifacts, VPI, UVM,
+and shared runtime behavior. Ordinary full CTest runs use fixture ownership so
+the same witnesses execute once rather than recursively; direct closure runs
+retain per-witness logs and a 1,200-second stage timeout.
+
 Verilog-2005 strength execution covers explicit zero/one drive pairs, pull and
 supply sources, implicit `tri0`/`tri1` pulls, strength-qualified gates and UDP
 outputs, MOS/resistive-MOS devices, passive `tran`/`rtran` and conditional
@@ -299,6 +342,17 @@ four-state and per bit; connected-net traversal is cycle safe and vector
 controls select conductance per lane. Strength, topology, charge, and decay
 metadata survive portable/object/design/library artifacts and interpreter/LLVM
 O0/O2 cold/warm/edit cache paths.
+
+Batch 186 Change 15 closes the SystemVerilog-2023 gate, switch, and UDP
+revision slice. `buf` and `not` now drive every declared output terminal;
+n-input logic gates accept the one-input boundary; and named switch arrays
+materialize one independently indexed primitive per declared range element,
+with scalar broadcast and packed-direction mapping. Programs reject built-in
+and user-defined primitive instances. UDP execution units retain the exact
+Verilog/SystemVerilog revision and compatibility profile, while restored
+cross-language metadata is rejected before elaboration. Independently authored
+2023 evidence agrees across interpreter and LLVM O0/O2 cold/warm execution and
+portable object inspection.
 
 Batch 163 Change 2 closes the IEEE 1076-2008 lexical and design-unit
 surface. Basic identifiers canonicalize case while rejecting leading,
@@ -661,9 +715,41 @@ frames, deterministic unlabeled `genblkN` names, and declaration-ordered
 generated localparams now specialize packed ranges, local typedefs, objects,
 function/task profiles, delays, instance overrides, and connections. Exact
 physical/logical source ancestry and include snapshots participate in
-preprocessor-v5 and native-schema-60 identity. Implementation-defined pragma
+preprocessor-v7 and native-schema-60 identity. Implementation-defined pragma
 payload semantics, dynamic generate selection, and aggregate or
 multidimensional generated types remain outside this bounded slice.
+
+Batch 186 Change 9 adds the SystemVerilog-2023 conditional-compilation
+expression form. Macro-definedness operands use ordinary logical precedence;
+logical implication and equivalence bind right-to-left. The form is rejected
+under every earlier profile. The `begin_keywords` selector accepts
+`"1800-2023"` only when the selected source revision is 2023, nested keyword
+regions restore their prior set, and preprocessing state crosses ordered roots
+only for an explicit source-set compilation unit. Preprocessor-v7 prevents
+reuse of caches produced with the earlier directive evaluator.
+
+Batch 186 Change 10 makes module hierarchy selection revision-correct.
+SystemVerilog modules with a parameter-port list retain directly declared body
+parameters as local parameters, including an empty parameter-port list;
+Verilog retains the older nonempty-list rule. Pre-2023 type-wide binds preserve
+name-based application across configured logical-library instances and apply
+ordinary configuration rules to their generated instances. Under the 2023
+profile, the controlling configuration selects both the bind target scope and
+the bound module instance through cell and default-library mappings, while a
+target-instance mapping for the generated bound instance is ignored.
+Independently authored application tests cover interpreter and LLVM O0/O2
+cold/warm execution, exact specialization libraries, hierarchy results, and
+137-bit values.
+
+Batch 186 Change 11 retains anonymous-program tasks, functions, and ordinary
+classes in established SystemVerilog profiles and adds anonymous-program
+interface classes only in the 2023 profile. A named 2023 program may place
+`$info`, `$warning`, `$error`, or `$fatal` directly or in generate constructs.
+After generate selection, fsim evaluates each selected item once during
+hierarchy elaboration using the bounded constant formatter. Notes and warnings
+remain ordered build messages; errors and fatal reports reject the design; no
+runtime process or repeated reactive execution remains. Existing program
+reactive scheduling is unchanged.
 
 Batch 109 aggregate/multidimensional status update: the Verilog/SV unit and
 expression rows' earlier exclusions for nested aggregates, nominal legality,
@@ -2112,6 +2198,39 @@ ports preserve a deterministic nonzero pointer-free identity. Repeated views
 of one specialization compare equal, distinct elements or specializations
 compare unequal, and a restricted actual cannot widen through a generic port
 or rebind to another modport.
+
+Batch 186 Change 12 makes the source side of virtual-interface assignment
+explicit across retained and 2023 profiles. Declaration initialization and
+procedural blocking assignment accept null, a same-specialization virtual
+interface, or a scalar/statically selected same-specialization interface
+instance. An unrestricted source may narrow to a selected modport; a selected
+source cannot widen or select another view. Default, positional, and named
+parameter spellings are compared through their canonical elaborated values,
+and direct instance sources lower to ordinary pointer-free 64-bit constants
+without adding a scheduler or native-code boundary.
+
+Batch 186 Change 13 completes design-unit package-header imports and makes
+wildcard visibility reference-sensitive. Header imports are available before
+parameter and port declarations; an import without either following surface
+is rejected. A wildcard name remains only potentially visible until a later
+reference needs it, so an unused collision is harmless and a direct local
+declaration takes precedence. Explicit imports remain immediately visible and
+conflict with a same-scope declaration. Transitive selective, package-wide,
+and all-import re-exports preserve their originating declaration identity, so
+the same declaration may legally arrive through more than one package path.
+Constants, types, lets, functions, tasks, ordinary classes, and interface
+classes share the completed export validation and dependency closure.
+
+Batch 186 Change 14 makes generate naming and selected declaration ownership
+scope-correct. One ordinal is consumed per construct, alternatives share an
+implicit `genblk` name, direct nested conditional generates do not add a
+synthetic hierarchy level, nested scopes restart numbering, and declaration or
+future-label collisions are avoided deterministically. Generated ordinary and
+SystemVerilog-2023 interface classes are retained, but only a selected branch
+is resolved and specialized; invalid classes in inactive branches remain
+inert. Selected classes cross the elaboration boundary into the existing class
+runtime, HIR, VPI, artifact, and cache surfaces. Repeated genvar cycles are
+rejected even when the iteration changes on its first step.
 
 Interpreter and cold/warm LLVM O0/O2 execution agree on program scheduling,
 clock samples, direct and forwarded virtual handles, callbacks, debugger

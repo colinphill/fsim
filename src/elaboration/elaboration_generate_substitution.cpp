@@ -7,6 +7,17 @@ using namespace runtime::simir;
 void qualify_generated_expression(
     Expression& expression,
     const GeneratedNameEnvironment& names) {
+    constexpr std::string_view deferred_allocation_prefix{"@sv-new:"};
+    if (expression.kind == ExpressionKind::Call
+        && expression.text.starts_with(deferred_allocation_prefix)) {
+        const auto local_name = expression.text.substr(
+            deferred_allocation_prefix.size());
+        if (const auto found = names.find(local_name);
+            found != names.end()) {
+            expression.text = "@sv-new";
+            expression.nominal_type = found->second;
+        }
+    }
     if (expression.kind == ExpressionKind::Identifier
         || expression.kind == ExpressionKind::Call) {
         if (const auto found = names.find(expression.text);

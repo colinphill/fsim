@@ -39,6 +39,16 @@ struct SystemVerilogCoverageSampleValue {
     std::string value_bits;
     std::string unknown_bits;
     bool signed_value { };
+    SystemVerilogScalarKind scalar_kind { SystemVerilogScalarKind::None };
+    std::uint64_t scalar_bits { };
+
+    [[nodiscard]] bool is_real() const noexcept
+    {
+        return scalar_kind == SystemVerilogScalarKind::ShortReal
+            || scalar_kind == SystemVerilogScalarKind::Real
+            || scalar_kind == SystemVerilogScalarKind::Realtime;
+    }
+    [[nodiscard]] std::optional<double> real_value() const noexcept;
 };
 
 struct SystemVerilogCoverageSampleResult {

@@ -72,6 +72,10 @@ frontend::SystemVerilogCoverageState coverage()
     regular.declaration_index = 20U;
     regular.span = coverpoint.span;
     coverpoint.bins.push_back(regular);
+    auto unhit = regular;
+    unhit.name = "unhit";
+    unhit.declaration_index = 22U;
+    coverpoint.bins.push_back(unhit);
 
     SystemVerilogCoverageDeclaration cross;
     cross.kind = SystemVerilogCoverageDeclarationKind::Cross;
@@ -79,6 +83,7 @@ frontend::SystemVerilogCoverageState coverage()
     cross.declaration_index = 11U;
     cross.span = span("tb/coverage.svh");
     SystemVerilogCoverageBin cross_bin;
+    cross_bin.kind = SystemVerilogCoverageBinKind::Ignore;
     cross_bin.name = "accepted";
     cross_bin.declaration_index = 21U;
     cross_bin.span = cross.span;
@@ -93,7 +98,7 @@ frontend::SystemVerilogCoverageState coverage()
     SystemVerilogCoverageBinHit hit;
     hit.coverage_declaration_index = 10U;
     hit.bin_declaration_index = 20U;
-    hit.identity = "work::codec_tb::codec_cg::symbol::data";
+    hit.identity = "work::codec_tb::codec_cg::symbol.data";
     hit.hit_count = 5U;
     hit.at_least = 3U;
     hit.covered = true;
@@ -102,7 +107,7 @@ frontend::SystemVerilogCoverageState coverage()
     cross_state.coverage_declaration_index = 11U;
     cross_state.bin_declaration_index = 21U;
     cross_state.identity
-        = "work::codec_tb::codec_cg::symbol_x_ready::accepted";
+        = "work::codec_tb::codec_cg::symbol_x_ready.accepted";
     cross_state.hit_count = std::numeric_limits<std::uint64_t>::max();
     cross_state.exclusion_count
         = std::numeric_limits<std::uint64_t>::max();
@@ -110,6 +115,14 @@ frontend::SystemVerilogCoverageState coverage()
     cross_state.excluded = true;
     cross_state.covered = false;
     first.cross_bin_state.push_back(cross_state);
+    auto zero_cross_state = cross_state;
+    zero_cross_state.bin_declaration_index.reset();
+    zero_cross_state.identity
+        = "work::codec_tb::codec_cg::symbol_x_ready<symbol.data,ready.one>";
+    zero_cross_state.hit_count = 0U;
+    zero_cross_state.exclusion_count = 0U;
+    zero_cross_state.excluded = false;
+    first.cross_bin_state.push_back(zero_cross_state);
 
     auto second = first;
     second.name = "cg1";
@@ -146,7 +159,7 @@ int main()
                database(), coverage(), bindings, id(3U))
                .contents
         == made.contents);
-    assert(made.contents->metrics.size() == 3U);
+    assert(made.contents->metrics.size() == 6U);
     assert(made.contents->exclusions.size() == 1U);
     assert(std::ranges::all_of(made.contents->metrics, [](const auto& metric) {
         return metric.name_space
@@ -155,20 +168,46 @@ int main()
             == artifact::CoverageDatabaseMetricScope::Instance
             && metric.run_identity == id(3U) && metric.source_line == 17U;
     }));
-    assert(made.contents->metrics[0].family
-        == artifact::CoverageDatabaseMetricFamily::SystemVerilogCoverpoint);
-    assert(made.contents->metrics[1].family
-        == artifact::CoverageDatabaseMetricFamily::SystemVerilogCoverpoint);
-    assert(made.contents->metrics[0].instance_identity
-        != made.contents->metrics[1].instance_identity);
-    const auto cross = std::ranges::find(made.contents->metrics,
-        artifact::CoverageDatabaseMetricFamily::SystemVerilogCross,
-        &artifact::CoverageDatabaseMetricRecord::family);
+    const auto five_hit = std::ranges::find(
+        made.contents->metrics, 5U,
+        &artifact::CoverageDatabaseMetricRecord::hits);
+    const auto one_hit = std::ranges::find(
+        made.contents->metrics, 1U,
+        &artifact::CoverageDatabaseMetricRecord::hits);
+    assert(five_hit != made.contents->metrics.end()
+        && one_hit != made.contents->metrics.end()
+        && five_hit->family
+            == artifact::CoverageDatabaseMetricFamily::SystemVerilogCoverpoint
+        && one_hit->family
+            == artifact::CoverageDatabaseMetricFamily::SystemVerilogCoverpoint
+        && five_hit->instance_identity != one_hit->instance_identity);
+    const auto cross = std::ranges::find_if(
+        made.contents->metrics,
+        [](const auto& metric) {
+            return metric.family
+                    == artifact::CoverageDatabaseMetricFamily::SystemVerilogCross
+                && metric.hits
+                    == std::numeric_limits<std::uint64_t>::max();
+        });
     assert(cross != made.contents->metrics.end()
         && cross->source_identity == id(2U)
         && cross->hits == std::numeric_limits<std::uint64_t>::max()
         && cross->excluded_hits == std::numeric_limits<std::uint64_t>::max()
         && cross->overflow && cross->excluded_overflow);
+    assert(std::ranges::any_of(made.contents->metrics, [](const auto& metric) {
+        return metric.family
+                == artifact::CoverageDatabaseMetricFamily::SystemVerilogCross
+            && metric.hits == 0U && metric.excluded_hits == 0U
+            && !metric.overflow && !metric.excluded_overflow;
+    }));
+    assert(std::ranges::count_if(
+               made.contents->metrics,
+               [](const auto& metric) {
+                   return metric.family
+                           == artifact::CoverageDatabaseMetricFamily::SystemVerilogCoverpoint
+                       && metric.hits == 0U;
+               })
+        == 2U);
     assert(made.contents->exclusions.front().point_identity
             == cross->bin_identity
         && made.contents->exclusions.front().source_line == 17U);
@@ -280,7 +319,7 @@ int main()
         database(), coverage(), bindings, id(3U), limits);
     assert(result.error == SystemVerilogCoverageDatabaseError::ResourceLimit);
     limits = { };
-    limits.maximum_bins = 2U;
+    limits.maximum_bins = 3U;
     result = frontend::project_systemverilog_coverage_namespace(
         database(), coverage(), bindings, id(3U), limits);
     assert(result.error == SystemVerilogCoverageDatabaseError::ResourceLimit);

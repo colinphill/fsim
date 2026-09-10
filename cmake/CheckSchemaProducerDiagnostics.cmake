@@ -9,14 +9,14 @@ endif()
 set(FSIM_CONTRACT
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/schema_producer_diagnostic_contract.tsv")
 set(FSIM_BUILDER
-  "${FSIM_SOURCE_DIR}/src/diagnostic/artifact_identity.hpp")
+  "${FSIM_SOURCE_DIR}/src/diagnostic/artifact_identity.cpp")
 set(FSIM_PROJECT "${FSIM_SOURCE_DIR}/src/project/project.cpp")
 set(FSIM_OBJECT "${FSIM_SOURCE_DIR}/src/artifact/object.cpp")
 set(FSIM_DESIGN "${FSIM_SOURCE_DIR}/src/artifact/design.cpp")
 set(FSIM_LIBRARY "${FSIM_SOURCE_DIR}/src/library/artifact.cpp")
 set(FSIM_PORTABLE "${FSIM_SOURCE_DIR}/src/library/portable_unit.cpp")
 set(FSIM_DESIGN_STATE
-  "${FSIM_SOURCE_DIR}/src/app/application_design_artifact_codec.tpp")
+  "${FSIM_SOURCE_DIR}/src/app/application_design_artifact_codec.cpp")
 set(FSIM_LIBRARY_IMPORT
   "${FSIM_SOURCE_DIR}/src/app/application_library_import.cpp")
 set(FSIM_INCREMENTAL_CODEC
@@ -227,7 +227,7 @@ fsim_require_schema_diagnostic_tokens("${FSIM_DESIGN_TEST}"
   "stale-publication")
 fsim_require_schema_diagnostic_tokens("${FSIM_LIBRARY_TEST}"
   "has_identity_diagnostic"
-  "portable-unit schema 11"
+  "portable-unit schema 14"
   "stale-publication.fsimlib")
 fsim_require_schema_diagnostic_tokens("${FSIM_APPLICATION_TEST}"
   "unsupported design state FSIMUVM1 identity: found"

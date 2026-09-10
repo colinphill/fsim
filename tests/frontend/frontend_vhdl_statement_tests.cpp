@@ -51,7 +51,6 @@ namespace {
 
 } // namespace
 
-#include "frontend_vhdl_statement_core_tests.tpp"
 void test_vhdl_revision_statement_profiles()
 {
     const auto diagnostic_count = [](const auto& diagnostics,

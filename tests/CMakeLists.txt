@@ -1,5 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
+add_library(
+  fsim_common_test_support STATIC
+  app/governed_process_limits.cpp
+  app/path_test_support.cpp
+)
+fsim_configure_library(fsim_common_test_support)
+
 add_subdirectory(runtime)
 
 add_executable(
@@ -38,7 +45,9 @@ add_executable(
   frontend/frontend_preprocessing_tests.cpp
   frontend/frontend_sv_conformance_tests.cpp
   frontend/frontend_vhdl_type_tests.cpp
+  frontend/frontend_vhdl_type_tests_part2.cpp
   frontend/frontend_vhdl_statement_tests.cpp
+  frontend/frontend_vhdl_statement_core_tests.cpp
   frontend/frontend_vhdl_revision_profile_tests.cpp
   frontend/frontend_vhdl_attribute_tests.cpp
   frontend/frontend_vhdl_time_file_tests.cpp
@@ -47,6 +56,7 @@ add_executable(
   frontend/frontend_parameter_tests.cpp
   frontend/frontend_chandle_tests.cpp
   frontend/frontend_coverage_tests.cpp
+  frontend/frontend_coverage_resource_tests.cpp
   frontend/frontend_dpi_tests.cpp
   frontend/frontend_interface_tests.cpp
   frontend/frontend_hierarchy_tests.cpp
@@ -59,10 +69,12 @@ add_executable(
   frontend/frontend_vhdl_configuration_tests.cpp
   frontend/frontend_vhdl_package_generic_tests.cpp
   frontend/frontend_statement_tests.cpp
+  frontend/frontend_statement_tests_part2.cpp
   frontend/frontend_strength_tests.cpp
   frontend/frontend_specify_tests.cpp
   frontend/frontend_udp_tests.cpp
   frontend/frontend_generate_output_tests.cpp
+  frontend/frontend_generate_output_tests_part2.cpp
   frontend/frontend_file_tests.cpp
   frontend/frontend_container_tests.cpp
 )
@@ -2925,15 +2937,19 @@ add_test(NAME fsim.jit-runtime-c COMMAND fsim_jit_runtime_c_tests)
 
 add_executable(
   fsim_elaboration_tests
+  elaboration/elaborator_test_support.cpp
   elaboration/elaborator_test.cpp
   elaboration/elaborator_specialization_test.cpp
+  elaboration/elaborator_specialization_type_test.cpp
   elaboration/elaborator_specify_test.cpp
   elaboration/elaborator_sv_constant_test.cpp
+  elaboration/elaborator_sv2023_utility_test.cpp
   elaboration/elaborator_sv_alias_test.cpp
   elaboration/elaborator_sv_string_test.cpp
   elaboration/elaborator_sv_type_parameter_test.cpp
   elaboration/elaborator_sv_hierarchy_test.cpp
   elaboration/elaborator_generate_test.cpp
+  elaboration/elaborator_generate_slice_test.cpp
   elaboration/elaborator_defparam_test.cpp
   elaboration/elaborator_mixed_test.cpp
   elaboration/elaborator_library_search_test.cpp
@@ -2952,6 +2968,7 @@ add_executable(
   elaboration/elaborator_expression_test.cpp
   elaboration/elaborator_numeric_test.cpp
   elaboration/elaborator_selection_test.cpp
+  elaboration/elaborator_selection_runtime_test.cpp
   elaboration/elaborator_vhdl_dynamic_slice_test.cpp
   elaboration/elaborator_vhdl_composite_test.cpp
   elaboration/elaborator_vhdl_conversion_test.cpp
@@ -2969,12 +2986,14 @@ add_executable(
   elaboration/elaborator_vhdl_generic_subprogram_test.cpp
   elaboration/elaborator_vhdl_generic_association_test.cpp
   elaboration/elaborator_vhdl_component_test.cpp
+  elaboration/elaborator_vhdl_component_closure_test.cpp
   elaboration/elaborator_vhdl_configuration_test.cpp
   elaboration/elaborator_vhdl_matching_test.cpp
   elaboration/elaborator_vhdl_case_test.cpp
   elaboration/elaborator_vhdl_concurrent_test.cpp
   elaboration/elaborator_sv_file_test.cpp
   elaboration/elaborator_sv_container_test.cpp
+  elaboration/elaborator_sv_container_mixed_test.cpp
   elaboration/elaborator_sv_container_bridge_test.cpp
   elaboration/elaborator_sv_composite_container_test.cpp
   elaboration/elaborator_sv_aggregate_container_test.cpp
@@ -2990,8 +3009,10 @@ add_test(NAME fsim.elaboration COMMAND fsim_elaboration_tests)
 
 add_executable(
   fsim_sv_container_elaboration_tests
+  elaboration/elaborator_test_support.cpp
   elaboration/elaborator_sv_container_main.cpp
   elaboration/elaborator_sv_container_test.cpp
+  elaboration/elaborator_sv_container_mixed_test.cpp
   elaboration/elaborator_sv_container_bridge_test.cpp
   elaboration/elaborator_sv_composite_container_test.cpp
   elaboration/elaborator_sv_aggregate_container_test.cpp
@@ -4029,9 +4050,12 @@ if(FSIM_WITH_LLVM)
   target_sources(
     fsim_llvm_tests
     PRIVATE
+      compiler/llvm_jit_test_support.cpp
       compiler/llvm_jit_scheduling_test.cpp
       compiler/llvm_jit_value_test.cpp
+      compiler/llvm_jit_value_arithmetic_test.cpp
       compiler/llvm_jit_cache_test.cpp
+      compiler/llvm_jit_cache_advanced_test.cpp
       compiler/llvm_jit_coverage_test.cpp
       compiler/llvm_jit_vhdl_profile_cache_test.cpp
       compiler/llvm_jit_control_cache_test.cpp
@@ -4582,7 +4606,9 @@ if(TARGET fsim_application)
       fsim_application_tests
       PRIVATE
         app/application_test_cli.cpp
+        app/application_test_cli_trace.cpp
         app/application_test_artifact_phases.cpp
+        app/application_test_artifact_verilog.cpp
         app/application_test_fixture.cpp
         app/application_test_mixed.cpp
         app/application_test_multiple_roots.cpp
@@ -4602,6 +4628,9 @@ if(TARGET fsim_application)
     fsim_add_application_case(
       0 expressions app/expression_application_test.cpp
       fsim.application.expressions fast expressions)
+    target_sources(
+      fsim_application_tests
+      PRIVATE app/expression_application_advanced_test.cpp)
     fsim_add_application_case(
       0 structural_signal_remap
       app/structural_signal_remap_application_test.cpp
@@ -4653,6 +4682,12 @@ if(TARGET fsim_application)
     fsim_add_application_case(
       0 assertions app/assertion_application_test.cpp
       fsim.application.assertions fast assertions)
+    target_sources(
+      fsim_application_tests
+      PRIVATE
+        app/assertion_application_checker.cpp
+        app/assertion_application_advanced_test.cpp
+        app/assertion_application_controls_coverage.cpp)
     fsim_add_application_case(
       0 line_directives app/line_directive_application_test.cpp
       fsim.application.line_directives fast line-directives)
@@ -4811,6 +4846,9 @@ if(TARGET fsim_application)
       2 vhdl_ieee_integration app/vhdl_ieee_integration_application_test.cpp
       fsim.application.vhdl_ieee_integration
       fast vhdl packages contexts integration)
+    target_sources(
+      fsim_application_tests_2
+      PRIVATE app/vhdl_ieee_integration_vhdl2019.cpp)
     fsim_add_application_case(
       2 vhdl_vital_delays app/vhdl_vital_delay_application_test.cpp
       fsim.application.vhdl_vital_delays
@@ -4941,6 +4979,7 @@ if(TARGET fsim_application)
   add_executable(
     fsim_expression_application_tests
     app/expression_application_test.cpp
+    app/expression_application_advanced_test.cpp
   )
   fsim_configure_test(fsim_expression_application_tests)
   target_link_libraries(
@@ -5646,6 +5685,9 @@ set_tests_properties(
 
   add_executable(
     fsim_assertion_application_tests
+    app/assertion_application_checker.cpp
+    app/assertion_application_controls_coverage.cpp
+    app/assertion_application_advanced_test.cpp
     app/assertion_application_test.cpp
   )
   fsim_configure_test(fsim_assertion_application_tests)
@@ -6138,7 +6180,9 @@ set_tests_properties(
     fsim_application_tests
     app/application_test.cpp
     app/application_test_artifact_phases.cpp
+    app/application_test_artifact_verilog.cpp
     app/application_test_cli.cpp
+    app/application_test_cli_trace.cpp
     app/application_test_fixture.cpp
     app/application_test_mixed.cpp
     app/application_test_multiple_roots.cpp
@@ -6226,6 +6270,7 @@ set_tests_properties(
   add_executable(
     fsim_api_tests
     api/api_test.cpp
+    api/api_systemc_test.cpp
     api/api_mapped_library_test.cpp
     api/api_multiple_root_test.cpp
   )
@@ -6430,6 +6475,7 @@ fsim_require_fixture_witnesses(
   fsim.semantic
   fsim.application.systemverilog_hir
   fsim.frontend
+  fsim.elaboration
   fsim.library.artifact
   fsim.llvm
   fsim.application.vpi
@@ -6438,6 +6484,17 @@ fsim_require_fixture_witnesses(
   fsim.application.expressions
   fsim.application.sv_containers
   fsim.application.assertions
+  fsim.application.random
+  fsim.application.coverage
+  fsim.application.sv_files
+  fsim.application.sv_preprocessor_generate
+  fsim.application.sv_hierarchy
+  fsim.application.sv_interfaces
+  fsim.application.sv_conformance
+  fsim.application.transition_delays
+  fsim.application.specify
+  fsim.application.sdf_endpoint_resolution
+  fsim.application.sdf_drive_timing
   fsim.application.typed_boundaries
   fsim.uvm-phase-tlm-matrix
   fsim.runtime)

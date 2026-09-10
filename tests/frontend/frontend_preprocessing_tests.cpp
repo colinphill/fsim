@@ -49,6 +49,10 @@ namespace {
 
 void test_systemverilog_preprocessor()
 {
+    require(
+        verilog_preprocessor_cache_version
+            == "fsim-verilog-preprocessor-v8-protected-envelopes",
+        "the preprocessor cache identity must invalidate pre-opaque-envelope diagnostics");
     const auto directory = make_test_directory("verilog-preprocessor");
     const auto include_directory = directory / "include";
     const auto root = directory / "root.sv";
@@ -239,29 +243,102 @@ endmodule
         ignored_and_plaintext_parsed.ok() && ignored_and_plaintext_parsed.design.units.size() == 1 && ignored_and_plaintext_parsed.design.units.front().name == "visible_plaintext",
         "unknown pragmas have no effect and plaintext protect markers compile");
 
-    auto encrypted_envelope = preprocess_verilog(
-        SourceText { "protected-envelope.sv",
-            R"(module visible_before;
+    PreprocessorOptions protected_options;
+    protected_options.standard_revision = StandardRevision::SystemVerilog2023;
+    std::string protected_source = R"(module visible_before;
 endmodule
 `pragma protect begin_protected
 `pragma protect data_method = "aes128-cbc"
 `pragma protect data_block
-encrypted payload tokens 12345
+)";
+    protected_source.push_back('\x01');
+    protected_source += R"(secret_payload_marker
+`pragma protect begin_protected
 `pragma protect end_protected
 module visible_after;
 endmodule
-)" },
-        Language::SystemVerilog2017);
+)";
+    auto encrypted_envelope = preprocess_verilog(
+        SourceText { "protected-envelope.sv", protected_source },
+        Language::SystemVerilog2017, protected_options);
     const bool has_protected_code = std::ranges::any_of(
         encrypted_envelope.lexed.diagnostics,
         [](const Diagnostic& diagnostic) {
             return diagnostic.code == "FSIM-SV-PP-011";
         });
+    const bool exposed_payload = std::ranges::any_of(
+        encrypted_envelope.lexed.diagnostics,
+        [](const Diagnostic& diagnostic) {
+            return diagnostic.message.find("secret_payload_marker")
+                != std::string::npos;
+        }) || std::ranges::any_of(encrypted_envelope.lexed.tokens,
+        [](const Token& token) {
+            return token.text.find("secret_payload_marker")
+                != std::string::npos;
+        });
     auto encrypted_parsed = parse_verilog(
         std::move(encrypted_envelope.lexed), true);
     require(
-        has_protected_code && encrypted_parsed.design.units.size() == 2 && encrypted_parsed.design.units[0].name == "visible_before" && encrypted_parsed.design.units[1].name == "visible_after",
-        "encrypted envelopes are contained and require a decryption provider");
+        has_protected_code && !exposed_payload
+            && encrypted_parsed.design.units.size() == 2
+            && encrypted_parsed.design.units[0].name == "visible_before"
+            && encrypted_parsed.design.units[1].name == "visible_after",
+        "encrypted envelopes are contained without exposing payload text");
+
+    const auto spanning_include = include_directory / "protected-open.svh";
+    const auto spanning_root = directory / "protected-spanning-include.sv";
+    write_text(spanning_include,
+        "`pragma protect begin_protected\n"
+        "included_secret_payload\n");
+    std::string spanning_source =
+        "module spanning_visible_before; endmodule\n"
+        "`include \"protected-open.svh\"\n";
+    spanning_source.push_back('\x01');
+    spanning_source +=
+        "root_secret_payload\n"
+        "`pragma protect end_protected\n"
+        "module spanning_visible_after; endmodule\n";
+    write_text(spanning_root, spanning_source);
+    auto spanning_options = protected_options;
+    spanning_options.include_directories = { include_directory };
+    auto spanning_envelope = preprocess_verilog_file(
+        spanning_root, Language::SystemVerilog2017, spanning_options);
+    const bool spanning_exposed = std::ranges::any_of(
+        spanning_envelope.lexed.diagnostics,
+        [](const Diagnostic& diagnostic) {
+            return diagnostic.message.find("secret_payload")
+                != std::string::npos;
+        }) || std::ranges::any_of(spanning_envelope.lexed.tokens,
+        [](const Token& token) {
+            return token.text.find("secret_payload") != std::string::npos;
+        });
+    auto spanning_parsed = parse_verilog(
+        std::move(spanning_envelope.lexed), true);
+    require(!spanning_exposed
+            && spanning_parsed.design.units.size() == 2
+            && spanning_parsed.design.units[0].name
+                == "spanning_visible_before"
+            && spanning_parsed.design.units[1].name
+                == "spanning_visible_after",
+        "protected envelopes remain opaque when an include opens the payload");
+
+    const auto unterminated_envelope = preprocess_verilog(
+        SourceText { "unterminated-protected-envelope.sv",
+            "module retained; endmodule\n"
+            "`pragma protect begin_protected\n"
+            "unterminated_secret_payload\n" },
+        Language::SystemVerilog2017, protected_options);
+    require(!unterminated_envelope.ok()
+            && std::ranges::count(unterminated_envelope.lexed.diagnostics,
+                   "FSIM-SV-PP-011", &Diagnostic::code)
+                == 2
+            && std::ranges::none_of(unterminated_envelope.lexed.diagnostics,
+                [](const Diagnostic& diagnostic) {
+                    return diagnostic.message.find(
+                               "unterminated_secret_payload")
+                        != std::string::npos;
+                }),
+        "unterminated protected envelopes diagnose at the opener without exposing payload text");
 
     const auto cycle_a = directory / "cycle-a.svh";
     const auto cycle_b = directory / "cycle-b.svh";
@@ -423,6 +500,12 @@ module selected_implication; endmodule
 `ifdef (A <-> C)
 module selected_equivalence; endmodule
 `endif
+`ifdef (B -> A -> B)
+module selected_right_associative_implication; endmodule
+`endif
+`ifndef (A && B)
+module selected_ifndef_expression; endmodule
+`endif
 )" },
         StandardRevision::SystemVerilog2023);
     const auto boolean_conditionals_2017 = preprocess_revision(
@@ -437,15 +520,19 @@ module selected_equivalence; endmodule
         StandardRevision::SystemVerilog2023);
     require(
         boolean_conditionals.ok()
-            && boolean_conditionals.design.units.size() == 5
+            && boolean_conditionals.design.units.size() == 7
             && boolean_conditionals.design.units[0].name == "selected_and_or"
             && boolean_conditionals.design.units[1].name == "selected_or"
             && boolean_conditionals.design.units[2].name == "selected_not"
             && boolean_conditionals.design.units[3].name
                 == "selected_implication"
             && boolean_conditionals.design.units[4].name
-                == "selected_equivalence",
-        "2023 conditional compilation evaluates the complete nested identifier Boolean operator set");
+                == "selected_equivalence"
+            && boolean_conditionals.design.units[5].name
+                == "selected_right_associative_implication"
+            && boolean_conditionals.design.units[6].name
+                == "selected_ifndef_expression",
+        "2023 conditional compilation evaluates precedence, right association, and ifndef inversion");
     require(
         !boolean_conditionals_2017.ok()
             && std::ranges::any_of(

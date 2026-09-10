@@ -496,11 +496,22 @@ void VerilogParser::normalize_udp_instances(ParsedDesign& design) {
     return delay;
   };
   const auto normalize = [&](Instance& instance,
-                             const std::string_view unit_spelling) {
+                             const std::string_view unit_spelling,
+                             const bool program_unit) {
     if (!declaration_named(instance.unit_name)) {
       return;
     }
     instance.udp_instance = true;
+    if (program_unit) {
+      Token location;
+      location.text = instance.unit_name;
+      location.span = instance.span;
+      error(
+          location,
+          "FSIM-SV-SEM-390",
+          "a program block cannot contain a user-defined primitive "
+          "instance");
+    }
     if (instance.udp_delay || instance.parameter_overrides.empty()) {
       return;
     }
@@ -536,12 +547,13 @@ void VerilogParser::normalize_udp_instances(ParsedDesign& design) {
   };
   const auto visit_regions = [&](const auto& self,
                                  std::vector<GenerateRegion>& regions,
-                                 const std::string_view time_unit) -> void {
+                                 const std::string_view time_unit,
+                                 const bool program_unit) -> void {
     const auto visit_body = [&](GenerateBody& body) {
       for (auto& instance : body.instances) {
-        normalize(instance, time_unit);
+        normalize(instance, time_unit, program_unit);
       }
-      self(self, body.generate_regions, time_unit);
+      self(self, body.generate_regions, time_unit, program_unit);
     };
     for (auto& region : regions) {
       visit_body(region.then_body);
@@ -552,10 +564,13 @@ void VerilogParser::normalize_udp_instances(ParsedDesign& design) {
     }
   };
   for (auto& unit : design.units) {
+    const bool program_unit =
+        unit.kind == UnitKind::SystemVerilogProgram;
     for (auto& instance : unit.instances) {
-      normalize(instance, unit.time_unit);
+      normalize(instance, unit.time_unit, program_unit);
     }
-    visit_regions(visit_regions, unit.generate_regions, unit.time_unit);
+    visit_regions(
+        visit_regions, unit.generate_regions, unit.time_unit, program_unit);
   }
 }
 

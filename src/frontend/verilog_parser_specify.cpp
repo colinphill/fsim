@@ -123,6 +123,13 @@ VerilogModulePathDeclaration VerilogParser::parse_specify_module_path(
     path.sources.push_back(parse_lvalue());
     if (!match(TokenKind::Comma)) break;
   }
+  const bool source_polarity =
+      at(TokenKind::Plus) || at(TokenKind::Minus);
+  if (match(TokenKind::Plus)) {
+    path.polarity = VerilogPathPolarity::Positive;
+  } else if (match(TokenKind::Minus)) {
+    path.polarity = VerilogPathPolarity::Negative;
+  }
   if (match(TokenKind::Arrow)) {
     path.kind = VerilogModulePathKind::Parallel;
   } else {
@@ -137,10 +144,12 @@ VerilogModulePathDeclaration VerilogParser::parse_specify_module_path(
     path.kind = VerilogModulePathKind::Full;
   }
 
-  if (match(TokenKind::Plus)) {
-    path.polarity = VerilogPathPolarity::Positive;
-  } else if (match(TokenKind::Minus)) {
-    path.polarity = VerilogPathPolarity::Negative;
+  if (at(TokenKind::Plus) || at(TokenKind::Minus)) {
+    error(
+        current(),
+        "FSIM-SV-SEM-391",
+        "simple-path polarity must precede the path operator");
+    advance();
   }
   const bool grouped_destination = match(TokenKind::LeftParen);
   for (;;) {
@@ -155,6 +164,33 @@ VerilogModulePathDeclaration VerilogParser::parse_specify_module_path(
              || (match(TokenKind::Minus) && match(TokenKind::Colon))) {
     path.polarity = VerilogPathPolarity::Negative;
     path.destination_data_source = parse_expression();
+  }
+  const bool edge_sensitive =
+      path.source_edge != VerilogSpecifyEdge::None;
+  if (path.kind == VerilogModulePathKind::Parallel
+      && (path.sources.size() != 1 || path.destinations.size() != 1)) {
+    error(
+        start,
+        "FSIM-SV-SEM-391",
+        "a parallel module path requires exactly one source and one "
+        "destination terminal");
+  }
+  if (edge_sensitive
+      && (source_polarity || !grouped_destination
+          || !path.destination_data_source.valid() || ifnone)) {
+    error(
+        start,
+        "FSIM-SV-SEM-392",
+        "an edge-sensitive module path requires a grouped destination data "
+        "source, cannot use source polarity, and cannot follow ifnone");
+  } else if (!edge_sensitive
+             && (grouped_destination
+                 || path.destination_data_source.valid())) {
+    error(
+        start,
+        "FSIM-SV-SEM-392",
+        "a simple module path cannot use an edge-sensitive grouped data "
+        "source");
   }
   if (grouped_destination) {
     expect(

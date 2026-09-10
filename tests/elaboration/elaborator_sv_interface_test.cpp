@@ -35,6 +35,20 @@ module virtual_interface_top;
   virtual interface virtual_if nullable = null;
   virtual virtual_if #(8).observer from_array = links[1],
       same_array = links[1], different_array = links[0];
+  virtual virtual_if unrestricted = link;
+  virtual virtual_if.observer narrowed = unrestricted;
+  virtual virtual_if.observer copied = narrowed;
+  virtual virtual_if #(8) positional = link;
+  virtual virtual_if #(.WIDTH(8)).observer named_narrowed = positional;
+  virtual virtual_if runtime_source = null;
+  virtual virtual_if.observer runtime_narrowed = null;
+  initial begin
+    runtime_source = link;
+    runtime_narrowed = link;
+    runtime_narrowed = copied;
+    runtime_narrowed = null;
+    runtime_narrowed = runtime_source;
+  end
 endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
@@ -58,6 +72,20 @@ endmodule
       "virtual_interface_top.same_array");
   const auto different_array = virtual_result.design->find_signal(
       "virtual_interface_top.different_array");
+  const auto unrestricted = virtual_result.design->find_signal(
+      "virtual_interface_top.unrestricted");
+  const auto narrowed = virtual_result.design->find_signal(
+      "virtual_interface_top.narrowed");
+  const auto copied = virtual_result.design->find_signal(
+      "virtual_interface_top.copied");
+  const auto positional = virtual_result.design->find_signal(
+      "virtual_interface_top.positional");
+  const auto named_narrowed = virtual_result.design->find_signal(
+      "virtual_interface_top.named_narrowed");
+  const auto runtime_source = virtual_result.design->find_signal(
+      "virtual_interface_top.runtime_source");
+  const auto runtime_narrowed = virtual_result.design->find_signal(
+      "virtual_interface_top.runtime_narrowed");
   const auto high_member = virtual_result.design->find_signal(
       "virtual_interface_top.links[2].value");
   const auto middle_member = virtual_result.design->find_signal(
@@ -72,6 +100,8 @@ endmodule
       "virtual_interface_top.high.bus.cb.value");
   assert(
       selected && nullable && from_array && same_array && different_array
+      && unrestricted && narrowed && copied && positional
+      && named_narrowed && runtime_source && runtime_narrowed
       && high_member && middle_member && low_member && forwarded
       && forwarded_clock && forwarded_sample);
   auto virtual_interpreter =
@@ -91,7 +121,22 @@ endmodule
       && virtual_interpreter->signal_value(*different_array).low_word()
           != selected_array_value
       && virtual_interpreter->signal_value(*forwarded).low_word()
-          == selected_array_value);
+          == selected_array_value
+      && virtual_interpreter->signal_value(*unrestricted).low_word().aval != 0
+      && virtual_interpreter->signal_value(*narrowed).low_word()
+          == virtual_interpreter->signal_value(*unrestricted).low_word()
+      && virtual_interpreter->signal_value(*copied).low_word()
+          == virtual_interpreter->signal_value(*unrestricted).low_word()
+      && virtual_interpreter->signal_value(*positional).low_word()
+          == virtual_interpreter->signal_value(*unrestricted).low_word()
+      && virtual_interpreter->signal_value(*named_narrowed).low_word()
+          == virtual_interpreter->signal_value(*unrestricted).low_word());
+  (void)virtual_interpreter->run();
+  assert(
+      virtual_interpreter->signal_value(*runtime_source).low_word()
+          == virtual_interpreter->signal_value(*unrestricted).low_word()
+      && virtual_interpreter->signal_value(*runtime_narrowed).low_word()
+          == virtual_interpreter->signal_value(*unrestricted).low_word());
 
   const auto invalid_virtual = fsim::frontend::parse_text(
       "invalid-virtual-interfaces.sv",
@@ -124,6 +169,16 @@ module invalid_virtual_top;
   virtual first_if.view dynamic_index = first_array[selected_index];
   virtual parameterized_if #(.WIDTH(8)).view
       wrong_parameters = wide;
+  virtual first_if.view restricted = first;
+  virtual first_if widened_view = restricted;
+  virtual first_if procedural_widened = null;
+  initial procedural_widened = restricted;
+  virtual parameterized_if #(.WIDTH(16)).view wide_virtual = wide;
+  virtual parameterized_if #(.WIDTH(8)).view narrow_virtual = null;
+  initial begin
+    narrow_virtual = wide_virtual;
+    narrow_virtual = wide;
+  end
 endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
@@ -136,7 +191,8 @@ endmodule
            "FSIM-ELAB-SVIFACE-003",
            "FSIM-ELAB-SVIFACE-004",
            "FSIM-ELAB-SVIFACE-010",
-           "FSIM-ELAB-SVIFACE-011"}) {
+           "FSIM-ELAB-SVIFACE-011",
+           "FSIM-ELAB-SVIFACE-012"}) {
     assert(has_diagnostic(invalid_virtual_result, code));
   }
 

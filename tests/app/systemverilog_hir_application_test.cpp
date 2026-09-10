@@ -115,10 +115,20 @@ module semantic_hir_top;
     $display("ready"); else $error("not ready");
   assume property (ready) else $warning("assumption");
   cover property (ready) $display("covered");
+  ready_sequence: cover sequence (ready_signal) $display("sequence covered");
   restrict property (ready);
   generate
     if (1) begin : generated
       logic active;
+    end
+    if (1)
+      if (1) begin
+        logic directly_nested;
+      end
+    if (1) begin
+      logic implicit_then;
+    end else begin
+      logic implicit_else;
     end
   endgenerate
   initial begin : executable
@@ -326,16 +336,35 @@ endmodule
     assert(top->lets.front().ports.front().default_value);
     assert(top->lets.front().expression.valid());
     assert(top->instances.size() == 1);
-    assert(top->generates.size() == 1);
-    assert(top->concurrent_assertions.size() == 4);
+    assert(top->generates.size() == 3);
+    const auto& explicit_generate = top->generates[0];
+    const auto& direct_generate = top->generates[1];
+    const auto& alternative_generate = top->generates[2];
+    assert(checked->semantics.scopes().at(
+               explicit_generate.scope.value()).name == "generated");
+    assert(direct_generate.scope == top->scope);
+    assert(direct_generate.nested.size() == 1);
+    assert(checked->semantics.scopes().at(
+               direct_generate.nested.front().scope.value()).name
+        == "genblk2");
+    assert(alternative_generate.label == "genblk3");
+    assert(checked->semantics.scopes().at(
+               alternative_generate.scope.value()).name == "genblk3");
+    assert(alternative_generate.nested.size() == 1);
+    assert(alternative_generate.nested.front().scope
+        == alternative_generate.scope);
+    assert(top->concurrent_assertions.size() == 5);
     assert(top->processes.size()
         == 1U + top->concurrent_assertions.size());
     const auto& ready_assertion = top->concurrent_assertions[0];
     const auto& assumption = top->concurrent_assertions[1];
     const auto& cover = top->concurrent_assertions[2];
-    const auto& restriction = top->concurrent_assertions[3];
+    const auto& sequence_cover = top->concurrent_assertions[3];
+    const auto& restriction = top->concurrent_assertions[4];
     assert(ready_assertion.kind
         == fsim::semantic::sv::ConcurrentAssertionKind::assertion);
+    assert(ready_assertion.form
+        == fsim::semantic::sv::ConcurrentAssertionForm::property);
     assert(ready_assertion.name == "ready_check");
     assert(ready_assertion.explicit_label);
     assert(ready_assertion.coverage_slot == 0);
@@ -371,12 +400,20 @@ endmodule
     assert(assumption.coverage_slot == 1);
     assert(cover.kind
         == fsim::semantic::sv::ConcurrentAssertionKind::cover);
+    assert(cover.form
+        == fsim::semantic::sv::ConcurrentAssertionForm::property);
     assert(!cover.observers.callback_on_failure);
     assert(cover.coverage_slot == 2);
+    assert(sequence_cover.kind
+        == fsim::semantic::sv::ConcurrentAssertionKind::cover);
+    assert(sequence_cover.form
+        == fsim::semantic::sv::ConcurrentAssertionForm::sequence);
+    assert(sequence_cover.name == "ready_sequence");
+    assert(sequence_cover.coverage_slot == 3);
     assert(restriction.kind
         == fsim::semantic::sv::ConcurrentAssertionKind::restriction);
     assert(!restriction.observers.callback_on_failure);
-    assert(restriction.coverage_slot == 3);
+    assert(restriction.coverage_slot == 4);
     assert(checked->systemverilog_hir.processes().size()
         == 3U + top->concurrent_assertions.size());
     const auto& process = checked->systemverilog_hir.processes()[top->processes.front().value()];
@@ -534,6 +571,9 @@ class HirObject #(parameter int MAX = 3) extends HirBase;
     foreach (samples[i]) { samples[i] >= 0; }
     solve payload before choice;
   }
+  constraint unique_samples {
+    unique {samples};
+  }
   pure constraint inherited_contract;
   function new();
   endfunction
@@ -652,7 +692,7 @@ endmodule
         && hir_object->properties[2].constant);
     assert(hir_object->properties[3].random_kind
         == fsim::semantic::sv::ClassRandomKind::randc);
-    assert(hir_object->constraints.size() == 5);
+    assert(hir_object->constraints.size() == 6);
     const auto valid_choice_position = std::ranges::find(
         hir_object->constraints,
         std::string { "valid_choice" },
@@ -694,6 +734,15 @@ endmodule
         == fsim::semantic::sv::ConstraintReferenceKind::local_variable);
     assert(structured_choice.expressions[3].kind
         == fsim::semantic::sv::ConstraintExpressionKind::solve_before);
+    const auto unique_samples_position = std::ranges::find(
+        hir_object->constraints,
+        std::string { "unique_samples" },
+        &fsim::semantic::sv::ClassConstraint::name);
+    assert(unique_samples_position != hir_object->constraints.end());
+    const auto& unique_samples = *unique_samples_position;
+    assert(unique_samples.expressions.size() == 1);
+    assert(unique_samples.expressions.front().kind
+        == fsim::semantic::sv::ConstraintExpressionKind::unique_constraint);
     assert(valid_choice.canonical_identity
         == "work::$unit::HirObject::valid_choice");
     assert(valid_choice.owner_identity == "work::$unit::HirObject");
@@ -878,7 +927,7 @@ endmodule
         sample_variables;
     for (std::size_t index = 0; index < 3; ++index) {
         sample_variables.push_back(add_structured_variable(
-            *samples_binding, 0,
+            *samples_binding, index,
             samples_binding->canonical_identity + "["
                 + std::to_string(index) + "]"));
     }
@@ -933,6 +982,33 @@ endmodule
                .low_word()
                .aval
         == 1);
+    std::vector<fsim::runtime::SystemVerilogConstraintVariableId>
+        unique_dependencies;
+    auto lowered_unique = fsim::app::application_detail::
+        lower_systemverilog_constraint_expression(
+            unique_samples.expressions.front(),
+            parameter_binding->specialization_identity,
+            structured_variables,
+            unique_dependencies,
+            lowering_error,
+            structured_containers);
+    assert(lowered_unique && lowering_error.empty());
+    assert(unique_dependencies == sample_variables);
+    structured_solver.add_clause(
+        fsim::runtime::systemverilog_constraint_expression_clause(
+            unique_samples.canonical_identity,
+            unique_dependencies,
+            std::move(*lowered_unique)));
+    assert(structured_solver.solve().status
+        == fsim::runtime::SystemVerilogConstraintSolveStatus::Satisfied);
+    structured_solver.replace_domain(
+        sample_variables.back(),
+        {fsim::runtime::PackedLogic4::from_aval_bval(
+            fsim::app::application_detail::
+                systemverilog_constraint_profile(*samples_binding).width,
+            1, 0)});
+    assert(structured_solver.solve().status
+        == fsim::runtime::SystemVerilogConstraintSolveStatus::Unsatisfiable);
     assert(valid_choice.expressions[2].operands[1].bindings.front().canonical_identity
         == "work::$unit::HirObject::limit");
     assert(valid_choice.expressions.back().operands[1].kind
@@ -943,7 +1019,7 @@ endmodule
         != valid_choice.source);
     assert(hir_object->constraints.back().pure
         && !hir_object->constraints.back().defined);
-    assert(hir_object->composed_constraints.size() == 5);
+    assert(hir_object->composed_constraints.size() == 6);
     assert(hir_object->composed_constraints.front().name == "nonnegative");
     assert(hir_object->composed_constraints.front().selected_identity
         == "work::$unit::HirObject::nonnegative");

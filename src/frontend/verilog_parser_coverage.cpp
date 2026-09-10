@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "verilog_parser_internal.hpp"
+#include "verilog_parser_coverage_internal.hpp"
 
 #include "fsim/frontend/coverage_sampling.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <charconv>
+#include <cmath>
 #include <limits>
 #include <span>
 #include <unordered_set>
@@ -12,17 +14,37 @@
 
 namespace fsim::frontend {
 
-namespace {
+namespace coverage_parser_detail {
 
     [[nodiscard]] bool unsupported_coverage_type(
-        const std::span<const Token> tokens)
+        const std::span<const Token> tokens,
+        const bool allow_real)
     {
-        return std::ranges::any_of(tokens, [](const Token& token) {
-            return token.text == "real" || token.text == "shortreal"
-                || token.text == "realtime" || token.text == "string"
+        return std::ranges::any_of(tokens, [&](const Token& token) {
+            return (!allow_real
+                       && (token.text == "real" || token.text == "shortreal"
+                           || token.text == "realtime"))
+                || token.text == "string"
                 || token.text == "chandle" || token.text == "event"
                 || token.text == "void";
         });
+    }
+
+    [[nodiscard]] SystemVerilogScalarKind coverage_scalar_kind(
+        const std::span<const Token> tokens)
+    {
+        for (const auto& token : tokens) {
+            if (token.text == "shortreal") {
+                return SystemVerilogScalarKind::ShortReal;
+            }
+            if (token.text == "real") {
+                return SystemVerilogScalarKind::Real;
+            }
+            if (token.text == "realtime") {
+                return SystemVerilogScalarKind::Realtime;
+            }
+        }
+        return SystemVerilogScalarKind::None;
     }
 
     [[nodiscard]] bool balanced_delimiters(
@@ -233,18 +255,6 @@ namespace {
         return result;
     }
 
-    struct CoverageLiteral {
-        std::optional<std::int64_t> exact;
-        std::uint64_t value { };
-        std::uint64_t mask { };
-        std::uint32_t width { };
-        bool wildcard { };
-        bool signed_value { };
-        std::string value_bits;
-        std::string unknown_bits;
-        std::string mask_bits;
-    };
-
     [[nodiscard]] std::string normalize_coverage_plane(
         std::string bits,
         const std::uint32_t width,
@@ -330,15 +340,32 @@ namespace {
             std::remove(spelling.begin(), spelling.end(), '_'), spelling.end());
         const auto apostrophe = spelling.find('\'');
         if (apostrophe == std::string::npos) {
-            const auto magnitude
-                = detail::OutputUnsignedInteger::parse(spelling, 10U);
-            if (!magnitude
-                || magnitude->bit_width()
+            if (spelling.find_first_of(".eE") != std::string::npos) {
+                if (negative)
+                    spelling.insert(spelling.begin(), '-');
+                double value { };
+                const auto converted = std::from_chars(
+                    spelling.data(), spelling.data() + spelling.size(), value,
+                    std::chars_format::general);
+                if (converted.ec != std::errc { }
+                    || converted.ptr != spelling.data() + spelling.size()
+                    || !std::isfinite(value)) {
+                    return std::nullopt;
+                }
+                CoverageLiteral result;
+                result.width = 64U;
+                result.real_bits = std::bit_cast<std::uint64_t>(value);
+                return result;
+            }
+            const auto magnitude_width
+                = output_unsigned_integer_bit_width(spelling, 10U);
+            if (!magnitude_width
+                || *magnitude_width
                     >= std::numeric_limits<std::uint32_t>::max()) {
                 return std::nullopt;
             }
             const auto width = static_cast<std::uint32_t>(std::max(
-                std::size_t { 32U }, magnitude->bit_width() + 1U));
+                std::size_t { 32U }, *magnitude_width + 1U));
             auto bits = decimal_coverage_bits(spelling, width);
             if (!bits) {
                 return std::nullopt;
@@ -541,14 +568,67 @@ namespace {
             && tokens.front().kind == TokenKind::LeftBracket
             && tokens.back().kind == TokenKind::RightBracket) {
             const auto interior = tokens.subspan(1U, tokens.size() - 2U);
-            const auto colon = find_top_level(interior, TokenKind::Colon);
-            if (!colon || *colon == 0U || *colon + 1U == interior.size()) {
+            auto separator = find_top_level(interior, TokenKind::Colon);
+            bool absolute_tolerance { };
+            bool relative_tolerance { };
+            if (!separator) {
+                separator = find_top_level(
+                    interior, TokenKind::AbsoluteTolerance);
+                absolute_tolerance = separator.has_value();
+            }
+            if (!separator) {
+                separator = find_top_level(
+                    interior, TokenKind::RelativeTolerance);
+                relative_tolerance = separator.has_value();
+            }
+            if (!separator || *separator == 0U
+                || *separator + 1U == interior.size()) {
                 return std::nullopt;
             }
-            const auto left = coverage_literal(interior.first(*colon));
-            const auto right = coverage_literal(interior.subspan(*colon + 1U));
+            const auto left = coverage_literal(interior.first(*separator));
+            const auto right = coverage_literal(
+                interior.subspan(*separator + 1U));
             if (!left || !right || left->wildcard || right->wildcard) {
                 return std::nullopt;
+            }
+            if (left->real_bits || right->real_bits
+                || absolute_tolerance || relative_tolerance) {
+                const auto numeric = [](const CoverageLiteral& literal)
+                    -> std::optional<double> {
+                    if (literal.real_bits) {
+                        return std::bit_cast<double>(*literal.real_bits);
+                    }
+                    if (literal.exact) {
+                        return static_cast<double>(*literal.exact);
+                    }
+                    return std::nullopt;
+                };
+                const auto first = numeric(*left);
+                const auto second = numeric(*right);
+                if (!first || !second || !std::isfinite(*first)
+                    || !std::isfinite(*second)) {
+                    return std::nullopt;
+                }
+                double lower = *first;
+                double upper = *second;
+                if (absolute_tolerance || relative_tolerance) {
+                    if (*second < 0.0)
+                        return std::nullopt;
+                    const auto tolerance = relative_tolerance
+                        ? std::abs(*first) * *second / 100.0
+                        : *second;
+                    lower = *first - tolerance;
+                    upper = *first + tolerance;
+                }
+                if (!std::isfinite(lower) || !std::isfinite(upper)) {
+                    return std::nullopt;
+                }
+                result.range_left_real_bits
+                    = std::bit_cast<std::uint64_t>(lower);
+                result.range_right_real_bits
+                    = std::bit_cast<std::uint64_t>(upper);
+                result.width = 64U;
+                return result;
             }
             result.range_left = left->exact;
             result.range_right = right->exact;
@@ -563,7 +643,12 @@ namespace {
         if (!literal) {
             return std::nullopt;
         }
-        if (literal->wildcard && wildcard_bin) {
+        if (literal->real_bits) {
+            if (wildcard_bin)
+                return std::nullopt;
+            result.exact_real_bits = literal->real_bits;
+            result.width = 64U;
+        } else if (literal->wildcard && wildcard_bin) {
             result.wildcard = true;
             result.wildcard_value = literal->value;
             result.wildcard_mask = literal->mask;
@@ -578,6 +663,18 @@ namespace {
             result.exact_signed = literal->signed_value;
         }
         return result;
+    }
+
+    [[nodiscard]] std::optional<double> coverage_real_value(
+        const CoverageLiteral& literal)
+    {
+        if (literal.real_bits) {
+            return std::bit_cast<double>(*literal.real_bits);
+        }
+        if (literal.exact) {
+            return static_cast<double>(*literal.exact);
+        }
+        return std::nullopt;
     }
 
     [[nodiscard]] SourceSpan coverage_span(const std::span<const Token> tokens)
@@ -842,7 +939,9 @@ namespace {
         return result;
     }
 
-} // namespace
+} // namespace coverage_parser_detail
+
+using namespace coverage_parser_detail;
 
 SystemVerilogCovergroupDeclaration
 VerilogParser::parse_covergroup_declaration(
@@ -851,6 +950,7 @@ VerilogParser::parse_covergroup_declaration(
 {
     SystemVerilogCovergroupDeclaration declaration;
     declaration.owner_kind = owner_kind;
+    declaration.standard_revision = standard_revision_;
 
     if (language_ != Language::SystemVerilog2017) {
         error(
@@ -859,11 +959,29 @@ VerilogParser::parse_covergroup_declaration(
             "a covergroup declaration requires SystemVerilog-2017");
     }
 
+    if (keyword("extends")) {
+        declaration.extends_parent = true;
+        const auto extends_token = advance();
+        (void)require_standard(
+            "covergroup inheritance",
+            StandardRevision::SystemVerilog2023,
+            extends_token,
+            "FSIM-SV-SEM-259");
+        if (owner_kind != SystemVerilogCovergroupOwnerKind::Class) {
+            error(
+                extends_token,
+                "FSIM-SV-SEM-260",
+                "a covergroup extension is permitted only in a class");
+        }
+    }
+
     if (!at(TokenKind::Identifier)) {
         error(
             current(),
             "FSIM-SV-PARSE-309",
-            "expected a name after 'covergroup'");
+            declaration.extends_parent
+                ? "expected an inherited covergroup name after 'covergroup extends'"
+                : "expected a name after 'covergroup'");
     } else {
         const auto name = advance();
         declaration.name = name.text;
@@ -910,6 +1028,12 @@ VerilogParser::parse_covergroup_declaration(
         TokenKind::Semicolon,
         "';' after covergroup declaration header",
         "FSIM-SV-PARSE-310");
+    if (declaration.extends_parent && !declaration.header_tokens.empty()) {
+        error(
+            declaration.header_tokens.front(),
+            "FSIM-SV-SEM-261",
+            "an inherited covergroup cannot redeclare constructor arguments or a sampling event");
+    }
     structure_covergroup_header(declaration);
 
     while (!at_end()
@@ -959,6 +1083,9 @@ void VerilogParser::structure_covergroup_header(
 {
     const std::span<const Token> header { declaration.header_tokens };
     if (header.empty()) {
+        return;
+    }
+    if (declaration.extends_parent) {
         return;
     }
     std::size_t position { };
@@ -1098,12 +1225,14 @@ void VerilogParser::structure_covergroup_formals(
         formal.type_tokens.assign(
             item.begin() + static_cast<std::ptrdiff_t>(type_start),
             item.begin() + static_cast<std::ptrdiff_t>(name_index));
-        if (unsupported_coverage_type(formal.type_tokens)) {
+        if (unsupported_coverage_type(
+                formal.type_tokens,
+                standard_revision_ == StandardRevision::SystemVerilog2023)) {
             error(
                 formal.type_tokens.front(),
                 "FSIM-SV-SEM-219",
                 std::string { description }
-                    + " formal type is outside the bounded integral coverage model");
+                    + " formal type is outside the bounded coverage scalar model");
             continue;
         }
         formal.name = item[name_index].text;
@@ -1197,20 +1326,88 @@ void VerilogParser::structure_covergroup_options(
             --braces;
         }
     }
-    for (const auto& option : declaration.option_assignments) {
-        const auto literal = coverage_literal(option.value_tokens);
-        if (!literal || literal->wildcard || !literal->exact)
+    bool saw_cross_retain_auto_bins { };
+    bool saw_real_interval { };
+    for (auto& option : declaration.option_assignments) {
+        const bool retain_cross_bins
+            = option.name == "cross_retain_auto_bins";
+        const bool real_interval = option.name == "real_interval";
+        if (real_interval) {
+            if (!require_standard(
+                    "type_option.real_interval",
+                    StandardRevision::SystemVerilog2023,
+                    *option.name_token,
+                    "FSIM-SV-SEM-264")) {
+                continue;
+            }
+            const auto literal = coverage_literal(option.value_tokens);
+            const auto value = literal
+                ? coverage_real_value(*literal)
+                : std::nullopt;
+            if (option.scope
+                    != SystemVerilogCovergroupOptionScope::Type
+                || saw_real_interval || !value || !std::isfinite(*value)
+                || *value <= 0.0) {
+                error(
+                    *option.name_token,
+                    "FSIM-SV-SEM-265",
+                    "type_option.real_interval requires one finite positive constant assignment");
+                continue;
+            }
+            saw_real_interval = true;
+            option.evaluated_real_bits
+                = std::bit_cast<std::uint64_t>(*value);
+            declaration.effective_real_interval_bits
+                = option.evaluated_real_bits;
             continue;
+        }
+        if (retain_cross_bins
+            && !require_standard(
+                "option.cross_retain_auto_bins",
+                StandardRevision::SystemVerilog2023,
+                *option.name_token,
+                "FSIM-SV-SEM-257")) {
+            continue;
+        }
+        if (retain_cross_bins
+            && (option.scope != SystemVerilogCovergroupOptionScope::Instance
+                || saw_cross_retain_auto_bins)) {
+            error(
+                *option.name_token,
+                "FSIM-SV-SEM-258",
+                "option.cross_retain_auto_bins is an immutable instance bit and may be assigned once");
+            continue;
+        }
+        const auto literal = coverage_literal(option.value_tokens);
+        if (!literal || literal->wildcard || !literal->exact) {
+            if (retain_cross_bins) {
+                error(
+                    *option.name_token,
+                    "FSIM-SV-SEM-258",
+                    "option.cross_retain_auto_bins requires a constant zero or one");
+            }
+            continue;
+        }
         const auto value = *literal->exact;
         const bool weight = option.name == "weight";
         const bool goal = option.name == "goal";
         const bool flag = option.name == "per_instance"
             || option.name == "merge_instances";
+        if (retain_cross_bins
+            && (value != 0 && value != 1)) {
+            error(
+                *option.name_token,
+                "FSIM-SV-SEM-258",
+                "option.cross_retain_auto_bins is an immutable instance bit and may be assigned once");
+            continue;
+        }
+        saw_cross_retain_auto_bins
+            = saw_cross_retain_auto_bins || retain_cross_bins;
         const bool valid = weight
             ? value >= 0 && value <= 65'536
-            : goal ? value >= 0 && value <= 100
-            : flag ? value == 0 || value == 1
-                   : true;
+            : goal                        ? value >= 0 && value <= 100
+            : (flag || retain_cross_bins) ? value == 0 || value == 1
+                                          : true;
         if (!valid) {
             diagnostics_.push_back(Diagnostic {
                 DiagnosticSeverity::Error,
@@ -1221,6 +1418,7 @@ void VerilogParser::structure_covergroup_options(
                 { } });
             continue;
         }
+        option.evaluated_value = static_cast<std::uint64_t>(value);
         if (weight) {
             auto& target = option.scope == SystemVerilogCovergroupOptionScope::Type
                 ? declaration.effective_type_weight
@@ -1235,6 +1433,8 @@ void VerilogParser::structure_covergroup_options(
             declaration.effective_per_instance = value != 0;
         } else if (option.name == "merge_instances") {
             declaration.effective_merge_instances = value != 0;
+        } else if (retain_cross_bins) {
+            declaration.effective_cross_retain_auto_bins = value != 0;
         }
     }
 }
@@ -1349,6 +1549,8 @@ void VerilogParser::structure_covergroup_declarations(
             item.name = "$cross$" + std::to_string(++cross_ordinal);
         }
         item.declaration_index = declaration.coverage_declarations.size();
+        item.effective_real_interval_bits
+            = declaration.effective_real_interval_bits;
 
         if (expression_end == 0U) {
             error(
@@ -1364,6 +1566,22 @@ void VerilogParser::structure_covergroup_declarations(
         if (coverpoint) {
             item.expression_tokens.assign(expression.begin(), expression.end());
             item.expression_span = span_from(expression.front(), expression.back());
+            if (expression.size() == 1U
+                && expression.front().kind == TokenKind::Identifier) {
+                const auto apply_formal_kind = [&](const auto& formals) {
+                    const auto formal = std::ranges::find(
+                        formals, expression.front().text,
+                        &SystemVerilogCovergroupFormal::name);
+                    if (formal != formals.end()) {
+                        item.sampled_scalar_kind
+                            = coverage_scalar_kind(formal->type_tokens);
+                    }
+                };
+                apply_formal_kind(declaration.formals);
+                if (declaration.sampling) {
+                    apply_formal_kind(declaration.sampling->formals);
+                }
+            }
         } else {
             auto operands = split_top_level(expression, TokenKind::Comma);
             bool malformed { };
@@ -1423,6 +1641,30 @@ void VerilogParser::structure_covergroup_declarations(
         structure_coverage_options(item);
         if (coverpoint) {
             structure_coverpoint_bins(item);
+            const auto has_real_bins = std::ranges::any_of(
+                item.bins,
+                [](const SystemVerilogCoverageBin& bin) {
+                    return std::ranges::any_of(
+                        bin.values,
+                        [](const SystemVerilogCoverageBinValue& value) {
+                            return value.exact_real_bits
+                                || value.range_left_real_bits
+                                || value.range_right_real_bits;
+                        });
+                });
+            if ((has_real_bins
+                    || item.sampled_scalar_kind
+                        == SystemVerilogScalarKind::ShortReal
+                    || item.sampled_scalar_kind == SystemVerilogScalarKind::Real
+                    || item.sampled_scalar_kind
+                        == SystemVerilogScalarKind::Realtime)
+                && standard_revision_
+                    != StandardRevision::SystemVerilog2023) {
+                error(
+                    token,
+                    "FSIM-SV-SEM-264",
+                    "real-valued coverpoints require the SystemVerilog-2023 profile");
+            }
         } else {
             structure_cross_bins(item);
         }
@@ -1436,360 +1678,6 @@ void VerilogParser::structure_covergroup_declarations(
             declaration.coverage_declarations.push_back(std::move(item));
         }
         position = *terminator + 1U;
-    }
-}
-
-void VerilogParser::structure_coverpoint_bins(
-    SystemVerilogCoverageDeclaration& declaration)
-{
-    constexpr std::size_t maximum_expanded_bins = 65'536U;
-    const std::span<const Token> body { declaration.body_tokens };
-    std::unordered_set<std::string> names;
-    bool saw_bin_declaration { };
-    std::size_t next_bin_index { };
-    for (auto statement : split_top_level(body, TokenKind::Semicolon)) {
-        if (statement.empty())
-            continue;
-        const bool wildcard_declaration = statement.front().text == "wildcard";
-        const std::size_t keyword_index = wildcard_declaration ? 1U : 0U;
-        if (keyword_index >= statement.size())
-            continue;
-        const auto keyword = statement[keyword_index].text;
-        if (keyword != "bins" && keyword != "ignore_bins"
-            && keyword != "illegal_bins") {
-            continue;
-        }
-        saw_bin_declaration = true;
-        const auto name_index = keyword_index + 1U;
-        const auto assignment = find_top_level(statement, TokenKind::Assign);
-        if (name_index >= statement.size()
-            || statement[name_index].kind != TokenKind::Identifier
-            || !assignment || *assignment <= name_index
-            || *assignment + 1U == statement.size()) {
-            error(
-                statement.front(),
-                "FSIM-SV-PARSE-319",
-                "a coverpoint bin requires 'bins name = selection'");
-            continue;
-        }
-        const auto source_name = statement[name_index].text;
-        if (!names.insert(source_name).second) {
-            error(
-                statement[name_index],
-                "FSIM-SV-SEM-212",
-                "duplicate coverpoint bin name '" + source_name + "'");
-            continue;
-        }
-
-        bool arrayed { };
-        std::optional<std::size_t> declared_array_size;
-        const auto declarator = std::span<const Token> { statement }.subspan(
-            name_index + 1U, *assignment - name_index - 1U);
-        if (!declarator.empty()) {
-            if (declarator.front().kind != TokenKind::LeftBracket
-                || declarator.back().kind != TokenKind::RightBracket) {
-                error(
-                    statement[name_index],
-                    "FSIM-SV-PARSE-320",
-                    "a bin array declarator must be empty or contain a positive size");
-                continue;
-            }
-            arrayed = true;
-            const auto extent = declarator.subspan(1U, declarator.size() - 2U);
-            if (!extent.empty()) {
-                const auto literal = coverage_literal(extent);
-                if (!literal || literal->wildcard || !literal->exact
-                    || *literal->exact <= 0
-                    || static_cast<std::uint64_t>(*literal->exact)
-                        > maximum_expanded_bins) {
-                    error(
-                        declarator.front(),
-                        "FSIM-SV-SEM-213",
-                        "a bin array size must be within 1..65536");
-                    continue;
-                }
-                declared_array_size = static_cast<std::size_t>(*literal->exact);
-            }
-        }
-
-        auto rhs = std::span<const Token> { statement }.subspan(
-            *assignment + 1U);
-        SystemVerilogCoverageBin bin;
-        bin.kind = keyword == "ignore_bins"
-            ? SystemVerilogCoverageBinKind::Ignore
-            : keyword == "illegal_bins"
-            ? SystemVerilogCoverageBinKind::Illegal
-            : SystemVerilogCoverageBinKind::Regular;
-        bin.name = source_name;
-        bin.source_name = source_name;
-        bin.name_token = statement[name_index];
-        bin.declared_array_size = declared_array_size;
-        bin.wildcard = wildcard_declaration;
-        bin.weight = declaration.effective_weight;
-        bin.goal = declaration.effective_goal;
-        bin.at_least = declaration.effective_at_least;
-        bin.span = span_from(statement.front(), statement.back());
-        const auto iff = find_top_level_keyword(rhs, "iff");
-        if (iff) {
-            const auto left = *iff + 1U;
-            if (*iff == 0U || left >= rhs.size()
-                || rhs[left].kind != TokenKind::LeftParen) {
-                error(
-                    rhs[*iff],
-                    "FSIM-SV-PARSE-322",
-                    "a bin iff guard requires a nonempty parenthesized expression");
-                continue;
-            }
-            const auto right = matching_right_parenthesis(rhs, left);
-            if (!right || *right + 1U != rhs.size() || *right == left + 1U) {
-                error(
-                    rhs[*iff],
-                    "FSIM-SV-PARSE-322",
-                    "a bin iff guard requires a nonempty balanced expression");
-                continue;
-            }
-            bin.iff_tokens.assign(
-                rhs.begin() + static_cast<std::ptrdiff_t>(left + 1U),
-                rhs.begin() + static_cast<std::ptrdiff_t>(*right));
-            bin.iff_span = span_from(rhs[*iff], rhs[*right]);
-            rhs = rhs.first(*iff);
-        }
-        if (const auto matches = find_top_level_keyword(rhs, "matches")) {
-            error(
-                rhs[*matches],
-                "FSIM-SV-PARSE-320",
-                "matches is only valid in a cross-bin selection expression");
-            continue;
-        }
-        if (const auto with = find_top_level_keyword(rhs, "with")) {
-            const auto left = *with + 1U;
-            if (*with == 0U || left >= rhs.size()
-                || rhs[left].kind != TokenKind::LeftParen) {
-                error(
-                    rhs[*with],
-                    "FSIM-SV-PARSE-320",
-                    "a coverpoint with clause requires a nonempty parenthesized expression");
-                continue;
-            }
-            const auto right = matching_right_parenthesis(rhs, left);
-            if (!right || *right + 1U != rhs.size() || *right == left + 1U) {
-                error(
-                    rhs[*with],
-                    "FSIM-SV-PARSE-320",
-                    "a coverpoint with clause requires one balanced expression");
-                continue;
-            }
-            bin.with_tokens.assign(
-                rhs.begin() + static_cast<std::ptrdiff_t>(left + 1U),
-                rhs.begin() + static_cast<std::ptrdiff_t>(*right));
-            bin.with_span = span_from(rhs[*with], rhs[*right]);
-            rhs = rhs.first(*with);
-        }
-        if (rhs.size() == 1U && rhs.front().text == "default") {
-            if (arrayed || wildcard_declaration) {
-                error(
-                    rhs.front(),
-                    "FSIM-SV-PARSE-320",
-                    "default bins cannot be wildcard or arrayed");
-                continue;
-            }
-            bin.selection = SystemVerilogCoverageBinSelection::Default;
-        } else if (rhs.size() == 1U
-            && rhs.front().kind == TokenKind::Identifier
-            && rhs.front().text == declaration.name
-            && !bin.with_tokens.empty()) {
-            // The coverpoint name denotes its complete value domain. The with
-            // predicate is evaluated against the sampled candidate as `item`.
-        } else if (
-            rhs.size() == 2U && rhs[0].text == "default"
-            && rhs[1].text == "sequence") {
-            if (arrayed || wildcard_declaration) {
-                error(
-                    rhs.front(),
-                    "FSIM-SV-PARSE-322",
-                    "default sequence bins cannot be wildcard or arrayed");
-                continue;
-            }
-            bin.selection = SystemVerilogCoverageBinSelection::DefaultSequence;
-        } else if (rhs.front().kind == TokenKind::LeftParen) {
-            const auto transitions = structure_transition_sequences(
-                rhs, wildcard_declaration);
-            if (!transitions) {
-                error(
-                    statement.front(),
-                    "FSIM-SV-PARSE-321",
-                    "a transition bin requires balanced bounded sequences and repetitions");
-                continue;
-            }
-            bin.transitions = *transitions;
-        } else if (
-            rhs.size() >= 3U && rhs.front().kind == TokenKind::LeftBrace
-            && rhs.back().kind == TokenKind::RightBrace) {
-            const auto right = matching_right_brace(rhs, 0U);
-            if (!right || *right + 1U != rhs.size())
-                continue;
-            auto values = split_top_level(
-                rhs.subspan(1U, rhs.size() - 2U), TokenKind::Comma);
-            if (values.empty()
-                || std::ranges::any_of(
-                    values,
-                    [](const std::vector<Token>& value) {
-                        return value.empty();
-                    })) {
-                error(
-                    statement.front(),
-                    "FSIM-SV-PARSE-319",
-                    "an explicit coverpoint bin requires nonempty values");
-                continue;
-            }
-            bool malformed { };
-            for (auto& value_tokens : values) {
-                const auto value = coverage_bin_value(
-                    value_tokens, wildcard_declaration);
-                if (!value) {
-                    malformed = true;
-                    break;
-                }
-                bin.values.push_back(*value);
-            }
-            if (malformed) {
-                error(
-                    statement.front(),
-                    "FSIM-SV-PARSE-320",
-                    "a bin value must be a bounded scalar, range, or wildcard literal");
-                continue;
-            }
-        } else {
-            error(
-                statement.front(),
-                "FSIM-SV-PARSE-320",
-                "a bin selection must be default, a braced value set, or transitions");
-            continue;
-        }
-
-        if (!arrayed) {
-            bin.declaration_index = next_bin_index++;
-            declaration.bins.push_back(std::move(bin));
-            continue;
-        }
-
-        if (!bin.transitions.empty()) {
-            const auto bin_count = declared_array_size.value_or(
-                bin.transitions.size());
-            if (bin_count == 0U || bin_count > maximum_expanded_bins
-                || bin.transitions.size() > maximum_expanded_bins
-                || bin_count > bin.transitions.size()) {
-                error(
-                    statement[name_index],
-                    "FSIM-SV-SEM-214",
-                    "transition array expansion exceeds 65536 sequences or creates empty bins");
-                continue;
-            }
-            std::size_t sequence_offset { };
-            for (std::size_t array_index = 0; array_index < bin_count;
-                ++array_index) {
-                const auto remaining_sequences = bin.transitions.size() - sequence_offset;
-                const auto remaining_bins = bin_count - array_index;
-                const auto sequence_count = (remaining_sequences + remaining_bins - 1U) / remaining_bins;
-                auto expanded = bin;
-                expanded.name = source_name + "[" + std::to_string(array_index) + "]";
-                expanded.array_index = array_index;
-                expanded.declaration_index = next_bin_index++;
-                expanded.transitions.assign(
-                    bin.transitions.begin()
-                        + static_cast<std::ptrdiff_t>(sequence_offset),
-                    bin.transitions.begin()
-                        + static_cast<std::ptrdiff_t>(
-                            sequence_offset + sequence_count));
-                sequence_offset += sequence_count;
-                declaration.bins.push_back(std::move(expanded));
-            }
-            continue;
-        }
-
-        std::vector<SystemVerilogCoverageBinValue> expanded_values;
-        for (const auto& value : bin.values) {
-            if (!value.range_left || !value.range_right) {
-                expanded_values.push_back(value);
-                continue;
-            }
-            const auto ascending = *value.range_left <= *value.range_right;
-            auto current = *value.range_left;
-            for (;;) {
-                SystemVerilogCoverageBinValue expanded = value;
-                expanded.exact_value = current;
-                expanded.range_left.reset();
-                expanded.range_right.reset();
-                expanded_values.push_back(std::move(expanded));
-                if (expanded_values.size() > maximum_expanded_bins)
-                    break;
-                if (current == *value.range_right)
-                    break;
-                current += ascending ? 1 : -1;
-            }
-            if (expanded_values.size() > maximum_expanded_bins)
-                break;
-        }
-        if (!bin.with_tokens.empty()) {
-            std::erase_if(
-                expanded_values,
-                [&](const SystemVerilogCoverageBinValue& value) {
-                    if (!value.exact_value && value.exact_bits.empty())
-                        return false;
-                    const SystemVerilogCoverageSampleValue candidate {
-                        value.exact_value.value_or(0),
-                        0U,
-                        value.width,
-                        value.exact_bits,
-                        value.exact_unknown_bits,
-                        value.exact_signed
-                    };
-                    return !systemverilog_coverage_with_allows(
-                        bin.with_tokens, candidate);
-                });
-        }
-        const auto bin_count = declared_array_size.value_or(
-            expanded_values.size());
-        if (bin_count == 0U || bin_count > maximum_expanded_bins
-            || expanded_values.size() > maximum_expanded_bins
-            || bin_count > expanded_values.size()) {
-            error(
-                statement[name_index],
-                "FSIM-SV-SEM-213",
-                "bin array expansion exceeds 65536 bins/values or creates empty bins");
-            continue;
-        }
-        std::size_t value_offset { };
-        for (std::size_t array_index = 0; array_index < bin_count;
-            ++array_index) {
-            const auto remaining_values = expanded_values.size() - value_offset;
-            const auto remaining_bins = bin_count - array_index;
-            const auto value_count = (remaining_values + remaining_bins - 1U) / remaining_bins;
-            auto expanded = bin;
-            expanded.name = source_name + "[" + std::to_string(array_index) + "]";
-            expanded.array_index = array_index;
-            expanded.declaration_index = next_bin_index++;
-            expanded.values.assign(
-                expanded_values.begin()
-                    + static_cast<std::ptrdiff_t>(value_offset),
-                expanded_values.begin()
-                    + static_cast<std::ptrdiff_t>(value_offset + value_count));
-            value_offset += value_count;
-            declaration.bins.push_back(std::move(expanded));
-        }
-    }
-    if (!saw_bin_declaration) {
-        SystemVerilogCoverageBin automatic;
-        automatic.selection = SystemVerilogCoverageBinSelection::Automatic;
-        automatic.name = "$auto";
-        automatic.source_name = "$auto";
-        automatic.weight = declaration.effective_weight;
-        automatic.goal = declaration.effective_goal;
-        automatic.at_least = declaration.effective_at_least;
-        automatic.span = declaration.body_span.empty()
-            ? declaration.expression_span
-            : declaration.body_span;
-        declaration.bins.push_back(std::move(automatic));
     }
 }
 
@@ -1850,6 +1738,7 @@ void VerilogParser::structure_coverage_options(
     SystemVerilogCoverageDeclaration& declaration)
 {
     const std::span<const Token> body { declaration.body_tokens };
+    bool saw_real_interval { };
     for (const auto& statement : split_top_level(body, TokenKind::Semicolon)) {
         if (statement.empty()
             || (statement.front().text != "option"
@@ -1869,6 +1758,45 @@ void VerilogParser::structure_coverage_options(
         const auto value_tokens = std::span<const Token> { statement }.subspan(4U);
         const auto literal = coverage_literal(value_tokens);
         const auto name = statement[2].text;
+        const bool real_interval = name == "real_interval";
+        if (real_interval) {
+            if (!require_standard(
+                    "type_option.real_interval",
+                    StandardRevision::SystemVerilog2023,
+                    statement[2],
+                    "FSIM-SV-SEM-264")) {
+                continue;
+            }
+            const auto value = literal
+                ? coverage_real_value(*literal)
+                : std::nullopt;
+            const bool legal = declaration.kind
+                    == SystemVerilogCoverageDeclarationKind::Coverpoint
+                && statement.front().text == "type_option"
+                && !saw_real_interval && value && std::isfinite(*value)
+                && *value > 0.0;
+            if (!legal) {
+                error(
+                    statement[2],
+                    "FSIM-SV-SEM-265",
+                    "type_option.real_interval requires one finite positive coverpoint assignment");
+                continue;
+            }
+            saw_real_interval = true;
+            SystemVerilogCovergroupOptionAssignment option;
+            option.scope = SystemVerilogCovergroupOptionScope::Type;
+            option.name = name;
+            option.name_token = statement[2];
+            option.name_span = statement[2].span;
+            option.value_tokens.assign(value_tokens.begin(), value_tokens.end());
+            option.evaluated_real_bits
+                = std::bit_cast<std::uint64_t>(*value);
+            option.span = span_from(statement.front(), statement.back());
+            declaration.option_assignments.push_back(std::move(option));
+            declaration.effective_real_interval_bits
+                = std::bit_cast<std::uint64_t>(*value);
+            continue;
+        }
         const bool valid_name = name == "weight" || name == "goal"
             || name == "at_least";
         const bool valid_value = literal && !literal->wildcard && literal->exact
@@ -1912,29 +1840,6 @@ void VerilogParser::structure_coverage_options(
     };
     apply_scope(SystemVerilogCovergroupOptionScope::Type);
     apply_scope(SystemVerilogCovergroupOptionScope::Instance);
-}
-
-void VerilogParser::add_covergroup_declaration(
-    std::vector<SystemVerilogCovergroupDeclaration>& declarations,
-    SystemVerilogCovergroupDeclaration declaration,
-    const Token& start)
-{
-    if (declaration.name.empty()) {
-        return;
-    }
-    const auto duplicate = std::ranges::any_of(
-        declarations,
-        [&](const SystemVerilogCovergroupDeclaration& existing) {
-            return existing.name == declaration.name;
-        });
-    if (duplicate) {
-        error(
-            start,
-            "FSIM-SV-SEM-205",
-            "duplicate covergroup declaration '" + declaration.name + "'");
-        return;
-    }
-    declarations.push_back(std::move(declaration));
 }
 
 } // namespace fsim::frontend

@@ -72,6 +72,9 @@ constexpr bool valid_archive_enum(const T value) noexcept
         std::same_as<T, frontend::SystemVerilogProcessRegion>) {
         return value >= frontend::SystemVerilogProcessRegion::Active
             && value <= frontend::SystemVerilogProcessRegion::Reactive;
+    } else if constexpr (std::same_as<T, frontend::OutputFormat>) {
+        return value >= frontend::OutputFormat::Binary
+            && value <= frontend::OutputFormat::Unformatted4;
     } else if constexpr (std::same_as<T, frontend::SystemVerilogScalarKind>) {
         return value >= frontend::SystemVerilogScalarKind::None
             && value <= frontend::SystemVerilogScalarKind::Chandle;

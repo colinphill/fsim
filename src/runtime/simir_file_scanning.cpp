@@ -4,6 +4,7 @@
 #include "fsim/runtime/simir.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <limits>
 #include <tuple>
@@ -268,6 +269,71 @@ namespace {
         return { pack_file_text(text, target.width), { }, false };
     }
 
+    [[nodiscard]] std::uint32_t native_word(
+        const std::string_view bytes, const std::size_t offset)
+    {
+        std::uint32_t result { };
+        for (std::size_t byte = 0; byte < 4U; ++byte) {
+            const auto shift = std::endian::native == std::endian::little
+                ? byte * 8U
+                : (3U - byte) * 8U;
+            result |= static_cast<std::uint32_t>(
+                          static_cast<unsigned char>(bytes[offset + byte]))
+                << shift;
+        }
+        return result;
+    }
+
+    [[nodiscard]] std::optional<InputScanValue> packed_unformatted(
+        const std::string_view bytes,
+        const InputScanFormat format,
+        const InputScanTarget& target)
+    {
+        PackedLogic4 value(target.width, Logic4::zero);
+        if (format == InputScanFormat::unformatted2) {
+            const auto expected = (static_cast<std::size_t>(target.width) + 7U)
+                / 8U;
+            if (bytes.size() != expected)
+                return std::nullopt;
+            for (std::size_t byte = 0; byte < bytes.size(); ++byte) {
+                const auto logical_byte = std::endian::native
+                        == std::endian::little
+                    ? byte
+                    : bytes.size() - byte - 1U;
+                const auto payload = static_cast<unsigned char>(bytes[byte]);
+                for (std::size_t bit = 0;
+                    bit < 8U && logical_byte * 8U + bit < value.width();
+                    ++bit) {
+                    value.set(
+                        logical_byte * 8U + bit,
+                        (payload & (1U << bit)) != 0U
+                            ? Logic4::one
+                            : Logic4::zero);
+                }
+            }
+        } else {
+            const auto words = (static_cast<std::size_t>(target.width) + 31U)
+                / 32U;
+            if (bytes.size() != words * 8U)
+                return std::nullopt;
+            for (std::size_t word = 0; word < words; ++word) {
+                const auto aval = native_word(bytes, word * 8U);
+                const auto bval = native_word(bytes, word * 8U + 4U);
+                for (std::size_t bit = 0;
+                    bit < 32U && word * 32U + bit < value.width();
+                    ++bit) {
+                    const bool a = (aval & (UINT32_C(1) << bit)) != 0U;
+                    const bool b = (bval & (UINT32_C(1) << bit)) != 0U;
+                    value.set(
+                        word * 32U + bit,
+                        !b ? (a ? Logic4::one : Logic4::zero)
+                           : (a ? Logic4::x : Logic4::z));
+                }
+            }
+        }
+        return finish_packed_scan(std::move(value), false, target);
+    }
+
     [[nodiscard]] bool numeric_character(
         const std::int32_t character,
         const InputScanFormat format,
@@ -306,13 +372,22 @@ namespace {
     {
         std::string text;
         bool eof = false;
-        const auto default_limit = conversion.format == InputScanFormat::character
+        const bool unformatted = conversion.format
+                == InputScanFormat::unformatted2
+            || conversion.format == InputScanFormat::unformatted4;
+        const auto default_limit = unformatted
+            ? conversion.format == InputScanFormat::unformatted2
+                ? (static_cast<std::size_t>(conversion.target.width) + 7U) / 8U
+                : ((static_cast<std::size_t>(conversion.target.width) + 31U)
+                      / 32U)
+                    * 8U
+            : conversion.format == InputScanFormat::character
             ? 1U
             : static_cast<std::uint32_t>(maximum_string_bytes);
         const auto limit = conversion.maximum_characters == 0
             ? default_limit
             : conversion.maximum_characters;
-        if (conversion.format != InputScanFormat::character) {
+        if (conversion.format != InputScanFormat::character && !unformatted) {
             (void)scanner.skip_space();
         }
         while (text.size() < limit) {
@@ -321,7 +396,8 @@ namespace {
                 eof = true;
                 break;
             }
-            const bool accepted = conversion.format == InputScanFormat::character
+            const bool accepted = unformatted
+                || conversion.format == InputScanFormat::character
                 || (conversion.format == InputScanFormat::string
                         ? !space(character)
                         : numeric_character(character, conversion.format, text.empty()));
@@ -331,7 +407,9 @@ namespace {
             }
             text.push_back(static_cast<char>(character));
         }
-        const bool complete_character = conversion.format != InputScanFormat::character || text.size() == limit;
+        const bool complete_character =
+            (conversion.format != InputScanFormat::character && !unformatted)
+            || text.size() == limit;
         return { std::move(text), complete_character, eof };
     }
 
@@ -381,9 +459,15 @@ InputScanResult scan_formatted_input(
         if (conversion.suppress)
             continue;
         std::optional<InputScanValue> value;
+        const bool unformatted = conversion.format
+                == InputScanFormat::unformatted2
+            || conversion.format == InputScanFormat::unformatted4;
         const bool text_format = conversion.format == InputScanFormat::character
             || conversion.format == InputScanFormat::string;
-        if (text_format) {
+        if (unformatted) {
+            value = packed_unformatted(
+                text, conversion.format, conversion.target);
+        } else if (text_format) {
             const bool string_target = conversion.target.kind
                     == InputScanTargetKind::string_register
                 || conversion.target.kind == InputScanTargetKind::string_object;

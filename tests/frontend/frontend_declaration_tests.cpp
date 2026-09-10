@@ -1087,6 +1087,112 @@ endmodule
           && sv_assertions[2].span.source_name == "assertions.sv",
       "SystemVerilog pass/failure action metadata");
 
+  const auto deferred = parse_verilog(
+      SourceText { "deferred_assertions.sv", R"(
+module deferred_assertions;
+  logic sampled;
+  task automatic record(input logic value);
+  endtask
+  initial begin
+    assert #0 (sampled) record(sampled); else $warning("observed");
+    assert final (sampled) ; else $error("final");
+  end
+endmodule
+)" },
+      StandardRevision::SystemVerilog2023);
+  require(deferred.ok(),
+      "observed and final deferred immediate assertions must parse");
+  const auto& deferred_statements =
+      deferred.design.units.front().processes.front().statements;
+  require(
+      deferred_statements.size() == 2
+          && deferred_statements[0].kind == StatementKind::Assert
+          && deferred_statements[0].delay
+          && deferred_statements[0].delay->magnitude == 0
+          && !deferred_statements[0].output_postponed
+          && deferred_statements[0].statements.size() == 1
+          && deferred_statements[0].statements.front().kind
+              == StatementKind::TaskCall
+          && deferred_statements[0].else_statements.size() == 1
+          && deferred_statements[0].else_statements.front().kind
+              == StatementKind::Report
+          && !deferred_statements[1].delay
+          && deferred_statements[1].output_postponed
+          && deferred_statements[1].assertion_has_pass_action
+          && deferred_statements[1].statements.size() == 1
+          && deferred_statements[1].statements.front().kind
+              == StatementKind::Null,
+      "deferred assertion form, action, and scheduling metadata");
+
+  const auto deferred_2005 = parse_verilog(
+      SourceText { "deferred_2005.sv", R"(
+module deferred_2005;
+  initial assert #0 (1'b1);
+endmodule
+)" },
+      StandardRevision::SystemVerilog2005);
+  require(
+      !deferred_2005.ok()
+          && std::ranges::any_of(
+              deferred_2005.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-348";
+              }),
+      "observed deferred assertions require the 2009 profile");
+
+  const auto deferred_2009 = parse_verilog(
+      SourceText { "deferred_2009.sv", R"(
+module deferred_2009;
+  initial assert #0 (1'b1);
+endmodule
+)" },
+      StandardRevision::SystemVerilog2009);
+  require(
+      deferred_2009.ok(),
+      "observed deferred assertions remain available in the 2009 profile");
+
+  const auto final_2009 = parse_verilog(
+      SourceText { "final_2009.sv", R"(
+module final_2009;
+  initial assert final (1'b1);
+endmodule
+)" },
+      StandardRevision::SystemVerilog2009);
+  require(
+      !final_2009.ok()
+          && std::ranges::any_of(
+              final_2009.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-348";
+              }),
+      "final deferred assertions require the 2012 profile");
+
+  const auto malformed_deferred = parse_verilog(
+      SourceText { "malformed_deferred.sv", R"(
+module malformed_deferred;
+  logic value;
+  initial begin
+    assert #1 (value);
+    assert final (value) value = 1'b1;
+    assert #0 (value) $display("not a permitted deferred action");
+  end
+endmodule
+)" },
+      StandardRevision::SystemVerilog2023);
+  require(
+      !malformed_deferred.ok()
+          && std::ranges::any_of(
+              malformed_deferred.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-371";
+              })
+          && std::ranges::any_of(
+              malformed_deferred.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-250";
+              }),
+      "deferred qualifiers and action restrictions need stable diagnostics");
+
   const auto contextual_vhdl_severity = parse_text(
       "bad_assertion.vhd",
       R"(

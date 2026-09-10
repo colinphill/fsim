@@ -3,6 +3,7 @@
 
 #include "fsim/runtime/file_binary.hpp"
 #include "fsim/runtime/file_scanning.hpp"
+#include "fsim/runtime/output_format.hpp"
 #include "fsim/runtime/simir.hpp"
 
 #include <array>
@@ -245,6 +246,49 @@ void test_simir_text_files()
             && decoded_time && decoded_time.value.as_time() == 17
             && scalar_values.values[2]->packed.low_word().aval == 0,
         "scalar scan preserves real, time, and null chandle payloads");
+
+    auto raw_value = PackedLogic4 { 37U, Logic4::zero };
+    raw_value.set(0U, Logic4::one);
+    raw_value.set(5U, Logic4::x);
+    raw_value.set(8U, Logic4::z);
+    raw_value.set(31U, Logic4::one);
+    raw_value.set(36U, Logic4::one);
+    const auto raw_four = format_output_value(
+        raw_value, OutputFormat::unformatted4, false, false);
+    const auto four_values = scan_formatted_string(
+        FileScan { 0, 0, 0, true,
+            { { "", InputScanFormat::unformatted4, 0, false,
+                { InputScanTargetKind::packed_register, 0, 37, false } } } },
+        raw_four);
+    require(
+        raw_four.size() == 16U && four_values.assignments == 1
+            && four_values.values[0]
+            && four_values.values[0]->packed == raw_value,
+        "%z round trips native aval and bval words without losing X or Z");
+
+    const auto raw_two = format_output_value(
+        raw_value, OutputFormat::unformatted2, false, false);
+    const auto two_values = scan_formatted_string(
+        FileScan { 0, 0, 0, true,
+            { { "", InputScanFormat::unformatted2, 0, false,
+                { InputScanTargetKind::packed_register, 0, 37, true } } } },
+        raw_two);
+    auto expected_two = raw_value;
+    expected_two.set(5U, Logic4::zero);
+    expected_two.set(8U, Logic4::zero);
+    require(
+        raw_two.size() == 5U && two_values.assignments == 1
+            && two_values.values[0]
+            && two_values.values[0]->packed == expected_two,
+        "%u round trips native two-state bytes and collapses X and Z to zero");
+    const auto incomplete_four = scan_formatted_string(
+        FileScan { 0, 0, 0, true,
+            { { "", InputScanFormat::unformatted4, 0, false,
+                { InputScanTargetKind::packed_register, 0, 37, false } } } },
+        std::string_view { raw_four }.substr(0, raw_four.size() - 1U));
+    require(
+        incomplete_four.assignments == -1 && !incomplete_four.values[0],
+        "an incomplete unformatted value leaves its target unmodified");
 
     const auto overflowing = scan_formatted_string(
         FileScan { 0, 0, 0, true,

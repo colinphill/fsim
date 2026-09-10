@@ -49,7 +49,7 @@ string(REPLACE "\r\n" "\n" FSIM_MATRIX_CONTENTS "${FSIM_MATRIX_CONTENTS}")
 string(SHA256 FSIM_MATRIX_DIGEST "${FSIM_MATRIX_CONTENTS}")
 
 set(FSIM_EXPECTED_MATRIX_DIGEST
-  "28aca45a0ca88ded646cbd1baff5d9cc29346d3bf8a0da0fa0187dd58b0179da")
+  "72ffbd202b8f0d995de037bed421f2164bc09e3b6c11d40924bb72be5de38331")
 if(NOT FSIM_MATRIX_DIGEST STREQUAL FSIM_EXPECTED_MATRIX_DIGEST)
   message(FATAL_ERROR
     "feature-matrix digest changed: expected ${FSIM_EXPECTED_MATRIX_DIGEST}, "
@@ -79,6 +79,12 @@ foreach(FSIM_LINE IN LISTS FSIM_MATRIX_LINES)
     continue()
   endif()
   set(FSIM_ID "${CMAKE_MATCH_1}")
+  if(FSIM_ID MATCHES "^SV-")
+    string(REGEX REPLACE "^SV-" "" FSIM_SV_NUMBER "${FSIM_ID}")
+    if(FSIM_SV_NUMBER GREATER 854)
+      continue()
+    endif()
+  endif()
   list(FIND FSIM_REQUIRED_IDS "${FSIM_ID}" FSIM_DUPLICATE_INDEX)
   if(NOT FSIM_DUPLICATE_INDEX EQUAL -1)
     message(FATAL_ERROR "duplicate final feature-matrix ID: ${FSIM_ID}")

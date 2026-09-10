@@ -33,7 +33,6 @@ void require(bool condition, const char *message) {
 
 } // namespace
 
-#include "runtime_value_primitives_tests.tpp"
 void test_scheduler_phase_order() {
   using namespace fsim::runtime;
 

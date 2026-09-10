@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "elaborator_internal.hpp"
+#include "hierarchy_builder_internal.hpp"
 
 namespace fsim::elaboration {
 using namespace runtime::simir;
@@ -1469,8 +1469,10 @@ using namespace elaboration_detail;
                 };
                 enum class DeclarationKind {
                     Type,
+                    Class,
                     Constant,
                     Signal,
+                    Variable,
                     SignalAlias,
                     Component,
                     Function,
@@ -1486,6 +1488,17 @@ using namespace elaboration_detail;
                     std::size_t index{};
                 };
                 std::vector<PriorGeneratedType> prior_types;
+                std::vector<frontend::Type> local_class_types;
+                local_class_types.reserve(
+                    body.systemverilog_classes.size());
+                for (const auto& declaration :
+                     body.systemverilog_classes) {
+                    frontend::Type type;
+                    type.spelling = declaration.name;
+                    type.named_type = declaration.name;
+                    type.named_type_span = declaration.span;
+                    local_class_types.push_back(std::move(type));
+                }
                 std::vector<OrderedDeclaration> declarations;
                 const auto append_declarations =
                     [&](const auto& source,
@@ -1509,9 +1522,14 @@ using namespace elaboration_detail;
                         index});
                 }
                 append_declarations(
+                    body.systemverilog_classes,
+                    DeclarationKind::Class);
+                append_declarations(
                     body.constants, DeclarationKind::Constant);
                 append_declarations(
                     body.signals, DeclarationKind::Signal);
+                append_declarations(
+                    body.variables, DeclarationKind::Variable);
                 append_declarations(
                     body.signal_aliases,
                     DeclarationKind::SignalAlias);
@@ -1551,6 +1569,20 @@ using namespace elaboration_detail;
                         generated_types[alias.name] = &alias.type;
                         break;
                     }
+                    case DeclarationKind::Class: {
+                        const auto& class_declaration =
+                            body.systemverilog_classes[declaration.index];
+                        const auto prior = generated_types.find(
+                            class_declaration.name);
+                        prior_types.push_back({
+                            class_declaration.name,
+                            prior == generated_types.end()
+                                ? nullptr
+                                : prior->second});
+                        generated_types[class_declaration.name] =
+                            &local_class_types[declaration.index];
+                        break;
+                    }
                     case DeclarationKind::Constant:
                         resolve_declaration(
                             body.constants[declaration.index]);
@@ -1558,6 +1590,10 @@ using namespace elaboration_detail;
                     case DeclarationKind::Signal:
                         resolve_declaration(
                             body.signals[declaration.index]);
+                        break;
+                    case DeclarationKind::Variable:
+                        resolve_declaration(
+                            body.variables[declaration.index]);
                         break;
                     case DeclarationKind::SignalAlias:
                         (void)resolve_type(

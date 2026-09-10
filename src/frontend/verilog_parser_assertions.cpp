@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
+#include "verilog_parser_assertion_support.hpp"
 
 #include <charconv>
 #include <map>
@@ -14,6 +15,19 @@
 
 namespace fsim::frontend {
 namespace {
+
+    [[nodiscard]] bool valid_deferred_action(
+        const Statement& action,
+        const bool final)
+    {
+        if (action.kind == StatementKind::Null
+            || action.kind == StatementKind::Report) {
+            return true;
+        }
+        return !final
+            && action.kind == StatementKind::TaskCall
+            && !action.task_name.starts_with("$");
+    }
 
     [[nodiscard]] std::string_view assertion_kind_name(
         const SystemVerilogAssertionDeclarationKind kind)
@@ -73,7 +87,9 @@ namespace {
         }
     }
 
-    [[nodiscard]] std::vector<std::vector<Token>> split_top_level(
+} // namespace
+
+[[nodiscard]] std::vector<std::vector<Token>> split_top_level(
         const std::span<const Token> tokens,
         const TokenKind separator)
     {
@@ -96,7 +112,7 @@ namespace {
         return result;
     }
 
-    [[nodiscard]] std::optional<std::size_t> find_top_level(
+[[nodiscard]] std::optional<std::size_t> find_top_level(
         const std::span<const Token> tokens,
         const TokenKind sought)
     {
@@ -117,7 +133,7 @@ namespace {
         return std::nullopt;
     }
 
-    [[nodiscard]] std::optional<std::size_t> matching_right_parenthesis(
+[[nodiscard]] std::optional<std::size_t> matching_right_parenthesis(
         const std::span<const Token> tokens,
         const std::size_t left)
     {
@@ -139,7 +155,7 @@ namespace {
         return std::nullopt;
     }
 
-    [[nodiscard]] std::optional<std::size_t> matching_right_bracket(
+[[nodiscard]] std::optional<std::size_t> matching_right_bracket(
         const std::span<const Token> tokens,
         const std::size_t left)
     {
@@ -161,7 +177,7 @@ namespace {
         return std::nullopt;
     }
 
-    [[nodiscard]] bool assertion_local_type_keyword(
+[[nodiscard]] bool assertion_local_type_keyword(
         const std::string_view text)
     {
         constexpr std::string_view keywords[] = {
@@ -172,7 +188,7 @@ namespace {
         return std::ranges::find(keywords, text) != std::ranges::end(keywords);
     }
 
-    [[nodiscard]] bool valid_named_local_type_prefix(
+[[nodiscard]] bool valid_named_local_type_prefix(
         const std::span<const Token> tokens)
     {
         if (tokens.empty()
@@ -215,7 +231,7 @@ namespace {
         return brackets == 0 && have_identifier && !expect_identifier;
     }
 
-    [[nodiscard]] bool assertion_reference_keyword(
+[[nodiscard]] bool assertion_reference_keyword(
         const std::string_view text)
     {
         constexpr std::string_view keywords[] = {
@@ -233,7 +249,7 @@ namespace {
         return std::ranges::find(keywords, text) != std::ranges::end(keywords);
     }
 
-    [[nodiscard]] std::unordered_set<std::string> assertion_design_unit_names(
+[[nodiscard]] std::unordered_set<std::string> assertion_design_unit_names(
         const DesignUnit& unit)
     {
         std::unordered_set<std::string> names;
@@ -255,11 +271,105 @@ namespace {
         return names;
     }
 
-} // namespace
+Statement VerilogParser::parse_immediate_assertion(const Token& start)
+{
+    (void)require_standard(
+        "an immediate assertion",
+        StandardRevision::SystemVerilog2005,
+        start,
+        "FSIM-SV-PARSE-348");
 
-#include "verilog_parser_assertion_formals.tpp"
+    Statement statement;
+    statement.kind = StatementKind::Assert;
+    if (match(TokenKind::Hash)) {
+        const auto qualifier = current();
+        (void)require_standard(
+            "an observed deferred immediate assertion",
+            StandardRevision::SystemVerilog2009,
+            qualifier,
+            "FSIM-SV-PARSE-348");
+        Delay delay;
+        delay.span = qualifier.span;
+        statement.delay = std::move(delay);
+        if (!at(TokenKind::Number) || current().text != "0") {
+            error(
+                current(),
+                "FSIM-SV-PARSE-371",
+                "an observed deferred immediate assertion requires '#0'");
+        }
+        if (!at(TokenKind::LeftParen)) {
+            advance();
+        }
+    } else if (match_keyword("final")) {
+        (void)require_standard(
+            "a final deferred immediate assertion",
+            StandardRevision::SystemVerilog2012,
+            previous(),
+            "FSIM-SV-PARSE-348");
+        statement.output_postponed = true;
+    }
 
-#include "verilog_parser_assertion_locals.tpp"
+    expect(
+        TokenKind::LeftParen,
+        "'(' after assert or its deferred qualifier",
+        "FSIM-SV-PARSE-137");
+    statement.condition = parse_expression();
+    expect(
+        TokenKind::RightParen,
+        "')' after assertion condition",
+        "FSIM-SV-PARSE-138");
+    if (match_keyword("else")) {
+        statement.assertion_has_failure_action = true;
+        if (auto action = parse_statement()) {
+            statement.else_statements.push_back(std::move(*action));
+        } else {
+            error(
+                current(),
+                "FSIM-SV-PARSE-044",
+                "expected an immediate-assertion failure action");
+        }
+    } else {
+        statement.assertion_has_pass_action = true;
+        if (auto action = parse_statement()) {
+            statement.statements.push_back(std::move(*action));
+        } else {
+            error(
+                current(),
+                "FSIM-SV-PARSE-044",
+                "expected an immediate-assertion pass action");
+        }
+        if (match_keyword("else")) {
+            statement.assertion_has_failure_action = true;
+            if (auto action = parse_statement()) {
+                statement.else_statements.push_back(std::move(*action));
+            } else {
+                error(
+                    current(),
+                    "FSIM-SV-PARSE-044",
+                    "expected an immediate-assertion failure action");
+            }
+        }
+    }
+
+    const bool deferred = statement.delay || statement.output_postponed;
+    const auto validate_action = [&](const std::vector<Statement>& actions) {
+        if (deferred && !actions.empty()
+            && !valid_deferred_action(
+                actions.front(), statement.output_postponed)) {
+            error(
+                start,
+                "FSIM-SV-SEM-250",
+                statement.output_postponed
+                    ? "a final deferred assertion action must be null or a severity-system-task call"
+                    : "an observed deferred assertion action must be null or a single subroutine call");
+        }
+    };
+    validate_action(statement.statements);
+    validate_action(statement.else_statements);
+    statement.span = span_from(start, previous());
+    return statement;
+}
+
 void VerilogParser::structure_assertion_clock_and_disable(
     SystemVerilogAssertionDeclaration& declaration,
     std::size_t position)
@@ -1141,8 +1251,6 @@ void VerilogParser::structure_assertion_endpoints(
     }
 }
 
-#include "verilog_parser_assertion_resolution.tpp"
-
 SystemVerilogAssertionDeclaration
 VerilogParser::parse_assertion_declaration(
     const Token& start,
@@ -1189,21 +1297,113 @@ VerilogParser::parse_assertion_declaration(
         "';' after " + std::string { kind_name } + " declaration header",
         "FSIM-SV-PARSE-291");
 
-    while (!at_end()
-        && !keyword(terminator)
-        && !any_keyword({ "endmodule", "endinterface", "endprogram" })) {
-        declaration.body_tokens.push_back(advance());
+    const auto body_begin = position();
+    if (kind == SystemVerilogAssertionDeclarationKind::Checker) {
+        for (auto& formal : declaration.formals) {
+            if (formal.direction == PortDirection::Unknown) {
+                formal.direction = PortDirection::Input;
+            }
+        }
+        const auto concurrent_start = [&] {
+            return (at(TokenKind::Identifier)
+                       && contains_word(
+                           { "assert", "assume", "cover", "restrict" },
+                           current().text))
+                || (at(TokenKind::Identifier)
+                    && at(TokenKind::Colon, 1)
+                    && at(TokenKind::Identifier, 2)
+                    && contains_word(
+                        { "assert", "assume", "cover", "restrict" },
+                        current(2).text));
+        };
+        while (!at_end()
+            && !keyword(terminator)
+            && !any_keyword({ "endmodule", "endinterface", "endprogram" })) {
+            const auto before = position();
+            if (keyword("sequence") || keyword("property")) {
+                const auto nested_start = advance();
+                const auto nested_kind = nested_start.text == "sequence"
+                    ? SystemVerilogAssertionDeclarationKind::Sequence
+                    : SystemVerilogAssertionDeclarationKind::Property;
+                auto nested = parse_assertion_declaration(
+                    nested_start, nested_kind);
+                const auto duplicate = std::ranges::any_of(
+                    declaration.checker_declarations,
+                    [&](const SystemVerilogAssertionDeclaration& existing) {
+                        return !nested.name.empty()
+                            && existing.name == nested.name;
+                    });
+                if (duplicate) {
+                    error(
+                        nested_start,
+                        "FSIM-SV-SEM-192",
+                        "duplicate checker assertion declaration '"
+                            + nested.name + "'");
+                } else {
+                    declaration.checker_declarations.push_back(
+                        std::move(nested));
+                }
+            } else if (concurrent_start()) {
+                std::optional<Token> label;
+                if (at(TokenKind::Colon, 1)) {
+                    label = advance();
+                    advance();
+                }
+                const auto directive = advance();
+                const auto assertion_kind = directive.text == "assert"
+                    ? SystemVerilogConcurrentAssertionKind::Assert
+                    : directive.text == "assume"
+                    ? SystemVerilogConcurrentAssertionKind::Assume
+                    : directive.text == "cover"
+                    ? SystemVerilogConcurrentAssertionKind::Cover
+                    : SystemVerilogConcurrentAssertionKind::Restrict;
+                declaration.checker_assertions.push_back(
+                    parse_concurrent_assertion(
+                        directive, assertion_kind, std::move(label)));
+            } else if (at(TokenKind::Backtick)) {
+                parse_directive();
+            } else {
+                if (at(TokenKind::Identifier)
+                    && assertion_local_type_keyword(current().text)
+                    && at(TokenKind::Assign, 1)) {
+                    error(
+                        current(),
+                        "FSIM-SV-PARSE-295",
+                        "a checker data declaration has no variable name");
+                }
+                // Retain every checker item in body_tokens. Unsupported item
+                // families remain inert, but skipping one complete statement
+                // prevents procedural assertions from being misclassified as
+                // checker-level concurrent directives.
+                skip_to_semicolon();
+            }
+            if (position() == before) {
+                advance();
+            }
+        }
+    } else {
+        while (!at_end()
+            && !keyword(terminator)
+            && !any_keyword({ "endmodule", "endinterface", "endprogram" })) {
+            advance();
+        }
     }
+    const auto body_end = position();
+    declaration.body_tokens.assign(
+        tokens_.begin() + static_cast<std::ptrdiff_t>(body_begin),
+        tokens_.begin() + static_cast<std::ptrdiff_t>(body_end));
     if (!declaration.body_tokens.empty()) {
         declaration.body_span = span_from(
             declaration.body_tokens.front(),
             declaration.body_tokens.back());
     }
-    const auto expression_position = structure_assertion_locals(declaration);
-    structure_assertion_clock_and_disable(declaration, expression_position);
-    structure_assertion_endpoints(declaration);
-    structure_sequence_expression(declaration);
-    structure_property_expression(declaration);
+    if (kind != SystemVerilogAssertionDeclarationKind::Checker) {
+        const auto expression_position = structure_assertion_locals(declaration);
+        structure_assertion_clock_and_disable(declaration, expression_position);
+        structure_assertion_endpoints(declaration);
+        structure_sequence_expression(declaration);
+        structure_property_expression(declaration);
+    }
     expect_keyword(terminator, false, "FSIM-SV-PARSE-292");
     if (match(TokenKind::Colon)) {
         if (!at(TokenKind::Identifier)) {
@@ -1238,11 +1438,22 @@ VerilogParser::parse_concurrent_assertion(
         assertion.label = label->text;
         assertion.label_span = label->span;
     }
-    if (!match_keyword("property")) {
+    if (match_keyword("property")) {
+        assertion.form = SystemVerilogConcurrentAssertionForm::Property;
+    } else if (match_keyword("sequence")) {
+        assertion.form = SystemVerilogConcurrentAssertionForm::Sequence;
+        if (kind != SystemVerilogConcurrentAssertionKind::Cover) {
+            error(
+                previous(),
+                "FSIM-SV-SEM-251",
+                "only a cover directive accepts the sequence form");
+        }
+    } else {
         error(
             current(),
             "FSIM-SV-PARSE-307",
-            "a concurrent assertion directive requires 'property'");
+            "a concurrent assertion directive requires 'property', or "
+            "'sequence' after 'cover'");
     }
     if (!match(TokenKind::LeftParen)) {
         error(
@@ -1278,6 +1489,19 @@ VerilogParser::parse_concurrent_assertion(
             depth != 0
                 ? "a concurrent assertion property is unbalanced"
                 : "a concurrent assertion has an empty property");
+    }
+    if (assertion.form == SystemVerilogConcurrentAssertionForm::Sequence
+        && !assertion.property_tokens.empty()) {
+        SystemVerilogAssertionDeclaration sequence;
+        sequence.kind = SystemVerilogAssertionDeclarationKind::Sequence;
+        sequence.body_tokens = assertion.property_tokens;
+        sequence.body_span = span_from(
+            sequence.body_tokens.front(), sequence.body_tokens.back());
+        structure_assertion_clock_and_disable(sequence, 0U);
+        structure_assertion_endpoints(sequence);
+        structure_sequence_expression(sequence);
+        sequence.span = sequence.body_span;
+        assertion.inline_sequence = std::move(sequence);
     }
 
     const auto at_unit_terminator = [&]() {

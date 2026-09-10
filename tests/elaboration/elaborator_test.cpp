@@ -41,6 +41,7 @@ int main()
     test_verilog_specify_specialization();
     test_systemverilog_typed_constants();
     test_systemverilog_constant_function_memoization_dependencies();
+    test_systemverilog_2023_utility_system_callables();
     test_systemverilog_aliases();
     test_systemverilog_string_constants();
     test_systemverilog_type_parameters();

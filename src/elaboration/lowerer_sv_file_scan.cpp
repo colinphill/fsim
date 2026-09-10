@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "elaborator_internal.hpp"
+#include "lowerer_internal.hpp"
 
 #include "fsim/frontend/input_format.hpp"
 
@@ -28,6 +28,10 @@ namespace {
             return InputScanFormat::string;
         case frontend::InputScanFormat::Real:
             return InputScanFormat::real;
+        case frontend::InputScanFormat::Unformatted2:
+            return InputScanFormat::unformatted2;
+        case frontend::InputScanFormat::Unformatted4:
+            return InputScanFormat::unformatted4;
         }
         throw std::logic_error { "invalid input scan format" };
     }
@@ -151,6 +155,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_file_scan(
                     == frontend::InputScanFormat::UnsignedDecimal
                 || parsed_conversion.format
                     == frontend::InputScanFormat::Real
+                || parsed_conversion.format
+                    == frontend::InputScanFormat::Unformatted2
+                || parsed_conversion.format
+                    == frontend::InputScanFormat::Unformatted4
             : scalar_kind == frontend::SystemVerilogScalarKind::Chandle
             ? parsed_conversion.format
                 == frontend::InputScanFormat::Hexadecimal
@@ -239,6 +247,25 @@ Lowerer::ExpressionAttempt Lowerer::lower_file_scan(
                 "scan target is unknown or read-only",
                 target.span);
             return std::nullopt;
+        }
+        if (parsed_conversion.format
+                == frontend::InputScanFormat::Unformatted2
+            || parsed_conversion.format
+                == frontend::InputScanFormat::Unformatted4) {
+            const auto bytes = parsed_conversion.format
+                    == frontend::InputScanFormat::Unformatted2
+                ? (static_cast<std::uint64_t>(conversion.target.width) + 7U)
+                    / 8U
+                : ((static_cast<std::uint64_t>(conversion.target.width) + 31U)
+                      / 32U)
+                    * 8U;
+            if (bytes > maximum_string_bytes) {
+                report(
+                    "FSIM-ELAB-SVFILE-012",
+                    "unformatted scan target exceeds the bounded transfer size",
+                    target.span);
+                return std::nullopt;
+            }
         }
         operation.conversions.push_back(std::move(conversion));
     }

@@ -3,6 +3,7 @@
 
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/simir_coverage.hpp"
+#include "fsim/runtime/output_format.hpp"
 #include <deque>
 
 #include <algorithm>
@@ -39,34 +40,6 @@ void validate_container_value(const ContainerValue& value);
 
 [[nodiscard]] std::optional<SignalId> output_signal(
     const Operation& operation);
-
-[[nodiscard]] std::string format_output_value(
-    const PackedLogic4& value,
-    const OutputFormat format,
-    const bool signed_decimal,
-    const bool suppress_leading_zero);
-
-[[nodiscard]] std::string make_formatted_output(
-    const std::string_view prefix,
-    const std::string_view suffix,
-    const OutputFormat format,
-    const PackedLogic4& value,
-    const bool signed_decimal,
-    const bool suppress_leading_zero,
-    const std::uint32_t minimum_width,
-    const bool left_justify,
-    const bool zero_pad,
-    SystemVerilogScalarKind scalar_kind = SystemVerilogScalarKind::None);
-
-[[nodiscard]] std::string make_time_output(
-    const std::string_view prefix,
-    const std::string_view suffix,
-    const SimulationTick tick,
-    const SystemVerilogTimeFormat& time_format,
-    const bool use_timeformat_width,
-    const std::uint32_t minimum_width,
-    const bool left_justify,
-    const bool zero_pad);
 
 [[nodiscard]] bool edge_matches(EdgeKind edge, Logic4 old_value,
     Logic4 new_value) noexcept;
@@ -416,39 +389,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
         Logic4Word word;
         std::uint8_t flags { };
 
-        PendingUpdate(
-            SignalId signal_value,
+        PendingUpdate(SignalId signal_value,
             std::optional<ProcessId> driver_value,
-            std::optional<std::size_t> offset_value,
-            Logic4Word word_value,
-            std::optional<std::size_t> packed_value_index)
-            : signal(signal_value)
-            , driver(driver_value.value_or(0U))
-            , offset(static_cast<std::uint32_t>(offset_value.value_or(0U)))
-            , packed_value(static_cast<std::uint32_t>(
-                  packed_value_index.value_or(0U)))
-            , word(word_value)
-            , flags(static_cast<std::uint8_t>(
-                  (driver_value
-                          ? static_cast<std::uint8_t>(has_driver)
-                          : std::uint8_t { })
-                  | (offset_value
-                          ? static_cast<std::uint8_t>(has_offset)
-                          : std::uint8_t { })
-                  | (packed_value_index
-                          ? static_cast<std::uint8_t>(has_packed_value)
-                          : std::uint8_t { })))
-        {
-            if ((offset_value
-                    && *offset_value
-                        > std::numeric_limits<std::uint32_t>::max())
-                || (packed_value_index
-                    && *packed_value_index
-                        > std::numeric_limits<std::uint32_t>::max())) {
-                throw std::length_error(
-                    "pending update metadata exceeds its compact representation");
-            }
-        }
+            std::optional<std::size_t> offset_value, Logic4Word word_value,
+            std::optional<std::size_t> packed_value_index);
 
         [[nodiscard]] bool driver_present() const noexcept
         {

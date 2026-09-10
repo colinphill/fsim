@@ -88,12 +88,12 @@ foreach(FSIM_TOKEN IN ITEMS
     "`SCV::scv`"
     "| SystemC | ABI 4 |"
     "project schema 3"
-    "format 7, portable schema 11"
+    "format 7, portable schema 14"
     "format 12, runtime ABI 1"
     "fsim-code-coverage-foundation-v3"
-    "format 5, portable schema 11"
+    "format 5, portable schema 14"
     "format 2, runtime ABI 1, SystemC ABI 4"
-    "runtime 59"
+    "runtime 61"
     "There is no supported in-place migration command"
     "intentionally provides no fallback reader")
   string(FIND "${FSIM_REFERENCE_TEXT}" "${FSIM_TOKEN}" FSIM_OFFSET)

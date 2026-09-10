@@ -66,7 +66,7 @@ fsim_require_tokens(
   "bytes.find(producer_prefix) == std::string::npos")
 
 fsim_require_tokens(
-  tests/app/application_test_artifact_phases.cpp
+  tests/app/application_test_artifact_verilog.cpp
   "checkpoint"
   "relocated_interpreted"
   "relocated_compiled"

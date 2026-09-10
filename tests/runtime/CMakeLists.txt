@@ -7,6 +7,7 @@ add_executable(
   fsim_runtime_tests
   runtime_tests.cpp
   runtime_value_tests.cpp
+  runtime_value_primitives_tests.cpp
   runtime_dpi_tests.cpp
   runtime_dpi_abi_c_test.c
   runtime_foreign_abi_cpp_test.cpp
@@ -47,6 +48,8 @@ add_executable(
   runtime_unicode_string_tests.cpp
   runtime_vhdl_psl_tests.cpp
   runtime_execution_tests.cpp
+  runtime_execution_services_tests.cpp
+  runtime_execution_lifecycle.cpp
   runtime_synchronization_tests.cpp
   runtime_file_tests.cpp
   runtime_container_tests.cpp

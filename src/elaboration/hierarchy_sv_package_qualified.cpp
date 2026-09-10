@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "elaborator_internal.hpp"
+#include "hierarchy_builder_internal.hpp"
 
 namespace fsim::elaboration {
 
@@ -48,6 +48,22 @@ void HierarchyBuilder::validate_systemverilog_exports(
                  return candidate.name == name
                      && !directly_declared(
                          candidate, declared_package.tasks);
+               })
+        || std::ranges::any_of(
+               effective_package.systemverilog_lets,
+               [&](const auto& candidate) {
+                 return candidate.name == name
+                     && !directly_declared(
+                         candidate,
+                         declared_package.systemverilog_lets);
+               })
+        || std::ranges::any_of(
+               effective_package.systemverilog_classes,
+               [&](const auto& candidate) {
+                 return candidate.name == name
+                     && !directly_declared(
+                         candidate,
+                         declared_package.systemverilog_classes);
                });
   };
   for (const auto& exported : declared_package.systemverilog_exports) {

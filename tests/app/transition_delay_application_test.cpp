@@ -1370,6 +1370,165 @@ endmodule
             }));
 }
 
+struct RevisedPrimitiveCapture {
+    fsim::runtime::RunResult result;
+    std::array<std::string, 5> values;
+    std::vector<std::string> process_names;
+    std::size_t compiled_processes { };
+    fsim::app::NativeCacheStatistics native_cache;
+};
+
+void verify_systemverilog_2023_primitives(
+    const std::filesystem::path& directory)
+{
+    const auto source = directory / "revised-primitives-2023.sv";
+    {
+        std::ofstream output(source, std::ios::binary);
+        output << R"(timeunit 1ns / 1ps;
+primitive revised_dff(output reg q, input d, clock);
+  initial q = 1'b0;
+  table
+    0 (01) : ? : 0;
+    1 (01) : ? : 1;
+    ? ?    : ? : -;
+  endtable
+endprimitive : revised_dff
+
+module revised_primitives_2023;
+  logic source;
+  logic clock;
+  logic [1:0] switch_data;
+  logic [1:0] switch_control;
+  wire single_input_gate;
+  wire fanout_zero;
+  wire fanout_one;
+  wire [1:0] switch_output;
+  wire state;
+
+  and single_input(single_input_gate, source);
+  buf fanout(fanout_zero, fanout_one, source);
+  nmos switch_bank[1:0](switch_output, switch_data, switch_control);
+  revised_dff stateful(state, source, clock);
+
+  initial begin
+    source = 1'b0;
+    clock = 1'b0;
+    switch_data = 2'b10;
+    switch_control = 2'b11;
+    #1 source = 1'b1;
+    clock = 1'b1;
+    #1 switch_control = 2'b01;
+    #1 $finish;
+  end
+endmodule
+)";
+        assert(output.good());
+    }
+
+    const auto config_for_revision = [&](const fsim::project::Optimization opt) {
+        fsim::project::Config config;
+        config.base_directory = directory;
+        config.project.name = "revised-primitives-2023";
+        config.project.top = "sv:work.revised_primitives_2023";
+        config.project.time_resolution = "1ps";
+        config.build.optimization = opt;
+        config.build.cache_path = directory
+            / (opt == fsim::project::Optimization::o0
+                    ? "primitive-cache-o0" : "primitive-cache-o2");
+        config.run.max_deltas = 1000;
+        fsim::project::SourceSet sources;
+        sources.language = fsim::project::Language::system_verilog;
+        sources.standard = "2023";
+        sources.library = "work";
+        sources.files = { source };
+        config.source_sets.push_back(std::move(sources));
+        return config;
+    };
+
+    const auto execute = [&](const fsim::project::Config& config,
+                             const fsim::app::SimulationEngine engine) {
+        fsim::diagnostic::Engine diagnostics;
+        auto project = fsim::app::build_project(config, diagnostics);
+        if (!project) {
+            fsim::diagnostic::print_text(std::cerr, diagnostics);
+        }
+        assert(project);
+        RevisedPrimitiveCapture capture;
+        for (const auto& process : project->design.processes()) {
+            if (process.name.find("single_input") != std::string::npos
+                || process.name.find("fanout") != std::string::npos
+                || process.name.find("switch_bank") != std::string::npos
+                || process.name.find("stateful") != std::string::npos) {
+                capture.process_names.push_back(process.name);
+            }
+        }
+        fsim::app::Simulation simulation{
+            std::move(*project), config.run.max_deltas, engine};
+        capture.compiled_processes = simulation.compiled_process_count();
+        capture.native_cache = simulation.native_cache_statistics();
+        capture.result = simulation.run();
+        constexpr std::array<std::string_view, 5> names{
+            "single_input_gate", "fanout_zero", "fanout_one",
+            "switch_output", "state"};
+        for (std::size_t index = 0; index < names.size(); ++index) {
+            const auto signal = simulation.find_signal(names[index]);
+            assert(signal);
+            capture.values[index] =
+                simulation.read_signal(*signal).to_msb_string();
+        }
+        std::ranges::sort(capture.process_names);
+        return capture;
+    };
+
+    for (const auto optimization : {
+             fsim::project::Optimization::o0,
+             fsim::project::Optimization::o2}) {
+        const auto config = config_for_revision(optimization);
+        const auto reference = execute(
+            config, fsim::app::SimulationEngine::interpreter);
+        const auto cold = execute(
+            config, fsim::app::SimulationEngine::compiled);
+        const auto warm = execute(
+            config, fsim::app::SimulationEngine::compiled);
+        const std::array<std::string, 5> expected_values{
+            "1", "1", "1", "Z0", "1"};
+        assert(
+            reference.result.status == fsim::runtime::RunStatus::stopped
+            && reference.result.time == 3000
+            && reference.values == expected_values
+            && reference.process_names.size() == 7);
+        for (const auto* actual : {&cold, &warm}) {
+            assert(actual->result.status == reference.result.status);
+            assert(actual->result.time == reference.result.time);
+            assert(actual->values == reference.values);
+            assert(actual->process_names == reference.process_names);
+        }
+#if defined(FSIM_HAS_LLVM)
+        assert(cold.compiled_processes != 0);
+        assert(cold.native_cache.misses != 0);
+        assert(warm.native_cache.hits == cold.native_cache.misses);
+        assert(warm.native_cache.misses == 0);
+#endif
+    }
+
+    auto artifact_config = config_for_revision(
+        fsim::project::Optimization::o2);
+    artifact_config.project.name = "revised-primitives-artifact";
+    const auto object = directory / "revised-primitives.fsimobj";
+    fsim::diagnostic::Engine compile_diagnostics;
+    assert(fsim::app::compile_artifact(
+        artifact_config, object, compile_diagnostics));
+    assert(!compile_diagnostics.has_error());
+    fsim::diagnostic::Engine inspect_diagnostics;
+    const auto inspection = fsim::app::inspect_artifact(
+        object, inspect_diagnostics);
+    assert(inspection && !inspect_diagnostics.has_error());
+    assert(
+        std::ranges::find(
+            inspection->units, "systemverilog:work.revised_dff")
+        != inspection->units.end());
+}
+
 } // namespace
 
 int main()
@@ -1505,6 +1664,7 @@ endmodule
     verify_parameterized_delays(directory.path, source);
     verify_udp_delays(directory.path, source);
     verify_udp_artifacts_and_mapping(directory.path);
+    verify_systemverilog_2023_primitives(directory.path);
     std::cout << "transition delay application tests passed\n";
     return 0;
 }

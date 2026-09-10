@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "elaborator_internal.hpp"
+#include "hierarchy_builder_internal.hpp"
 
 #include "vhdl_array_boundary.hpp"
 
@@ -13,26 +13,6 @@ using namespace elaboration_detail;
 
 namespace {
 
-    template <typename Callback>
-    class ScopeExit final {
-    public:
-        explicit ScopeExit(Callback callback)
-            : callback_ { std::move(callback) }
-        {
-        }
-
-        ScopeExit(const ScopeExit&) = delete;
-        ScopeExit& operator=(const ScopeExit&) = delete;
-
-        ~ScopeExit() { callback_(); }
-
-    private:
-        Callback callback_;
-    };
-
-    template <typename Callback>
-    ScopeExit(Callback) -> ScopeExit<Callback>;
-
     bool belongs_to_hierarchy(
         const std::string_view candidate,
         const std::string_view path)
@@ -42,229 +22,6 @@ namespace {
                 && candidate.starts_with(path)
                 && candidate[path.size()] == '.');
     }
-
-    template <typename SignalMap>
-    void adapt_vhdl_unspecified_port_types(
-        DesignUnit& unit,
-        const frontend::Instance& instance,
-        const SignalMap& parent_signals,
-        const std::span<const SignalInfo> signal_info,
-        std::vector<std::pair<std::string, std::string>>& identities,
-        std::vector<Diagnostic>& diagnostics)
-    {
-        if (unit.language != frontend::Language::Vhdl2008
-            || std::ranges::none_of(
-                unit.ports, [](const auto& port) {
-                    return port.type.vhdl_unspecified != nullptr;
-                })) {
-            return;
-        }
-        const auto actual_type = [](const SignalInfo& info) {
-            frontend::Type type;
-            type.domain = info.source_domain;
-            type.spelling = info.type_name;
-            type.is_signed = info.is_signed;
-            type.packed_range = info.packed_range;
-            if (info.vhdl_array) {
-                type.vhdl_array = *info.vhdl_array;
-            }
-            if (info.vhdl_access) {
-                type.vhdl_access = *info.vhdl_access;
-            }
-            if (info.vhdl_physical) {
-                type.vhdl_physical = *info.vhdl_physical;
-            }
-            type.packed_members = info.packed_members;
-            type.integer_range = info.integer_range;
-            if (info.source_domain == frontend::ValueDomain::Integer
-                && (info.width == 32U || info.width == 64U)) {
-                type.vhdl_integer_storage_width =
-                    static_cast<std::uint8_t>(info.width);
-            }
-            type.nominal_type = info.nominal_type;
-            type.enumeration_literals = info.enumeration_literals;
-            type.enumeration_range = info.enumeration_range;
-            return type;
-        };
-        struct Inference {
-            frontend::Type type;
-            std::string identity;
-        };
-        std::unordered_map<std::string, Inference> inferred;
-        std::vector<bool> connected(unit.ports.size());
-        std::size_t positional = 0;
-        for (const auto& connection : instance.connections) {
-            std::size_t port_index = unit.ports.size();
-            if (connection.port) {
-                const auto found = std::ranges::find_if(
-                    unit.ports, [&](const auto& port) {
-                        return port.name == *connection.port;
-                    });
-                if (found != unit.ports.end()) {
-                    port_index = static_cast<std::size_t>(
-                        std::distance(unit.ports.begin(), found));
-                }
-            } else {
-                while (positional < unit.ports.size()
-                    && connected[positional]) {
-                    ++positional;
-                }
-                port_index = positional++;
-            }
-            if (port_index >= unit.ports.size()
-                || connected[port_index]) {
-                continue;
-            }
-            connected[port_index] = true;
-            const auto& formal = unit.ports[port_index];
-            if (!formal.type.vhdl_unspecified) {
-                continue;
-            }
-            if (connection.kind != frontend::PortActualKind::Expression
-                || connection.value.kind
-                    != frontend::ExpressionKind::Identifier) {
-                diagnostics.push_back({ "FSIM-ELAB-VHUNSPEC-001",
-                    "port association for unspecified formal '"
-                        + formal.name
-                        + "' does not determine one concrete actual subtype",
-                    connection.span });
-                continue;
-            }
-            const auto actual = parent_signals.find(connection.value.text);
-            if (actual == parent_signals.end()
-                || actual->second >= signal_info.size()) {
-                continue;
-            }
-            auto type = actual_type(signal_info[actual->second]);
-            if (!frontend::vhdl_unspecified_type_accepts(
-                    formal.type, type)) {
-                diagnostics.push_back({ "FSIM-ELAB-VHUNSPEC-001",
-                    "actual subtype for port '" + formal.name
-                        + "' does not satisfy its VHDL-2019 unspecified "
-                          "type category",
-                    connection.span });
-                continue;
-            }
-            const auto& profile = *formal.type.vhdl_unspecified;
-            const auto key = profile.inference_identity.empty()
-                ? formal.name : profile.inference_identity;
-            auto identity = frontend::vhdl_inferred_type_identity(type);
-            const auto [existing, inserted] = inferred.emplace(
-                key, Inference { type, identity });
-            if (!inserted && existing->second.identity != identity) {
-                diagnostics.push_back({ "FSIM-ELAB-VHUNSPEC-001",
-                    "port associations sharing one unspecified formal type "
-                    "infer conflicting concrete subtypes",
-                    connection.span });
-            }
-        }
-        for (auto& port : unit.ports) {
-            if (!port.type.vhdl_unspecified) {
-                continue;
-            }
-            const auto& profile = *port.type.vhdl_unspecified;
-            const auto key = profile.inference_identity.empty()
-                ? port.name : profile.inference_identity;
-            const auto actual = inferred.find(key);
-            if (actual == inferred.end()) {
-                diagnostics.push_back({ "FSIM-ELAB-VHUNSPEC-001",
-                    "port '" + port.name
-                        + "' does not determine one unique legal actual type "
-                          "for its unspecified formal",
-                    port.span });
-                continue;
-            }
-            port.type = actual->second.type;
-            const auto identity_name =
-                "__vhdl_unspecified_port_type." + key;
-            if (std::ranges::none_of(
-                    identities, [&](const auto& item) {
-                        return item.first == identity_name;
-                    })) {
-                identities.emplace_back(
-                    identity_name, actual->second.identity);
-            }
-        }
-    }
-
-    template <typename SignalMap>
-    void adapt_vhdl_array_port_shapes(
-        DesignUnit& unit,
-        const frontend::Instance& instance,
-        const SignalMap& parent_signals,
-        const std::span<const SignalInfo> signal_info,
-        std::vector<std::pair<std::string, std::string>>& identities)
-    {
-        if (unit.language != frontend::Language::Vhdl2008
-            || unit.ports.empty()) {
-            return;
-        }
-        std::vector<bool> connected(unit.ports.size());
-        std::size_t positional = 0;
-        for (const auto& connection : instance.connections) {
-            std::size_t port_index = unit.ports.size();
-            if (connection.port) {
-                const auto found = std::ranges::find_if(
-                    unit.ports,
-                    [&](const auto& port) {
-                        return port.name == *connection.port;
-                    });
-                if (found != unit.ports.end()) {
-                    port_index = static_cast<std::size_t>(
-                        std::distance(unit.ports.begin(), found));
-                }
-            } else {
-                while (positional < unit.ports.size()
-                    && connected[positional]) {
-                    ++positional;
-                }
-                port_index = positional++;
-            }
-            if (port_index >= unit.ports.size()
-                || connected[port_index]
-                || connection.kind != frontend::PortActualKind::Expression
-                || connection.value.kind
-                    != frontend::ExpressionKind::Identifier) {
-                continue;
-            }
-            connected[port_index] = true;
-            auto& formal = unit.ports[port_index];
-            if (!formal.type.vhdl_array) {
-                continue;
-            }
-            const auto actual = parent_signals.find(connection.value.text);
-            if (actual == parent_signals.end()
-                || actual->second >= signal_info.size()) {
-                continue;
-            }
-            const auto& info = signal_info[actual->second];
-            const bool indefinite = !formal.type.vhdl_array->flat_width
-                || std::ranges::any_of(
-                    formal.type.vhdl_array->dimensions,
-                    [](const auto& dimension) {
-                        return dimension.unconstrained;
-                    });
-            if (!indefinite || !info.vhdl_array
-                || formal.type.nominal_type != info.nominal_type) {
-                continue;
-            }
-            formal.type.vhdl_array = *info.vhdl_array;
-            formal.type.vhdl_array_constraints.clear();
-            formal.type.packed_range = info.packed_range;
-            formal.type.packed_range_expression.reset();
-            formal.type.domain = info.source_domain;
-            formal.type.is_signed = info.is_signed;
-            identities.emplace_back(
-                "__vhdl_port_shape." + formal.name,
-                vhdl_array_shape_identity(formal.type));
-        }
-    }
-
-    struct ResolvedVerilogDefparam {
-        const frontend::VerilogDefparamDeclaration* declaration { };
-        std::vector<std::string> segments;
-        bool matched { };
-    };
 
     struct ConcurrentComponentGroups {
         std::vector<std::vector<std::size_t>> groups;
@@ -300,7 +57,7 @@ namespace {
                 && !expression.operands.empty()) {
                 auto result = expression.text + "(";
                 for (std::size_t index = 0;
-                     index < expression.operands.size(); ++index) {
+                    index < expression.operands.size(); ++index) {
                     const auto operand = self(self, expression.operands[index]);
                     if (!operand) {
                         return std::nullopt;
@@ -331,7 +88,7 @@ namespace {
                 }
                 auto result = *base + "[";
                 for (std::size_t index = 1U;
-                     index < expression.operands.size(); ++index) {
+                    index < expression.operands.size(); ++index) {
                     const auto selector = static_expression_key(
                         static_expression_key, expression.operands[index]);
                     if (!selector) {
@@ -348,10 +105,10 @@ namespace {
             return std::nullopt;
         };
         const auto contains_call = [](const auto& self,
-                                      const frontend::Expression& expression)
+                                       const frontend::Expression& expression)
             -> bool {
             return (expression.kind == frontend::ExpressionKind::Call
-                    && expression.text != "?:")
+                       && expression.text != "?:")
                 || std::ranges::any_of(
                     expression.operands,
                     [&](const auto& operand) {
@@ -383,7 +140,7 @@ namespace {
             return key.substr(0, selected);
         };
         const auto overlaps = [&base](const std::string& left,
-                                      const std::string& right) {
+                                  const std::string& right) {
             if (left == right) {
                 return true;
             }
@@ -420,7 +177,7 @@ namespace {
             targets.push_back(*target);
             collect_reads(collect_reads, statement.value, reads[index]);
             for (std::size_t operand = 1U;
-                 operand < statement.target.operands.size(); ++operand) {
+                operand < statement.target.operands.size(); ++operand) {
                 if (contains_call(
                         contains_call, statement.target.operands[operand])) {
                     return one_component();
@@ -451,7 +208,7 @@ namespace {
         };
         for (std::size_t left = 0; left < statements.size(); ++left) {
             for (std::size_t right = left + 1U;
-                 right < statements.size(); ++right) {
+                right < statements.size(); ++right) {
                 const auto reads_target = [&](const std::size_t reader,
                                               const std::size_t writer) {
                     return std::ranges::any_of(
@@ -569,27 +326,6 @@ namespace {
         return result;
     }
 
-    std::optional<std::size_t> defparam_instance_prefix(
-        const std::span<const std::string> segments,
-        const std::string_view instance_name)
-    {
-        std::string candidate;
-        for (std::size_t index = 0; index + 1U < segments.size(); ++index) {
-            if (!candidate.empty()) {
-                candidate += '.';
-            }
-            candidate += segments[index];
-            if (candidate == instance_name) {
-                return index + 1U;
-            }
-            if (candidate.size() >= instance_name.size()
-                && !instance_name.starts_with(candidate)) {
-                break;
-            }
-        }
-        return std::nullopt;
-    }
-
     std::string defparam_path_text(
         const std::span<const std::string> segments)
     {
@@ -660,6 +396,7 @@ HierarchyBuilder::hierarchy_checkpoint(std::string path) const
         design_.vhdl_protected_object_info_.size(),
         design_.processes_.size(),
         design_.specializations_.size(),
+        selected_systemverilog_classes_.size(),
         design_.udp_tables_.size(),
         design_.verilog_specify_paths_.size(),
         design_.verilog_timing_checks_.size(),
@@ -689,6 +426,8 @@ void HierarchyBuilder::rollback_hierarchy(
     design_.vhdl_protected_object_info_.resize(checkpoint.protected_objects);
     design_.processes_.resize(checkpoint.processes);
     design_.specializations_.resize(checkpoint.specializations);
+    selected_systemverilog_classes_.resize(
+        checkpoint.selected_systemverilog_classes);
     design_.udp_tables_.resize(checkpoint.udp_tables);
     design_.verilog_specify_paths_.resize(checkpoint.specify_paths);
     design_.verilog_timing_checks_.resize(checkpoint.timing_checks);
@@ -926,8 +665,7 @@ void HierarchyBuilder::instantiate(
         frontend::Type type;
         type.domain = frontend::ValueDomain::Bit2;
         type.spelling = "real";
-        type.systemverilog_scalar =
-            frontend::SystemVerilogScalarKind::Real;
+        type.systemverilog_scalar = frontend::SystemVerilogScalarKind::Real;
         type.is_signed = true;
         type.packed_range = frontend::PackedRange { 63, 0, true };
         type.nominal_type = "@builtin:real";
@@ -941,7 +679,8 @@ void HierarchyBuilder::instantiate(
         type.is_signed = true;
         type.packed_range = frontend::PackedRange { 63, 0, true };
         type.integer_range = frontend::IntegerRange {
-            0, std::numeric_limits<std::int64_t>::max(), false };
+            0, std::numeric_limits<std::int64_t>::max(), false
+        };
         type.nominal_type = "@builtin:time";
         type.vhdl_type_declaration = type.nominal_type;
         return type;
@@ -1142,18 +881,16 @@ void HierarchyBuilder::instantiate(
         if (unit.language == frontend::Language::Vhdl2008
             && initialized_signal.default_value) {
             std::string initializer_error;
-            if (const auto initialized =
-                    evaluate_systemverilog_constant_function_expression(
-                        *initialized_signal.default_value,
-                        parameter_integral_environment,
-                        parameter_environment,
-                        unit.functions,
-                        initializer_error)) {
+            if (const auto initialized = evaluate_systemverilog_constant_function_expression(
+                    *initialized_signal.default_value,
+                    parameter_integral_environment,
+                    parameter_environment,
+                    unit.functions,
+                    initializer_error)) {
                 auto expression = initialized->expression(
                     initialized_signal.default_value->span);
                 if (!initialized_signal.type.nominal_type.empty()) {
-                    expression.nominal_type =
-                        initialized_signal.type.nominal_type;
+                    expression.nominal_type = initialized_signal.type.nominal_type;
                 }
                 initialized_signal.default_value = std::move(expression);
             }
@@ -1247,8 +984,7 @@ void HierarchyBuilder::instantiate(
             path + "." + variable.name, &variable.type);
         if (variable.vhdl_shared
             && !variable.type.vhdl_protected) {
-            const bool bounded_memory_extension =
-                variable.type.vhdl_array
+            const bool bounded_memory_extension = variable.type.vhdl_array
                 && variable.type.vhdl_array->dimensions.size() == 1U
                 && variable.type.vhdl_array->dimensions.front().range
                 && !variable.type.vhdl_array->dimensions.front().null
@@ -1477,8 +1213,7 @@ void HierarchyBuilder::instantiate(
                             "too many elaborated signals"
                         };
                     }
-                    const auto signal_name =
-                        full_name + ".$container_storage";
+                    const auto signal_name = full_name + ".$container_storage";
                     SignalInfo info;
                     info.id = signal_id;
                     info.name = signal_name;
@@ -1487,8 +1222,7 @@ void HierarchyBuilder::instantiate(
                     info.source_domain = type.two_state
                         ? frontend::ValueDomain::Bit2
                         : frontend::ValueDomain::Logic4;
-                    info.systemverilog_net_type =
-                        variable.type.systemverilog_net_type;
+                    info.systemverilog_net_type = variable.type.systemverilog_net_type;
                     info.declaration_span = variable.span;
                     design_.signal_info_.push_back(std::move(info));
                     design_.signals_.push_back(Signal {
@@ -1712,7 +1446,27 @@ void HierarchyBuilder::instantiate(
             variable.name, std::move(initial));
     }
 
-#include "hierarchy_instantiate_processes_and_children.tpp"
+    instantiate_processes_and_children(
+        unit,
+        path,
+        local,
+        local_string_objects,
+        local_container_objects,
+        read_only_signals,
+        read_only_strings,
+        read_only_container_objects,
+        parameter_environment,
+        parameter_integral_environment,
+        parameter_values,
+        parameter_identity_values,
+        package_environment,
+        parent_types,
+        parent_domains,
+        resolved_defparams,
+        visible_types,
+        visible_type_marks,
+        identity,
+        systemverilog_alias_plan);
     for (const auto& declaration : resolved_defparams) {
         if (!declaration.matched) {
             report(
@@ -1722,6 +1476,58 @@ void HierarchyBuilder::instantiate(
                 declaration.declaration->span);
         }
     }
+    const auto virtual_interface_specialization_identity =
+        [&](const frontend::Type& type,
+            const frontend::SourceSpan& span)
+        -> std::optional<std::vector<
+            std::pair<std::string, std::string>>> {
+        const auto declaration = std::ranges::find_if(
+            parsed_.units,
+            [&](const DesignUnit& candidate) {
+                return candidate.kind
+                        == frontend::UnitKind::SystemVerilogInterface
+                    && candidate.name
+                        == type.systemverilog_interface_type;
+            });
+        if (declaration == parsed_.units.end()) {
+            return std::nullopt;
+        }
+        std::vector<frontend::ParameterOverride> overrides;
+        overrides.reserve(
+            type.systemverilog_class_parameter_actuals.size());
+        for (const auto& retained :
+            type.systemverilog_class_parameter_actuals) {
+            frontend::ParameterOverride override;
+            override.name = retained.name;
+            override.value = retained.value;
+            if (retained.type_actual) {
+                override.type_value = *retained.type_actual;
+            }
+            override.span = retained.span;
+            overrides.push_back(std::move(override));
+        }
+        const auto diagnostics_before = diagnostics_.size();
+        auto specialized = specialize_selected_unit(
+            *declaration,
+            overrides,
+            parameter_environment,
+            parameter_integral_environment,
+            parent_domains,
+            parent_types,
+            unit.functions,
+            unit.procedures,
+            package_environment,
+            unit.language);
+        if (diagnostics_.size() != diagnostics_before) {
+            report(
+                "FSIM-ELAB-SVIFACE-010",
+                "virtual interface type '" + type.spelling
+                    + "' has no valid specialization identity",
+                span);
+            return std::nullopt;
+        }
+        return specialized.identity_values;
+    };
     for (const auto& variable : unit.variables) {
         if (!variable.type.systemverilog_virtual_interface
             || !variable.initializer
@@ -1757,6 +1563,74 @@ void HierarchyBuilder::instantiate(
                 variable.initializer->span);
             continue;
         }
+        const auto virtual_source = std::ranges::find(
+            unit.variables,
+            actual_name,
+            &frontend::VariableDeclaration::name);
+        if (virtual_source != unit.variables.end()
+            && virtual_source->type.systemverilog_virtual_interface) {
+            if (virtual_source->type.systemverilog_interface_type
+                != variable.type.systemverilog_interface_type) {
+                report(
+                    "FSIM-ELAB-SVIFACE-003",
+                    "virtual interface '" + path + "." + variable.name
+                        + "' requires type '"
+                        + variable.type.systemverilog_interface_type
+                        + "' but initializer '" + actual_name
+                        + "' has type '"
+                        + virtual_source->type.systemverilog_interface_type
+                        + "'",
+                    variable.initializer->span);
+                continue;
+            }
+            const auto& source_modport = virtual_source->type
+                .systemverilog_interface_modport;
+            if (!source_modport.empty()
+                && (variable.type.systemverilog_interface_modport.empty()
+                    || variable.type.systemverilog_interface_modport
+                        != source_modport)) {
+                report(
+                    "FSIM-ELAB-SVIFACE-012",
+                    "virtual-interface initializer '" + actual_name
+                        + "' exposes modport '" + source_modport
+                        + "' and cannot be widened or rebound by '"
+                        + path + "." + variable.name + "'",
+                    variable.initializer->span);
+                continue;
+            }
+            const auto required_identity =
+                virtual_interface_specialization_identity(
+                    variable.type, variable.initializer->span);
+            const auto source_identity =
+                virtual_interface_specialization_identity(
+                    virtual_source->type,
+                    variable.initializer->span);
+            if (!required_identity || !source_identity) {
+                continue;
+            }
+            if (*required_identity != *source_identity) {
+                report(
+                    "FSIM-ELAB-SVIFACE-010",
+                    "virtual interface '" + path + "." + variable.name
+                        + "' requires a different specialization of interface '"
+                        + variable.type.systemverilog_interface_type
+                        + "' than initializer '" + actual_name + "'",
+                    variable.initializer->span);
+                continue;
+            }
+            const auto source_signal = local.find(actual_name);
+            if (source_signal == local.end()) {
+                report(
+                    "FSIM-ELAB-SVIFACE-002",
+                    "virtual-interface initializer '" + actual_name
+                        + "' has no elaborated virtual-interface value",
+                    variable.initializer->span);
+                continue;
+            }
+            design_.signals_[signal->second].initial_value
+                = design_.signals_[source_signal->second].initial_value;
+            continue;
+        }
         auto actual_path = path.empty()
             ? actual_name
             : path + "." + actual_name;
@@ -1788,65 +1662,31 @@ void HierarchyBuilder::instantiate(
                 variable.initializer->span);
             continue;
         }
-        if (!variable.type.systemverilog_class_parameter_actuals.empty()) {
-            const auto declaration = std::ranges::find_if(
-                parsed_.units,
-                [&](const DesignUnit& candidate) {
-                    return candidate.kind
-                        == frontend::UnitKind::SystemVerilogInterface
-                        && candidate.name
-                        == variable.type.systemverilog_interface_type
-                        && candidate.library == actual->second.library;
-                });
-            const auto actual_identity = systemverilog_interface_parameter_identities_.find(
-                actual_path);
-            if (declaration == parsed_.units.end()
-                || actual_identity
-                    == systemverilog_interface_parameter_identities_.end()) {
-                report(
-                    "FSIM-ELAB-SVIFACE-010",
-                    "virtual interface '" + path + "." + variable.name
-                        + "' cannot resolve the specialization identity of '"
-                        + actual_path + "'",
-                    variable.initializer->span);
-                continue;
-            }
-            std::vector<frontend::ParameterOverride> overrides;
-            overrides.reserve(
-                variable.type.systemverilog_class_parameter_actuals.size());
-            for (const auto& retained :
-                variable.type.systemverilog_class_parameter_actuals) {
-                frontend::ParameterOverride override;
-                override.name = retained.name;
-                override.value = retained.value;
-                if (retained.type_actual) {
-                    override.type_value = *retained.type_actual;
-                }
-                override.span = retained.span;
-                overrides.push_back(std::move(override));
-            }
-            auto required = specialize_selected_unit(
-                *declaration,
-                overrides,
-                parameter_environment,
-                parameter_integral_environment,
-                parent_domains,
-                parent_types,
-                unit.functions,
-                unit.procedures,
-                package_environment,
-                unit.language);
-            if (required.identity_values
-                != actual_identity->second) {
-                report(
-                    "FSIM-ELAB-SVIFACE-010",
-                    "virtual interface '" + path + "." + variable.name
-                        + "' requires a different specialization of interface '"
-                        + variable.type.systemverilog_interface_type
-                        + "' than initializer '" + actual_path + "'",
-                    variable.initializer->span);
-                continue;
-            }
+        const auto required_identity =
+            virtual_interface_specialization_identity(
+                variable.type, variable.initializer->span);
+        const auto actual_identity =
+            systemverilog_interface_parameter_identities_.find(actual_path);
+        if (!required_identity
+            || actual_identity
+                == systemverilog_interface_parameter_identities_.end()) {
+            report(
+                "FSIM-ELAB-SVIFACE-010",
+                "virtual interface '" + path + "." + variable.name
+                    + "' cannot resolve the specialization identity of '"
+                    + actual_path + "'",
+                variable.initializer->span);
+            continue;
+        }
+        if (*required_identity != actual_identity->second) {
+            report(
+                "FSIM-ELAB-SVIFACE-010",
+                "virtual interface '" + path + "." + variable.name
+                    + "' requires a different specialization of interface '"
+                    + variable.type.systemverilog_interface_type
+                    + "' than initializer '" + actual_path + "'",
+                variable.initializer->span);
+            continue;
         }
         const auto handle = systemverilog_interface_handles_.find(actual_path);
         if (handle == systemverilog_interface_handles_.end()) {

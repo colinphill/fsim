@@ -205,6 +205,7 @@ enum class SystemVerilogConstraintTemplateKind : std::uint8_t {
     ConditionalConstraint,
     SolveBefore,
     SolveList,
+    Unique,
 };
 
 struct SystemVerilogConstraintTemplate {

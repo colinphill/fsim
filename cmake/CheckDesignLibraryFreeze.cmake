@@ -89,7 +89,7 @@ fsim_require_design_library_tokens("${FSIM_DESIGN_HEADER}"
   "Producer paths are deliberately")
 fsim_require_design_library_tokens("${FSIM_LIBRARY_HEADER}"
   "kFormatVersion = 5"
-  "kPortableSchemaVersion = 11"
+  "kPortableSchemaVersion = 14"
   "Empty when an exporter intentionally omits source text"
   "enough producer identity to make admission an exact"
   "Opens only fsim-library.toml")

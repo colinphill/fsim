@@ -15,9 +15,9 @@ set(FSIM_WIDTH_INVENTORY
 set(FSIM_TYPED
   "${FSIM_SOURCE_DIR}/tests/app/typed_boundary_application_test.cpp")
 set(FSIM_ARTIFACT
-  "${FSIM_SOURCE_DIR}/tests/app/application_test_artifact_phases.cpp")
+  "${FSIM_SOURCE_DIR}/tests/app/application_test_artifact_verilog.cpp")
 set(FSIM_LIMITS
-  "${FSIM_SOURCE_DIR}/tests/app/governed_process_limits.hpp")
+  "${FSIM_SOURCE_DIR}/tests/app/governed_process_limits.cpp")
 set(FSIM_RUNNER "${FSIM_SOURCE_DIR}/cmake/RunVerilogClosureMatrix.cmake")
 set(FSIM_TEST_CMAKE "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
 set(FSIM_RUNTIME_CMAKE
@@ -238,8 +238,8 @@ endforeach()
 foreach(FSIM_TOKEN IN ITEMS
     "34 supported, 0 active, and 3 deferred"
     "12 preserved, 0 active, and 3 physical"
-    "diagnostic catalog covers 2693 production codes"
-    "against the 2500-line hard limit with a 2000-line refactor target"
+    "diagnostic catalog covers 2746 production codes"
+    "Checked 1510 authored sources against the 2000-line hard limit"
     "v1 conformance audit:"
     "resource portability contract:")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)

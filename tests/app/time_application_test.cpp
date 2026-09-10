@@ -887,6 +887,14 @@ program timing_driver(
   end
 endprogram
 
+module timing_monitor(input logic clock);
+  logic notifier;
+  specify
+    $period(posedge clock, 10, notifier);
+    $width(posedge clock, 1, 0, notifier);
+  endspecify
+endmodule
+
 module timing_top;
   logic clock;
   logic [7:0] first_sample;
@@ -894,13 +902,9 @@ module timing_top;
   logic zero_done;
   logic [7:0] data;
   logic [7:0] driven;
-  logic notifier;
   timing_driver driver(
       clock, data, driven, first_sample, third_sample, zero_done);
-  specify
-    $period(posedge clock, 10, notifier);
-    $width(posedge clock, 1, 0, notifier);
-  endspecify
+  timing_monitor monitor(clock);
   initial begin
     clock = 1'b0;
     data = '0;

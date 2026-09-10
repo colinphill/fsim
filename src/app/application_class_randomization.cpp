@@ -25,6 +25,28 @@ systemverilog_randomize_callback(
   return nullptr;
 }
 
+void configure_systemverilog_randomize_selection(
+    runtime::SystemVerilogClassRandomizeRequest& request,
+    const std::span<const std::string> selected_names) {
+  constexpr std::string_view no_properties{"@randomize-null"};
+  const auto checker_call = selected_names.size() == 1U
+      && selected_names.front() == no_properties;
+  if (!checker_call
+      && std::ranges::find(selected_names, no_properties)
+          != selected_names.end()) {
+    throw std::invalid_argument{
+        "class randomize checker marker must be the only selection"};
+  }
+  if (checker_call) {
+    request.selection =
+        runtime::SystemVerilogClassRandomizeSelection::NoProperties;
+    return;
+  }
+  for (const auto& name : selected_names) {
+    if (!name.empty()) request.variable_list.push_back(name);
+  }
+}
+
 runtime::PackedLogic4 invoke_systemverilog_randomization_mode(
     runtime::SystemVerilogClassHeap& heap,
     const runtime::SystemVerilogClassHandle handle,

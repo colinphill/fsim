@@ -2,6 +2,7 @@
 #include "frontend_test_support.hpp"
 
 #include "fsim/frontend/frontend.hpp"
+#include "fsim/frontend/input_format.hpp"
 
 #include <algorithm>
 #include <stdexcept>
@@ -35,6 +36,61 @@ namespace {
 void test_systemverilog_text_files()
 {
     using namespace fsim::frontend;
+
+    const auto raw_input = parse_input_format("%u%z");
+    require(
+        raw_input.valid && raw_input.conversions.size() == 2U
+            && raw_input.conversions[0].format
+                == InputScanFormat::Unformatted2
+            && raw_input.conversions[1].format
+                == InputScanFormat::Unformatted4,
+        "unformatted two-state and four-state input conversions stay distinct");
+    require(
+        !parse_input_format("%8u").valid
+            && !parse_input_format("%*z").valid,
+        "unformatted input rejects text field modifiers");
+    const auto raw_output = parse_text(
+        "raw-file-output.sv",
+        R"(
+module raw_file_output;
+  integer handle;
+  logic [36:0] value;
+  initial begin
+    $fwrite(handle, "%u", value);
+    $fwrite(handle, "%z", value);
+  end
+endmodule
+)",
+        Language::SystemVerilog2017);
+    require(
+        raw_output.ok(),
+        "unformatted two-state and four-state output conversions parse");
+    const auto* raw_unit = raw_output.design.find(
+        UnitKind::VerilogModule, "raw_file_output");
+    require(
+        raw_unit != nullptr && raw_unit->processes.size() == 1U,
+        "unformatted output fixture retains one process");
+    const auto& raw_statements = raw_unit->processes[0].statements;
+    require(
+        raw_statements.size() == 2U,
+        "unformatted output fixture retains two calls: "
+            + std::to_string(raw_statements.size()));
+    const auto retained_format = [](const Statement& statement) {
+        return statement.output_values.empty()
+            ? statement.output_format
+            : statement.output_values.front().format;
+    };
+    const auto first_raw_format = retained_format(raw_statements[0]);
+    const auto second_raw_format = retained_format(raw_statements[1]);
+    require(
+        first_raw_format == OutputFormat::Unformatted2
+            && second_raw_format == OutputFormat::Unformatted4,
+        "unformatted output retains distinct frontend identities: "
+            + std::to_string(static_cast<unsigned>(
+                first_raw_format.value_or(OutputFormat::Decimal)))
+            + "/"
+            + std::to_string(static_cast<unsigned>(
+                second_raw_format.value_or(OutputFormat::Decimal))));
 
     const auto parsed = parse_text(
         "text-files.sv",
@@ -170,6 +226,8 @@ module file_format;
   initial begin
     $fdisplay(handle, "%0d %0d", 1);
     $fwrite(handle, "%q", handle);
+    $fwrite(handle, "%8u", handle);
+    $display("%z", handle);
   end
 endmodule
 )",

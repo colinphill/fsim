@@ -1027,6 +1027,91 @@ endmodule
 endmodule
 )",
         "FSIM-SV-SEM-246");
+    require_isolated(
+        "anonymous-program-interface-class",
+        R"(program;
+  interface class ProgramContract;
+  endclass
+endprogram
+)",
+        "FSIM-SV-PARSE-381");
+    require_isolated(
+        "program-elaboration-severity",
+        R"(program severity_program;
+  $info("direct");
+  if (1) $warning("selected");
+endprogram
+)",
+        "FSIM-SV-PARSE-381");
+
+    const auto program_revisions = parse_verilog(
+        SourceText {
+            "program-revisions-2023.sv",
+            R"(program;
+  interface class ProgramContract;
+  endclass
+endprogram
+program severity_program;
+  $info("direct");
+  if (1) $warning("selected");
+endprogram
+)" },
+        StandardRevision::SystemVerilog2023);
+    const auto program_contract = std::ranges::find(
+        program_revisions.design.systemverilog_classes,
+        std::string { "ProgramContract" },
+        &SystemVerilogClassDeclaration::name);
+    const auto severity_program = std::ranges::find(
+        program_revisions.design.units,
+        std::string { "severity_program" },
+        &DesignUnit::name);
+    require(
+        program_revisions.ok()
+            && program_contract
+                != program_revisions.design.systemverilog_classes.end()
+            && program_contract->is_interface
+            && program_contract->canonical_identity
+                == "$unit::ProgramContract",
+        "a 2023 anonymous program must retain interface-class items in the "
+        "compilation-unit namespace");
+    require(
+        severity_program != program_revisions.design.units.end()
+            && severity_program->kind == UnitKind::SystemVerilogProgram
+            && severity_program->concurrent_statements.size() == 1
+            && severity_program->concurrent_statements.front().kind
+                == StatementKind::Report
+            && severity_program->generate_regions.size() == 1
+            && severity_program->generate_regions.front()
+                   .then_body.concurrent_statements.size() == 1
+            && severity_program->generate_regions.front()
+                   .then_body.concurrent_statements.front().kind
+                == StatementKind::Report,
+        "2023 program elaboration severity tasks must remain source-owned "
+        "through direct and conditional generate forms");
+
+    const auto retained_anonymous_program = parse_verilog(
+        SourceText {
+            "retained-anonymous-program.sv",
+            R"(program;
+  function int retained_value();
+    return 1;
+  endfunction
+  class RetainedClass;
+  endclass
+endprogram
+)" },
+        StandardRevision::SystemVerilog2017);
+    require(
+        retained_anonymous_program.ok()
+            && retained_anonymous_program.design.functions.size() == 1
+            && retained_anonymous_program.design.functions.front().name
+                == "retained_value"
+            && retained_anonymous_program.design.systemverilog_classes.size()
+                == 1
+            && retained_anonymous_program.design.systemverilog_classes.front()
+                   .canonical_identity == "$unit::RetainedClass",
+        "retained anonymous-program callable and class items must preserve "
+        "their compilation-unit ownership");
 
     const auto retained_baseline = parse_verilog(
         SourceText {
@@ -1042,6 +1127,127 @@ endmodule
     require(
         retained_baseline.ok(),
         "2023 profile gates must not narrow established 2017 forms");
+}
+
+void test_systemverilog_checker_revisions()
+{
+    const auto parsed = parse_verilog(
+        SourceText {
+            "checker-revisions.sv",
+            R"(checker value_checker(
+    input logic checker_clock,
+    input logic observed,
+    input logic expected = observed
+  );
+    property is_expected;
+      @(posedge checker_clock) observed == expected;
+    endproperty
+    okay: assert property (is_expected);
+  endchecker : value_checker
+module checker_revisions(
+  input logic clock,
+  input logic named_value,
+  input logic ordered_value
+);
+  logic checker_clock;
+  logic observed;
+  value_checker named_instance(
+    .checker_clock(clock),
+    .observed(named_value)
+  );
+  value_checker ordered_instance(clock, ordered_value, 1'b0);
+  value_checker wildcard_instance(.*, .expected());
+endmodule
+)" },
+        StandardRevision::SystemVerilog2023);
+    std::string diagnostic_text;
+    for (const auto& diagnostic : parsed.diagnostics) {
+        diagnostic_text += " " + diagnostic.code + ":" + diagnostic.message;
+    }
+    const auto* unit = parsed.design.find(
+        UnitKind::VerilogModule, "checker_revisions");
+    require(
+        parsed.ok() && unit != nullptr
+            && unit->systemverilog_checker_instances.size() == 3U
+            && unit->systemverilog_checker_instances[0].name
+                == "named_instance"
+            && unit->systemverilog_checker_instances[0].connections.size()
+                == 2U
+            && unit->systemverilog_checker_instances[0].connections[0]
+                   .formal_name
+                == "checker_clock"
+            && unit->systemverilog_checker_instances[1].name
+                == "ordered_instance"
+            && unit->systemverilog_checker_instances[1].connections.size()
+                == 3U
+            && unit->systemverilog_checker_instances[2].name
+                == "wildcard_instance"
+            && unit->systemverilog_checker_instances[2].connections.size()
+                == 2U
+            && unit->systemverilog_checker_instances[2].connections[0]
+                   .formal_name
+                == "*"
+            && unit->systemverilog_checker_instances[2].connections[1].open
+            && unit->systemverilog_assertion_declarations.size() == 4U
+            && unit->systemverilog_assertion_declarations[0].kind
+                == SystemVerilogAssertionDeclarationKind::Checker
+            && unit->systemverilog_assertion_declarations[0]
+                   .checker_declarations.size()
+                == 1U
+            && unit->systemverilog_assertion_declarations[0]
+                   .checker_assertions.size()
+                == 1U
+            && unit->systemverilog_assertion_declarations[1].name
+                == "named_instance$is_expected"
+            && unit->systemverilog_assertion_declarations[2].name
+                == "ordered_instance$is_expected"
+            && unit->systemverilog_assertion_declarations[3].name
+                == "wildcard_instance$is_expected"
+            && unit->systemverilog_concurrent_assertions.size() == 3U
+            && unit->systemverilog_concurrent_assertions[0].label
+                == "named_instance.okay"
+            && unit->systemverilog_concurrent_assertions[1].label
+                == "ordered_instance.okay"
+            && unit->systemverilog_concurrent_assertions[2].label
+                == "wildcard_instance.okay"
+            && unit->processes.size() == 3U
+            && std::ranges::all_of(
+                unit->processes,
+                [](const Process& process) {
+                    return process.systemverilog_concurrent_assertion;
+                }),
+        "checker declarations, instances, connections, specializations, and executable assertions are retained"
+            + diagnostic_text);
+
+    const auto invalid = parse_verilog(
+        SourceText {
+            "invalid-checker-connections.sv",
+            R"(checker required(input logic checker_clock, input logic observed);
+    property p; @(posedge checker_clock) observed; endproperty
+    assert property (p);
+  endchecker
+module invalid_checker_connections(
+  input logic clock,
+  input logic value
+);
+  required mixed(clock, .observed(value));
+  required unknown(.checker_clock(clock), .missing(value));
+  required duplicate(.checker_clock(clock), .checker_clock(clock),
+                     .observed(value));
+  required missing(.checker_clock(clock));
+  required excessive(clock, value, value);
+  required repeated(clock, value), repeated(clock, value);
+endmodule
+)" },
+        StandardRevision::SystemVerilog2023);
+    require(
+        !invalid.ok()
+            && has_code(invalid, "FSIM-SV-SEM-252")
+            && has_code(invalid, "FSIM-SV-SEM-253")
+            && has_code(invalid, "FSIM-SV-SEM-254")
+            && has_code(invalid, "FSIM-SV-SEM-255")
+            && has_code(invalid, "FSIM-SV-SEM-256"),
+        "checker connection form, names, cardinality, required formals, and instance identities are diagnosed");
 }
 
 void test_verilog_systemverilog_compatibility_defaults()

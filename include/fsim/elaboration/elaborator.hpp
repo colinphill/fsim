@@ -683,6 +683,14 @@ private:
 struct ElaborationResult {
     std::optional<ElaboratedDesign> design;
     std::vector<Diagnostic> diagnostics;
+    // Non-failing elaboration-time language messages remain ordered beside
+    // ordinary errors without making a successful design unavailable.
+    std::vector<frontend::Diagnostic> messages;
+    // Generate declarations are selected only after parameters and hierarchy
+    // are known. Return selected classes so the durable application registry
+    // matches the lowered design and excludes inactive alternatives.
+    std::vector<frontend::SystemVerilogClassDeclaration>
+        selected_systemverilog_classes;
 
     [[nodiscard]] bool ok() const noexcept
     {

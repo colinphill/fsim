@@ -876,6 +876,37 @@ namespace {
                 }
                 return membership;
             }
+            if (expression.kind == TemplateKind::Unique) {
+                std::vector<SystemVerilogConstraintExpressionId> values;
+                values.reserve(expression.operands.size());
+                for (const auto& item : expression.operands) {
+                    if (item.kind != TemplateKind::Name) {
+                        throw std::invalid_argument {
+                            "inline unique constraint items must be named variables"
+                        };
+                    }
+                    const auto value = lower(item);
+                    if (!value)
+                        return std::nullopt;
+                    values.push_back(*value);
+                }
+                if (values.size() < 2U) {
+                    return builder_.constant(
+                        PackedLogic4::from_aval_bval(1, 1, 0),
+                        SystemVerilogConstraintVariableProfile {
+                            SystemVerilogConstraintDomainKind::BitVector,
+                            1, false, "$unique-result", false });
+                }
+                std::vector<SystemVerilogConstraintExpressionId> comparisons;
+                for (std::size_t left = 0; left < values.size(); ++left) {
+                    for (std::size_t right = left + 1U;
+                         right < values.size(); ++right) {
+                        comparisons.push_back(builder_.binary(
+                            Operator::NotEqual, values[left], values[right]));
+                    }
+                }
+                return builder_.conjunction(comparisons);
+            }
 
             std::vector<SystemVerilogConstraintExpressionId> operands;
             operands.reserve(expression.operands.size());

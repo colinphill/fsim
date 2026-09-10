@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "elaborator_internal.hpp"
+#include "hierarchy_builder_internal.hpp"
 
 #include <algorithm>
 #include <array>
@@ -165,7 +165,8 @@ void HierarchyBuilder::validate_verilog_specify(
     const auto resolve = [&](const frontend::Expression& expression,
                              const std::string_view role,
                              const bool require_input,
-                             const bool require_output)
+                             const bool require_output,
+                             const bool require_port = false)
         -> std::optional<VerilogSpecifyTerminalInfo> {
         const auto* base = specify_terminal_base(expression);
         if (base->kind != frontend::ExpressionKind::Identifier) {
@@ -191,7 +192,9 @@ void HierarchyBuilder::validate_verilog_specify(
             || declared->direction == frontend::PortDirection::Inout;
         const bool output = declared->direction == frontend::PortDirection::Output
             || declared->direction == frontend::PortDirection::Inout;
-        if ((require_input && !input) || (require_output && !output)) {
+        const bool port = input || output;
+        if ((require_input && !input) || (require_output && !output)
+            || (require_port && !port)) {
             report(
                 "FSIM-ELAB-SVSPEC-003",
                 "specify " + std::string { role } + " '" + base->text
@@ -630,7 +633,7 @@ void HierarchyBuilder::validate_verilog_specify(
                                              const std::string_view role)
                 -> std::optional<runtime::simir::ModuleTimingEvent> {
                 const auto terminal = resolve(
-                    event.expression, role, false, false);
+                    event.expression, role, false, false, true);
                 if (!terminal || terminal->width != 1) {
                     if (terminal) {
                         report(
@@ -829,11 +832,16 @@ void HierarchyBuilder::validate_verilog_specify(
             };
             if (check.notifier.valid()) {
                 normalized.notifier = optional_signal(check.notifier);
-                if (!normalized.notifier) {
+                const auto* notifier_declaration =
+                    check.notifier.kind == frontend::ExpressionKind::Identifier
+                    ? declaration(check.notifier.text)
+                    : nullptr;
+                if (!normalized.notifier || notifier_declaration == nullptr
+                    || !notifier_declaration->type.systemverilog_net_type.empty()) {
                     report(
                         "FSIM-ELAB-SVSPEC-015",
                         "timing-check notifier at '" + path
-                            + "' is not a scalar signal",
+                            + "' is not a scalar variable",
                         check.notifier.span);
                     valid = false;
                 }

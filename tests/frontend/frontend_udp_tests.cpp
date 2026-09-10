@@ -193,6 +193,67 @@ endmodule
           && forms[6].drive_strength->one == VerilogStrength::Weak,
       "UDP instance drive strength retains canonical zero/one ranks");
 
+  const auto revised = parse_verilog(
+      SourceText{
+          "udp-2023.sv",
+          R"(
+primitive revised_udp(output reg q, input d, clock);
+  initial q = 1'b0;
+  table
+    0 (01) : ? : 0;
+    1 (01) : ? : 1;
+    ? ?    : ? : -;
+  endtable
+endprimitive : revised_udp
+module revised_udp_top(input logic d, clock, output wire q);
+  revised_udp state(q, d, clock);
+endmodule
+)"},
+      StandardRevision::SystemVerilog2023);
+  require(
+      revised.ok() && revised.design.udp_declarations.size() == 1
+          && revised.design.udp_declarations.front().standard_revision
+              == StandardRevision::SystemVerilog2023
+          && revised.design.udp_declarations.front().language
+              == Language::SystemVerilog2017
+          && revised.design.units.front().instances.front().udp_instance
+          && verilog_udp_declaration_well_formed(
+              revised.design.udp_declarations.front()),
+      "the exact 2023 profile retains a well-formed sequential UDP and "
+      "marks its instance");
+  auto mismatched_profile = revised.design.udp_declarations.front();
+  mismatched_profile.standard_revision = StandardRevision::Vhdl2019;
+  require(
+      !verilog_udp_declaration_well_formed(mismatched_profile),
+      "artifact-facing UDP validation rejects cross-language revision "
+      "metadata");
+
+  const auto program_primitives = parse_verilog(
+      SourceText{
+          "program-primitives-2023.sv",
+          R"(
+primitive program_udp(output q, input d);
+  table 0 : 1; 1 : 0; x : x; endtable
+endprimitive
+program illegal_primitives;
+  wire a, b;
+  and builtin_gate(a, b);
+  tran builtin_switch(a, b);
+  program_udp user_primitive(a, b);
+endprogram
+)"},
+      StandardRevision::SystemVerilog2023);
+  require(
+      !program_primitives.ok()
+          && std::ranges::count_if(
+                 program_primitives.diagnostics,
+                 [](const Diagnostic& diagnostic) {
+                   return diagnostic.code == "FSIM-SV-SEM-390";
+                 })
+              == 3,
+      "program blocks reject gate, switch, and user-defined primitive "
+      "instances");
+
   const auto invalid = parse_text(
       "invalid_udp.v",
       R"(

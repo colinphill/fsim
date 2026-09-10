@@ -1477,18 +1477,7 @@ struct ExecutionPoint {
         SourceLocation execution_source,
         std::string execution_scope = { },
         std::string execution_language_standard = { },
-        std::string execution_compatibility_profile = { })
-        : process(execution_process)
-        , design_process(source_process)
-        , instruction(execution_instruction)
-        , kind(execution_kind)
-        , source(std::move(execution_source))
-        , scope(std::move(execution_scope))
-        , language_standard(std::move(execution_language_standard))
-        , compatibility_profile(
-              std::move(execution_compatibility_profile))
-    {
-    }
+        std::string execution_compatibility_profile = { });
 };
 class ProcessExecutor {
 public:
@@ -1723,6 +1712,7 @@ public:
         std::string_view,
         std::span<const PackedLogic4>,
         std::span<const std::uint8_t>,
+        std::span<const frontend::SystemVerilogScalarKind>,
         CoverageSampleTrigger)>;
     using CoverageQueryHook = std::function<PackedLogic4(CoverageQueryKind)>;
     using VhdlPslApiHook = std::function<bool(

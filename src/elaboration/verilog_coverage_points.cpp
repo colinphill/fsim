@@ -38,6 +38,52 @@ namespace {
 
 } // namespace
 
+bool is_executable_verilog_statement_kind(
+    const frontend::StatementKind kind) noexcept
+{
+    switch (kind) {
+    case frontend::StatementKind::Block:
+    case frontend::StatementKind::Null:
+        return false;
+    case frontend::StatementKind::Assignment:
+    case frontend::StatementKind::Force:
+    case frontend::StatementKind::Release:
+    case frontend::StatementKind::If:
+    case frontend::StatementKind::Case:
+    case frontend::StatementKind::Loop:
+    case frontend::StatementKind::Break:
+    case frontend::StatementKind::Continue:
+    case frontend::StatementKind::Return:
+    case frontend::StatementKind::TaskCall:
+    case frontend::StatementKind::ProcedureCall:
+    case frontend::StatementKind::Assert:
+    case frontend::StatementKind::Delay:
+    case frontend::StatementKind::WaitOn:
+    case frontend::StatementKind::WaitUntil:
+    case frontend::StatementKind::EventTrigger:
+    case frontend::StatementKind::Fork:
+    case frontend::StatementKind::WaitFork:
+    case frontend::StatementKind::DisableFork:
+    case frontend::StatementKind::Disable:
+    case frontend::StatementKind::Display:
+    case frontend::StatementKind::FileClose:
+    case frontend::StatementKind::FileFlush:
+    case frontend::StatementKind::FileDisplay:
+    case frontend::StatementKind::MemoryLoad:
+    case frontend::StatementKind::ContainerMethod:
+    case frontend::StatementKind::MonitorControl:
+    case frontend::StatementKind::Report:
+    case frontend::StatementKind::Pause:
+    case frontend::StatementKind::Finish:
+    case frontend::StatementKind::Exit:
+    case frontend::StatementKind::ProceduralAssign:
+    case frontend::StatementKind::Deassign:
+    case frontend::StatementKind::WaitOrder:
+        return true;
+    }
+    return false;
+}
+
 VerilogCoveragePointResult discover_verilog_statement_points(
     const std::span<const frontend::Statement> statements,
     const frontend::Language language,

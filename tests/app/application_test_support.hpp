@@ -71,6 +71,8 @@ class ApplicationTestFixture {
   void test_artifact_phase_semantics();
 
  private:
+  void test_cli_trace_and_timescale(fsim::cli::Services& services);
+  void test_verilog_artifact_matrix(fsim::cli::Services& services);
   void create_common_sources();
   void create_mixed_language_sources();
   void create_systemc_sources();

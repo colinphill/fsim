@@ -656,6 +656,14 @@ systemverilog_integral_type_descriptor(std::string_view spelling) noexcept;
 [[nodiscard]] bool systemverilog_types_equivalent(
     const Type& left, const Type& right) noexcept;
 
+/// Return whether a virtual-interface source can be assigned to a virtual-
+/// interface target before hierarchy specialization is considered. Interface
+/// identity and parameter syntax must match. A source without a selected
+/// modport may narrow to any target view; a selected source may only retain
+/// that same selected view.
+[[nodiscard]] bool systemverilog_virtual_interface_assignment_compatible(
+    const Type& target, const Type& source) noexcept;
+
 [[nodiscard]] constexpr std::uint8_t vhdl_predefined_integer_storage_width(
     const VhdlStandard standard) noexcept
 {
@@ -1401,6 +1409,8 @@ enum class OutputFormat {
     RealGeneral,
     Hierarchy,
     Time,
+    Unformatted2,
+    Unformatted4,
 };
 
 struct OutputValue {
@@ -1571,7 +1581,10 @@ struct Statement {
     AssertionSeverity assertion_severity { AssertionSeverity::Error };
     // SystemVerilog immediate assertions retain explicit action-block
     // presence separately from their statement vectors because a null action
-    // is semantically different from an omitted failure action.
+    // is semantically different from an omitted failure action. For an Assert
+    // statement, `delay` denotes the grammar's exact observed-deferred `#0`
+    // qualifier and `output_postponed` denotes the final-deferred qualifier;
+    // neither field changes the assertion condition's procedural sampling.
     bool assertion_has_pass_action { };
     bool assertion_has_failure_action { };
     // Bounded literal language output used by Verilog/SystemVerilog output
@@ -1650,6 +1663,9 @@ enum class ProcessKind {
 struct Process {
     ProcessKind kind { ProcessKind::VhdlProcess };
     bool vhdl_postponed { };
+    // Resolver-generated concurrent assertions sample through the pre-slot
+    // signal snapshot and execute their property automata in Observed.
+    bool systemverilog_concurrent_assertion { };
     std::string name;
     std::vector<ParameterDeclaration> constants;
     std::vector<TypeAliasDeclaration> type_aliases;

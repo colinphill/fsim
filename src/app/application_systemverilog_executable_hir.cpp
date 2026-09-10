@@ -569,6 +569,10 @@ namespace {
                 return sv::OutputFormat::hierarchy;
             case frontend::OutputFormat::Time:
                 return sv::OutputFormat::time;
+            case frontend::OutputFormat::Unformatted2:
+                return sv::OutputFormat::unformatted2;
+            case frontend::OutputFormat::Unformatted4:
+                return sv::OutputFormat::unformatted4;
             }
             return sv::OutputFormat::decimal;
         }
@@ -1226,6 +1230,7 @@ namespace {
                 || !input.else_body.variables.empty()
                 || !input.else_body.functions.empty()
                 || !input.else_body.tasks.empty()
+                || !input.else_body.systemverilog_classes.empty()
                 || !input.else_body.processes.empty()
                 || !input.else_body.concurrent_statements.empty()
                 || !input.else_body.instances.empty()

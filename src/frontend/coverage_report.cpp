@@ -135,6 +135,21 @@ std::vector<SystemVerilogCoverageBinReport> item_bins(
       }
     }
   }
+  if (declaration.effective_cross_retain_auto_bins) {
+    std::vector<const SystemVerilogCoverageCrossBinState*> automatic_states;
+    for (const auto& state : instance.cross_bin_state) {
+      if (state.coverage_declaration_index == item.declaration_index
+          && !state.bin_declaration_index) {
+        automatic_states.push_back(&state);
+      }
+    }
+    std::ranges::sort(
+        automatic_states, {}, &SystemVerilogCoverageCrossBinState::identity);
+    for (const auto* state : automatic_states) {
+      result.push_back(cross_bin_report(
+          declaration, item, nullptr, state, instance.runtime_identity));
+    }
+  }
   return result;
 }
 

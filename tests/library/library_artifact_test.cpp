@@ -83,8 +83,8 @@ bool has_identity_diagnostic(
 int main()
 {
     static_assert(fsim::library::kFormatVersion == 5);
-    static_assert(fsim::library::kOwningUnitSchemaVersion == 28);
-    static_assert(fsim::library::kPortableSchemaVersion == 11);
+    static_assert(fsim::library::kOwningUnitSchemaVersion == 31);
+    static_assert(fsim::library::kPortableSchemaVersion == 14);
     const auto expected = example_metadata();
     const auto serialized = fsim::library::serialize_metadata(expected);
     assert(serialized.starts_with(
@@ -146,8 +146,8 @@ int main()
         stale_publication_diagnostics));
     assert(has_identity_diagnostic(
         stale_publication_diagnostics, ".fsimlib publication",
-        "format 4 and portable-unit schema 11",
-        "format 5 and portable-unit schema 11", ".fsimlib"));
+        "format 4 and portable-unit schema 14",
+        "format 5 and portable-unit schema 14", ".fsimlib"));
     assert(!std::filesystem::exists(stale_publication));
     fsim::diagnostic::Engine publish_diagnostics;
     assert(fsim::library::publish(
@@ -1144,8 +1144,8 @@ endprimitive
     assert(!fsim::library::deserialize_portable_class_unit(
         stale_class, "stale.fsimclass", stale_class_diagnostics));
     assert(has_identity_diagnostic(
-        stale_class_diagnostics, "portable class unit", "schema 27",
-        "schema 28", ".fsimobj"));
+        stale_class_diagnostics, "portable class unit", "schema 30",
+        "schema 31", ".fsimobj"));
     auto future_class = *class_bytes;
     future_class[8] = static_cast<char>(
         fsim::library::kOwningUnitSchemaVersion + 1U);
@@ -1153,8 +1153,8 @@ endprimitive
     assert(!fsim::library::deserialize_portable_class_unit(
         future_class, "future.fsimclass", future_class_diagnostics));
     assert(has_identity_diagnostic(
-        future_class_diagnostics, "portable class unit", "schema 29",
-        "schema 28", ".fsimobj"));
+        future_class_diagnostics, "portable class unit", "schema 32",
+        "schema 31", ".fsimobj"));
     fsim::diagnostic::Engine truncated_class_diagnostics;
     assert(!fsim::library::deserialize_portable_class_unit(
         class_bytes->substr(0, 15), "truncated.fsimclass",
@@ -1265,8 +1265,8 @@ endprimitive
     assert(!fsim::library::deserialize_portable_unit(
         future_unit, "future.fsimir", future_diagnostics));
     assert(has_identity_diagnostic(
-        future_diagnostics, "portable owning unit", "schema 29",
-        "schema 28", ".fsimobj"));
+        future_diagnostics, "portable owning unit", "schema 32",
+        "schema 31", ".fsimobj"));
     auto stale_unit = *unit_bytes;
     stale_unit[8] = static_cast<char>(
         fsim::library::kOwningUnitSchemaVersion - 1U);
@@ -1274,8 +1274,8 @@ endprimitive
     assert(!fsim::library::deserialize_portable_unit(
         stale_unit, "stale.fsimir", stale_diagnostics));
     assert(has_identity_diagnostic(
-        stale_diagnostics, "portable owning unit", "schema 27",
-        "schema 28", ".fsimobj"));
+        stale_diagnostics, "portable owning unit", "schema 30",
+        "schema 31", ".fsimobj"));
     fsim::diagnostic::Engine truncated_unit_diagnostics;
     assert(!fsim::library::deserialize_portable_unit(
         unit_bytes->substr(0, 15), "truncated.fsimir",
@@ -1365,8 +1365,8 @@ endprimitive
         schema < fsim::library::kPortableSchemaVersion; ++schema) {
         auto stale_portable_text = serialized;
         stale_portable_text.replace(
-            stale_portable_text.find("portable_schema = 11"),
-            std::string { "portable_schema = 11" }.size(),
+            stale_portable_text.find("portable_schema = 14"),
+            std::string { "portable_schema = 14" }.size(),
             "portable_schema = " + std::to_string(schema));
         fsim::diagnostic::Engine stale_portable_diagnostics;
         assert(!fsim::library::parse_metadata(
@@ -1375,21 +1375,21 @@ endprimitive
         assert(has_identity_diagnostic(
             stale_portable_diagnostics, ".fsimlib",
             "portable-unit schema " + std::to_string(schema),
-            "portable-unit schema 11", ".fsimlib"));
+            "portable-unit schema 14", ".fsimlib"));
     }
 
     auto future_portable_text = serialized;
     future_portable_text.replace(
-        future_portable_text.find("portable_schema = 11"),
-        std::string { "portable_schema = 11" }.size(),
-        "portable_schema = 12");
+        future_portable_text.find("portable_schema = 14"),
+        std::string { "portable_schema = 14" }.size(),
+        "portable_schema = 15");
     fsim::diagnostic::Engine future_portable_diagnostics;
     assert(!fsim::library::parse_metadata(
         future_portable_text, "future-portable.toml",
         future_portable_diagnostics));
     assert(has_identity_diagnostic(
         future_portable_diagnostics, ".fsimlib",
-        "portable-unit schema 12", "portable-unit schema 11", ".fsimlib"));
+        "portable-unit schema 15", "portable-unit schema 14", ".fsimlib"));
 
     auto systemc_metadata = expected;
     systemc_metadata.native_artifacts = { { "systemc_plugin", "native/systemc/libfixture.so",

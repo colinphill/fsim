@@ -469,6 +469,8 @@ enum class OutputFormat : std::uint8_t {
     real_fixed,
     real_general,
     time,
+    unformatted2,
+    unformatted4,
 };
 
 /// Format one runtime value between literal prefix/suffix text.
@@ -686,6 +688,7 @@ struct CoverageSample {
     std::vector<RegisterId> actuals;
     std::vector<std::uint32_t> actual_widths;
     std::vector<std::uint8_t> signed_actuals;
+    std::vector<frontend::SystemVerilogScalarKind> scalar_kinds;
     CoverageSampleTrigger trigger { CoverageSampleTrigger::explicit_sample };
 };
 

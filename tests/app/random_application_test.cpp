@@ -30,7 +30,7 @@ struct TemporaryDirectory {
 
 struct Capture {
     fsim::runtime::RunResult result;
-    std::array<fsim::runtime::Logic4Word, 33> values { };
+    std::array<fsim::runtime::Logic4Word, 40> values { };
     std::vector<std::string> output;
     std::size_t compiled_processes { };
 };
@@ -61,7 +61,7 @@ Capture execute(
     fsim::app::Simulation simulation {
         std::move(project), 1000, engine
     };
-    constexpr std::array<std::string_view, 33> names {
+    constexpr std::array<std::string_view, 40> names {
         "a", "b", "c", "d", "e", "f", "u", "p0", "p1",
         "scope_result", "scope_value", "scope_mode", "wide_nonzero",
         "inline_result", "inline_value", "inline_mode", "srandom_a",
@@ -70,7 +70,9 @@ Capture execute(
         "dist_exponential_seed", "dist_poisson_value", "dist_poisson_seed",
         "dist_chi_square_value", "dist_chi_square_seed", "dist_t_value",
         "dist_t_seed", "dist_erlang_value", "dist_erlang_seed",
-        "dist_invalid_value"
+        "dist_invalid_value", "checker_satisfied", "checker_rejected",
+        "checker_satisfied_unchanged", "checker_rejected_unchanged",
+        "unique_result", "unique_values_distinct", "unique_impossible"
     };
     Capture capture;
     capture.compiled_processes = simulation.compiled_process_count();
@@ -113,7 +115,7 @@ fsim::project::Config config_for(
     config.run.max_deltas = 1000;
     fsim::project::SourceSet sources;
     sources.language = fsim::project::Language::system_verilog;
-    sources.standard = "2017";
+    sources.standard = "2023";
     sources.library = "work";
     sources.files.push_back(source);
     config.source_sets.push_back(std::move(sources));
@@ -197,6 +199,13 @@ void test_random(
             == distribution_values[index]);
         assert(reference.values[18U + index].bval == 0U);
     }
+    assert(reference.values[33].aval == 1 && reference.values[33].bval == 0);
+    assert(reference.values[34].aval == 0 && reference.values[34].bval == 0);
+    assert(reference.values[35].aval == 1 && reference.values[35].bval == 0);
+    assert(reference.values[36].aval == 1 && reference.values[36].bval == 0);
+    assert(reference.values[37].aval == 1 && reference.values[37].bval == 0);
+    assert(reference.values[38].aval == 1 && reference.values[38].bval == 0);
+    assert(reference.values[39].aval == 0 && reference.values[39].bval == 0);
     assert(reference.compiled_processes == 0);
 #if defined(FSIM_HAS_LLVM)
     assert(compiled.compiled_processes == 3);
@@ -325,6 +334,20 @@ int main()
     {
         std::ofstream output(source);
         output << R"(
+class UniquePacket;
+  rand logic [2:0] left;
+  rand logic [2:0] right;
+  rand logic [2:0] third;
+  constraint bounded {
+    left < 4;
+    right < 4;
+    third < 4;
+  }
+  constraint distinct {
+    unique {left, right, third};
+  }
+endclass
+
 module random_test;
   typedef enum logic [1:0] {MODE_ZERO, MODE_ONE, MODE_TWO} mode_t;
   logic [31:0] a, b, c, d, e, f, u, p0, p1;
@@ -345,6 +368,10 @@ module random_test;
   int inline_result;
   logic [2:0] inline_value;
   mode_t inline_mode;
+  int checker_satisfied, checker_rejected;
+  logic checker_satisfied_unchanged, checker_rejected_unchanged;
+  int unique_result, unique_impossible;
+  logic unique_values_distinct;
   initial begin
     logic [2:0] scoped;
     mode_t mode;
@@ -391,6 +418,27 @@ module random_test;
     dist_erlang_value = $dist_erlang(dist_seed, 3, 30);
     dist_erlang_seed = dist_seed;
     dist_invalid_value = $dist_exponential(dist_seed, 0);
+    begin
+      UniquePacket packet;
+      packet = new;
+      packet.left = 1;
+      packet.right = 2;
+      packet.third = 3;
+      checker_satisfied = packet.randomize(null);
+      checker_satisfied_unchanged = packet.left == 1
+          && packet.right == 2 && packet.third == 3;
+      packet.right = 1;
+      checker_rejected = packet.randomize(null);
+      checker_rejected_unchanged = packet.left == 1
+          && packet.right == 1 && packet.third == 3;
+      unique_result = packet.randomize();
+      unique_values_distinct = packet.left != packet.right
+          && packet.left != packet.third && packet.right != packet.third;
+      unique_impossible = packet.randomize() with {
+        unique {left, right};
+        left == right;
+      };
+    end
   end
   initial p0 = $urandom;
   initial p1 = $urandom;
@@ -408,7 +456,7 @@ endmodule
             << "time_resolution = \"1ns\"\n"
             << "[[source_set]]\n"
             << "language = \"systemverilog\"\n"
-            << "standard = \"2017\"\n"
+            << "standard = \"2023\"\n"
             << "library = \"work\"\n"
             << "files = [\"random_test.sv\"]\n"
             << "[build]\n"

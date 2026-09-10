@@ -1,16 +1,35 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/coverage_sampling.hpp"
+#include "fsim/frontend/coverage_cross_inventory.hpp"
 #include "fsim/frontend/coverage_limits.hpp"
 
 #include <boost/multiprecision/cpp_int.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
+#include <charconv>
+#include <cmath>
 #include <limits>
 #include <string>
 #include <unordered_set>
 
 namespace fsim::frontend {
+
+std::optional<double>
+SystemVerilogCoverageSampleValue::real_value() const noexcept
+{
+    if (scalar_kind == SystemVerilogScalarKind::ShortReal) {
+        return static_cast<double>(
+            std::bit_cast<float>(static_cast<std::uint32_t>(scalar_bits)));
+    }
+    if (scalar_kind == SystemVerilogScalarKind::Real
+        || scalar_kind == SystemVerilogScalarKind::Realtime) {
+        return std::bit_cast<double>(scalar_bits);
+    }
+    return std::nullopt;
+}
+
 namespace {
 
     [[nodiscard]] bool valid_binary_plane(const std::string_view plane)
@@ -59,6 +78,16 @@ namespace {
     [[nodiscard]] std::string sample_identity(
         const SystemVerilogCoverageSampleValue& sample)
     {
+        if (const auto real = sample.real_value()) {
+            char buffer[64] { };
+            const auto converted = std::to_chars(
+                std::begin(buffer), std::end(buffer), *real,
+                std::chars_format::general,
+                std::numeric_limits<double>::max_digits10);
+            return converted.ec == std::errc { }
+                ? std::string { buffer, converted.ptr }
+                : std::string { "nonfinite" };
+        }
         if (sample.value_bits.empty() && !sample_has_unknown(sample)
             && sample.width <= 64U) {
             return std::to_string(sample.value);
@@ -98,7 +127,10 @@ namespace {
         const SystemVerilogCoverageBin& bin,
         const SystemVerilogCoverageSampleValue* automatic_value)
     {
-        auto identity = declaration.canonical_identity + "::" + coverpoint.name
+        const auto& origin = coverpoint.origin_covergroup_identity.empty()
+            ? declaration.canonical_identity
+            : coverpoint.origin_covergroup_identity;
+        auto identity = origin + "::" + coverpoint.name
             + "." + bin.name;
         if (automatic_value != nullptr) {
             identity += "[" + sample_identity(*automatic_value) + "]";
@@ -314,6 +346,39 @@ namespace {
         return std::ranges::any_of(
             values,
             [&](const SystemVerilogCoverageBinValue& candidate) {
+                if (const auto sampled_real = sample.real_value()) {
+                    if (!std::isfinite(*sampled_real)) {
+                        return false;
+                    }
+                    if (candidate.exact_real_bits
+                        && *sampled_real
+                            == std::bit_cast<double>(
+                                *candidate.exact_real_bits)) {
+                        return true;
+                    }
+                    if (candidate.range_left_real_bits
+                        && candidate.range_right_real_bits) {
+                        const auto left = std::bit_cast<double>(
+                            *candidate.range_left_real_bits);
+                        const auto right = std::bit_cast<double>(
+                            *candidate.range_right_real_bits);
+                        const auto lower = std::min(left, right);
+                        const auto upper = std::max(left, right);
+                        const auto lower_inclusive = left <= right
+                            ? candidate.range_left_inclusive
+                            : candidate.range_right_inclusive;
+                        const auto upper_inclusive = left <= right
+                            ? candidate.range_right_inclusive
+                            : candidate.range_left_inclusive;
+                        return (lower_inclusive
+                                ? *sampled_real >= lower
+                                : *sampled_real > lower)
+                            && (upper_inclusive
+                                ? *sampled_real <= upper
+                                : *sampled_real < upper);
+                    }
+                    return false;
+                }
                 if (!sample.value_bits.empty() || !candidate.exact_bits.empty()
                     || !candidate.exact_unknown_bits.empty()
                     || !candidate.range_left_bits.empty()
@@ -368,6 +433,7 @@ namespace {
 
     struct GuardOperand {
         boost::multiprecision::cpp_int value { };
+        std::optional<double> real;
         bool known { };
     };
 
@@ -379,6 +445,11 @@ namespace {
     [[nodiscard]] GuardOperand sample_guard_operand(
         const SystemVerilogCoverageSampleValue& sample)
     {
+        if (const auto real = sample.real_value()) {
+            return std::isfinite(*real)
+                ? GuardOperand { { }, *real, true }
+                : GuardOperand { };
+        }
         if (sample_has_unknown(sample))
             return { };
         auto bits = sample.value_bits;
@@ -398,7 +469,7 @@ namespace {
         }
         if (sample.signed_value && !bits.empty() && bits.front() == '1')
             value -= boost::multiprecision::cpp_int { 1 } << bits.size();
-        return { std::move(value), true };
+        return { std::move(value), std::nullopt, true };
     }
 
     [[nodiscard]] GuardOperand number_guard_operand(
@@ -408,6 +479,17 @@ namespace {
             std::remove(spelling.begin(), spelling.end(), '_'), spelling.end());
         if (spelling.empty())
             return { };
+        if (spelling.find_first_of(".eE") != std::string::npos) {
+            double value { };
+            const auto parsed = std::from_chars(
+                spelling.data(), spelling.data() + spelling.size(), value,
+                std::chars_format::general);
+            return parsed.ec == std::errc { }
+                    && parsed.ptr == spelling.data() + spelling.size()
+                    && std::isfinite(value)
+                ? GuardOperand { { }, value, true }
+                : GuardOperand { };
+        }
         unsigned base { 10U };
         bool signed_value { };
         std::optional<std::size_t> width;
@@ -473,7 +555,7 @@ namespace {
             && ((value >> (*width - 1U)) & 1U) != 0U) {
             value -= boost::multiprecision::cpp_int { 1 } << *width;
         }
-        return { std::move(value), true };
+        return { std::move(value), std::nullopt, true };
     }
 
     std::span<const Token> strip_guard_parentheses(
@@ -574,26 +656,54 @@ namespace {
                 return { };
             }
             const auto kind = tokens[*operation].kind;
+            if (left.real || right.real) {
+                if (kind == TokenKind::Pipe || kind == TokenKind::Caret
+                    || kind == TokenKind::Ampersand
+                    || kind == TokenKind::Percent
+                    || kind == TokenKind::ShiftLeft
+                    || kind == TokenKind::ArithmeticShiftLeft
+                    || kind == TokenKind::ShiftRight
+                    || kind == TokenKind::ArithmeticShiftRight) {
+                    return { };
+                }
+                const auto left_value = left.real.value_or(
+                    left.value.convert_to<double>());
+                const auto right_value = right.real.value_or(
+                    right.value.convert_to<double>());
+                if (kind == TokenKind::Slash && right_value == 0.0) {
+                    return { };
+                }
+                const auto value = kind == TokenKind::Plus
+                    ? left_value + right_value
+                    : kind == TokenKind::Minus
+                    ? left_value - right_value
+                    : kind == TokenKind::Star
+                    ? left_value * right_value
+                    : left_value / right_value;
+                return std::isfinite(value)
+                    ? GuardOperand { { }, value, true }
+                    : GuardOperand { };
+            }
             if ((kind == TokenKind::Slash || kind == TokenKind::Percent)
                 && right.value == 0) {
                 return { };
             }
             if (kind == TokenKind::Pipe)
-                return { left.value | right.value, true };
+                return { left.value | right.value, std::nullopt, true };
             if (kind == TokenKind::Caret)
-                return { left.value ^ right.value, true };
+                return { left.value ^ right.value, std::nullopt, true };
             if (kind == TokenKind::Ampersand)
-                return { left.value & right.value, true };
+                return { left.value & right.value, std::nullopt, true };
             if (kind == TokenKind::Plus)
-                return { left.value + right.value, true };
+                return { left.value + right.value, std::nullopt, true };
             if (kind == TokenKind::Minus)
-                return { left.value - right.value, true };
+                return { left.value - right.value, std::nullopt, true };
             if (kind == TokenKind::Star)
-                return { left.value * right.value, true };
+                return { left.value * right.value, std::nullopt, true };
             if (kind == TokenKind::Slash)
-                return { left.value / right.value, true };
+                return { left.value / right.value, std::nullopt, true };
             if (kind == TokenKind::Percent)
-                return { left.value % right.value, true };
+                return { left.value % right.value, std::nullopt, true };
             if (right.value < 0
                 || right.value
                     > std::numeric_limits<std::size_t>::max()) {
@@ -602,9 +712,9 @@ namespace {
             const auto amount = right.value.convert_to<std::size_t>();
             if (kind == TokenKind::ShiftLeft
                 || kind == TokenKind::ArithmeticShiftLeft) {
-                return { left.value << amount, true };
+                return { left.value << amount, std::nullopt, true };
             }
-            return { left.value >> amount, true };
+            return { left.value >> amount, std::nullopt, true };
         }
         if (tokens.size() == 1U && tokens.front().kind == TokenKind::Identifier) {
             if (!named_samples.empty()) {
@@ -627,8 +737,10 @@ namespace {
             return { };
         }
         auto value = number_guard_operand(tokens.front().text);
-        if (negative && value.known)
-            value.value = -value.value;
+        if (negative && value.known) {
+            if (value.real) value.real = -*value.real;
+            else value.value = -value.value;
+        }
         return value;
     }
 
@@ -688,6 +800,26 @@ namespace {
                 tokens.subspan(*operation + 1U), sample, named_samples);
             if (!left.known || !right.known)
                 return GuardTruth::Unknown;
+            if (left.real || right.real) {
+                const auto left_value = left.real.value_or(
+                    left.value.convert_to<double>());
+                const auto right_value = right.real.value_or(
+                    right.value.convert_to<double>());
+                const bool result = comparison == TokenKind::EqualEqual
+                        || comparison == TokenKind::CaseEqual
+                    ? left_value == right_value
+                    : comparison == TokenKind::NotEqual
+                            || comparison == TokenKind::CaseNotEqual
+                    ? left_value != right_value
+                    : comparison == TokenKind::Less
+                    ? left_value < right_value
+                    : comparison == TokenKind::LessEqual
+                    ? left_value <= right_value
+                    : comparison == TokenKind::Greater
+                    ? left_value > right_value
+                    : left_value >= right_value;
+                return result ? GuardTruth::True : GuardTruth::False;
+            }
             bool result { };
             if (comparison == TokenKind::EqualEqual
                 || comparison == TokenKind::CaseEqual) {
@@ -710,7 +842,9 @@ namespace {
         const auto operand = guard_operand(tokens, sample, named_samples);
         if (!operand.known)
             return GuardTruth::Unknown;
-        return operand.value != 0 ? GuardTruth::True : GuardTruth::False;
+        return operand.real ? (*operand.real != 0.0 ? GuardTruth::True
+                                                   : GuardTruth::False)
+            : operand.value != 0 ? GuardTruth::True : GuardTruth::False;
     }
 
     bool guard_allows(
@@ -1484,7 +1618,7 @@ SystemVerilogCoverageSampleResult sample_systemverilog_coverpoint(
             selected = &*found;
     }
 
-    if (!had_previous) {
+    if (!value.is_real() && !had_previous) {
         SystemVerilogCoveragePreviousSample created;
         created.coverage_declaration_index = coverpoint.declaration_index;
         created.value = value.value;
@@ -1494,7 +1628,7 @@ SystemVerilogCoverageSampleResult sample_systemverilog_coverpoint(
         created.unknown_bits = value.unknown_bits;
         created.signed_value = value.signed_value;
         instance.previous_samples.push_back(std::move(created));
-    } else {
+    } else if (!value.is_real()) {
         previous->value = value.value;
         previous->unknown_mask = value.unknown_mask;
         previous->width = value.width;
@@ -1543,6 +1677,8 @@ SystemVerilogCoverageSampleResult sample_systemverilog_coverpoint(
         report.sampled_value_bits = value.value_bits;
         report.sampled_unknown_bits = value.unknown_bits;
         report.sampled_signed = value.signed_value;
+        report.sampled_scalar_kind = value.scalar_kind;
+        report.sampled_scalar_bits = value.scalar_bits;
         report.span = selected->span;
         instance.illegal_bin_reports.push_back(std::move(report));
         diagnostics.push_back(Diagnostic {
@@ -1618,6 +1754,10 @@ SystemVerilogCovergroupSampleResult sample_systemverilog_covergroup(
         ? std::optional<SystemVerilogCovergroupInstance> { instance }
         : std::nullopt;
     const auto original_diagnostic_count = diagnostics.size();
+    if (!initialize_systemverilog_cross_inventory(
+            instance, declaration, diagnostics)) {
+        return result;
+    }
 
     result.coverpoints.reserve(inputs.size());
     for (const auto& input : inputs) {
@@ -1691,7 +1831,8 @@ SystemVerilogCovergroupSampleResult sample_systemverilog_covergroup(
             ? ignore_cross_bin
             : illegal_cross_bin ? illegal_cross_bin
                                 : regular_cross_bin;
-        if (!cross.bins.empty() && !selected_cross_bin)
+        if (!cross.bins.empty() && !selected_cross_bin
+            && !declaration.effective_cross_retain_auto_bins)
             continue;
         const auto weight = selected_cross_bin
             ? selected_cross_bin->weight
@@ -1704,16 +1845,21 @@ SystemVerilogCovergroupSampleResult sample_systemverilog_covergroup(
             : cross.effective_at_least;
         excluded = excluded || (selected_cross_bin && selected_cross_bin->kind != SystemVerilogCoverageBinKind::Regular);
         excluded = excluded || weight == 0U;
-        auto identity = declaration.canonical_identity + "::" + cross.name;
-        if (selected_cross_bin)
+        const auto& origin = cross.origin_covergroup_identity.empty()
+            ? declaration.canonical_identity
+            : cross.origin_covergroup_identity;
+        auto identity = origin + "::" + cross.name;
+        if (selected_cross_bin) {
             identity += "." + selected_cross_bin->name;
-        identity += "<";
-        for (std::size_t index = 0; index < tuple.size(); ++index) {
-            if (index != 0U)
-                identity += ",";
-            identity += tuple[index];
+        } else {
+            identity += "<";
+            for (std::size_t index = 0; index < tuple.size(); ++index) {
+                if (index != 0U)
+                    identity += ",";
+                identity += tuple[index];
+            }
+            identity += ">";
         }
-        identity += ">";
         auto state = std::ranges::find(
             instance.cross_bin_state,
             identity,

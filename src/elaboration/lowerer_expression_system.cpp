@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "elaborator_internal.hpp"
+#include "lowerer_internal.hpp"
 
 #include "fsim/frontend/input_format.hpp"
 
@@ -28,6 +28,10 @@ namespace {
             return InputScanFormat::string;
         case frontend::InputScanFormat::Real:
             return InputScanFormat::real;
+        case frontend::InputScanFormat::Unformatted2:
+            return InputScanFormat::unformatted2;
+        case frontend::InputScanFormat::Unformatted4:
+            return InputScanFormat::unformatted4;
         }
         throw std::logic_error { "invalid plusarg input format" };
     }
@@ -839,6 +843,15 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
             return std::nullopt;
         }
         const auto& parsed_conversion = parsed.conversions.front();
+        if (parsed_conversion.format == frontend::InputScanFormat::Unformatted2
+            || parsed_conversion.format
+                == frontend::InputScanFormat::Unformatted4) {
+            report(
+                "FSIM-ELAB-SVCLI-002",
+                "$value$plusargs does not accept unformatted %u or %z conversions",
+                format_expression.span);
+            return std::nullopt;
+        }
         InputScanConversion conversion;
         conversion.prefix = parsed_conversion.prefix;
         conversion.format = plusarg_scan_format(parsed_conversion.format);

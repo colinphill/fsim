@@ -4,8 +4,7 @@ if(NOT DEFINED FSIM_SOURCE_DIR)
   message(FATAL_ERROR "FSIM_SOURCE_DIR is required")
 endif()
 
-set(FSIM_SOURCE_LINE_LIMIT 2500)
-set(FSIM_SOURCE_LINE_REFACTOR_TARGET 2000)
+set(FSIM_SOURCE_LINE_LIMIT 2000)
 
 file(
   GLOB_RECURSE FSIM_AUTHORED_SOURCES
@@ -30,7 +29,6 @@ file(
   "${FSIM_SOURCE_DIR}/tests/*.tpp"
 )
 
-set(FSIM_OBSERVED_ALLOWLIST)
 foreach(source IN LISTS FSIM_AUTHORED_SOURCES)
   file(READ "${FSIM_SOURCE_DIR}/${source}" contents)
   string(REGEX MATCHALL "\n" newlines "${contents}")
@@ -39,8 +37,8 @@ foreach(source IN LISTS FSIM_AUTHORED_SOURCES)
     message(
       FATAL_ERROR
       "${source} has ${line_count} lines and exceeds the "
-      "${FSIM_SOURCE_LINE_LIMIT}-line hard limit; refactor it below the "
-      "${FSIM_SOURCE_LINE_REFACTOR_TARGET}-line target before retrying"
+      "${FSIM_SOURCE_LINE_LIMIT}-line hard limit; split the owning "
+      "implementation or interface before retrying"
     )
   endif()
 endforeach()
@@ -49,6 +47,7 @@ list(LENGTH FSIM_AUTHORED_SOURCES source_count)
 message(
   STATUS
   "Checked ${source_count} authored sources against the "
-  "${FSIM_SOURCE_LINE_LIMIT}-line hard limit with a "
-  "${FSIM_SOURCE_LINE_REFACTOR_TARGET}-line refactor target"
+  "${FSIM_SOURCE_LINE_LIMIT}-line hard limit"
 )
+
+include("${FSIM_SOURCE_DIR}/cmake/CheckTranslationUnitStructure.cmake")

@@ -139,6 +139,65 @@ endconfig : other
                     return diagnostic.code == "FSIM-SV-SEM-236";
                 }),
         "configuration end names and required design statements diagnose exactly");
+
+    const auto body_parameters = parse_verilog(
+        SourceText {
+            "systemverilog-body-parameters.sv",
+            R"(module header_parameters #(parameter int EXTERNAL = 2);
+  parameter int DERIVED = EXTERNAL + 1;
+endmodule
+module empty_header_parameters #();
+  parameter int DERIVED = 3;
+endmodule
+module body_parameters;
+  parameter int EXTERNAL = 4;
+endmodule
+)" },
+        StandardRevision::SystemVerilog2023);
+    require(
+        body_parameters.ok()
+            && body_parameters.design.units.size() == 3U
+            && body_parameters.design.units[0].parameters.size() == 2U
+            && !body_parameters.design.units[0].parameters[0].local
+            && body_parameters.design.units[0].parameters[1].local
+            && body_parameters.design.units[1].parameters.size() == 1U
+            && body_parameters.design.units[1].parameters[0].local
+            && body_parameters.design.units[2].parameters.size() == 1U
+            && !body_parameters.design.units[2].parameters[0].local,
+        "a SystemVerilog parameter-port list makes directly contained body parameters local");
+
+    const auto retained_body_parameters = parse_verilog(
+        SourceText {
+            "systemverilog-2005-body-parameters.sv",
+            R"(module retained #(parameter int EXTERNAL = 2);
+  parameter int DERIVED = EXTERNAL + 1;
+endmodule
+)" },
+        StandardRevision::SystemVerilog2005);
+    require(
+        retained_body_parameters.ok()
+            && retained_body_parameters.design.units.size() == 1U
+            && retained_body_parameters.design.units[0].parameters.size()
+                == 2U
+            && !retained_body_parameters.design.units[0].parameters[0].local
+            && retained_body_parameters.design.units[0].parameters[1].local,
+        "retained SystemVerilog profiles preserve body-parameter locality");
+
+    const auto verilog_body_parameters = parse_verilog(
+        SourceText {
+            "verilog-body-parameters.v",
+            R"(module retained #(parameter EXTERNAL = 2);
+  parameter BODY = EXTERNAL + 1;
+endmodule
+)" },
+        StandardRevision::Verilog2005);
+    require(
+        verilog_body_parameters.ok()
+            && verilog_body_parameters.design.units.size() == 1U
+            && verilog_body_parameters.design.units[0].parameters.size() == 2U
+            && !verilog_body_parameters.design.units[0].parameters[0].local
+            && verilog_body_parameters.design.units[0].parameters[1].local,
+        "Verilog-2005 parameter-port assignments also make body parameters local");
 }
 
 } // namespace fsim::tests::frontend

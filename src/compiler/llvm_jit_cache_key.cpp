@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "llvm_jit_internal.hpp"
+#include "llvm_jit_cache_key_internal.hpp"
 
 #include "fsim/compiler/object_cache.hpp"
 
@@ -29,6 +29,7 @@ using runtime::simir::ClassPropertyWrite;
 using runtime::simir::ClassStaticMethodCall;
 using runtime::simir::ClassStaticPropertyRead;
 using runtime::simir::ClassStaticPropertyWrite;
+using runtime::simir::CodeCoverageHit;
 using runtime::simir::CompareStrings;
 using runtime::simir::Concatenate;
 using runtime::simir::ConcatenateStrings;
@@ -38,14 +39,11 @@ using runtime::simir::CopyRegister;
 using runtime::simir::CopyStringRegister;
 using runtime::simir::CountBits;
 using runtime::simir::CountOnes;
+using runtime::simir::CoverageAccess;
+using runtime::simir::CoverageControl;
 using runtime::simir::CoverageDatabaseControl;
 using runtime::simir::CoverageDatabaseControlKind;
-using runtime::simir::CodeCoverageHit;
-using runtime::simir::CoverageControl;
-using runtime::simir::CoverageAccess;
 using runtime::simir::CoverageQuery;
-using runtime::simir::VhdlPslApi;
-using runtime::simir::VhdlAssertApi;
 using runtime::simir::CoverageSample;
 using runtime::simir::CoverageSampleTrigger;
 using runtime::simir::DebugPoint;
@@ -143,12 +141,6 @@ using runtime::simir::SignalLastEvent;
 using runtime::simir::SignalLastValue;
 using runtime::simir::StochasticQueueOperation;
 using runtime::simir::Stop;
-using runtime::simir::VhdlEnvironmentTime;
-using runtime::simir::VhdlEnvironmentTimeToString;
-using runtime::simir::VhdlEnvironmentDirectory;
-using runtime::simir::VhdlEnvironmentGetenv;
-using runtime::simir::VhdlEnvironmentCallPath;
-using runtime::simir::VhdlEnvironmentGetCallPath;
 using runtime::simir::StrengthRank;
 using runtime::simir::StringDisplay;
 using runtime::simir::StringIndex;
@@ -164,6 +156,14 @@ using runtime::simir::UnknownBranchPolicy;
 using runtime::simir::ValueKind;
 using runtime::simir::VcdControl;
 using runtime::simir::VcdControlKind;
+using runtime::simir::VhdlAssertApi;
+using runtime::simir::VhdlEnvironmentCallPath;
+using runtime::simir::VhdlEnvironmentDirectory;
+using runtime::simir::VhdlEnvironmentGetCallPath;
+using runtime::simir::VhdlEnvironmentGetenv;
+using runtime::simir::VhdlEnvironmentTime;
+using runtime::simir::VhdlEnvironmentTimeToString;
+using runtime::simir::VhdlPslApi;
 using runtime::simir::VitalDelay;
 using runtime::simir::VitalTimingCheck;
 using runtime::simir::WaitFor;
@@ -581,7 +581,7 @@ void add_container_type_key(
         add_key_u64(builder, "static-trigger-region-end", region.end);
         add_key_u64(builder, "static-trigger-region-mask", region.mask);
     }
-#include "llvm_jit_cache_key_operations.tpp"
+    add_operation_cache_keys(builder, process, signal_widths);
     return builder.finish();
 }
 

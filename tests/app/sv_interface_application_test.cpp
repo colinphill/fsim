@@ -54,7 +54,7 @@ fsim::project::Config make_config(
   config.run.max_deltas = 1000;
   fsim::project::SourceSet sources;
   sources.language = fsim::project::Language::system_verilog;
-  sources.standard = "2017";
+  sources.standard = "2023";
   sources.library = "work";
   sources.files.push_back(source);
   config.source_sets.push_back(std::move(sources));
@@ -79,7 +79,7 @@ Capture execute(
   capture.compiled_processes = simulation.compiled_process_count();
   capture.cache = simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 8> names{
+  constexpr std::array<std::string_view, 12> names{
       "interface_top.link[0].data",
       "interface_top.link[0].valid",
       "interface_top.link[0].ready",
@@ -87,7 +87,13 @@ Capture execute(
       "interface_top.result",
       "interface_top.selected",
       "interface_top.virtuals.leaf.selected",
-      "interface_top.virtuals.bus.cb.data"};
+      "interface_top.virtuals.bus.cb.data",
+      "interface_top.unrestricted",
+      "interface_top.narrowed",
+      "interface_top.runtime_source",
+      "interface_top.runtime_narrowed"};
+  constexpr std::array<std::uint32_t, names.size()> widths{
+      4, 1, 1, 4, 4, 64, 64, 4, 64, 64, 64, 64};
   std::array<fsim::runtime::simir::SignalId, names.size()> signals{};
   std::array<fsim::runtime::VcdSignal, names.size()> traces{};
   std::ostringstream vcd_text;
@@ -98,9 +104,7 @@ Capture execute(
     signals[index] = *signal;
     traces[index] = vcd.declare_signal(
         std::string{names[index]},
-        index == 5 || index == 6 ? 64U
-        : index == 0 || index == 3 || index == 4 || index == 7
-            ? 4U : 1U);
+        widths[index]);
   }
   assert(
       simulation.find_signal("interface_top.source.bus.data")
@@ -143,10 +147,14 @@ void verify(const Capture& capture) {
   assert(capture.result.time == 2);
   const auto expected = std::vector<std::string>{
       "1010", "1", "1", "XXXX", "1011"};
-  assert(capture.final_values.size() == 8);
+  assert(capture.final_values.size() == 12);
   assert(std::equal(
       expected.begin(), expected.end(), capture.final_values.begin()));
   assert(capture.final_values[5] == capture.final_values[6]);
+  assert(capture.final_values[5] == capture.final_values[8]);
+  assert(capture.final_values[5] == capture.final_values[9]);
+  assert(capture.final_values[5] == capture.final_values[10]);
+  assert(capture.final_values[5] == capture.final_values[11]);
   assert(capture.final_values[5] != std::string(64, '0'));
   assert(capture.final_values[5].find_first_of("XZ")
          == std::string::npos);
@@ -348,7 +356,18 @@ module interface_top;
   service_impl service(.bus(link[1]));
   virtual_mid virtuals(link[0]);
   virtual bus_if #(.WIDTH(4)).observer selected = link[0];
-  initial #2 $finish;
+  virtual bus_if unrestricted = link[0];
+  virtual bus_if.observer narrowed = unrestricted;
+  virtual bus_if runtime_source = null;
+  virtual bus_if.observer runtime_narrowed = null;
+  initial begin
+    runtime_source = link[0];
+    runtime_narrowed = link[0];
+    runtime_narrowed = narrowed;
+    runtime_narrowed = null;
+    runtime_narrowed = runtime_source;
+    #2 $finish;
+  end
 endmodule
 )";
     assert(output.good());

@@ -1308,12 +1308,20 @@ endmodule
   property requested;
     @(posedge clock) request;
   endproperty
+  sequence requested_twice;
+    @(posedge clock) request ##1 request;
+  endsequence
   request_check: assert property (requested)
     $display("pass"); else $error("fail");
   assume property (requested) else $warning("assume");
   cover property (requested) begin
     $display("covered");
   end
+  named_sequence: cover sequence (requested_twice)
+    $display("named sequence covered");
+  inline_sequence: cover sequence (
+    @(posedge clock) disable iff (!request) request ##1 request
+  ) $display("inline sequence covered");
   restrict property (requested);
   initial begin
     $assertcontrol(1);
@@ -1334,7 +1342,7 @@ endmodule
                                  .systemverilog_concurrent_assertions;
     require(
         concurrent_assertions.ok()
-            && directives.size() == 4
+            && directives.size() == 6
             && directives[0].kind
                 == SystemVerilogConcurrentAssertionKind::Assert
             && directives[0].label == "request_check"
@@ -1360,9 +1368,28 @@ endmodule
             && has_token(directives[2].pass_action_tokens, "end")
             && !directives[2].has_failure_action
             && directives[3].kind
+                == SystemVerilogConcurrentAssertionKind::Cover
+            && directives[3].form
+                == SystemVerilogConcurrentAssertionForm::Sequence
+            && directives[3].label == "named_sequence"
+            && directives[3].inline_sequence
+            && !directives[3].inline_sequence->clock
+            && directives[3].inline_sequence->sequence_expression
+            && directives[4].kind
+                == SystemVerilogConcurrentAssertionKind::Cover
+            && directives[4].form
+                == SystemVerilogConcurrentAssertionForm::Sequence
+            && directives[4].label == "inline_sequence"
+            && directives[4].inline_sequence
+            && directives[4].inline_sequence->clock
+            && directives[4].inline_sequence->disable
+            && directives[4].inline_sequence->sequence_expression
+            && directives[4].inline_sequence->sequence_expression->delays.size()
+                == 1
+            && directives[5].kind
                 == SystemVerilogConcurrentAssertionKind::Restrict
-            && !directives[3].has_pass_action
-            && !directives[3].has_failure_action
+            && !directives[5].has_pass_action
+            && !directives[5].has_failure_action
             && has_token(directives[0].property_tokens, "requested")
             && directives[0].sampling_region
                 == SystemVerilogAssertionRegion::Preponed
@@ -1370,11 +1397,21 @@ endmodule
                 == SystemVerilogAssertionRegion::Observed
             && directives[0].action_region
                 == SystemVerilogAssertionRegion::Reactive
-            && directives[3].span.source_name
+            && directives[5].span.source_name
                 == "concurrent-assertions.sv",
-        "concurrent directives own kinds, labels, properties, and regions");
-    const auto& controls = concurrent_assertions.design.units[0]
-                               .processes[0]
+        "concurrent directives own property and sequence forms, labels, "
+        "actions, structure, and regions");
+    const auto& concurrent_processes
+        = concurrent_assertions.design.units[0].processes;
+    require(
+        concurrent_processes.size() == 7
+            && !concurrent_processes.front()
+                    .systemverilog_concurrent_assertion
+            && std::ranges::all_of(
+                std::span { concurrent_processes }.subspan(1U),
+                &Process::systemverilog_concurrent_assertion),
+        "resolved concurrent assertion processes retain explicit execution identity");
+    const auto& controls = concurrent_processes[0]
                                .statements;
     require(
         controls.size() == 10
@@ -1452,6 +1489,47 @@ endmodule
             })
             == 4,
         "malformed concurrent property syntax rejects exactly");
+
+    const auto illegal_sequence_directive = parse_text(
+        "illegal-sequence-directive.sv",
+        R"(module illegal_sequence_directive(input logic clock, request);
+  assert sequence (@(posedge clock) request);
+endmodule
+)",
+        Language::SystemVerilog2017);
+    require(
+        std::ranges::count_if(
+            illegal_sequence_directive.diagnostics,
+            [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-251";
+            })
+            == 1,
+        "only cover accepts a concurrent sequence directive");
+
+    const auto retained_cover_sequence = [](const StandardRevision revision) {
+        return parse_verilog(
+            SourceText {
+                "cover-sequence-profile.sv",
+                R"(module cover_sequence_profile;
+  cover sequence (1'b1);
+endmodule
+)" },
+            revision);
+    };
+    require(
+        retained_cover_sequence(StandardRevision::SystemVerilog2005).ok()
+            && retained_cover_sequence(StandardRevision::SystemVerilog2023).ok(),
+        "cover sequence remains available in its retained and exact 2023 profiles");
+    const auto verilog_cover_sequence = retained_cover_sequence(
+        StandardRevision::Verilog2005);
+    require(
+        std::ranges::count_if(
+            verilog_cover_sequence.diagnostics,
+            [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-348";
+            })
+            == 1,
+        "cover sequence remains unavailable in the Verilog profile");
 
     const auto supported_formals = parse_text(
         "supported-executable-property-formals.sv",
@@ -1558,22 +1636,32 @@ endmodule
                     }
                     const auto& evaluation = statement.statements.back();
                     return evaluation.kind == StatementKind::Assert
-                        && evaluation.statements.size() >= 5U
+                        && evaluation.statements.size() >= 6U
                         && std::ranges::count(
                                evaluation.statements,
                                StatementKind::Assignment,
                                &Statement::kind)
                         == 3
-                        && evaluation.statements[0].target.text == "match_count"
-                        && evaluation.statements[1].value.kind
+                        && evaluation.statements[0].kind
+                        == StatementKind::Display
+                        && evaluation.statements[0].output_text.starts_with(
+                            "\x1f"
+                            "fsim.concurrent-assertion|")
+                        && evaluation.statements[1].kind
+                        == StatementKind::Display
+                        && evaluation.statements[1].output_text.starts_with(
+                            "\x1f"
+                            "fsim.concurrent-assertion-action-region|")
+                        && evaluation.statements[2].target.text == "match_count"
+                        && evaluation.statements[3].value.kind
                         == ExpressionKind::Binary
-                        && evaluation.statements[2].value.kind
+                        && evaluation.statements[4].value.kind
                         == ExpressionKind::Binary
-                        && evaluation.statements[3].kind
+                        && evaluation.statements[5].kind
                         == StatementKind::TaskCall
-                        && evaluation.statements[3].task_name == "record_match";
+                        && evaluation.statements[5].task_name == "record_match";
                 }),
-        "sequence first_match assignments, updates, and calls execute at the match point");
+        "sequence first_match assignments, updates, and calls execute in the reactive action region after the observed outcome");
     const auto statement_tree_has_target
         = [&](const auto& self, const Statement& statement,
               const std::string_view target) -> bool {

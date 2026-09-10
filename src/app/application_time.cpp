@@ -184,6 +184,18 @@ void visit_procedure_delays(
 }
 
 template <typename Function>
+void visit_class_delays(
+    std::vector<frontend::SystemVerilogClassDeclaration>& classes,
+    Function& function) {
+  for (auto& declaration : classes) {
+    for (auto& method : declaration.methods) {
+      visit_delays(method.statements, function);
+    }
+    visit_class_delays(declaration.nested_classes, function);
+  }
+}
+
+template <typename Function>
 void visit_generate_delays(
     std::vector<frontend::GenerateRegion>& regions,
     Function& function) {
@@ -203,6 +215,7 @@ void visit_generate_delays(
     for (auto& procedure : body.procedures) {
       visit_procedure_delays(procedure, function);
     }
+    visit_class_delays(body.systemverilog_classes, function);
     visit_generate_delays(body.generate_regions, function);
   };
   for (auto& region : regions) {
@@ -800,6 +813,7 @@ bool normalize_delays(
     for (auto& procedure : unit.procedures) {
       visit_procedure_delays(procedure, normalize);
     }
+    visit_class_delays(unit.systemverilog_classes, normalize);
     visit_generate_delays(unit.generate_regions, normalize);
     validate_vhdl_rejection_limits(
         unit.concurrent_statements, diagnostics, valid);
@@ -859,8 +873,9 @@ void select_delay_alternatives(
       visit_delays(task.statements, select);
     }
     for (auto& procedure : unit.procedures) {
-      visit_delays(procedure.statements, select);
+      visit_procedure_delays(procedure, select);
     }
+    visit_class_delays(unit.systemverilog_classes, select);
     visit_generate_delays(unit.generate_regions, select);
   }
 }

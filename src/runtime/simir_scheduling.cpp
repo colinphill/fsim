@@ -8,38 +8,6 @@
 
 namespace fsim::runtime::simir {
 
-namespace {
-
-template <typename Visitor>
-void for_each_active_update_slot(
-    const ProcessUpdateSlotBatch& batch,
-    Visitor&& visitor)
-{
-    if (batch.active_words.empty()) {
-        for (const auto& slot : batch.slots) {
-            visitor(slot);
-        }
-        return;
-    }
-    for (std::size_t word_index = 0;
-         word_index < batch.active_words.size(); ++word_index) {
-        auto active = batch.active_words[word_index];
-        while (active != 0U) {
-            const auto bit = static_cast<std::size_t>(
-                std::countr_zero(active));
-            const auto slot_index = word_index * 64U + bit;
-            if (slot_index < batch.slots.size()) {
-                visitor(batch.slots[slot_index]);
-            }
-            active &= active - UINT64_C(1);
-        }
-    }
-}
-
-} // namespace
-
-#include "simir_scheduling_commit.tpp"
-#include "simir_scheduling_stage.tpp"
 void Interpreter::Impl::stage_update_unrouted(
     const std::optional<ProcessId> driver,
     const SignalId signal,

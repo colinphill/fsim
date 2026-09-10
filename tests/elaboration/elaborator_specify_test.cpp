@@ -130,7 +130,8 @@ module conditional_specify(
 );
   specify
     specparam PATHPULSE$source$result = (1, 4);
-    if (enable) (source => (result +: data)) = 5;
+    if (enable) (posedge source => (result +: data)) = 5;
+    if (enable) (source => result) = 5;
     ifnone (source => result) = 2;
     pulsestyle_ondetect result;
     showcancelled result;
@@ -144,11 +145,13 @@ endmodule
         conditional.design, "conditional_specify");
     assert(conditional_result.ok());
     const auto& conditional_paths = conditional_result.design->verilog_specify_paths();
-    assert(conditional_paths.size() == 2);
+    assert(conditional_paths.size() == 3);
     assert(!conditional_paths[0].condition_program.empty());
     assert(!conditional_paths[0].data_source_program.empty());
+    assert(conditional_paths[1].selection_group
+        == conditional_paths[2].selection_group);
     assert(conditional_paths[0].selection_group
-        == conditional_paths[1].selection_group);
+        != conditional_paths[1].selection_group);
     assert(conditional_paths[0].pulse_style
         == fsim::frontend::VerilogPulseStyle::Ondetect);
     assert(conditional_paths[0].show_cancelled);
@@ -251,6 +254,8 @@ module invalid_specify_timing(
   output z,
   output [1:0] delayed
 );
+  reg internal_event;
+  wire net_notifier;
   specify
     $setup(posedge a, posedge b, -1);
     $setup(posedge a, posedge b, a);
@@ -260,6 +265,8 @@ module invalid_specify_timing(
     $nochange(posedge a, posedge b, 4, -2);
     $setuphold(posedge a, posedge b, 1, 1, , , , delayed, delayed);
     $setup(posedge a, posedge b, 1, delayed);
+    $setup(posedge internal_event, posedge b, 1);
+    $setup(posedge a, posedge b, 1, net_notifier);
   endspecify
   assign z = a;
 endmodule
@@ -277,6 +284,8 @@ endmodule
         invalid_timing_result, "FSIM-ELAB-SVSPEC-017"));
     assert(has_diagnostic(
         invalid_timing_result, "FSIM-ELAB-SVSPEC-019"));
+    assert(has_diagnostic(
+        invalid_timing_result, "FSIM-ELAB-SVSPEC-003"));
 
     auto corrupt_state = compound_result.design->state();
     corrupt_state.verilog_timing_checks.front().id = 7;

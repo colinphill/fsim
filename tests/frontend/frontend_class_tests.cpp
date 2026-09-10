@@ -1930,6 +1930,7 @@ module invalid_randomization_user;
   RandomizationCalls object;
   int result;
   initial result = object.randomize(fixed_value)
+      + object.randomize(null, choice)
       + object.fixed_value.rand_mode()
       + object.choice.rand_mode(0, 1)
       + object.missing.constraint_mode();
@@ -1951,8 +1952,12 @@ endmodule
           && std::ranges::count(
               invalid_randomization_diagnostics,
               std::string{"FSIM-SV-CLASS-020"},
-              &Diagnostic::code) == 3,
-      "nonrandom variable lists and invalid mode selections must diagnose precisely");
+              &Diagnostic::code) == 3
+          && std::ranges::count(
+              invalid_randomization_diagnostics,
+              std::string{"FSIM-SV-CLASS-022"},
+              &Diagnostic::code) == 1,
+      "nonrandom, mixed-null, and invalid mode selections must diagnose precisely");
 
   const auto malformed_constraint = parse_text(
       "malformed_randomization_constraint.sv",
